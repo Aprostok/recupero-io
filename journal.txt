@@ -1,0 +1,43 @@
+﻿# Recupero project journal
+
+## Patches shipped
+- v1: CoinGecko tier detection, Unicode fixes
+- v2: `inspect` command
+- v3: `brief` / `victim` commands
+- v4: Midas-targeted brief template
+- v5: spoofed-stablecoin bug fix + batch tracer + aggregate command
+- v5b: batch tracer case_dir fix
+- v6: Arbitrum + BSC EVM support + aggregate dedup
+- v7: Arbitrum startblock workaround (Etherscan V2 quirk)
+- v8: print/PDF styling for briefs
+
+## Cases (data/cases/)
+- ZIGHA-VERIFY, ZIGHA-VERIFY-W2: primary victim wallets
+- ZIGHA-PERP-HOP1, ZIGHA-PERP-HOP2: perpetrator wallet outflows
+- ZIGHA-ETH-26D20f, ZIGHA-ETH-37fc5f, ZIGHA-ETH-c1ee32, ZIGHA-ETH-3daFC6, ZIGHA-ETH-415D8D: CFI-identified perp wallet traces
+- ZIGHA-ARB-PERP1, ZIGHA-ARB-VICTIM: Arbitrum traces (v7 enabled)
+- ZIGHA-DUST-01 through -20: 20 dust wallet dust traces
+
+## Known numbers
+- Direct Ethereum theft from Zigha: $3,387,678
+- DeBridge USDC Arbitrum -> Ethereum landings: $16.89M
+- Primary mSyrupUSDp at 0x3e2E66af: $3.12M (freezable by Midas)
+- DAI dormant at 0x3daFC6a8: $9.98M
+- DAI dormant at 0x415D8D07: $6.91M
+- Total documented: ~$20.4M (matches CFI-00265)
+
+## Pending
+- Patch v9: Solana support (Helius API)
+- Patch v10: Hyperliquid minimal scraper
+- Regenerate brief with all traces + ship to Midas, Sky, French LE
+- Eventually: multi-chain brief template, proper bridge-landing aggregate category
+
+## Open backlog
+- Arbitrum USDC pricing (CoinGecko platform=arbitrum-one for 0xaf88d065...)
+- Native ETH historical pricing (CoinGecko Demo /history endpoint 400s)
+- Inspector first-seen/last-seen wrong for high-volume addresses
+- Address-poisoning filter for Lisu/zero-width spoof tokens
+- Recursive multi-hop tracer (currently manual chain)
+- SQLite cross-case entity DB
+- French translation of LE brief
+- Git/GitHub adoption

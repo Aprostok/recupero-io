@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recupero"
+version = "0.1.0"
+description = "Trace stolen crypto from a victim wallet to law-enforcement-actionable endpoints"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "Recupero" }]
+
+dependencies = [
+    # HTTP + retries
+    "httpx>=0.27,<1.0",
+    "tenacity>=8.2,<9.0",
+
+    # Data modeling
+    "pydantic>=2.5,<3.0",
+    "pydantic-settings>=2.1,<3.0",
+
+    # Config + env
+    "python-dotenv>=1.0,<2.0",
+    "pyyaml>=6.0,<7.0",
+
+    # CLI
+    "typer>=0.12,<1.0",
+    "rich>=13.7,<14.0",
+
+    # Address + value handling
+    "eth-utils>=4.1,<5.0",      # checksum addresses, hex utilities
+    "eth-typing>=4.0,<5.0",
+    "eth-hash[pycryptodome]>=0.7,<1.0",   # required keccak backend for eth-utils
+
+    # Time
+    "python-dateutil>=2.8,<3.0",
+
+    # On-disk storage
+    "orjson>=3.10,<4.0",         # faster JSON for large case files
+
+    # Templated HTML for briefs/reports
+    "jinja2>=3.1,<4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<9.0",
+    "pytest-asyncio>=0.23,<1.0",
+    "pytest-httpx>=0.30,<1.0",
+    "respx>=0.21,<1.0",          # alternative httpx mocking
+    "ruff>=0.5,<1.0",
+    "mypy>=1.10,<2.0",
+    "types-PyYAML",
+    "types-python-dateutil",
+]
+
+[project.scripts]
+recupero = "recupero.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "RET", "SIM"]
+ignore = ["E501"]   # line length handled by formatter
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"

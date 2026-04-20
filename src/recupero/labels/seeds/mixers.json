@@ -1,0 +1,47 @@
+[
+  {
+    "address": "0x47CE0C6eD5B0Ce3d3A51fdb1C52DC66a7c3c2936",
+    "name": "Tornado Cash: 0.1 ETH",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED — flag for special handling",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x910Cbd523D972eb0a6f4cAe4618aD62622b39DbF",
+    "name": "Tornado Cash: 1 ETH",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xA160cdAB225685dA1d56aa342Ad8841c3b53f291",
+    "name": "Tornado Cash: 100 ETH",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xD4B88Df4D29F5CedD6857912842cff3b20C8Cfa3",
+    "name": "Tornado Cash: 10 ETH",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x722122dF12D4e14e13Ac3b6895a86e84145b6967",
+    "name": "Tornado Cash: Router",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED",
+    "added_at": "2025-01-01T00:00:00Z"
+  }
+]

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Freeze Request — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<header class="brief-header">
+  <h1>Compliance Freeze Request</h1>
+  <p class="subtitle">Stolen Position Held in Identifiable Wallet — Time-Sensitive</p>
+</header>
+
+<dl class="meta-grid">
+  <dt>To:</dt>          <dd>Maple Finance Compliance Team</dd>
+  <dt>From:</dt>        <dd>Recupero (on behalf of victim)</dd>
+  <dt>Date prepared:</dt><dd>{{ generated_at }}</dd>
+  <dt>Case identifier:</dt><dd>{{ case_id }}</dd>
+  <dt>Victim wallet:</dt><dd>{{ victim.wallet_address }}</dd>
+  <dt>Stolen asset:</dt><dd>{{ asset.symbol }} ({{ asset.contract }})</dd>
+</dl>
+
+<div class="summary-box urgent">
+  <p style="margin:0"><strong>Summary.</strong>
+    On {{ theft_event.timestamp_human }} UTC, the wallet of {{ victim.name }}
+    ({{ victim.wallet_address }}) was drained of
+    <strong>{{ asset.amount_human }} {{ asset.symbol }}</strong>
+    (initial value: <strong>USD {{ asset.usd_value_at_theft }}</strong>).
+    The stolen position was forwarded by the perpetrator within hours to wallet
+    <span class="mono">{{ current_holder.address }}</span>,
+    where on-chain records show
+    <strong>it currently remains intact</strong>
+    (last verified {{ verified_at }} UTC; no outbound transfers of this asset observed).
+    We respectfully request that Maple Finance voluntarily freeze redemption rights on
+    this specific position pending law enforcement engagement.
+  </p>
+</div>
+
+<h2>1. Victim Identification</h2>
+<dl class="meta-grid">
+  <dt>Name:</dt>            <dd>{{ victim.name }}</dd>
+  {% if victim.citizenship %}<dt>Citizenship:</dt><dd>{{ victim.citizenship }}</dd>{% endif %}
+  {% if victim.address %}<dt>Address:</dt><dd>{{ victim.address }}</dd>{% endif %}
+  {% if victim.email %}<dt>Email:</dt>      <dd>{{ victim.email }}</dd>{% endif %}
+  {% if victim.phone %}<dt>Phone:</dt>      <dd>{{ victim.phone }}</dd>{% endif %}
+  <dt>Wallet:</dt>          <dd>{{ victim.wallet_address }}</dd>
+  {% if victim.legal_counsel %}
+  <dt>Legal counsel:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
+  {% endif %}
+</dl>
+
+{% if victim.incident_summary %}
+<p>{{ victim.incident_summary }}</p>
+{% endif %}
+
+<h2>2. Theft Event</h2>
+<table class="evidence">
+  <tr><th>Date / time (UTC)</th><td class="mono">{{ theft_event.timestamp_human }}</td></tr>
+  <tr><th>Block</th>             <td class="mono">{{ theft_event.block_number }}</td></tr>
+  <tr><th>Transaction hash</th>  <td class="mono"><a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a></td></tr>
+  <tr><th>From (victim)</th>     <td class="mono victim-row">{{ theft_event.from_address }}</td></tr>
+  <tr><th>To (perpetrator)</th>  <td class="mono perp-row">{{ theft_event.to_address }}</td></tr>
+  <tr><th>Asset</th>             <td>{{ asset.symbol }} <span class="small">(contract: <span class="mono">{{ asset.contract }}</span>)</span></td></tr>
+  <tr><th>Amount</th>            <td class="amount">{{ asset.amount_human }} {{ asset.symbol }}</td></tr>
+  <tr><th>USD value at time of transaction</th><td class="amount">USD {{ asset.usd_value_at_theft }}</td></tr>
+</table>
+
+<h2>3. Forwarding Chain (perpetrator's movements)</h2>
+{% if hops %}
+<p>After the theft, the funds moved through the following wallets controlled by the perpetrator:</p>
+<table class="evidence">
+  <tr>
+    <th>Hop</th><th>Date (UTC)</th><th>Tx hash</th>
+    <th>From</th><th>To</th><th>Amount</th>
+  </tr>
+  {% for hop in hops %}
+  <tr>
+    <td>{{ loop.index }}</td>
+    <td class="mono">{{ hop.timestamp_human }}</td>
+    <td class="mono"><a href="{{ hop.explorer_url }}">{{ hop.tx_hash[:14] }}…</a></td>
+    <td class="mono perp-row">{{ hop.from_address }}</td>
+    <td class="mono perp-row">{{ hop.to_address }}</td>
+    <td class="amount">{{ hop.amount_human }} {{ hop.symbol }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>No subsequent forwarding observed; the funds remain in the perpetrator's initial receiving wallet.</p>
+{% endif %}
+
+<h2>4. Current Location of Stolen Position</h2>
+<div class="summary-box action">
+  <p style="margin:0"><strong>The {{ asset.amount_human }} {{ asset.symbol }} position is currently held in:</strong></p>
+  <p class="mono" style="font-size:11pt; margin:0.5em 0;">{{ current_holder.address }}</p>
+  <p style="margin:0">
+    <a href="{{ current_holder.explorer_url }}">View on Etherscan</a>
+    &nbsp;·&nbsp;
+    <a href="{{ current_holder.explorer_url }}#tokentxns">Token transfer history</a>
+  </p>
+  <p style="margin:0.5em 0 0;">
+    <strong>Last verified:</strong> {{ verified_at }} UTC.
+    <strong>Outbound transfers of this asset observed:</strong> {{ outbound_count_of_stolen_asset }}.
+  </p>
+</div>
+
+<h2>5. Specific Request</h2>
+<p>
+  We request that Maple Finance compliance team take the following actions:
+</p>
+<ol>
+  <li>
+    <strong>Voluntarily freeze redemption rights</strong> on the
+    {{ asset.amount_human }} {{ asset.symbol }} position currently held in
+    <span class="mono">{{ current_holder.address }}</span>,
+    pending engagement with law enforcement authorities representing the victim.
+  </li>
+  <li>
+    <strong>Confirm receipt of this request</strong> in writing, noting the date and time
+    Maple Finance was placed on notice of the alleged theft.
+  </li>
+  <li>
+    <strong>Designate a point of contact</strong> for follow-up coordination with
+    law enforcement. We anticipate a formal request from the relevant authorities to follow.
+  </li>
+</ol>
+<p>
+  We recognize Maple Finance is not a party to the underlying theft and are not asserting
+  any wrongdoing on Maple's part. This request is made because Maple's protocol-level
+  controls represent the most rapid available means of preventing further dissipation of
+  the stolen funds while law enforcement procedures are initiated.
+</p>
+
+<h2>6. Independent Verification</h2>
+<p>
+  All facts in this brief are derived from public Ethereum mainnet data and are independently
+  verifiable. Each transaction hash above links to its Etherscan record. The on-chain state
+  of <span class="mono">{{ current_holder.address }}</span> as of
+  {{ verified_at }} UTC shows {{ outbound_count_of_stolen_asset }} outbound
+  transfers of {{ asset.symbol }} from that wallet to date.
+</p>
+<p class="small">
+  Data sources: Etherscan API v2 (Ethereum mainnet transaction history),
+  CoinGecko (historical USD valuation), Recupero label database
+  (cross-case entity attribution).
+</p>
+
+<h2>7. Contact</h2>
+<dl class="meta-grid">
+  <dt>Investigator:</dt>  <dd>{{ investigator.name }}</dd>
+  <dt>Organization:</dt>  <dd>{{ investigator.organization }}</dd>
+  <dt>Email:</dt>         <dd>{{ investigator.email }}</dd>
+  {% if investigator.phone %}<dt>Phone:</dt><dd>{{ investigator.phone }}</dd>{% endif %}
+</dl>
+
+<footer class="brief-footer">
+  <p>
+    Generated by Recupero v{{ software_version }} on {{ generated_at }} UTC.
+    Case file: <span class="mono">{{ case_id }}</span>.
+    Brief identifier: <span class="mono">{{ brief_id }}</span>.
+  </p>
+  <p>
+    This document contains personally-identifiable information about the victim
+    and is intended solely for the recipient's compliance and legal review.
+  </p>
+</footer>
+
+</body>
+</html>

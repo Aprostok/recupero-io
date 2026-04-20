@@ -1,0 +1,216 @@
+{# Shared print-friendly stylesheet. Included by both templates. #}
+<style>
+  @page { size: letter; margin: 0.75in; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    max-width: 8.5in;
+    margin: 0 auto;
+    padding: 1in 0.75in;
+    background: #fff;
+  }
+  header.brief-header {
+    border-bottom: 3px solid #1a1a1a;
+    padding-bottom: 1em;
+    margin-bottom: 2em;
+  }
+  header.brief-header h1 {
+    margin: 0 0 0.3em 0;
+    font-size: 18pt;
+    letter-spacing: 0.02em;
+  }
+  header.brief-header .subtitle {
+    color: #666;
+    font-size: 10pt;
+    margin: 0;
+  }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.3em 1.5em;
+    margin: 1em 0 2em;
+    font-size: 10pt;
+  }
+  .meta-grid dt {
+    font-weight: 600;
+    color: #444;
+  }
+  .meta-grid dd {
+    margin: 0;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    word-break: break-all;
+  }
+  h2 {
+    font-size: 13pt;
+    margin: 2em 0 0.5em;
+    padding-bottom: 0.3em;
+    border-bottom: 1px solid #ccc;
+  }
+  h3 {
+    font-size: 11pt;
+    margin: 1.5em 0 0.5em;
+    color: #333;
+  }
+  .summary-box {
+    background: #f8f9fa;
+    border-left: 4px solid #1a1a1a;
+    padding: 1em 1.2em;
+    margin: 1em 0 2em;
+  }
+  .summary-box.urgent {
+    background: #fff8e1;
+    border-left-color: #d97706;
+  }
+  .summary-box.action {
+    background: #ecfdf5;
+    border-left-color: #047857;
+  }
+  table.evidence {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 9.5pt;
+  }
+  table.evidence th, table.evidence td {
+    border: 1px solid #d1d5db;
+    padding: 0.5em 0.7em;
+    text-align: left;
+    vertical-align: top;
+  }
+  table.evidence th {
+    background: #f3f4f6;
+    font-weight: 600;
+  }
+  table.evidence td.mono, table.evidence td.amount {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    word-break: break-all;
+  }
+  table.evidence td.amount {
+    text-align: right;
+    white-space: nowrap;
+  }
+  .perp-row { background: #fef2f2; }
+  .victim-row { background: #eff6ff; }
+  a { color: #1d4ed8; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .mono { font-family: "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
+  .small { font-size: 9pt; color: #6b7280; }
+  .label-pill {
+    display: inline-block;
+    padding: 0.1em 0.5em;
+    border-radius: 3px;
+    font-size: 9pt;
+    font-weight: 600;
+  }
+  .label-pill.perpetrator { background: #fee2e2; color: #991b1b; }
+  .label-pill.exchange { background: #fef3c7; color: #92400e; }
+  .label-pill.bridge { background: #ddd6fe; color: #5b21b6; }
+  .label-pill.unknown { background: #f3f4f6; color: #4b5563; }
+  footer.brief-footer {
+    margin-top: 3em;
+    padding-top: 1em;
+    border-top: 1px solid #ccc;
+    font-size: 9pt;
+    color: #6b7280;
+  }
+  .timeline {
+    border-left: 2px solid #ccc;
+    padding-left: 1em;
+    margin: 1em 0;
+  }
+  .timeline-event {
+    margin-bottom: 1em;
+    position: relative;
+  }
+  .timeline-event::before {
+    content: "";
+    position: absolute;
+    left: -1.35em;
+    top: 0.4em;
+    width: 0.7em;
+    height: 0.7em;
+    border-radius: 50%;
+    background: #1a1a1a;
+  }
+  .timeline-event.theft::before { background: #dc2626; }
+  .timeline-event.transfer::before { background: #d97706; }
+  .timeline-event.current::before { background: #047857; }
+  .timeline-event time {
+    font-weight: 600;
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 10pt;
+  }
+  .signature-block {
+    margin-top: 3em;
+    padding-top: 1em;
+    border-top: 1px solid #ccc;
+  }
+
+  /* ---------- Print / PDF export rules ---------- */
+  /* These activate when the user hits Ctrl+P / Cmd+P or "Save as PDF".
+     They fix the issues with the default print rendering: double margins,
+     tables split across pages, section headings stranded at page bottoms,
+     color coding disappearing, and long hex addresses breaking awkwardly. */
+  @media print {
+    /* Let @page handle margins entirely — don't double up with body padding. */
+    body {
+      max-width: none;
+      margin: 0;
+      padding: 0;
+      font-size: 10.5pt;
+      line-height: 1.4;
+    }
+    /* Force background colors to print. Without this, Chrome drops the
+       perp-row / victim-row / label-pill colors, breaking the visual coding. */
+    * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+    }
+    /* Keep headings with the content that follows them. */
+    h1, h2, h3, h4 {
+      page-break-after: avoid;
+      break-after: avoid;
+    }
+    /* Don't split a summary box or meta grid across pages. */
+    .summary-box, .meta-grid, .signature-block, .timeline-event {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    /* Keep table rows intact. Repeat the header row on every page the
+       table spans, so column labels never go missing after a page break. */
+    table.evidence { page-break-inside: auto; }
+    table.evidence thead { display: table-header-group; }
+    table.evidence tfoot { display: table-footer-group; }
+    table.evidence tr {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    /* Long hex addresses wrap cleanly instead of overflowing cells.
+       overflow-wrap is friendlier than word-break for mono-font content:
+       it breaks only when necessary rather than at every character. */
+    td.mono, .mono {
+      word-break: normal;
+      overflow-wrap: anywhere;
+    }
+    /* Links shouldn't be bright blue in a printed document — harder to
+       read. Keep them identifiable but match body color. */
+    a {
+      color: inherit;
+      text-decoration: underline;
+    }
+    /* Interactive-only elements hide themselves for print, in case we
+       ever add any nav / toggle UI to the HTML. */
+    .no-print, nav, button { display: none !important; }
+    /* Avoid orphaned section headings at page bottoms. */
+    section { page-break-inside: auto; }
+    header.brief-header { page-break-after: avoid; break-after: avoid; }
+    /* Slightly tighter tables save page count without hurting readability. */
+    table.evidence th, table.evidence td {
+      padding: 0.35em 0.5em;
+      font-size: 9pt;
+    }
+  }
+</style>

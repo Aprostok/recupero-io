@@ -1,0 +1,221 @@
+[
+  {
+    "address": "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d",
+    "name": "MEXC Deposit (observed Zigha)",
+    "category": "exchange_deposit",
+    "exchange": "MEXC",
+    "source": "manual:zigha_report_2025",
+    "confidence": "high",
+    "notes": "Identified by CryptoForensic Investigators in Zigha case report",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x28C6c06298d514Db089934071355E5743bf21d60",
+    "name": "Binance: Hot Wallet 14",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x21a31Ee1afC51d94C2eFcCAa2092aD1028285549",
+    "name": "Binance: Hot Wallet 15",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xDFd5293D8e347dFe59E90eFd55b2956a1343963d",
+    "name": "Binance: Hot Wallet 16",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xF977814e90dA44bFA03b6295A0616a897441aceC",
+    "name": "Binance 8",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x71660c4005BA85c37ccec55d0C4493E66Fe775d3",
+    "name": "Coinbase 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x503828976D22510aad0201ac7EC88293211D23Da",
+    "name": "Coinbase 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xddfAbCdc4D8FfC6d5beaf154f18B778f892A0740",
+    "name": "Coinbase 3",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x3cD751E6b0078Be393132286c442345e5DC49699",
+    "name": "Coinbase 4",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x267be1C1D684F78cb4F6a176C4911b741E4Ffdc0",
+    "name": "Kraken 4",
+    "category": "exchange_hot_wallet",
+    "exchange": "Kraken",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xa910f92ACdAf488fa6eF02174fb86208Ad7722ba",
+    "name": "Kraken 7",
+    "category": "exchange_hot_wallet",
+    "exchange": "Kraken",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x6262998Ced04146fA42253a5C0AF90CA02dfd2A3",
+    "name": "Crypto.com 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Crypto.com",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x46340b20830761efd32832A74d7169B29FEB9758",
+    "name": "Crypto.com 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Crypto.com",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x2FAF487A4414Fe77e2327F0bf4AE2a264a776AD2",
+    "name": "FTX Exchange (defunct)",
+    "category": "exchange_hot_wallet",
+    "exchange": "FTX",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "notes": "Bankruptcy estate — flag for special handling",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xA7EFAe728D2936e78BDA97dc267687568dD593f3",
+    "name": "OKX 4",
+    "category": "exchange_hot_wallet",
+    "exchange": "OKX",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x868daB0b8E21EC0a48b76A7787b7d3Cb6f9B3576",
+    "name": "OKX 5",
+    "category": "exchange_hot_wallet",
+    "exchange": "OKX",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xD6216fC19DB775Df9774a6E33526131dA7D19a2c",
+    "name": "KuCoin 7",
+    "category": "exchange_hot_wallet",
+    "exchange": "KuCoin",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xD89350284c7732163765b23338f2ff27449E0Bf5",
+    "name": "Bybit Hot Wallet",
+    "category": "exchange_hot_wallet",
+    "exchange": "Bybit",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x1AE0EA34a72D944a8C7603FfB3eC30a6669E454C",
+    "name": "Poloniex 4",
+    "category": "exchange_hot_wallet",
+    "exchange": "Poloniex",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x0D0707963952f2fBA59dD06f2b425ace40b492Fe",
+    "name": "Gate.io 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Gate.io",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x1C4b70a3968436B9A0a9cf5205c787eb81Bb558c",
+    "name": "Gate.io 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Gate.io",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x75e89d5979E4f6Fba9F97c104c2F0AFB3F1dcB88",
+    "name": "MEXC Hot Wallet",
+    "category": "exchange_hot_wallet",
+    "exchange": "MEXC",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x9642b23Ed1E01Df1092B92641051881a322F5D4E",
+    "name": "Bitfinex Hot Wallet",
+    "category": "exchange_hot_wallet",
+    "exchange": "Bitfinex",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x77696bb39917C91A0c3908D577d5e322095425cA",
+    "name": "FixedFloat (non-KYC)",
+    "category": "exchange_deposit",
+    "exchange": "FixedFloat",
+    "source": "manual:public_observation",
+    "confidence": "medium",
+    "notes": "Instant-swap service frequently used by perpetrators per Zigha report",
+    "added_at": "2025-01-01T00:00:00Z"
+  }
+]

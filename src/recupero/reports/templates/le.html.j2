@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>LE Handoff Package — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<header class="brief-header">
+  <h1>Law Enforcement Handoff Package</h1>
+  <p class="subtitle">Cryptocurrency Theft — Investigative Findings &amp; Recommended Actions</p>
+</header>
+
+<dl class="meta-grid">
+  <dt>Case identifier:</dt>     <dd>{{ case_id }}</dd>
+  <dt>Date prepared:</dt>       <dd>{{ generated_at }} UTC</dd>
+  <dt>Prepared by:</dt>         <dd>{{ investigator.organization }}</dd>
+  <dt>Investigator:</dt>        <dd>{{ investigator.name }} &lt;{{ investigator.email }}&gt;</dd>
+  <dt>Victim:</dt>              <dd>{{ victim.name }}</dd>
+  <dt>Victim citizenship:</dt>  <dd>{{ victim.citizenship or "—" }}</dd>
+  <dt>Chain:</dt>               <dd>Ethereum mainnet (chainid 1)</dd>
+  <dt>Asset issuer:</dt>        <dd>{{ issuer.name }} ({{ issuer.jurisdiction or "—" }})</dd>
+  <dt>Stolen value:</dt>        <dd>USD {{ asset.usd_value_at_theft }} (initial valuation)</dd>
+</dl>
+
+<h2>1. Executive Summary</h2>
+<div class="summary-box">
+  <p style="margin:0 0 0.7em 0;">
+    On <strong>{{ theft_event.timestamp_human }} UTC</strong>, the Ethereum wallet of
+    {{ victim.name }} (citizen of {{ victim.citizenship or "—" }}) was drained of
+    <strong>{{ asset.amount_human }} {{ asset.symbol }}</strong>
+    (<strong>USD {{ asset.usd_value_at_theft }}</strong> at time of transaction).
+  </p>
+  <p style="margin:0 0 0.7em 0;">
+    The asset is a {{ asset.description }}. The token is issued by
+    <strong>{{ issuer.name }}</strong>{% if issuer.jurisdiction %},
+    a {{ issuer.jurisdiction }} entity{% endif %}.
+    {% if issuer.secondary_party %}
+    The underlying yield strategy is operated by {{ issuer.secondary_party }}
+    ({{ issuer.secondary_role }}).
+    {% endif %}
+    The stolen position was forwarded by the perpetrator to a secondary wallet
+    (<span class="mono">{{ current_holder.address }}</span>) within four hours of the theft.
+  </p>
+  <p style="margin:0;">
+    As of {{ verified_at }} UTC, on-chain records confirm the position
+    <strong>remains intact in the secondary wallet</strong>
+    ({{ outbound_count_of_stolen_asset }} outbound transfers of the stolen asset observed).
+    A timely freeze request to {{ issuer.short_name }}'s compliance team is the
+    recommended immediate action.
+  </p>
+</div>
+
+<h2>2. Victim Information</h2>
+<dl class="meta-grid">
+  <dt>Full name:</dt>           <dd>{{ victim.name }}</dd>
+  {% if victim.citizenship %}<dt>Citizenship:</dt><dd>{{ victim.citizenship }}</dd>{% endif %}
+  {% if victim.address %}<dt>Residential address:</dt><dd>{{ victim.address }}</dd>{% endif %}
+  {% if victim.email %}<dt>Email:</dt>      <dd>{{ victim.email }}</dd>{% endif %}
+  {% if victim.phone %}<dt>Phone:</dt>      <dd>{{ victim.phone }}</dd>{% endif %}
+  <dt>Affected wallet:</dt>     <dd class="mono">{{ victim.wallet_address }}</dd>
+  {% if victim.legal_counsel %}
+  <dt>Legal counsel:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
+  {% endif %}
+</dl>
+
+{% if victim.incident_summary %}
+<h3>Victim's account of the incident</h3>
+<p>{{ victim.incident_summary }}</p>
+{% endif %}
+
+<h2>3. Timeline of Events (UTC)</h2>
+<div class="timeline">
+  <div class="timeline-event theft">
+    <time>{{ theft_event.timestamp_human }}</time> &nbsp;—&nbsp;
+    <strong>Initial theft.</strong> {{ asset.amount_human }} {{ asset.symbol }} transferred
+    from victim wallet <span class="mono">{{ theft_event.from_address }}</span>
+    to perpetrator wallet <span class="mono">{{ theft_event.to_address }}</span>.
+    Tx: <span class="mono"><a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a></span>
+  </div>
+  {% for hop in hops %}
+  <div class="timeline-event transfer">
+    <time>{{ hop.timestamp_human }}</time> &nbsp;—&nbsp;
+    <strong>Hop {{ loop.index }}.</strong>
+    {{ hop.amount_human }} {{ hop.symbol }} transferred from
+    <span class="mono">{{ hop.from_address }}</span>
+    to <span class="mono">{{ hop.to_address }}</span>.
+    Tx: <span class="mono"><a href="{{ hop.explorer_url }}">{{ hop.tx_hash }}</a></span>
+  </div>
+  {% endfor %}
+  <div class="timeline-event current">
+    <time>{{ verified_at }}</time> &nbsp;—&nbsp;
+    <strong>Current state.</strong> Position remains in
+    <span class="mono">{{ current_holder.address }}</span>.
+    {{ outbound_count_of_stolen_asset }} outbound transfers of the stolen asset observed
+    since receipt.
+  </div>
+</div>
+
+<h2>4. Stolen Asset Details</h2>
+<table class="evidence">
+  <tr><th>Asset symbol</th>           <td>{{ asset.symbol }}</td></tr>
+  <tr><th>Token contract address</th> <td class="mono">{{ asset.contract }}</td></tr>
+  <tr><th>Issuer (legal entity)</th>  <td>{{ asset.issuer }}</td></tr>
+  {% if issuer.jurisdiction %}<tr><th>Issuer jurisdiction</th><td>{{ issuer.jurisdiction }}</td></tr>{% endif %}
+  {% if issuer.secondary_party %}<tr><th>Underlying strategy operator</th><td>{{ issuer.secondary_party }} ({{ issuer.secondary_role }})</td></tr>{% endif %}
+  <tr><th>Asset description</th>      <td>{{ asset.description }}</td></tr>
+  <tr><th>Amount</th>                 <td class="amount">{{ asset.amount_human }}</td></tr>
+  <tr><th>USD value at time of theft</th><td class="amount">USD {{ asset.usd_value_at_theft }}</td></tr>
+  {% if asset.usd_value_current %}
+  <tr><th>USD value (current estimate)</th><td class="amount">USD {{ asset.usd_value_current }}</td></tr>
+  {% endif %}
+  {% if issuer.kyc_required %}
+  <tr><th>KYC requirement at acquisition</th><td>Yes — {{ issuer.short_name }} required full identity verification{% if issuer.kyc_minimum %} with minimum subscription of {{ issuer.kyc_minimum }}{% endif %}</td></tr>
+  {% endif %}
+</table>
+
+<h2>5. Identified Wallets</h2>
+<table class="evidence">
+  <tr>
+    <th>Address</th>
+    <th>Role</th>
+    <th>Type</th>
+    <th>Notes</th>
+  </tr>
+  {% for w in identified_wallets %}
+  <tr class="{{ w.row_class }}">
+    <td class="mono">{{ w.address }}</td>
+    <td>{{ w.role }}</td>
+    <td>{{ w.type }}</td>
+    <td>{{ w.notes }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>6. Recommended Actions for Law Enforcement</h2>
+
+<h3>6.1 Immediate (within 24 hours)</h3>
+<ol>
+  <li>
+    <strong>Issue a preservation request to {{ issuer.name }}</strong>
+    ({{ issuer.contact_email }}). The {{ asset.symbol }} token is issued by
+    {{ issuer.short_name }}. As the issuer of the wrapper token, {{ issuer.short_name }}
+    has protocol-level control over redemption and is the only party able to
+    technically freeze the position. The identified position is
+    {{ asset.amount_human }} {{ asset.symbol }} held at
+    <span class="mono">{{ current_holder.address }}</span>.
+    A direct request from your office, citing this case, is significantly more
+    enforceable than a third-party request.
+    {% if issuer.kyc_required %}
+    Note: {{ issuer.short_name }} required full KYC for the original deposit, so
+    they have identifying information for the legitimate holder
+    ({{ victim.name }}) on file.
+    {% endif %}
+  </li>
+  {% if issuer.secondary_party %}
+  <li>
+    <strong>Cc {{ issuer.secondary_party }} (the underlying strategy manager).</strong>
+    While {{ issuer.short_name }} controls the wrapper token, {{ issuer.secondary_party }}
+    controls the underlying yield strategy that the wrapper represents. If
+    {{ issuer.short_name }}'s freeze mechanism is unavailable or contested,
+    {{ issuer.secondary_party }} is a secondary route.
+  </li>
+  {% endif %}
+  <li>
+    <strong>Confirm chain-of-custody preservation</strong> on this evidence package
+    (case files <span class="mono">{{ case_id }}</span> and any linked cases).
+    {{ investigator.organization }} retains full per-transaction evidence receipts
+    including raw chain state at fetch time.
+  </li>
+</ol>
+
+<h3>6.2 Investigative (next 1–2 weeks)</h3>
+<ol>
+  <li>Issue legal process to {{ issuer.short_name }} for KYC records of any party
+      that attempts to redeem or transfer the position from
+      <span class="mono">{{ current_holder.address }}</span>.</li>
+  <li>Issue legal process to any centralized exchange that subsequently receives
+      transfers from any of the identified perpetrator wallets (see Section 5).</li>
+  {% if victim.citizenship == "France" and issuer.jurisdiction and "Germany" in issuer.jurisdiction %}
+  <li>Coordinate via French national police (OCLCTIC / Cyber unit) with German
+      Federal Financial Supervisory Authority (BaFin) under EU cross-border
+      regulatory cooperation frameworks. Both France and Germany are MiCA
+      signatories; this case falls clearly within EU consumer-protection scope.</li>
+  {% else %}
+  <li>{% if issuer.jurisdiction %}Coordinate with regulatory authorities in {{ issuer.jurisdiction }}.{% endif %}</li>
+  {% endif %}
+</ol>
+
+<h2>7. Service Providers Involved</h2>
+<table class="evidence">
+  <tr>
+    <th>Service</th><th>Role</th><th>Why relevant</th><th>Suggested contact</th>
+  </tr>
+  <tr>
+    <td>{{ issuer.name }}</td>
+    <td>Issuer of stolen {{ asset.symbol }} wrapper token</td>
+    <td>Has protocol-level control over redemption; primary freeze target</td>
+    <td>{{ issuer.contact_email }} (request escalation to compliance)</td>
+  </tr>
+  {% if issuer.secondary_party %}
+  <tr>
+    <td>{{ issuer.secondary_party }}</td>
+    <td>{{ issuer.secondary_role|capitalize }}</td>
+    <td>Controls underlying strategy; secondary freeze route</td>
+    <td>(public compliance channel)</td>
+  </tr>
+  {% endif %}
+</table>
+
+<h2>8. Independent Verification</h2>
+<p>
+  All evidence in this package is derived from public Ethereum mainnet state and
+  is independently verifiable. Each transaction listed includes a hyperlink to
+  its Etherscan record. The {{ investigator.organization }} case folder contains,
+  for each transaction:
+</p>
+<ul>
+  <li>The raw transaction object as returned by Etherscan API v2</li>
+  <li>The transaction receipt (gas, status, event logs)</li>
+  <li>The block header (timestamp, miner)</li>
+  <li>A timestamp documenting when the data was fetched</li>
+  <li>A direct link to Etherscan for human verification</li>
+</ul>
+<p class="small">
+  Software version: {{ investigator.organization }} v{{ software_version }}.
+  Data sources: Etherscan API v2 (transaction history), CoinGecko (historical USD
+  valuation), {{ investigator.organization }} label database (cross-case entity
+  attribution).
+</p>
+
+<h2>9. Investigator Attestation</h2>
+<div class="signature-block">
+  <p>
+    I, the undersigned, prepared this evidence package on behalf of
+    {{ victim.name }} based on public Ethereum mainnet data fetched between
+    {{ trace_started_at }} and {{ generated_at }} UTC.
+    All transaction hashes, addresses, timestamps, and amounts in this package
+    are accurate to the best of my knowledge and were independently verified at
+    fetch time.
+  </p>
+  <p>
+    Signature: ______________________________________
+  </p>
+  <p>
+    Print name: <strong>{{ investigator.name }}</strong> &nbsp; · &nbsp;
+    Date: ______________________
+  </p>
+</div>
+
+<footer class="brief-footer">
+  <p>
+    Generated by {{ investigator.organization }} on {{ generated_at }} UTC.
+    Case file: <span class="mono">{{ case_id }}</span>.
+    Brief identifier: <span class="mono">{{ brief_id }}</span>.
+    Software version: {{ software_version }}.
+  </p>
+  <p>
+    This document contains personally-identifiable information about the victim
+    and is intended solely for the receiving law enforcement agency.
+  </p>
+</footer>
+
+</body>
+</html>

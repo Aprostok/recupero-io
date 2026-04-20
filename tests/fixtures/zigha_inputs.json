@@ -1,0 +1,14 @@
+{
+  "_comment": "Zigha case inputs for the Phase 1 acceptance harness.",
+  "case_id": "ZIGHA-VERIFY",
+  "chain": "ethereum",
+  "seed_address": "0x0cdC902f4448b51289398261DB41E8ADC99bE955",
+  "incident_time": "2025-10-09T00:00:00Z",
+  "incident_buffer_minutes": 360,
+  "_notes": [
+    "seed_address is the Ethereum-side victim address referenced in the Zigha CFI report.",
+    "incident_time set to start-of-day UTC on the confirmed theft date (Oct 9, 2025).",
+    "incident_buffer_minutes is 6 hours back to capture activity if the actual unauthorized tx happened slightly before midnight UTC.",
+    "Once you populate zigha_expected.json with anchor txs from the CFI report, the verify script will diff against this trace's output."
+  ]
+}

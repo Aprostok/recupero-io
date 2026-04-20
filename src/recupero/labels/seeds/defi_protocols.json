@@ -1,0 +1,58 @@
+[
+  {
+    "address": "0x1111111254EEB25477B68fb85Ed929f73A960582",
+    "name": "1inch v5: Aggregation Router",
+    "category": "defi_protocol",
+    "source": "1inch_docs",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x111111125421cA6dc452d289314280a0f8842A65",
+    "name": "1inch v6: Aggregation Router",
+    "category": "defi_protocol",
+    "source": "1inch_docs",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+    "name": "Uniswap V3: Router",
+    "category": "defi_protocol",
+    "source": "uniswap_docs",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
+    "name": "Uniswap V3: Router 2",
+    "category": "defi_protocol",
+    "source": "uniswap_docs",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
+    "name": "Uniswap V2: Router",
+    "category": "defi_protocol",
+    "source": "uniswap_docs",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xDef1C0ded9bec7F1a1670819833240f027b25EfF",
+    "name": "0x: Exchange Proxy",
+    "category": "defi_protocol",
+    "source": "0x_docs",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0x66a9893cC07D91D95644AEDD05D03f95e1dBA8Af",
+    "name": "Uniswap: Universal Router",
+    "category": "defi_protocol",
+    "source": "uniswap_docs",
+    "confidence": "high",
+    "added_at": "2025-01-01T00:00:00Z"
+  }
+]

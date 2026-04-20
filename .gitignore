@@ -1,0 +1,46 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Secrets — NEVER commit
+.env
+.env.*
+!.env.example
+
+# Case data — this is client PII and live investigations
+data/cases/
+data/prices_cache/
+data/labels/local_*.json
+
+# Outputs and generated artifacts
+*.log
+*.pdf
+diag_*.py
+check_keys.py
+add_*.py
+add_sister_labels.py
+dump_hl_victim.py
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Patch files — these were transient build artifacts, no need to version
+apply_patch*.py
+recupero.zip

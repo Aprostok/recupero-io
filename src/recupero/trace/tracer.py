@@ -8,7 +8,7 @@ the structure friendly to that.
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -40,6 +40,13 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _normalize_address(chain: Chain, address: Address) -> Address:
+    """Normalize per-chain. EVM chains use checksum; Solana/others pass through."""
+    if chain in (Chain.ethereum, Chain.arbitrum, Chain.bsc, Chain.base, Chain.polygon):
+        return to_checksum_address(address)
+    return address
+
+
 def run_trace(
     *,
     chain: Chain,
@@ -50,13 +57,17 @@ def run_trace(
     env: RecuperoEnv,
     case_dir: Path,
 ) -> Case:
-    """End-to-end trace. Writes evidence receipts as it goes; caller writes case.json."""
+    """End-to-end trace. Writes evidence receipts as it goes; caller writes case.json.
+
+    When ``config.trace.max_depth`` > 1 this performs a BFS recursive trace:
+    for each transfer returned from the seed, if the destination is eligible
+    per the policy (labeled-exchange/mixer/bridge check, contract check, dust
+    threshold, depth limit), the destination is enqueued as a new seed and
+    re-traced. Cycle detection via a visited-addresses set.
+    """
     if incident_time.tzinfo is None:
         incident_time = incident_time.replace(tzinfo=timezone.utc)
-    # Only EVM chains have checksum addresses; Solana uses base58, other
-    # non-EVM chains may use entirely different formats.
-    if chain in (Chain.ethereum, Chain.arbitrum, Chain.bsc, Chain.base, Chain.polygon):
-        seed_address = to_checksum_address(seed_address)
+    seed_address = _normalize_address(chain, seed_address)
 
     adapter = ChainAdapter.for_chain(chain, (config, env))
     label_store = LabelStore.load(config)
@@ -67,6 +78,12 @@ def run_trace(
         dust_threshold_usd=Decimal(str(config.trace.dust_threshold_usd)),
         stop_at_exchange=config.trace.stop_at_exchange,
     )
+    # Override stop_at_contract / stop_at_bridge from config if set there;
+    # otherwise keep the policy defaults (both True).
+    if hasattr(config.trace, "stop_at_contract"):
+        policy.stop_at_contract = config.trace.stop_at_contract
+    if hasattr(config.trace, "stop_at_bridge"):
+        policy.stop_at_bridge = config.trace.stop_at_bridge
 
     started = utcnow()
     log.info(
@@ -84,28 +101,95 @@ def run_trace(
         trace_started_at=started,
     )
 
-    transfers = _trace_one_hop(
-        adapter=adapter,
-        label_store=label_store,
-        price_client=price_client,
-        policy=policy,
-        from_address=seed_address,
-        incident_time=incident_time,
-        config=config,
-        hop_depth=0,
-        parent_transfer_id=None,
-        evidence_dir=case_dir / "tx_evidence",
-    )
+    # --- Recursive BFS driver ---
+    # We maintain:
+    #   - visited: addresses we've already traced-from (cycle detection)
+    #   - queued: addresses currently in the queue (avoid dupes before visiting)
+    #   - is_contract_cache: per-chain address → bool (to avoid repeat RPCs)
+    all_transfers: list[Transfer] = []
+    visited: set[str] = set()
+    queued: set[str] = set()
+    is_contract_cache: dict[str, bool] = {}
+    queue: deque[tuple[Address, int]] = deque([(seed_address, 0)])
+    queued.add(seed_address.lower())
 
-    case.transfers = transfers
-    case.exchange_endpoints = _compute_exchange_endpoints(transfers)
-    case.unlabeled_counterparties = _collect_unlabeled(transfers)
-    case.total_usd_out = _sum_usd(transfers)
+    addresses_processed = 0
+
+    while queue:
+        current_address, current_depth = queue.popleft()
+        addr_key = current_address.lower()
+        queued.discard(addr_key)
+        if addr_key in visited:
+            continue
+        visited.add(addr_key)
+        addresses_processed += 1
+
+        log.info(
+            "tracing #%d address=%s depth=%d visited=%d queued=%d",
+            addresses_processed, current_address, current_depth, len(visited), len(queue),
+        )
+
+        # Fetch outflows for this address. Errors at this stage shouldn't
+        # abort the whole trace — log and move on.
+        try:
+            hop_transfers = _trace_one_hop(
+                adapter=adapter,
+                label_store=label_store,
+                price_client=price_client,
+                policy=policy,
+                from_address=current_address,
+                incident_time=incident_time,
+                config=config,
+                hop_depth=current_depth,
+                parent_transfer_id=None,
+                evidence_dir=case_dir / "tx_evidence",
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "trace hop failed for %s (depth=%d): %s — continuing",
+                current_address, current_depth, e,
+            )
+            continue
+
+        all_transfers.extend(hop_transfers)
+
+        # Decide which destinations to enqueue for the next hop
+        if current_depth + 1 >= policy.max_depth:
+            continue
+
+        for transfer in hop_transfers:
+            if not policy.should_traverse(transfer):
+                continue
+            dest = transfer.to_address
+            dest_key = dest.lower()
+            if dest_key in visited or dest_key in queued:
+                continue
+
+            # Contract check: one RPC per unique address, cached
+            if policy.stop_at_contract:
+                if dest_key not in is_contract_cache:
+                    try:
+                        is_contract_cache[dest_key] = adapter.is_contract(dest)
+                    except Exception as e:  # noqa: BLE001
+                        log.debug("is_contract check failed for %s: %s", dest, e)
+                        # Be conservative: if we can't check, assume contract (skip)
+                        is_contract_cache[dest_key] = True
+                if is_contract_cache[dest_key]:
+                    continue
+
+            queue.append((dest, current_depth + 1))
+            queued.add(dest_key)
+
+    case.transfers = all_transfers
+    case.exchange_endpoints = _compute_exchange_endpoints(all_transfers)
+    case.unlabeled_counterparties = _collect_unlabeled(all_transfers)
+    case.total_usd_out = _sum_usd(all_transfers)
     case.trace_completed_at = utcnow()
 
     log.info(
-        "trace complete case=%s transfers=%d total_usd=%s endpoints=%d duration=%.1fs",
+        "trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs",
         case_id,
+        addresses_processed,
         len(case.transfers),
         case.total_usd_out,
         len(case.exchange_endpoints),

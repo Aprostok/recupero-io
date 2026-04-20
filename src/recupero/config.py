@@ -20,6 +20,8 @@ class TraceParams(BaseModel):
     max_depth: int = 1
     dust_threshold_usd: float = 50.0
     stop_at_exchange: bool = True
+    stop_at_contract: bool = True  # stop traversal at contract destinations (DeFi pools/routers)
+    stop_at_bridge: bool = True    # stop traversal at labeled bridges (can't follow cross-chain)
     incident_buffer_minutes: int = 60
     max_transfers_per_address: int = 500
 
@@ -27,7 +29,7 @@ class TraceParams(BaseModel):
 class EthereumParams(BaseModel):
     api_base: str = "https://api.etherscan.io/v2/api"
     chain_id: int = 1
-    requests_per_second: float = 4.0
+    requests_per_second: float = 2.5
     block_range_chunk: int = 10_000
     native_symbol: str = "ETH"
     native_decimals: int = 18
@@ -37,7 +39,7 @@ class ArbitrumParams(BaseModel):
     """Arbitrum One — Etherscan V2 unified API, chain_id=42161."""
     api_base: str = "https://api.etherscan.io/v2/api"
     chain_id: int = 42161
-    requests_per_second: float = 4.0
+    requests_per_second: float = 2.5
     block_range_chunk: int = 10_000
     native_symbol: str = "ETH"  # Arbitrum native gas token is ETH
     native_decimals: int = 18
@@ -50,7 +52,7 @@ class BscParams(BaseModel):
     """BNB Smart Chain — Etherscan V2 unified API, chain_id=56."""
     api_base: str = "https://api.etherscan.io/v2/api"
     chain_id: int = 56
-    requests_per_second: float = 4.0
+    requests_per_second: float = 2.5
     block_range_chunk: int = 10_000
     native_symbol: str = "BNB"
     native_decimals: int = 18

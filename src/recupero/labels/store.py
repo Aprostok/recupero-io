@@ -79,7 +79,13 @@ class LabelStore:
             return
 
         if not isinstance(data, list):
-            log.error("label file %s must contain a JSON array", path)
+            # Not all JSON files in seeds/ are label arrays. issuers.json (added
+            # in v15) is an object with _meta + tokens. Skip silently — it's
+            # consumed by recupero.freeze, not the label store.
+            log.debug(
+                "skipping non-array seed file %s (probably consumed by another module)",
+                path,
+            )
             return
 
         for entry in data:

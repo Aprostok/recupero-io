@@ -44,14 +44,32 @@ def trace_cmd(
     incident_time: str = typer.Option(..., help="ISO-8601 UTC timestamp of the incident."),
     case_id: str = typer.Option(..., help="Identifier for this case. Becomes folder name."),
     config_path: Path | None = typer.Option(None, "--config", help="Optional YAML config override."),
-    max_depth: int | None = typer.Option(None, help="Override trace depth (Phase 1 default 1)."),
-    dust_threshold_usd: float | None = typer.Option(None, help="Skip transfers below this USD value."),
+    max_depth: int | None = typer.Option(None, help="Override trace depth. 1=single hop (default), 2-5=recursive BFS trace."),
+    dust_threshold_usd: float | None = typer.Option(None, help="Skip transfers below this USD value. Default 50."),
+    follow_contracts: bool = typer.Option(
+        False, "--follow-contracts",
+        help="By default the tracer stops at contract destinations (DeFi routers, pools). "
+             "Use this flag to follow them (produces much larger traces).",
+    ),
+    follow_bridges: bool = typer.Option(
+        False, "--follow-bridges",
+        help="By default the tracer stops at labeled bridges (cross-chain flows can't "
+             "be followed with a single-chain adapter). Use this to record bridge-side "
+             "transfers on the current chain even if labeled as bridge.",
+    ),
 ) -> None:
     cfg, env = load_config(config_path)
     if max_depth is not None:
         cfg.trace.max_depth = max_depth
     if dust_threshold_usd is not None:
         cfg.trace.dust_threshold_usd = dust_threshold_usd
+    # Thread through to the trace policy via the config. TraceParams will accept
+    # these fields (added in v13); if they're not there yet we just set them on
+    # the object so getattr-style access still finds them.
+    if follow_contracts:
+        cfg.trace.stop_at_contract = False
+    if follow_bridges:
+        cfg.trace.stop_at_bridge = False
 
     try:
         chain_enum_early = Chain(chain)
@@ -390,6 +408,183 @@ def hyperliquid_scrape_cmd(
     console.print(f"  Events: {len(case.transfers)} ({len(outflows)} outflows, {len(inflows)} inflows)")
     console.print(f"  Total USDC movement: ${usd_total:,.2f}")
     console.print(f"  Wrote {case_path}")
+
+
+@app.command("find-dormant")
+def find_dormant_cmd(
+    case_id: str = typer.Argument(..., help="Case ID to analyze."),
+    min_usd: float = typer.Option(10000.0, help="Only report addresses with >= this USD value (default $10K)."),
+    config_path: Path | None = typer.Option(None, "--config", help="Optional YAML config override."),
+) -> None:
+    """Find addresses from a case that still hold meaningful USD value.
+
+    These are your potential freeze targets — addresses where stolen money
+    landed and hasn't moved since. The output is sorted by current USD held,
+    descending. Currently Ethereum-only (Solana/Arbitrum/BSC support pending).
+    """
+    from decimal import Decimal as _D
+    from recupero.dormant import find_dormant_in_case, write_dormant_report
+
+    cfg, env = load_config(config_path)
+    if not env.ETHERSCAN_API_KEY:
+        console.print("[bold red]Missing ETHERSCAN_API_KEY in .env[/]")
+        raise typer.Exit(code=2)
+
+    store = CaseStore(cfg)
+    try:
+        case = store.read_case(case_id)
+    except FileNotFoundError:
+        console.print(f"[bold red]No case found:[/] {case_id}")
+        raise typer.Exit(code=1) from None
+
+    setup_logging(cfg.logging.level, store.case_dir(case_id))
+
+    console.print(f"\n[bold]Scanning case {case_id} for dormant freeze targets[/]")
+    console.print(f"  Chain: {case.chain.value}")
+    console.print(f"  Transfers in case: {len(case.transfers)}")
+    console.print(f"  Min USD threshold: ${min_usd:,.2f}\n")
+
+    candidates = find_dormant_in_case(
+        case=case, config=cfg, env=env, min_usd=_D(str(min_usd)),
+    )
+
+    if not candidates:
+        console.print("[yellow]No addresses found holding ≥ threshold.[/]")
+        console.print(
+            "  This might mean: (a) all stolen funds have been moved through, "
+            "(b) the case isn't deep enough — try re-tracing with --max-depth 3+, "
+            "(c) the threshold is too high — try --min-usd 1000."
+        )
+        return
+
+    # Pretty-print top candidates
+    console.print(f"[bold green]Found {len(candidates)} dormant target(s):[/]\n")
+    for i, c in enumerate(candidates, start=1):
+        console.print(f"  {i}. [bold]{c.address}[/]  →  [bold green]${c.total_usd:,.2f}[/]")
+        console.print(f"     Holdings: {c.top_holding_summary()}")
+        console.print(
+            f"     Received during case: ${c.inflow_usd_during_case:,.2f} "
+            f"across {c.inflow_count} transfer(s)"
+        )
+        console.print(f"     Explorer: {c.explorer_url}\n")
+
+    out_path = write_dormant_report(store.case_dir(case_id), candidates)
+    console.print(f"[bold]Wrote[/] {out_path}")
+
+
+@app.command("list-freeze-targets")
+def list_freeze_targets_cmd(
+    case_id: str = typer.Argument(..., help="Case ID to analyze."),
+    min_usd: float = typer.Option(10000.0, help="Min USD per dormant address (default $10K)."),
+    min_holding_usd: float = typer.Option(1000.0, help="Min USD per individual holding (default $1K)."),
+    config_path: Path | None = typer.Option(None, "--config", help="Optional YAML config override."),
+) -> None:
+    """End-to-end freeze-target identification: find dormant wallets, match to
+    issuers, and print a ranked action list of who to email and what to ask for.
+
+    This is the closest thing to a one-command answer for "what do I do with
+    this case." For each freezable holding, you get the issuer's contact info,
+    their freeze capability rating, and a short summary line.
+    """
+    from decimal import Decimal as _D
+    from recupero.dormant import find_dormant_in_case
+    from recupero.freeze import group_by_issuer, match_freeze_asks
+
+    cfg, env = load_config(config_path)
+    if not env.ETHERSCAN_API_KEY:
+        console.print("[bold red]Missing ETHERSCAN_API_KEY in .env[/]")
+        raise typer.Exit(code=2)
+
+    store = CaseStore(cfg)
+    try:
+        case = store.read_case(case_id)
+    except FileNotFoundError:
+        console.print(f"[bold red]No case found:[/] {case_id}")
+        raise typer.Exit(code=1) from None
+
+    setup_logging(cfg.logging.level, store.case_dir(case_id))
+
+    console.print(f"\n[bold]Step 1/2:[/] Finding dormant addresses in {case_id}...")
+    candidates = find_dormant_in_case(
+        case=case, config=cfg, env=env, min_usd=_D(str(min_usd)),
+    )
+    if not candidates:
+        console.print("[yellow]No dormant addresses found at the given threshold.[/]")
+        return
+
+    console.print(f"  Found {len(candidates)} dormant candidate(s).\n")
+    console.print(f"[bold]Step 2/2:[/] Matching token holdings to known issuers...\n")
+
+    matched, unmatched = match_freeze_asks(
+        candidates, min_holding_usd=_D(str(min_holding_usd)),
+    )
+
+    if not matched:
+        console.print(
+            "[yellow]No matched freeze asks found.[/] The dormant wallets hold "
+            "tokens we don't have issuer info for. Add them to "
+            "src/recupero/labels/seeds/issuers.json if they're worth chasing."
+        )
+        if unmatched:
+            console.print(f"\n[dim]Unmatched holdings worth investigating:[/]")
+            for h in unmatched[:10]:
+                usd = f"${h.usd_value:,.2f}" if h.usd_value else "?"
+                console.print(f"  - {h.decimal_amount:,.2f} {h.token.symbol} ({usd}) — contract: {h.token.contract}")
+        return
+
+    console.print(f"[bold green]Found {len(matched)} actionable freeze ask(s):[/]\n")
+
+    grouped = group_by_issuer(matched)
+    for issuer_name, asks in grouped.items():
+        total = sum((a.holding_usd_value or _D("0") for a in asks), start=_D("0"))
+        first = asks[0]  # all asks for one issuer share the same IssuerEntry contact info
+        cap_color = {"yes": "green", "limited": "yellow", "no": "red"}.get(
+            first.issuer.freeze_capability, "white"
+        )
+        console.print(f"[bold cyan]→ {issuer_name}[/]  ([{cap_color}]freeze: {first.issuer.freeze_capability}[/])")
+        console.print(f"  Contact:      {first.issuer.primary_contact or '(none — see notes)'}")
+        if first.issuer.secondary_contact:
+            console.print(f"  Secondary:    {first.issuer.secondary_contact}")
+        console.print(f"  Jurisdiction: {first.issuer.jurisdiction}")
+        console.print(f"  Total ask:    [bold green]${total:,.2f}[/] across {len(asks)} holding(s)")
+        console.print(f"  Notes:        {first.issuer.freeze_notes}")
+        for ask in asks:
+            console.print(f"    • {ask.short_summary()}")
+        console.print()
+
+    if unmatched:
+        console.print(
+            f"[dim]({len(unmatched)} holding(s) skipped — no issuer info. "
+            f"Run with --min-holding-usd 0 to see them.)[/]"
+        )
+
+    # Persist as JSON for downstream tooling
+    out_path = store.case_dir(case_id) / "freeze_asks.json"
+    import json
+    out_path.write_text(
+        json.dumps({
+            "case_id": case_id,
+            "total_asks": len(matched),
+            "by_issuer": {
+                issuer: [
+                    {
+                        "address": a.candidate_address,
+                        "chain": a.chain.value,
+                        "symbol": a.holding_symbol,
+                        "amount": str(a.holding_decimal_amount),
+                        "usd_value": str(a.holding_usd_value) if a.holding_usd_value else None,
+                        "primary_contact": a.issuer.primary_contact,
+                        "freeze_capability": a.issuer.freeze_capability,
+                        "explorer_url": a.explorer_url,
+                    }
+                    for a in asks
+                ]
+                for issuer, asks in grouped.items()
+            },
+        }, indent=2),
+        encoding="utf-8",
+    )
+    console.print(f"[bold]Wrote[/] {out_path}")
 
 
 def main() -> None:  # pragma: no cover

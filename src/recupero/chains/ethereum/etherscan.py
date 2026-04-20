@@ -92,6 +92,21 @@ class EtherscanClient:
         data = self._call(module="account", action="balance", address=address, tag=tag)
         return int(data["result"])
 
+    def get_token_balance(self, contract: str, address: str, tag: str = "latest") -> int:
+        """Current ERC-20 balance of `address` for token at `contract`. Returns
+        the raw integer amount (decimal-aware conversion is the caller's job)."""
+        data = self._call(
+            module="account",
+            action="tokenbalance",
+            contractaddress=contract,
+            address=address,
+            tag=tag,
+        )
+        try:
+            return int(data["result"])
+        except (KeyError, ValueError, TypeError):
+            return 0
+
     def get_normal_transactions(
         self, address: str, start_block: int, end_block: int = 99_999_999, page: int = 1, offset: int = 1000
     ) -> list[dict[str, Any]]:
@@ -190,9 +205,16 @@ class EtherscanClient:
         if isinstance(data, dict) and data.get("status") == "0":
             msg = str(data.get("message", "")).lower()
             result = data.get("result", "")
+            result_lower = str(result).lower()
             if "no transactions found" in msg or "no records found" in msg:
                 return {"status": "1", "message": "OK", "result": []}
-            if "rate limit" in str(result).lower() or "rate limit" in msg:
+            # Etherscan returns rate-limit notices in different shapes depending
+            # on which endpoint and tier. Patterns observed in production:
+            #   "Max rate limit reached"
+            #   "Max calls per sec rate limit reached (3/sec)"
+            #   "rate limit"  (BSC/Arbitrum variants)
+            # Match permissively on the substring "rate limit" in either field.
+            if "rate limit" in msg or "rate limit" in result_lower:
                 raise EtherscanRateLimitError(str(result) or msg)
             raise EtherscanError(f"Etherscan error: {data.get('message')} / {data.get('result')}")
         return data

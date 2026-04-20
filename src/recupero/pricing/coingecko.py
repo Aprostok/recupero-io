@@ -314,6 +314,74 @@ class CoinGeckoClient:
         except (KeyError, TypeError):
             return None
 
+    def price_now(self, token: TokenRef) -> PriceResult:
+        """Returns current USD price for a TokenRef. Uses /simple/price endpoint
+        (much cheaper than /coins/{id}/history). For dormant-wallet detection
+        we want today's price, not the historical price at the incident.
+
+        Stablecoins still get the $1.00 par treatment.
+        """
+        symbol_upper = token.symbol.upper()
+        if symbol_upper in _STABLECOIN_SYMBOLS:
+            canonical = _CANONICAL_STABLECOIN_CONTRACTS.get((token.chain, symbol_upper))
+            token_contract_lower = (token.contract or "").lower()
+            if canonical and token_contract_lower == canonical:
+                return PriceResult(
+                    usd_value=Decimal("1.00"), source="stablecoin_par", error=None,
+                )
+
+        cg_id = token.coingecko_id or self._resolve_cg_id(token)
+        if not cg_id:
+            return PriceResult(
+                usd_value=None, source=None, error="no_coingecko_mapping",
+            )
+
+        # Cache key includes today's date so we re-fetch at most once per day
+        from datetime import date as _date
+        today_iso = _date.today().isoformat()
+        cache_key = f"coingecko:simple:{cg_id}:{today_iso}"
+        cached = self.cache.get(cache_key)
+        if cached is not None and "usd" in cached:
+            usd = cached["usd"]
+            return PriceResult(
+                usd_value=Decimal(str(usd)) if usd is not None else None,
+                source=cache_key, error=None if usd is not None else cached.get("error"),
+            )
+
+        try:
+            usd = self._fetch_simple_price(cg_id)
+        except Exception as e:  # noqa: BLE001
+            log.debug("coingecko price_now failed for %s: %s", cg_id, e)
+            self.cache.put(cache_key, {"usd": None, "error": f"fetch_error: {e}"})
+            return PriceResult(usd_value=None, source=None, error=f"fetch_error: {e}")
+
+        self.cache.put(cache_key, {"usd": str(usd) if usd is not None else None})
+        return PriceResult(
+            usd_value=Decimal(str(usd)) if usd is not None else None,
+            source=cache_key, error=None if usd is not None else "no_price_data",
+        )
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        retry=retry_if_exception_type(httpx.TransportError),
+        reraise=True,
+    )
+    def _fetch_simple_price(self, cg_id: str) -> Decimal | None:
+        url = f"{self._base_url()}/simple/price"
+        params = {"ids": cg_id, "vs_currencies": "usd", **self._auth_params()}
+        self.limiter.wait()
+        resp = self._client.get(url, headers=self._headers(), params=params)
+        if resp.status_code == 429:
+            time.sleep(15)
+            raise httpx.TransportError("rate limited")
+        resp.raise_for_status()
+        data = resp.json()
+        try:
+            return Decimal(str(data[cg_id]["usd"]))
+        except (KeyError, TypeError):
+            return None
+
     def _base_url(self) -> str:
         return self.BASE_URL_PRO if self._is_pro else self.BASE_URL_PUBLIC
 

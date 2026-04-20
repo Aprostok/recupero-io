@@ -1,0 +1,154 @@
+{
+  "_meta": {
+    "description": "Maps freezable-token contracts to the issuer that controls them. When a freeze target's holdings include one of these tokens, the brief generator knows who to address. All addresses lowercased.",
+    "schema_version": 1,
+    "source_caveat": "These contact emails and freeze powers are based on public knowledge as of 2025-2026. Verify before sending. Issuer policies change."
+  },
+  "tokens": [
+    {
+      "chain": "ethereum",
+      "contract": "0x6b175474e89094c44da98b954eedeac495271d0f",
+      "symbol": "DAI",
+      "issuer": "Sky Protocol (formerly MakerDAO)",
+      "freeze_capability": "limited",
+      "freeze_notes": "DAI is permissionless; Sky/MKR governance can pause specific functions but cannot freeze individual addresses. Reach out for visibility and possible governance action.",
+      "primary_contact": "security@makerdao.com",
+      "secondary_contact": "https://forum.sky.money",
+      "jurisdiction": "Cayman Islands (Sky Foundation)"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+      "symbol": "USDC",
+      "issuer": "Circle",
+      "freeze_capability": "yes",
+      "freeze_notes": "Circle has demonstrated freeze capability via blacklist on multiple occasions. Compliance request through their LE portal.",
+      "primary_contact": "compliance@circle.com",
+      "secondary_contact": "https://www.circle.com/en/legal/law-enforcement",
+      "jurisdiction": "United States (Massachusetts)"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xdac17f958d2ee523a2206206994597c13d831ec7",
+      "symbol": "USDT",
+      "issuer": "Tether",
+      "freeze_capability": "yes",
+      "freeze_notes": "Tether has frozen billions in USDT and is generally responsive to law enforcement requests. Submit through their LE channel.",
+      "primary_contact": "compliance@tether.to",
+      "secondary_contact": "https://tether.to/en/contact-law-enforcement",
+      "jurisdiction": "British Virgin Islands"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x4fabb145d64652a948d72533023f6e7a623c7c53",
+      "symbol": "BUSD",
+      "issuer": "Paxos (BUSD discontinued by NYDFS Feb 2023)",
+      "freeze_capability": "yes",
+      "freeze_notes": "Paxos retains freeze capability on remaining BUSD supply. Note: BUSD was deprecated by NYDFS — minting halted.",
+      "primary_contact": "compliance@paxos.com",
+      "jurisdiction": "United States (New York)"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x6c3ea9036406852006290770bedfcaba0e23a0e8",
+      "symbol": "PYUSD",
+      "issuer": "Paxos / PayPal",
+      "freeze_capability": "yes",
+      "freeze_notes": "Paxos issues PYUSD on PayPal's behalf and has freeze capability.",
+      "primary_contact": "compliance@paxos.com",
+      "jurisdiction": "United States (New York)"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb",
+      "symbol": "msyrupUSDp",
+      "issuer": "Midas",
+      "freeze_capability": "yes",
+      "freeze_notes": "Midas issues mSyrup* tokens via permissioned mint/redeem and can freeze specific holders. EU-regulated (BaFin).",
+      "primary_contact": "compliance@midas.app",
+      "secondary_contact": "team@midas.app",
+      "jurisdiction": "Germany (BaFin)"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xae78736cd615f374d3085123a210448e74fc6393",
+      "symbol": "rETH",
+      "issuer": "Rocket Pool",
+      "freeze_capability": "no",
+      "freeze_notes": "rETH is a fully decentralized liquid staking token — no freeze capability exists.",
+      "primary_contact": null,
+      "jurisdiction": "decentralized"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+      "symbol": "stETH",
+      "issuer": "Lido",
+      "freeze_capability": "no",
+      "freeze_notes": "stETH is a permissionless liquid staking token. Lido DAO has no individual-address freeze capability.",
+      "primary_contact": null,
+      "jurisdiction": "decentralized"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xcbb7c0006f23900c38eb856149f799620fcb8a4a",
+      "symbol": "cbBTC",
+      "issuer": "Coinbase",
+      "freeze_capability": "yes",
+      "freeze_notes": "Coinbase issues cbBTC and retains freeze capability via their compliance program.",
+      "primary_contact": "law-enforcement@coinbase.com",
+      "jurisdiction": "United States"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x18084fba666a33d37592fa2633fd49a74dd93a88",
+      "symbol": "tBTC",
+      "issuer": "Threshold Network",
+      "freeze_capability": "no",
+      "freeze_notes": "tBTC is a decentralized BTC bridge token — no freeze capability exists at the contract level.",
+      "primary_contact": null,
+      "jurisdiction": "decentralized"
+    },
+    {
+      "chain": "arbitrum",
+      "contract": "0xaf88d065e77c8cc2239327c5edb3a432268e5831",
+      "symbol": "USDC",
+      "issuer": "Circle",
+      "freeze_capability": "yes",
+      "freeze_notes": "Native Arbitrum USDC issued by Circle. Same compliance channel as Ethereum USDC.",
+      "primary_contact": "compliance@circle.com",
+      "secondary_contact": "https://www.circle.com/en/legal/law-enforcement",
+      "jurisdiction": "United States (Massachusetts)"
+    },
+    {
+      "chain": "arbitrum",
+      "contract": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+      "symbol": "USDT",
+      "issuer": "Tether",
+      "freeze_capability": "yes",
+      "freeze_notes": "Arbitrum-native USDT issued by Tether.",
+      "primary_contact": "compliance@tether.to",
+      "jurisdiction": "British Virgin Islands"
+    },
+    {
+      "chain": "solana",
+      "contract": "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
+      "symbol": "USDC",
+      "issuer": "Circle",
+      "freeze_capability": "yes",
+      "freeze_notes": "Solana USDC issued by Circle.",
+      "primary_contact": "compliance@circle.com",
+      "jurisdiction": "United States (Massachusetts)"
+    },
+    {
+      "chain": "solana",
+      "contract": "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",
+      "symbol": "USDT",
+      "issuer": "Tether",
+      "freeze_capability": "yes",
+      "freeze_notes": "Solana USDT issued by Tether.",
+      "primary_contact": "compliance@tether.to",
+      "jurisdiction": "British Virgin Islands"
+    }
+  ]
+}

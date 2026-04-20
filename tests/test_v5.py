@@ -52,7 +52,7 @@ class TestSpoofedStablecoin:
 
     def test_real_usdc_priced_at_par(self, tmp_path):
         client = self._client(tmp_path)
-        token = _make_token("USDC", _CANONICAL_STABLECOIN_CONTRACTS["USDC"])
+        token = _make_token("USDC", _CANONICAL_STABLECOIN_CONTRACTS[(Chain.ethereum, "USDC")])
         result = client.price_at(token, _now())
         assert result.usd_value == Decimal("1.00")
         assert result.source == "stablecoin_par"
@@ -60,7 +60,7 @@ class TestSpoofedStablecoin:
 
     def test_real_usdt_priced_at_par_case_insensitive(self, tmp_path):
         client = self._client(tmp_path)
-        token = _make_token("usdt", _CANONICAL_STABLECOIN_CONTRACTS["USDT"].upper())
+        token = _make_token("usdt", _CANONICAL_STABLECOIN_CONTRACTS[(Chain.ethereum, "USDT")].upper())
         result = client.price_at(token, _now())
         assert result.usd_value == Decimal("1.00")
 
@@ -93,12 +93,12 @@ class TestAggregate:
             incident_time=_now(), trace_started_at=_now(), trace_completed_at=_now(),
             transfers=[
                 _transfer(from_addr=victim, to_addr=perp, symbol="USDC",
-                          contract=_CANONICAL_STABLECOIN_CONTRACTS["USDC"],
+                          contract=_CANONICAL_STABLECOIN_CONTRACTS[(Chain.ethereum, "USDC")],
                           amount=Decimal("100000"), usd=Decimal("100000"),
                           tx_hash="0x1"),
                 # Non-perpetrator destination — should be excluded
                 _transfer(from_addr=victim, to_addr=not_perp, symbol="USDC",
-                          contract=_CANONICAL_STABLECOIN_CONTRACTS["USDC"],
+                          contract=_CANONICAL_STABLECOIN_CONTRACTS[(Chain.ethereum, "USDC")],
                           amount=Decimal("50000"), usd=Decimal("50000"),
                           tx_hash="0x2"),
                 _transfer(from_addr=victim, to_addr=perp, symbol="ETH",

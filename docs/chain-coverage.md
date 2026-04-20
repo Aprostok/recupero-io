@@ -7,16 +7,18 @@ Last verified: 2026-04-20, against the Zigha case.
 | Chain        | Adapter     | Tier   | Status         | Verified       | Notes |
 |--------------|-------------|--------|----------------|----------------|-------|
 | Ethereum     | EvmAdapter  | Free   | ✅ Production  | 25+ live cases | Hundreds of transfers traced cleanly. |
-| Arbitrum     | EvmAdapter  | Free   | ✅ Works       | 2 live cases   | Needs the startblock workaround (patch v7). USD pricing incomplete — USDC shows up unpriced. |
+| Arbitrum     | EvmAdapter  | Free   | ✅ Works       | 2 live cases   | Needs the startblock workaround (patch v7). USDC/USDT/DAI pricing fixed in v12. |
 | BSC          | EvmAdapter  | **Paid**| ❌ Blocked    | Error verified | Etherscan V2 free tier rejects BSC: `Free API access is not supported for this chain`. Need paid Etherscan plan, alternative API (bscscan free tier, Alchemy), or public RPC. |
-| Solana       | SolanaAdapter (Helius) | Free | ✅ Works | 1 live case | USD pricing works for USDC/USDT/SOL/JitoSOL/mSOL/BONK/JUP; other mints fall through unpriced. |
+| Solana       | SolanaAdapter (Helius) | Free | ✅ Works | 1 live case | Stablecoin pricing (USDC/USDT) chain-aware as of v12; other SPL tokens fall through unpriced. |
 | Hyperliquid  | Scraper (not adapter) | Free | ✅ Works | 2 live cases | Data model maps awkwardly to our Transfer abstraction — ledger events recorded as synthetic Transfers. USDC flows documented; no perp-position reconstruction. |
+| Base         | EvmAdapter  | Free   | ⚠️ Untested   | No             | Code present, CoinGecko platform mapped, no real trace yet. Likely works but needs verification. |
+| Polygon      | EvmAdapter  | Free   | ⚠️ Untested   | No             | Same as Base. |
 
 ## Known issues by chain
 
 ### Arbitrum
-- **USD pricing for tokens other than native ETH is broken.** The CoinGecko `_resolve_cg_id` hardcodes `platform="ethereum"`, so Arbitrum USDC (`0xaf88d065...`) is looked up at the Ethereum platform path and returns 404. Fix: make `_resolve_cg_id` chain-aware (use `platform="arbitrum-one"` for Arbitrum tokens). Tracked as backlog.
 - **Block-to-timestamp queries return values that make `startblock` misbehave** on Etherscan V2's Arbitrum endpoint. Worked around by querying with `startblock=0` and filtering client-side. See patch v7.
+- **Stablecoin pricing fixed in v12** — previously Arbitrum USDC was flagged as a spoof because the canonical-stablecoin map was Ethereum-only. Now chain-scoped.
 
 ### BSC
 - **Free-tier blocked entirely.** We ship the code path but any real call returns the tier error. The CLI surfaces this cleanly rather than crashing.

@@ -32,8 +32,9 @@ Design notes:
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,20 @@ EDITORIAL_TEMPLATE: dict[str, Any] = {
 }
 
 
+def _now_utc_iso_seconds() -> str:
+    """UTC timestamp, second precision, ISO 8601 with trailing Z."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _parse_usd_string(s: str) -> Decimal:
+    """Parse '$47,840.12' -> Decimal('47840.12'). Returns Decimal('0') on failure."""
+    s = str(s).replace("$", "").replace(",", "").strip()
+    try:
+        return Decimal(s)
+    except Exception:
+        return Decimal("0")
+
+
 def short_addr(addr: str) -> str:
     """Shorten an address for display: 0xAAAAbbbb...XXXXyyyy -> 0xAA…yy (ethscan style)."""
     if len(addr) <= 10:
@@ -94,11 +109,6 @@ def iso_to_display_date(iso: str) -> str:
     """'2026-04-19T14:22:17Z' -> 'April 19, 2026'."""
     dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
     return dt.strftime("%B %d, %Y").replace(" 0", " ")
-
-
-def iso_to_display_time(iso: str) -> str:
-    """'2026-04-19T14:22:17Z' -> '2026-04-19T14:22:17Z' (pass through)."""
-    return iso
 
 
 def _extract_primary_chain(case: Case) -> str:
@@ -199,7 +209,6 @@ def _extract_destinations(
     destinations = []
     for addr in sorted(candidate_addrs, key=lambda a: per_addr_received[a], reverse=True):
         label_name = per_addr_label_name.get(addr)
-        category = per_addr_category.get(addr)
         is_freezable = addr in freeze_targets_by_addr
         is_mixer = per_addr_is_mixer[addr]
 
@@ -382,26 +391,18 @@ def _compute_totals(case: Case, freezable: list[dict[str, Any]], unrecoverable: 
     FREEZABLE_PERCENT    — TOTAL_FREEZABLE_USD / TOTAL_LOSS_USD, capped at 100%
     RECOVERABLE_PERCENT  — MAX_RECOVERABLE_USD / TOTAL_LOSS_USD (the honest number)
     """
-    def parse_usd(s: str) -> Decimal:
-        s = str(s).replace("$", "").replace(",", "").strip()
-        try:
-            return Decimal(s)
-        except Exception:
-            return Decimal("0")
-
     # The actual loss — from case data, not from freezable sum
     total_loss = _compute_total_drained(case)
 
     # Per-status sums from the freezable list
-    total_freezable = sum((parse_usd(f.get("total_usd", "0")) for f in freezable), start=Decimal("0"))
-    total_suspected = sum((parse_usd(f.get("total_suspected_usd", "0")) for f in freezable), start=Decimal("0"))
-    total_excluded = sum((parse_usd(f.get("total_excluded_usd", "0")) for f in freezable), start=Decimal("0"))
+    total_freezable = sum((_parse_usd_string(f.get("total_usd", "0")) for f in freezable), start=Decimal("0"))
+    total_suspected = sum((_parse_usd_string(f.get("total_suspected_usd", "0")) for f in freezable), start=Decimal("0"))
+    total_excluded = sum((_parse_usd_string(f.get("total_excluded_usd", "0")) for f in freezable), start=Decimal("0"))
 
     # Unrecoverable sum from editorial's UNRECOVERABLE_ITEMS (best-effort regex parse)
     total_unrecoverable = Decimal("0")
     for u in unrecoverable:
         asset = u.get("asset", "")
-        import re
         m = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
         if m:
             try:
@@ -510,8 +511,6 @@ def _extract_exchanges(freeze_asks: dict[str, Any]) -> list[dict[str, Any]]:
     list of deposit addresses. The JS builder iterates this to produce Exhibit C
     letters (one per exchange).
     """
-    from collections import defaultdict
-
     deposits_by_exchange: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for d in freeze_asks.get("exchange_deposits", []):
         exchange = d.get("exchange", "Unknown Exchange")
@@ -559,7 +558,7 @@ def emit_brief(
     # --- Basic fields ---
     primary_chain = _extract_primary_chain(case)
     report_date = editorial["REPORT_DATE"]
-    report_time_utc = datetime.utcnow().isoformat().split(".")[0] + "Z"
+    report_time_utc = _now_utc_iso_seconds()
 
     # --- Victim fields ---
     victim_wallet = case.seed_address

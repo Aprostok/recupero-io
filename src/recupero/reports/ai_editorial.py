@@ -27,8 +27,8 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -51,6 +51,9 @@ AI_DRAFTED_KEYS = [
 
 # Fields the AI is given but does NOT draft (it just passes them through or
 # uses them as facts to ground its drafts).
+# TODO: when a second investigator joins, read these from the active user's
+# config or from env vars (e.g. RECUPERO_INVESTIGATOR_NAME) rather than
+# hardcoding. Solo-operator mode for now.
 STATIC_EDITORIAL_DEFAULTS = {
     "INVESTIGATOR_NAME": "Alec Prostok",
     "INVESTIGATOR_EMAIL": "alec@recupero.io",
@@ -215,6 +218,11 @@ def _short_addr(addr: str) -> str:
     return f"{addr[:6]}…{addr[-4:]}"
 
 
+def _now_utc_iso_seconds() -> str:
+    """UTC timestamp, second precision, ISO 8601 with trailing Z."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], victim_narrative: str | None) -> dict[str, Any]:
     """Build a compact, readable summary of the case for the AI prompt.
 
@@ -222,12 +230,8 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
     distill it to the facts the AI needs: total drained, first-hop address,
     freezable holdings by issuer, mixer/bridge destinations, label hints.
     """
-    from collections import defaultdict
-
-    # Total USD drained (sum of USD value of transfers leaving the victim wallet)
     seed_lower = case.seed_address.lower()
     total_drained = Decimal("0")
-    first_hop_candidate: dict[str, Any] = {}
     per_first_hop_usd: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_first_hop_first_seen: dict[str, datetime] = {}
 
@@ -255,8 +259,7 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
                 bridge_addresses.append(t.counterparty.address)
 
     # Pick the largest first hop as the consolidation/drainer address
-    first_hop_addr = None
-    first_hop_usd = Decimal("0")
+    first_hop_candidate: dict[str, Any] = {}
     if per_first_hop_usd:
         first_hop_addr, first_hop_usd = max(per_first_hop_usd.items(), key=lambda kv: kv[1])
         first_hop_candidate = {
@@ -447,11 +450,14 @@ def build_editorial_dict(ai_output: dict[str, Any], case_summary: dict[str, Any]
     If `case_id` is provided, it's used as the CASE_ID; otherwise CASE_ID is left
     as a TODO for the reviewer to assign.
     """
+    now_iso = _now_utc_iso_seconds()
+    today_human = datetime.now(timezone.utc).strftime("%B %d, %Y").replace(" 0", " ")
+
     editorial: dict[str, Any] = {
         # Top-level review gate
         "AI_GENERATED": True,
         "AI_MODEL": MODEL,
-        "AI_GENERATED_AT": datetime.utcnow().isoformat().split(".")[0] + "Z",
+        "AI_GENERATED_AT": now_iso,
         "REVIEW_REQUIRED": True,
         "REVIEW_INSTRUCTIONS": (
             "This file was drafted by an AI. Before running `recupero emit-brief`, "
@@ -464,7 +470,7 @@ def build_editorial_dict(ai_output: dict[str, Any], case_summary: dict[str, Any]
 
     # Mechanical fields the AI doesn't draft — derived from the case
     editorial["CASE_ID"] = case_id if case_id else "TODO: assign case ID (e.g. RCP-2026-0427)"
-    editorial["REPORT_DATE"] = datetime.utcnow().strftime("%B %d, %Y").replace(" 0", " ")
+    editorial["REPORT_DATE"] = today_human
     editorial["INCIDENT_DATE"] = case_summary.get("incident_date_human", "TODO: incident date")
     editorial["PRIMARY_CHAIN"] = {
         "ethereum": "Ethereum",
@@ -494,10 +500,11 @@ def build_editorial_dict(ai_output: dict[str, Any], case_summary: dict[str, Any]
         editorial["VICTIM_ADDRESS_LINE1"] = "TODO: victim street address"
         editorial["VICTIM_ADDRESS_LINE2"] = "TODO: victim city/state/zip"
 
-    # AI-drafted fields (with their confidence sibling fields)
+    # AI-drafted fields. Single pass: copy each AI-drafted key and its
+    # _AI_CONFIDENCE sibling together. Required-key validation happened
+    # earlier in _validate_ai_output.
     for key in AI_DRAFTED_KEYS:
         editorial[key] = ai_output.get(key)
-    for key in AI_DRAFTED_KEYS:
         conf_key = f"{key}_AI_CONFIDENCE"
         if conf_key in ai_output:
             editorial[conf_key] = ai_output[conf_key]

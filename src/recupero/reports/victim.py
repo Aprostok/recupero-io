@@ -13,7 +13,6 @@ All `data/cases/` is gitignored, so PII is never accidentally committed.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict
@@ -21,7 +20,6 @@ from pydantic import BaseModel, ConfigDict
 
 class VictimInfo(BaseModel):
     """PII about the victim. Loaded only when generating briefs."""
-
     model_config = ConfigDict(extra="forbid")
 
     name: str
@@ -69,7 +67,3 @@ def example_victim() -> VictimInfo:
         wallet_address="0x0000000000000000000000000000000000000001",
         incident_summary="Wallet drain on 2025-01-01.",
     )
-
-
-def now_iso() -> str:
-    return datetime.utcnow().isoformat() + "Z"

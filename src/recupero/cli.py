@@ -364,7 +364,8 @@ def hyperliquid_scrape_cmd(
 ) -> None:
     """Fetch Hyperliquid non-funding ledger events (deposits, withdrawals, transfers)
     and write them as a case file. No API key required."""
-    from decimal import Decimal
+    # Lazy import: keeps Hyperliquid adapter out of startup path so the CLI
+    # still works even if the Hyperliquid module is broken or missing deps.
     from recupero.chains.hyperliquid.scraper import scrape_hyperliquid_case
 
     cfg, env = load_config(config_path)
@@ -414,7 +415,8 @@ def find_dormant_cmd(
     landed and hasn't moved since. The output is sorted by current USD held,
     descending. Currently Ethereum-only (Solana/Arbitrum/BSC support pending).
     """
-    from decimal import Decimal as _D
+    # Lazy import: dormant.py pulls in RPC dependencies we don't want loaded
+    # for `--help` or unrelated commands.
     from recupero.dormant import find_dormant_in_case, write_dormant_report
 
     cfg, env = load_config(config_path)
@@ -437,7 +439,7 @@ def find_dormant_cmd(
     console.print(f"  Min USD threshold: ${min_usd:,.2f}\n")
 
     candidates = find_dormant_in_case(
-        case=case, config=cfg, env=env, min_usd=_D(str(min_usd)),
+        case=case, config=cfg, env=env, min_usd=Decimal(str(min_usd)),
     )
 
     if not candidates:
@@ -477,11 +479,11 @@ def list_freeze_targets_cmd(
     this case." For each freezable holding, you get the issuer's contact info,
     their freeze capability rating, and a short summary line.
     """
-    from decimal import Decimal as _D
+    # Lazy imports: dormant + freeze modules are heavyweight; avoid loading
+    # them at CLI startup.
     from recupero.dormant import find_dormant_in_case
     from recupero.freeze import group_by_issuer, match_freeze_asks
     from recupero.freeze.asks import detect_exchange_deposits, group_exchange_deposits_by_exchange
-    from recupero.labels.store import LabelStore
 
     cfg, env = load_config(config_path)
     if not env.ETHERSCAN_API_KEY:
@@ -499,17 +501,17 @@ def list_freeze_targets_cmd(
 
     console.print(f"\n[bold]Step 1/2:[/] Finding dormant addresses in {case_id}...")
     candidates = find_dormant_in_case(
-        case=case, config=cfg, env=env, min_usd=_D(str(min_usd)),
+        case=case, config=cfg, env=env, min_usd=Decimal(str(min_usd)),
     )
     if not candidates:
         console.print("[yellow]No dormant addresses found at the given threshold.[/]")
         return
 
     console.print(f"  Found {len(candidates)} dormant candidate(s).\n")
-    console.print(f"[bold]Step 2/2:[/] Matching token holdings to known issuers...\n")
+    console.print("[bold]Step 2/2:[/] Matching token holdings to known issuers...\n")
 
     matched, unmatched = match_freeze_asks(
-        candidates, min_holding_usd=_D(str(min_holding_usd)),
+        candidates, min_holding_usd=Decimal(str(min_holding_usd)),
     )
 
     if not matched:
@@ -519,7 +521,7 @@ def list_freeze_targets_cmd(
             "src/recupero/labels/seeds/issuers.json if they're worth chasing."
         )
         if unmatched:
-            console.print(f"\n[dim]Unmatched holdings worth investigating:[/]")
+            console.print("\n[dim]Unmatched holdings worth investigating:[/]")
             for h in unmatched[:10]:
                 usd = f"${h.usd_value:,.2f}" if h.usd_value else "?"
                 console.print(f"  - {h.decimal_amount:,.2f} {h.token.symbol} ({usd}) — contract: {h.token.contract}")
@@ -529,7 +531,7 @@ def list_freeze_targets_cmd(
 
     grouped = group_by_issuer(matched)
     for issuer_name, asks in grouped.items():
-        total = sum((a.holding_usd_value or _D("0") for a in asks), start=_D("0"))
+        total = sum((a.holding_usd_value or Decimal("0") for a in asks), start=Decimal("0"))
         first = asks[0]
         cap_color = {"yes": "green", "limited": "yellow", "no": "red"}.get(
             first.issuer.freeze_capability, "white"
@@ -556,18 +558,18 @@ def list_freeze_targets_cmd(
     # These need a subpoena-backed exchange letter (Exhibit C), not an issuer
     # freeze — the funds are under the exchange's custody, not in a wallet
     # the issuer can blacklist.
-    console.print(f"[bold]Step 3/3:[/] Detecting exchange deposits in the trace...")
+    console.print("[bold]Step 3/3:[/] Detecting exchange deposits in the trace...")
     label_store = LabelStore.load(cfg)
     exchange_deposits = detect_exchange_deposits(
         case=case,
         label_store=label_store,
-        min_deposit_usd=_D(str(min_holding_usd)),
+        min_deposit_usd=Decimal(str(min_holding_usd)),
     )
     if exchange_deposits:
         console.print(f"  Found {len(exchange_deposits)} exchange deposit address(es):\n")
         grouped_exch = group_exchange_deposits_by_exchange(exchange_deposits)
         for exchange_name, deposits in grouped_exch.items():
-            total = sum((d.total_deposited_usd for d in deposits), start=_D("0"))
+            total = sum((d.total_deposited_usd for d in deposits), start=Decimal("0"))
             console.print(f"[bold blue]▶ {exchange_name}[/]  ([blue]exchange[/])")
             console.print(f"  Total deposited: [bold green]${total:,.2f}[/] across {len(deposits)} address(es)")
             for d in deposits:
@@ -620,6 +622,10 @@ def list_freeze_targets_cmd(
     console.print(f"[bold]Wrote[/] {out_path}")
 
 
+# TODO: `brief` is legacy — predates the emit-brief + ai-editorial pipeline.
+# Retained for Midas/Zigha-era workflows. Consider removing once all active
+# cases use the emit-brief flow. Do not delete without confirming no active
+# scripts or runbooks still call it.
 @app.command("brief")
 def brief_cmd(
     primary_case: str = typer.Option(..., "--case", help="Primary case ID (the victim's case)."),
@@ -862,7 +868,6 @@ def ai_editorial_cmd(
     # Load narrative from file if specified
     victim_narrative = narrative
     if narrative_file:
-        from pathlib import Path
         nf = Path(narrative_file)
         if not nf.exists():
             console.print(f"[bold red]Narrative file not found:[/] {nf}")

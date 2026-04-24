@@ -133,7 +133,7 @@ def load_config(config_path: Path | None = None) -> tuple[RecuperoConfig, Recupe
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
-    with path.open() as f:
+    with path.open(encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
 
 

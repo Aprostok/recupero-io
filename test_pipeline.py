@@ -4,6 +4,15 @@ Runs the full Recupero trace → freeze-targets → emit-brief pipeline against
 the ALEC-TEST-2026 case and verifies the output at each stage. Designed as a
 regression guard: if refactoring breaks the pipeline, this test fails loudly.
 
+Two modes:
+  --fast (default): skip `list-freeze-targets` if freeze_asks.json is fresh
+                    and has the expected structure. Fast re-runs, no Etherscan
+                    API calls, no rate-limit risk. The file's contents are still
+                    validated so the test isn't a rubber-stamp.
+  --full:           force fresh `list-freeze-targets` run. Takes ~10 minutes,
+                    hits Etherscan API 400+ times. Use when you've changed the
+                    trace or freeze logic and want to verify it end-to-end.
+
 What it does NOT test:
   - ai-editorial (costs money per run; requires Anthropic API key)
   - JS builders (separate test harness; left for a future integration test)
@@ -11,7 +20,8 @@ What it does NOT test:
   - The trace step itself (takes 10+ minutes; assumes case.json already exists)
 
 Usage:
-    python test_pipeline.py
+    python test_pipeline.py           # fast mode (default)
+    python test_pipeline.py --full    # force regen of freeze_asks.json
 
 Exit codes:
     0 = all checks passed
@@ -23,6 +33,7 @@ Run from the recupero-io repo root with the venv active.
 
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 import sys
@@ -41,6 +52,7 @@ EXPECTED_LOSS_MATCHES_CEILING = True  # MAX_RECOVERABLE should cap at TOTAL_LOSS
 # Paths (relative to repo root)
 REPO_ROOT = Path(__file__).parent
 CASE_DIR = REPO_ROOT / "data" / "cases" / CASE_ID
+CASE_JSON = CASE_DIR / "case.json"
 FREEZE_ASKS_PATH = CASE_DIR / "freeze_asks.json"
 EDITORIAL_PATH = CASE_DIR / "brief_editorial.json"
 FREEZE_BRIEF_PATH = CASE_DIR / "freeze_brief.json"
@@ -96,6 +108,35 @@ def assert_close(label: str, actual: Decimal, expected: Decimal, tolerance: Deci
     print(f"  ✓ {label} ({actual} ≈ {expected})")
 
 
+def freeze_asks_looks_fresh() -> tuple[bool, str]:
+    """Decide whether we can skip list-freeze-targets in fast mode.
+
+    Returns (ok, reason). ok=True means the existing freeze_asks.json is usable
+    for validation. reason is a short explanation for the log.
+    """
+    if not FREEZE_ASKS_PATH.exists():
+        return False, "freeze_asks.json does not exist"
+    if not CASE_JSON.exists():
+        return False, "case.json does not exist (unexpected)"
+
+    # If case.json is newer than freeze_asks.json, the freeze data is stale.
+    asks_mtime = FREEZE_ASKS_PATH.stat().st_mtime
+    case_mtime = CASE_JSON.stat().st_mtime
+    if case_mtime > asks_mtime:
+        return False, f"case.json is newer than freeze_asks.json (case was re-traced)"
+
+    # Validate structure — if by_issuer is missing or empty, treat as stale.
+    try:
+        asks = json.loads(FREEZE_ASKS_PATH.read_text(encoding="utf-8-sig"))
+    except Exception as e:
+        return False, f"freeze_asks.json is not valid JSON: {e}"
+    by_issuer = asks.get("by_issuer", {})
+    if not by_issuer:
+        return False, "freeze_asks.json has no by_issuer entries"
+
+    return True, f"freeze_asks.json is fresh ({len(by_issuer)} issuers)"
+
+
 # ==================== CHECKS ====================
 def check_setup():
     """Verify prerequisites before running the test."""
@@ -108,8 +149,7 @@ def check_setup():
         )
     print(f"  ✓ Case directory exists: {CASE_DIR}")
 
-    case_json = CASE_DIR / "case.json"
-    if not case_json.exists():
+    if not CASE_JSON.exists():
         raise SetupError(f"case.json not found in {CASE_DIR}")
     print(f"  ✓ case.json exists")
 
@@ -127,25 +167,42 @@ def check_setup():
     print(f"  ✓ recupero CLI is on PATH")
 
 
-def step_1_list_freeze_targets():
-    """Stage 1: run list-freeze-targets, expect freeze_asks.json with Circle + Tether."""
-    print("\n[Step 1: list-freeze-targets]")
+def step_1_list_freeze_targets(full_mode: bool):
+    """Stage 1: ensure freeze_asks.json exists and has Circle + Tether entries.
 
-    # Delete existing freeze_asks.json so we verify it's regenerated
-    if FREEZE_ASKS_PATH.exists():
-        FREEZE_ASKS_PATH.unlink()
-        print(f"  (deleted existing {FREEZE_ASKS_PATH.name})")
+    In --full mode, always runs the CLI (10-minute scan).
+    In --fast mode (default), skips the CLI call if the existing file is fresh
+    and has the expected structure — but still validates its contents.
+    """
+    print("\n[Step 1: freeze_asks.json has Circle + Tether]")
 
-    # Note: list-freeze-targets takes ~10 min on ALEC-TEST-2026 because it checks
-    # the balance of every address in the trace. Expected behavior.
-    result = run_cli(["list-freeze-targets", CASE_ID, "--min-usd", "1000"])
+    ran_cli = False
+    if full_mode:
+        print("  --full mode: regenerating freeze_asks.json (this takes ~10 min)")
+        if FREEZE_ASKS_PATH.exists():
+            FREEZE_ASKS_PATH.unlink()
+            print(f"  (deleted existing {FREEZE_ASKS_PATH.name})")
+        run_cli(["list-freeze-targets", CASE_ID, "--min-usd", "1000"])
+        ran_cli = True
+    else:
+        fresh, reason = freeze_asks_looks_fresh()
+        if fresh:
+            print(f"  (fast mode) skipping CLI call: {reason}")
+        else:
+            print(f"  (fast mode) CLI call needed: {reason}")
+            run_cli(["list-freeze-targets", CASE_ID, "--min-usd", "1000"])
+            ran_cli = True
 
+    # Either way, the file must exist now.
     if not FREEZE_ASKS_PATH.exists():
         raise TestFailure(f"{FREEZE_ASKS_PATH} was not created")
-    print(f"  ✓ freeze_asks.json created")
+    if ran_cli:
+        print(f"  ✓ freeze_asks.json created by CLI")
+    else:
+        print(f"  ✓ freeze_asks.json exists (reused from previous run)")
 
+    # Validate contents — the real assertion.
     asks = json.loads(FREEZE_ASKS_PATH.read_text(encoding="utf-8-sig"))
-
     issuers_found = set(asks.get("by_issuer", {}).keys())
     for expected in EXPECTED_ISSUERS:
         assert_in(f"{expected} in by_issuer", expected, issuers_found)
@@ -252,8 +309,18 @@ def step_4_validate_brief_numbers():
 
 # ==================== RUN ====================
 def main():
+    parser = argparse.ArgumentParser(description="Recupero pipeline smoke test")
+    parser.add_argument(
+        "--full", action="store_true",
+        help="Force fresh list-freeze-targets run (~10 minutes, hits Etherscan API). "
+             "Default is fast mode: skip that step if freeze_asks.json is already fresh.",
+    )
+    args = parser.parse_args()
+
+    mode_label = "full (regenerate everything)" if args.full else "fast (reuse fresh freeze_asks.json if possible)"
     print("=" * 70)
     print(f"Recupero pipeline smoke test — case: {CASE_ID}")
+    print(f"Mode: {mode_label}")
     print("=" * 70)
 
     try:
@@ -263,7 +330,7 @@ def main():
         return 2
 
     try:
-        step_1_list_freeze_targets()
+        step_1_list_freeze_targets(full_mode=args.full)
         step_2_emit_brief_blocked_by_review_gate()
         step_3_emit_brief_success_after_review()
         step_4_validate_brief_numbers()

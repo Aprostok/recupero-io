@@ -1,4 +1,4 @@
-"""Issuer detection.
+"""Issuer detection and exchange-deposit detection.
 
 Given a list of dormant freeze candidates (each with token holdings), determine
 WHO to contact to freeze each holding. Maps token contracts to issuer info
@@ -8,6 +8,11 @@ The output is a list of "freeze asks" — one per (candidate × freezable token)
 ranked by USD value descending. Each ask carries everything an investigator
 needs to send the request: address, amount, issuer name, contact email,
 freeze-capability rating, and jurisdiction.
+
+This module also handles exchange-deposit detection: scanning case transfers
+for destinations labeled as CEX deposit addresses or hot wallets, so
+investigators can issue subpoena-backed exchange letters (Exhibit C) in
+addition to issuer freeze letters (Exhibit B).
 
 Limitations:
   - Tokens not in the issuer database show up as "unknown_issuer" — the
@@ -22,17 +27,23 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 
 from recupero.dormant.finder import DormantCandidate, TokenHolding
-from recupero.models import Chain
+from recupero.labels.store import LabelStore
+from recupero.models import Case, Chain, Label, LabelCategory
 
 log = logging.getLogger(__name__)
 
 
 _ISSUER_DB_PATH = Path(__file__).parent.parent / "labels" / "seeds" / "issuers.json"
+
+
+# ---------- Issuer models ---------- #
 
 
 @dataclass
@@ -66,6 +77,40 @@ class FreezeAsk:
             f"{self.holding_decimal_amount:,.2f} {self.holding_symbol} ({usd}) "
             f"at {self.candidate_address} → {self.issuer.issuer}"
         )
+
+
+# ---------- Exchange deposit models ---------- #
+
+
+@dataclass
+class ExchangeDeposit:
+    """One detected deposit to a CEX deposit address or hot wallet.
+
+    Represents a single address (exchange-labeled) that received funds
+    directly from any wallet in the trace. Total/count are aggregated
+    across all inbound transfers in the case to this address.
+    """
+    candidate_address: str          # the exchange address funds were deposited TO
+    chain: Chain
+    exchange: str                    # "Binance", "Coinbase", etc. — from Label.exchange
+    label_name: str                  # "Binance: Hot Wallet 14" — from Label.name
+    label_category: str              # "exchange_deposit" | "exchange_hot_wallet"
+    label_confidence: str            # "high" | "medium" | "low" — from Label.confidence
+    total_deposited_usd: Decimal
+    deposit_count: int               # how many separate transfers into this address
+    first_deposit_at: datetime | None
+    last_deposit_at: datetime | None
+    explorer_url: str
+
+    def short_summary(self) -> str:
+        usd = f"${self.total_deposited_usd:,.2f}"
+        return (
+            f"{usd} in {self.deposit_count} deposit(s) at {self.candidate_address} "
+            f"→ {self.exchange} ({self.label_category})"
+        )
+
+
+# ---------- Issuer loading & matching ---------- #
 
 
 def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEntry]:
@@ -156,46 +201,13 @@ def group_by_issuer(asks: list[FreezeAsk]) -> dict[str, list[FreezeAsk]]:
     for ask in asks:
         out.setdefault(ask.issuer.issuer, []).append(ask)
     return out
-# ============================================================
-# EXCHANGE DEPOSIT DETECTION (Path B, Apr 23 2026)
-# ============================================================
-
-from collections import defaultdict
-from datetime import datetime
-from recupero.labels.store import LabelStore
-from recupero.models import Case, LabelCategory
 
 
-@dataclass
-class ExchangeDeposit:
-    """One detected deposit to a CEX deposit address or hot wallet.
-
-    Represents a single address (exchange-labeled) that received funds
-    directly from any wallet in the trace. Total/count are aggregated
-    across all inbound transfers in the case to this address.
-    """
-    candidate_address: str          # the exchange address funds were deposited TO
-    chain: Chain
-    exchange: str                    # "Binance", "Coinbase", etc. — from Label.exchange
-    label_name: str                  # "Binance: Hot Wallet 14" — from Label.name
-    label_category: str              # "exchange_deposit" | "exchange_hot_wallet"
-    label_confidence: str            # "high" | "medium" | "low" — from Label.confidence
-    total_deposited_usd: Decimal
-    deposit_count: int               # how many separate transfers into this address
-    first_deposit_at: datetime | None
-    last_deposit_at: datetime | None
-    explorer_url: str
-
-    def short_summary(self) -> str:
-        usd = f"${self.total_deposited_usd:,.2f}"
-        return (
-            f"{usd} in {self.deposit_count} deposit(s) at {self.candidate_address} "
-            f"→ {self.exchange} ({self.label_category})"
-        )
+# ---------- Exchange deposit detection ---------- #
 
 
 def detect_exchange_deposits(
-    case: "Case",
+    case: Case,
     label_store: LabelStore,
     *,
     min_deposit_usd: Decimal = Decimal("1000"),
@@ -215,7 +227,7 @@ def detect_exchange_deposits(
     per_addr_count: dict[str, int] = defaultdict(int)
     per_addr_first: dict[str, datetime] = {}
     per_addr_last: dict[str, datetime] = {}
-    per_addr_label: dict[str, object] = {}
+    per_addr_label: dict[str, Label] = {}
 
     exchange_categories = {LabelCategory.exchange_deposit, LabelCategory.exchange_hot_wallet}
 
@@ -241,6 +253,8 @@ def detect_exchange_deposits(
         if total_usd < min_deposit_usd:
             continue
         label = per_addr_label[addr]
+        # TODO: when multi-chain support ships, pick the right explorer base
+        # from config.<chain>.explorer_base instead of hardcoding etherscan.io.
         out.append(ExchangeDeposit(
             candidate_address=addr,
             chain=case.chain,
@@ -268,4 +282,3 @@ def group_exchange_deposits_by_exchange(
     for d in deposits:
         out.setdefault(d.exchange, []).append(d)
     return out
-

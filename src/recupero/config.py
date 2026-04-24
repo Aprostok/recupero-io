@@ -99,6 +99,7 @@ class RecuperoEnv(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=True)
 
     ETHERSCAN_API_KEY: str = ""
+    ANTHROPIC_API_KEY: str = ""
     COINGECKO_API_KEY: str = ""
     COINGECKO_TIER: str = "demo"   # "demo" (free tier, public API) or "pro"
     HELIUS_API_KEY: str = ""

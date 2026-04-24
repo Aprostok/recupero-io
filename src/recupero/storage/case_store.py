@@ -79,7 +79,12 @@ class CaseStore:
     def read_case(self, case_id: str) -> Case:
         path = self.cases_root / case_id / "case.json"
         with path.open("rb") as f:
-            data = orjson.loads(f.read())
+            raw = f.read()
+        # Strip UTF-8 BOM if present (PowerShell's `Set-Content -Encoding UTF8`
+        # writes a BOM that orjson/json reject).
+        if raw.startswith(b"\xef\xbb\xbf"):
+            raw = raw[3:]
+        data = orjson.loads(raw)
         return Case.model_validate(data)
 
     # ----- internals -----

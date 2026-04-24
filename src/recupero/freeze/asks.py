@@ -71,7 +71,7 @@ class FreezeAsk:
 def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEntry]:
     """Load issuers.json into a dict keyed by (chain, contract_lower)."""
     src = path or _ISSUER_DB_PATH
-    raw = json.loads(src.read_text(encoding="utf-8"))
+    raw = json.loads(src.read_text(encoding="utf-8-sig"))
     out: dict[tuple[Chain, str], IssuerEntry] = {}
     for tok in raw.get("tokens", []):
         try:
@@ -156,3 +156,116 @@ def group_by_issuer(asks: list[FreezeAsk]) -> dict[str, list[FreezeAsk]]:
     for ask in asks:
         out.setdefault(ask.issuer.issuer, []).append(ask)
     return out
+# ============================================================
+# EXCHANGE DEPOSIT DETECTION (Path B, Apr 23 2026)
+# ============================================================
+
+from collections import defaultdict
+from datetime import datetime
+from recupero.labels.store import LabelStore
+from recupero.models import Case, LabelCategory
+
+
+@dataclass
+class ExchangeDeposit:
+    """One detected deposit to a CEX deposit address or hot wallet.
+
+    Represents a single address (exchange-labeled) that received funds
+    directly from any wallet in the trace. Total/count are aggregated
+    across all inbound transfers in the case to this address.
+    """
+    candidate_address: str          # the exchange address funds were deposited TO
+    chain: Chain
+    exchange: str                    # "Binance", "Coinbase", etc. — from Label.exchange
+    label_name: str                  # "Binance: Hot Wallet 14" — from Label.name
+    label_category: str              # "exchange_deposit" | "exchange_hot_wallet"
+    label_confidence: str            # "high" | "medium" | "low" — from Label.confidence
+    total_deposited_usd: Decimal
+    deposit_count: int               # how many separate transfers into this address
+    first_deposit_at: datetime | None
+    last_deposit_at: datetime | None
+    explorer_url: str
+
+    def short_summary(self) -> str:
+        usd = f"${self.total_deposited_usd:,.2f}"
+        return (
+            f"{usd} in {self.deposit_count} deposit(s) at {self.candidate_address} "
+            f"→ {self.exchange} ({self.label_category})"
+        )
+
+
+def detect_exchange_deposits(
+    case: "Case",
+    label_store: LabelStore,
+    *,
+    min_deposit_usd: Decimal = Decimal("1000"),
+) -> list[ExchangeDeposit]:
+    """Scan case.transfers for destinations labeled as exchange addresses.
+
+    For each address in the trace that's tagged exchange_deposit or
+    exchange_hot_wallet in the LabelStore, aggregate the inbound transfers
+    and produce one ExchangeDeposit per address.
+
+    Addresses with aggregate USD value below min_deposit_usd are dropped — a
+    $50 sweep to Binance isn't worth a compliance letter.
+    """
+    # Group transfers by destination address, only for addresses that are
+    # exchange-labeled. Track USD, count, first/last timestamps per address.
+    per_addr_usd: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    per_addr_count: dict[str, int] = defaultdict(int)
+    per_addr_first: dict[str, datetime] = {}
+    per_addr_last: dict[str, datetime] = {}
+    per_addr_label: dict[str, object] = {}
+
+    exchange_categories = {LabelCategory.exchange_deposit, LabelCategory.exchange_hot_wallet}
+
+    for t in case.transfers:
+        to_addr = t.to_address
+        label = label_store.lookup(to_addr, chain=case.chain)
+        if label is None or label.category not in exchange_categories:
+            continue
+
+        # Track aggregate inflows to this address
+        if t.usd_value_at_tx is not None:
+            per_addr_usd[to_addr] += t.usd_value_at_tx
+        per_addr_count[to_addr] += 1
+        per_addr_label[to_addr] = label
+        bt = t.block_time
+        if to_addr not in per_addr_first or bt < per_addr_first[to_addr]:
+            per_addr_first[to_addr] = bt
+        if to_addr not in per_addr_last or bt > per_addr_last[to_addr]:
+            per_addr_last[to_addr] = bt
+
+    out: list[ExchangeDeposit] = []
+    for addr, total_usd in per_addr_usd.items():
+        if total_usd < min_deposit_usd:
+            continue
+        label = per_addr_label[addr]
+        out.append(ExchangeDeposit(
+            candidate_address=addr,
+            chain=case.chain,
+            exchange=label.exchange or label.name,  # fallback to name if exchange field missing
+            label_name=label.name,
+            label_category=label.category.value,
+            label_confidence=label.confidence,
+            total_deposited_usd=total_usd,
+            deposit_count=per_addr_count[addr],
+            first_deposit_at=per_addr_first.get(addr),
+            last_deposit_at=per_addr_last.get(addr),
+            explorer_url=f"https://etherscan.io/address/{addr}",
+        ))
+
+    out.sort(key=lambda d: d.total_deposited_usd, reverse=True)
+    return out
+
+
+def group_exchange_deposits_by_exchange(
+    deposits: list[ExchangeDeposit],
+) -> dict[str, list[ExchangeDeposit]]:
+    """Group exchange deposits by exchange name. Useful for sending one
+    consolidated letter per exchange rather than N separate letters."""
+    out: dict[str, list[ExchangeDeposit]] = {}
+    for d in deposits:
+        out.setdefault(d.exchange, []).append(d)
+    return out
+

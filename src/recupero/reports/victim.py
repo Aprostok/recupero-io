@@ -47,7 +47,7 @@ def load_victim(case_dir: Path) -> VictimInfo:
             f"victim.json not found in {case_dir}. "
             "Create one with the schema in src/recupero/reports/victim.py."
         )
-    data = json.loads(path.read_text(encoding="utf-8"))
+    data = json.loads(path.read_text(encoding="utf-8-sig"))
     return VictimInfo.model_validate(data)
 
 

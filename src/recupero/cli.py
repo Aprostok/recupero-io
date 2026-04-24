@@ -28,6 +28,8 @@ from recupero.logging_setup import setup_logging
 from recupero.models import Chain, LabelCategory
 from recupero.reports.aggregate import aggregate_stolen, format_aggregate_markdown, write_aggregate_json
 from recupero.reports.brief import InvestigatorInfo, IssuerInfo, MIDAS_ISSUER, generate_briefs
+from recupero.reports.emit_brief import run_emit_brief, write_editorial_template
+from recupero.reports.ai_editorial import run_ai_editorial
 from recupero.reports.victim import VictimInfo, load_victim, write_victim
 from recupero.storage.case_store import CaseStore
 from recupero.trace.tracer import run_trace
@@ -63,9 +65,6 @@ def trace_cmd(
         cfg.trace.max_depth = max_depth
     if dust_threshold_usd is not None:
         cfg.trace.dust_threshold_usd = dust_threshold_usd
-    # Thread through to the trace policy via the config. TraceParams will accept
-    # these fields (added in v13); if they're not there yet we just set them on
-    # the object so getattr-style access still finds them.
     if follow_contracts:
         cfg.trace.stop_at_contract = False
     if follow_bridges:
@@ -77,7 +76,6 @@ def trace_cmd(
         console.print(f"[bold red]Unknown chain:[/] {chain}")
         raise typer.Exit(code=2)
 
-    # API key requirements vary by chain
     if chain_enum_early == Chain.solana:
         if not env.HELIUS_API_KEY:
             console.print("[bold red]Missing HELIUS_API_KEY in .env (required for Solana tracing)[/]")
@@ -92,8 +90,6 @@ def trace_cmd(
 
     chain_enum = chain_enum_early
 
-    # Advisory: BSC is not on Etherscan V2's free tier. Fail fast with guidance
-    # instead of making the user wade through a stack trace.
     if chain_enum == Chain.bsc:
         console.print(
             "[bold yellow]Warning:[/] BSC is not supported on Etherscan V2's free tier. "
@@ -102,7 +98,6 @@ def trace_cmd(
             "(2) wait for a future patch adding an alternative BSC data source "
             "(bscscan.com free tier, Alchemy, or a public RPC)."
         )
-        # Allow the user to proceed anyway in case they've upgraded their key
 
     try:
         when = datetime.fromisoformat(incident_time.replace("Z", "+00:00"))
@@ -121,7 +116,6 @@ def trace_cmd(
             case_dir=case_dir,
         )
     except Exception as e:  # noqa: BLE001
-        # Surface common API errors cleanly instead of dumping a stack trace.
         err_msg = str(e).lower()
         if "free api access is not supported" in err_msg or "upgrade your api plan" in err_msg:
             console.print(
@@ -136,7 +130,6 @@ def trace_cmd(
                 f"HELIUS_API_KEY in .env."
             )
             raise typer.Exit(code=3) from None
-        # Anything else: let the original exception propagate so we can see it
         raise
 
     case_path = store.write_case(case)
@@ -217,7 +210,6 @@ def inspect_cmd(
         console.print("[bold red]Missing ETHERSCAN_API_KEY in .env[/]")
         raise typer.Exit(code=2)
 
-    # Inspector logs are quiet (no per-case file handler — this is interactive)
     setup_logging(cfg.logging.level)
 
     try:
@@ -252,7 +244,7 @@ def inspect_cmd(
         out_dir = Path(cfg.storage.data_dir) / "labels"
         out_dir.mkdir(parents=True, exist_ok=True)
         out_path = out_dir / f"local_{save_label_file}.json"
-        existing = json.loads(out_path.read_text(encoding="utf-8")) if out_path.exists() else []
+        existing = json.loads(out_path.read_text(encoding="utf-8-sig")) if out_path.exists() else []
         new_entry = {
             "address": profile.address,
             "name": save_label_name or profile.likely_identity or "Inspector-saved label",
@@ -457,7 +449,6 @@ def find_dormant_cmd(
         )
         return
 
-    # Pretty-print top candidates
     console.print(f"[bold green]Found {len(candidates)} dormant target(s):[/]\n")
     for i, c in enumerate(candidates, start=1):
         console.print(f"  {i}. [bold]{c.address}[/]  →  [bold green]${c.total_usd:,.2f}[/]")
@@ -489,6 +480,8 @@ def list_freeze_targets_cmd(
     from decimal import Decimal as _D
     from recupero.dormant import find_dormant_in_case
     from recupero.freeze import group_by_issuer, match_freeze_asks
+    from recupero.freeze.asks import detect_exchange_deposits, group_exchange_deposits_by_exchange
+    from recupero.labels.store import LabelStore
 
     cfg, env = load_config(config_path)
     if not env.ETHERSCAN_API_KEY:
@@ -537,7 +530,7 @@ def list_freeze_targets_cmd(
     grouped = group_by_issuer(matched)
     for issuer_name, asks in grouped.items():
         total = sum((a.holding_usd_value or _D("0") for a in asks), start=_D("0"))
-        first = asks[0]  # all asks for one issuer share the same IssuerEntry contact info
+        first = asks[0]
         cap_color = {"yes": "green", "limited": "yellow", "no": "red"}.get(
             first.issuer.freeze_capability, "white"
         )
@@ -558,9 +551,33 @@ def list_freeze_targets_cmd(
             f"Run with --min-holding-usd 0 to see them.)[/]"
         )
 
-    # Persist as JSON for downstream tooling
+    # --- Exchange deposit detection (Path B) ---
+    # Scan the case for addresses labeled as CEX deposits/hot wallets.
+    # These need a subpoena-backed exchange letter (Exhibit C), not an issuer
+    # freeze — the funds are under the exchange's custody, not in a wallet
+    # the issuer can blacklist.
+    console.print(f"[bold]Step 3/3:[/] Detecting exchange deposits in the trace...")
+    label_store = LabelStore.load(cfg)
+    exchange_deposits = detect_exchange_deposits(
+        case=case,
+        label_store=label_store,
+        min_deposit_usd=_D(str(min_holding_usd)),
+    )
+    if exchange_deposits:
+        console.print(f"  Found {len(exchange_deposits)} exchange deposit address(es):\n")
+        grouped_exch = group_exchange_deposits_by_exchange(exchange_deposits)
+        for exchange_name, deposits in grouped_exch.items():
+            total = sum((d.total_deposited_usd for d in deposits), start=_D("0"))
+            console.print(f"[bold blue]▶ {exchange_name}[/]  ([blue]exchange[/])")
+            console.print(f"  Total deposited: [bold green]${total:,.2f}[/] across {len(deposits)} address(es)")
+            for d in deposits:
+                dt_str = d.last_deposit_at.strftime("%Y-%m-%d") if d.last_deposit_at else "?"
+                console.print(f"    • {d.short_summary()} (last seen {dt_str})")
+            console.print()
+    else:
+        console.print("  [dim]No exchange deposits detected.[/]\n")
+
     out_path = store.case_dir(case_id) / "freeze_asks.json"
-    import json
     out_path.write_text(
         json.dumps({
             "case_id": case_id,
@@ -581,14 +598,26 @@ def list_freeze_targets_cmd(
                 ]
                 for issuer, asks in grouped.items()
             },
+            "exchange_deposits": [
+                {
+                    "address": d.candidate_address,
+                    "chain": d.chain.value,
+                    "exchange": d.exchange,
+                    "label_name": d.label_name,
+                    "label_category": d.label_category,
+                    "label_confidence": d.label_confidence,
+                    "total_deposited_usd": str(d.total_deposited_usd),
+                    "deposit_count": d.deposit_count,
+                    "first_deposit_at": d.first_deposit_at.isoformat() if d.first_deposit_at else None,
+                    "last_deposit_at": d.last_deposit_at.isoformat() if d.last_deposit_at else None,
+                    "explorer_url": d.explorer_url,
+                }
+                for d in exchange_deposits
+            ],
         }, indent=2),
         encoding="utf-8",
     )
     console.print(f"[bold]Wrote[/] {out_path}")
-
-
-def main() -> None:  # pragma: no cover
-    app()
 
 
 @app.command("brief")
@@ -639,7 +668,6 @@ def brief_cmd(
     setup_logging(cfg.logging.level)
     store = CaseStore(cfg)
 
-    # Load primary case + victim PII
     try:
         primary = store.read_case(primary_case)
     except FileNotFoundError:
@@ -653,7 +681,6 @@ def brief_cmd(
         console.print("Hint: write data/cases/<case>/victim.json or use `recupero victim set`.")
         raise typer.Exit(code=2) from None
 
-    # Load linked cases
     linked = []
     if linked_cases.strip():
         for cid in [c.strip() for c in linked_cases.split(",") if c.strip()]:
@@ -662,7 +689,6 @@ def brief_cmd(
             except FileNotFoundError:
                 console.print(f"[yellow]Linked case not found, skipping:[/] {cid}")
 
-    # Build issuer: start from Midas defaults, override fields if provided
     issuer = IssuerInfo(
         name=issuer_name or MIDAS_ISSUER.name,
         short_name=issuer_short or MIDAS_ISSUER.short_name,
@@ -732,6 +758,162 @@ def victim_cmd(
     )
     path = write_victim(case_dir, victim)
     console.print(f"[green]Wrote[/] {path}")
+
+
+@app.command("emit-brief")
+def emit_brief_cmd(
+    case_id: str = typer.Argument(..., help="Case ID to emit a freeze_brief.json for."),
+    init: bool = typer.Option(
+        False, "--init",
+        help="Write a brief_editorial.json template and exit. Use this on a new case.",
+    ),
+) -> None:
+    """Emit freeze_brief.json for consumption by the JS triage builders.
+
+    Reads:  case.json, victim.json, freeze_asks.json, brief_editorial.json
+    Writes: freeze_brief.json  (in the same case directory)
+
+    Typical flow on a new case:
+      1. recupero trace --case-id MYCASE --address 0x... --incident-time ...
+      2. recupero victim --case MYCASE --name "..." --wallet 0x... ...
+      3. recupero list-freeze-targets MYCASE
+      4. recupero emit-brief MYCASE --init        # writes template
+      5. edit data/cases/MYCASE/brief_editorial.json (fill in TODO placeholders)
+      6. recupero emit-brief MYCASE               # emits freeze_brief.json
+    """
+    cfg, _ = load_config()
+    setup_logging(cfg.logging.level)
+    store = CaseStore(cfg)
+    case_dir = store.case_dir(case_id)
+
+    if init:
+        path = write_editorial_template(case_dir)
+        if path.exists() and path.stat().st_size > 0:
+            console.print(f"[green]Wrote editorial template to[/] {path}")
+            console.print(
+                "\n[bold]Next:[/] open the file, replace every TODO placeholder, "
+                f"then run:\n  recupero emit-brief {case_id}"
+            )
+        return
+
+    try:
+        out_path, brief = run_emit_brief(case_id, store)
+    except FileNotFoundError as e:
+        console.print(f"[bold red]{e}[/]")
+        raise typer.Exit(code=2) from None
+    except ValueError as e:
+        console.print(f"[bold red]{e}[/]")
+        raise typer.Exit(code=2) from None
+
+    console.print(f"\n[bold green]Wrote[/] {out_path}")
+    console.print(f"  Case: {brief.get('CASE_ID')}")
+    console.print(f"  Total loss: {brief.get('TOTAL_LOSS_USD')}")
+    console.print(f"  Freezable balance pool: {brief.get('TOTAL_FREEZABLE_USD')}")
+    console.print(f"  [bold green]Realistic recovery ceiling: {brief.get('MAX_RECOVERABLE_USD')} ({brief.get('RECOVERABLE_PERCENT')})[/]")
+    if brief.get("TOTAL_SUSPECTED_USD") and brief["TOTAL_SUSPECTED_USD"] not in ("$0", "$0.00"):
+        console.print(f"  [yellow]Suspected (needs verification): {brief.get('TOTAL_SUSPECTED_USD')}[/]")
+    console.print(f"  Destinations: {len(brief.get('DESTINATIONS', []))}")
+    console.print(f"  Freezable issuers: {len(brief.get('FREEZABLE', []))}")
+    console.print()
+    console.print("[bold]Next:[/] pass this JSON to the JS builders:")
+    console.print(f"  node build_triage.js {out_path} PREFIX path/to/flow.dot")
+
+
+
+@app.command("ai-editorial")
+def ai_editorial_cmd(
+    case_id: str = typer.Argument(..., help="Case ID to draft brief_editorial.json for."),
+    narrative: str = typer.Option(
+        None, "--narrative", "-n",
+        help=(
+            "Optional victim-supplied narrative. Pass with quotes: "
+            "--narrative \"I was on a fake Uniswap site and signed a transaction...\""
+        ),
+    ),
+    narrative_file: str = typer.Option(
+        None, "--narrative-file",
+        help="Read victim narrative from a file (alternative to --narrative).",
+    ),
+    api_key: str = typer.Option(
+        None, "--api-key",
+        help="Override the ANTHROPIC_API_KEY env var with an explicit key.",
+    ),
+) -> None:
+    """Draft brief_editorial.json using Claude Opus 4.7.
+
+    Reads case.json, victim.json, freeze_asks.json from the case directory
+    and produces an AI-drafted brief_editorial.json marked AI_GENERATED:true
+    and REVIEW_REQUIRED:true. The emit-brief command will refuse to consume
+    the file until you review it and flip REVIEW_REQUIRED to false.
+
+    Typical flow:
+      1. recupero trace ... --case-id MYCASE
+      2. recupero victim --case MYCASE ...
+      3. recupero list-freeze-targets MYCASE
+      4. recupero ai-editorial MYCASE --narrative "victim's words..."
+      5. open data/cases/MYCASE/brief_editorial.json, REVIEW carefully,
+         edit any low-confidence fields, set REVIEW_REQUIRED to false
+      6. recupero emit-brief MYCASE
+    """
+    cfg, _ = load_config()
+    setup_logging(cfg.logging.level)
+    store = CaseStore(cfg)
+
+    # Load narrative from file if specified
+    victim_narrative = narrative
+    if narrative_file:
+        from pathlib import Path
+        nf = Path(narrative_file)
+        if not nf.exists():
+            console.print(f"[bold red]Narrative file not found:[/] {nf}")
+            raise typer.Exit(code=2)
+        victim_narrative = nf.read_text(encoding="utf-8").strip()
+
+    if not victim_narrative:
+        console.print(
+            "[yellow]Note:[/] no victim narrative supplied. AI will draft from chain data only "
+            "and confidence ratings will be lower. Pass --narrative or --narrative-file for "
+            "better drafts."
+        )
+
+    console.print(f"[cyan]Calling Claude Opus 4.7 to draft editorial for {case_id}...[/]")
+    console.print("[dim]This typically takes 30-90 seconds.[/]")
+
+    try:
+        out_path, editorial = run_ai_editorial(
+            case_id=case_id,
+            case_store=store,
+            victim_narrative=victim_narrative,
+            api_key=api_key,
+        )
+    except RuntimeError as e:
+        console.print(f"[bold red]AI editorial failed:[/] {e}")
+        raise typer.Exit(code=2) from None
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Required file missing:[/] {e}")
+        console.print("[dim]Did you run `recupero trace` and `recupero victim` first?[/]")
+        raise typer.Exit(code=2) from None
+
+    console.print()
+    console.print(f"[bold green]Wrote AI-drafted editorial to[/] {out_path}")
+    console.print()
+    console.print("[bold yellow]⚠ REVIEW REQUIRED ⚠[/]")
+    console.print()
+    console.print("Before running emit-brief, you MUST:")
+    console.print("  1. Open the file and read every AI-drafted field")
+    console.print("  2. Pay close attention to fields marked _AI_CONFIDENCE 'low' or 'medium'")
+    console.print("  3. Replace any TODO placeholders (especially VICTIM_JURISDICTION)")
+    console.print("  4. Edit anything that's wrong, hedged poorly, or invents facts")
+    console.print('  5. Set "REVIEW_REQUIRED": false')
+    console.print()
+    console.print("Then run:")
+    console.print(f"  [bold]recupero emit-brief {case_id}[/]")
+    console.print()
+    console.print("[dim]The emit-brief command will refuse to run while REVIEW_REQUIRED is true.[/]")
+
+
+def main() -> None:  # pragma: no cover
+    app()
 
 
 if __name__ == "__main__":  # pragma: no cover

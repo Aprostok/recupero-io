@@ -168,6 +168,61 @@ def _try_claim(db: WorkerDB) -> Investigation | None:
 # ----- CLI ----- #
 
 
+def health_check() -> int:
+    """Verify env vars + DB connectivity + bucket access without claiming work.
+
+    Returns 0 if everything is reachable, 1 otherwise. Prints a short
+    line per check so the caller can see exactly what failed.
+    """
+    cfg, _env = load_config()
+    failures: list[str] = []
+
+    # Env vars
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    db_url = os.environ.get("SUPABASE_DB_URL", "").strip()
+    for name, val in (("SUPABASE_URL", supabase_url),
+                      ("SUPABASE_SERVICE_ROLE_KEY", service_role),
+                      ("SUPABASE_DB_URL", db_url)):
+        if val:
+            log.info("env [OK]    %s set", name)
+        else:
+            log.error("env [MISS]  %s missing", name)
+            failures.append(name)
+
+    if failures:
+        return 1
+
+    # DB connectivity (single round-trip)
+    try:
+        import psycopg
+        with psycopg.connect(db_url, autocommit=True, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1;")
+                cur.fetchone()
+        log.info("db  [OK]    connected to SUPABASE_DB_URL")
+    except Exception as e:  # noqa: BLE001
+        log.error("db  [FAIL]  %s", e)
+        failures.append("db")
+
+    # Bucket reachability — HEAD on a known prefix that doesn't need to exist
+    try:
+        store = SupabaseCaseStore(
+            cfg, supabase_url, service_role,
+            investigation_id="00000000-0000-0000-0000-000000000000",
+        )
+        try:
+            store.exists("does-not-exist.json")
+            log.info("bkt [OK]    investigation-files reachable")
+        finally:
+            store.close()
+    except Exception as e:  # noqa: BLE001
+        log.error("bkt [FAIL]  %s", e)
+        failures.append("bucket")
+
+    return 0 if not failures else 1
+
+
 def cli() -> None:
     """Console-script entry point. Wired up in pyproject.toml as
     ``recupero-worker``."""
@@ -178,6 +233,11 @@ def cli() -> None:
              "and ops sanity checks.",
     )
     parser.add_argument(
+        "--health-check", action="store_true",
+        help="Verify env vars, DB connectivity, and bucket access; exit 0 "
+             "on success / 1 on failure. Does not claim work.",
+    )
+    parser.add_argument(
         "--log-level", default=os.environ.get("RECUPERO_LOG_LEVEL", "INFO"),
         help="Python logging level. Default INFO.",
     )
@@ -185,6 +245,9 @@ def cli() -> None:
 
     load_dotenv()
     setup_logging(args.log_level.upper())
+
+    if args.health_check:
+        sys.exit(health_check())
 
     heartbeat_sec = float(
         os.environ.get("RECUPERO_HEARTBEAT_INTERVAL_SEC", _HEARTBEAT_DEFAULT_SEC)

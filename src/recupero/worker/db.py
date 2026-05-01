@@ -147,13 +147,18 @@ class WorkerDB:
 
     # ----- Queries ----- #
 
-    def claim_one(self, *, stale_after_sec: int) -> Investigation | None:
+    def claim_one(self) -> Investigation | None:
         """Atomically claim the next available investigation.
 
         Returns the claimed row, or None if nothing is available.
         Uses FOR UPDATE SKIP LOCKED so multiple workers don't fight.
+
+        Per the contract, only ``pending`` and ``review_approved`` rows
+        are claimable. Stale active-state rows are NOT silently
+        re-claimed — that's the reaper's job (``reap_stale_claims``).
+        Failed rows stay terminal; humans re-queue by inserting a fresh
+        investigation, not by mutating an old one.
         """
-        active_list = ",".join(f"'{s}'" for s in sorted(S.ACTIVE_STATUSES))
         claimable_list = ",".join(f"'{s}'" for s in sorted(S.CLAIMABLE_STATUSES))
         sql = f"""
             UPDATE {T_INV}
@@ -164,9 +169,6 @@ class WorkerDB:
              WHERE {COL_ID} = (
                     SELECT {COL_ID} FROM {T_INV}
                      WHERE {COL_STATUS} IN ({claimable_list})
-                        OR ({COL_STATUS} IN ({active_list})
-                            AND ({COL_HEARTBEAT} IS NULL
-                                 OR {COL_HEARTBEAT} < NOW() - make_interval(secs => %(stale)s)))
                      ORDER BY {COL_TRIGGERED_AT} ASC NULLS LAST
                      LIMIT 1
                      FOR UPDATE SKIP LOCKED
@@ -177,16 +179,64 @@ class WorkerDB:
             with conn.cursor() as cur:
                 cur.execute(
                     sql,
-                    {
-                        "claimed": S.CLAIMED,
-                        "worker": self.worker_id,
-                        "stale": stale_after_sec,
-                    },
+                    {"claimed": S.CLAIMED, "worker": self.worker_id},
                 )
                 row = cur.fetchone()
         if row is None:
             return None
         return Investigation.model_validate(row)
+
+    def reap_stale_claims(self, *, stale_after_sec: int) -> list[tuple[UUID, str]]:
+        """Mark active-state rows whose heartbeat has lapsed as ``failed``.
+
+        Returns a list of ``(investigation_id, prior_status)`` for each
+        row that was reaped, so callers can log them.
+
+        This implements the v2 stale-claim recovery the contract
+        documents: when a worker crashes mid-pipeline, its row stays
+        in an active state forever because nothing transitions it. The
+        reaper notices the silent heartbeat and surfaces the failure to
+        the admin UI as a regular ``failed`` row. The operator can then
+        decide whether re-running is safe (e.g., the editorial stage
+        may have partially called Anthropic) and insert a fresh row.
+
+        Idempotent and lock-safe: ``FOR UPDATE SKIP LOCKED`` means
+        concurrent workers don't double-reap the same row.
+        """
+        active_list = ",".join(f"'{s}'" for s in sorted(S.ACTIVE_STATUSES))
+        sql = f"""
+            WITH stale AS (
+                SELECT {COL_ID}, {COL_STATUS}
+                  FROM {T_INV}
+                 WHERE {COL_STATUS} IN ({active_list})
+                   AND {COL_HEARTBEAT} IS NOT NULL
+                   AND {COL_HEARTBEAT} < NOW() - make_interval(secs => %(stale)s)
+                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE {T_INV} i
+               SET {COL_STATUS} = %(failed)s,
+                   {COL_FAILED_AT} = NOW(),
+                   {COL_ERROR_MESSAGE} = %(msg)s,
+                   {COL_ERROR_STAGE} = stale.{COL_STATUS}
+              FROM stale
+             WHERE i.{COL_ID} = stale.{COL_ID}
+            RETURNING i.{COL_ID}, stale.{COL_STATUS};
+        """
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {
+                        "stale": stale_after_sec,
+                        "failed": S.FAILED,
+                        "msg": (
+                            f"reaper: heartbeat older than {stale_after_sec}s "
+                            "— worker presumed dead"
+                        ),
+                    },
+                )
+                rows = cur.fetchall()
+        return [(r[0], r[1]) for r in rows]
 
     def fetch_case(self, case_id: UUID) -> CaseData | None:
         """Look up the cases row referenced by an investigation."""

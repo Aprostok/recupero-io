@@ -116,7 +116,20 @@ def run_forever(
     backoff = poll_idle_sec
     try:
         while True:
-            inv = _try_claim(db, stale_after_sec=stale_after_sec)
+            # Reap stale claims before each polling attempt — turns dead
+            # workers' orphaned rows into terminal `failed` so the admin
+            # UI can surface them. Cheap (one UPDATE), idempotent.
+            try:
+                reaped = db.reap_stale_claims(stale_after_sec=stale_after_sec)
+                for inv_id, prior_status in reaped:
+                    log.warning(
+                        "reaper failed stale row id=%s prior_status=%s",
+                        inv_id, prior_status,
+                    )
+            except Exception as e:  # noqa: BLE001
+                log.error("reaper failed (will retry on next poll): %s", e)
+
+            inv = _try_claim(db)
             if inv is None:
                 if once:
                     log.info("nothing to claim; --once exiting")
@@ -144,9 +157,9 @@ def run_forever(
         db.close()
 
 
-def _try_claim(db: WorkerDB, *, stale_after_sec: int) -> Investigation | None:
+def _try_claim(db: WorkerDB) -> Investigation | None:
     try:
-        return db.claim_one(stale_after_sec=stale_after_sec)
+        return db.claim_one()
     except Exception as e:  # noqa: BLE001
         log.error("claim_one failed (will retry): %s", e)
         return None

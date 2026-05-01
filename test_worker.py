@@ -338,7 +338,7 @@ def main() -> int:
         try:
             # 2. Pass 1: claim, run_one — should pause at review_required.
             print("\n[Pass 1: queued → review_required]")
-            inv = db.claim_one(stale_after_sec=300)
+            inv = db.claim_one()
             if inv is None or inv.id != inv_id:
                 raise RuntimeError(
                     f"claim_one did not pick up our row (got {inv.id if inv else None}, "
@@ -389,7 +389,7 @@ def main() -> int:
 
             # 5. Pass 2: re-claim, run_one — should run emit and complete.
             print("\n[Pass 2: review_approved → completed]")
-            inv2 = db.claim_one(stale_after_sec=300)
+            inv2 = db.claim_one()
             if inv2 is None or inv2.id != inv_id:
                 raise RuntimeError(
                     f"claim_one (pass 2) did not pick up our row "

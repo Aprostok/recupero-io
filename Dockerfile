@@ -17,17 +17,12 @@ WORKDIR /app
 # doesn't bust the dep-install cache layer.
 COPY pyproject.toml README.md ./
 COPY src/ ./src/
-COPY config/ ./config/
 
-# Editable install (`-e`). Reason: src/recupero/config.py looks up
-# config/default.yaml via `Path(__file__).parents[2] / "config" / ...`.
-# A normal install puts __file__ in site-packages so parents[2] points
-# to /usr/local/lib/python3.12/ (wrong). Editable keeps __file__ in
-# /app/src/recupero/, so parents[2] = /app and /app/config/ resolves.
-# A future refactor of config.py to use importlib.resources would let
-# us go back to a regular install.
+# Regular install. config.py reads default.yaml via importlib.resources
+# from the bundled `recupero._defaults` package, so we don't need to
+# COPY config/ or use editable install anymore.
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir .
 
 # `recupero-worker` is registered by pyproject.toml's [project.scripts].
 # railway.json's startCommand also points here; both end up the same.

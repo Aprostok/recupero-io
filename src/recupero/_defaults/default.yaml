@@ -1,0 +1,55 @@
+# Recupero default configuration.
+# Override per-case with --config path/to/case.yaml or CLI flags.
+
+trace:
+  # Maximum hops from the seed (victim) address.
+  # Phase 1 default is 1 — we want first-hop outflows clean before going deeper.
+  max_depth: 1
+
+  # Skip individual transfers below this USD value at time of tx.
+  # Filters dust attacks and tiny incidental transfers.
+  dust_threshold_usd: 50.0
+
+  # Stop following a path once it deposits to a labeled exchange — we have what
+  # we need (the freeze point). Set false to continue traversing past CEX deposits.
+  stop_at_exchange: true
+
+  # Look only at transfers occurring at or after the incident timestamp.
+  # Set buffer_minutes to look slightly before in case the victim's reported time
+  # is approximate.
+  incident_buffer_minutes: 60
+
+  # Maximum number of transfers to follow per address (sanity cap).
+  max_transfers_per_address: 500
+
+ethereum:
+  # Etherscan API v2 endpoint (multichain). chainid=1 is mainnet.
+  api_base: "https://api.etherscan.io/v2/api"
+  chain_id: 1
+
+  # Rate limit on free tier: 5 req/sec, 100k req/day.
+  # Be conservative to avoid 429s.
+  requests_per_second: 2
+
+  # Block range chunking when querying transfer history.
+  block_range_chunk: 10000
+
+  # Native asset
+  native_symbol: "ETH"
+  native_decimals: 18
+
+pricing:
+  provider: "coingecko"
+  # Free tier: ~30 calls/minute. We cache aggressively.
+  requests_per_second: 0.5
+  # If a token has no CoinGecko mapping, write null and flag in report.
+  fail_open: true
+
+storage:
+  data_dir: "./data"
+  # Pretty-print case.json (slower but git-diff-friendly during development).
+  pretty_json: true
+
+logging:
+  level: "INFO"
+  format: "rich"   # "rich" or "json"

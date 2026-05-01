@@ -2,10 +2,16 @@
 
 Loads YAML config (default + optional override) and merges environment variables
 from .env. Returns a typed Pydantic settings object the rest of the code uses.
+
+The default YAML is bundled inside the package at
+``recupero._defaults/default.yaml`` and read via ``importlib.resources``,
+so a regular ``pip install`` Just Works — no editable install or repo-root
+file required.
 """
 
 from __future__ import annotations
 
+from importlib.resources import files as resource_files
 from pathlib import Path
 from typing import Any
 
@@ -113,8 +119,7 @@ class RecuperoEnv(BaseSettings):
 
 def load_config(config_path: Path | None = None) -> tuple[RecuperoConfig, RecuperoEnv]:
     """Load default config, optionally overlay with `config_path`, and load env."""
-    default_path = Path(__file__).parents[2] / "config" / "default.yaml"
-    cfg_dict = _read_yaml(default_path)
+    cfg_dict = _read_default_yaml()
 
     if config_path is not None:
         override = _read_yaml(config_path)
@@ -130,6 +135,23 @@ def load_config(config_path: Path | None = None) -> tuple[RecuperoConfig, Recupe
         cfg.logging.level = env.RECUPERO_LOG_LEVEL
 
     return cfg, env
+
+
+def _read_default_yaml() -> dict[str, Any]:
+    """Load the bundled default.yaml via importlib.resources.
+
+    Falls back to the repo-root ``config/default.yaml`` if the package
+    resource isn't found — this happens during a development checkout
+    before the package has been re-installed."""
+    try:
+        text = resource_files("recupero._defaults").joinpath("default.yaml").read_text(
+            encoding="utf-8"
+        )
+        return yaml.safe_load(text) or {}
+    except (FileNotFoundError, ModuleNotFoundError):
+        # Dev fallback for an unreinstalled checkout.
+        repo_default = Path(__file__).resolve().parents[2] / "config" / "default.yaml"
+        return _read_yaml(repo_default)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:

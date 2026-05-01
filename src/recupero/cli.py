@@ -39,6 +39,45 @@ console = Console()
 log = logging.getLogger(__name__)
 
 
+def _sync_to_bucket(investigation_id: str | None, case_dir: Path) -> None:
+    """If --investigation-id was passed, mirror the case_dir to Supabase
+    Storage under ``investigations/<investigation_id>/``.
+
+    Reads SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY from .env / environment.
+    No-op when investigation_id is None — preserves existing local-only
+    CLI behavior for analysts who don't want bucket writes.
+
+    Phase 4: lets manual ``recupero trace ...`` / ``list-freeze-targets``
+    / ``ai-editorial`` / ``emit-brief`` runs land artifacts in the same
+    bucket the worker writes to, so the admin UI can surface them.
+    """
+    import os as _os
+    if not investigation_id:
+        return
+    supabase_url = _os.environ.get("SUPABASE_URL", "").strip()
+    service_role_key = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    if not supabase_url or not service_role_key:
+        console.print(
+            "[bold red]--investigation-id requires SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY in .env[/]"
+        )
+        raise typer.Exit(code=2)
+    cfg, _env = load_config()
+    # Lazy imports keep CLI startup fast for non-bucket paths.
+    from recupero.storage.supabase_case_store import SupabaseCaseStore
+    from recupero.worker.sync import upload_case_dir
+
+    with SupabaseCaseStore(
+        cfg, supabase_url, service_role_key,
+        investigation_id=investigation_id,
+    ) as store:
+        n = upload_case_dir(case_dir, store)
+    console.print(
+        f"[green]Synced[/] {n} file(s) to "
+        f"[cyan]investigations/{investigation_id}/[/] in the bucket"
+    )
+
+
 @app.command("trace")
 def trace_cmd(
     chain: str = typer.Option("ethereum", help="Chain to trace: ethereum, arbitrum, bsc, or solana."),
@@ -58,6 +97,13 @@ def trace_cmd(
         help="By default the tracer stops at labeled bridges (cross-chain flows can't "
              "be followed with a single-chain adapter). Use this to record bridge-side "
              "transfers on the current chain even if labeled as bridge.",
+    ),
+    investigation_id: str | None = typer.Option(
+        None, "--investigation-id",
+        help="Optional UUID of a public.investigations row. If set, the produced "
+             "artifacts (case.json, manifest.json, transfers.csv, evidence/*.json) "
+             "are mirrored to investigation-files/investigations/<id>/ in addition "
+             "to the local case dir. Requires SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.",
     ),
 ) -> None:
     cfg, env = load_config(config_path)
@@ -137,6 +183,8 @@ def trace_cmd(
     _print_summary(case)
     console.print(f"\n[bold green]Wrote[/] {case_path}")
     console.print(f"[bold green]Wrote[/] {case_dir / 'transfers.csv'}")
+
+    _sync_to_bucket(investigation_id, case_dir)
 
 
 @app.command("show")
@@ -471,6 +519,11 @@ def list_freeze_targets_cmd(
     min_usd: float = typer.Option(10000.0, help="Min USD per dormant address (default $10K)."),
     min_holding_usd: float = typer.Option(1000.0, help="Min USD per individual holding (default $1K)."),
     config_path: Path | None = typer.Option(None, "--config", help="Optional YAML config override."),
+    investigation_id: str | None = typer.Option(
+        None, "--investigation-id",
+        help="Optional UUID of a public.investigations row. If set, freeze_asks.json "
+             "is mirrored to investigations/<id>/ in the bucket alongside the local write.",
+    ),
 ) -> None:
     """End-to-end freeze-target identification: find dormant wallets, match to
     issuers, and print a ranked action list of who to email and what to ask for.
@@ -620,6 +673,8 @@ def list_freeze_targets_cmd(
         encoding="utf-8",
     )
     console.print(f"[bold]Wrote[/] {out_path}")
+
+    _sync_to_bucket(investigation_id, store.case_dir(case_id))
 
 
 # TODO: `brief` is legacy — predates the emit-brief + ai-editorial pipeline.
@@ -773,6 +828,11 @@ def emit_brief_cmd(
         False, "--init",
         help="Write a brief_editorial.json template and exit. Use this on a new case.",
     ),
+    investigation_id: str | None = typer.Option(
+        None, "--investigation-id",
+        help="Optional UUID of a public.investigations row. If set, the produced "
+             "freeze_brief.json is mirrored to investigations/<id>/ in the bucket.",
+    ),
 ) -> None:
     """Emit freeze_brief.json for consumption by the JS triage builders.
 
@@ -812,6 +872,7 @@ def emit_brief_cmd(
         raise typer.Exit(code=2) from None
 
     console.print(f"\n[bold green]Wrote[/] {out_path}")
+    _sync_to_bucket(investigation_id, store.case_dir(case_id))
     console.print(f"  Case: {brief.get('CASE_ID')}")
     console.print(f"  Total loss: {brief.get('TOTAL_LOSS_USD')}")
     console.print(f"  Freezable balance pool: {brief.get('TOTAL_FREEZABLE_USD')}")
@@ -843,6 +904,13 @@ def ai_editorial_cmd(
     api_key: str = typer.Option(
         None, "--api-key",
         help="Override the ANTHROPIC_API_KEY env var with an explicit key.",
+    ),
+    investigation_id: str | None = typer.Option(
+        None, "--investigation-id",
+        help="Optional UUID of a public.investigations row. If set, brief_editorial.json "
+             "is mirrored to investigations/<id>/ in the bucket. Note that the worker's "
+             "review-checkpoint flow assumes the admin UI uploads the edited editorial; "
+             "use this flag for ad-hoc analyst runs only.",
     ),
 ) -> None:
     """Draft brief_editorial.json using Claude Opus 4.7.
@@ -905,6 +973,7 @@ def ai_editorial_cmd(
         f"  [dim]Tokens:[/] {usage['input_tokens']:,} in / {usage['output_tokens']:,} out  "
         f"[dim]Cost:[/] ${usage['usd_cost']}"
     )
+    _sync_to_bucket(investigation_id, store.case_dir(case_id))
     console.print()
     console.print("[bold yellow]⚠ REVIEW REQUIRED ⚠[/]")
     console.print()

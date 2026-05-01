@@ -88,6 +88,8 @@ def run_one(
                        error=f"cases row {inv.case_id} not found (FK violation)")
         return
 
+    api_costs_usd: Decimal | None = None
+
     try:
         with _local_case_dir(cfg, case_id_str) as (local_store, case_dir):
             # Always seed victim.json — idempotent, cheap.
@@ -120,7 +122,7 @@ def run_one(
 
             # Editorial stage ----------------------------------------------
             if not has_editorial:
-                _run_stage(
+                api_costs_usd = _run_stage(
                     db, inv.id, S.EDITORIAL_DRAFTING,
                     lambda: _stage_ai_editorial(inv, case_id_str, case_data,
                                                 local_store, case_dir, store),
@@ -158,7 +160,7 @@ def run_one(
                 total_loss_usd=summary.get("total_loss_usd"),
                 max_recoverable_usd=summary.get("max_recoverable_usd"),
                 freezable_issuers=summary.get("freezable_issuers"),
-                # api_costs_usd: not tracked end-to-end yet; leave None.
+                api_costs_usd=api_costs_usd,
             )
             db.mark_completed(inv.id)
             log.info("investigation %s completed", inv.id)
@@ -294,16 +296,24 @@ def _stage_ai_editorial(
     local_store: CaseStore,
     case_dir: Path,
     bucket: SupabaseCaseStore,
-) -> None:
+) -> Decimal | None:
+    """Run editorial drafting, return USD cost from this call (None on failure)."""
     from recupero.reports.ai_editorial import run_ai_editorial
 
-    run_ai_editorial(
+    _path, _editorial, usage = run_ai_editorial(
         case_id=case_id_str,
         case_store=local_store,
         victim_narrative=case_data.description,
         # api_key falls through to ANTHROPIC_API_KEY env var
     )
     upload_case_dir(case_dir, bucket)
+    cost = usage.get("usd_cost") if usage else None
+    if cost is not None:
+        log.info(
+            "ai_editorial usage: %d in / %d out tokens, $%s",
+            usage.get("input_tokens", 0), usage.get("output_tokens", 0), cost,
+        )
+    return cost
 
 
 def _stage_emit_brief(
@@ -336,12 +346,14 @@ def _run_stage(
     inv_id: UUID,
     stage: str,
     fn,
-) -> None:
-    """Transition DB → stage, run fn(), let exceptions propagate as
-    _StageFailure tagged with the current stage."""
+) -> Any:
+    """Transition DB → stage, run fn(), return whatever fn() returns.
+
+    Lets exceptions propagate as _StageFailure tagged with the current stage.
+    """
     db.transition(inv_id, status=stage)
     try:
-        fn()
+        return fn()
     except _StageFailure:
         raise
     except Exception as e:  # noqa: BLE001

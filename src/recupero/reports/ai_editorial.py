@@ -38,6 +38,20 @@ from typing import Any
 MODEL = "claude-opus-4-7"
 MAX_TOKENS = 4096
 
+# USD pricing per million tokens. Update when Anthropic adjusts list prices.
+# Source: https://www.anthropic.com/pricing  (Opus 4.7, Jan 2026)
+_INPUT_USD_PER_MTOK = Decimal("15.0")
+_OUTPUT_USD_PER_MTOK = Decimal("75.0")
+
+
+def _compute_usd_cost(input_tokens: int, output_tokens: int) -> Decimal:
+    """Token counts → USD spend. Quantized to 4 decimal places."""
+    cost = (
+        Decimal(input_tokens) * _INPUT_USD_PER_MTOK / Decimal(1_000_000)
+        + Decimal(output_tokens) * _OUTPUT_USD_PER_MTOK / Decimal(1_000_000)
+    )
+    return cost.quantize(Decimal("0.0001"))
+
 # Fields the AI is asked to draft. Other editorial fields (investigator name,
 # entity, etc.) are static and don't go through the AI.
 AI_DRAFTED_KEYS = [
@@ -360,8 +374,15 @@ def _strip_json_fences(text: str) -> str:
     return text.strip()
 
 
-def call_anthropic_for_editorial(case_summary: dict[str, Any], api_key: str | None = None) -> dict[str, Any]:
-    """Call the Anthropic API and return the parsed editorial dict.
+def call_anthropic_for_editorial(
+    case_summary: dict[str, Any],
+    api_key: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Call the Anthropic API and return ``(editorial_dict, usage_info)``.
+
+    ``usage_info`` is ``{"input_tokens": int, "output_tokens": int,
+    "model": str, "usd_cost": Decimal}``, summed across retries so a
+    JSON-validation retry is reflected in the cost.
 
     Raises RuntimeError on API failure or malformed output (after one retry).
     """
@@ -398,6 +419,8 @@ def call_anthropic_for_editorial(case_summary: dict[str, Any], api_key: str | No
     )
 
     last_error = None
+    in_total = 0
+    out_total = 0
     for attempt in range(2):  # one retry on bad JSON
         try:
             resp = client.messages.create(
@@ -406,6 +429,12 @@ def call_anthropic_for_editorial(case_summary: dict[str, Any], api_key: str | No
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": user_prompt}],
             )
+
+            # Tally tokens even on retries — they all cost money.
+            usage = getattr(resp, "usage", None)
+            if usage is not None:
+                in_total += int(getattr(usage, "input_tokens", 0) or 0)
+                out_total += int(getattr(usage, "output_tokens", 0) or 0)
 
             # Concatenate text blocks
             text_parts = []
@@ -429,7 +458,13 @@ def call_anthropic_for_editorial(case_summary: dict[str, Any], api_key: str | No
                     continue
                 raise RuntimeError(last_error)
 
-            return ai_obj
+            usage_info = {
+                "input_tokens": in_total,
+                "output_tokens": out_total,
+                "model": MODEL,
+                "usd_cost": _compute_usd_cost(in_total, out_total),
+            }
+            return ai_obj, usage_info
 
         except json.JSONDecodeError as e:
             last_error = f"AI returned invalid JSON: {e}"
@@ -527,8 +562,13 @@ def build_editorial_dict(ai_output: dict[str, Any], case_summary: dict[str, Any]
     return editorial
 
 
-def run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str | None = None, api_key: str | None = None) -> tuple[Path, dict[str, Any]]:
-    """Top-level orchestration. Returns (output_path, editorial_dict).
+def run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str | None = None, api_key: str | None = None) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+    """Top-level orchestration.
+
+    Returns ``(output_path, editorial_dict, usage_info)`` where
+    ``usage_info`` carries token counts and the computed USD cost. The
+    CLI ignores the third element; the worker uses it to populate
+    ``investigations.api_costs_usd``.
 
     Reads case.json, victim.json, freeze_asks.json. Calls the Anthropic API.
     Writes brief_editorial.json (overwriting any existing file).
@@ -566,7 +606,7 @@ def run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str | None
     case_summary = _summarize_case_for_ai(case, victim, freeze_asks, victim_narrative)
 
     # 5. Call AI
-    ai_output = call_anthropic_for_editorial(case_summary, api_key=api_key)
+    ai_output, usage_info = call_anthropic_for_editorial(case_summary, api_key=api_key)
 
     # 6. Build the editorial dict
     editorial = build_editorial_dict(ai_output, case_summary, case_id=case_id)
@@ -575,7 +615,7 @@ def run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str | None
     out_path = case_dir / "brief_editorial.json"
     out_path.write_text(json.dumps(editorial, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    return out_path, editorial
+    return out_path, editorial, usage_info
 
 
 # Helper for emit_brief.py to detect AI-generated unreviewed editorials.

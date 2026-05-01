@@ -108,9 +108,13 @@ def _fake_run_trace(*, case_id: str, **_kwargs: Any) -> Case:
 
 
 def _fake_run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str | None = None,
-                            api_key: str | None = None) -> tuple[Path, dict[str, Any]]:
+                            api_key: str | None = None) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     """Stand-in for run_ai_editorial — writes a valid editorial directly with
-    REVIEW_REQUIRED=true. Schema mirrors what emit_brief.py expects."""
+    REVIEW_REQUIRED=true. Schema mirrors what emit_brief.py expects.
+
+    Returns the same 3-tuple shape as the real run_ai_editorial:
+    (out_path, editorial_dict, usage_info). usage_info has zero token
+    counts since no API call was made."""
     case_dir: Path = case_store.case_dir(case_id)
     editorial = {
         "AI_GENERATED": True,
@@ -135,7 +139,9 @@ def _fake_run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str 
     }
     out = case_dir / "brief_editorial.json"
     out.write_text(json.dumps(editorial, indent=2, ensure_ascii=False), encoding="utf-8")
-    return out, editorial
+    usage = {"input_tokens": 0, "output_tokens": 0, "model": "test-mock",
+             "usd_cost": Decimal("0.0000")}
+    return out, editorial, usage
 
 
 def _fake_freeze_stage(inv, case_id_str, config, env, local_store, case_dir, bucket):

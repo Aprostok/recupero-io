@@ -885,7 +885,7 @@ def ai_editorial_cmd(
     console.print("[dim]This typically takes 30-90 seconds.[/]")
 
     try:
-        out_path, editorial = run_ai_editorial(
+        out_path, editorial, usage = run_ai_editorial(
             case_id=case_id,
             case_store=store,
             victim_narrative=victim_narrative,
@@ -901,6 +901,10 @@ def ai_editorial_cmd(
 
     console.print()
     console.print(f"[bold green]Wrote AI-drafted editorial to[/] {out_path}")
+    console.print(
+        f"  [dim]Tokens:[/] {usage['input_tokens']:,} in / {usage['output_tokens']:,} out  "
+        f"[dim]Cost:[/] ${usage['usd_cost']}"
+    )
     console.print()
     console.print("[bold yellow]⚠ REVIEW REQUIRED ⚠[/]")
     console.print()

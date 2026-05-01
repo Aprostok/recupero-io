@@ -35,6 +35,7 @@ from recupero.config import load_config
 from recupero.logging_setup import setup_logging
 from recupero.storage.supabase_case_store import SupabaseCaseStore
 from recupero.worker import state as S
+from recupero.worker._health_server import start_health_server
 from recupero.worker.db import Investigation, WorkerDB
 from recupero.worker.pipeline import run_one
 
@@ -111,6 +112,16 @@ def run_forever(
     worker_id = f"{socket.gethostname()}-{os.getpid()}"
     log.info("recupero-worker starting id=%s", worker_id)
 
+    # HTTP healthcheck server. Runs only in long-lived mode so --once
+    # tests don't have to bind a port. Daemon thread; dies with parent.
+    if not once:
+        try:
+            start_health_server(lambda: _run_checks(verbose=False))
+        except OSError as e:
+            # Port-bind failures shouldn't kill the worker — Railway will
+            # mark "unhealthy" but the polling loop is still useful.
+            log.warning("health server failed to bind: %s (continuing without it)", e)
+
     db = WorkerDB(db_url, worker_id=worker_id)
 
     backoff = poll_idle_sec
@@ -168,44 +179,48 @@ def _try_claim(db: WorkerDB) -> Investigation | None:
 # ----- CLI ----- #
 
 
-def health_check() -> int:
-    """Verify env vars + DB connectivity + bucket access without claiming work.
+def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
+    """Run env + DB + bucket reachability checks.
 
-    Returns 0 if everything is reachable, 1 otherwise. Prints a short
-    line per check so the caller can see exactly what failed.
+    Returns ``(all_ok, details_dict)`` where details maps each check
+    name to ``"ok"`` or an error message. Logs human-readable lines
+    when ``verbose=True`` (used by --health-check); the HTTP healthcheck
+    handler calls with verbose=False to avoid log spam.
     """
     cfg, _env = load_config()
-    failures: list[str] = []
+    details: dict[str, str] = {}
 
-    # Env vars
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     db_url = os.environ.get("SUPABASE_DB_URL", "").strip()
+    env_ok = bool(supabase_url and service_role and db_url)
     for name, val in (("SUPABASE_URL", supabase_url),
                       ("SUPABASE_SERVICE_ROLE_KEY", service_role),
                       ("SUPABASE_DB_URL", db_url)):
-        if val:
-            log.info("env [OK]    %s set", name)
-        else:
-            log.error("env [MISS]  %s missing", name)
-            failures.append(name)
+        details[f"env:{name}"] = "ok" if val else "missing"
+        if verbose:
+            if val:
+                log.info("env [OK]    %s set", name)
+            else:
+                log.error("env [MISS]  %s missing", name)
 
-    if failures:
-        return 1
+    if not env_ok:
+        return False, details
 
-    # DB connectivity (single round-trip)
     try:
         import psycopg
         with psycopg.connect(db_url, autocommit=True, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
                 cur.fetchone()
-        log.info("db  [OK]    connected to SUPABASE_DB_URL")
+        details["db"] = "ok"
+        if verbose:
+            log.info("db  [OK]    connected to SUPABASE_DB_URL")
     except Exception as e:  # noqa: BLE001
-        log.error("db  [FAIL]  %s", e)
-        failures.append("db")
+        details["db"] = f"fail: {e}"
+        if verbose:
+            log.error("db  [FAIL]  %s", e)
 
-    # Bucket reachability — HEAD on a known prefix that doesn't need to exist
     try:
         store = SupabaseCaseStore(
             cfg, supabase_url, service_role,
@@ -213,14 +228,27 @@ def health_check() -> int:
         )
         try:
             store.exists("does-not-exist.json")
-            log.info("bkt [OK]    investigation-files reachable")
+            details["bucket"] = "ok"
+            if verbose:
+                log.info("bkt [OK]    investigation-files reachable")
         finally:
             store.close()
     except Exception as e:  # noqa: BLE001
-        log.error("bkt [FAIL]  %s", e)
-        failures.append("bucket")
+        details["bucket"] = f"fail: {e}"
+        if verbose:
+            log.error("bkt [FAIL]  %s", e)
 
-    return 0 if not failures else 1
+    all_ok = all(v == "ok" for v in details.values())
+    return all_ok, details
+
+
+def health_check() -> int:
+    """CLI entry point for ``recupero-worker --health-check``.
+
+    Returns 0 if everything is reachable, 1 otherwise.
+    """
+    ok, _ = _run_checks(verbose=True)
+    return 0 if ok else 1
 
 
 def cli() -> None:

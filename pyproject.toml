@@ -41,6 +41,10 @@ dependencies = [
 
     # Templated HTML for briefs/reports
     "jinja2>=3.1,<4.0",
+
+    # Worker queue (Phase 2): Supabase Postgres via the transaction pooler.
+    # [binary] ships pre-built wheels — no Visual C++ Build Tools required.
+    "psycopg[binary]>=3.2,<4.0",
 ]
 
 [project.optional-dependencies]
@@ -57,6 +61,7 @@ dev = [
 
 [project.scripts]
 recupero = "recupero.cli:app"
+recupero-worker = "recupero.worker.main:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

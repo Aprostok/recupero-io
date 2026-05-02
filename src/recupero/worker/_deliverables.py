@@ -36,7 +36,7 @@ from recupero.models import Case
 from recupero.reports.brief import (
     InvestigatorInfo,
     IssuerInfo,
-    MIDAS_ISSUER,
+    MIDAS_ISSUER,  # used as the canonical fully-filled IssuerInfo when name matches
     generate_briefs,
 )
 from recupero.reports.victim import VictimInfo
@@ -66,18 +66,35 @@ def build_all_deliverables(
     """Generate one freeze-request HTML per unique issuer in FREEZABLE,
     plus one LE handoff. Returns the list of paths written.
 
-    Skips deliverable generation entirely if the case has no transfers
-    (nothing to seize) — returns an empty list, no error.
+    Skip conditions (return empty list, log, no error):
+
+      * The case has no transfers — nothing to seize.
+      * FREEZABLE is empty — no labeled-issuer holding to address.
+        This is the right outcome for cases that route entirely to
+        exchange deposits / mixers / unlabeled wallets: those paths
+        need different deliverables (exchange subpoena, mixer report)
+        that the worker doesn't generate today, and producing a
+        canned letter to a random issuer (e.g. defaulting to Midas)
+        would be misleading. Operators see no briefs/ subdir → handle
+        the case via the appropriate other path.
+
+    The legacy ``recupero brief`` CLI command remains available for
+    one-off overrides if an operator wants to manually generate a
+    letter to a specific issuer that wasn't matched automatically.
     """
     if not case.transfers:
         log.info("no transfers in case; skipping deliverable generation")
         return []
 
-    investigator = investigator or _DEFAULT_INVESTIGATOR
     freezable = freeze_brief.get("FREEZABLE") or []
 
     # Build the set of unique issuers from FREEZABLE. Each issuer becomes one
-    # freeze-request brief addressed to that entity.
+    # freeze-request brief addressed to that entity. The LE handoff template
+    # is tailored to one issuer at a time too (le.html.j2 references issuer
+    # heavily), so when there are multiple matches, the last iteration's
+    # le_handoff_*.html overwrites earlier ones with that issuer's framing.
+    # That's a known minor quirk of generate_briefs; multi-issuer LE
+    # production is a follow-up.
     issuers_seen: dict[str, IssuerInfo] = {}
     for entry in freezable:
         issuer_name = entry.get("issuer")
@@ -85,15 +102,16 @@ def build_all_deliverables(
             continue
         issuers_seen[issuer_name] = _issuer_info_for(issuer_name, entry)
 
-    # Always produce at least one brief — if FREEZABLE is empty (no labeled
-    # tokens matched), default to the Midas issuer so the operator gets an
-    # editable template they can re-address rather than a blank case dir.
     if not issuers_seen:
         log.info(
-            "FREEZABLE list is empty; emitting one Midas-default brief as a "
-            "starting template the operator can re-address",
+            "FREEZABLE list is empty (no labeled-issuer holdings matched). "
+            "Skipping HTML deliverable generation — no canned letter applies. "
+            "Operator should review freeze_asks.json's exchange_deposits and "
+            "the case.json transfers for non-issuer recovery paths.",
         )
-        issuers_seen["Midas Software GmbH"] = MIDAS_ISSUER
+        return []
+
+    investigator = investigator or _DEFAULT_INVESTIGATOR
 
     written: list[Path] = []
     for issuer_name, issuer_info in issuers_seen.items():

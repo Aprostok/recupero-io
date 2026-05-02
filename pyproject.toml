@@ -45,6 +45,12 @@ dependencies = [
     # Worker queue (Phase 2): Supabase Postgres via the transaction pooler.
     # [binary] ships pre-built wheels — no Visual C++ Build Tools required.
     "psycopg[binary]>=3.2,<4.0",
+
+    # Flow-diagram rendering for freeze briefs / LE handoffs.
+    # Pure-Python wrapper around the `dot` binary (installed via apt in
+    # the Dockerfile). Locally on Windows, install Graphviz from
+    # https://graphviz.org/download/ and ensure `dot.exe` is on PATH.
+    "graphviz>=0.20,<1.0",
 ]
 
 [project.optional-dependencies]

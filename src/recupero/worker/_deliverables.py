@@ -113,6 +113,23 @@ def build_all_deliverables(
 
     investigator = investigator or _DEFAULT_INVESTIGATOR
 
+    # Render the fund-flow SVG once. All issuer briefs + the LE handoff(s)
+    # embed the same diagram inline. We also write a standalone .svg in
+    # briefs/ so operators can pull the diagram into separate decks/PDFs.
+    flow_svg_inline = ""
+    try:
+        from recupero.worker._flow_diagram import render_flow_diagram
+        from uuid import uuid4
+        briefs_dir = case_dir / "briefs"
+        briefs_dir.mkdir(parents=True, exist_ok=True)
+        flow_svg_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
+        if render_flow_diagram(case, flow_svg_path) is not None:
+            flow_svg_inline = _strip_svg_preamble(
+                flow_svg_path.read_text(encoding="utf-8")
+            )
+    except Exception as e:  # noqa: BLE001
+        log.warning("flow diagram generation failed (continuing without it): %s", e)
+
     written: list[Path] = []
     for issuer_name, issuer_info in issuers_seen.items():
         try:
@@ -123,6 +140,7 @@ def build_all_deliverables(
                 investigator=investigator,
                 case_dir=case_dir,
                 issuer=issuer_info,
+                flow_svg=flow_svg_inline or None,
             )
             written.append(bundle.maple_path)
             written.append(bundle.le_path)
@@ -140,6 +158,16 @@ def build_all_deliverables(
     log.info("deliverables done: %d file(s) under %s/briefs/",
              len(written), case_dir.name)
     return written
+
+
+def _strip_svg_preamble(svg_text: str) -> str:
+    """Remove ``<?xml ...?>`` and ``<!DOCTYPE ...>`` lines so the SVG
+    can be embedded inline in HTML without confusing the HTML parser.
+    Keeps everything from ``<svg`` onward."""
+    idx = svg_text.find("<svg")
+    if idx == -1:
+        return svg_text
+    return svg_text[idx:]
 
 
 def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:

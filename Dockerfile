@@ -8,10 +8,21 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# All wheels we need ship pre-built for cp312-manylinux (psycopg[binary],
-# pydantic-core, orjson, pycryptodome, pyyaml). No compiler needed.
-# ca-certificates is in the slim base; nothing else to install at the OS
-# level for now.
+# All Python wheels we need ship pre-built for cp312-manylinux
+# (psycopg[binary], pydantic-core, orjson, pycryptodome, pyyaml).
+#
+# System deps:
+#   - graphviz: layout/rendering binary (`dot`) for flow diagrams in
+#     the freeze-request + LE handoff HTMLs. The Python `graphviz`
+#     package is a thin wrapper around the binary.
+#   - fonts-dejavu-core: clean sans-serif fallback so nodes/labels
+#     don't render in the awful default bitmap font.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        graphviz \
+        fonts-dejavu-core \
+        ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
 # Install Python deps. Order is set up so that adding a code-only change
 # doesn't bust the dep-install cache layer.

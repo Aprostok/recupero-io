@@ -98,6 +98,20 @@
   </div>
 </div>
 
+{% if flow_svg %}
+<h2>3.1 Fund Flow Diagram</h2>
+<div class="flow-diagram">
+  {{ flow_svg|safe }}
+  <div class="flow-caption">
+    Solid arrows indicate observed on-chain transfers. Edge labels show the
+    USD-denominated value at the time of transfer. Color coding: blue =
+    victim wallet, green = labeled exchange / hot wallet, red = mixer
+    (terminal — funds obfuscated), orange = cross-chain bridge (terminal
+    on this chain), purple = DeFi contract, grey = unlabeled wallet.
+  </div>
+</div>
+{% endif %}
+
 <h2>4. Stolen Asset Details</h2>
 <table class="evidence">
   <tr><th>Asset symbol</th>           <td>{{ asset.symbol }}</td></tr>

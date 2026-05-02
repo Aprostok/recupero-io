@@ -68,6 +68,34 @@
     background: #ecfdf5;
     border-left-color: #047857;
   }
+  /* Inline-SVG fund-flow diagram block. Centered, capped width so the
+     diagram doesn't overflow on long chains. The SVG itself is rendered
+     by Graphviz with custom styling; this wrapper just frames it.    */
+  .flow-diagram {
+    margin: 1.5em auto 2em;
+    padding: 1.2em;
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04),
+                0 4px 12px rgba(15, 23, 42, 0.04);
+    text-align: center;
+    overflow-x: auto;
+  }
+  .flow-diagram svg {
+    max-width: 100%;
+    height: auto;
+  }
+  .flow-caption {
+    margin-top: 0.8em;
+    padding: 0.6em 0.8em;
+    background: #F8FAFC;
+    border-radius: 4px;
+    font-size: 9pt;
+    color: #475569;
+    text-align: left;
+    line-height: 1.55;
+  }
   table.evidence {
     width: 100%;
     border-collapse: collapse;

@@ -124,6 +124,96 @@ Railway log streams to claimed rows.
 | Worker claims a row, runs trace, then fails on `editorial_drafting` | Missing or invalid `ANTHROPIC_API_KEY` |
 | Worker fails on `tracing` with rate-limit error                | Etherscan free tier exhausted; either upgrade plan or wait until next 24h reset |
 
+## Operational monitoring
+
+The worker is meant to run unattended for weeks at a time. Three
+out-of-band checks make sure nothing rots silently:
+
+### Uptime monitoring (UptimeRobot on `/healthz`)
+
+Railway will restart the worker on crash, but it won't tell you if the
+service has been crash-looping for hours, or if Railway itself has paged
+your project. An external HTTP probe catches that.
+
+1. Sign up at [uptimerobot.com](https://uptimerobot.com) (the free tier
+   covers 50 monitors at 5-minute resolution — fine for one service).
+2. **Add New Monitor** → Type: `HTTP(s)`.
+3. **URL**: paste the public URL of the Railway service +`/healthz`,
+   e.g. `https://recupero-worker-production.up.railway.app/healthz`.
+   Find the URL in the Railway service → **Settings → Networking →
+   Public Networking**. Generate a domain if none exists.
+4. **Monitoring Interval**: 5 minutes.
+5. **Alert Contacts**: at minimum the on-call email; ideally a Slack
+   webhook so the alert lands in a channel everyone can see.
+6. Save. UptimeRobot starts probing immediately; the first datapoint
+   shows up within a minute.
+
+`/healthz` returns 200 the moment the process is up — no DB or bucket
+round-trips — so it can't false-positive on transient Supabase
+flakiness. If you ever need a deeper probe, point a second monitor at
+`/health` with a longer timeout (it does the full readiness check).
+
+### Stale-review alert (`scripts/check_stale_reviews.py`)
+
+The worker pauses every investigation at `awaiting_review` so a human
+can sign off on the AI editorial. There is intentionally no automated
+escalation in the pipeline — the brief might genuinely need a rewrite —
+so a row can sit in `awaiting_review` forever if nobody clicks. Run
+this query daily; exit code 1 means there's at least one stale row.
+
+```bash
+python scripts/check_stale_reviews.py                    # default 24h
+python scripts/check_stale_reviews.py --threshold-hours 48
+python scripts/check_stale_reviews.py --json | jq .      # for tooling
+```
+
+Schedule via cron / GitHub Actions. Minimal GitHub Actions example
+(put `SUPABASE_DB_URL` in repo secrets, alert wiring up to you):
+
+```yaml
+# .github/workflows/stale-review-alert.yml
+name: stale-review-alert
+on:
+  schedule:
+    - cron: '0 14 * * *'   # 14:00 UTC = 09:00 ET daily
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install psycopg[binary] python-dotenv
+      - env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: python scripts/check_stale_reviews.py
+```
+
+When the action fails, GitHub emails the repo admins. Wire the
+`--json` output into a Slack notify step if you want richer alerts.
+
+### Weekly snapshot (`scripts/backup_investigations.py`)
+
+Supabase's own backups cover total-loss disaster, but a self-managed
+snapshot also protects against a bad UI deploy or an accidental DELETE
+that ages out of the (free-tier) 7-day PITR window. The script dumps
+`public.investigations` and `public.cases` to JSON; the bucket files
+are deterministic outputs of those rows + the on-chain trace, so
+they're not backed up by default.
+
+```bash
+python scripts/backup_investigations.py
+python scripts/backup_investigations.py --out-dir /mnt/backups/recupero/2026-05-08
+python scripts/backup_investigations.py --include-bucket  # full snapshot
+```
+
+Each run writes `investigations.json`, `cases.json`, and a
+`manifest.json` with row counts + sha256 digests. Schedule weekly via
+cron or GitHub Actions; ship the directory to S3 / a NAS / wherever
+you keep operational backups. Restore is `psql \copy` per table — the
+JSON shape matches the column set 1:1.
+
 ## What the worker writes to the bucket
 
 Each completed investigation lands the following under

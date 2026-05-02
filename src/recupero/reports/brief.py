@@ -211,7 +211,14 @@ def generate_briefs(
     briefs_dir.mkdir(parents=True, exist_ok=True)
     issuer_slug = (issuer.short_name or "issuer").lower().replace(" ", "_")
     maple_path = briefs_dir / f"freeze_request_{issuer_slug}_{brief_id}.html"
-    le_path = briefs_dir / f"le_handoff_{brief_id}.html"
+    # Include the issuer slug in the LE handoff filename too — the LE
+    # template references issuer.name / issuer.short_name extensively
+    # (preservation requests, KYC framing, secondary-party language),
+    # so multi-issuer cases produce DIFFERENT le_handoff content per
+    # call. Without the slug, generate_briefs called N times would
+    # silently overwrite the previous LE handoff with the last issuer's
+    # version. Per-issuer filename preserves all of them.
+    le_path = briefs_dir / f"le_handoff_{issuer_slug}_{brief_id}.html"
     maple_path.write_text(maple_html, encoding="utf-8")
     le_path.write_text(le_html, encoding="utf-8")
 

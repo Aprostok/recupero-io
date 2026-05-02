@@ -511,13 +511,32 @@ def main() -> int:
             # Building-package deliverables (HTML letters)
             briefs_files = sorted(store.list_files("briefs"))
             issuer_letters = [f for f in briefs_files if f.startswith("freeze_request_")]
+            # LE handoff filename now includes issuer slug too —
+            # le_handoff_<issuer_slug>_<brief_id>.html — so multi-issuer
+            # cases preserve all variants instead of overwriting.
             le_handoffs = [f for f in briefs_files if f.startswith("le_handoff_")]
             manifests = [f for f in briefs_files if f.startswith("manifest_")]
             print(f"  briefs/ issuer letters: {len(issuer_letters)}")
             for f in issuer_letters:
                 print(f"    - {f}")
             print(f"  briefs/ LE handoffs:    {len(le_handoffs)}")
+            for f in le_handoffs:
+                print(f"    - {f}")
             print(f"  briefs/ manifests:      {len(manifests)}")
+            # Sanity: per-issuer naming should match between the issuer
+            # letter set and the LE handoff set (one of each per issuer).
+            issuer_slugs_in_letters = {
+                f.split("freeze_request_")[1].split("_BRIEF-")[0]
+                for f in issuer_letters
+            }
+            issuer_slugs_in_le = {
+                f.split("le_handoff_")[1].split("_BRIEF-")[0]
+                for f in le_handoffs
+            }
+            assert issuer_slugs_in_letters == issuer_slugs_in_le, (
+                f"issuer slug mismatch — freeze_request set {issuer_slugs_in_letters} "
+                f"vs le_handoff set {issuer_slugs_in_le}"
+            )
 
     except Exception as e:
         print(f"\n[FAIL] {type(e).__name__}: {e}")

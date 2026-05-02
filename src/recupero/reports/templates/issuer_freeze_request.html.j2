@@ -60,20 +60,16 @@
 </section>
 
 <div class="summary-box urgent">
-  <p style="margin:0"><strong>Summary.</strong>
-    On {{ theft_event.timestamp_human }} UTC, the Ethereum wallet of
-    {{ victim.name }} ({{ victim.wallet_address }}) was drained of
-    <strong>{{ asset.amount_human }} {{ asset.symbol }}</strong>
-    (initial value: <strong>USD {{ asset.usd_value_at_theft }}</strong>).
-    The asset is a {{ asset.description }}.
-    The stolen position was forwarded by the perpetrator within hours to wallet
-    <span class="mono">{{ current_holder.address }}</span>, where on-chain records
-    show <strong>it currently remains intact</strong>
-    (last verified {{ verified_at }} UTC; {{ outbound_count_of_stolen_asset }} outbound
-    transfers of this specific asset observed since receipt).
-    We respectfully request that {{ issuer.short_name }} voluntarily freeze redemption
-    rights on this specific position pending engagement with law enforcement
-    authorities representing the victim.
+  <p style="margin:0">
+    On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
+    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ victim.name }}'s wallet without authorization and forwarded to
+    <span class="mono">{{ current_holder.address }}</span>, where it remains
+    as of {{ verified_at }} UTC. The recipient wallet has executed
+    {{ outbound_count_of_stolen_asset }} outbound transfers of this asset
+    since receipt. We are writing to request that {{ issuer.short_name }}
+    place a precautionary hold on the position pending law-enforcement
+    engagement.
   </p>
 </div>
 
@@ -96,19 +92,15 @@
 
 {% if issuer.kyc_required %}
 <div class="summary-box action">
-  <p style="margin:0"><strong>KYC Holder Verification.</strong>
-    Acquisition of {{ asset.symbol }} requires {{ issuer.short_name }}-administered
-    KYC verification{% if issuer.kyc_minimum %} with a minimum subscription of
-    {{ issuer.kyc_minimum }}{% endif %}. {{ victim.name }} is an established
-    {{ asset.symbol }} holder and would have completed {{ issuer.short_name }}'s KYC
-    process at the time of original deposit. We respectfully suggest that
-    {{ issuer.short_name }}'s internal records will confirm {{ victim.name }} as the
-    legitimate KYC'd holder of the affected position. By contrast, the wallet
-    <span class="mono">{{ current_holder.address }}</span> currently holding the
-    stolen position has no record of completing {{ issuer.short_name }} KYC — it is
-    a freshly-created wallet that received the position by direct on-chain transfer
-    only. This asymmetry strengthens the basis for a precautionary hold pending
-    law-enforcement validation.
+  <p style="margin:0">
+    <strong>KYC asymmetry.</strong>
+    {{ issuer.short_name }} required full KYC for the original {{ asset.symbol }}
+    subscription{% if issuer.kyc_minimum %} (minimum {{ issuer.kyc_minimum }}){% endif %}.
+    {{ victim.name }} should appear in {{ issuer.short_name }}'s records as the
+    KYC'd holder of this position. The recipient wallet at
+    <span class="mono">{{ current_holder.address }}</span> has no
+    corresponding KYC history; it received the position by direct on-chain
+    transfer. The disparity supports the basis for a precautionary hold.
   </p>
 </div>
 {% endif %}
@@ -170,82 +162,79 @@
 </div>
 {% endif %}
 
-<h2>4. Current Location of Stolen Position</h2>
+<h2>4. Current Location</h2>
 <div class="summary-box action">
-  <p style="margin:0"><strong>The {{ asset.amount_human }} {{ asset.symbol }} position is currently held in:</strong></p>
-  <p class="mono" style="font-size:11pt; margin:0.5em 0;">{{ current_holder.address }}</p>
-  <p style="margin:0">
+  <p style="margin:0 0 0.4em 0;">
+    {{ asset.amount_human }} {{ asset.symbol }} held at:
+  </p>
+  <p class="mono" style="font-size:11pt; margin:0 0 0.7em;">{{ current_holder.address }}</p>
+  <p style="margin:0;">
     <a href="{{ current_holder.explorer_url }}">View on Etherscan</a>
     &nbsp;·&nbsp;
     <a href="{{ current_holder.explorer_url }}#tokentxns">Token transfer history</a>
-  </p>
-  <p style="margin:0.5em 0 0;">
-    <strong>Last verified:</strong> {{ verified_at }} UTC.
-    <strong>Outbound transfers of this asset observed:</strong> {{ outbound_count_of_stolen_asset }}.
+    <br/>
+    Last verified {{ verified_at }} UTC.
+    Outbound transfers of this asset since receipt: {{ outbound_count_of_stolen_asset }}.
   </p>
 </div>
 
 <h2>5. Specific Request</h2>
 <p>
-  We respectfully request that {{ issuer.name }} take the following actions:
+  We ask that {{ issuer.name }}:
 </p>
 <ol>
   <li>
-    <strong>Voluntarily place a hold on redemption rights</strong> for the
-    {{ asset.amount_human }} {{ asset.symbol }} position currently held in
+    Place a precautionary hold on redemption of the
+    {{ asset.amount_human }} {{ asset.symbol }} position at
     <span class="mono">{{ current_holder.address }}</span>,
-    pending engagement with law enforcement authorities representing the victim.
+    in effect until law enforcement authorities representing the victim
+    have engaged.
   </li>
   <li>
-    <strong>Confirm receipt of this request</strong> in writing, noting the date and time
-    {{ issuer.short_name }} was placed on notice of the alleged theft.
+    Confirm receipt of this request in writing and record the date and
+    time of notice.
   </li>
   <li>
-    <strong>Designate a point of contact</strong> for follow-up coordination with
-    law enforcement. We anticipate a formal request from the relevant authorities
-    (French national police / EU cooperation channels) to follow.
+    Identify a point of contact for coordination with the relevant
+    authorities, who we expect to follow with formal process.
   </li>
   {% if issuer.kyc_required %}
   <li>
-    <strong>Confirm via internal records</strong> whether {{ victim.name }} is registered
-    as the original KYC'd subscriber for the affected position. This information is
-    needed solely to corroborate ownership and would not need to be shared externally.
+    Verify internally whether {{ victim.name }} is the KYC'd subscriber
+    of record for the affected position. The result need not be shared
+    externally; we ask only that {{ issuer.short_name }} confirm the
+    review has been performed.
   </li>
   {% endif %}
 </ol>
 <p>
-  We recognize that {{ issuer.name }} is not a party to the underlying theft and are
-  not asserting any wrongdoing on {{ issuer.short_name }}'s part. This request is
-  made because {{ issuer.short_name }}'s protocol-level controls represent the most
-  rapid available means of preventing further dissipation of the stolen funds
-  while law enforcement procedures are initiated.
+  We are not alleging any wrongdoing on the part of {{ issuer.name }}.
+  This request is made because {{ issuer.short_name }}'s protocol-level
+  authority is the only avenue by which the stolen position can be
+  preserved before further dissipation occurs.
 </p>
 
 {% if issuer.regulatory_framework %}
-<h2>6. Applicable Regulatory Context</h2>
+<h2>6. Regulatory Context</h2>
 <p>
   {{ issuer.name }} operates under {{ issuer.regulatory_framework }}.
-  {% if victim.citizenship %}
-  The victim, {{ victim.name }}, is a citizen of {{ victim.citizenship }}, an EU
-  member state. This case therefore falls within established EU cross-border
-  regulatory cooperation frameworks for the protection of consumer/investor interests
-  in tokenized assets.
-  {% endif %}
+  Cooperation with a precautionary hold pending law-enforcement engagement
+  is consistent with the consumer- and investor-protection obligations
+  embedded in that framework.
 </p>
 {% endif %}
 
-<h2>7. Independent Verification</h2>
+<h2>7. Verification</h2>
 <p>
-  All facts in this brief are derived from public Ethereum mainnet data and are
-  independently verifiable. Each transaction hash above links to its Etherscan
-  record. The on-chain state of <span class="mono">{{ current_holder.address }}</span>
-  as of {{ verified_at }} UTC shows {{ outbound_count_of_stolen_asset }} outbound
-  transfers of {{ asset.symbol }} from that wallet to date.
+  Every fact in this brief is drawn from public on-chain data and is
+  independently verifiable. Each transaction hash links to its Etherscan
+  record. As of {{ verified_at }} UTC, the recipient wallet shows
+  {{ outbound_count_of_stolen_asset }} outbound transfers of
+  {{ asset.symbol }}.
 </p>
 <p class="small">
-  Data sources: Etherscan API v2 (Ethereum mainnet transaction history),
-  CoinGecko (historical USD valuation), {{ investigator.organization }} cross-case
-  entity attribution database.
+  Sources: Etherscan API v2; CoinGecko historical pricing; our internal
+  cross-case label database.
 </p>
 
 <h2>8. Contact</h2>

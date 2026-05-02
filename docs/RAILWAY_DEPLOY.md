@@ -6,9 +6,17 @@ trace → freeze → editorial → emit pipeline, mirrors artifacts to the
 Supabase `investigation-files` bucket, and updates the row's status as it
 goes.
 
-This is a **headless worker**. No HTTP endpoints, no health check route.
-Railway treats it as a regular process; if it exits, Railway restarts it
-per the policy in [railway.json](../railway.json).
+The worker exposes two HTTP endpoints purely for Railway's healthcheck:
+
+- `GET /healthz` — instant liveness probe. Returns 200 if the process is up.
+  This is what Railway polls (`healthcheckPath: /healthz` in `railway.json`).
+- `GET /health` — full readiness probe. Runs env-var, DB connectivity,
+  bucket-reachability, and package-integrity checks. Slower (~2-5s on
+  cold start due to DB + bucket round-trips). Used by ops manually
+  (`recupero-worker --health-check` runs the same checks via CLI).
+
+If the worker exits, Railway restarts it per the on-failure policy in
+[railway.json](../railway.json) (10 retries before giving up).
 
 ## Prerequisites
 
@@ -116,17 +124,50 @@ Railway log streams to claimed rows.
 | Worker claims a row, runs trace, then fails on `editorial_drafting` | Missing or invalid `ANTHROPIC_API_KEY` |
 | Worker fails on `tracing` with rate-limit error                | Etherscan free tier exhausted; either upgrade plan or wait until next 24h reset |
 
+## What the worker writes to the bucket
+
+Each completed investigation lands the following under
+`investigation-files/investigations/<investigation_id>/`:
+
+```
+case.json                # structured trace data + endpoints
+manifest.json            # run metadata
+transfers.csv            # flat CSV mirror of all transfers
+freeze_asks.json         # candidate freeze targets per issuer + per exchange
+brief_editorial.json     # AI-drafted editorial, post-review
+freeze_brief.json        # final customer-facing brief JSON
+evidence/<tx_hash>.json  # one per traced transfer (EVM chains only)
+briefs/
+  freeze_request_<issuer>_<brief_id>.html   # one per matched issuer
+  le_handoff_<issuer>_<brief_id>.html       # LE handoff per issuer
+  manifest_<brief_id>.json                  # output manifest
+  flow_<id>.svg                             # standalone fund-flow diagram
+```
+
+The HTML briefs embed the same SVG inline so they render self-contained.
+The standalone `flow_*.svg` is provided so operators can drop the
+diagram into separate decks or PDFs without re-rendering.
+
+## System dependencies in the image
+
+The Dockerfile installs:
+
+- **`graphviz`** + **`fonts-dejavu-core`** (apt) — `dot` binary used to
+  render the fund-flow SVGs. ~30 MB image overhead. Without these the
+  worker still runs; the deliverables stage emits a placeholder SVG and
+  logs a warning.
+- **All Python deps** ship as pre-built wheels for cp312-manylinux —
+  no compiler needed in the image.
+
 ## What this deploy does NOT do
 
-- **JS builders** (the `building_package` stage that turns
-  `freeze_brief.json` into `.docx` / `.pdf`) — deferred per the contract.
-  Worker passes through `building_package` immediately. When ready,
-  productionize either as (a) Node bundled into the Python image or (b)
-  a separate Railway service that watches for `building_package` rows.
-- **Stale-claim reaper** — `last_heartbeat_at` is written but no
-  background process actively kills stale rows yet. The claim SQL will
-  re-claim a row whose heartbeat is older than `STALE_AFTER_SEC`, which
-  covers the common crash case. A dedicated reaper is v2.
-- **API cost tracking** — `api_costs_usd` is left NULL. Adding it means
-  plumbing token usage out of `run_ai_editorial` and Etherscan
-  request counts; not load-bearing for v1.
+- **JS-side .docx / .pdf rendering** — the worker emits HTML briefs that
+  print to PDF cleanly via Chrome / wkhtmltopdf. Native `.docx` export
+  is deferred. Productionize when needed by either (a) bundling Node +
+  the JS builders into the same image or (b) running a second Railway
+  service that watches for `complete` rows.
+- **Native cross-chain bridge following** — when the trace hits a
+  labeled bridge, it stops on the source chain and records "bridged
+  out" as a finding. Following the funds onto the destination chain
+  requires bridge decoders (DeBridge, Wormhole, Stargate, Across)
+  tracked in `docs/BACKLOG.md` Phase 4.

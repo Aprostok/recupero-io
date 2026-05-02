@@ -60,28 +60,29 @@
 <h2>1. Executive Summary</h2>
 <div class="summary-box">
   <p style="margin:0 0 0.7em 0;">
-    On <strong>{{ theft_event.timestamp_human }} UTC</strong>, the Ethereum wallet of
-    {{ victim.name }} (citizen of {{ victim.citizenship or "—" }}) was drained of
-    <strong>{{ asset.amount_human }} {{ asset.symbol }}</strong>
-    (<strong>USD {{ asset.usd_value_at_theft }}</strong> at time of transaction).
-  </p>
-  <p style="margin:0 0 0.7em 0;">
-    The asset is a {{ asset.description }}. The token is issued by
-    <strong>{{ issuer.name }}</strong>{% if issuer.jurisdiction %},
+    On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
+    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }} at the time of
+    transaction) was removed without authorization from
+    {{ victim.name }}'s wallet
+    {% if victim.citizenship %}(citizen of {{ victim.citizenship }}){% endif %}.
+    The token is issued by {{ issuer.name }}{% if issuer.jurisdiction %},
     a {{ issuer.jurisdiction }} entity{% endif %}.
     {% if issuer.secondary_party %}
-    The underlying yield strategy is operated by {{ issuer.secondary_party }}
+    Its underlying strategy is operated by {{ issuer.secondary_party }}
     ({{ issuer.secondary_role }}).
     {% endif %}
-    The stolen position was forwarded by the perpetrator to a secondary wallet
-    (<span class="mono">{{ current_holder.address }}</span>) within four hours of the theft.
+  </p>
+  <p style="margin:0 0 0.7em 0;">
+    The position was promptly forwarded by the perpetrator to a secondary
+    wallet at <span class="mono">{{ current_holder.address }}</span>, where
+    {{ outbound_count_of_stolen_asset }} outbound transfers have been
+    observed as of {{ verified_at }} UTC.
   </p>
   <p style="margin:0;">
-    As of {{ verified_at }} UTC, on-chain records confirm the position
-    <strong>remains intact in the secondary wallet</strong>
-    ({{ outbound_count_of_stolen_asset }} outbound transfers of the stolen asset observed).
-    A timely freeze request to {{ issuer.short_name }}'s compliance team is the
-    recommended immediate action.
+    The asset's issuer-level controls remain the only available
+    mechanism by which redemption can be paused. We recommend that
+    a preservation request be issued to {{ issuer.short_name }} as a
+    matter of priority.
   </p>
 </div>
 
@@ -188,57 +189,51 @@
   {% endfor %}
 </table>
 
-<h2>6. Recommended Actions for Law Enforcement</h2>
+<h2>6. Recommended Actions</h2>
 
-<h3>6.1 Immediate (within 24 hours)</h3>
+<h3>Immediate</h3>
 <ol>
   <li>
-    <strong>Issue a preservation request to {{ issuer.name }}</strong>
-    ({{ issuer.contact_email }}). The {{ asset.symbol }} token is issued by
-    {{ issuer.short_name }}. As the issuer of the wrapper token, {{ issuer.short_name }}
-    has protocol-level control over redemption and is the only party able to
-    technically freeze the position. The identified position is
-    {{ asset.amount_human }} {{ asset.symbol }} held at
-    <span class="mono">{{ current_holder.address }}</span>.
-    A direct request from your office, citing this case, is significantly more
-    enforceable than a third-party request.
+    Issue a preservation request to {{ issuer.name }}
+    ({{ issuer.contact_email }}). As issuer, {{ issuer.short_name }}
+    holds protocol-level authority over redemption and is the only party
+    in a position to technically halt the {{ asset.amount_human }}
+    {{ asset.symbol }} position at
+    <span class="mono">{{ current_holder.address }}</span>. A request
+    originating from your office is materially more enforceable than a
+    third-party request.
     {% if issuer.kyc_required %}
-    Note: {{ issuer.short_name }} required full KYC for the original deposit, so
-    they have identifying information for the legitimate holder
-    ({{ victim.name }}) on file.
+    {{ issuer.short_name }} required full KYC at original subscription;
+    they hold identifying information for {{ victim.name }} on file.
     {% endif %}
   </li>
   {% if issuer.secondary_party %}
   <li>
-    <strong>Cc {{ issuer.secondary_party }} (the underlying strategy manager).</strong>
-    While {{ issuer.short_name }} controls the wrapper token, {{ issuer.secondary_party }}
-    controls the underlying yield strategy that the wrapper represents. If
-    {{ issuer.short_name }}'s freeze mechanism is unavailable or contested,
-    {{ issuer.secondary_party }} is a secondary route.
+    Copy {{ issuer.secondary_party }}, who manages the underlying
+    {{ issuer.secondary_role }} the wrapper represents. They are the
+    secondary route if {{ issuer.short_name }}'s freeze mechanism is
+    unavailable or contested.
   </li>
   {% endif %}
   <li>
-    <strong>Confirm chain-of-custody preservation</strong> on this evidence package
-    (case files <span class="mono">{{ case_id }}</span> and any linked cases).
-    {{ investigator.organization }} retains full per-transaction evidence receipts
-    including raw chain state at fetch time.
+    Confirm chain-of-custody preservation of this evidence package and
+    any linked case files. Per-transaction raw chain state at the time
+    of fetch is retained on our side and available on request.
   </li>
 </ol>
 
-<h3>6.2 Investigative (next 1–2 weeks)</h3>
+<h3>Investigative (over the following 1–2 weeks)</h3>
 <ol>
-  <li>Issue legal process to {{ issuer.short_name }} for KYC records of any party
-      that attempts to redeem or transfer the position from
+  <li>Issue legal process to {{ issuer.short_name }} for KYC records on
+      any party attempting to redeem or transfer the position out of
       <span class="mono">{{ current_holder.address }}</span>.</li>
-  <li>Issue legal process to any centralized exchange that subsequently receives
-      transfers from any of the identified perpetrator wallets (see Section 5).</li>
-  {% if victim.citizenship == "France" and issuer.jurisdiction and "Germany" in issuer.jurisdiction %}
-  <li>Coordinate via French national police (OCLCTIC / Cyber unit) with German
-      Federal Financial Supervisory Authority (BaFin) under EU cross-border
-      regulatory cooperation frameworks. Both France and Germany are MiCA
-      signatories; this case falls clearly within EU consumer-protection scope.</li>
-  {% else %}
-  <li>{% if issuer.jurisdiction %}Coordinate with regulatory authorities in {{ issuer.jurisdiction }}.{% endif %}</li>
+  <li>Issue legal process to any centralized exchange that receives
+      onward transfers from the identified perpetrator wallets listed
+      in Section 5.</li>
+  {% if issuer.jurisdiction %}
+  <li>Coordinate with the financial-supervisory authority in
+      {{ issuer.jurisdiction }} regarding the issuer's obligations to
+      cooperate with the freeze.</li>
   {% endif %}
 </ol>
 
@@ -263,36 +258,27 @@
   {% endif %}
 </table>
 
-<h2>8. Independent Verification</h2>
+<h2>8. Verification</h2>
 <p>
-  All evidence in this package is derived from public Ethereum mainnet state and
-  is independently verifiable. Each transaction listed includes a hyperlink to
-  its Etherscan record. The {{ investigator.organization }} case folder contains,
-  for each transaction:
+  Every fact in this package is drawn from public Ethereum mainnet state
+  and is independently verifiable. Each transaction listed in the timeline
+  links to its Etherscan record. For each transaction we retain, on file:
+  the raw transaction object, receipt, block header, fetch timestamp, and
+  direct verification link.
 </p>
-<ul>
-  <li>The raw transaction object as returned by Etherscan API v2</li>
-  <li>The transaction receipt (gas, status, event logs)</li>
-  <li>The block header (timestamp, miner)</li>
-  <li>A timestamp documenting when the data was fetched</li>
-  <li>A direct link to Etherscan for human verification</li>
-</ul>
 <p class="small">
-  Software version: {{ investigator.organization }} v{{ software_version }}.
-  Data sources: Etherscan API v2 (transaction history), CoinGecko (historical USD
-  valuation), {{ investigator.organization }} label database (cross-case entity
-  attribution).
+  Sources: Etherscan API v2 (transaction history); CoinGecko (historical
+  pricing); our internal label database for entity attribution.
 </p>
 
 <h2>9. Investigator Attestation</h2>
 <div class="signature-block">
   <p>
-    I, the undersigned, prepared this evidence package on behalf of
-    {{ victim.name }} based on public Ethereum mainnet data fetched between
-    {{ trace_started_at }} and {{ generated_at }} UTC.
-    All transaction hashes, addresses, timestamps, and amounts in this package
-    are accurate to the best of my knowledge and were independently verified at
-    fetch time.
+    I prepared this package on behalf of {{ victim.name }} from public
+    Ethereum mainnet data fetched between {{ trace_started_at }} and
+    {{ generated_at }} UTC. The transaction hashes, addresses, timestamps,
+    and amounts set out in this brief are accurate to the best of my
+    knowledge and were independently verified at the time of fetch.
   </p>
   <div class="signature-line"></div>
   <div class="signature-fields">

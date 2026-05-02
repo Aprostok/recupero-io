@@ -154,9 +154,10 @@ def run_one(
 
             # Per docs/investigation-integration.md, the worker passes
             # through `building_package` (output columns written here),
-            # then `complete` (just stamps completed_at). The JS-builder
-            # step that conceptually owns `building_package` is deferred
-            # — for v1 we transition through both states immediately.
+            # then `complete` (stamps completed_at). The Python-side
+            # builder generates per-issuer freeze HTMLs + LE handoff;
+            # JS-based PDF/docx production is still deferred but the
+            # worker now produces the operator-ready HTML deliverables.
             summary = _summarize_brief(case_dir / "freeze_brief.json")
             db.mark_built_package(
                 inv.id,
@@ -165,6 +166,11 @@ def run_one(
                 max_recoverable_usd=summary.get("max_recoverable_usd"),
                 freezable_issuers=summary.get("freezable_issuers"),
                 api_costs_usd=api_costs_usd,
+            )
+            _run_stage(
+                db, inv.id, S.BUILDING_PACKAGE,
+                lambda: _stage_build_package(inv, case_id_str,
+                                             local_store, case_dir, store),
             )
             db.mark_completed(inv.id)
             log.info("investigation %s completed", inv.id)
@@ -351,6 +357,42 @@ def _stage_emit_brief(
     from recupero.reports.emit_brief import run_emit_brief
 
     run_emit_brief(case_id=case_id_str, case_store=local_store)
+    upload_case_dir(case_dir, bucket)
+
+
+def _stage_build_package(
+    inv: Investigation,
+    case_id_str: str,
+    local_store: CaseStore,
+    case_dir: Path,
+    bucket: SupabaseCaseStore,
+) -> None:
+    """Generate per-issuer freeze briefs + LE handoff HTMLs and sync.
+
+    Implements the worker side of the contract's ``building_package``
+    state. Reads case.json + victim.json + freeze_brief.json from the
+    local case_dir (already populated by prior stages), invokes the
+    Jinja-based brief generator once per unique issuer in FREEZABLE,
+    writes outputs to case_dir/briefs/, and uploads to the bucket.
+
+    No exceptions caught here — any failure marks the row failed at
+    stage='building_package', surfaced via the admin UI.
+    """
+    from recupero.reports.victim import load_victim
+    from recupero.worker._deliverables import build_all_deliverables
+
+    case = local_store.read_case(case_id_str)
+    victim = load_victim(case_dir)
+    freeze_brief_path = case_dir / "freeze_brief.json"
+    freeze_brief = json.loads(freeze_brief_path.read_text(encoding="utf-8-sig"))
+
+    written = build_all_deliverables(
+        case=case,
+        victim=victim,
+        freeze_brief=freeze_brief,
+        case_dir=case_dir,
+    )
+    log.info("building_package wrote %d deliverable file(s)", len(written))
     upload_case_dir(case_dir, bucket)
 
 

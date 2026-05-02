@@ -60,6 +60,17 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
             log.debug("uploaded %s as evidence/%s.json", rel, tx_hash)
             continue
 
+        # building_package deliverables: case_dir/briefs/*.html etc.
+        # Mirror the directory verbatim under the bucket prefix.
+        if parts[0] == "briefs":
+            bucket_path = "/".join(parts)  # e.g. briefs/freeze_request_circle_BRIEF-...html
+            content_type = _content_type_for(path.suffix.lower())
+            _upload_to_subpath(store, bucket_path, _read_text(path).encode("utf-8"),
+                               content_type)
+            uploaded += 1
+            log.debug("uploaded %s", rel)
+            continue
+
         # Top-level files: write_json for *.json, write_text for the rest.
         if len(parts) != 1:
             log.warning("skipping nested non-evidence file: %s", rel)
@@ -105,3 +116,32 @@ def _read_text(path: Path) -> str:
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
     return raw.decode("utf-8")
+
+
+def _content_type_for(suffix: str) -> str:
+    """Map a file extension to a Content-Type for bucket upload."""
+    return {
+        ".json": "application/json",
+        ".csv": "text/csv; charset=utf-8",
+        ".html": "text/html; charset=utf-8",
+        ".htm": "text/html; charset=utf-8",
+        ".txt": "text/plain; charset=utf-8",
+    }.get(suffix, "application/octet-stream")
+
+
+def _upload_to_subpath(
+    store: SupabaseCaseStore,
+    bucket_relative_path: str,
+    body: bytes,
+    content_type: str,
+) -> None:
+    """Upload to <storage_prefix>/<bucket_relative_path>.
+
+    SupabaseCaseStore's public surface only exposes flat (single-segment)
+    writes via write_text/write_json/write_evidence; nested-subdirectory
+    writes need to go through the same upload primitive directly. We hit
+    the underlying _upload helper since the storage_prefix already carries
+    the investigations/<id>/ part.
+    """
+    full = store.storage_prefix + bucket_relative_path
+    store._upload(full, body, content_type)  # noqa: SLF001

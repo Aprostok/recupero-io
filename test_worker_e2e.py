@@ -34,6 +34,7 @@ import json
 import os
 import socket
 import sys
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -45,15 +46,26 @@ from dotenv import load_dotenv
 
 # ----- DEFAULT TEST INPUTS PER CHAIN ----- #
 # Each chain's defaults can be overridden via --seed / --incident.
+# max_depth=3 mirrors the schema default; deeper traces surface forwarding hops
+# that single-hop misses, at the cost of more Etherscan calls (still free tier).
 DEFAULTS: dict[str, dict[str, Any]] = {
     "ethereum": {
         "seed": "0x8E3b200f356724299643402148a25FD4B852Bd53",
         "incident": "2026-01-02T00:00:00Z",
+        # depth=1 keeps the test cycle <60s on fan-out-heavy wallets.
+        # The point of this test is to validate the worker pipeline +
+        # deliverable generation end-to-end, not to do an exhaustive
+        # multi-hop trace. Jacob's production UI sets max_depth per
+        # investigation (schema default 3); Railway runs those async,
+        # so trace depth doesn't block any human-watched test cycle.
+        # Override with --max-depth 2 or 3 if you want to validate
+        # deeper-trace pipelining and have time to wait.
         "max_depth": 1,
         "dust_threshold_usd": 50.0,
     },
     "hyperliquid": {
-        # Will be overridden by --seed; placeholder so script can start.
+        # Hyperliquid scraper doesn't use max_depth (it's a single-API ledger
+        # query, not a graph walk), but we keep the field for parity.
         "seed": "0x0000000000000000000000000000000000000001",
         "incident": "2026-01-02T00:00:00Z",
         "max_depth": 1,
@@ -70,28 +82,73 @@ def _utf8_console() -> None:
             pass
 
 
-def _fill_todos(obj: Any, _depth: int = 0) -> int:
-    """Walk an editorial dict and replace every "TODO: ..." string with a
-    deterministic test value. Mirrors what the admin UI's review flow
-    must do before flipping to review_approved.
+class _HeartbeatThread:
+    """Same shape as main.py's _Heartbeat — pings last_heartbeat_at every
+    interval_sec while a long stage is running.
+
+    Without this, depth=3 traces (which can run >5 min) get reaped by
+    Railway's stale-claim reaper. The reaper is doing its job correctly;
+    the test just needs to keep the heartbeat fresh like the production
+    worker does.
+    """
+
+    def __init__(self, db: Any, inv_id: uuid.UUID, interval_sec: float = 30.0) -> None:
+        self._db = db
+        self._inv_id = inv_id
+        self._interval = interval_sec
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True,
+                                        name=f"e2e-hb-{inv_id}")
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=self._interval + 5)
+
+    def _run(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self._db.heartbeat(self._inv_id)
+            except Exception as e:
+                print(f"  [hb warning] {e}")
+
+
+def _fill_todos(obj: Any, _depth: int = 0, _path: str = "") -> int:
+    """Walk an editorial dict and replace any string CONTAINING "TODO:"
+    with a deterministic test value. Mirrors what the admin UI's review
+    flow must do before flipping to review_approved.
+
+    Match semantics use substring, not prefix — same as emit_brief's
+    _find_todos validator. The AI sometimes embeds "TODO:..." mid-string
+    (e.g. confidence-tagged values like "USA (TODO: confirm state)"),
+    which a prefix check would miss.
+
+    Skips the same metadata keys emit_brief skips (AI_GENERATED etc.)
+    so we don't trample legitimate TODO mentions in REVIEW_INSTRUCTIONS.
 
     Returns the count of placeholders replaced.
     """
+    skip = {"AI_GENERATED", "AI_MODEL", "AI_GENERATED_AT",
+            "REVIEW_REQUIRED", "REVIEW_INSTRUCTIONS"}
     count = 0
     if isinstance(obj, dict):
         for k, v in list(obj.items()):
-            if isinstance(v, str) and v.startswith("TODO:"):
+            if not _path and k in skip:
+                continue
+            if isinstance(v, str) and "TODO:" in v:
                 obj[k] = f"[E2E test fill-in for {k}]"
                 count += 1
             else:
-                count += _fill_todos(v, _depth + 1)
+                count += _fill_todos(v, _depth + 1, f"{_path}.{k}" if _path else k)
     elif isinstance(obj, list):
         for i, item in enumerate(obj):
-            if isinstance(item, str) and item.startswith("TODO:"):
+            if isinstance(item, str) and "TODO:" in item:
                 obj[i] = f"[E2E test fill-in #{i}]"
                 count += 1
             else:
-                count += _fill_todos(item, _depth + 1)
+                count += _fill_todos(item, _depth + 1, f"{_path}[{i}]")
     return count
 
 
@@ -329,9 +386,14 @@ def main() -> int:
         print(f"  loaded inv id={inv.id} status={inv.status}")
 
         pass1_start = time.time()
-        with SupabaseCaseStore(cfg, supabase_url, service_role_key,
-                                investigation_id=str(inv.id)) as store:
-            run_one(inv, config=cfg, env=env, db=db, store=store)
+        hb = _HeartbeatThread(db, inv.id)
+        hb.start()
+        try:
+            with SupabaseCaseStore(cfg, supabase_url, service_role_key,
+                                    investigation_id=str(inv.id)) as store:
+                run_one(inv, config=cfg, env=env, db=db, store=store)
+        finally:
+            hb.stop()
         elapsed = int(time.time() - pass1_start)
         print(f"  pass 1 wallclock: {elapsed}s")
 
@@ -406,9 +468,14 @@ def main() -> int:
         print(f"  re-claimed inv status={inv2.status}")
 
         pass2_start = time.time()
-        with SupabaseCaseStore(cfg, supabase_url, service_role_key,
-                                investigation_id=str(inv_id)) as store:
-            run_one(inv2, config=cfg, env=env, db=db, store=store)
+        hb = _HeartbeatThread(db, inv2.id)
+        hb.start()
+        try:
+            with SupabaseCaseStore(cfg, supabase_url, service_role_key,
+                                    investigation_id=str(inv_id)) as store:
+                run_one(inv2, config=cfg, env=env, db=db, store=store)
+        finally:
+            hb.stop()
         elapsed = int(time.time() - pass2_start)
         print(f"  pass 2 wallclock: {elapsed}s")
 
@@ -440,6 +507,17 @@ def main() -> int:
             print(f"  brief MAX_RECOVERABLE:  {brief.get('MAX_RECOVERABLE_USD')}")
             print(f"  brief FREEZABLE count:  {len(brief.get('FREEZABLE', []))}")
             print(f"  brief DESTINATIONS:     {len(brief.get('DESTINATIONS', []))}")
+
+            # Building-package deliverables (HTML letters)
+            briefs_files = sorted(store.list_files("briefs"))
+            issuer_letters = [f for f in briefs_files if f.startswith("freeze_request_")]
+            le_handoffs = [f for f in briefs_files if f.startswith("le_handoff_")]
+            manifests = [f for f in briefs_files if f.startswith("manifest_")]
+            print(f"  briefs/ issuer letters: {len(issuer_letters)}")
+            for f in issuer_letters:
+                print(f"    - {f}")
+            print(f"  briefs/ LE handoffs:    {len(le_handoffs)}")
+            print(f"  briefs/ manifests:      {len(manifests)}")
 
     except Exception as e:
         print(f"\n[FAIL] {type(e).__name__}: {e}")

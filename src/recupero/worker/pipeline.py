@@ -189,23 +189,44 @@ def _stage_trace(
     case_dir: Path,
     bucket: SupabaseCaseStore,
 ) -> None:
-    from recupero.models import Chain
-    from recupero.trace.tracer import run_trace
+    """Trace dispatch by chain.
 
-    try:
-        chain = Chain(inv.chain)
-    except ValueError as e:
-        raise _StageFailure(S.TRACING, f"unknown chain: {inv.chain}") from e
+    EVM chains (ethereum / arbitrum / polygon / base / bsc) and Solana go
+    through ``run_trace``, which queries chain explorers, prices each
+    transfer, and writes per-tx evidence receipts.
 
-    case = run_trace(
-        chain=chain,
-        seed_address=inv.seed_address,
-        incident_time=inv.incident_time,
-        case_id=case_id_str,
-        config=config,
-        env=env,
-        case_dir=case_dir,
-    )
+    Hyperliquid is fundamentally different — it has its own ledger API
+    (no Etherscan equivalent) and no per-tx evidence concept — so it
+    uses ``scrape_hyperliquid_case`` instead. The resulting Case has
+    chain=ethereum baked in (Hyperliquid uses Ethereum-format addresses)
+    even though the investigations row has chain='hyperliquid'.
+    """
+    if inv.chain == "hyperliquid":
+        from recupero.chains.hyperliquid.scraper import scrape_hyperliquid_case
+        case = scrape_hyperliquid_case(
+            user_address=inv.seed_address,
+            case_id=case_id_str,
+            incident_time=inv.incident_time,
+            config=config,
+            env=env,
+        )
+    else:
+        from recupero.models import Chain
+        from recupero.trace.tracer import run_trace
+        try:
+            chain = Chain(inv.chain)
+        except ValueError as e:
+            raise _StageFailure(S.TRACING, f"unknown chain: {inv.chain}") from e
+        case = run_trace(
+            chain=chain,
+            seed_address=inv.seed_address,
+            incident_time=inv.incident_time,
+            case_id=case_id_str,
+            config=config,
+            env=env,
+            case_dir=case_dir,
+        )
+
     local_store.write_case(case)
     upload_case_dir(case_dir, bucket)
 

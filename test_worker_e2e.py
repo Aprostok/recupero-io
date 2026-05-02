@@ -1,27 +1,35 @@
 """test_worker_e2e.py — full real-API end-to-end test of the worker pipeline.
 
 Drives the worker pipeline against real Supabase + real Etherscan + real
-CoinGecko + real Anthropic, with no mocks. Same code Railway is running;
-controlled from your laptop so you see live progress.
+CoinGecko + real Anthropic + (optionally) real Hyperliquid, with no mocks.
+Same code Railway is running; controlled from your laptop so you see live
+progress.
 
 Use: a final smoke test BEFORE handing off to Jacob, to catch any
 real-pipeline issues (like packaging gaps) that the mocked test_worker.py
 doesn't exercise.
 
 Cost per run:
-  - ~$0.50 in Anthropic (Opus 4.7, ~10K input + ~3K output tokens)
-  - Etherscan: ~50 free-tier calls
-  - CoinGecko: ~30 free-tier calls
-  - Wallclock: 10-15 minutes (depending on transfer count + AI response time)
+  - ~$0.13 in Anthropic (Opus 4.7, ~9K input + ~1.5K output tokens)
+  - Etherscan / Hyperliquid: free
+  - CoinGecko: free tier
+  - Wallclock: ~30s (small wallet) to ~15 min (deep / wide trace)
 
 Cleanup is in a try/finally and runs even on failure — synthesized cases
 + investigations rows AND the bucket prefix all get deleted.
 
-Run from repo root:  python test_worker_e2e.py
+Run from repo root:
+    python test_worker_e2e.py                       # default: ethereum
+    python test_worker_e2e.py --chain ethereum
+    python test_worker_e2e.py --chain hyperliquid --seed 0x... --incident 2026-...
+
+Override seed/incident with --seed / --incident if the bundled defaults
+don't have movement on the chain you're testing.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import socket
@@ -35,12 +43,23 @@ from typing import Any
 import psycopg
 from dotenv import load_dotenv
 
-# ----- TEST INPUTS ----- #
-TEST_SEED_ADDRESS = "0x8E3b200f356724299643402148a25FD4B852Bd53"
-TEST_CHAIN = "ethereum"
-TEST_INCIDENT = "2026-01-02T00:00:00Z"
-TEST_MAX_DEPTH = 1
-TEST_DUST_THRESHOLD_USD = 50.0
+# ----- DEFAULT TEST INPUTS PER CHAIN ----- #
+# Each chain's defaults can be overridden via --seed / --incident.
+DEFAULTS: dict[str, dict[str, Any]] = {
+    "ethereum": {
+        "seed": "0x8E3b200f356724299643402148a25FD4B852Bd53",
+        "incident": "2026-01-02T00:00:00Z",
+        "max_depth": 1,
+        "dust_threshold_usd": 50.0,
+    },
+    "hyperliquid": {
+        # Will be overridden by --seed; placeholder so script can start.
+        "seed": "0x0000000000000000000000000000000000000001",
+        "incident": "2026-01-02T00:00:00Z",
+        "max_depth": 1,
+        "dust_threshold_usd": 50.0,
+    },
+}
 
 
 def _utf8_console() -> None:
@@ -203,20 +222,54 @@ def main() -> int:
     # `export ANTHROPIC_API_KEY=""`) doesn't shadow the real one in .env.
     load_dotenv(override=True)
 
+    parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
+    parser.add_argument(
+        "--chain", default="ethereum", choices=sorted(DEFAULTS.keys()),
+        help="Which chain to test against. Default: ethereum.",
+    )
+    parser.add_argument(
+        "--seed", default=None,
+        help="Override seed wallet address for this chain.",
+    )
+    parser.add_argument(
+        "--incident", default=None,
+        help="Override incident time (ISO 8601 UTC).",
+    )
+    parser.add_argument(
+        "--max-depth", type=int, default=None,
+        help="Override max_depth (default 1).",
+    )
+    args = parser.parse_args()
+
+    chain_defaults = DEFAULTS[args.chain]
+    seed = args.seed or chain_defaults["seed"]
+    incident_iso = args.incident or chain_defaults["incident"]
+    max_depth = args.max_depth or chain_defaults["max_depth"]
+    dust_threshold = chain_defaults["dust_threshold_usd"]
+
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_role_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     db_url = os.environ.get("SUPABASE_DB_URL", "").strip()
-    etherscan = os.environ.get("ETHERSCAN_API_KEY", "").strip()
     anthropic = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    missing = [k for k, v in {
+    required_for_chain: dict[str, str] = {
         "SUPABASE_URL": supabase_url,
         "SUPABASE_SERVICE_ROLE_KEY": service_role_key,
         "SUPABASE_DB_URL": db_url,
-        "ETHERSCAN_API_KEY": etherscan,
         "ANTHROPIC_API_KEY": anthropic,
-    }.items() if not v]
+    }
+    if args.chain in {"ethereum", "arbitrum", "polygon", "base", "bsc"}:
+        required_for_chain["ETHERSCAN_API_KEY"] = (
+            os.environ.get("ETHERSCAN_API_KEY", "").strip()
+        )
+    if args.chain == "solana":
+        required_for_chain["HELIUS_API_KEY"] = (
+            os.environ.get("HELIUS_API_KEY", "").strip()
+        )
+    # Hyperliquid scraper hits a public endpoint — no API key required.
+
+    missing = [k for k, v in required_for_chain.items() if not v]
     if missing:
-        print(f"ERROR: missing env vars: {', '.join(missing)}")
+        print(f"ERROR: missing env vars for chain={args.chain}: {', '.join(missing)}")
         return 2
 
     # Lazy imports — keeps startup fast and surfaces import problems clearly
@@ -231,12 +284,12 @@ def main() -> int:
 
     case_number = f"E-{uuid.uuid4().hex[:6]}"
     print("=" * 78)
-    print("Phase 3 worker E2E — full real-API run")
+    print(f"Phase 3 worker E2E — full real-API run [chain={args.chain}]")
     print(f"  case_number:        {case_number}")
-    print(f"  test_seed_address:  {TEST_SEED_ADDRESS}")
-    print(f"  chain:              {TEST_CHAIN}")
-    print(f"  incident_time:      {TEST_INCIDENT}")
-    print(f"  max_depth:          {TEST_MAX_DEPTH}")
+    print(f"  test_seed_address:  {seed}")
+    print(f"  chain:              {args.chain}")
+    print(f"  incident_time:      {incident_iso}")
+    print(f"  max_depth:          {max_depth}")
     print(f"  worker_id:          {worker_id}")
     print("=" * 78)
 
@@ -251,11 +304,11 @@ def main() -> int:
     try:
         # ----- Setup -----
         step("Insert cases + investigations rows (investigation pre-claimed by us)")
-        case_id = _insert_case(db_url, case_number=case_number, wallet=TEST_SEED_ADDRESS)
+        case_id = _insert_case(db_url, case_number=case_number, wallet=seed)
         inv_id = _insert_investigation_pre_claimed(
-            db_url, case_id=case_id, chain=TEST_CHAIN, seed=TEST_SEED_ADDRESS,
-            incident_iso=TEST_INCIDENT, max_depth=TEST_MAX_DEPTH,
-            dust_threshold_usd=TEST_DUST_THRESHOLD_USD,
+            db_url, case_id=case_id, chain=args.chain, seed=seed,
+            incident_iso=incident_iso, max_depth=max_depth,
+            dust_threshold_usd=dust_threshold,
             worker_id=worker_id,
         )
         print(f"  case_id (FK):     {case_id}")

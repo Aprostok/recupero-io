@@ -127,8 +127,12 @@ def run_one(
                     lambda: _stage_ai_editorial(inv, case_id_str, case_data,
                                                 local_store, case_dir, store),
                 )
-                db.mark_review_required(inv.id)
-                log.info("investigation %s paused at review_required", inv.id)
+                # Write the cost on the row before pausing — pass 2 won't
+                # have access to this local since the review checkpoint
+                # resets state. mark_built_package's COALESCE preserves it.
+                db.mark_review_required(inv.id, api_costs_usd=api_costs_usd)
+                log.info("investigation %s paused at review_required (api_costs=$%s)",
+                         inv.id, api_costs_usd)
                 return
 
             # Editorial already exists. Re-read from bucket (UI may have

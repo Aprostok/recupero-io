@@ -288,14 +288,27 @@ class WorkerDB:
             },
         )
 
-    def mark_review_required(self, investigation_id: UUID) -> None:
-        """Pause point. Drop the worker_id so re-claim after UI review is clean."""
+    def mark_review_required(
+        self,
+        investigation_id: UUID,
+        *,
+        api_costs_usd: Decimal | None = None,
+    ) -> None:
+        """Pause point. Drop the worker_id so re-claim after UI review is clean.
+
+        Optionally records api_costs_usd from the editorial stage. We
+        write it here (rather than at mark_built_package) because run_one
+        loses track of the cost across the review checkpoint — pass 2
+        starts with a fresh local variable. Once stored on the row,
+        mark_built_package's COALESCE preserves it through completion.
+        """
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
                    {COL_REVIEW_REQUIRED_AT} = NOW(),
                    {COL_WORKER_ID} = NULL,
-                   {COL_HEARTBEAT} = NULL
+                   {COL_HEARTBEAT} = NULL,
+                   {COL_API_COSTS} = COALESCE(%(api)s, {COL_API_COSTS})
              WHERE {COL_ID} = %(id)s
                AND {COL_WORKER_ID} = %(worker)s;
         """
@@ -303,6 +316,7 @@ class WorkerDB:
             sql,
             {
                 "status": S.REVIEW_REQUIRED,
+                "api": api_costs_usd,
                 "id": investigation_id,
                 "worker": self.worker_id,
             },

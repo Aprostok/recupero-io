@@ -1,214 +1,565 @@
-{# Shared print-friendly stylesheet. Included by both templates. #}
+{# Premium document styles — shared by issuer freeze requests and LE handoffs. #}
+{# Design language: restrained navy + gold, confident type hierarchy,        #}
+{# generous whitespace. Inspired by high-end legal / security firm output.   #}
 <style>
-  @page { size: letter; margin: 0.75in; }
-  * { box-sizing: border-box; }
+  /* ===================================================================
+     Design tokens — palette, type, spacing
+     =================================================================== */
+  :root {
+    /* Restrained palette — black ink, warm gray, single thin gold rule. */
+    --ink:               #0A0A0A;   /* primary text */
+    --ink-soft:          #1F2937;   /* heavier body */
+    --ink-muted:         #4B5563;   /* secondary body */
+    --ink-quiet:         #6B7280;   /* tertiary / metadata labels */
+    --ink-faint:         #9CA3AF;   /* dividers / least-important */
+    --rule:              #111827;   /* thin black accent rule */
+    --rule-soft:         #D1D5DB;   /* table borders / subtle dividers */
+    --gold-accent:       #9C7E3F;   /* single accent stroke; never a chip */
+
+    /* Page surfaces */
+    --paper:             #FFFFFF;
+    --paper-tint:        #FAFAF7;   /* table zebra / very subtle bg */
+
+    /* Semantic — used sparingly */
+    --confidential:      #6B0F0F;   /* italic word, no fill */
+    --urgent-bg:         #FBF7E9;
+    --urgent-border:     #9C7E3F;
+    --action-bg:         #F4F8F4;
+    --action-border:     #2F6B3E;
+    --color-victim-tint: #EFF4FB;
+    --color-perp-tint:   #FBEFEF;
+
+    /* Type — serif for titles (Georgia is reliably available without a CDN);
+       sans for body. Mono for hex addresses. The serif gives the documents
+       a "legal correspondence / banker memo" feel rather than a SaaS feel. */
+    --font-serif:  "Georgia", "Times New Roman", "Iowan Old Style", serif;
+    --font-body:   "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+                   Helvetica, Arial, sans-serif;
+    --font-mono:   "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+    /* Type scale */
+    --type-cover:   38pt;
+    --type-cover-sub: 13pt;
+    --type-h1:      22pt;
+    --type-h2:      13pt;
+    --type-h3:      11pt;
+    --type-body:    10.5pt;
+    --type-small:   9pt;
+    --type-tiny:    8pt;
+    --type-micro:   7.5pt;
+
+    --space-xs:   0.25em;
+    --space-sm:   0.5em;
+    --space-md:   1em;
+    --space-lg:   1.5em;
+    --space-xl:   2em;
+    --space-xxl:  3em;
+    --space-xxxl: 4.5em;
+
+    --doc-max-w: 8in;
+    --radius-sm: 3px;
+    --radius-md: 6px;
+
+    --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md:  0 1px 3px rgba(0, 0, 0, 0.05),
+                  0 4px 12px rgba(0, 0, 0, 0.04);
+  }
+
+  /* ===================================================================
+     Reset + page baseline
+     =================================================================== */
+  @page {
+    size: letter;
+    margin: 0.6in 0.65in 0.7in 0.65in;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    font-size: 11pt;
-    line-height: 1.5;
-    color: #1a1a1a;
-    max-width: 8.5in;
+    font-family: var(--font-body);
+    font-size: var(--type-body);
+    line-height: 1.6;
+    color: var(--ink-soft);
+    max-width: var(--doc-max-w);
     margin: 0 auto;
-    padding: 1in 0.75in;
-    background: #fff;
+    padding: 0.85in 0.75in 0.7in;
+    background: var(--paper);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
   }
-  header.brief-header {
-    border-bottom: 3px solid #1a1a1a;
-    padding-bottom: 1em;
-    margin-bottom: 2em;
+
+  /* ===================================================================
+     Cover — banker / law-firm letterhead aesthetic
+     ===================================================================
+     Design intent: confidence through restraint. One word of brand at
+     the top in serif caps, a thin black rule, the document title set
+     huge in Georgia (centered), then a precisely-aligned metadata
+     block. No colored chips. No gradient cards. White space is the
+     design.
+     =================================================================== */
+  .cover {
+    margin-bottom: var(--space-xxxl);
+    padding-bottom: var(--space-xl);
   }
-  header.brief-header h1 {
-    margin: 0 0 0.3em 0;
-    font-size: 18pt;
-    letter-spacing: 0.02em;
+  .cover-letterhead {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding-bottom: 0.6em;
+    border-bottom: 1px solid var(--rule);
+    margin-bottom: var(--space-xxl);
   }
-  header.brief-header .subtitle {
-    color: #666;
-    font-size: 10pt;
-    margin: 0;
+  .cover-wordmark {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    font-size: 15pt;
+    letter-spacing: 0.32em;
+    color: var(--ink);
+    text-transform: uppercase;
   }
-  .meta-grid {
-    display: grid;
-    grid-template-columns: max-content 1fr;
-    gap: 0.3em 1.5em;
-    margin: 1em 0 2em;
-    font-size: 10pt;
+  .cover-wordmark .tagline {
+    display: block;
+    margin-top: 0.4em;
+    font-family: var(--font-body);
+    font-size: var(--type-tiny);
+    font-weight: 500;
+    color: var(--ink-quiet);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
   }
-  .meta-grid dt {
-    font-weight: 600;
-    color: #444;
-  }
-  .meta-grid dd {
-    margin: 0;
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    word-break: break-all;
-  }
-  h2 {
-    font-size: 13pt;
-    margin: 2em 0 0.5em;
-    padding-bottom: 0.3em;
-    border-bottom: 1px solid #ccc;
-  }
-  h3 {
-    font-size: 11pt;
-    margin: 1.5em 0 0.5em;
-    color: #333;
-  }
-  .summary-box {
-    background: #f8f9fa;
-    border-left: 4px solid #1a1a1a;
-    padding: 1em 1.2em;
-    margin: 1em 0 2em;
-  }
-  .summary-box.urgent {
-    background: #fff8e1;
-    border-left-color: #d97706;
-  }
-  .summary-box.action {
-    background: #ecfdf5;
-    border-left-color: #047857;
-  }
-  /* Inline-SVG fund-flow diagram block. Centered, capped width so the
-     diagram doesn't overflow on long chains. The SVG itself is rendered
-     by Graphviz with custom styling; this wrapper just frames it.    */
-  .flow-diagram {
-    margin: 1.5em auto 2em;
-    padding: 1.2em;
-    background: #FFFFFF;
-    border: 1px solid #E2E8F0;
-    border-radius: 8px;
-    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04),
-                0 4px 12px rgba(15, 23, 42, 0.04);
-    text-align: center;
-    overflow-x: auto;
-  }
-  .flow-diagram svg {
-    max-width: 100%;
-    height: auto;
-  }
-  .flow-caption {
-    margin-top: 0.8em;
-    padding: 0.6em 0.8em;
-    background: #F8FAFC;
-    border-radius: 4px;
-    font-size: 9pt;
-    color: #475569;
-    text-align: left;
+  .cover-letterhead-right {
+    text-align: right;
+    font-family: var(--font-body);
+    font-size: var(--type-small);
+    color: var(--ink-quiet);
     line-height: 1.55;
   }
+  .cover-letterhead-right .confidential {
+    font-style: italic;
+    color: var(--confidential);
+    letter-spacing: 0.04em;
+  }
+  .cover-letterhead-right .date {
+    color: var(--ink-soft);
+    font-size: var(--type-small);
+    margin-top: 0.2em;
+  }
+
+  /* Title block — large serif, centered */
+  .cover-title-block {
+    text-align: center;
+    margin: var(--space-xxxl) 0 var(--space-xxl);
+  }
+  .cover-eyebrow {
+    font-family: var(--font-body);
+    font-size: var(--type-tiny);
+    font-weight: 600;
+    color: var(--ink-quiet);
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    margin-bottom: var(--space-lg);
+  }
+  .cover h1 {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    font-size: var(--type-cover);
+    line-height: 1.1;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    margin: 0 0 var(--space-md) 0;
+  }
+  .cover-subtitle {
+    font-family: var(--font-serif);
+    font-style: italic;
+    font-size: var(--type-cover-sub);
+    line-height: 1.45;
+    color: var(--ink-muted);
+    max-width: 30em;
+    margin: 0 auto;
+  }
+  .cover-rule {
+    display: block;
+    width: 56px;
+    margin: var(--space-lg) auto 0;
+    border-top: 1px solid var(--gold-accent);
+    height: 0;
+  }
+
+  /* Metadata block — formal "PREPARED FOR / PREPARED BY" layout */
+  .cover-meta {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-xl) var(--space-xxl);
+    margin: var(--space-xxxl) auto 0;
+    max-width: 6.5in;
+    padding: var(--space-lg) 0;
+    border-top: 1px solid var(--rule-soft);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .cover-meta-item {
+    /* tight vertical alignment — labels above values */
+  }
+  .cover-meta dt {
+    font-family: var(--font-body);
+    font-size: var(--type-micro);
+    font-weight: 600;
+    color: var(--ink-quiet);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    margin-bottom: 0.5em;
+  }
+  .cover-meta dd {
+    font-family: var(--font-serif);
+    font-size: 12pt;
+    font-weight: 400;
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.4;
+  }
+  .cover-meta dd .secondary {
+    display: block;
+    margin-top: 0.25em;
+    font-family: var(--font-body);
+    font-style: normal;
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+    line-height: 1.45;
+  }
+  .cover-meta dd.mono {
+    font-family: var(--font-mono);
+    font-size: 10.5pt;
+    font-weight: 500;
+    color: var(--ink-soft);
+  }
+
+  /* ===================================================================
+     Section headings — serif numbered, thin black rule
+     =================================================================== */
+  h2 {
+    font-family: var(--font-serif);
+    font-size: var(--type-h2);
+    font-weight: 400;
+    color: var(--ink);
+    margin: var(--space-xxl) 0 var(--space-md);
+    padding-bottom: var(--space-sm);
+    border-bottom: 1px solid var(--rule-soft);
+    letter-spacing: 0.005em;
+  }
+  h2:first-of-type { margin-top: var(--space-xl); }
+  h3 {
+    font-family: var(--font-body);
+    font-size: var(--type-h3);
+    font-weight: 600;
+    color: var(--ink-soft);
+    margin: var(--space-xl) 0 var(--space-sm);
+    letter-spacing: 0.005em;
+    text-transform: uppercase;
+    font-size: var(--type-tiny);
+    letter-spacing: 0.16em;
+    color: var(--ink-quiet);
+  }
+  p { margin: 0 0 var(--space-md); }
+  ul, ol { margin: var(--space-md) 0; padding-left: 1.5em; }
+  ul li, ol li { margin-bottom: var(--space-xs); }
+
+  /* ===================================================================
+     Summary / call-out boxes — flatter, less colorful
+     =================================================================== */
+  .summary-box {
+    background: var(--paper-tint);
+    border-left: 2px solid var(--rule);
+    padding: var(--space-md) var(--space-lg);
+    margin: var(--space-lg) 0 var(--space-xl);
+  }
+  .summary-box.urgent {
+    background: var(--urgent-bg);
+    border-left-color: var(--urgent-border);
+  }
+  .summary-box.action {
+    background: var(--action-bg);
+    border-left-color: var(--action-border);
+  }
+  .summary-box p:last-child { margin-bottom: 0; }
+
+  /* Inline label pills — kept understated. Used for chain-context  */
+  /* notes only; not for prominent visual treatment.                */
+  .label-pill {
+    display: inline-block;
+    padding: 0.12em 0.55em;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    font-size: var(--type-tiny);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    background: transparent;
+  }
+  .label-pill.perpetrator { color: #6B0F0F; }
+  .label-pill.exchange    { color: #2F6B3E; }
+  .label-pill.bridge      { color: #7C2D12; }
+  .label-pill.unknown     { color: var(--ink-quiet); }
+
+  /* ===================================================================
+     Tables — restrained evidence presentation
+     =================================================================== */
   table.evidence {
     width: 100%;
     border-collapse: collapse;
-    margin: 1em 0;
-    font-size: 9.5pt;
+    margin: var(--space-md) 0 var(--space-xl);
+    font-size: var(--type-small);
+    border-top: 1px solid var(--rule);
+    border-bottom: 1px solid var(--rule);
   }
   table.evidence th, table.evidence td {
-    border: 1px solid #d1d5db;
-    padding: 0.5em 0.7em;
+    padding: 0.7em 0.6em;
     text-align: left;
     vertical-align: top;
+    border-top: 1px solid var(--rule-soft);
   }
-  table.evidence th {
-    background: #f3f4f6;
+  table.evidence thead th {
     font-weight: 600;
+    color: var(--ink-quiet);
+    border-top: none;
+    border-bottom: 1px solid var(--rule);
+    font-size: var(--type-micro);
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding-bottom: 0.55em;
   }
+  table.evidence tbody tr:first-child td { border-top: none; }
   table.evidence td.mono, table.evidence td.amount {
-    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-family: var(--font-mono);
+    font-weight: 500;
     word-break: break-all;
+    color: var(--ink);
   }
   table.evidence td.amount {
     text-align: right;
     white-space: nowrap;
+    font-feature-settings: "tnum" 1;
   }
-  .perp-row { background: #fef2f2; }
-  .victim-row { background: #eff6ff; }
-  a { color: #1d4ed8; text-decoration: none; }
-  a:hover { text-decoration: underline; }
-  .mono { font-family: "SF Mono", Menlo, Consolas, monospace; word-break: break-all; }
-  .small { font-size: 9pt; color: #6b7280; }
-  .label-pill {
-    display: inline-block;
-    padding: 0.1em 0.5em;
-    border-radius: 3px;
-    font-size: 9pt;
+  /* Two-column "th in left col" layout used in metadata tables */
+  table.evidence tr > th:first-child:not(:only-child) {
+    width: 12em;
+    font-weight: 500;
+    color: var(--ink-quiet);
+    border-bottom: 1px solid var(--rule-soft);
+    background: transparent;
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: var(--type-small);
+  }
+  .perp-row    { background: var(--color-perp-tint)   !important; }
+  .victim-row  { background: var(--color-victim-tint) !important; }
+
+  /* ===================================================================
+     Mono utility + links + inline annotations
+     =================================================================== */
+  .mono {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    word-break: break-all;
+    font-feature-settings: "tnum" 1;
+  }
+  .small { font-size: var(--type-small); color: var(--ink-quiet); }
+  a {
+    color: var(--ink);
+    text-decoration: underline;
+    text-decoration-color: var(--gold-accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
+  }
+  a:hover {
+    text-decoration-color: var(--ink);
+  }
+
+  /* ===================================================================
+     Flow diagram card — kept (per Alec's feedback)
+     =================================================================== */
+  .flow-diagram {
+    margin: var(--space-lg) 0 var(--space-xl);
+    padding: var(--space-md) var(--space-md) var(--space-md);
+    background:
+      radial-gradient(circle at 1px 1px, var(--rule-soft) 1px, transparent 0)
+        0 0 / 18px 18px,
+      var(--paper);
+    border: 1px solid var(--rule-soft);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-md);
+    text-align: center;
+    overflow-x: auto;
+    position: relative;
+  }
+  .flow-diagram::before {
+    content: "FUND FLOW · " attr(data-case);
+    position: absolute;
+    top: 0.7em; left: 1em;
+    font-size: var(--type-micro);
     font-weight: 600;
+    letter-spacing: 0.22em;
+    color: var(--ink-quiet);
   }
-  .label-pill.perpetrator { background: #fee2e2; color: #991b1b; }
-  .label-pill.exchange { background: #fef3c7; color: #92400e; }
-  .label-pill.bridge { background: #ddd6fe; color: #5b21b6; }
-  .label-pill.unknown { background: #f3f4f6; color: #4b5563; }
-  footer.brief-footer {
-    margin-top: 3em;
-    padding-top: 1em;
-    border-top: 1px solid #ccc;
-    font-size: 9pt;
-    color: #6b7280;
+  .flow-diagram svg {
+    max-width: 100%;
+    height: auto;
+    margin-top: 1.6em;
   }
+  .flow-caption {
+    margin-top: var(--space-md);
+    padding: var(--space-sm) var(--space-md);
+    background: var(--paper-tint);
+    border-left: 2px solid var(--rule-soft);
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+    text-align: left;
+    line-height: 1.55;
+  }
+  .flow-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4em 0.9em;
+    margin-top: var(--space-sm);
+  }
+  .flow-legend .swatch {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    font-size: var(--type-tiny);
+    color: var(--ink-soft);
+  }
+  .flow-legend .swatch::before {
+    content: "";
+    width: 0.85em; height: 0.85em;
+    border-radius: 2px;
+    background: currentColor;
+    opacity: 0.85;
+  }
+  .swatch.victim    { color: #3B82F6; }
+  .swatch.exchange  { color: #16A34A; }
+  .swatch.mixer     { color: #DC2626; }
+  .swatch.bridge    { color: #EA580C; }
+  .swatch.contract  { color: #7C3AED; }
+  .swatch.wallet    { color: #94A3B8; }
+
+  /* ===================================================================
+     Timeline — quiet, monochrome
+     =================================================================== */
   .timeline {
-    border-left: 2px solid #ccc;
-    padding-left: 1em;
-    margin: 1em 0;
+    border-left: 1px solid var(--rule-soft);
+    padding-left: var(--space-lg);
+    margin: var(--space-md) 0;
   }
   .timeline-event {
-    margin-bottom: 1em;
+    margin-bottom: var(--space-md);
     position: relative;
   }
   .timeline-event::before {
     content: "";
     position: absolute;
-    left: -1.35em;
-    top: 0.4em;
-    width: 0.7em;
-    height: 0.7em;
+    left: -1.55em;
+    top: 0.5em;
+    width: 0.55em; height: 0.55em;
     border-radius: 50%;
-    background: #1a1a1a;
+    background: var(--paper);
+    border: 1.5px solid var(--ink);
   }
-  .timeline-event.theft::before { background: #dc2626; }
-  .timeline-event.transfer::before { background: #d97706; }
-  .timeline-event.current::before { background: #047857; }
+  .timeline-event.theft::before    { background: #6B0F0F; border-color: #6B0F0F; }
+  .timeline-event.transfer::before { background: var(--gold-accent); border-color: var(--gold-accent); }
+  .timeline-event.current::before  { background: #2F6B3E; border-color: #2F6B3E; }
   .timeline-event time {
     font-weight: 600;
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-    font-size: 10pt;
-  }
-  .signature-block {
-    margin-top: 3em;
-    padding-top: 1em;
-    border-top: 1px solid #ccc;
+    font-family: var(--font-mono);
+    font-size: var(--type-small);
+    color: var(--ink);
   }
 
-  /* ---------- Print / PDF export rules ---------- */
-  /* These activate when the user hits Ctrl+P / Cmd+P or "Save as PDF".
-     They fix the issues with the default print rendering: double margins,
-     tables split across pages, section headings stranded at page bottoms,
-     color coding disappearing, and long hex addresses breaking awkwardly. */
+  /* ===================================================================
+     Signature block + footer — letterhead-style closing
+     =================================================================== */
+  .signature-block {
+    margin-top: var(--space-xxl);
+    padding-top: var(--space-lg);
+    border-top: 1px solid var(--rule-soft);
+  }
+  .signature-line {
+    margin-top: var(--space-xxl);
+    border-bottom: 1px solid var(--ink);
+    width: 18em;
+    height: 1.5em;
+  }
+  .signature-fields {
+    margin-top: var(--space-sm);
+    font-size: var(--type-small);
+    color: var(--ink-muted);
+    line-height: 1.6;
+  }
+  .signature-fields strong {
+    font-family: var(--font-serif);
+    font-weight: 400;
+    font-size: 11pt;
+    color: var(--ink);
+    display: block;
+    margin-bottom: 0.15em;
+  }
+
+  footer.brief-footer {
+    margin-top: var(--space-xxxl);
+    padding: var(--space-md) 0 var(--space-sm);
+    border-top: 1px solid var(--rule);
+    font-family: var(--font-body);
+    font-size: var(--type-micro);
+    color: var(--ink-quiet);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--space-md);
+    letter-spacing: 0.04em;
+  }
+  footer.brief-footer .footer-brand {
+    font-family: var(--font-serif);
+    font-size: 10pt;
+    font-weight: 400;
+    color: var(--ink);
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+  }
+  footer.brief-footer .footer-meta {
+    text-align: right;
+    line-height: 1.8;
+  }
+  footer.brief-footer .footer-meta .confidential {
+    font-style: italic;
+    color: var(--confidential);
+  }
+  footer.brief-footer code {
+    font-family: var(--font-mono);
+    font-size: var(--type-micro);
+    color: var(--ink-soft);
+    letter-spacing: 0;
+  }
+
+  /* ===================================================================
+     Print / PDF rules
+     =================================================================== */
   @media print {
-    /* Let @page handle margins entirely — don't double up with body padding. */
     body {
       max-width: none;
-      margin: 0;
-      padding: 0;
-      font-size: 10.5pt;
-      line-height: 1.4;
+      margin: 0; padding: 0;
+      font-size: 10pt;
+      line-height: 1.45;
     }
-    /* Force background colors to print. Without this, Chrome drops the
-       perp-row / victim-row / label-pill colors, breaking the visual coding. */
     * {
       -webkit-print-color-adjust: exact !important;
       print-color-adjust: exact !important;
     }
-    /* Keep headings with the content that follows them. */
     h1, h2, h3, h4 {
       page-break-after: avoid;
       break-after: avoid;
     }
-    /* Don't split a summary box or meta grid across pages. */
-    .summary-box, .meta-grid, .signature-block, .timeline-event {
+    .summary-box, .meta-grid, .signature-block, .timeline-event,
+    .cover, .flow-diagram {
       page-break-inside: avoid;
       break-inside: avoid;
     }
-    /* Keep table rows intact. Repeat the header row on every page the
-       table spans, so column labels never go missing after a page break. */
     table.evidence { page-break-inside: auto; }
     table.evidence thead { display: table-header-group; }
     table.evidence tfoot { display: table-footer-group; }
@@ -216,29 +567,22 @@
       page-break-inside: avoid;
       break-inside: avoid;
     }
-    /* Long hex addresses wrap cleanly instead of overflowing cells.
-       overflow-wrap is friendlier than word-break for mono-font content:
-       it breaks only when necessary rather than at every character. */
     td.mono, .mono {
       word-break: normal;
       overflow-wrap: anywhere;
     }
-    /* Links shouldn't be bright blue in a printed document — harder to
-       read. Keep them identifiable but match body color. */
     a {
       color: inherit;
       text-decoration: underline;
     }
-    /* Interactive-only elements hide themselves for print, in case we
-       ever add any nav / toggle UI to the HTML. */
     .no-print, nav, button { display: none !important; }
-    /* Avoid orphaned section headings at page bottoms. */
     section { page-break-inside: auto; }
-    header.brief-header { page-break-after: avoid; break-after: avoid; }
-    /* Slightly tighter tables save page count without hurting readability. */
+    .cover { page-break-after: avoid; break-after: avoid; }
     table.evidence th, table.evidence td {
-      padding: 0.35em 0.5em;
-      font-size: 9pt;
+      padding: 0.4em 0.6em;
+      font-size: 8.5pt;
     }
+    /* New page after the cover so the first body section starts clean */
+    .cover + h2 { page-break-before: always; }
   }
 </style>

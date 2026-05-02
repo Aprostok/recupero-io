@@ -49,15 +49,17 @@ log = logging.getLogger(__name__)
 
 # ----- Visual design system ----- #
 
-# Font stack with no embedded quotes — multi-word font names like
-# "DejaVu Sans" unfortunately can't be inside Graphviz HTML labels
-# without breaking the XML parser. Stick to single-word names; the
-# browser/PDF renderer will pick whichever is available locally.
+# Font stack: single-word names only because multi-word names like
+# "DejaVu Sans" can't be inside Graphviz HTML labels without breaking
+# the XML parser. Browsers/PDF renderers pick whichever is available.
 _FONT_FACE = "Inter,Helvetica,Arial,sans-serif"
 _MONO_FACE = "Menlo,Consolas,monospace"
 
-_GRAPH_BG = "#FAFAFA"
-_TITLE_COLOR = "#0F172A"
+# Brand palette (matches _styles.html.j2)
+_BRAND_NAVY = "#0B2545"
+_BRAND_GOLD = "#B8924A"
+_BG_COLOR = "#FFFFFF"
+_TITLE_COLOR = _BRAND_NAVY
 _SUBTITLE_COLOR = "#64748B"
 
 # Per-category fill / border / text colors. Keys map LabelCategory →
@@ -75,6 +77,69 @@ _NODE_PALETTE: dict[str, tuple[str, str, str]] = {
     # Fallback (unknown / unlabeled wallet)
     "wallet":               ("#F1F5F9", "#94A3B8", "#1E293B"),
 }
+
+# Letter-mark logos for top-tier entities. When the trace lands on a
+# labeled entity we recognize, the node gets a small colored badge
+# next to the name — closer in feel to TRM/Chainalysis where
+# Binance/Coinbase/etc. appear with branded marks.
+# (letter, fill, text_color)
+_ENTITY_BADGES: dict[str, tuple[str, str, str]] = {
+    "binance":   ("B", "#F0B90B", "#1A1A1A"),
+    "coinbase":  ("C", "#0052FF", "#FFFFFF"),
+    "kraken":    ("K", "#5741D9", "#FFFFFF"),
+    "okx":       ("O", "#000000", "#FFFFFF"),
+    "bybit":     ("B", "#F7A600", "#1A1A1A"),
+    "tether":    ("T", "#26A17B", "#FFFFFF"),
+    "circle":    ("C", "#1A85FF", "#FFFFFF"),
+    "paxos":     ("P", "#FFB800", "#1A1A1A"),
+    "midas":     ("M", "#1A1A1A", "#FFFFFF"),
+    "tornado":   ("T", "#000000", "#FFFFFF"),     # mixer: monochrome
+    "stargate":  ("S", "#1F1F1F", "#FFFFFF"),     # bridge
+    "wormhole":  ("W", "#3B0975", "#FFFFFF"),
+    "across":    ("A", "#6CF9D8", "#1A1A1A"),
+    "lido":      ("L", "#00A3FF", "#FFFFFF"),
+    "uniswap":   ("U", "#FF007A", "#FFFFFF"),
+    "1inch":     ("1", "#1F2937", "#FFFFFF"),
+    "sky":       ("S", "#1AAB9B", "#FFFFFF"),
+    "maker":     ("M", "#1AAB9B", "#FFFFFF"),
+}
+
+
+def _entity_badge(identity: str | None) -> tuple[str, str, str] | None:
+    """Lookup the letter-mark badge for an identity. Matches against the
+    entity name case-insensitively — e.g., "Binance Hot Wallet" matches
+    the "binance" key. Returns None when nothing matches."""
+    if not identity:
+        return None
+    low = identity.lower()
+    for key, badge in _ENTITY_BADGES.items():
+        if key in low:
+            return badge
+    return None
+
+
+# Chain → explorer URL prefix. When a node renders, we append the address
+# so each box in the diagram links to its own Etherscan/Solscan/etc. page.
+# Operators reading the brief can click any node to drill into chain data.
+_EXPLORER_BY_CHAIN: dict[str, str] = {
+    "ethereum":    "https://etherscan.io/address/",
+    "arbitrum":    "https://arbiscan.io/address/",
+    "polygon":     "https://polygonscan.com/address/",
+    "base":        "https://basescan.org/address/",
+    "bsc":         "https://bscscan.com/address/",
+    "solana":      "https://solscan.io/account/",
+    # Hyperliquid has no per-address public explorer comparable to Etherscan.
+    # We point at the official UI's address-search view as the closest
+    # equivalent so the link still goes somewhere meaningful.
+    "hyperliquid": "https://app.hyperliquid.xyz/explorer/address/",
+}
+
+
+def _explorer_url(chain: str, address: str) -> str | None:
+    prefix = _EXPLORER_BY_CHAIN.get(chain)
+    if not prefix or not address:
+        return None
+    return f"{prefix}{address}"
 
 
 def render_flow_diagram(
@@ -104,17 +169,22 @@ def render_flow_diagram(
 
     g = Digraph("flow", format="svg", strict=True)
 
-    # Top-of-graph title block + global attrs.
+    # Global graph attributes — premium styling.
+    # splines=spline gives smooth curved edges (vs default ortho/line);
+    # closer in feel to TRM Reactor's hand-drawn edge style.
     g.attr(
         rankdir="LR",
-        bgcolor=_GRAPH_BG,
+        bgcolor=_BG_COLOR,
         labelloc="t",
+        labeljust="l",
         label=_html_title_label(case, title),
         fontname=_FONT_FACE,
         fontsize="14",
-        nodesep="0.35",
-        ranksep="0.65",
-        pad="0.4",
+        nodesep="0.5",
+        ranksep="0.85",
+        pad="0.5",
+        splines="spline",
+        concentrate="true",
     )
     g.attr(
         "node",
@@ -122,18 +192,21 @@ def render_flow_diagram(
         style="rounded,filled",
         fontname=_FONT_FACE,
         fontsize="11",
-        margin="0.18,0.10",
-        penwidth="1.5",
+        margin="0.22,0.14",
+        penwidth="1.4",
     )
     g.attr(
         "edge",
         fontname=_FONT_FACE,
-        fontsize="10",
-        color="#475569",
+        fontsize="9",
+        color="#94A3B8",
         fontcolor="#475569",
         arrowsize="0.7",
-        penwidth="1.0",
+        arrowhead="vee",
+        penwidth="1.1",
     )
+
+    chain_str = case.chain.value
 
     # The seed (victim) node is added explicitly so it's always present
     # even if the case has no transfers from it directly.
@@ -142,6 +215,7 @@ def render_flow_diagram(
         address=case.seed_address,
         identity="Victim wallet",
         category="victim",
+        chain=chain_str,
     ))
 
     # Add nodes for each unique counterparty across all transfers.
@@ -154,6 +228,7 @@ def render_flow_diagram(
                 address=t.from_address,
                 identity=None,  # intermediate from-address; usually internal
                 category="wallet",
+                chain=chain_str,
             ))
             seen.add(from_id)
         if to_id not in seen:
@@ -162,6 +237,7 @@ def render_flow_diagram(
                 address=t.to_address,
                 identity=identity,
                 category=cat_name,
+                chain=chain_str,
             ))
             seen.add(to_id)
 
@@ -228,34 +304,74 @@ def _node_style(
     address: str,
     identity: str | None,
     category: str,
+    chain: str = "ethereum",
 ) -> dict[str, str]:
     """Build a Graphviz node attr dict using HTML-table labels for richer
-    typography than plain string labels allow."""
+    typography than plain string labels allow.
+
+    For known entities, prepends a colored letter-mark badge (e.g. a
+    yellow "B" for Binance) so the node reads at a glance the way it
+    would in a Chainalysis Reactor / TRM Forensics graph.
+
+    Every node also gets a clickable URL pointing at the appropriate
+    chain explorer for ``address`` so operators can drill in directly
+    from the rendered diagram.
+    """
     fill, border, text_color = _NODE_PALETTE.get(category, _NODE_PALETTE["wallet"])
     short = _short_addr(address)
+    badge = _entity_badge(identity)
+    url = _explorer_url(chain, address)
 
-    # Two-line HTML label: identity on top (or empty), short address below.
-    # Address always rendered in monospace; identity in the body font.
-    if identity:
+    if identity and badge:
+        letter, badge_fill, badge_text = badge
+        # Two-row HTML label:
+        #   row 1: [colored letter-mark badge] [identity text]
+        #   row 2: [           short address (mono)         ]
+        # Letting the badge cell self-size — fixedsize cells warn when
+        # content overflows. The padding makes the badge visually square-ish
+        # without forcing a brittle pixel size.
+        label = (
+            f'<<table border="0" cellspacing="0" cellpadding="0">'
+            f'<tr>'
+            f'<td bgcolor="{badge_fill}" cellpadding="6" valign="middle">'
+            f'<font color="{badge_text}" face="{_FONT_FACE}" point-size="13">'
+            f'<b>&nbsp;{_escape(letter)}&nbsp;</b></font></td>'
+            f'<td cellpadding="6" valign="middle">'
+            f'<font face="{_FONT_FACE}" point-size="11" color="{text_color}">'
+            f'<b>{_escape(identity)}</b></font></td>'
+            f'</tr>'
+            f'<tr><td colspan="2" cellpadding="2"><font face="{_MONO_FACE}" '
+            f'point-size="8" color="{text_color}">{_escape(short)}</font></td></tr>'
+            f'</table>>'
+        )
+    elif identity:
+        # Identity but no recognized badge — show identity + short address
         label = (
             f'<<table border="0" cellspacing="0" cellpadding="2">'
-            f'<tr><td><b>{_escape(identity)}</b></td></tr>'
+            f'<tr><td><font face="{_FONT_FACE}" point-size="11" '
+            f'color="{text_color}"><b>{_escape(identity)}</b></font></td></tr>'
             f'<tr><td><font face="{_MONO_FACE}" '
-            f'point-size="9" color="{text_color}">{_escape(short)}</font></td></tr>'
+            f'point-size="8" color="{text_color}">{_escape(short)}</font></td></tr>'
             f'</table>>'
         )
     else:
+        # Bare wallet — just the short hex address in monospace.
         label = (
             f'<<font face="{_MONO_FACE}" '
-            f'point-size="10">{_escape(short)}</font>>'
+            f'point-size="10" color="{text_color}">{_escape(short)}</font>>'
         )
 
-    return {
+    attrs: dict[str, str] = {
         "label": label,
         "fillcolor": fill,
         "color": border,
         "fontcolor": text_color,
     }
+    if url:
+        attrs["URL"] = url
+        attrs["target"] = "_blank"
+        attrs["tooltip"] = f"{identity or short} — open on chain explorer"
+    return attrs
 
 
 def _edge_label(t: Transfer) -> str:
@@ -288,19 +404,36 @@ def _edge_penwidth(usd: Decimal | None) -> float:
 
 
 def _html_title_label(case: Case, title: str | None) -> str:
-    """The graph-level title block (HTML-style label allowed by Graphviz
-    when the value is wrapped in <...>)."""
-    primary = title or "Stolen Funds — Trace"
+    """The graph-level title block. HTML-style label (allowed when the
+    label value is wrapped in ``<...>``).
+
+    Layout matches the document letterhead aesthetic: serif "Recupero"
+    wordmark on the left, the diagram subject on the right.
+    """
+    primary = title or "Fund Flow Analysis"
     sub = (
-        f"Case {_escape(case.case_id)} • "
-        f"{len(case.transfers)} transfer(s) • "
+        f"Case {_escape(case.case_id)} · "
+        f"{len(case.transfers)} transfer(s) · "
         f"{case.chain.value}"
     )
     return (
-        f'<<font face="{_FONT_FACE}" point-size="16" color="{_TITLE_COLOR}">'
-        f'<b>{_escape(primary)}</b></font><br/>'
-        f'<font face="{_FONT_FACE}" point-size="10" color="{_SUBTITLE_COLOR}">'
-        f'{_escape(sub)}</font>>'
+        f'<<table border="0" cellspacing="0" cellpadding="0" width="100%">'
+        f'<tr>'
+        # Left cell: brand wordmark, no logo box
+        f'<td align="left" cellpadding="6">'
+        f'<font face="Georgia,serif" point-size="13" color="{_BRAND_NAVY}">'
+        f'R&#8201;E&#8201;C&#8201;U&#8201;P&#8201;E&#8201;R&#8201;O</font><br/>'
+        f'<font face="{_FONT_FACE}" point-size="7" color="{_SUBTITLE_COLOR}">'
+        f'I N V E S T I G A T I O N &#160; S E R V I C E S</font>'
+        f'</td>'
+        # Right cell: subject of this diagram
+        f'<td align="right" cellpadding="6">'
+        f'<font face="Georgia,serif" point-size="14" color="{_TITLE_COLOR}">'
+        f'{_escape(primary)}</font><br/>'
+        f'<font face="{_FONT_FACE}" point-size="8" color="{_SUBTITLE_COLOR}">'
+        f'{_escape(sub)}</font>'
+        f'</td>'
+        f'</tr></table>>'
     )
 
 

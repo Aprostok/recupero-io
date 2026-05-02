@@ -135,6 +135,10 @@ class WorkerDB:
         self._dsn = dsn
         self.worker_id = worker_id
 
+    @property
+    def dsn(self) -> str:
+        return self._dsn
+
     def close(self) -> None:
         # No persistent connection to close.
         pass

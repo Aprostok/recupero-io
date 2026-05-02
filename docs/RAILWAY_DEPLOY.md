@@ -214,6 +214,69 @@ cron or GitHub Actions; ship the directory to S3 / a NAS / wherever
 you keep operational backups. Restore is `psql \copy` per table — the
 JSON shape matches the column set 1:1.
 
+## Watchlist (LE-handoff blacklist + nightly balance monitor)
+
+The worker auto-populates `public.watchlist` after every successful
+trace. **Every** non-victim wallet on the trace path lands there: the
+perpetrator, every hop, current holders, exchange deposits, mixers,
+bridges. The `is_freezeable` flag (set true only for current holders
+of asset-issuer-freezable positions and known exchange deposits) is
+what the nightly monitor filters on.
+
+Schema lives in [migrations/001_watchlist.sql](../migrations/001_watchlist.sql).
+Apply with `python scripts/apply_migration.py migrations/001_watchlist.sql`
+(idempotent).
+
+### Daily monitoring
+
+A scheduled task (`recupero-watchlist-monitor`, 03:03 ET daily) runs:
+
+```bash
+python scripts/monitor_watchlist.py --json-only
+```
+
+Filter contract: monitors only `status='active' AND is_freezeable=true`
+rows where either `last_balance_usd > 0` or `last_snapshot_at IS NULL`.
+Mixers and bridges have `is_freezeable=false` and are skipped; dust
+wallets that snapshot at $0 are skipped from the second run onwards.
+
+Exit code 1 means at least one wallet moved (native balance changed or
+`tx_count` advanced). The scheduled task surfaces movement back here.
+
+### Manual entries
+
+For ad-hoc additions, lifecycle changes, or LE-driven flagging:
+
+```bash
+python scripts/recupero_watch.py add 0xabc... --chain ethereum \
+    --reason "tipoff from victim" --issuer Tether --asset USDT
+python scripts/recupero_watch.py list --freezeable-only
+python scripts/recupero_watch.py set --address 0xabc... --chain ethereum \
+    --status frozen --note "Tether confirmed freeze on 2026-05-08"
+python scripts/recupero_watch.py clear --address 0xabc... --chain ethereum \
+    --reason "exchange determined was their internal wallet"
+```
+
+### Law-enforcement export
+
+```bash
+python scripts/export_watchlist.py --format csv --out le_handoff.csv
+python scripts/export_watchlist.py --format json --freezeable-only
+python scripts/export_watchlist.py --case-id <uuid>
+```
+
+Default scope is `status='active'` rows; pass `--include-cleared` for a
+full audit dump.
+
+### Limitations (v1)
+
+- Solana / Hyperliquid wallets are inserted into the table but the
+  monitor skips them with a warning until chain dispatch is extended.
+- Per-token balances (USDC / USDT positions) are not snapshotted — the
+  monitor only tracks native balance + `tx_count`. A change in
+  `tx_count` is a reliable proxy for token movement; per-token USD
+  values are deferred pending a richer snapshot schema.
+
 ## What the worker writes to the bucket
 
 Each completed investigation lands the following under

@@ -120,6 +120,11 @@ def run_one(
             else:
                 _hydrate_local_from_bucket(store, case_dir, ["freeze_asks.json"])
 
+            # Watchlist population is best-effort: failures here log but do
+            # not fail the investigation. The audit list is a side-effect,
+            # not a deliverable.
+            _populate_watchlist(inv, local_store, case_dir, db)
+
             # Editorial stage ----------------------------------------------
             if not has_editorial:
                 api_costs_usd = _run_stage(
@@ -397,6 +402,37 @@ def _stage_build_package(
 
 
 # ----- Helpers ----- #
+
+
+def _populate_watchlist(
+    inv: Investigation,
+    local_store: CaseStore,
+    case_dir: Path,
+    db: WorkerDB,
+) -> None:
+    """Best-effort watchlist insert. Errors logged, never propagated.
+
+    Reads the just-produced ``case.json`` + ``freeze_asks.json`` and
+    upserts one row per non-victim wallet into ``public.watchlist``.
+    """
+    from recupero.worker.watchlist import populate_from_case
+    try:
+        case = local_store.read_case(str(inv.id))
+        freeze_asks_path = case_dir / "freeze_asks.json"
+        if freeze_asks_path.exists():
+            freeze_asks = json.loads(freeze_asks_path.read_text(encoding="utf-8-sig"))
+        else:
+            freeze_asks = {}
+        n = populate_from_case(
+            dsn=db.dsn,
+            case=case,
+            freeze_asks=freeze_asks,
+            investigation_id=inv.id,
+            case_id=inv.case_id,
+        )
+        log.info("watchlist populated: %d row(s) for inv=%s", n, inv.id)
+    except Exception as e:  # noqa: BLE001
+        log.warning("watchlist population failed for inv=%s: %s", inv.id, e)
 
 
 class _StageFailure(Exception):

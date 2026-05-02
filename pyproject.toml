@@ -68,6 +68,10 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "recupero._defaults" = ["*.yaml"]
+# Seed label lists loaded by labels/store.py + freeze/asks.py via Path(__file__).
+"recupero.labels.seeds" = ["*.json"]
+# Jinja2 templates loaded by reports/brief.py via Path(__file__).
+"recupero.reports.templates" = ["*.j2", "*.html.j2"]
 
 [tool.ruff]
 line-length = 100

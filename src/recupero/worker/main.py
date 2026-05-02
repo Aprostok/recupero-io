@@ -180,12 +180,18 @@ def _try_claim(db: WorkerDB) -> Investigation | None:
 
 
 def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
-    """Run env + DB + bucket reachability checks.
+    """Run env + DB + bucket + package-integrity checks.
 
     Returns ``(all_ok, details_dict)`` where details maps each check
     name to ``"ok"`` or an error message. Logs human-readable lines
     when ``verbose=True`` (used by --health-check); the HTTP healthcheck
     handler calls with verbose=False to avoid log spam.
+
+    Package-integrity verifies that data files declared in pyproject's
+    setuptools.package-data actually shipped in the installed wheel —
+    catches the regression class where a Path(__file__) lookup works
+    locally (editable install reaches into source tree) but fails in
+    production (non-editable install needs explicit package-data).
     """
     cfg, _env = load_config()
     details: dict[str, str] = {}
@@ -203,6 +209,17 @@ def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
                 log.info("env [OK]    %s set", name)
             else:
                 log.error("env [MISS]  %s missing", name)
+
+    # Package-integrity: load every Path(__file__)-resolved data file the
+    # pipeline depends on. Run before DB/bucket so a fast local issue
+    # surfaces without a Supabase round-trip.
+    integrity_ok, integrity_msg = _check_package_integrity()
+    details["package"] = "ok" if integrity_ok else f"fail: {integrity_msg}"
+    if verbose:
+        if integrity_ok:
+            log.info("pkg [OK]    seeds + templates + default.yaml all loadable")
+        else:
+            log.error("pkg [FAIL]  %s", integrity_msg)
 
     if not env_ok:
         return False, details
@@ -240,6 +257,53 @@ def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
 
     all_ok = all(v == "ok" for v in details.values())
     return all_ok, details
+
+
+def _check_package_integrity() -> tuple[bool, str]:
+    """Verify every data file the pipeline reads is actually shipped.
+
+    Loads (without I/O to external services):
+      - bundled default.yaml via load_config()
+      - all label seed JSONs via LabelStore.load()
+      - the issuer database via freeze.asks.load_issuer_db()
+      - report templates via reports.brief.TEMPLATES_DIR
+
+    Returns ``(ok, error_message_if_any)``.
+    """
+    try:
+        from recupero.config import load_config as _lc
+        cfg, _ = _lc()  # exercises _defaults/default.yaml
+    except Exception as e:  # noqa: BLE001
+        return False, f"default.yaml not loadable: {e}"
+
+    try:
+        from recupero.labels.store import SEEDS_DIR
+        if not SEEDS_DIR.is_dir():
+            return False, f"seeds dir missing: {SEEDS_DIR}"
+        seed_files = list(SEEDS_DIR.glob("*.json"))
+        if not seed_files:
+            return False, f"no *.json under {SEEDS_DIR}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"seeds dir lookup failed: {e}"
+
+    try:
+        from recupero.freeze.asks import load_issuer_db
+        db_entries = load_issuer_db()
+        if not db_entries:
+            return False, "issuer DB loaded but empty"
+    except Exception as e:  # noqa: BLE001
+        return False, f"issuer DB unreadable: {e}"
+
+    try:
+        from recupero.reports.brief import TEMPLATES_DIR
+        if not TEMPLATES_DIR.is_dir():
+            return False, f"templates dir missing: {TEMPLATES_DIR}"
+        if not list(TEMPLATES_DIR.glob("*.j2")):
+            return False, f"no *.j2 templates under {TEMPLATES_DIR}"
+    except Exception as e:  # noqa: BLE001
+        return False, f"templates dir lookup failed: {e}"
+
+    return True, ""
 
 
 def health_check() -> int:

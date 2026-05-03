@@ -42,6 +42,28 @@ from recupero.worker.pipeline import run_one
 log = logging.getLogger(__name__)
 
 
+# ----- Required env vars ----- #
+# Splitting these into "required to start" vs "required to actually do work"
+# is a temptation, but resist it: a worker that's missing ETHERSCAN_API_KEY
+# will cheerfully claim every queued row and fail it on the trace stage. The
+# user-visible result is "every investigation is broken" with no clear cause.
+# Failing fast at startup turns it into "Railway shows the deploy unhealthy",
+# which is the right signal.
+_REQUIRED_ENV_VARS: Final = (
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "SUPABASE_DB_URL",
+    "ETHERSCAN_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "COINGECKO_API_KEY",
+)
+
+
+def _missing_env_vars() -> list[str]:
+    return [name for name in _REQUIRED_ENV_VARS
+            if not os.environ.get(name, "").strip()]
+
+
 # ----- Config defaults ----- #
 
 _HEARTBEAT_DEFAULT_SEC: Final = 30
@@ -99,15 +121,19 @@ def run_forever(
 ) -> None:
     cfg, env = load_config()
 
-    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
-    service_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-    db_url = os.environ.get("SUPABASE_DB_URL", "").strip()
-    if not supabase_url or not service_role or not db_url:
+    missing = _missing_env_vars()
+    if missing:
         log.error(
-            "missing required env vars; need SUPABASE_URL, "
-            "SUPABASE_SERVICE_ROLE_KEY, SUPABASE_DB_URL"
+            "missing required env vars: %s. The worker refuses to start "
+            "rather than claim work it can't process. Set them in Railway "
+            "Variables (or the local .env) and redeploy.",
+            ", ".join(missing),
         )
         sys.exit(2)
+
+    supabase_url = os.environ["SUPABASE_URL"].strip()
+    service_role = os.environ["SUPABASE_SERVICE_ROLE_KEY"].strip()
+    db_url = os.environ["SUPABASE_DB_URL"].strip()
 
     worker_id = f"{socket.gethostname()}-{os.getpid()}"
     log.info("recupero-worker starting id=%s", worker_id)
@@ -196,19 +222,21 @@ def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
     cfg, _env = load_config()
     details: dict[str, str] = {}
 
+    env_ok = True
+    for name in _REQUIRED_ENV_VARS:
+        val = os.environ.get(name, "").strip()
+        details[f"env:{name}"] = "ok" if val else "missing"
+        if val:
+            if verbose:
+                log.info("env [OK]    %s set", name)
+        else:
+            env_ok = False
+            if verbose:
+                log.error("env [MISS]  %s missing", name)
+
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     db_url = os.environ.get("SUPABASE_DB_URL", "").strip()
-    env_ok = bool(supabase_url and service_role and db_url)
-    for name, val in (("SUPABASE_URL", supabase_url),
-                      ("SUPABASE_SERVICE_ROLE_KEY", service_role),
-                      ("SUPABASE_DB_URL", db_url)):
-        details[f"env:{name}"] = "ok" if val else "missing"
-        if verbose:
-            if val:
-                log.info("env [OK]    %s set", name)
-            else:
-                log.error("env [MISS]  %s missing", name)
 
     # Package-integrity: load every Path(__file__)-resolved data file the
     # pipeline depends on. Run before DB/bucket so a fast local issue

@@ -51,6 +51,13 @@ in [.env.example](../.env.example).
 | `COINGECKO_API_KEY`               | https://www.coingecko.com/en/api (demo tier OK) |
 | `RECUPERO_LOG_LEVEL`              | `INFO` (default) or `DEBUG` |
 
+The first six are **required** — the worker refuses to start if any are
+missing or empty. This is deliberate: a worker that's missing
+`ETHERSCAN_API_KEY` would otherwise cheerfully claim every queued row
+and fail it on the trace stage, which is much harder to diagnose than a
+loud "deploy unhealthy" signal. If Railway shows the deploy unhealthy
+right after a redeploy, the worker logs say which variable is missing.
+
 Optional tunables (defaults are sensible):
 
 | Variable                          | Default | Meaning |

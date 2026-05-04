@@ -22,14 +22,23 @@ trace:
   # Maximum number of transfers to follow per address (sanity cap).
   max_transfers_per_address: 500
 
+  # Service-wallet detection: if a wallet emits more than this many
+  # outflows in the trace window, treat it as service-like (unlabeled
+  # exchange, OTC desk, token distributor) and don't follow its
+  # downstream branches. We still keep its transfers for the audit
+  # trail. Tuned conservatively: real perp paths in published thefts
+  # cap out at ~30 outflows per hop.
+  service_wallet_outflow_threshold: 200
+
 ethereum:
   # Etherscan API v2 endpoint (multichain). chainid=1 is mainnet.
   api_base: "https://api.etherscan.io/v2/api"
   chain_id: 1
 
   # Rate limit on free tier: 5 req/sec, 100k req/day.
-  # Be conservative to avoid 429s.
-  requests_per_second: 2
+  # 4.5 leaves a small margin under the 5/sec cap to avoid 429s
+  # while making full use of the free tier.
+  requests_per_second: 4.5
 
   # Block range chunking when querying transfer history.
   block_range_chunk: 10000

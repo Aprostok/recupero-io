@@ -39,6 +39,15 @@ class TracePolicy:
     # them explodes the trace. Override to False for specific investigations
     # where contract-internal flow matters (e.g., tracing through a vault).
     stop_at_contract: bool = True
+    # If a wallet emits more outflows than this within the trace window,
+    # treat it as a service address (unlabeled exchange / OTC desk / token
+    # distributor) and stop BFS at it. Transfers TO/FROM the wallet still
+    # land in the case file for the audit trail; the wallet's children
+    # just don't get queued for the next hop. Without this cap, hitting a
+    # 500-outflow service wallet at depth 2 explodes downstream.
+    # Real perp paths in published thefts cap out at ~30 per hop;
+    # 200 leaves headroom for legitimate dispersal.
+    service_wallet_outflow_threshold: int = 200
 
     def should_include(self, transfer: Transfer) -> bool:
         """Filter: should this transfer appear in the case at all?"""

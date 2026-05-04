@@ -78,12 +78,16 @@ def run_trace(
         dust_threshold_usd=Decimal(str(config.trace.dust_threshold_usd)),
         stop_at_exchange=config.trace.stop_at_exchange,
     )
-    # Override stop_at_contract / stop_at_bridge from config if set there;
-    # otherwise keep the policy defaults (both True).
+    # Override stop_at_contract / stop_at_bridge / service_wallet threshold
+    # from config if set there; otherwise keep the policy defaults.
     if hasattr(config.trace, "stop_at_contract"):
         policy.stop_at_contract = config.trace.stop_at_contract
     if hasattr(config.trace, "stop_at_bridge"):
         policy.stop_at_bridge = config.trace.stop_at_bridge
+    if hasattr(config.trace, "service_wallet_outflow_threshold"):
+        policy.service_wallet_outflow_threshold = (
+            config.trace.service_wallet_outflow_threshold
+        )
 
     started = utcnow()
     log.info(
@@ -132,7 +136,7 @@ def run_trace(
         # Fetch outflows for this address. Errors at this stage shouldn't
         # abort the whole trace — log and move on.
         try:
-            hop_transfers = _trace_one_hop(
+            hop_transfers, is_service_wallet = _trace_one_hop(
                 adapter=adapter,
                 label_store=label_store,
                 price_client=price_client,
@@ -155,6 +159,16 @@ def run_trace(
 
         # Decide which destinations to enqueue for the next hop
         if current_depth + 1 >= policy.max_depth:
+            continue
+
+        # Service-wallet cap: keep the transfers we observed (audit trail)
+        # but don't queue downstream. Without this, a single 500-outflow
+        # OTC desk / unlabeled exchange explodes BFS at the next depth.
+        if is_service_wallet:
+            log.info(
+                "service-wallet skip: not queueing %d destinations from %s",
+                len(hop_transfers), current_address,
+            )
             continue
 
         for transfer in hop_transfers:
@@ -213,8 +227,14 @@ def _trace_one_hop(
     hop_depth: int,
     parent_transfer_id: str | None,
     evidence_dir: Path,
-) -> list[Transfer]:
-    """Fetch + label + price all outflows from one address. Phase 2 makes this recursive."""
+) -> tuple[list[Transfer], bool]:
+    """Fetch + label + price all outflows from one address.
+
+    Returns ``(transfers, is_service_wallet)``. When ``is_service_wallet``
+    is True, the address has more outflows than
+    ``policy.service_wallet_outflow_threshold`` — caller should keep the
+    transfers but stop BFS traversal at this address.
+    """
     start_time = incident_time - timedelta(minutes=config.trace.incident_buffer_minutes)
     start_block = adapter.block_at_or_before(start_time)
     log.info(
@@ -227,6 +247,20 @@ def _trace_one_hop(
     raw_outflows.extend(adapter.fetch_erc20_outflows(from_address, start_block))
 
     log.info("fetched %d raw outflows", len(raw_outflows))
+
+    # Service-wallet detection: a wallet emitting more outflows than the
+    # threshold is almost certainly an unlabeled exchange / OTC desk /
+    # token distributor. Caller stops BFS at this address.
+    is_service_wallet = (
+        len(raw_outflows) > policy.service_wallet_outflow_threshold
+    )
+    if is_service_wallet:
+        log.warning(
+            "service-wallet detected: %s emits %d outflows "
+            "(threshold=%d) — including transfers but not traversing children",
+            from_address, len(raw_outflows),
+            policy.service_wallet_outflow_threshold,
+        )
 
     # Cap to avoid runaway on chatty addresses
     if len(raw_outflows) > config.trace.max_transfers_per_address:
@@ -309,7 +343,7 @@ def _trace_one_hop(
             (label.name if label else "UNLABELED"),
         )
 
-    return transfers
+    return transfers, is_service_wallet
 
 
 def _build_transfer(raw: dict, *, hop_depth: int, parent_transfer_id: str | None) -> Transfer:

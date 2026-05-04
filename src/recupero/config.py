@@ -30,6 +30,12 @@ class TraceParams(BaseModel):
     stop_at_bridge: bool = True    # stop traversal at labeled bridges (can't follow cross-chain)
     incident_buffer_minutes: int = 60
     max_transfers_per_address: int = 500
+    # If a wallet has more raw outflows than this, treat it as service-like
+    # (OTC desk, unlabeled exchange, mixer-adjacent, etc.) and don't traverse
+    # its children. We still keep the transfers we observed in the case
+    # output, but BFS terminates here. Without this cap a single 500-outflow
+    # service wallet at depth 2 explodes into 500 useless wallets at depth 3.
+    service_wallet_outflow_threshold: int = 200
 
 
 class EthereumParams(BaseModel):

@@ -27,10 +27,68 @@ from pathlib import Path
 
 from recupero.chains.ethereum.adapter import EthereumAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
+from recupero.freeze.asks import load_issuer_db
 from recupero.models import Case, Chain, TokenRef
 from recupero.pricing.coingecko import CoinGeckoClient
 
 log = logging.getLogger(__name__)
+
+
+# Stablecoins / freezable tokens we always check, even if the trace
+# only saw a different token flow into the candidate. Real perpetrators
+# consolidate stolen value across multiple tokens — a wallet that
+# received $20 USDC dust from this victim might be holding $250k USDT
+# from other sources. We want the full freezable picture per wallet.
+# Decimals match the on-chain ERC-20 metadata; symbols are canonical.
+_DEFAULT_FREEZABLE_TOKEN_DECIMALS: dict[Chain, list[tuple[str, int]]] = {
+    Chain.ethereum: [
+        # (symbol, decimals) — contract addresses come from the issuer DB.
+        ("USDC", 6),
+        ("USDT", 6),
+        ("DAI", 18),
+        ("BUSD", 18),
+        ("PYUSD", 6),
+        ("FDUSD", 18),
+        ("TUSD", 18),
+    ],
+}
+
+
+def _build_issuer_token_refs(chain: Chain) -> list[TokenRef]:
+    """Build a TokenRef list for every issuer-controlled token on ``chain``.
+
+    Reads contract addresses from the issuer DB so we don't hard-code
+    them in two places. Returns refs with normalized symbol + decimals
+    suitable for handing to ``EthereumAdapter`` for balance queries.
+    """
+    try:
+        db = load_issuer_db()
+    except Exception as e:  # noqa: BLE001
+        log.warning("could not load issuer DB; freezable-token sweep disabled: %s", e)
+        return []
+
+    decimals_by_symbol = {
+        sym: dec for sym, dec in _DEFAULT_FREEZABLE_TOKEN_DECIMALS.get(chain, [])
+    }
+    refs: list[TokenRef] = []
+    seen: set[str] = set()
+    for (entry_chain, contract_lower), entry in db.items():
+        if entry_chain != chain:
+            continue
+        if contract_lower in seen:
+            continue
+        seen.add(contract_lower)
+        # Match the issuer DB's symbol back to a known decimal; fall
+        # back to 18 if we don't have it (almost always wrong but
+        # better than failing — operator will see odd amounts).
+        decimals = decimals_by_symbol.get(entry.symbol.upper(), 18)
+        refs.append(TokenRef(
+            chain=chain,
+            contract=contract_lower,
+            symbol=entry.symbol.upper(),
+            decimals=decimals,
+        ))
+    return refs
 
 
 @dataclass
@@ -123,6 +181,25 @@ def find_dormant_in_case(
         if tr.usd_value_at_tx is not None:
             address_inflow[dest] = address_inflow.get(dest, Decimal("0")) + tr.usd_value_at_tx
         address_inflow_count[dest] = address_inflow_count.get(dest, 0) + 1
+
+    # ALSO check every known freezable issuer token on every candidate,
+    # not just tokens observed in the trace. Real perpetrators
+    # consolidate stolen funds across multiple tokens; a wallet that
+    # received $20 USDC dust from this victim may be holding $250k USDT
+    # from other victims. Without this sweep we'd silently miss the
+    # bigger position. ~5-7 extra balance calls per address.
+    issuer_token_refs = _build_issuer_token_refs(case.chain)
+    if issuer_token_refs:
+        for bucket in address_tokens.values():
+            for ref in issuer_token_refs:
+                token_key = (ref.contract or "__native__").lower()
+                bucket.setdefault(token_key, ref)
+        log.info(
+            "dormant: also sweeping %d issuer-controlled tokens "
+            "(%s) on every candidate",
+            len(issuer_token_refs),
+            ", ".join(t.symbol for t in issuer_token_refs),
+        )
 
     log.info(
         "dormant: %d unique destination addresses to inspect (%d unique tokens total)",

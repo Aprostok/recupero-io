@@ -24,7 +24,10 @@ import json
 import logging
 from pathlib import Path
 
-from recupero.storage.supabase_case_store import SupabaseCaseStore
+from recupero.storage.supabase_case_store import (
+    PayloadTooLargeError,
+    SupabaseCaseStore,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,11 +40,20 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
 
     Returns the count of files uploaded. Idempotent — every upload uses
     upsert mode in the underlying store.
+
+    Per-tx evidence files are best-effort: if a single evidence file is
+    too large for the bucket / edge layer, log it and continue. Evidence
+    is supplementary audit material, not the deliverable itself; losing
+    one (and surfacing the loss in logs) is preferable to failing the
+    whole investigation. Top-level files (case.json, freeze_brief.json,
+    briefs/*.html) still hard-fail on upload errors — those are the
+    actual deliverables.
     """
     if not case_dir.exists():
         raise FileNotFoundError(f"case_dir does not exist: {case_dir}")
 
     uploaded = 0
+    skipped_oversize = 0
     for path in sorted(case_dir.rglob("*")):
         if not path.is_file():
             continue
@@ -54,10 +66,18 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
         # Per-tx evidence: tx_evidence/<hash>.json → evidence/<hash>.json
         if len(parts) == 2 and parts[0] == "tx_evidence" and parts[1].endswith(".json"):
             tx_hash = parts[1][:-5]
-            payload = json.loads(_read_text(path))
-            store.write_evidence(tx_hash, payload)
-            uploaded += 1
-            log.debug("uploaded %s as evidence/%s.json", rel, tx_hash)
+            try:
+                payload = json.loads(_read_text(path))
+                store.write_evidence(tx_hash, payload)
+                uploaded += 1
+                log.debug("uploaded %s as evidence/%s.json", rel, tx_hash)
+            except PayloadTooLargeError as e:
+                skipped_oversize += 1
+                log.warning(
+                    "skipping oversized evidence file %s (%d bytes); "
+                    "investigation continues without it",
+                    rel, e.size,
+                )
             continue
 
         # building_package deliverables: case_dir/briefs/*.html etc.
@@ -87,8 +107,15 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
         uploaded += 1
         log.debug("uploaded %s", rel)
 
-    log.info("synced %d file(s) from %s to bucket prefix %s",
-             uploaded, case_dir, store.storage_prefix)
+    if skipped_oversize:
+        log.warning(
+            "synced %d file(s) from %s to bucket prefix %s "
+            "(skipped %d oversized evidence file(s); see warnings above)",
+            uploaded, case_dir, store.storage_prefix, skipped_oversize,
+        )
+    else:
+        log.info("synced %d file(s) from %s to bucket prefix %s",
+                 uploaded, case_dir, store.storage_prefix)
     return uploaded
 
 

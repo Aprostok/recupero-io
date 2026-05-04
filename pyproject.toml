@@ -51,6 +51,12 @@ dependencies = [
     # the Dockerfile). Locally on Windows, install Graphviz from
     # https://graphviz.org/download/ and ensure `dot.exe` is on PATH.
     "graphviz>=0.20,<1.0",
+
+    # Editorial-drafting stage (worker). Lazy-imported in
+    # reports/ai_editorial.py, but required for any complete pipeline run.
+    # Pin major to avoid surprise breaking changes; floor matches the API
+    # surface ai_editorial.py expects (Messages API + usage accounting).
+    "anthropic>=0.40,<1.0",
 ]
 
 [project.optional-dependencies]

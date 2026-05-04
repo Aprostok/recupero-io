@@ -46,6 +46,23 @@ log = logging.getLogger(__name__)
 _BOM = b"\xef\xbb\xbf"
 
 
+class PayloadTooLargeError(RuntimeError):
+    """Raised when an upload body exceeds the bucket / edge size limit.
+
+    Callers (e.g. ``upload_case_dir`` for evidence files) can catch this
+    specifically to skip-and-log instead of failing the whole stage.
+    """
+
+    def __init__(self, path: str, size: int, status_code: int) -> None:
+        super().__init__(
+            f"upload to {path} rejected as too large "
+            f"({size} bytes, HTTP {status_code})"
+        )
+        self.path = path
+        self.size = size
+        self.status_code = status_code
+
+
 class SupabaseCaseStore:
     """Storage adapter that writes case files to Supabase Storage via raw HTTPS.
 
@@ -244,16 +261,38 @@ class SupabaseCaseStore:
     # =====================================================================
 
     def _upload(self, path: str, body: bytes, content_type: str) -> None:
+        """Upsert ``body`` at ``path``.
+
+        Uses PUT, not POST: Supabase Storage's POST endpoint creates
+        new objects only and returns 400 if the file already exists,
+        even with ``x-upsert: true`` (the header is reliably honored
+        on PUT but flaky on POST). Resumed worker stages re-upload
+        the same case_dir, so every upload must be idempotent.
+
+        On 413, or 400 with an HTML body and a >10 MB payload (typical
+        Cloudflare/edge size-limit response shape, before the request
+        even reaches Supabase), raise ``PayloadTooLargeError`` so the
+        caller can skip non-critical files instead of failing the
+        whole stage.
+        """
         url = f"{self._storage_root}/object/{self._bucket}/{path}"
-        resp = self._client.post(
+        resp = self._client.put(
             url,
             content=body,
             headers={"Content-Type": content_type, "x-upsert": "true"},
         )
-        if resp.status_code not in (200, 201):
-            raise RuntimeError(
-                f"upload to {path} failed: {resp.status_code} {resp.text[:200]}"
-            )
+        if resp.status_code in (200, 201):
+            return
+        is_oversize = resp.status_code == 413 or (
+            resp.status_code == 400
+            and "text/html" in resp.headers.get("content-type", "").lower()
+            and len(body) > 10 * 1024 * 1024
+        )
+        if is_oversize:
+            raise PayloadTooLargeError(path, len(body), resp.status_code)
+        raise RuntimeError(
+            f"upload to {path} failed: {resp.status_code} {resp.text[:200]}"
+        )
 
     def _download(self, path: str) -> bytes:
         url = f"{self._storage_root}/object/{self._bucket}/{path}"

@@ -95,10 +95,26 @@ def build_all_deliverables(
     # le_handoff_*.html overwrites earlier ones with that issuer's framing.
     # That's a known minor quirk of generate_briefs; multi-issuer LE
     # production is a follow-up.
+    #
+    # Filter: skip issuers where every holding is UNRECOVERABLE. Lido staking
+    # contracts are the canonical example — we surface them in the trace
+    # because stETH technically has an issuer, but Lido has no power to
+    # freeze stETH at a staking contract (it's a public-good system, not a
+    # custodial one). Sending Lido a freeze request for these is wrong and
+    # makes us look uninformed. emit_brief.py already excludes their USD
+    # value from TOTAL_FREEZABLE_USD; we just need to also skip generating
+    # the letter.
     issuers_seen: dict[str, IssuerInfo] = {}
     for entry in freezable:
         issuer_name = entry.get("issuer")
         if not issuer_name or issuer_name in issuers_seen:
+            continue
+        if not _has_actionable_holding(entry):
+            log.info(
+                "skipping freeze brief for issuer=%s — every holding marked "
+                "UNRECOVERABLE (e.g. staking contract, no freeze authority)",
+                issuer_name,
+            )
             continue
         issuers_seen[issuer_name] = _issuer_info_for(issuer_name, entry)
 
@@ -158,6 +174,23 @@ def build_all_deliverables(
     log.info("deliverables done: %d file(s) under %s/briefs/",
              len(written), case_dir.name)
     return written
+
+
+def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:
+    """True if at least one holding in the entry is not UNRECOVERABLE.
+
+    The freeze_brief writer (emit_brief.py) classifies each holding's
+    ``status`` as ``RECOVERABLE`` (high-confidence freeze target),
+    ``INVESTIGATE`` (worth asking about), or ``UNRECOVERABLE`` (technically
+    held by issuer's token but not freezable — e.g. funds at a Lido
+    staking contract). If every holding is UNRECOVERABLE we have no
+    business sending the issuer a freeze letter.
+    """
+    holdings = freezable_entry.get("holdings") or []
+    for h in holdings:
+        if (h.get("status") or "").upper() != "UNRECOVERABLE":
+            return True
+    return False
 
 
 def _strip_svg_preamble(svg_text: str) -> str:

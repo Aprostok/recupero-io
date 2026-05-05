@@ -27,9 +27,15 @@ from pathlib import Path
 
 from recupero.chains.ethereum.adapter import EthereumAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
-from recupero.freeze.asks import load_issuer_db
 from recupero.models import Case, Chain, TokenRef
 from recupero.pricing.coingecko import CoinGeckoClient
+
+# NOTE: ``recupero.freeze.asks.load_issuer_db`` is intentionally imported
+# lazily inside ``_build_issuer_token_refs`` rather than at module top
+# level. ``freeze.asks`` already imports ``DormantCandidate`` /
+# ``TokenHolding`` from this module, so a top-level import here would
+# form a circular import (the symptom is an ImportError that surfaces
+# only on cold-start, not in dev where caches sometimes paper over it).
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +67,10 @@ def _build_issuer_token_refs(chain: Chain) -> list[TokenRef]:
     them in two places. Returns refs with normalized symbol + decimals
     suitable for handing to ``EthereumAdapter`` for balance queries.
     """
+    # Lazy import to avoid circular dependency with freeze.asks
+    # (which imports DormantCandidate/TokenHolding from this module).
     try:
+        from recupero.freeze.asks import load_issuer_db
         db = load_issuer_db()
     except Exception as e:  # noqa: BLE001
         log.warning("could not load issuer DB; freezable-token sweep disabled: %s", e)

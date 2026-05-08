@@ -43,25 +43,41 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
 
     class _Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
+            self._serve(write_body=True)
+
+        def do_HEAD(self) -> None:  # noqa: N802
+            # External monitors (UptimeRobot's free tier, Cloudflare
+            # health checks, etc.) often use HEAD by default. Without
+            # this, BaseHTTPRequestHandler returns 501 Not Implemented
+            # and the monitor sees the worker as down even though it's
+            # healthy. Same status code logic as GET, no response body.
+            self._serve(write_body=False)
+
+        def _serve(self, *, write_body: bool) -> None:
             if self.path == "/healthz":
-                self._respond(200, {"alive": True})
+                self._respond(200, {"alive": True}, write_body=write_body)
             elif self.path in ("/health", "/"):
                 try:
                     ok, details = check_fn()
                 except Exception as e:  # noqa: BLE001
-                    self._respond(503, {"ok": False, "error": str(e)})
+                    self._respond(503, {"ok": False, "error": str(e)}, write_body=write_body)
                     return
-                self._respond(200 if ok else 503, {"ok": ok, "checks": details})
+                self._respond(
+                    200 if ok else 503,
+                    {"ok": ok, "checks": details},
+                    write_body=write_body,
+                )
             else:
-                self._respond(404, {"error": "not found"})
+                self._respond(404, {"error": "not found"}, write_body=write_body)
 
-        def _respond(self, code: int, body: dict) -> None:
+        def _respond(self, code: int, body: dict, *, write_body: bool = True) -> None:
             payload = json.dumps(body).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
-            self.wfile.write(payload)
+            if write_body:
+                self.wfile.write(payload)
 
         # Silence the default per-request stderr line so Railway logs
         # aren't dominated by healthcheck traffic.

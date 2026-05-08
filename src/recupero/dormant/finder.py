@@ -27,8 +27,25 @@ from pathlib import Path
 
 from recupero.chains.ethereum.adapter import EthereumAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
-from recupero.models import Case, Chain, TokenRef
+from recupero.models import Case, Chain, LabelCategory, TokenRef
 from recupero.pricing.coingecko import CoinGeckoClient
+
+
+# Categories where the address itself is custodial infrastructure for
+# many users — protocol contracts, exchange hot wallets, OTC desks,
+# bridges, mixers. The on-chain balance there reflects the public
+# infrastructure's holdings, not the perpetrator's. Querying these
+# wallets' issuer-token balances produces large false-positive freeze
+# targets (Uniswap V4 with $97M USDC, Binance hot wallet with $54M
+# USDT, etc.). Always exclude from the candidate set.
+_SERVICE_CATEGORIES: frozenset[LabelCategory] = frozenset({
+    LabelCategory.exchange_deposit,
+    LabelCategory.exchange_hot_wallet,
+    LabelCategory.bridge,
+    LabelCategory.mixer,
+    LabelCategory.defi_protocol,
+    LabelCategory.staking,
+})
 
 # NOTE: ``recupero.freeze.asks.load_issuer_db`` is intentionally imported
 # lazily inside ``_build_issuer_token_refs`` rather than at module top
@@ -172,6 +189,8 @@ def find_dormant_in_case(
     address_inflow: dict[str, Decimal] = {}
     address_inflow_count: dict[str, int] = {}
     seed_addr_lower = case.seed_address.lower()
+    skipped_contracts: set[str] = set()
+    skipped_service_labels: dict[str, str] = {}
 
     for tr in case.transfers:
         # Only consider on-chain destination addresses.
@@ -183,6 +202,22 @@ def find_dormant_in_case(
         dest_lower = dest.lower()
         if dest_lower == seed_addr_lower:
             continue
+
+        # Filter out service / public-infrastructure addresses BEFORE
+        # querying their balances. Without this, the dormant detector
+        # surfaces things like Uniswap V4 PoolManager ($97M USDC), Binance
+        # hot wallets ($54M USDT), etc. as "freezable" — those balances
+        # belong to the public infrastructure, not the perpetrator.
+        cp = tr.counterparty
+        if cp.is_contract:
+            skipped_contracts.add(dest)
+            continue
+        if cp.label is not None and cp.label.category in _SERVICE_CATEGORIES:
+            skipped_service_labels.setdefault(
+                dest, f"{cp.label.category.value}:{cp.label.name}"
+            )
+            continue
+
         bucket = address_tokens.setdefault(dest, {})
         # Native (contract=None) → use a fixed key so we don't double-add it
         token_key = (tr.token.contract or "__native__").lower()
@@ -190,6 +225,23 @@ def find_dormant_in_case(
         if tr.usd_value_at_tx is not None:
             address_inflow[dest] = address_inflow.get(dest, Decimal("0")) + tr.usd_value_at_tx
         address_inflow_count[dest] = address_inflow_count.get(dest, 0) + 1
+
+    if skipped_contracts:
+        log.info(
+            "dormant: filtered %d contract address(es) from candidate set "
+            "(public-infrastructure balances are not perpetrator funds): %s",
+            len(skipped_contracts),
+            ", ".join(sorted(skipped_contracts)[:5])
+            + ("…" if len(skipped_contracts) > 5 else ""),
+        )
+    if skipped_service_labels:
+        log.info(
+            "dormant: filtered %d service-labeled address(es): %s",
+            len(skipped_service_labels),
+            ", ".join(f"{a} ({label})"
+                      for a, label in list(skipped_service_labels.items())[:5])
+            + ("…" if len(skipped_service_labels) > 5 else ""),
+        )
 
     # ALSO check every known freezable issuer token on every candidate,
     # not just tokens observed in the trace. Real perpetrators

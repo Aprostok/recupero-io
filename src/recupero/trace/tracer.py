@@ -133,66 +133,83 @@ def run_trace(
             addresses_processed, current_address, current_depth, len(visited), len(queue),
         )
 
-        # Fetch outflows for this address. Errors at this stage shouldn't
-        # abort the whole trace — log and move on.
+        # Per-iteration safety net: any unexpected exception (a CoinGecko
+        # ReadTimeout escaping price_client, a Supabase 5xx mid-evidence
+        # upload, an adapter quirk on a malformed address) gets caught
+        # here so the trace continues with the next address. A single
+        # 30s+ HTTP hang at hour 1 of a deep trace would otherwise erase
+        # everything we'd collected for this stage. Per-hop _trace_one_hop
+        # errors keep their own catch below; this is the broader safety net.
         try:
-            hop_transfers, is_service_wallet = _trace_one_hop(
-                adapter=adapter,
-                label_store=label_store,
-                price_client=price_client,
-                policy=policy,
-                from_address=current_address,
-                incident_time=incident_time,
-                config=config,
-                hop_depth=current_depth,
-                parent_transfer_id=None,
-                evidence_dir=case_dir / "tx_evidence",
-            )
+            try:
+                hop_transfers, is_service_wallet = _trace_one_hop(
+                    adapter=adapter,
+                    label_store=label_store,
+                    price_client=price_client,
+                    policy=policy,
+                    from_address=current_address,
+                    incident_time=incident_time,
+                    config=config,
+                    hop_depth=current_depth,
+                    parent_transfer_id=None,
+                    evidence_dir=case_dir / "tx_evidence",
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "trace hop failed for %s (depth=%d): %s — continuing",
+                    current_address, current_depth, e,
+                )
+                continue
+
+            all_transfers.extend(hop_transfers)
+
+            # Decide which destinations to enqueue for the next hop
+            if current_depth + 1 >= policy.max_depth:
+                continue
+
+            # Service-wallet cap: keep the transfers we observed (audit trail)
+            # but don't queue downstream. Without this, a single 500-outflow
+            # OTC desk / unlabeled exchange explodes BFS at the next depth.
+            if is_service_wallet:
+                log.info(
+                    "service-wallet skip: not queueing %d destinations from %s",
+                    len(hop_transfers), current_address,
+                )
+                continue
+
+            for transfer in hop_transfers:
+                if not policy.should_traverse(transfer):
+                    continue
+                dest = transfer.to_address
+                dest_key = dest.lower()
+                if dest_key in visited or dest_key in queued:
+                    continue
+
+                # Contract check: one RPC per unique address, cached
+                if policy.stop_at_contract:
+                    if dest_key not in is_contract_cache:
+                        try:
+                            is_contract_cache[dest_key] = adapter.is_contract(dest)
+                        except Exception as e:  # noqa: BLE001
+                            log.debug("is_contract check failed for %s: %s", dest, e)
+                            # Be conservative: if we can't check, assume contract (skip)
+                            is_contract_cache[dest_key] = True
+                    if is_contract_cache[dest_key]:
+                        continue
+
+                queue.append((dest, current_depth + 1))
+                queued.add(dest_key)
         except Exception as e:  # noqa: BLE001
+            # Catch-all for anything unexpected after _trace_one_hop succeeded
+            # (e.g., evidence write, queue manipulation). Log and move on
+            # rather than killing the whole stage. We've already kept the
+            # transfers in all_transfers above (if applicable), so the
+            # case.json write at the end of run_trace still has data.
             log.warning(
-                "trace hop failed for %s (depth=%d): %s — continuing",
+                "unexpected error processing %s (depth=%d): %s — continuing",
                 current_address, current_depth, e,
             )
             continue
-
-        all_transfers.extend(hop_transfers)
-
-        # Decide which destinations to enqueue for the next hop
-        if current_depth + 1 >= policy.max_depth:
-            continue
-
-        # Service-wallet cap: keep the transfers we observed (audit trail)
-        # but don't queue downstream. Without this, a single 500-outflow
-        # OTC desk / unlabeled exchange explodes BFS at the next depth.
-        if is_service_wallet:
-            log.info(
-                "service-wallet skip: not queueing %d destinations from %s",
-                len(hop_transfers), current_address,
-            )
-            continue
-
-        for transfer in hop_transfers:
-            if not policy.should_traverse(transfer):
-                continue
-            dest = transfer.to_address
-            dest_key = dest.lower()
-            if dest_key in visited or dest_key in queued:
-                continue
-
-            # Contract check: one RPC per unique address, cached
-            if policy.stop_at_contract:
-                if dest_key not in is_contract_cache:
-                    try:
-                        is_contract_cache[dest_key] = adapter.is_contract(dest)
-                    except Exception as e:  # noqa: BLE001
-                        log.debug("is_contract check failed for %s: %s", dest, e)
-                        # Be conservative: if we can't check, assume contract (skip)
-                        is_contract_cache[dest_key] = True
-                if is_contract_cache[dest_key]:
-                    continue
-
-            queue.append((dest, current_depth + 1))
-            queued.add(dest_key)
 
     case.transfers = all_transfers
     case.exchange_endpoints = _compute_exchange_endpoints(all_transfers)

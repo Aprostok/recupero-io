@@ -63,7 +63,12 @@ class EtherscanClient:
         api_base: str = "https://api.etherscan.io/v2/api",
         chain_id: int = 1,
         requests_per_second: float = 4.0,
-        timeout_seconds: float = 30.0,
+        # Default 60s (was 30s). Etherscan v2 occasionally takes 30-45s to
+        # respond on whale wallets / busy endpoints. A single slow response
+        # shouldn't kill an in-progress depth-3 trace; the BFS catch-and-
+        # continue handles retries, but raising the per-call ceiling here
+        # means most slow calls succeed instead of needing retry.
+        timeout_seconds: float = 60.0,
     ) -> None:
         if not api_key:
             raise ValueError("ETHERSCAN_API_KEY is required")

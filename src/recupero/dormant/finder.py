@@ -21,6 +21,8 @@ supports them via the same endpoints).
 from __future__ import annotations
 
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
@@ -29,6 +31,17 @@ from recupero.chains.ethereum.adapter import EthereumAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Case, Chain, LabelCategory, TokenRef
 from recupero.pricing.coingecko import CoinGeckoClient
+
+
+# Per-address dormant checks fan out to N threads concurrently. Each
+# thread does its 7 token-balance Etherscan calls + price lookups
+# serially within itself; parallelism is across addresses. Both
+# EtherscanClient and CoinGeckoClient have thread-safe internal
+# rate-limiters (with locks), so global throughput stays under the
+# per-key rate caps regardless of thread count. 5 is a safe default —
+# higher values produce diminishing returns once the rate limit caps
+# the throughput.
+_DORMANT_CONCURRENCY = int(os.environ.get("RECUPERO_DORMANT_CONCURRENCY", "5"))
 
 
 # Categories where the address itself is custodial infrastructure for
@@ -267,55 +280,59 @@ def find_dormant_in_case(
         len(address_tokens), sum(len(d) for d in address_tokens.values()),
     )
 
+    # Parallel fan-out across addresses. Each worker thread runs the
+    # full _check_one_address sequence (token balances + pricing +
+    # filter) for one candidate. The rate limiters in EtherscanClient
+    # and CoinGeckoClient enforce global per-key caps, so adding more
+    # threads can't violate the API's rate limits.
     candidates: list[DormantCandidate] = []
-    for idx, (address, token_dict) in enumerate(address_tokens.items(), start=1):
-        log.info(
-            "dormant #%d/%d: checking balances for %s (%d tokens)",
-            idx, len(address_tokens), address, len(token_dict),
-        )
-        try:
-            holdings = _fetch_holdings(address, list(token_dict.values()), adapter, price_client)
-        except Exception as e:  # noqa: BLE001
-            log.warning("dormant: balance fetch failed for %s: %s — skipping", address, e)
-            continue
+    total_n = len(address_tokens)
+    completed = 0
 
-        total_usd = sum(
-            (h.usd_value for h in holdings if h.usd_value is not None),
-            start=Decimal("0"),
-        )
-        if total_usd < min_usd:
-            log.debug("dormant: %s holds $%s — below threshold $%s", address, total_usd, min_usd)
-            continue
-
-        # Magnitude sanity check: a wallet currently holding >100x the
-        # USD inflow we observed in this trace is almost certainly
-        # consolidating from many sources (could be a perp aggregating
-        # multiple victims, but more often is an OTC desk or active
-        # trader unrelated to the case). Surface it in logs so the
-        # operator sees the disparity; the AI editorial gets the same
-        # signal via balance_to_inflow_ratio in the prompt summary and
-        # downgrades these from 🟩 FREEZABLE to 🟧 INVESTIGATE.
-        case_inflow = address_inflow.get(address, Decimal("0"))
-        if case_inflow > 0:
-            ratio = total_usd / case_inflow
-            if ratio > 100:
-                log.warning(
-                    "dormant: %s has balance/inflow ratio %.1fx "
-                    "(holds $%s, inflow from this case $%s) — likely "
-                    "consolidates from many sources; expect AI to mark "
-                    "INVESTIGATE rather than FREEZABLE",
-                    address, ratio, total_usd, case_inflow,
-                )
-
-        candidates.append(DormantCandidate(
+    def _check(address: str, tokens: list[TokenRef]) -> DormantCandidate | None:
+        return _check_one_address(
             address=address,
+            tokens=tokens,
+            adapter=adapter,
+            price_client=price_client,
             chain=case.chain,
-            total_usd=total_usd,
-            holdings=holdings,
-            inflow_usd_during_case=address_inflow.get(address, Decimal("0")),
+            min_usd=min_usd,
+            inflow_usd=address_inflow.get(address, Decimal("0")),
             inflow_count=address_inflow_count.get(address, 0),
-            explorer_url=adapter.explorer_address_url(address),
-        ))
+        )
+
+    if total_n == 0:
+        pass  # nothing to do
+    elif _DORMANT_CONCURRENCY <= 1 or total_n == 1:
+        # Single-threaded path — keeps test determinism and avoids
+        # threadpool overhead for tiny cases.
+        for idx, (address, token_dict) in enumerate(address_tokens.items(), start=1):
+            log.info("dormant #%d/%d: %s (%d tokens)", idx, total_n, address, len(token_dict))
+            try:
+                cand = _check(address, list(token_dict.values()))
+                if cand is not None:
+                    candidates.append(cand)
+            except Exception as e:  # noqa: BLE001
+                log.warning("dormant: balance fetch failed for %s: %s — skipping", address, e)
+    else:
+        with ThreadPoolExecutor(
+            max_workers=_DORMANT_CONCURRENCY, thread_name_prefix="dormant"
+        ) as pool:
+            futures = {
+                pool.submit(_check, address, list(token_dict.values())): address
+                for address, token_dict in address_tokens.items()
+            }
+            for fut in as_completed(futures):
+                address = futures[fut]
+                completed += 1
+                try:
+                    cand = fut.result()
+                except Exception as e:  # noqa: BLE001
+                    log.warning("dormant: balance fetch failed for %s: %s — skipping", address, e)
+                    continue
+                log.info("dormant %d/%d done: %s", completed, total_n, address)
+                if cand is not None:
+                    candidates.append(cand)
 
     price_client.close()
     candidates.sort(key=lambda c: c.total_usd, reverse=True)
@@ -324,6 +341,60 @@ def find_dormant_in_case(
         len(candidates), min_usd,
     )
     return candidates
+
+
+def _check_one_address(
+    *,
+    address: str,
+    tokens: list[TokenRef],
+    adapter: EthereumAdapter,
+    price_client: CoinGeckoClient,
+    chain: Chain,
+    min_usd: Decimal,
+    inflow_usd: Decimal,
+    inflow_count: int,
+) -> "DormantCandidate | None":
+    """Per-address worker run by the thread pool: balance sweep + filter.
+
+    Returns a DormantCandidate if total holdings ≥ min_usd, else None.
+    Logs balance/inflow ratio warnings for service-like wallets so the
+    AI editorial picks them up via the same signal in the prompt
+    summary and downgrades to 🟧 INVESTIGATE.
+
+    All Etherscan / CoinGecko calls inside _fetch_holdings respect the
+    global rate-limiters in their respective clients; running multiple
+    instances of this function in parallel can't exceed the per-key cap.
+    """
+    holdings = _fetch_holdings(address, tokens, adapter, price_client)
+    total_usd = sum(
+        (h.usd_value for h in holdings if h.usd_value is not None),
+        start=Decimal("0"),
+    )
+    if total_usd < min_usd:
+        log.debug("dormant: %s holds $%s — below threshold $%s",
+                  address, total_usd, min_usd)
+        return None
+
+    if inflow_usd > 0:
+        ratio = total_usd / inflow_usd
+        if ratio > 100:
+            log.warning(
+                "dormant: %s has balance/inflow ratio %.1fx "
+                "(holds $%s, inflow from this case $%s) — likely "
+                "consolidates from many sources; expect AI to mark "
+                "INVESTIGATE rather than FREEZABLE",
+                address, ratio, total_usd, inflow_usd,
+            )
+
+    return DormantCandidate(
+        address=address,
+        chain=chain,
+        total_usd=total_usd,
+        holdings=holdings,
+        inflow_usd_during_case=inflow_usd,
+        inflow_count=inflow_count,
+        explorer_url=adapter.explorer_address_url(address),
+    )
 
 
 def _fetch_holdings(

@@ -66,6 +66,7 @@ Optional tunables (defaults are sensible):
 | `RECUPERO_STALE_AFTER_SEC`        | 300     | A row whose heartbeat is older than this is eligible for re-claim by another worker. |
 | `RECUPERO_POLL_IDLE_SEC`          | 2       | Initial backoff between empty polls. Doubles up to `RECUPERO_POLL_MAX_SEC`. |
 | `RECUPERO_POLL_MAX_SEC`           | 30      | Cap on idle backoff. |
+| `RECUPERO_DORMANT_CONCURRENCY`    | 5       | Threads used by the dormant detector to parallelize per-address balance sweeps. Etherscan/CoinGecko rate limiters cap global throughput regardless. Set to 1 to disable parallelism (e.g., for debugging). Higher values give diminishing returns once the rate limit caps actual throughput. |
 
 Investigator identity (optional; appears on every freeze brief + LE handoff):
 

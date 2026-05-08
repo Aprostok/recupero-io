@@ -190,11 +190,16 @@ You must output ONLY a valid JSON object — no preamble, no markdown fences, no
   UNRECOVERABLE_ITEMS_AI_CONFIDENCE
 
 For DESTINATION_NOTES, use these emoji prefixes consistently:
-  🟩 FREEZABLE — for addresses currently holding freezable tokens (Circle USDC, Tether USDT, Paxos, etc.)
+  🟩 FREEZABLE — for addresses currently holding freezable tokens (Circle USDC, Tether USDT, Paxos, etc.) where the on-chain balance plausibly represents perpetrator-controlled funds.
   ⬛ UNRECOVERABLE — for mixer deposits, bridges to anonymous chains, burn addresses, AND for DEX aggregator routers (1inch, CoW Protocol GPv2 settlement, 0x, ParaSwap), the WETH9 contract when funds were wrapped and swapped, and liquid-staking token contracts (Lido stETH, Rocket Pool rETH). Briefly say WHY (e.g., "DEX aggregator routing — funds dispersed to swap counterparties; not freezable")
   🟦 EXCHANGE — for known exchange deposit addresses (Binance, Coinbase, Kraken, etc.)
   🟧 INVESTIGATE — for addresses worth investigating but unclear status (e.g., very large balances that may be unrelated, addresses that look like protocol contracts but you're not certain)
   (no emoji) — for transit/intermediate wallets the perpetrator controls but with no current freezable balance
+
+CRITICAL RULES for using `is_contract` and `balance_to_inflow_ratio`:
+  - If `is_contract` is true on an entry in `current_freezable_holdings`, the address is a smart contract. Default to ⬛ UNRECOVERABLE (or 🟧 INVESTIGATE only if you have a specific reason). NEVER mark a contract address as 🟩 FREEZABLE — its on-chain balance reflects protocol/exchange liquidity, not perpetrator funds.
+  - If `balance_to_inflow_ratio` is large (e.g., 100x or more), the wallet is consolidating from many sources beyond this victim. Most of that balance is unrelated to this case. Use 🟧 INVESTIGATE rather than 🟩 FREEZABLE — a freeze request that overstates the recoverable amount looks uninformed to the issuer's compliance team.
+  - Treat 🟩 FREEZABLE as a high-confidence claim. Only use it when (a) the address is an EOA (`is_contract` false), (b) the inflow from this case is a meaningful fraction of the current balance, and (c) the token is one with a documented issuer freeze pathway.
 
 For UNRECOVERABLE_ITEMS, include any portion of the stolen funds that the chain data shows are practically unrecoverable to this victim. Be honest with the customer — it helps them set expectations even when the news is bad. The following patterns are practically unrecoverable even if technically traceable:
 
@@ -283,16 +288,44 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
             "first_seen_iso": per_first_hop_first_seen[first_hop_addr].isoformat().replace("+00:00", "Z"),
         }
 
+    # Per-address signals the AI uses for emoji classification:
+    # - is_contract: True if the destination has bytecode. Contracts that
+    #   slip past the dormant filter should be 🟧 INVESTIGATE at most,
+    #   never 🟩 FREEZABLE — their on-chain balance is public-infra liquidity.
+    # - inflow_usd_during_case: how much of THIS victim's funds reached
+    #   the address per our trace. If it's tiny relative to current
+    #   balance, the wallet is consolidating from many sources (could
+    #   be a perp aggregating victims, or just an unrelated trader).
+    address_is_contract: dict[str, bool] = {}
+    address_inflow_usd: dict[str, Decimal] = {}
+    for t in case.transfers:
+        addr = t.to_address
+        if t.counterparty.is_contract:
+            address_is_contract[addr] = True
+        if t.usd_value_at_tx is not None:
+            address_inflow_usd[addr] = address_inflow_usd.get(addr, Decimal("0")) + t.usd_value_at_tx
+
     # Freezable holdings from freeze_asks
     freezable_summary = []
     for issuer_name, asks in freeze_asks.get("by_issuer", {}).items():
         for a in asks:
+            addr = a.get("address", "")
+            balance_usd = Decimal(str(a.get("usd_value") or "0"))
+            inflow = address_inflow_usd.get(addr, Decimal("0"))
+            # Magnitude ratio — None if inflow is zero (no signal).
+            ratio: str | None = None
+            if inflow > 0 and balance_usd > 0:
+                r = balance_usd / inflow
+                ratio = f"{r:.1f}x" if r < 1000 else f"{r:.0f}x"
             freezable_summary.append({
-                "address": a.get("address", ""),
-                "address_short": _short_addr(a.get("address", "")),
+                "address": addr,
+                "address_short": _short_addr(addr),
                 "issuer": issuer_name,
                 "token": a.get("symbol", ""),
-                "usd": f"${Decimal(str(a.get('usd_value') or '0')):,.2f}",
+                "usd": f"${balance_usd:,.2f}",
+                "inflow_usd_from_this_case": f"${inflow:,.2f}",
+                "balance_to_inflow_ratio": ratio,
+                "is_contract": address_is_contract.get(addr, False),
                 "freeze_capability": a.get("freeze_capability", "unknown"),
             })
 

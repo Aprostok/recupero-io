@@ -287,6 +287,26 @@ def find_dormant_in_case(
             log.debug("dormant: %s holds $%s — below threshold $%s", address, total_usd, min_usd)
             continue
 
+        # Magnitude sanity check: a wallet currently holding >100x the
+        # USD inflow we observed in this trace is almost certainly
+        # consolidating from many sources (could be a perp aggregating
+        # multiple victims, but more often is an OTC desk or active
+        # trader unrelated to the case). Surface it in logs so the
+        # operator sees the disparity; the AI editorial gets the same
+        # signal via balance_to_inflow_ratio in the prompt summary and
+        # downgrades these from 🟩 FREEZABLE to 🟧 INVESTIGATE.
+        case_inflow = address_inflow.get(address, Decimal("0"))
+        if case_inflow > 0:
+            ratio = total_usd / case_inflow
+            if ratio > 100:
+                log.warning(
+                    "dormant: %s has balance/inflow ratio %.1fx "
+                    "(holds $%s, inflow from this case $%s) — likely "
+                    "consolidates from many sources; expect AI to mark "
+                    "INVESTIGATE rather than FREEZABLE",
+                    address, ratio, total_usd, case_inflow,
+                )
+
         candidates.append(DormantCandidate(
             address=address,
             chain=case.chain,

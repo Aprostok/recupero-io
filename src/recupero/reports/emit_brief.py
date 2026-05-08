@@ -37,11 +37,34 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
+import os
 from typing import Any
 
 from recupero.models import Case, LabelCategory
 from recupero.reports.victim import VictimInfo, load_victim
 from recupero.storage.case_store import CaseStore
+
+
+# Investigator identity is resolved from env vars at module load with the
+# current solo-operator values as fallback. Set RECUPERO_INVESTIGATOR_*
+# in Railway Variables to override per deployment. See identical block in
+# reports/ai_editorial.py — both modules need the same values because
+# emit_brief writes the EDITORIAL_TEMPLATE that ships when AI editorial
+# is skipped, and ai_editorial bakes the same defaults into its prompt.
+def _investigator_defaults() -> dict[str, str]:
+    return {
+        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "Alec Prostok"),
+        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "alec@recupero.io"),
+        "INVESTIGATOR_ENTITY": os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
+        "INVESTIGATOR_ENTITY_FULL": os.environ.get(
+            "RECUPERO_INVESTIGATOR_ENTITY_FULL",
+            "Recupero LLC, a Delaware limited liability company",
+        ),
+        "INVESTIGATOR_WEB": os.environ.get("RECUPERO_INVESTIGATOR_WEB", "recupero.io"),
+    }
+
+
+_INV = _investigator_defaults()
 
 
 EDITORIAL_TEMPLATE: dict[str, Any] = {
@@ -64,11 +87,11 @@ EDITORIAL_TEMPLATE: dict[str, Any] = {
             "reason": "TODO: e.g. 'Sent to Tornado Cash. Mixed. Not traceable post-mixing with current techniques.'"
         }
     ],
-    "INVESTIGATOR_NAME": "Alec Prostok",
-    "INVESTIGATOR_EMAIL": "alec@recupero.io",
-    "INVESTIGATOR_ENTITY": "Recupero LLC",
-    "INVESTIGATOR_ENTITY_FULL": "Recupero LLC, a Delaware limited liability company",
-    "INVESTIGATOR_WEB": "recupero.io",
+    "INVESTIGATOR_NAME": _INV["INVESTIGATOR_NAME"],
+    "INVESTIGATOR_EMAIL": _INV["INVESTIGATOR_EMAIL"],
+    "INVESTIGATOR_ENTITY": _INV["INVESTIGATOR_ENTITY"],
+    "INVESTIGATOR_ENTITY_FULL": _INV["INVESTIGATOR_ENTITY_FULL"],
+    "INVESTIGATOR_WEB": _INV["INVESTIGATOR_WEB"],
     "TEMPLATE_VERSION": "v1.0 — April 2026",
 }
 

@@ -65,17 +65,30 @@ AI_DRAFTED_KEYS = [
 
 # Fields the AI is given but does NOT draft (it just passes them through or
 # uses them as facts to ground its drafts).
-# TODO: when a second investigator joins, read these from the active user's
-# config or from env vars (e.g. RECUPERO_INVESTIGATOR_NAME) rather than
-# hardcoding. Solo-operator mode for now.
-STATIC_EDITORIAL_DEFAULTS = {
-    "INVESTIGATOR_NAME": "Alec Prostok",
-    "INVESTIGATOR_EMAIL": "alec@recupero.io",
-    "INVESTIGATOR_ENTITY": "Recupero LLC",
-    "INVESTIGATOR_ENTITY_FULL": "Recupero LLC, a Delaware limited liability company",
-    "INVESTIGATOR_WEB": "recupero.io",
-    "TEMPLATE_VERSION": "v1.0 — April 2026",
-}
+#
+# Investigator identity is read from env vars at module-load time, with the
+# current solo-operator values as fallback defaults. When a second
+# investigator joins (or you deploy a separate worker for a different
+# operator), set RECUPERO_INVESTIGATOR_* in Railway Variables — no code
+# change needed. The env-var approach also keeps the local .env separate
+# from the production deploy's identity. Eventually, when the cases table
+# carries a per-case investigator field, these become the fallback only
+# and per-case values flow through the pipeline instead.
+def _investigator_defaults() -> dict[str, str]:
+    return {
+        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "Alec Prostok"),
+        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "alec@recupero.io"),
+        "INVESTIGATOR_ENTITY": os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
+        "INVESTIGATOR_ENTITY_FULL": os.environ.get(
+            "RECUPERO_INVESTIGATOR_ENTITY_FULL",
+            "Recupero LLC, a Delaware limited liability company",
+        ),
+        "INVESTIGATOR_WEB": os.environ.get("RECUPERO_INVESTIGATOR_WEB", "recupero.io"),
+        "TEMPLATE_VERSION": "v1.0 — April 2026",
+    }
+
+
+STATIC_EDITORIAL_DEFAULTS = _investigator_defaults()
 
 # Compact, illustrative few-shot. Mirrors the production Sarah Chen case.
 # This is fictional test data already used in the codebase as the canonical

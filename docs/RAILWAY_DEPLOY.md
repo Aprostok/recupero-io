@@ -67,6 +67,22 @@ Optional tunables (defaults are sensible):
 | `RECUPERO_POLL_IDLE_SEC`          | 2       | Initial backoff between empty polls. Doubles up to `RECUPERO_POLL_MAX_SEC`. |
 | `RECUPERO_POLL_MAX_SEC`           | 30      | Cap on idle backoff. |
 
+Investigator identity (optional; appears on every freeze brief + LE handoff):
+
+| Variable                            | Default                                              |
+|-------------------------------------|------------------------------------------------------|
+| `RECUPERO_INVESTIGATOR_NAME`        | `Alec Prostok`                                       |
+| `RECUPERO_INVESTIGATOR_EMAIL`       | `alec@recupero.io`                                   |
+| `RECUPERO_INVESTIGATOR_ENTITY`      | `Recupero LLC`                                       |
+| `RECUPERO_INVESTIGATOR_ENTITY_FULL` | `Recupero LLC, a Delaware limited liability company` |
+| `RECUPERO_INVESTIGATOR_WEB`         | `recupero.io`                                        |
+| `RECUPERO_INVESTIGATOR_PHONE`       | (none)                                               |
+
+Set these to override the operator on whose behalf the briefs are
+issued. When the cases table eventually carries a per-case investigator
+field, those values will flow through the pipeline and these env vars
+become the fallback only.
+
 ### 3. Deploy
 
 Railway redeploys automatically on every push to `main`. First deploy

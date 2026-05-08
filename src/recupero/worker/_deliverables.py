@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -45,13 +46,16 @@ log = logging.getLogger(__name__)
 
 
 # Default investigator info when the cases row doesn't carry it (the schema
-# doesn't have an investigator column today). Operators can edit the
-# generated HTML before sending if specifics need to change.
+# doesn't have an investigator column today). Each Railway deployment can
+# override via RECUPERO_INVESTIGATOR_* env vars; the fallback values
+# match the solo-operator setup. When the cases table eventually carries
+# a per-case investigator field, those values will flow through and these
+# only apply for legacy rows.
 _DEFAULT_INVESTIGATOR = InvestigatorInfo(
-    name="Recupero Investigation Team",
-    organization="Recupero",
-    email="contact@recupero.io",
-    phone=None,
+    name=os.environ.get("RECUPERO_INVESTIGATOR_NAME", "Alec Prostok"),
+    organization=os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
+    email=os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "alec@recupero.io"),
+    phone=os.environ.get("RECUPERO_INVESTIGATOR_PHONE") or None,
 )
 
 

@@ -3,10 +3,22 @@
 Called from the pipeline after ``_stage_list_freeze_targets`` produces
 ``freeze_asks.json``. We flag every non-victim wallet on the trace —
 mixers, bridges, hops, the lot — so we have a complete audit trail
-per case. The ``is_freezeable`` flag (set true only for wallets that
-appear as freeze targets or known exchange deposits) is what the
-nightly monitor filters on; everything else sits in the table as
-historical record but is never re-queried.
+per case. The ``is_freezeable`` flag is what the nightly monitor
+filters on; everything else sits in the table as historical record
+but is never re-queried.
+
+Definition of ``is_freezeable=True``: an EOA (non-contract) where a
+stablecoin issuer (Circle, Tether, etc.) can freeze our tokens at
+their protocol level. This is the legal-cooperation freeze pathway.
+
+Explicitly NOT is_freezeable:
+  * Contract addresses (Uniswap V4 PoolManager, deBridge, Across, etc.).
+    Their on-chain balance is public-infrastructure liquidity, not the
+    perpetrator's holdings.
+  * Exchange hot wallets / deposit addresses. Recovery here goes via
+    subpoena to the exchange's compliance team, not via issuer freeze;
+    we don't want the nightly monitor pinging Binance balances every
+    24h. They get a different deliverable (the LE handoff brief).
 
 Idempotency: every row is inserted with ``ON CONFLICT
 (address, chain, investigation_id) DO UPDATE`` so re-runs (resumed
@@ -167,13 +179,18 @@ def _build_rows(
         _record(tr.from_address, role="hop", label_category=None, label_name=None)
 
     # ---- Pass 2: exchange endpoints from the trace aggregation ---- #
+    # NOT marked is_freezeable. Exchange-deposit recovery goes via subpoena
+    # to the exchange's compliance team, not via issuer-level freeze;
+    # surfacing them in the nightly issuer-balance monitor would be
+    # noise. They're still tracked in the watchlist for the audit trail
+    # and the LE handoff brief.
     for ep in case.exchange_endpoints:
         _record(
             ep.address,
             role="exchange_deposit",
             label_category=LabelCategory.exchange_deposit.value,
             label_name=ep.label_name,
-            is_freezeable=True,
+            is_freezeable=False,
             notes=f"exchange={ep.exchange}",
         )
 
@@ -182,11 +199,31 @@ def _build_rows(
         _record(addr, role="unlabeled", label_category=None, label_name=None)
 
     # ---- Pass 4: freeze_asks → is_freezeable rows ---- #
+    # Defense in depth: even with the dormant detector's contract filter,
+    # if a contract address ever slipped through (regression, edge case),
+    # we re-check counterparty.is_contract here before marking
+    # is_freezeable. Better to skip a real ask than auto-monitor a
+    # Uniswap-style protocol balance every night.
+    contract_addrs: set[str] = set()
+    for tr in case.transfers:
+        if tr.counterparty.is_contract:
+            contract_addrs.add(tr.to_address.lower())
+
     by_issuer = freeze_asks.get("by_issuer") or {}
     for issuer, asks in by_issuer.items():
         for ask in asks or []:
+            ask_addr = ask.get("address")
+            if not ask_addr:
+                continue
+            if ask_addr.lower() in contract_addrs:
+                log.info(
+                    "watchlist: skipping is_freezeable=True on contract address "
+                    "%s (issuer=%s, symbol=%s) — defense-in-depth filter",
+                    ask_addr, issuer, ask.get("symbol"),
+                )
+                continue
             _record(
-                ask.get("address"),
+                ask_addr,
                 role="current_holder",
                 label_category=None,
                 label_name=None,

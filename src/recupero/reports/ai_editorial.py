@@ -42,13 +42,32 @@ MAX_TOKENS = 4096
 # Source: https://www.anthropic.com/pricing  (Opus 4.7, Jan 2026)
 _INPUT_USD_PER_MTOK = Decimal("15.0")
 _OUTPUT_USD_PER_MTOK = Decimal("75.0")
+# Prompt-cache pricing multipliers (relative to base input price):
+#   - Cache write: 1.25× (Anthropic pays a small premium to populate)
+#   - Cache read:  0.10× (90% discount on cached tokens)
+_CACHE_WRITE_MULTIPLIER = Decimal("1.25")
+_CACHE_READ_MULTIPLIER = Decimal("0.10")
 
 
-def _compute_usd_cost(input_tokens: int, output_tokens: int) -> Decimal:
-    """Token counts → USD spend. Quantized to 4 decimal places."""
+def _compute_usd_cost(
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    cache_creation: int = 0,
+    cache_read: int = 0,
+) -> Decimal:
+    """Token counts → USD spend. Quantized to 4 decimal places.
+
+    ``input_tokens`` from the API response already excludes cached
+    tokens — the SDK reports them separately via ``cache_creation_input_tokens``
+    and ``cache_read_input_tokens``. We bill all three at their
+    respective rates so usage_info reflects real spend.
+    """
     cost = (
         Decimal(input_tokens) * _INPUT_USD_PER_MTOK / Decimal(1_000_000)
         + Decimal(output_tokens) * _OUTPUT_USD_PER_MTOK / Decimal(1_000_000)
+        + Decimal(cache_creation) * _INPUT_USD_PER_MTOK * _CACHE_WRITE_MULTIPLIER / Decimal(1_000_000)
+        + Decimal(cache_read) * _INPUT_USD_PER_MTOK * _CACHE_READ_MULTIPLIER / Decimal(1_000_000)
     )
     return cost.quantize(Decimal("0.0001"))
 
@@ -229,7 +248,11 @@ For each unrecoverable item include `asset` (e.g., "approximately 6.4 ETH (~$15,
 You'll be given a working example with input and ideal output. Use it to calibrate voice and structure. Do NOT copy its specific facts; use only the facts in the actual case input."""
 
 
-USER_PROMPT_TEMPLATE = """Below is a working example of how this task should be done, followed by the actual case to draft for.
+# Split into two parts so the static example portion can be marked
+# with cache_control and reused across calls (saves ~25% per call after
+# the first within a 5-minute window). The dynamic portion contains
+# only the per-investigation case input.
+FEW_SHOT_PROMPT_TEMPLATE = """Below is a working example of how this task should be done, followed by the actual case to draft for.
 
 === EXAMPLE INPUT ===
 {example_input}
@@ -238,10 +261,17 @@ USER_PROMPT_TEMPLATE = """Below is a working example of how this task should be 
 {example_output}
 
 === ACTUAL CASE INPUT ===
-{case_input}
+"""
+
+CASE_PROMPT_TEMPLATE = """{case_input}
 
 === YOUR TASK ===
 Draft the editorial JSON for the actual case. Output only the JSON object, no commentary."""
+
+# Backward-compat alias — older code paths can still call format() on
+# this and get a single concatenated string. New code should use the
+# split templates above with cache_control on the few-shot block.
+USER_PROMPT_TEMPLATE = FEW_SHOT_PROMPT_TEMPLATE + CASE_PROMPT_TEMPLATE
 
 
 def _short_addr(addr: str) -> str:
@@ -458,29 +488,63 @@ def call_anthropic_for_editorial(
 
     client = anthropic.Anthropic(api_key=api_key)
 
-    user_prompt = USER_PROMPT_TEMPLATE.format(
+    # Split the prompt into:
+    #   1. system prompt (static across all calls) — cached
+    #   2. few-shot example (static) — cached
+    #   3. actual case input (dynamic) — not cached
+    # Anthropic's prompt cache returns the cached portions at ~10% of
+    # input price within a 5-minute window. For Recupero's editorial
+    # prompt (~3-4K input tokens of which ~3K is static), the savings
+    # is ~25% per call after the first one.
+    few_shot_block = FEW_SHOT_PROMPT_TEMPLATE.format(
         example_input=json.dumps(FEW_SHOT_EXAMPLE["input_summary"], indent=2),
         example_output=json.dumps(FEW_SHOT_EXAMPLE["output"], indent=2),
+    )
+    case_block = CASE_PROMPT_TEMPLATE.format(
         case_input=json.dumps(case_summary, indent=2),
     )
+    case_block_text = case_block  # mutable across retries
 
     last_error = None
     in_total = 0
     out_total = 0
+    cache_creation_total = 0
+    cache_read_total = 0
     for attempt in range(2):  # one retry on bad JSON
         try:
             resp = client.messages.create(
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
+                system=[
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": few_shot_block,
+                                "cache_control": {"type": "ephemeral"},
+                            },
+                            {"type": "text", "text": case_block_text},
+                        ],
+                    }
+                ],
             )
 
-            # Tally tokens even on retries — they all cost money.
+            # Tally tokens even on retries — they all cost money. Track
+            # cache hits separately so usage_info can show how much we saved.
             usage = getattr(resp, "usage", None)
             if usage is not None:
                 in_total += int(getattr(usage, "input_tokens", 0) or 0)
                 out_total += int(getattr(usage, "output_tokens", 0) or 0)
+                cache_creation_total += int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+                cache_read_total += int(getattr(usage, "cache_read_input_tokens", 0) or 0)
 
             # Concatenate text blocks
             text_parts = []
@@ -495,9 +559,11 @@ def call_anthropic_for_editorial(
             if problems:
                 last_error = f"AI output failed validation: {problems[:3]}"
                 if attempt == 0:
-                    # Add an explicit nudge for the retry
-                    user_prompt = (
-                        user_prompt
+                    # Add an explicit nudge for the retry. Append to the
+                    # case_block so the cached system + few-shot blocks
+                    # still hit the cache on retry.
+                    case_block_text = (
+                        case_block
                         + f"\n\nYour previous response had validation problems: {problems[:3]}. "
                         "Please output ONLY a valid JSON object with all required keys."
                     )
@@ -507,8 +573,14 @@ def call_anthropic_for_editorial(
             usage_info = {
                 "input_tokens": in_total,
                 "output_tokens": out_total,
+                "cache_creation_input_tokens": cache_creation_total,
+                "cache_read_input_tokens": cache_read_total,
                 "model": MODEL,
-                "usd_cost": _compute_usd_cost(in_total, out_total),
+                "usd_cost": _compute_usd_cost(
+                    in_total, out_total,
+                    cache_creation=cache_creation_total,
+                    cache_read=cache_read_total,
+                ),
             }
             return ai_obj, usage_info
 

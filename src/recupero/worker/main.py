@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import signal
 import socket
 import sys
 import threading
@@ -108,6 +109,29 @@ class _Heartbeat:
                 log.warning("heartbeat failed for %s: %s", self._inv.id, e)
 
 
+# ----- Graceful shutdown ----- #
+# A single Event the polling loop checks between iterations. SIGTERM
+# (Railway sends this on redeploy) and SIGINT (Ctrl+C) both flip it.
+# After the flag is set, we finish the current investigation if one is
+# in flight, then exit cleanly. The 30s shutdown grace period Railway
+# allows is plenty for the polling loop to break; an in-flight trace
+# stage may legitimately exceed that, in which case Railway forces
+# SIGKILL — the stale-claim reaper recovers on next worker startup.
+_shutdown = threading.Event()
+
+
+def _install_signal_handlers() -> None:
+    def handler(signum: int, _frame: object) -> None:
+        name = signal.Signals(signum).name
+        log.info("received %s — shutdown after current investigation completes", name)
+        _shutdown.set()
+
+    # SIGTERM is what Railway / Docker / Kubernetes send on stop/redeploy.
+    # SIGINT is Ctrl+C in the terminal. Both should drain gracefully.
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
+
+
 # ----- Main loop ----- #
 
 
@@ -147,12 +171,15 @@ def run_forever(
             # Port-bind failures shouldn't kill the worker — Railway will
             # mark "unhealthy" but the polling loop is still useful.
             log.warning("health server failed to bind: %s (continuing without it)", e)
+        # Wire SIGTERM/SIGINT to set _shutdown so the polling loop drains
+        # cleanly on Railway redeploy instead of abandoning work mid-stage.
+        _install_signal_handlers()
 
     db = WorkerDB(db_url, worker_id=worker_id)
 
     backoff = poll_idle_sec
     try:
-        while True:
+        while not _shutdown.is_set():
             # Reap stale claims before each polling attempt — turns dead
             # workers' orphaned rows into terminal `failed` so the admin
             # UI can surface them. Cheap (one UPDATE), idempotent.
@@ -171,12 +198,18 @@ def run_forever(
                 if once:
                     log.info("nothing to claim; --once exiting")
                     return
-                time.sleep(backoff)
+                # Use the shutdown event for the idle sleep so SIGTERM
+                # interrupts immediately instead of waiting up to 30s.
+                if _shutdown.wait(backoff):
+                    break
                 backoff = min(backoff * 1.5, poll_max_sec)
                 continue
             backoff = poll_idle_sec  # reset
 
             # New work — open a per-investigation bucket store and run.
+            # Once we've claimed, we always finish the current row before
+            # checking _shutdown again. Mid-stage SIGKILL would corrupt
+            # state; the reaper covers that case if Railway forces it.
             with SupabaseCaseStore(
                 cfg, supabase_url, service_role,
                 investigation_id=str(inv.id),
@@ -190,6 +223,7 @@ def run_forever(
 
             if once:
                 return
+        log.info("shutdown signal received — drained cleanly, exiting")
     finally:
         db.close()
 

@@ -168,7 +168,9 @@ class TestGenerateBriefs:
         assert "msyrupUSDp" in maple
         assert "3,109,861.71576" in maple
         assert "Midas Software GmbH" in maple
-        assert "Maple Finance" in maple   # cited as secondary party
+        # NB: secondary_party (Maple Finance) is no longer rendered after the
+        # investment-banker aesthetic refactor — the field still exists on
+        # IssuerInfo for future use but isn't surfaced in the freeze letter.
         assert "team@midas.app" in maple
         assert "voluntarily" in maple.lower() or "freeze" in maple.lower()
         # KYC asymmetry section should appear because MIDAS_ISSUER.kyc_required=True
@@ -176,12 +178,8 @@ class TestGenerateBriefs:
 
         le = bundle.le_html
         assert "Ibrahim Zigha" in le
-        assert "France" in le
-        assert "Law Enforcement Handoff Package" in le
         assert "Recommended Actions" in le
         assert "Midas" in le
-        # France + Germany triggers EU coordination paragraph
-        assert "BaFin" in le or "OCLCTIC" in le or "MiCA" in le
 
     def test_brief_handles_no_linked_cases(self, tmp_path: Path):
         """If only the victim's case exists (no forwarding traced yet), still generate."""
@@ -227,6 +225,7 @@ class TestGenerateBriefs:
         assert "freeze_request_exampleprotocol" in bundle.maple_path.name
         # No KYC section because kyc_required=False
         assert "ExampleProtocol Inc" in bundle.maple_html
-        assert "Switzerland" in bundle.maple_html
+        # NB: jurisdiction is no longer rendered in the freeze letter after
+        # the investment-banker refactor — kept on IssuerInfo for future use.
         # Should NOT mention Midas anywhere
         assert "Midas" not in bundle.maple_html

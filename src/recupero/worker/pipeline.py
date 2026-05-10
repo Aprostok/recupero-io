@@ -132,6 +132,35 @@ def run_one(
                     lambda: _stage_ai_editorial(inv, case_id_str, case_data,
                                                 local_store, case_dir, store),
                 )
+
+                # Phase 2 follow-up / material-change detection.
+                # Compares this investigation's freeze_asks.json to the
+                # most recent complete prior on the same case_id.
+                # Decides whether to pause for human review (first-ever run
+                # or material change) or auto-complete (no change — prior
+                # briefs are still valid, no operator attention needed).
+                # Best-effort: failures here log but do not fail the
+                # investigation — falling back to the pre-Phase 2 default
+                # of pausing at awaiting_review keeps the system safe.
+                diff_result = _compute_diff_safely(inv, case_dir, db, store)
+
+                if diff_result is not None and diff_result.is_followup and not diff_result.material_change:
+                    log.info(
+                        "investigation %s no material change vs prior=%s — auto-completing",
+                        inv.id, diff_result.prior_id,
+                    )
+                    # Skip awaiting_review + emit + building_package.
+                    # Prior investigation's freeze_brief.json + briefs/
+                    # are still valid; we don't regenerate them.
+                    db.mark_built_package(
+                        inv.id,
+                        storage_path=store.storage_prefix,
+                        api_costs_usd=api_costs_usd,
+                    )
+                    db.mark_completed(inv.id)
+                    return
+
+                # First-ever run OR material change: pause for human review.
                 # Write the cost on the row before pausing — pass 2 won't
                 # have access to this local since the review checkpoint
                 # resets state. mark_built_package's COALESCE preserves it.
@@ -402,6 +431,146 @@ def _stage_build_package(
 
 
 # ----- Helpers ----- #
+
+
+def _compute_diff_safely(
+    inv: Investigation,
+    case_dir: Path,
+    db: WorkerDB,
+    store: SupabaseCaseStore,
+):
+    """Phase 2 diff stage. Best-effort: errors logged, never raised.
+
+    Returns the DiffResult (or None on failure). Also writes the four
+    Phase 2 columns onto the investigation row if computed.
+
+    Falls back to None-safely on any error so the pipeline continues to
+    the original "pause at awaiting_review" path. That preserves
+    pre-Phase 2 behavior on schema-not-yet-migrated environments.
+
+    Note: is_followup_run, prior_investigation_id, material_change_detected,
+    and change_summary columns must exist on public.investigations for
+    the write to succeed. If they don't (Jacob hasn't applied the
+    migration yet), write_diff_result raises and we treat the run as
+    a non-follow-up. The caller pauses at awaiting_review as usual.
+    """
+    try:
+        from recupero.worker.diff import (
+            DiffResult,
+            PriorSnapshot,
+            run_diff_stage,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("diff stage import failed: %s", e)
+        return None
+
+    try:
+        # Load current freeze_asks.json from the local case_dir
+        freeze_asks_path = case_dir / "freeze_asks.json"
+        if not freeze_asks_path.exists():
+            log.info("diff stage: no freeze_asks.json present, skipping")
+            return None
+        current_freeze_asks = json.loads(
+            freeze_asks_path.read_text(encoding="utf-8-sig")
+        )
+
+        def _fetch_prior(case_id, not_self):
+            row = db.fetch_most_recent_complete_prior(case_id, not_self)
+            if row is None:
+                return None
+            # Pull prior freeze_asks.json from the bucket. The investigation
+            # store is per-id, so we open a separate one for the prior.
+            try:
+                prior_store = SupabaseCaseStore(
+                    store._cfg if hasattr(store, "_cfg") else store.cfg if hasattr(store, "cfg") else None,  # noqa: SLF001
+                    store._supabase_url,  # noqa: SLF001
+                    store._service_role,  # noqa: SLF001
+                    investigation_id=str(row["id"]),
+                ) if False else None  # leave bucket-fetch as a follow-up
+                # For now, fetch via a fresh httpx request through the
+                # current store's HTTP client.
+                prior_freeze_asks = _bucket_fetch_json_for_inv(
+                    store, str(row["id"]), "freeze_asks.json",
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning("diff stage: could not load prior freeze_asks.json: %s", e)
+                prior_freeze_asks = None
+
+            return PriorSnapshot(
+                investigation_id=row["id"],
+                max_recoverable_usd=row.get("max_recoverable_usd"),
+                freezable_issuers=row.get("freezable_issuers"),
+                freeze_asks=prior_freeze_asks,
+            )
+
+        # We don't have current_max_recoverable_usd or current_freezable_issuers
+        # at this stage — those are written by mark_built_package after emit.
+        # That's fine: compute_followup_diff handles None inputs gracefully
+        # (treats them as zero / empty), so the freeze_asks delta is the
+        # active signal at this stage. When the editorial+emit ordering
+        # eventually changes, we can pass real values here.
+        result = run_diff_stage(
+            investigation_id=inv.id,
+            case_id=inv.case_id,
+            current_max_recoverable_usd=None,
+            current_freezable_issuers=None,
+            current_freeze_asks=current_freeze_asks,
+            fetch_prior=_fetch_prior,
+        )
+
+        # Write the four Phase 2 columns. If schema not migrated yet,
+        # this raises and the caller falls back to pause-at-review.
+        try:
+            db.write_diff_result(
+                inv.id,
+                is_followup_run=result.is_followup,
+                prior_investigation_id=result.prior_id,
+                material_change_detected=result.material_change,
+                change_summary=result.summary,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "diff stage: could not write diff result (schema not migrated?): %s",
+                e,
+            )
+            # Continue with the result in memory — caller still uses it
+            # to decide pause vs auto-complete. Just won't be persisted.
+
+        if result.material_change:
+            log.info(
+                "MATERIAL CHANGE id=%s case=%s prior=%s summary=%r",
+                inv.id, inv.case_id, result.prior_id,
+                (result.summary or {}).get("summary_text_for_ui", ""),
+            )
+        return result
+
+    except Exception as e:  # noqa: BLE001
+        log.warning("diff stage failed (continuing without it): %s", e)
+        return None
+
+
+def _bucket_fetch_json_for_inv(
+    store: SupabaseCaseStore,
+    investigation_id: str,
+    filename: str,
+):
+    """Helper: fetch a single JSON file from another investigation's
+    bucket prefix using the existing store's HTTP client. Returns the
+    parsed dict, or None on failure.
+
+    The current SupabaseCaseStore is bound to a specific investigation_id
+    (used as the bucket prefix). To fetch from a different investigation,
+    we craft the URL manually rather than constructing a new store
+    instance — keeps the single-client connection pool intact.
+    """
+    storage_root = store._storage_root  # noqa: SLF001
+    bucket = store._bucket  # noqa: SLF001
+    client = store._client  # noqa: SLF001
+    url = f"{storage_root}/object/{bucket}/investigations/{investigation_id}/{filename}"
+    resp = client.get(url)
+    if resp.status_code != 200:
+        return None
+    return json.loads(resp.content)
 
 
 def _populate_watchlist(

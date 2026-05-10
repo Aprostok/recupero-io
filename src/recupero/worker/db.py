@@ -67,6 +67,14 @@ COL_TOTAL_LOSS = "total_loss_usd"
 COL_MAX_RECOVERABLE = "max_recoverable_usd"
 COL_API_COSTS = "api_costs_usd"
 COL_FREEZABLE_ISSUERS = "freezable_issuers"
+# Phase 2 follow-up / material-change columns. Schema migration owned by
+# Jacob (Phase 2 admin UI work). Code lands first on the feature branch
+# and merges to main only after the migration is applied — until then,
+# write_diff_result() raises a clear error if the columns aren't there.
+COL_IS_FOLLOWUP_RUN = "is_followup_run"
+COL_PRIOR_INVESTIGATION_ID = "prior_investigation_id"
+COL_MATERIAL_CHANGE_DETECTED = "material_change_detected"
+COL_CHANGE_SUMMARY = "change_summary"
 
 # cases columns we read for victim info / narrative
 COL_CASE_NUMBER = "case_number"
@@ -421,6 +429,94 @@ class WorkerDB:
                 "status": S.FAILED,
                 "stage": stage,
                 "error": error[:4000],
+                "id": investigation_id,
+                "worker": self.worker_id,
+            },
+        )
+
+    # ----- Phase 2: follow-up / material-change ----- #
+
+    def fetch_most_recent_complete_prior(
+        self,
+        case_id: UUID,
+        not_self: UUID,
+    ) -> dict[str, Any] | None:
+        """Return the most recent ``status='complete'`` investigation
+        for ``case_id``, excluding the row identified by ``not_self``.
+
+        Returned dict has the columns the diff stage needs:
+        ``id``, ``max_recoverable_usd``, ``freezable_issuers``,
+        ``storage_path``. Caller (the pipeline) loads ``freeze_asks.json``
+        from the bucket separately.
+
+        Returns ``None`` if no eligible prior exists. Eligible means:
+
+          * status = 'complete'  (no failed / awaiting_review rows)
+          * completed_at IS NOT NULL  (defensive — should be implied by complete)
+          * id != not_self  (we never compare against ourselves)
+          * order by completed_at DESC, take the first
+        """
+        sql = f"""
+            SELECT {COL_ID},
+                   {COL_MAX_RECOVERABLE},
+                   {COL_FREEZABLE_ISSUERS},
+                   {COL_STORAGE_PATH}
+              FROM {T_INV}
+             WHERE {COL_CASE_ID} = %(case)s
+               AND {COL_STATUS} = 'complete'
+               AND {COL_COMPLETED_AT} IS NOT NULL
+               AND {COL_ID} <> %(self)s
+             ORDER BY {COL_COMPLETED_AT} DESC
+             LIMIT 1;
+        """
+        with psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, {"case": case_id, "self": not_self})
+                row = cur.fetchone()
+        return row
+
+    def write_diff_result(
+        self,
+        investigation_id: UUID,
+        *,
+        is_followup_run: bool,
+        prior_investigation_id: UUID | None,
+        material_change_detected: bool,
+        change_summary: dict[str, Any] | None,
+    ) -> None:
+        """Persist the diff result onto the investigation row.
+
+        Writes the four Phase 2 columns Jacob is adding. Idempotent: a
+        re-run of the diff stage produces the same output and overwrites
+        cleanly.
+
+        ``change_summary`` is JSON-serialized; ``None`` becomes SQL NULL
+        which matches the "first-ever run" semantics. Empty-dict-but-
+        non-null distinguishes "compared but no change" from "didn't
+        compare", per the schema's tri-state convention.
+        """
+        sql = f"""
+            UPDATE {T_INV}
+               SET {COL_IS_FOLLOWUP_RUN} = %(is_followup)s,
+                   {COL_PRIOR_INVESTIGATION_ID} = %(prior)s,
+                   {COL_MATERIAL_CHANGE_DETECTED} = %(material)s,
+                   {COL_CHANGE_SUMMARY} = %(summary)s::jsonb
+             WHERE {COL_ID} = %(id)s
+               AND {COL_WORKER_ID} = %(worker)s;
+        """
+        # Render dict → JSON string here rather than letting psycopg
+        # marshal a Python dict (avoids edge cases with Decimal /
+        # UUID values inside change_summary).
+        import json
+        summary_json = json.dumps(change_summary, default=str) if change_summary is not None else None
+
+        self._exec(
+            sql,
+            {
+                "is_followup": is_followup_run,
+                "prior": prior_investigation_id,
+                "material": material_change_detected,
+                "summary": summary_json,
                 "id": investigation_id,
                 "worker": self.worker_id,
             },

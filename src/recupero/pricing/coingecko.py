@@ -152,10 +152,41 @@ class CoinGeckoClient:
     BASE_URL_PRO = "https://pro-api.coingecko.com/api/v3"
     BASE_URL_PUBLIC = "https://api.coingecko.com/api/v3"
 
-    def __init__(self, config: RecuperoConfig, env: RecuperoEnv, cache_dir: Path) -> None:
+    def __init__(
+        self,
+        config: RecuperoConfig,
+        env: RecuperoEnv,
+        cache_dir: Path | None = None,
+        *,
+        dsn: str | None = None,
+    ) -> None:
+        """Create the client with either a Postgres or file-system cache.
+
+        Precedence:
+          1. explicit ``dsn`` argument
+          2. ``SUPABASE_DB_URL`` env var (worker production path)
+          3. ``cache_dir`` (CLI / tests / no-DB scenarios)
+
+        Postgres cache survives across investigations and is shared across
+        worker replicas — important for Phase 2 nightly monitoring where
+        the same cases get re-traced daily. File cache survives only
+        within a single investigation's tempdir.
+
+        Setting the env var unblocks the persistent cache without any
+        call-site changes; tests that explicitly want the file cache
+        should clear ``SUPABASE_DB_URL`` from their environment.
+        """
+        import os
+        from recupero.pricing.cache import make_price_cache
+
+        effective_dsn = dsn or os.environ.get("SUPABASE_DB_URL")
+
         self.cfg = config
         self.api_key = env.COINGECKO_API_KEY
-        self.cache = PriceCache(cache_dir)
+        self.cache = make_price_cache(
+            dsn=effective_dsn if effective_dsn else None,
+            cache_dir=cache_dir,
+        )
         self.limiter = _RateLimiter(config.pricing.requests_per_second)
         self._is_pro = (env.COINGECKO_TIER or "demo").lower() == "pro"
         self._client = httpx.Client(timeout=30.0)

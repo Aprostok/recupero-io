@@ -8,7 +8,9 @@ the structure friendly to that.
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -105,75 +107,70 @@ def run_trace(
         trace_started_at=started,
     )
 
-    # --- Recursive BFS driver ---
-    # We maintain:
-    #   - visited: addresses we've already traced-from (cycle detection)
-    #   - queued: addresses currently in the queue (avoid dupes before visiting)
-    #   - is_contract_cache: per-chain address → bool (to avoid repeat RPCs)
+    # --- Recursive BFS driver (wave-based, optionally parallel) ---
+    # We process BFS one depth-wave at a time. Within a wave, addresses
+    # are independent (no shared state mutated by their _trace_one_hop
+    # calls beyond thread-safe rate-limiter / cache hits), so we fan
+    # them out to a ThreadPoolExecutor. Between waves, the main thread
+    # serially aggregates results and decides the next wave's contents,
+    # so visited / is_contract_cache mutations don't need locks.
+    #
+    # Concurrency is configurable via RECUPERO_TRACE_CONCURRENCY (default 5).
+    # The EtherscanClient + CoinGeckoClient rate-limiters globally cap
+    # actual throughput, so higher thread counts give diminishing returns
+    # once the rate limit is the bottleneck. 5 is conservative and lets
+    # network latency be hidden behind in-flight requests.
+    trace_concurrency = max(1, int(os.environ.get("RECUPERO_TRACE_CONCURRENCY", "5")))
+
     all_transfers: list[Transfer] = []
-    visited: set[str] = set()
-    queued: set[str] = set()
+    visited: set[str] = {seed_address.lower()}  # includes queued-but-not-yet-processed
     is_contract_cache: dict[str, bool] = {}
-    queue: deque[tuple[Address, int]] = deque([(seed_address, 0)])
-    queued.add(seed_address.lower())
-
+    current_wave: list[tuple[Address, int]] = [(seed_address, 0)]
     addresses_processed = 0
+    wave_number = 0
 
-    while queue:
-        current_address, current_depth = queue.popleft()
-        addr_key = current_address.lower()
-        queued.discard(addr_key)
-        if addr_key in visited:
-            continue
-        visited.add(addr_key)
-        addresses_processed += 1
-
+    while current_wave:
+        wave_number += 1
+        wave_size = len(current_wave)
         log.info(
-            "tracing #%d address=%s depth=%d visited=%d queued=%d",
-            addresses_processed, current_address, current_depth, len(visited), len(queue),
+            "wave #%d: %d address(es) at depth %d",
+            wave_number, wave_size, current_wave[0][1],
+        )
+        next_wave: list[tuple[Address, int]] = []
+
+        # --- Process current wave (parallel or serial) ---
+        # Returns list of (from_address, depth, transfers, is_service_wallet).
+        # Errors from a single address don't fail the wave — the worker
+        # function catches and returns ([], False) so the rest of the
+        # wave's work isn't wasted.
+        wave_results = _process_wave(
+            current_wave,
+            adapter=adapter,
+            label_store=label_store,
+            price_client=price_client,
+            policy=policy,
+            incident_time=incident_time,
+            config=config,
+            evidence_dir=case_dir / "tx_evidence",
+            concurrency=trace_concurrency,
         )
 
-        # Per-iteration safety net: any unexpected exception (a CoinGecko
-        # ReadTimeout escaping price_client, a Supabase 5xx mid-evidence
-        # upload, an adapter quirk on a malformed address) gets caught
-        # here so the trace continues with the next address. A single
-        # 30s+ HTTP hang at hour 1 of a deep trace would otherwise erase
-        # everything we'd collected for this stage. Per-hop _trace_one_hop
-        # errors keep their own catch below; this is the broader safety net.
-        try:
-            try:
-                hop_transfers, is_service_wallet = _trace_one_hop(
-                    adapter=adapter,
-                    label_store=label_store,
-                    price_client=price_client,
-                    policy=policy,
-                    from_address=current_address,
-                    incident_time=incident_time,
-                    config=config,
-                    hop_depth=current_depth,
-                    parent_transfer_id=None,
-                    evidence_dir=case_dir / "tx_evidence",
-                )
-            except Exception as e:  # noqa: BLE001
-                log.warning(
-                    "trace hop failed for %s (depth=%d): %s — continuing",
-                    current_address, current_depth, e,
-                )
-                continue
-
+        # --- Aggregate results + build next wave (single-threaded) ---
+        for from_addr, depth, hop_transfers, is_service_wallet in wave_results:
+            addresses_processed += 1
             all_transfers.extend(hop_transfers)
 
-            # Decide which destinations to enqueue for the next hop
-            if current_depth + 1 >= policy.max_depth:
+            if depth + 1 >= policy.max_depth:
                 continue
 
-            # Service-wallet cap: keep the transfers we observed (audit trail)
-            # but don't queue downstream. Without this, a single 500-outflow
-            # OTC desk / unlabeled exchange explodes BFS at the next depth.
+            # Service-wallet cap: keep the transfers we observed (audit
+            # trail) but don't queue downstream. Without this, a single
+            # 500-outflow OTC desk / unlabeled exchange explodes BFS at
+            # the next depth.
             if is_service_wallet:
                 log.info(
                     "service-wallet skip: not queueing %d destinations from %s",
-                    len(hop_transfers), current_address,
+                    len(hop_transfers), from_addr,
                 )
                 continue
 
@@ -182,10 +179,12 @@ def run_trace(
                     continue
                 dest = transfer.to_address
                 dest_key = dest.lower()
-                if dest_key in visited or dest_key in queued:
+                if dest_key in visited:
                     continue
 
-                # Contract check: one RPC per unique address, cached
+                # Contract check: one RPC per unique address, cached.
+                # Done here (single-threaded between waves) so we don't
+                # need to lock is_contract_cache.
                 if policy.stop_at_contract:
                     if dest_key not in is_contract_cache:
                         try:
@@ -197,19 +196,10 @@ def run_trace(
                     if is_contract_cache[dest_key]:
                         continue
 
-                queue.append((dest, current_depth + 1))
-                queued.add(dest_key)
-        except Exception as e:  # noqa: BLE001
-            # Catch-all for anything unexpected after _trace_one_hop succeeded
-            # (e.g., evidence write, queue manipulation). Log and move on
-            # rather than killing the whole stage. We've already kept the
-            # transfers in all_transfers above (if applicable), so the
-            # case.json write at the end of run_trace still has data.
-            log.warning(
-                "unexpected error processing %s (depth=%d): %s — continuing",
-                current_address, current_depth, e,
-            )
-            continue
+                next_wave.append((dest, depth + 1))
+                visited.add(dest_key)
+
+        current_wave = next_wave
 
     case.transfers = all_transfers
     case.exchange_endpoints = _compute_exchange_endpoints(all_transfers)
@@ -230,6 +220,78 @@ def run_trace(
     # Cleanup
     price_client.close()
     return case
+
+
+def _process_wave(
+    wave: list[tuple[Address, int]],
+    *,
+    adapter: ChainAdapter,
+    label_store: LabelStore,
+    price_client: CoinGeckoClient,
+    policy: TracePolicy,
+    incident_time: datetime,
+    config: RecuperoConfig,
+    evidence_dir: Path,
+    concurrency: int,
+) -> list[tuple[Address, int, list["Transfer"], bool]]:
+    """Run ``_trace_one_hop`` on every address in the wave, returning the
+    aggregated results. Internal errors per-address are caught and
+    surfaced as empty transfer lists (so a single bad address doesn't
+    discard the wave's other work).
+
+    Wave parallelism uses ``ThreadPoolExecutor``. The rate-limiters in
+    EtherscanClient and CoinGeckoClient have internal locks, so multiple
+    threads sharing the clients are safe — global throughput is capped
+    at the per-key rate regardless of thread count. Higher concurrency
+    just hides per-call latency behind concurrent in-flight requests.
+    """
+    if not wave:
+        return []
+
+    def _one(addr: Address, depth: int) -> tuple[Address, int, list[Transfer], bool]:
+        try:
+            transfers, is_service_wallet = _trace_one_hop(
+                adapter=adapter,
+                label_store=label_store,
+                price_client=price_client,
+                policy=policy,
+                from_address=addr,
+                incident_time=incident_time,
+                config=config,
+                hop_depth=depth,
+                parent_transfer_id=None,
+                evidence_dir=evidence_dir,
+            )
+            return (addr, depth, transfers, is_service_wallet)
+        except Exception as e:  # noqa: BLE001
+            log.warning(
+                "trace hop failed for %s (depth=%d): %s — continuing",
+                addr, depth, e,
+            )
+            return (addr, depth, [], False)
+
+    # Single-threaded path for trivial waves or when concurrency is off.
+    # Preserves test determinism + avoids ThreadPoolExecutor overhead
+    # for tiny cases.
+    if concurrency <= 1 or len(wave) == 1:
+        return [_one(addr, depth) for addr, depth in wave]
+
+    results: list[tuple[Address, int, list[Transfer], bool]] = []
+    with ThreadPoolExecutor(
+        max_workers=concurrency, thread_name_prefix="trace"
+    ) as pool:
+        futures = {pool.submit(_one, addr, depth): (addr, depth) for addr, depth in wave}
+        for fut in as_completed(futures):
+            try:
+                results.append(fut.result())
+            except Exception as e:  # noqa: BLE001
+                # _one catches its own exceptions and returns a result tuple;
+                # this is the belt-and-suspenders catch for anything that
+                # escaped (e.g., a future cancelled exception).
+                addr, depth = futures[fut]
+                log.warning("trace wave worker crashed for %s: %s", addr, e)
+                results.append((addr, depth, [], False))
+    return results
 
 
 def _trace_one_hop(

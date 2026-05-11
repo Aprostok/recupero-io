@@ -67,6 +67,7 @@ Optional tunables (defaults are sensible):
 | `RECUPERO_POLL_IDLE_SEC`          | 2       | Initial backoff between empty polls. Doubles up to `RECUPERO_POLL_MAX_SEC`. |
 | `RECUPERO_POLL_MAX_SEC`           | 30      | Cap on idle backoff. |
 | `RECUPERO_DORMANT_CONCURRENCY`    | 5       | Threads used by the dormant detector to parallelize per-address balance sweeps. Etherscan/CoinGecko rate limiters cap global throughput regardless. Set to 1 to disable parallelism (e.g., for debugging). Higher values give diminishing returns once the rate limit caps actual throughput. |
+| `RECUPERO_TRACE_CONCURRENCY`      | 5       | Threads used by the trace BFS to parallelize per-address outflow fetching within a single depth wave. Same rate-limiter ceiling as dormant. Set to 1 to force serial BFS (e.g., for deterministic test runs). |
 
 Investigator identity (optional; appears on every freeze brief + LE handoff):
 

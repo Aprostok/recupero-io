@@ -192,6 +192,67 @@ no harm. Resume to come back online.
 | Pipeline orchestration | `src/recupero/worker/pipeline.py` |
 | Investigation state machine | `src/recupero/worker/state.py` |
 
+## Phase 2: nightly monitoring + material-change detection
+
+The worker runs a diff stage after editorial on every investigation
+that has a prior `complete` row for the same `case_id`. Decides
+whether to pause for human review or auto-complete.
+
+### What you'll see in production
+
+| Row state | What happened | Operator action |
+|---|---|---|
+| `is_followup_run=false` | First-ever investigation for this case. Pauses at `awaiting_review` so a human signs off on the initial brief. | Review + approve as normal. |
+| `is_followup_run=true`, `material_change_detected=true` | Nightly re-run found something different vs prior. Email fires, alert UI surfaces row. Pauses at `awaiting_review`. | Open the diff in the alert queue. Read `change_summary.summary_text_for_ui` for the one-line. Inspect `change_summary.new_asks` / `removed_asks` / `changed_amounts` for details. Approve if narrative looks right; edit if not. |
+| `is_followup_run=true`, `material_change_detected=false` | Nightly heartbeat. No diff fired. Auto-completes without pausing. No new briefs in bucket (prior briefs still valid). | Nothing. Check the case detail page's "Last checked" timestamp if you want to confirm monitoring is alive. |
+
+### Diff signals (what counts as "material change")
+
+Three signals OR-combined:
+
+1. `max_recoverable_usd` increased
+2. `freezable_issuers` set gained an entry
+3. `freeze_asks.json` delta:
+   - New `(issuer, address)` ask appeared
+   - Existing ask USD value changed by ≥ $1,000 absolute OR ≥ 5% relative
+   - Existing ask removed (funds moved out)
+
+Any one signal triggers `material_change_detected=true`. Thresholds are
+tunable in `src/recupero/worker/diff.py` (constants
+`DELTA_USD_THRESHOLD`, `DELTA_PCT_THRESHOLD`).
+
+### Spotting in logs
+
+Material-change runs log a grep-friendly single line at INFO:
+```
+MATERIAL CHANGE id=<uuid> case=<uuid> prior=<uuid> summary='...'
+```
+
+No-change runs log:
+```
+investigation <uuid> no material change vs prior=<uuid> — auto-completing
+```
+
+Filter Railway's log stream by `MATERIAL CHANGE` to see only the
+runs that warrant attention.
+
+### Manual operator-triggered re-runs
+
+When you trigger a re-run via the admin UI (not the cron),
+`triggered_by` is set to a UI-supplied value (NOT `cron-monitor`).
+The diff stage still runs, but the UI should always surface manual
+re-runs as new events in the timeline regardless of
+`material_change_detected` — operator explicitly asked for a fresh look.
+
+### Failure modes
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Every nightly run pauses at `awaiting_review` even with no change | Schema migration didn't apply, or one of the 4 columns is missing. Diff write fails, code falls back to pause. | Verify columns exist: `\d public.investigations` in psql. Reapply migration `migrations/003_phase2_diff.sql` (when added). |
+| `material_change_detected=true` fires every night without real changes | `DELTA_PCT_THRESHOLD` too tight, or upstream pricing oracle is noisy | Bump thresholds in `worker/diff.py`. Cheap to redeploy. |
+| Diff stage logs "prior freeze_asks.json unreadable" | Bucket file deleted or transient HTTP error | Verify with `recupero-watch` script. Falls back to pause-for-review (safe). If recurring, check Supabase Storage retention. |
+| `material_change_detected=true` but UI doesn't show alert | UI's query filter wrong, or `material_change_idx` index missing | Check `SELECT * FROM pg_indexes WHERE indexname='investigations_material_change_idx'`. Recreate if missing. |
+
 ## Last resort
 
 If everything is broken and you can't figure out why:

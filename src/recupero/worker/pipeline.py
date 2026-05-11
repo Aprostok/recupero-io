@@ -474,28 +474,40 @@ def _compute_diff_safely(
             freeze_asks_path.read_text(encoding="utf-8-sig")
         )
 
+        # Sentinel raised when the prior exists but its freeze_asks.json
+        # is unreadable. Treating that as "no change detected" would be
+        # a false-positive risk in the other direction (assuming nothing
+        # changed when in fact we just couldn't read the prior). Better
+        # to fall back to pause-for-review — operator sees the run.
+        class _PriorUnreadable(Exception):
+            pass
+
         def _fetch_prior(case_id, not_self):
             row = db.fetch_most_recent_complete_prior(case_id, not_self)
             if row is None:
                 return None
-            # Pull prior freeze_asks.json from the bucket. The investigation
-            # store is per-id, so we open a separate one for the prior.
+            prior_inv_id = str(row["id"])
             try:
-                prior_store = SupabaseCaseStore(
-                    store._cfg if hasattr(store, "_cfg") else store.cfg if hasattr(store, "cfg") else None,  # noqa: SLF001
-                    store._supabase_url,  # noqa: SLF001
-                    store._service_role,  # noqa: SLF001
-                    investigation_id=str(row["id"]),
-                ) if False else None  # leave bucket-fetch as a follow-up
-                # For now, fetch via a fresh httpx request through the
-                # current store's HTTP client.
-                prior_freeze_asks = _bucket_fetch_json_for_inv(
-                    store, str(row["id"]), "freeze_asks.json",
+                prior_freeze_asks = store.read_json_for_investigation(
+                    prior_inv_id, "freeze_asks.json",
                 )
             except Exception as e:  # noqa: BLE001
-                log.warning("diff stage: could not load prior freeze_asks.json: %s", e)
-                prior_freeze_asks = None
-
+                log.warning(
+                    "diff stage: prior %s freeze_asks.json unreadable: %s — "
+                    "falling back to pause-for-review",
+                    prior_inv_id, e,
+                )
+                raise _PriorUnreadable() from e
+            if prior_freeze_asks is None:
+                # Prior investigation exists but never produced freeze_asks
+                # (e.g., trace failed mid-stage but row was manually flipped
+                # to complete by an operator). Treat as no comparable prior.
+                log.info(
+                    "diff stage: prior %s has no freeze_asks.json — "
+                    "treating as first run",
+                    prior_inv_id,
+                )
+                return None
             return PriorSnapshot(
                 investigation_id=row["id"],
                 max_recoverable_usd=row.get("max_recoverable_usd"),
@@ -509,14 +521,21 @@ def _compute_diff_safely(
         # (treats them as zero / empty), so the freeze_asks delta is the
         # active signal at this stage. When the editorial+emit ordering
         # eventually changes, we can pass real values here.
-        result = run_diff_stage(
-            investigation_id=inv.id,
-            case_id=inv.case_id,
-            current_max_recoverable_usd=None,
-            current_freezable_issuers=None,
-            current_freeze_asks=current_freeze_asks,
-            fetch_prior=_fetch_prior,
-        )
+        try:
+            result = run_diff_stage(
+                investigation_id=inv.id,
+                case_id=inv.case_id,
+                current_max_recoverable_usd=None,
+                current_freezable_issuers=None,
+                current_freeze_asks=current_freeze_asks,
+                fetch_prior=_fetch_prior,
+            )
+        except _PriorUnreadable:
+            # Prior investigation existed but we couldn't read its
+            # freeze_asks.json from the bucket. Don't risk a false
+            # "no change" auto-complete — return None so caller falls
+            # through to mark_review_required (the safe default).
+            return None
 
         # Write the four Phase 2 columns. If schema not migrated yet,
         # this raises and the caller falls back to pause-at-review.
@@ -547,30 +566,6 @@ def _compute_diff_safely(
     except Exception as e:  # noqa: BLE001
         log.warning("diff stage failed (continuing without it): %s", e)
         return None
-
-
-def _bucket_fetch_json_for_inv(
-    store: SupabaseCaseStore,
-    investigation_id: str,
-    filename: str,
-):
-    """Helper: fetch a single JSON file from another investigation's
-    bucket prefix using the existing store's HTTP client. Returns the
-    parsed dict, or None on failure.
-
-    The current SupabaseCaseStore is bound to a specific investigation_id
-    (used as the bucket prefix). To fetch from a different investigation,
-    we craft the URL manually rather than constructing a new store
-    instance — keeps the single-client connection pool intact.
-    """
-    storage_root = store._storage_root  # noqa: SLF001
-    bucket = store._bucket  # noqa: SLF001
-    client = store._client  # noqa: SLF001
-    url = f"{storage_root}/object/{bucket}/investigations/{investigation_id}/{filename}"
-    resp = client.get(url)
-    if resp.status_code != 200:
-        return None
-    return json.loads(resp.content)
 
 
 def _populate_watchlist(

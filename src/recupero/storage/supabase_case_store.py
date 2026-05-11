@@ -218,6 +218,40 @@ class SupabaseCaseStore:
         items = self._list(prefix)
         return [item["name"] for item in items if item.get("id") is not None]
 
+    # ----- Cross-investigation reads (Phase 2 diff stage) ----- #
+
+    def read_json_for_investigation(
+        self,
+        investigation_id: str,
+        filename: str,
+    ) -> dict | list | None:
+        """Read a JSON file from a DIFFERENT investigation's bucket prefix.
+
+        ``read_json()`` reads from this store's own investigation prefix.
+        The Phase 2 diff stage needs to read a prior investigation's
+        ``freeze_asks.json`` while this store is bound to the current
+        investigation. Rather than constructing a new store instance
+        (which would open a new HTTP connection pool), we craft the URL
+        manually and reuse the existing client.
+
+        Returns the parsed JSON, or ``None`` if the file doesn't exist.
+        Raises on other HTTP errors so callers can decide whether to
+        retry or fall back.
+        """
+        url = (
+            f"{self._storage_root}/object/{self._bucket}"
+            f"/investigations/{investigation_id}/{filename}"
+        )
+        resp = self._client.get(url)
+        if resp.status_code in (400, 404):
+            return None
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"read {filename} for inv {investigation_id} failed: "
+                f"{resp.status_code} {resp.text[:200]}"
+            )
+        return orjson.loads(resp.content)
+
     # ----- Cleanup ----- #
 
     def delete_all(self) -> int:

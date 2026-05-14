@@ -991,7 +991,118 @@ def _polish_svg(path: Path) -> None:
     #    seen across smoke tests.
     raw = _wrap_edge_labels_in_pills(raw)
 
+    # 4. Letter-mark badges. For every entity circle whose
+    #    xlink:title matches a known entity (Binance/Coinbase/
+    #    Tether/Circle/etc.), inject a small colored circle in the
+    #    upper-right of the entity badge with the entity's letter
+    #    mark in white/black depending on luminance. Mirrors TRM
+    #    Forensics's logo treatment.
+    raw = _inject_letter_mark_badges(raw)
+
     path.write_text(raw, encoding="utf-8")
+
+
+def _inject_letter_mark_badges(svg: str) -> str:
+    """Inject a small letter-mark circle in the upper-right of every
+    entity circle whose identity matches a known entry in
+    ``_ENTITY_BADGES`` (Binance, Coinbase, Tether, Circle, Tornado,
+    Stargate, etc.).
+
+    The badge looks like:
+
+        ┌─────────────┐
+        │     ◯ B     │  ← small circle with letter, top-right
+        │   Binance   │
+        │   0x1a..b2  │
+        └─────────────┘
+
+    Each entity ``<a><ellipse>...</a>`` group in the Graphviz SVG
+    carries an ``xlink:title`` like
+    ``"Binance Hot Wallet — open on chain explorer"``. We match the
+    title against ``_ENTITY_BADGES`` keys (case-insensitive
+    substring) and, on a hit, emit a small badge group right after
+    the ``<ellipse>`` so it renders on top.
+
+    Position math:
+
+      * Badge radius = 10pt (fixed).
+      * Center placed at (ellipse.cx + ellipse.rx * 0.55,
+                          ellipse.cy - ellipse.ry * 0.55).
+        That puts the badge in the entity circle's upper-right
+        quadrant, overlapping the entity circle's outline so it
+        reads as "attached to" rather than "floating beside".
+
+    No-op when no match. Best-effort: parsing failures on a single
+    entity leave that entity un-badged but don't break the rest of
+    the diagram.
+    """
+    import re
+
+    # Match each <a ...><ellipse ...>/></a> group inside a node g.
+    #
+    # The Graphviz SVG layout for an entity node is:
+    #   <g id="node_N" class="node">
+    #     <title>...</title>
+    #     <g id="a_node_N"><a xlink:href="..." xlink:title="EntityName — ...">
+    #       <ellipse fill=".." stroke=".." cx=".." cy=".." rx=".." ry=".." ... />
+    #       <text ...>EntityName</text>
+    #       <text ...>0x1a..b2</text>
+    #     </a></g>
+    #   </g>
+    #
+    # We pluck the title and ellipse coords from each anchor block
+    # and emit the badge SVG between the ellipse and its accompanying
+    # text labels.
+    anchor_pattern = re.compile(
+        r'(<a\s+xlink:href="[^"]*"\s+xlink:title="([^"]+)"\s+target="_blank">)'
+        r'(\s*<ellipse\b[^/]*?\bcx="([\-\d.]+)"[^/]*?\bcy="([\-\d.]+)"'
+        r'[^/]*?\brx="([\-\d.]+)"[^/]*?\bry="([\-\d.]+)"[^/]*/>)',
+        re.DOTALL,
+    )
+
+    def _maybe_inject(match: "re.Match[str]") -> str:
+        anchor_open = match.group(1)
+        title = match.group(2)
+        ellipse_tag = match.group(3)
+        cx = float(match.group(4))
+        cy = float(match.group(5))
+        rx = float(match.group(6))
+        ry = float(match.group(7))
+
+        # Skip non-entity nodes — wallets, intermediate hops. These
+        # don't carry a known entity name in their title so the
+        # badge lookup will miss anyway, but short-circuiting avoids
+        # the regex work.
+        # Title format: "<identity> — open on chain explorer". We
+        # strip the suffix and run the existing _entity_badge match.
+        identity = title.split("—")[0].strip()
+        badge = _entity_badge(identity)
+        if not badge:
+            # Also try the case where the entity name has the
+            # category in it (e.g. "Tornado Cash" → catches "tornado").
+            badge = _entity_badge(title)
+        if not badge:
+            return anchor_open + ellipse_tag
+
+        letter, fill, text_color = badge
+        badge_r = 10.0
+        badge_cx = cx + rx * 0.55
+        badge_cy = cy - ry * 0.55
+        # Drop a subtle white halo behind the badge so it reads
+        # cleanly on top of any chain-stroke border color.
+        halo_r = badge_r + 1.5
+        badge_svg = (
+            f'<circle cx="{badge_cx:.1f}" cy="{badge_cy:.1f}" r="{halo_r:.1f}" '
+            f'fill="#FAFAF7" stroke="none"/>'
+            f'<circle cx="{badge_cx:.1f}" cy="{badge_cy:.1f}" r="{badge_r:.1f}" '
+            f'fill="{fill}" stroke="#FFFFFF" stroke-width="1.2"/>'
+            f'<text x="{badge_cx:.1f}" y="{badge_cy + 3.4:.1f}" '
+            f'text-anchor="middle" font-family="{_FONT_FACE}" font-size="11" '
+            f'font-weight="700" fill="{text_color}">{_escape(letter)}</text>'
+        )
+        return anchor_open + ellipse_tag + badge_svg
+
+    return anchor_pattern.sub(_maybe_inject, svg)
 
 
 def _wrap_edge_labels_in_pills(svg: str) -> str:

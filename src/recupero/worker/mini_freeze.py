@@ -102,15 +102,42 @@ def generate_daily_digest(
     html_path.write_text(html, encoding="utf-8")
     log.info("digest HTML rendered: %s (%d bytes)", html_path.name, html_path.stat().st_size)
 
+    # PDF render in subprocess so a WeasyPrint OOM doesn't take down
+    # the cron — same isolation strategy worker/_deliverables uses
+    # for the freeze-letter PDFs. The cron container is the same
+    # ~512MB image; the digest PDF is much smaller than a full
+    # freeze letter so OOM is unlikely, but the subprocess guard
+    # costs nothing and matches the production pattern.
     pdf_path: Path | None = None
     try:
-        from weasyprint import HTML as WeasyHTML
-        pdf_path = html_path.with_suffix(".pdf")
-        WeasyHTML(filename=str(html_path)).write_pdf(str(pdf_path))
-        log.info("digest PDF rendered: %s (%d bytes)", pdf_path.name, pdf_path.stat().st_size)
+        import subprocess
+        import sys
+        candidate = html_path.with_suffix(".pdf")
+        result = subprocess.run(
+            [
+                sys.executable, "-c",
+                "import sys; from weasyprint import HTML; "
+                "HTML(filename=sys.argv[1]).write_pdf(sys.argv[2])",
+                str(html_path), str(candidate),
+            ],
+            capture_output=True, timeout=90.0,
+        )
+        if result.returncode == 0:
+            pdf_path = candidate
+            log.info(
+                "digest PDF rendered: %s (%d bytes)",
+                pdf_path.name, pdf_path.stat().st_size,
+            )
+        else:
+            tail = (result.stderr or b"").decode("utf-8", errors="replace")[-300:]
+            log.warning(
+                "digest PDF render skipped (subprocess exit=%d): ...%s",
+                result.returncode, tail,
+            )
+    except subprocess.TimeoutExpired:
+        log.warning("digest PDF render skipped (subprocess timed out)")
     except Exception as exc:  # noqa: BLE001
         log.warning("digest PDF render skipped: %s", exc)
-        pdf_path = None
 
     # JSON summary for the admin UI's "Digest Archive" view. Listed
     # alongside the HTML/PDF in the bucket so the UI can do a single

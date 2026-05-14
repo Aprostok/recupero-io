@@ -279,19 +279,37 @@ def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Pa
 
 
 def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
-    from weasyprint import HTML
-    HTML(filename=str(html_path)).write_pdf(str(pdf_path))
+    """Render an HTML deliverable to PDF in an isolated subprocess.
+
+    Each render runs in its own Python process so a WeasyPrint OOM
+    (8 PDFs per case × SVG-filter-heavy diagrams can blow past a
+    512MB Railway container) kills only the subprocess, never the
+    parent worker. The parent catches the non-zero exit, logs the
+    error, and moves on to the next PDF — partial PDF output is
+    more useful than failing the entire building_package stage.
+
+    Timeout: 120s per PDF. A typical render is 1-3s; >30s suggests
+    something pathological in the SVG and is better killed than
+    pinned forever.
+    """
+    _render_pdf_in_subprocess(
+        script=(
+            "import sys; from weasyprint import HTML; "
+            "HTML(filename=sys.argv[1]).write_pdf(sys.argv[2])"
+        ),
+        args=[str(html_path), str(pdf_path)],
+        label=html_path.name,
+    )
 
 
 def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
-    """Render a standalone SVG to PDF by wrapping it in minimal HTML.
+    """Render a standalone SVG to PDF (subprocess-isolated, see above).
 
     WeasyPrint doesn't render SVG files directly; it renders HTML
     documents. Wrapping the SVG payload in a no-margin HTML shell lets
     us emit a single-page PDF whose page size auto-fits the SVG's
     intrinsic dimensions and preserves all ``href`` link annotations.
     """
-    from weasyprint import HTML
     # ``errors="replace"`` so a rogue byte from Graphviz doesn't fail
     # the entire upload step — match read_inline_svg's tolerance.
     svg_content = svg_path.read_text(encoding="utf-8", errors="replace")
@@ -303,7 +321,62 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
         "svg{display:block}</style></head><body>"
         f"{svg_content}</body></html>"
     )
-    HTML(string=html_shell, base_url=str(svg_path.parent)).write_pdf(str(pdf_path))
+    # Write the shell to a tempfile so the subprocess can read it
+    # without inheriting any Python state from the parent.
+    import tempfile
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", suffix=".html",
+        delete=False, dir=str(svg_path.parent),
+    ) as tmp:
+        tmp.write(html_shell)
+        shell_path = Path(tmp.name)
+    try:
+        _render_pdf_in_subprocess(
+            script=(
+                "import sys; from weasyprint import HTML; "
+                "HTML(filename=sys.argv[1], base_url=sys.argv[3])"
+                ".write_pdf(sys.argv[2])"
+            ),
+            args=[str(shell_path), str(pdf_path), str(svg_path.parent)],
+            label=svg_path.name,
+        )
+    finally:
+        try:
+            shell_path.unlink()
+        except OSError:
+            pass
+
+
+def _render_pdf_in_subprocess(
+    *, script: str, args: list[str], label: str,
+    timeout_sec: float = 120.0,
+) -> None:
+    """Invoke a one-shot Python subprocess that runs ``script`` with
+    ``args``. Isolates WeasyPrint memory + GC churn from the parent
+    worker process so a render-time OOM doesn't take down the cron.
+
+    Surfaces non-zero exit + timeout + stderr tail as a RuntimeError
+    so the caller's try/except can log them. Stdout is captured but
+    ignored (WeasyPrint normally writes nothing useful to stdout).
+    """
+    import subprocess
+    import sys
+    cmd = [sys.executable, "-c", script, *args]
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"weasyprint subprocess timed out after {timeout_sec}s "
+            f"on {label}"
+        ) from exc
+    if result.returncode != 0:
+        tail = (result.stderr or b"").decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(
+            f"weasyprint subprocess exit={result.returncode} on {label}: "
+            f"...{tail}"
+        )
 
 
 def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:

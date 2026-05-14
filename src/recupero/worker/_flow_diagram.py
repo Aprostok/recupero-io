@@ -102,17 +102,27 @@ _EDGE_LABEL_COLOR = "#334155"
 # Per-category fill / border-stroke / label-text colors. The border color
 # is overridden later by the chain coloring; this is the *category* tint
 # applied as a subtle fill behind the label.
+#
+# Palette principles (TRM-aligned):
+#   * Fills are mid-tone — not pastels — so the entity reads as a
+#     "solid badge" against the white page, the way TRM's circle
+#     nodes do. Pastels look like a wireframe; saturated mid-tones
+#     read as product.
+#   * Text colors are deep, near-black variants of the fill's hue
+#     family so the label has serious contrast (4.5:1+).
+#   * Victim is intentionally a different blue from chain-ethereum
+#     so the seed node never gets confused with a generic ETH wallet.
 _NODE_PALETTE: dict[str, tuple[str, str, str]] = {
-    "victim":               ("#DBEAFE", "#3B82F6", "#1E3A8A"),  # soft blue
-    "exchange_deposit":     ("#DCFCE7", "#16A34A", "#14532D"),  # green
-    "exchange_hot_wallet":  ("#DCFCE7", "#16A34A", "#14532D"),
-    "mixer":                ("#FEE2E2", "#DC2626", "#7F1D1D"),  # red
-    "bridge":               ("#FFEDD5", "#EA580C", "#7C2D12"),  # orange
-    "defi_protocol":        ("#EDE9FE", "#7C3AED", "#4C1D95"),  # purple
-    "perpetrator":          ("#FECDD3", "#BE123C", "#881337"),  # dark red
-    "staking":              ("#E0F2FE", "#0284C7", "#0C4A6E"),  # cyan
-    # Fallback (unknown / unlabeled wallet)
-    "wallet":               ("#F8FAFC", "#94A3B8", "#475569"),
+    "victim":               ("#BFDBFE", "#1D4ED8", "#0C2A6E"),  # solid blue
+    "exchange_deposit":     ("#BBF7D0", "#15803D", "#0F3D1F"),  # solid green
+    "exchange_hot_wallet":  ("#BBF7D0", "#15803D", "#0F3D1F"),
+    "mixer":                ("#FECACA", "#B91C1C", "#5B1414"),  # solid red
+    "bridge":               ("#FED7AA", "#C2410C", "#5C1F09"),  # solid orange
+    "defi_protocol":        ("#DDD6FE", "#6D28D9", "#3C1380"),  # solid purple
+    "perpetrator":          ("#FECDD3", "#9F1239", "#5B0B1F"),  # solid crimson
+    "staking":              ("#BAE6FD", "#0369A1", "#0B3A57"),  # solid sky
+    # Fallback (unknown / unlabeled wallet) — quiet neutral.
+    "wallet":               ("#F1F5F9", "#94A3B8", "#334155"),
 }
 
 # Chain-coded border color. TRM uses distinct chain colors on every node
@@ -492,6 +502,37 @@ def _short_addr(addr: str) -> str:
     return f"{addr[:6]}…{addr[-4:]}"
 
 
+def _soft_wrap(text: str, *, width: int) -> str:
+    """Word-wrap a label string at roughly ``width`` characters per line.
+
+    Used for entity identity labels inside fixed-size circle nodes —
+    long names like "Sky Protocol (formerly MakerDAO)" would overflow
+    the silhouette without breaks. We split on word boundaries only
+    (never mid-word) and cap at 3 lines to avoid towering labels.
+    """
+    if not text or len(text) <= width:
+        return text or ""
+    words = text.split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        if not cur:
+            cur = w
+            continue
+        if len(cur) + 1 + len(w) <= width:
+            cur = f"{cur} {w}"
+        else:
+            lines.append(cur)
+            cur = w
+            if len(lines) == 2:
+                # Cap at 3 lines — last bucket gets remaining words joined.
+                cur = " ".join([cur] + words[words.index(w) + 1:])
+                break
+    if cur:
+        lines.append(cur)
+    return "\n".join(lines[:3])
+
+
 def _classify_counterparty(t: Transfer) -> tuple[str, str | None]:
     """Returns (palette_key, identity_string).
 
@@ -507,20 +548,22 @@ def _classify_counterparty(t: Transfer) -> tuple[str, str | None]:
 
 # Node shape selection by category.
 #
-# Hex (regular polygon with sides=6, orientation tweaked so a flat side
-# faces top/bottom) is reserved for *labeled entities*: exchanges,
-# mixers, bridges, the victim, perpetrators, DeFi protocols. These are
-# "the players" in the case — they should jump out of the diagram.
+# Circles are reserved for *labeled entities*: exchanges, mixers,
+# bridges, the victim, perpetrators, DeFi protocols. Each one reads as
+# a solid badge — the same visual language as TRM Forensics' entity
+# graph (where labeled entities are circles with logos inside and
+# unlabeled wallets are small rectangles).
 #
 # Rounded rectangles are used for unlabeled wallet hops — they sit
-# quietly in the middle and let the entities lead the read.
+# quietly in the middle and let the entity circles lead the read.
 #
 # Note: graphviz's HTML-table labels render inside ``shape=plaintext``
-# only. Hex-shaped nodes therefore use a plain (non-HTML) label string
-# with newline separators; we lose the colored letter-mark badge for
-# hex nodes but gain the silhouette. The wordmark / identity stays
-# legible because the label is just identity + short address.
-_HEX_CATEGORIES = {
+# only. Circle-shaped nodes therefore use a plain (non-HTML) label
+# string with newline separators; we lose the colored letter-mark
+# badge for circle nodes but gain the silhouette. The wordmark /
+# identity stays legible because the label is just identity + short
+# address inside the circle.
+_ENTITY_CATEGORIES = {
     "victim",
     "exchange_deposit",
     "exchange_hot_wallet",
@@ -545,29 +588,31 @@ def _node_style(n: _NodeAttrs) -> dict[str, str]:
     short = _short_addr(n.address)
     url = _explorer_url(n.chain, n.address)
 
-    is_entity = n.category in _HEX_CATEGORIES
+    is_entity = n.category in _ENTITY_CATEGORIES
 
     if is_entity:
-        # Hex-silhouette node, plain-text label (HTML labels aren't
-        # supported on polygon shapes in graphviz).
+        # Circle-silhouette node, plain-text label (HTML labels aren't
+        # supported on circle shapes in graphviz).
         identity = n.identity or n.category.replace("_", " ").title()
-        # Two-line label: bold-ish identity on top, short address below.
-        # Graphviz doesn't honor <b> inside non-HTML labels — we lean on
-        # font size + the hex silhouette to give the entity emphasis.
-        label = f"{identity}\n{short}"
+        # Long identities ("Sky Protocol (formerly MakerDAO)") would
+        # overflow a fixed-size circle. Wrap softly on word boundaries
+        # at ~16 chars so the label sits centered without breaking the
+        # silhouette.
+        wrapped = _soft_wrap(identity, width=16)
+        label = f"{wrapped}\n{short}"
         return {
             "label": label,
-            "shape": "hexagon",
+            "shape": "circle",
             "style": "filled",
-            "orientation": "0",  # flat sides top/bottom — TRM-style
+            "fixedsize": "true",
+            "width": "1.55",
+            "height": "1.55",
             "fillcolor": fill,
             "color": stroke,
             "fontcolor": text_color,
-            "fontsize": "10",
-            "penwidth": "2.0",
-            "width": "1.5",
-            "height": "0.85",
-            "margin": "0.18,0.10",
+            "fontsize": "9",
+            "penwidth": "2.4",
+            "margin": "0.10,0.10",
             **_url_attrs(url, identity, short),
         }
 

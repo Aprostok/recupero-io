@@ -209,7 +209,21 @@ def build_all_deliverables(
     # flow SVG. Best-effort — a WeasyPrint failure on one file logs a
     # warning but doesn't kill the stage (operators can still hand-deliver
     # the HTML / SVG to compliance teams that don't strictly require PDF).
-    pdf_paths = _emit_pdfs(html_paths, flow_svg_path=flow_svg_path if flow_filename else None)
+    #
+    # Kill-switch: RECUPERO_DISABLE_PDF_RENDER=1 skips WeasyPrint
+    # entirely. On a memory-constrained Railway container with 8
+    # PDFs to render per case (4 issuers × 2 letter types), the
+    # combined memory footprint of WeasyPrint + inline-SVG filters
+    # has been observed to OOM the worker. Disabling PDF render
+    # ships the HTML deliverables alone — they still embed the new
+    # appendix + clickable Etherscan links + are readable in any
+    # browser; compliance teams that need PDFs can print-to-PDF
+    # from the browser.
+    if os.environ.get("RECUPERO_DISABLE_PDF_RENDER", "").strip() == "1":
+        log.info("PDF render skipped — RECUPERO_DISABLE_PDF_RENDER=1")
+        pdf_paths: list[Path] = []
+    else:
+        pdf_paths = _emit_pdfs(html_paths, flow_svg_path=flow_svg_path if flow_filename else None)
     written.extend(pdf_paths)
 
     log.info("deliverables done: %d file(s) under %s/briefs/",

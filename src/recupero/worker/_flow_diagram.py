@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
@@ -495,7 +496,10 @@ def render_flow_diagram(
         return None
 
     nodes_all, edges_all = _aggregate(case)
-    if freeze_brief is not None:
+    if (freeze_brief is not None
+            and os.environ.get(
+                "RECUPERO_DISABLE_FREEZABLE_PROMOTION", ""
+            ).strip() != "1"):
         _promote_freezable_holdings(nodes_all, freeze_brief)
     nodes, edges, omitted = _select_for_render(nodes_all, edges_all, case)
 
@@ -572,11 +576,23 @@ def render_flow_diagram(
     # labels — things Graphviz can't do natively. Best-effort: a
     # post-process failure shouldn't kill the diagram (the raw
     # Graphviz output is still valid SVG).
-    try:
-        _polish_svg(output_svg)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("flow SVG polish failed for %s (continuing with raw): %s",
-                    output_svg.name, exc)
+    #
+    # Kill-switch: RECUPERO_DISABLE_FLOW_POLISH=1 skips the polish
+    # step entirely. The SVG filters (drop shadow, edge label pills)
+    # measurably increase WeasyPrint's PDF render time + memory cost
+    # — on a memory-constrained container with 8 PDFs to render per
+    # case, that has been observed to OOM the worker. Disabling the
+    # polish ships a flatter but still TRM-styled diagram (circles,
+    # chain-coded borders, double-ring victim) within the same memory
+    # budget as the pre-polish renderer.
+    if os.environ.get("RECUPERO_DISABLE_FLOW_POLISH", "").strip() != "1":
+        try:
+            _polish_svg(output_svg)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("flow SVG polish failed for %s (continuing with raw): %s",
+                        output_svg.name, exc)
+    else:
+        log.info("flow SVG polish skipped — RECUPERO_DISABLE_FLOW_POLISH=1")
 
     log.info(
         "rendered flow diagram → %s (nodes=%d edges=%d omitted=%d)",

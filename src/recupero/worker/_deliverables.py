@@ -133,17 +133,28 @@ def build_all_deliverables(
 
     investigator = investigator or _DEFAULT_INVESTIGATOR
 
-    # Render the fund-flow SVG once into the standalone briefs/flow_<hash>.svg
-    # file. Letters and LE handoffs reference this filename in their
-    # "attachment-note" paragraph rather than embedding the SVG inline —
-    # real-case traces produce SVGs with absurd aspect ratios (e.g.
-    # 984×20261pt) that are unreadable when crammed into a letter-width
-    # HTML column. The standalone file opens at native resolution with
-    # working Etherscan hyperlinks per the operator's design.
+    # Render the fund-flow SVG once into briefs/flow_<hash>.svg. The
+    # SVG now ships in two ways:
+    #
+    #   1. As an inline block at the END of each HTML deliverable
+    #      (Appendix A: Fund Flow Diagram). The compact TRM-style
+    #      renderer produces a letter-landscape-shaped SVG sized to
+    #      fit a single page, so inlining it no longer breaks PDF
+    #      output the way the old 21:1-aspect-ratio version did.
+    #
+    #   2. As a standalone SVG file in the briefs/ directory, with a
+    #      matching standalone PDF rendered by _emit_pdfs. Operators
+    #      who want to share just the flow diagram (without the whole
+    #      letter) use this artifact.
+    #
+    # Both letters and LE handoffs receive the inline SVG via
+    # ``flow_inline_svg``; the templates render it as the final
+    # appendix so the case narrative isn't interrupted mid-section.
     flow_filename: str | None = None
     flow_svg_path: Path | None = None
+    flow_inline_svg: str | None = None
     try:
-        from recupero.worker._flow_diagram import render_flow_diagram
+        from recupero.worker._flow_diagram import read_inline_svg, render_flow_diagram
         from uuid import uuid4
         briefs_dir = case_dir / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
@@ -151,6 +162,9 @@ def build_all_deliverables(
         if render_flow_diagram(case, candidate_path) is not None:
             flow_filename = candidate_path.name
             flow_svg_path = candidate_path
+            flow_inline_svg = read_inline_svg(candidate_path)
+            if flow_inline_svg is None:
+                log.warning("flow SVG inline-read returned None; appendix will be skipped")
     except Exception as e:  # noqa: BLE001
         log.warning("flow diagram generation failed (continuing without it): %s", e)
 
@@ -166,6 +180,7 @@ def build_all_deliverables(
                 case_dir=case_dir,
                 issuer=issuer_info,
                 flow_filename=flow_filename,
+                flow_inline_svg=flow_inline_svg,
             )
             written.append(bundle.maple_path)
             written.append(bundle.le_path)

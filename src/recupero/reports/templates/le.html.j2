@@ -132,16 +132,13 @@
   </div>
 </div>
 
-{% if flow_filename %}
-<h2>3.1 Fund Flow Diagram</h2>
-<p class="attachment-note">
-  The fund-flow diagram is provided as a separate SVG attachment
-  (<span class="mono">{{ flow_filename }}</span>) accompanying this
-  package. Open in any modern browser for full-resolution inspection;
-  each wallet node links to its Etherscan record. Solid arrows
-  represent observed on-chain transfers, with edge labels showing
-  USD-denominated value at the time of transfer and line thickness
-  scaled logarithmically to value.
+{% if flow_inline_svg %}
+<p class="appendix-pointer">
+  A fund-flow visualization accompanies this package as
+  <strong>Appendix&nbsp;A</strong> at the end of this document.
+  Edge thickness scales with USD value, dashed edges represent
+  cross-chain bridge crossings, and each wallet node links to its
+  on-chain explorer record.
 </p>
 {% endif %}
 
@@ -278,6 +275,33 @@
     Date: __________________________
   </div>
 </div>
+
+{% if flow_inline_svg %}
+<section class="appendix">
+  <div class="appendix-eyebrow">Appendix A</div>
+  <h2 class="appendix-title">Fund Flow Diagram</h2>
+  <p class="appendix-subtitle">
+    Top USD flows from the victim wallet through identified
+    counterparties. Hexagonal nodes are labeled entities (exchanges,
+    bridges, mixers, the victim wallet); rounded rectangles are
+    unlabeled intermediate wallets. Border color encodes the chain
+    each wallet lives on, edge thickness scales with transferred USD,
+    and dashed orange edges represent cross-chain bridge crossings.
+    Click any node to open its on-chain explorer record.
+  </p>
+  <div class="appendix-flow-frame">
+    {{ flow_inline_svg | safe }}
+  </div>
+  <p class="appendix-note small">
+    Source: on-chain trace fetched between {{ trace_started_at }} and
+    {{ generated_at }} UTC. The complete transfer set lives in the
+    accompanying case archive; the diagram above is a top-flow summary
+    rendered for at-a-glance review. The standalone version of this
+    SVG is also delivered as
+    <span class="mono">{{ flow_filename }}</span> in the case package.
+  </p>
+</section>
+{% endif %}
 
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>

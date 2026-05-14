@@ -307,41 +307,48 @@
      is fully clickable from a reviewer's desk (WeasyPrint
      converts <a> tags to PDF link annotations).
 
-     Visual treatment: gold-accent underline + chain-blue mono text.
-     The previous "ink color + 1px dotted border-bottom in
-     #94A3B8" was so subtle it disappeared at print resolution
-     against monospaced glyphs — reviewers couldn't tell which
-     addresses were clickable.
+     PDF-compatibility note: WeasyPrint 60-69 has flaky support
+     for the modern CSS3 text-decoration-{color,thickness,offset}
+     trio — especially when the color comes from a CSS variable.
+     We saw the styled treatment render correctly in the HTML
+     (visible in browser) but the PDF dropped the underline color
+     and thickness, leaving the addresses looking like plain mono
+     text. Switching to literal hex values + border-bottom (which
+     WeasyPrint has supported reliably since its earliest
+     versions) makes the PDF treatment identical to the HTML.
 
-     The blue is the same Ethereum chain color used in the flow
-     diagram, which ties the address treatment to the visual
-     vocabulary of the appendix; the gold underline is the brand
-     accent. Underline (not border-bottom) prints more reliably
-     in WeasyPrint and survives PDF zooming. */
+     Visual treatment:
+       * Text color #1D4ED8 (Ethereum blue) — distinct from body
+         ink so the BLUE TEXT alone signals "link" even before
+         the underline is read.
+       * border-bottom 1.5px solid #9C7E3F (brand gold) — bold
+         enough to read at print resolution against the mono
+         monospaced glyphs.
+       * padding-bottom 1px so the underline doesn't kiss the
+         baseline. */
   a.mono,
   .mono a,
   table.evidence a {
-    color: var(--chain-eth, #1D4ED8);
-    text-decoration: underline;
-    text-decoration-color: var(--gold-accent);
-    text-decoration-thickness: 1px;
-    text-underline-offset: 2px;
+    color: #1D4ED8;
+    text-decoration: none;
+    border-bottom: 1.5px solid #9C7E3F;
+    padding-bottom: 1px;
   }
   a.mono:hover,
   .mono a:hover,
   table.evidence a:hover {
-    color: var(--gold-accent);
-    text-decoration-color: currentColor;
+    color: #9C7E3F;
+    border-bottom-color: currentColor;
   }
   /* Non-mono prose links ("View on Etherscan", "Token transfer
-     history") — louder solid underline since they're explicit
-     CTAs in body prose, not in-line address chrome. */
+     history") — louder solid underline + semibold since they're
+     explicit CTAs in body prose, not in-line address chrome. */
   .summary-box a:not(.mono),
   p a:not(.mono):not([href*="@"]) {
-    color: var(--chain-eth, #1D4ED8);
-    text-decoration: underline;
-    text-decoration-color: var(--gold-accent);
-    text-decoration-thickness: 1.5px;
+    color: #1D4ED8;
+    text-decoration: none;
+    border-bottom: 2px solid #9C7E3F;
+    padding-bottom: 1px;
     font-weight: 600;
   }
 

@@ -525,6 +525,17 @@ def _upload_digest_to_bucket(
                 "application/pdf",
             )
             log.info("digest uploaded: %s", pdf_dest)
+        # Summary JSON for the admin UI's archive listing — same dir,
+        # parallel filename. Listing the prefix and parsing only the
+        # *.summary.json files lets the UI render the archive table
+        # without downloading the much-larger HTML/PDF per row.
+        if bundle.summary_path is not None and bundle.summary_path.exists():
+            summary_dest = bundle.bucket_prefix + bundle.summary_path.name
+            store._upload(  # noqa: SLF001
+                summary_dest, bundle.summary_path.read_bytes(),
+                "application/json",
+            )
+            log.info("digest uploaded: %s", summary_dest)
     finally:
         store.close()
 

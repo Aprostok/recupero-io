@@ -55,8 +55,7 @@ log = logging.getLogger(__name__)
 # ----- Constants ----- #
 
 
-# Etherscan v2 chain-id mapping for all EVM chains the worker supports.
-# Solana / Hyperliquid go through different APIs (deferred for watch_tick).
+# Etherscan v2 chain-id mapping for the EVM chains we monitor.
 _CHAIN_ID_BY_NAME: dict[str, int] = {
     "ethereum": 1,
     "arbitrum": 42161,
@@ -65,8 +64,21 @@ _CHAIN_ID_BY_NAME: dict[str, int] = {
     "bsc":      56,
 }
 
+# Chains that need a non-EVM snapshot path. The watch_tick loop
+# dispatches on the row's ``chain`` column: EVM names route through
+# ``_snapshot_evm_one`` (Etherscan v2); ``solana`` routes through
+# ``_snapshot_solana_one`` (Helius RPC); ``hyperliquid`` is a TODO
+# (the existing scraper doesn't expose a wallet-balance endpoint —
+# adding one means new API plumbing on the spotClearinghouseState /
+# clearinghouseState info endpoints).
+_SOLANA_CHAIN = "solana"
+_HYPERLIQUID_CHAIN = "hyperliquid"
 
-# Defaults for the materiality bar. Both are env-overridable.
+
+# Defaults for the materiality bar. All three are env-overridable —
+# the cron operator can tune these without a code push (useful for a
+# high-priority case where 12h cadence + $100 threshold is too lax).
+#
 #   * 100 USD threshold for balance delta — small enough to catch
 #     meaningful drains, big enough to ignore gas-dust drift.
 #   * Any new outbound tx is interesting regardless of USD value;
@@ -76,8 +88,7 @@ _DEFAULT_DELTA_USD_THRESHOLD = Decimal("100")
 
 # How often a single wallet is re-snapshotted. Default 12h — running
 # the tick twice in one day shouldn't burn API budget on the same
-# rows. Operators can override via env if they want hourly polling
-# on a high-priority case.
+# rows.
 _DEFAULT_MIN_INTERVAL_SEC = 12 * 3600
 
 
@@ -86,6 +97,41 @@ _DEFAULT_MIN_INTERVAL_SEC = 12 * 3600
 # overlapping the network-latency stalls. 4 workers is a safe upper
 # bound that doesn't risk burst-rejection on a misconfigured wallet.
 _DEFAULT_PARALLELISM = 4
+
+
+# Env var names — kept in one place so the runbook can reference
+# them directly. ``RECUPERO_WATCH_*`` namespace mirrors the existing
+# ``RECUPERO_*`` worker env vars (heartbeat interval, poll cadence,
+# etc.).
+_ENV_DELTA_USD_THRESHOLD = "RECUPERO_WATCH_DELTA_USD_THRESHOLD"
+_ENV_MIN_INTERVAL_SEC    = "RECUPERO_WATCH_MIN_INTERVAL_SEC"
+_ENV_PARALLELISM         = "RECUPERO_WATCH_PARALLELISM"
+
+
+def _env_decimal(name: str, default: Decimal) -> Decimal:
+    """Read an env var as Decimal, falling back to default on missing
+    or unparseable values. Logs a warning when a bad value is ignored
+    so the operator sees the typo instead of silently inheriting the
+    default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return Decimal(raw)
+    except Exception:  # noqa: BLE001
+        log.warning("ignoring bad %s=%r (using default %s)", name, raw, default)
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except Exception:  # noqa: BLE001
+        log.warning("ignoring bad %s=%r (using default %d)", name, raw, default)
+        return default
 
 
 # ----- Data shapes ----- #
@@ -156,9 +202,9 @@ def run_watch_tick(
     dsn: str,
     config: RecuperoConfig,
     env: RecuperoEnv,
-    min_interval_sec: int = _DEFAULT_MIN_INTERVAL_SEC,
-    delta_usd_threshold: Decimal = _DEFAULT_DELTA_USD_THRESHOLD,
-    parallelism: int = _DEFAULT_PARALLELISM,
+    min_interval_sec: int | None = None,
+    delta_usd_threshold: Decimal | None = None,
+    parallelism: int | None = None,
     limit: int | None = None,
 ) -> WatchTickReport:
     """Snapshot every eligible active watchlist row.
@@ -176,7 +222,33 @@ def run_watch_tick(
     Returns a :class:`WatchTickReport` summarizing what happened. The
     caller (the cron entry, the deliverables generator, or the admin
     UI) decides what to do with the material changes.
+
+    Tuning knobs (each is "explicit kwarg wins, else env var, else
+    module default"):
+
+      * ``min_interval_sec``  — env ``RECUPERO_WATCH_MIN_INTERVAL_SEC``
+      * ``delta_usd_threshold`` — env ``RECUPERO_WATCH_DELTA_USD_THRESHOLD``
+      * ``parallelism``      — env ``RECUPERO_WATCH_PARALLELISM``
     """
+    # Resolve every tuning knob in one place: explicit kwarg wins,
+    # else env var (RECUPERO_WATCH_*), else the module default. Logged
+    # at INFO so the cron operator can verify in Railway logs that the
+    # env overrides actually took effect.
+    if min_interval_sec is None:
+        min_interval_sec = _env_int(_ENV_MIN_INTERVAL_SEC, _DEFAULT_MIN_INTERVAL_SEC)
+    if delta_usd_threshold is None:
+        delta_usd_threshold = _env_decimal(
+            _ENV_DELTA_USD_THRESHOLD, _DEFAULT_DELTA_USD_THRESHOLD,
+        )
+    if parallelism is None:
+        parallelism = _env_int(_ENV_PARALLELISM, _DEFAULT_PARALLELISM)
+    log.info(
+        "watch-tick tuning: min_interval_sec=%d delta_usd_threshold=%s "
+        "parallelism=%d limit=%s",
+        min_interval_sec, delta_usd_threshold, parallelism,
+        limit if limit else "none",
+    )
+
     started_at = datetime.now(timezone.utc)
     report = WatchTickReport(
         started_at=started_at,
@@ -194,52 +266,52 @@ def run_watch_tick(
         report.finished_at = datetime.now(timezone.utc)
         return report
 
-    # Group by chain so we instantiate one Etherscan client per chain
-    # (shared rate limiter across all of that chain's wallets).
+    # Group by chain so we instantiate one chain client per chain
+    # (shared rate limiter across all of that chain's wallets). Rows
+    # for chains we don't yet support are counted as skipped — they
+    # remain on the watchlist for the next supported-chain tick.
     by_chain: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         chain = r["chain"]
-        if chain not in _CHAIN_ID_BY_NAME:
+        if (chain not in _CHAIN_ID_BY_NAME
+                and chain != _SOLANA_CHAIN
+                and chain != _HYPERLIQUID_CHAIN):
             report.skipped_unsupported_chain += 1
             continue
         by_chain.setdefault(chain, []).append(r)
 
-    api_key = os.environ.get("ETHERSCAN_API_KEY", "").strip()
-    if not api_key:
-        report.errors.append("ETHERSCAN_API_KEY not set; cannot snapshot")
-        report.finished_at = datetime.now(timezone.utc)
-        return report
-
-    # Per-chain client + pricing client are constructed lazily.
-    from recupero.chains.ethereum.etherscan import EtherscanClient
+    # Pricing client is shared across chains (CoinGecko is chain-
+    # agnostic — pricing is keyed by (chain, contract) for token
+    # entries and by coingecko_id for native gas tokens).
     from recupero.pricing.coingecko import CoinGeckoClient
-
     cg = CoinGeckoClient(
         config=config,
         env=env,
         dsn=dsn,  # use the persistent pricing cache (Postgres-backed)
     )
 
-    try:
-        for chain, chain_rows in by_chain.items():
-            client = EtherscanClient(
-                api_key=api_key, chain_id=_CHAIN_ID_BY_NAME[chain],
+    for chain, chain_rows in by_chain.items():
+        if chain in _CHAIN_ID_BY_NAME:
+            _run_evm_chain(
+                chain=chain, rows=chain_rows, dsn=dsn,
+                price_client=cg, parallelism=parallelism,
+                delta_usd_threshold=delta_usd_threshold, report=report,
             )
-            try:
-                _snapshot_chain(
-                    dsn=dsn,
-                    client=client,
-                    price_client=cg,
-                    rows=chain_rows,
-                    parallelism=parallelism,
-                    delta_usd_threshold=delta_usd_threshold,
-                    report=report,
+        elif chain == _SOLANA_CHAIN:
+            _run_solana_chain(
+                rows=chain_rows, dsn=dsn,
+                price_client=cg, parallelism=parallelism,
+                delta_usd_threshold=delta_usd_threshold, report=report,
+            )
+        elif chain == _HYPERLIQUID_CHAIN:
+            # Hyperliquid balance fetch isn't on the existing scraper
+            # client. Skip with a per-row error so the operator sees
+            # we tracked the row but didn't sample it.
+            for row in chain_rows:
+                report.errors.append(
+                    f"hyperliquid snapshot not implemented for {row['address']}"
                 )
-            finally:
-                client.close()
-    finally:
-        # CoinGeckoClient: nothing to close (httpx client is internal)
-        pass
+                report.skipped_unsupported_chain += 1
 
     report.finished_at = datetime.now(timezone.utc)
     log.info(
@@ -285,22 +357,82 @@ def _fetch_eligible(
             return list(cur.fetchall())
 
 
-def _snapshot_chain(
+def _run_evm_chain(
     *,
-    dsn: str,
-    client: Any,
-    price_client: Any,
+    chain: str,
     rows: list[dict[str, Any]],
+    dsn: str,
+    price_client: Any,
     parallelism: int,
     delta_usd_threshold: Decimal,
     report: WatchTickReport,
 ) -> None:
-    """Snapshot every wallet on a single chain, in parallel."""
+    """Snapshot one EVM chain's wallets via Etherscan v2."""
+    api_key = os.environ.get("ETHERSCAN_API_KEY", "").strip()
+    if not api_key:
+        report.errors.append(
+            f"ETHERSCAN_API_KEY not set; cannot snapshot {len(rows)} {chain} rows"
+        )
+        return
+
+    from recupero.chains.ethereum.etherscan import EtherscanClient
+    client = EtherscanClient(api_key=api_key, chain_id=_CHAIN_ID_BY_NAME[chain])
+    try:
+        _run_chain_pool(
+            rows=rows, dsn=dsn,
+            snapshot_fn=lambda row: _snapshot_evm_one(row, client, price_client),
+            parallelism=parallelism,
+            delta_usd_threshold=delta_usd_threshold,
+            report=report,
+        )
+    finally:
+        client.close()
+
+
+def _run_solana_chain(
+    *,
+    rows: list[dict[str, Any]],
+    dsn: str,
+    price_client: Any,
+    parallelism: int,
+    delta_usd_threshold: Decimal,
+    report: WatchTickReport,
+) -> None:
+    """Snapshot Solana wallets via Helius."""
+    api_key = os.environ.get("HELIUS_API_KEY", "").strip()
+    if not api_key:
+        report.errors.append(
+            f"HELIUS_API_KEY not set; cannot snapshot {len(rows)} solana rows"
+        )
+        return
+
+    from recupero.chains.solana.helius import HeliusClient
+    client = HeliusClient(api_key=api_key)
+    try:
+        _run_chain_pool(
+            rows=rows, dsn=dsn,
+            snapshot_fn=lambda row: _snapshot_solana_one(row, client, price_client),
+            parallelism=parallelism,
+            delta_usd_threshold=delta_usd_threshold,
+            report=report,
+        )
+    finally:
+        client.close()
+
+
+def _run_chain_pool(
+    *,
+    rows: list[dict[str, Any]],
+    dsn: str,
+    snapshot_fn,
+    parallelism: int,
+    delta_usd_threshold: Decimal,
+    report: WatchTickReport,
+) -> None:
+    """Shared parallel loop for any chain — fan out snapshot_fn(row),
+    persist + diff sequentially as results arrive."""
     with ThreadPoolExecutor(max_workers=parallelism) as pool:
-        futures = {
-            pool.submit(_snapshot_one, row, client, price_client): row
-            for row in rows
-        }
+        futures = {pool.submit(snapshot_fn, row): row for row in rows}
         for fut in as_completed(futures):
             row = futures[fut]
             try:
@@ -327,7 +459,7 @@ def _snapshot_chain(
                 report.errors.append(msg)
 
 
-def _snapshot_one(
+def _snapshot_evm_one(
     row: dict[str, Any], client: Any, price_client: Any,
 ) -> _Snapshot:
     """Fetch native balance, optional token balance, and tx count for
@@ -416,26 +548,92 @@ def _snapshot_one(
     return snap
 
 
+def _snapshot_solana_one(
+    row: dict[str, Any], client: Any, price_client: Any,
+) -> _Snapshot:
+    """Helius-based snapshot for a Solana address.
+
+    Uses Helius RPC primitives directly:
+      * ``getBalance`` — native SOL balance in lamports
+      * ``getSignaturesForAddress`` (limit=1000) for the lifetime
+        tx count proxy. Solana doesn't expose a tx-count number
+        per address the way EVM does; we approximate by counting
+        signatures. The cap at 1000 means very-busy addresses
+        report a ceiling rather than the true count — flagged in
+        materiality detection by also tracking when this hits 1000.
+
+    SPL token balances are deferred — the watchlist row's
+    ``asset_contract`` for Solana means the mint address, which
+    would route through ``getTokenAccountsByOwner`` per mint.
+    Worth adding once we have a Solana case that actually
+    produces freezable rows (none in production today).
+    """
+    addr = row["address"]
+    snap = _Snapshot(
+        native_balance_raw=None, tx_count=None, total_usd=None,
+        source="helius",
+    )
+
+    try:
+        data = client._rpc_call("getBalance", [addr])  # noqa: SLF001
+        result = data.get("result") or {}
+        # getBalance returns { context: {...}, value: <lamports int> }
+        if isinstance(result, dict):
+            snap.native_balance_raw = int(result.get("value") or 0)
+        else:
+            snap.native_balance_raw = int(result)
+    except Exception as exc:  # noqa: BLE001
+        snap.error = f"sol getBalance: {exc}"
+        return snap
+
+    # Tx count proxy via signatures.
+    try:
+        data = client._rpc_call(  # noqa: SLF001
+            "getSignaturesForAddress", [addr, {"limit": 1000}],
+        )
+        sigs = data.get("result") or []
+        snap.tx_count = len(sigs) if isinstance(sigs, list) else None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("sol getSignaturesForAddress failed for %s: %s", addr, exc)
+
+    # Native value in USD. Solana lamports → SOL via 10^9.
+    native_usd = Decimal(0)
+    if snap.native_balance_raw and snap.native_balance_raw > 0:
+        sol_decimal = Decimal(snap.native_balance_raw) / Decimal(10 ** 9)
+        sol_token = _native_token_for("solana")
+        if sol_token is not None:
+            try:
+                price = price_client.price_now(sol_token)
+                if price.usd_value is not None:
+                    native_usd = price.usd_value * sol_decimal
+            except Exception as exc:  # noqa: BLE001
+                log.debug("SOL price fetch failed for %s: %s", addr, exc)
+    snap.total_usd = native_usd
+    return snap
+
+
 def _native_token_for(chain_name: str) -> TokenRef | None:
     """Return the chain's native gas token (for USD pricing). None
     when the chain is unmapped — caller treats native_usd as 0."""
     mapping = {
-        "ethereum": ("ETH",  "ethereum"),
-        "arbitrum": ("ETH",  "ethereum"),
-        "base":     ("ETH",  "ethereum"),
-        "polygon":  ("MATIC", "matic-network"),
-        "bsc":      ("BNB",  "binancecoin"),
+        "ethereum": ("ETH",  "ethereum",      18),
+        "arbitrum": ("ETH",  "ethereum",      18),
+        "base":     ("ETH",  "ethereum",      18),
+        "polygon":  ("MATIC", "matic-network", 18),
+        "bsc":      ("BNB",  "binancecoin",   18),
+        # Solana: SOL has 9 decimals (lamports), not 18 like EVM gas.
+        "solana":   ("SOL",  "solana",         9),
     }
     entry = mapping.get(chain_name)
     if not entry:
         return None
-    symbol, coingecko_id = entry
+    symbol, coingecko_id, decimals = entry
     try:
         chain = Chain(chain_name)
     except ValueError:
         return None
     return TokenRef(
-        chain=chain, contract=None, symbol=symbol, decimals=18,
+        chain=chain, contract=None, symbol=symbol, decimals=decimals,
         coingecko_id=coingecko_id,
     )
 

@@ -23,7 +23,8 @@ from __future__ import annotations
 import io
 import logging
 import re
-from dataclasses import dataclass
+import json
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -60,8 +61,10 @@ class DigestBundle:
     """What a digest render produced."""
     digest_id: str
     html_path: Path
-    pdf_path: Path | None  # None when WeasyPrint isn't importable
-    bucket_prefix: str     # e.g. "watchlist-digest/2026-05-14/"
+    pdf_path: Path | None        # None when WeasyPrint isn't importable
+    summary_path: Path | None    # JSON summary for admin UI list views
+    bucket_prefix: str           # e.g. "watchlist-digest/2026-05-14/"
+    summary: dict[str, Any] = field(default_factory=dict)
 
 
 def generate_daily_digest(
@@ -109,12 +112,108 @@ def generate_daily_digest(
         log.warning("digest PDF render skipped: %s", exc)
         pdf_path = None
 
+    # JSON summary for the admin UI's "Digest Archive" view. Listed
+    # alongside the HTML/PDF in the bucket so the UI can do a single
+    # `list watchlist-digest/<date>/*.summary.json` to populate the
+    # archive table without parsing 30KB of HTML per row.
+    summary = _build_summary_payload(
+        report=report, total_watched=total_watched,
+        digest_id=digest_id, now=now,
+        html_filename=html_path.name,
+        pdf_filename=pdf_path.name if pdf_path else None,
+    )
+    summary_path = output_dir / f"{digest_id}.summary.json"
+    summary_path.write_text(
+        json.dumps(summary, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
+    log.info(
+        "digest summary written: %s (%d bytes)",
+        summary_path.name, summary_path.stat().st_size,
+    )
+
     return DigestBundle(
         digest_id=digest_id,
         html_path=html_path,
         pdf_path=pdf_path,
+        summary_path=summary_path,
         bucket_prefix=f"watchlist-digest/{tick_date}/",
+        summary=summary,
     )
+
+
+def _build_summary_payload(
+    *,
+    report: WatchTickReport,
+    total_watched: int,
+    digest_id: str,
+    now: datetime,
+    html_filename: str,
+    pdf_filename: str | None,
+) -> dict[str, Any]:
+    """Compact JSON payload the admin UI's archive listing can consume
+    without parsing the full HTML.
+
+    Stable schema fields (don't rename without a UI coordination):
+
+      digest_id, generated_at, tick_started_at, tick_finished_at,
+      total_watched, snapshotted, material_count, freezeable_count,
+      error_count, total_outflow_usd, html_filename, pdf_filename,
+      material_changes[*] = {address, chain, role, label_name,
+                              is_freezeable, issuer, asset_symbol,
+                              delta_usd, tx_count_delta, reason}
+    """
+    freezeable_count = 0
+    total_outflow = Decimal(0)
+    changes_payload: list[dict[str, Any]] = []
+    for mc in report.material_changes:
+        if mc.is_freezeable:
+            freezeable_count += 1
+        if mc.delta_usd is not None and mc.delta_usd < 0:
+            total_outflow += -mc.delta_usd
+        changes_payload.append({
+            "address": mc.address,
+            "chain": mc.chain,
+            "role": mc.role,
+            "label_name": mc.label_name,
+            "is_freezeable": mc.is_freezeable,
+            "issuer": mc.issuer,
+            "asset_symbol": mc.asset_symbol,
+            "delta_usd": str(mc.delta_usd) if mc.delta_usd is not None else None,
+            "tx_count_delta": mc.tx_count_delta,
+            "reason": mc.reason,
+        })
+
+    return {
+        "digest_id": digest_id,
+        "generated_at": now.isoformat(),
+        "tick_started_at": report.started_at.isoformat(),
+        "tick_finished_at": report.finished_at.isoformat(),
+        "tick_duration_seconds": (
+            report.finished_at - report.started_at
+        ).total_seconds(),
+        "total_watched": total_watched,
+        "snapshotted": report.snapshotted,
+        "skipped_cooldown": report.skipped_cooldown,
+        "skipped_unsupported_chain": report.skipped_unsupported_chain,
+        "material_count": len(report.material_changes),
+        "freezeable_count": freezeable_count,
+        "error_count": len(report.errors),
+        "total_outflow_usd": str(total_outflow),
+        "html_filename": html_filename,
+        "pdf_filename": pdf_filename,
+        "material_changes": changes_payload,
+    }
+
+
+def _json_default(value: Any) -> Any:
+    """JSON fallback encoder — Decimal / datetime / UUID."""
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    # Let json raise its TypeError for anything else.
+    return str(value)
 
 
 def _build_context(

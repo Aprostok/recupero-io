@@ -37,17 +37,43 @@ That command:
 
 ## Materiality, cooldown, and limits
 
-These are env-overridable in `_run_watch_tick_once`:
+All three tuning knobs are env-overridable — set them on the Railway
+cron service to adjust behavior without a code push.
 
-| Env var (suggested) | Default | What it controls |
+| Env var | Default | What it controls |
 |---|---|---|
-| (none) — code default | `100 USD` | `delta_usd_threshold` |
-| (none) — code default | `12h` | `min_interval_sec` cooldown |
-| (none) — code default | `4` | `parallelism` (Etherscan-bound) |
+| `RECUPERO_WATCH_DELTA_USD_THRESHOLD` | `100` | USD delta below which a balance change is ignored. Set to `0` to flag any non-zero balance change (noisy). |
+| `RECUPERO_WATCH_MIN_INTERVAL_SEC` | `43200` (12h) | Cooldown — same wallet not re-snapshotted within this window. Set to `0` for hourly polling on a high-priority case. |
+| `RECUPERO_WATCH_PARALLELISM` | `4` | Concurrent snapshot workers per chain. Etherscan free tier caps at 5 rps so >5 is wasted. |
+
+Bad values (unparseable Decimal / int) log a warning and fall back to
+the default — typos don't silently change behavior.
 
 The CLI also supports `--watch-tick-limit N` to cap the pass size
-(useful for first-run validation; the budget per wallet is ~3
-Etherscan calls + 0 CoinGecko calls if cached).
+(useful for first-run validation; budget per wallet is ~3 Etherscan
+calls + 0 CoinGecko calls if cached).
+
+## Multi-chain coverage
+
+| Chain | Snapshot path | Status |
+|---|---|---|
+| `ethereum` | Etherscan v2 (`chain_id=1`) | ✅ supported |
+| `arbitrum` | Etherscan v2 (`chain_id=42161`) | ✅ supported |
+| `base` | Etherscan v2 (`chain_id=8453`) | ✅ supported |
+| `polygon` | Etherscan v2 (`chain_id=137`) | ✅ supported |
+| `bsc` | Etherscan v2 (`chain_id=56`) | ✅ supported |
+| `solana` | Helius RPC (`getBalance` + `getSignaturesForAddress`) | ✅ supported (needs `HELIUS_API_KEY`) |
+| `hyperliquid` | — | ⛔ not implemented (existing scraper has no balance endpoint) |
+
+Solana SPL token balances are deferred — currently only the native
+SOL balance contributes to the snapshot's `usd_value`. Adding SPL
+support means routing through `getTokenAccountsByOwner` per mint
+when the watchlist row's `asset_contract` is set (matches the
+EVM-side `asset_contract` semantics).
+
+Hyperliquid rows on the watchlist are skipped with a per-row error
+("hyperliquid snapshot not implemented") logged in the report. The
+rows remain `active` for the next tick once balance fetching lands.
 
 ## Cost shape
 
@@ -93,11 +119,51 @@ Per-tick digest files land in the bucket at:
 ```
 watchlist-digest/2026-05-14/DIGEST-20260514T030042-a1b2c3.html
 watchlist-digest/2026-05-14/DIGEST-20260514T030042-a1b2c3.pdf
+watchlist-digest/2026-05-14/DIGEST-20260514T030042-a1b2c3.summary.json
 ```
 
-Open the PDF directly from the Supabase dashboard, or via the admin
-UI's "Digest Archive" view (Jacob's UI work). Each entry in the PDF
-links its address to the appropriate chain explorer.
+The `.summary.json` is a compact (~500B – 5KB) listing the admin UI's
+**Digest Archive** view can consume without downloading the full
+HTML/PDF. Schema fields (stable — coordinate before renaming):
+
+```json
+{
+  "digest_id":            "DIGEST-...",
+  "generated_at":         "2026-05-14T03:00:42+00:00",
+  "tick_started_at":      "2026-05-14T03:00:00+00:00",
+  "tick_finished_at":     "2026-05-14T03:14:21+00:00",
+  "tick_duration_seconds": 861.3,
+  "total_watched":        1227,
+  "snapshotted":          245,
+  "skipped_cooldown":     982,
+  "skipped_unsupported_chain": 0,
+  "material_count":       3,
+  "freezeable_count":     1,
+  "error_count":          0,
+  "total_outflow_usd":    "12300.45",
+  "html_filename":        "DIGEST-...html",
+  "pdf_filename":         "DIGEST-...pdf",
+  "material_changes": [
+    {
+      "address":         "0xabc...",
+      "chain":           "ethereum",
+      "role":            "perpetrator",
+      "label_name":      null,
+      "is_freezeable":   true,
+      "issuer":          "Circle",
+      "asset_symbol":    "USDC",
+      "delta_usd":       "-8400.20",
+      "tx_count_delta":  3,
+      "reason":          "balance -$8,400.20 USD · 3 new outbound tx(s)"
+    }
+  ]
+}
+```
+
+Admin UI flow: list `watchlist-digest/<date>/*.summary.json` from the
+bucket, render an archive table, link each row's `html_filename` /
+`pdf_filename` to a signed-URL for in-browser opening. Each entry in
+the PDF links its address to the appropriate chain explorer.
 
 The raw `watchlist_snapshots` history is retained indefinitely for
 audit — query examples:

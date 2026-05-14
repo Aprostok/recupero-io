@@ -29,6 +29,17 @@
     --color-victim-tint: #EFF4FB;
     --color-perp-tint:   #FBEFEF;
 
+    /* Chain-coded colors — mirror worker/_flow_diagram.py's
+       _CHAIN_STROKE table so the address links in body prose pick
+       up the same brand color as their corresponding nodes in the
+       Appendix A flow diagram. */
+    --chain-eth:         #1D4ED8;   /* ethereum / L2s default */
+    --chain-arb:         #28A0F0;
+    --chain-base:        #0052FF;
+    --chain-polygon:     #8247E5;
+    --chain-bsc:         #B68A0E;   /* darker than #F0B90B for AA contrast */
+    --chain-solana:      #6F33C9;   /* darker than #9945FF for AA contrast */
+
     /* Type — serif for titles (Georgia is reliably available without a CDN);
        sans for body. Mono for hex addresses. The serif gives the documents
        a "legal correspondence / banker memo" feel rather than a SaaS feel. */
@@ -291,41 +302,47 @@
     font-weight: 600;
   }
 
-  /* Address hyperlinks — restrained.
-     Every raw wallet/contract address in the letter is wrapped in
-     <a href="..."> so the rendered PDF is fully clickable from a
-     reviewer's desk (WeasyPrint converts <a> tags to PDF link
-     annotations). Default browser link styling (bright blue,
-     aggressive underline) would turn the document into a wall of
-     blue — we want links that read as part of the prose by default
-     and reveal themselves on hover / focus.
+  /* Address hyperlinks — every raw wallet / contract / tx hash in
+     the letter is wrapped in <a href="..."> so the rendered PDF
+     is fully clickable from a reviewer's desk (WeasyPrint
+     converts <a> tags to PDF link annotations).
 
-     Color: deep navy (matches the brief letterhead) instead of
-     #0000EE browser blue. Underline: subtle dotted bottom border
-     so the linked status is visible without screaming. The mono
-     monospace face uses a slightly heavier dotted line so it
-     reads against the fixed-width letters. */
+     Visual treatment: gold-accent underline + chain-blue mono text.
+     The previous "ink color + 1px dotted border-bottom in
+     #94A3B8" was so subtle it disappeared at print resolution
+     against monospaced glyphs — reviewers couldn't tell which
+     addresses were clickable.
+
+     The blue is the same Ethereum chain color used in the flow
+     diagram, which ties the address treatment to the visual
+     vocabulary of the appendix; the gold underline is the brand
+     accent. Underline (not border-bottom) prints more reliably
+     in WeasyPrint and survives PDF zooming. */
   a.mono,
   .mono a,
   table.evidence a {
-    color: var(--ink);
-    text-decoration: none;
-    border-bottom: 1px dotted var(--ink-quiet);
+    color: var(--chain-eth, #1D4ED8);
+    text-decoration: underline;
+    text-decoration-color: var(--gold-accent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
   }
   a.mono:hover,
   .mono a:hover,
   table.evidence a:hover {
     color: var(--gold-accent);
-    border-bottom-color: var(--gold-accent);
+    text-decoration-color: currentColor;
   }
-  /* Non-mono prose links (the few existing "View on Etherscan" /
-     "Token transfer history" CTAs) keep their slightly louder
-     treatment — they're explicit CTAs, not address chrome. */
+  /* Non-mono prose links ("View on Etherscan", "Token transfer
+     history") — louder solid underline since they're explicit
+     CTAs in body prose, not in-line address chrome. */
   .summary-box a:not(.mono),
   p a:not(.mono):not([href*="@"]) {
-    color: var(--ink);
-    text-decoration: none;
-    border-bottom: 1px solid var(--gold-accent);
+    color: var(--chain-eth, #1D4ED8);
+    text-decoration: underline;
+    text-decoration-color: var(--gold-accent);
+    text-decoration-thickness: 1.5px;
+    font-weight: 600;
   }
 
   /* Appendix-pointer — narrow inline note replacing the old

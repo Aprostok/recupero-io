@@ -329,6 +329,15 @@
   a[href*="solscan"] {
     color: #1D4ED8 !important;
     text-decoration: underline !important;
+    /* Explicit text-decoration-color with literal hex — without
+       this, WeasyPrint draws the underline in the inherited body-
+       ink color, not the link's text color. The literal hex (not
+       a CSS var) is what makes WeasyPrint actually honor it. */
+    text-decoration-color: #1D4ED8 !important;
+    /* Semibold so the BLUE BOLD TEXT is itself a visual cue
+       regardless of whether the underline survives any given PDF
+       reader's text-decoration handling. Belt + suspenders. */
+    font-weight: 600 !important;
     /* Allow long hex addresses to wrap at any character — without
        this they overflow the column on narrow body / table cells
        and the PDF gets cut off on the right. */
@@ -336,13 +345,14 @@
     overflow-wrap: anywhere;
   }
   /* Non-mono prose links ("View on Etherscan", "Token transfer
-     history") — same color + semibold for visual emphasis since
-     they're explicit CTAs in body prose. */
+     history") — same treatment + bolder weight for visual
+     emphasis since they're explicit CTAs in body prose. */
   .summary-box a:not(.mono),
   p a:not(.mono):not([href*="@"]) {
     color: #1D4ED8 !important;
     text-decoration: underline !important;
-    font-weight: 600;
+    text-decoration-color: #1D4ED8 !important;
+    font-weight: 700 !important;
   }
 
   /* Appendix-pointer — narrow inline note replacing the old

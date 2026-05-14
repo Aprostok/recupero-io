@@ -93,11 +93,17 @@ _MONO_FACE = "Menlo,Consolas,monospace"
 # Brand palette (matches _styles.html.j2)
 _BRAND_NAVY = "#0B2545"
 _BRAND_GOLD = "#B8924A"
-_BG_COLOR = "#FFFFFF"
+# Off-white paper for the canvas — subtle warmth, looks expensive on
+# print compared to flat #FFFFFF (which reads as "cheap web page").
+_BG_COLOR = "#FAFAF7"
 _TITLE_COLOR = _BRAND_NAVY
 _SUBTITLE_COLOR = "#64748B"
-_EDGE_COLOR = "#94A3B8"
-_EDGE_LABEL_COLOR = "#334155"
+# Edge color stack — quiet medium-grey for the line, a deeper but
+# still restrained slate for the label so the dollar values pop
+# without screaming.
+_EDGE_COLOR = "#CBD5E1"
+_EDGE_LABEL_COLOR = "#1F2937"
+_EDGE_LABEL_BG = "#FAFAF7"  # matches page bg so the "pill" reads as cut-out
 
 # Per-category fill / border-stroke / label-text colors. The border color
 # is overridden later by the chain coloring; this is the *category* tint
@@ -452,8 +458,8 @@ def render_flow_diagram(
         fontsize="8",
         color=_EDGE_COLOR,
         fontcolor=_EDGE_LABEL_COLOR,
-        arrowsize="0.65",
-        arrowhead="vee",
+        arrowsize="0.55",
+        arrowhead="normal",   # cleaner triangle than vee; refined post-process replaces
         penwidth="1.1",
     )
 
@@ -476,6 +482,16 @@ def render_flow_diagram(
         log.warning("flow diagram render failed: %s", exc)
         _write_placeholder_svg(output_svg, "Flow diagram render failed")
         return None
+
+    # Post-process the Graphviz SVG to add elevation + refined edge
+    # labels — things Graphviz can't do natively. Best-effort: a
+    # post-process failure shouldn't kill the diagram (the raw
+    # Graphviz output is still valid SVG).
+    try:
+        _polish_svg(output_svg)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("flow SVG polish failed for %s (continuing with raw): %s",
+                    output_svg.name, exc)
 
     log.info(
         "rendered flow diagram → %s (nodes=%d edges=%d omitted=%d)",
@@ -600,7 +616,7 @@ def _node_style(n: _NodeAttrs) -> dict[str, str]:
         # silhouette.
         wrapped = _soft_wrap(identity, width=16)
         label = f"{wrapped}\n{short}"
-        return {
+        attrs = {
             "label": label,
             "shape": "circle",
             "style": "filled",
@@ -615,6 +631,12 @@ def _node_style(n: _NodeAttrs) -> dict[str, str]:
             "margin": "0.10,0.10",
             **_url_attrs(url, identity, short),
         }
+        # Victim node gets a double-ring (peripheries=2) as the visual
+        # anchor — the eye returns to it as the origin of the entire
+        # trace. TRM Forensics uses the same convention for the seed.
+        if n.category == "victim":
+            attrs["peripheries"] = "2"
+        return attrs
 
     # Unlabeled wallet — small rounded rectangle, mono short address only.
     label = (
@@ -786,6 +808,145 @@ def _write_placeholder_svg(path: Path, message: str) -> None:
 </svg>
 """
     path.write_text(svg, encoding="utf-8")
+
+
+# ----- SVG polish (post-processing Graphviz output) ----- #
+
+
+_FILTER_DEFS = """  <defs>
+    <!-- Soft drop shadow for elevation on entity circles. Subtle —
+         we're going for "premium product asset", not "Web 2.0 button". -->
+    <filter id="elev" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="2.4"/>
+      <feOffset dx="0" dy="1.5" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.28"/>
+      </feComponentTransfer>
+      <feMerge>
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+"""
+
+
+def _polish_svg(path: Path) -> None:
+    """Hand-tune the Graphviz SVG output for an elite finish.
+
+    Three injections, all best-effort and idempotent:
+
+      1. ``<defs>`` block with a soft drop-shadow filter ("elev") that
+         renders entity circles as raised badges. WeasyPrint honors
+         SVG filters on PDF render, so the elevation survives print.
+
+      2. ``filter="url(#elev)"`` applied to every ``<ellipse>`` (these
+         are the entity circles — Graphviz emits ``<ellipse>`` for
+         shape=circle).
+
+      3. White rounded-rect "pills" added behind every edge text
+         label so dollar values read cleanly when they cross another
+         edge in the layout. We can't paint these in Graphviz because
+         it doesn't support per-label backgrounds — we wrap each
+         ``<text>`` element under a ``<g class="edge">`` with a
+         pill-shaped rect sized to the text bbox.
+
+    Reads the SVG as text and rewrites in place. Operations are
+    regex-based rather than XML-DOM-parsed — keeps zero dependencies
+    on lxml, and Graphviz's SVG output is well-structured enough that
+    string-level matching is reliable.
+    """
+    import re
+
+    raw = path.read_text(encoding="utf-8", errors="replace")
+
+    # 1. Inject the <defs> filter right after the <svg ...> open tag,
+    #    but only if we haven't already injected it (idempotent).
+    if 'id="elev"' not in raw:
+        m = re.search(r"(<svg\b[^>]*?>)", raw)
+        if m:
+            raw = raw[:m.end()] + "\n" + _FILTER_DEFS + raw[m.end():]
+
+    # 2. Apply filter="url(#elev)" to every <ellipse> — those are the
+    #    entity circles (shape=circle in Graphviz → <ellipse> in SVG).
+    #    We add the attribute only if not already present, so a
+    #    re-polish on the same SVG doesn't double-decorate.
+    def _add_filter(match: "re.Match[str]") -> str:
+        tag = match.group(0)
+        if "filter=" in tag:
+            return tag
+        # Insert before the closing > (preserves self-closing or not).
+        if tag.endswith("/>"):
+            return tag[:-2] + ' filter="url(#elev)"/>'
+        return tag[:-1] + ' filter="url(#elev)">'
+    raw = re.sub(r"<ellipse\b[^>]*/?>", _add_filter, raw)
+
+    # 3. Edge-label pills. Find every <text> inside a <g class="edge">
+    #    and prepend a matching <rect>. Bbox isn't available without
+    #    rendering, so we approximate from text length × font size at
+    #    a known average glyph width. This is good enough for pill
+    #    sizing — text stays inside the pill on every label we've
+    #    seen across smoke tests.
+    raw = _wrap_edge_labels_in_pills(raw)
+
+    path.write_text(raw, encoding="utf-8")
+
+
+def _wrap_edge_labels_in_pills(svg: str) -> str:
+    """Insert a rounded-rect background behind every edge-text label.
+
+    Graphviz emits each edge as a ``<g class="edge">`` wrapper
+    containing path(s) + a ``<text>`` for the label. We find each
+    ``<text>`` inside an edge group and prepend a ``<rect>`` whose
+    bounds approximate the text bounding box.
+
+    Approximation: width = chars * fontsize * 0.55, height = fontsize
+    * 1.5. Errs slightly wide so labels never clip the pill on the
+    right edge. Pill background is the page color (_EDGE_LABEL_BG)
+    so it reads as the edge being interrupted, not as a chip.
+    """
+    import re
+
+    out: list[str] = []
+    pos = 0
+    edge_pattern = re.compile(
+        r'<g\s+id="[^"]*"\s+class="edge">.*?</g>', re.DOTALL
+    )
+    # Graphviz writes <text xml:space="preserve" text-anchor="..." x=".." y=".."
+    # font-family=".." font-size=".." fill="..">...</text>. Match liberally
+    # on attribute order — only x/y/font-size are required for the pill.
+    text_pattern = re.compile(
+        r'<text\b[^>]*?\bx="([\-\d.]+)"[^>]*?\by="([\-\d.]+)"'
+        r'[^>]*?\bfont-size="([\d.]+)"[^>]*>'
+        r'([^<]+)</text>',
+        re.DOTALL,
+    )
+    for em in edge_pattern.finditer(svg):
+        out.append(svg[pos:em.start()])
+        block = em.group(0)
+        # For each <text> inside this edge block, prepend a pill.
+        def _pill(match: "re.Match[str]") -> str:
+            x = float(match.group(1))
+            y = float(match.group(2))
+            fs = float(match.group(3))
+            content = match.group(4)
+            # Approximate text bbox.
+            glyph_w = fs * 0.55
+            w = max(len(content) * glyph_w, fs * 2.0) + 6.0
+            h = fs * 1.45
+            rx = x - w / 2.0
+            ry = y - h * 0.78  # text baseline → rect top
+            rect = (
+                f'<rect x="{rx:.1f}" y="{ry:.1f}" '
+                f'width="{w:.1f}" height="{h:.1f}" rx="2.5" ry="2.5" '
+                f'fill="{_EDGE_LABEL_BG}" stroke="none" opacity="0.92"/>'
+            )
+            return rect + match.group(0)
+        new_block = text_pattern.sub(_pill, block)
+        out.append(new_block)
+        pos = em.end()
+    out.append(svg[pos:])
+    return "".join(out)
 
 
 # ----- Inline-SVG helper used by the deliverables stage ----- #

@@ -132,25 +132,17 @@
   </div>
 </div>
 
-{% if flow_svg %}
+{% if flow_filename %}
 <h2>3.1 Fund Flow Diagram</h2>
-<div class="flow-diagram" data-case="{{ case_id }}">
-  {{ flow_svg|safe }}
-  <div class="flow-caption">
-    Solid arrows indicate observed on-chain transfers; edge labels show the
-    USD-denominated value at the time of transfer with line thickness
-    scaled logarithmically to value. Each node represents one address;
-    hover-state metadata, when available, names the controlling entity.
-    <div class="flow-legend">
-      <span class="swatch victim">Victim wallet</span>
-      <span class="swatch exchange">Labeled exchange</span>
-      <span class="swatch mixer">Mixer (terminal)</span>
-      <span class="swatch bridge">Bridge (terminal)</span>
-      <span class="swatch contract">DeFi contract</span>
-      <span class="swatch wallet">Unlabeled wallet</span>
-    </div>
-  </div>
-</div>
+<p class="attachment-note">
+  The fund-flow diagram is provided as a separate SVG attachment
+  (<span class="mono">{{ flow_filename }}</span>) accompanying this
+  package. Open in any modern browser for full-resolution inspection;
+  each wallet node links to its Etherscan record. Solid arrows
+  represent observed on-chain transfers, with edge labels showing
+  USD-denominated value at the time of transfer and line thickness
+  scaled logarithmically to value.
+</p>
 {% endif %}
 
 <h2>4. Stolen Asset Details</h2>

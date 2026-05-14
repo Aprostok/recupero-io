@@ -143,23 +143,13 @@
 <p>No subsequent forwarding observed; the funds remain in the perpetrator's initial receiving wallet.</p>
 {% endif %}
 
-{% if flow_svg %}
-<h3>Fund flow visualization</h3>
-<div class="flow-diagram" data-case="{{ case_id }}">
-  {{ flow_svg|safe }}
-  <div class="flow-caption">
-    Visualization of observed on-chain transfers from victim wallet
-    through to current location of the stolen position. Edge labels
-    show USD-denominated value at time of transfer.
-    <div class="flow-legend">
-      <span class="swatch victim">Victim wallet</span>
-      <span class="swatch exchange">Labeled exchange</span>
-      <span class="swatch mixer">Mixer</span>
-      <span class="swatch bridge">Bridge</span>
-      <span class="swatch wallet">Unlabeled wallet</span>
-    </div>
-  </div>
-</div>
+{% if flow_filename %}
+<p class="attachment-note">
+  A complete fund-flow visualization is provided as a separate SVG
+  attachment (<span class="mono">{{ flow_filename }}</span>) accompanying
+  this letter. Open the file in any modern browser to inspect at full
+  resolution; each wallet node links directly to its Etherscan record.
+</p>
 {% endif %}
 
 <h2>4. Current Location</h2>

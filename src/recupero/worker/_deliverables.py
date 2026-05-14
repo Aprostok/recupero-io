@@ -133,10 +133,14 @@ def build_all_deliverables(
 
     investigator = investigator or _DEFAULT_INVESTIGATOR
 
-    # Render the fund-flow SVG once. All issuer briefs + the LE handoff(s)
-    # embed the same diagram inline. We also write a standalone .svg in
-    # briefs/ so operators can pull the diagram into separate decks/PDFs.
-    flow_svg_inline = ""
+    # Render the fund-flow SVG once into the standalone briefs/flow_<hash>.svg
+    # file. Letters and LE handoffs reference this filename in their
+    # "attachment-note" paragraph rather than embedding the SVG inline —
+    # real-case traces produce SVGs with absurd aspect ratios (e.g.
+    # 984×20261pt) that are unreadable when crammed into a letter-width
+    # HTML column. The standalone file opens at native resolution with
+    # working Etherscan hyperlinks per the operator's design.
+    flow_filename: str | None = None
     try:
         from recupero.worker._flow_diagram import render_flow_diagram
         from uuid import uuid4
@@ -144,9 +148,7 @@ def build_all_deliverables(
         briefs_dir.mkdir(parents=True, exist_ok=True)
         flow_svg_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
         if render_flow_diagram(case, flow_svg_path) is not None:
-            flow_svg_inline = _strip_svg_preamble(
-                flow_svg_path.read_text(encoding="utf-8")
-            )
+            flow_filename = flow_svg_path.name
     except Exception as e:  # noqa: BLE001
         log.warning("flow diagram generation failed (continuing without it): %s", e)
 
@@ -160,7 +162,7 @@ def build_all_deliverables(
                 investigator=investigator,
                 case_dir=case_dir,
                 issuer=issuer_info,
-                flow_svg=flow_svg_inline or None,
+                flow_filename=flow_filename,
             )
             written.append(bundle.maple_path)
             written.append(bundle.le_path)
@@ -195,16 +197,6 @@ def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:
         if (h.get("status") or "").upper() != "UNRECOVERABLE":
             return True
     return False
-
-
-def _strip_svg_preamble(svg_text: str) -> str:
-    """Remove ``<?xml ...?>`` and ``<!DOCTYPE ...>`` lines so the SVG
-    can be embedded inline in HTML without confusing the HTML parser.
-    Keeps everything from ``<svg`` onward."""
-    idx = svg_text.find("<svg")
-    if idx == -1:
-        return svg_text
-    return svg_text[idx:]
 
 
 def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:

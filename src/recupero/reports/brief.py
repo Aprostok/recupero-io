@@ -103,7 +103,7 @@ def generate_briefs(
     asset_type: str = "ERC-20 yield-bearing wrapper token",
     asset_usd_value_current: str | None = None,
     outbound_count_of_stolen_asset: int = 0,
-    flow_svg: str | None = None,
+    flow_filename: str | None = None,
 ) -> BriefBundle:
     """Render both briefs and write them to disk."""
     # Identify the theft event: the largest USD transfer in the primary case
@@ -189,11 +189,18 @@ def generate_briefs(
         },
         "outbound_count_of_stolen_asset": outbound_count_of_stolen_asset,
         "identified_wallets": identified_wallets,
-        # Inline-SVG flow diagram. Templates render via {{ flow_svg|safe }};
-        # absence is rendered as nothing rather than an error so the
-        # legacy CLI flow continues to work without the worker's
-        # diagram pipeline attached.
-        "flow_svg": flow_svg or "",
+        # Fund-flow diagram is written as a separate file in the same
+        # briefs/ directory; the freeze letter + LE handoff just
+        # reference it by filename. Previously the SVG was inlined into
+        # the HTML, but on real cases that produces a 984×20261pt block
+        # crammed into a letter-width column with microscopic labels
+        # and dead hyperlinks on print/email render. The attachment-
+        # pointer pattern keeps the standalone file usable at its
+        # native resolution and the letter readable.
+        # ``flow_filename`` is None when no diagram was rendered (CLI
+        # path without the worker diagram pipeline). Templates guard
+        # with ``{% if flow_filename %}``.
+        "flow_filename": flow_filename,
     }
 
     env = Environment(

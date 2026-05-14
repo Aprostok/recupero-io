@@ -28,6 +28,7 @@ import socket
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
@@ -380,20 +381,29 @@ def health_check() -> int:
 def _run_watch_tick_once(*, limit: int | None) -> int:
     """CLI entry point for ``recupero-worker --watch-tick``.
 
-    Runs one pass of the nightly watchlist snapshot loop and prints a
-    summary report. Designed to be invoked from a Railway cron entry
-    (e.g. ``0 3 * * *`` UTC). Returns 0 on a clean pass even when
-    individual wallets fail — only env / DB misconfiguration produces
-    a non-zero exit, so a partial-fail tick doesn't take down the cron.
+    Runs one pass of the nightly watchlist snapshot loop, renders the
+    daily digest deliverable, uploads the digest to the
+    ``watchlist-digest/<date>/`` bucket prefix, and prints a summary.
+    Designed to be invoked from a Railway cron entry (e.g.
+    ``0 3 * * *`` UTC).
 
-    The materially-changed rows are logged at WARNING level so the
-    operator can spot them in Railway log search even before the
-    digest deliverable lands.
+    Returns 0 on a clean pass even when individual wallets fail —
+    only env / DB misconfiguration produces a non-zero exit, so a
+    partial-fail tick doesn't take down the cron.
+
+    Materially-changed rows are also logged at WARNING level so they
+    surface in Railway log search even before an operator opens the
+    digest PDF.
     """
+    import tempfile
+    from recupero.storage.supabase_case_store import SupabaseCaseStore
+    from recupero.worker.mini_freeze import generate_daily_digest
     from recupero.worker.watch_tick import run_watch_tick
 
     cfg, env = load_config()
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    service_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if not dsn:
         log.error("SUPABASE_DB_URL is not set; cannot run watch-tick")
         return 2
@@ -420,7 +430,103 @@ def _run_watch_tick_once(*, limit: int | None) -> int:
     for err in report.errors:
         log.warning("watch-tick error: %s", err)
 
+    # Total active watchlist count for the digest cover page (covers
+    # both the rows snapshotted this tick AND those still in their
+    # cooldown window — the operator wants to see "we monitor 1227,
+    # snapshotted 245 today" not just "245 snapshotted").
+    total_watched = _count_active_watchlist(dsn)
+
+    # Render the digest unconditionally — even a no-material-change
+    # tick produces an "all clear" page so the operator can confirm
+    # the cron job actually ran today.
+    with tempfile.TemporaryDirectory(prefix="recupero-digest-") as tmp:
+        try:
+            bundle = generate_daily_digest(
+                report, output_dir=Path(tmp), total_watched=total_watched,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.exception("digest render failed: %s", exc)
+            return 0  # don't fail cron on render error
+
+        # Upload to bucket: watchlist-digest/<YYYY-MM-DD>/<digest_id>.html/.pdf
+        if supabase_url and service_role:
+            try:
+                _upload_digest_to_bucket(
+                    cfg=cfg, supabase_url=supabase_url,
+                    service_role=service_role, bundle=bundle,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("digest upload skipped: %s", exc)
+        else:
+            log.info(
+                "digest written locally to %s (bucket upload skipped — "
+                "SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set)",
+                bundle.html_path,
+            )
+
     return 0
+
+
+def _count_active_watchlist(dsn: str) -> int:
+    """Total active rows in public.watchlist (irrespective of cooldown)."""
+    import re as _re
+    import psycopg as _psy
+    pooled = dsn
+    if "db." in pooled and ".supabase.co" in pooled:
+        m = _re.search(
+            r"postgres(?:ql)?://([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co",
+            pooled,
+        )
+        if m:
+            user, pwd, ref = m.group(1), m.group(2), m.group(3)
+            pooled = (
+                f"postgresql://{user}.{ref}:{pwd}"
+                f"@aws-1-us-east-1.pooler.supabase.com:6543/postgres"
+            )
+    try:
+        with _psy.connect(pooled, autocommit=True, prepare_threshold=None,
+                          connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM public.watchlist WHERE status='active';")
+                row = cur.fetchone()
+                return int(row[0]) if row else 0
+    except Exception as exc:  # noqa: BLE001
+        log.warning("active watchlist count failed: %s", exc)
+        return 0
+
+
+def _upload_digest_to_bucket(
+    *, cfg, supabase_url: str, service_role: str, bundle,
+) -> None:
+    """Upload the digest HTML + PDF to ``watchlist-digest/<date>/``.
+
+    Uses the same ``_upload_to_subpath`` helper from worker.sync —
+    the digest doesn't belong to any one investigation, so it lands
+    at the bucket root prefix instead of under ``investigations/<id>/``.
+    """
+    from recupero.storage.supabase_case_store import SupabaseCaseStore
+    # We use a placeholder investigation_id just so the SupabaseCaseStore
+    # constructor is happy; we override the storage prefix per upload.
+    store = SupabaseCaseStore(
+        cfg, supabase_url, service_role,
+        investigation_id="00000000-0000-0000-0000-000000000000",
+    )
+    try:
+        html_dest = bundle.bucket_prefix + bundle.html_path.name
+        store._upload(  # noqa: SLF001
+            html_dest, bundle.html_path.read_bytes(),
+            "text/html; charset=utf-8",
+        )
+        log.info("digest uploaded: %s", html_dest)
+        if bundle.pdf_path is not None and bundle.pdf_path.exists():
+            pdf_dest = bundle.bucket_prefix + bundle.pdf_path.name
+            store._upload(  # noqa: SLF001
+                pdf_dest, bundle.pdf_path.read_bytes(),
+                "application/pdf",
+            )
+            log.info("digest uploaded: %s", pdf_dest)
+    finally:
+        store.close()
 
 
 def cli() -> None:

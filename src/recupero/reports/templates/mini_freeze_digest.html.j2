@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Daily Movement Digest — {{ tick_date }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Strictly Private &amp; Confidential</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Watchlist Monitoring · 24-Hour Window</div>
+    <h1>Daily Movement<br/>Digest</h1>
+    <p class="cover-subtitle">
+      Material on-chain activity observed across {{ total_watched }}
+      monitored wallets during the past tick. {{ material_count }}
+      wallet{{ 's' if material_count != 1 else '' }} crossed a
+      materiality threshold and warrant{{ '' if material_count != 1 else 's' }}
+      operator review.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Tick Window</dt>
+      <dd>{{ tick_window }}<span class="secondary">{{ tick_duration }} wallclock</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Wallets Snapshotted</dt>
+      <dd>{{ snapshotted }}<span class="secondary">of {{ total_watched }} active watchlist rows</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Material Changes</dt>
+      <dd>{{ material_count }}<span class="secondary">{{ freezeable_count }} on freezeable wallets</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Total Outflow Observed</dt>
+      <dd>USD {{ total_outflow_usd }}<span class="secondary">net negative balance changes</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Digest Identifier</dt>
+      <dd class="mono">{{ digest_id }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Errors</dt>
+      <dd>{{ error_count }}<span class="secondary">per-wallet snapshot failures</span></dd>
+    </div>
+  </dl>
+</section>
+
+{% if material_count == 0 %}
+<div class="summary-box">
+  <p style="margin:0">
+    <strong>No material movement observed.</strong>
+    All {{ snapshotted }} watched wallets are within materiality
+    thresholds since the last snapshot. No operator action is
+    required from this tick. The next tick will run on the standard
+    nightly schedule; an interim manual tick can be requested via
+    <span class="mono">recupero-worker --watch-tick</span>.
+  </p>
+</div>
+{% else %}
+
+<div class="summary-box urgent">
+  <p style="margin:0 0 0.5em 0;">
+    <strong>Action recommended.</strong>
+    {{ material_count }} watched wallet{{ 's have' if material_count != 1 else ' has' }}
+    moved funds, received new transfers, or changed balance beyond
+    the materiality threshold in the past 24 hours. The summary
+    below identifies each affected wallet, the magnitude of the
+    change, and the on-chain reference for verification.
+  </p>
+  {% if freezeable_count > 0 %}
+  <p style="margin:0;">
+    Of these, <strong>{{ freezeable_count }}</strong> are flagged as
+    freezeable through an asset issuer. Any new outbound transfer
+    from a freezeable wallet is grounds to expedite the existing
+    issuer freeze request — recommend immediate follow-up to the
+    relevant issuer compliance contact{{ 's' if freezeable_count != 1 else '' }}.
+  </p>
+  {% endif %}
+</div>
+
+<h2>1. Material Changes Observed</h2>
+<table class="evidence">
+  <tr>
+    <th>Wallet</th>
+    <th>Role</th>
+    <th>Issuer</th>
+    <th>Δ Balance (USD)</th>
+    <th>New Tx</th>
+    <th>Last Snapshot</th>
+  </tr>
+  {% for c in changes %}
+  <tr class="{{ c.row_class }}">
+    <td class="mono"><a href="{{ c.explorer_url }}">{{ c.address_short }}</a></td>
+    <td>{{ c.role }}{% if c.label_name %}<br/><span class="small secondary">{{ c.label_name }}</span>{% endif %}</td>
+    <td>{{ c.issuer or '—' }}{% if c.asset_symbol %}<br/><span class="small secondary">{{ c.asset_symbol }}</span>{% endif %}</td>
+    <td class="amount">{{ c.delta_usd_human }}</td>
+    <td class="amount">{{ c.tx_count_delta_human }}</td>
+    <td class="mono small">{{ c.prior_taken_at_human }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<h2>2. Recommended Operator Actions</h2>
+<ol>
+  {% if freezeable_count > 0 %}
+  <li>
+    For freezeable wallets with new outbound activity
+    ({{ freezeable_count }} above): notify the relevant issuer
+    compliance contact{{ 's' if freezeable_count != 1 else '' }}
+    of the new transfer{{ 's' if freezeable_count != 1 else '' }} and
+    request expedited review of the standing freeze request. The
+    original freeze brief{{ 's' if freezeable_count != 1 else '' }}
+    accompanies this digest by case reference.
+  </li>
+  {% endif %}
+  <li>
+    Cross-reference any large outbound transfers against the
+    perpetrator's known on-chain pattern before sending fresh
+    process — sudden, unusual movement is often the perpetrator
+    reacting to investigative pressure and identifies their next
+    wallet of interest, which can be added to the watchlist.
+  </li>
+  <li>
+    For wallets where the change is balance-only (no new tx — e.g.
+    inbound consolidation from another address): no immediate action
+    required, but the wallet's continued activity confirms the
+    perpetrator's operational behavior, which strengthens the case
+    narrative for the LE handoff.
+  </li>
+</ol>
+
+<h2>3. Per-Wallet Detail</h2>
+{% for c in changes %}
+<div class="summary-box {{ 'urgent' if c.is_freezeable else '' }}">
+  <p style="margin:0 0 0.5em 0;">
+    <strong>{{ c.address_short }}</strong>
+    {% if c.label_name %}({{ c.label_name }}){% endif %}
+    — <em>{{ c.reason }}</em>
+  </p>
+  <table class="evidence" style="margin:0;">
+    <tr><th>Address</th><td class="mono"><a href="{{ c.explorer_url }}">{{ c.address }}</a></td></tr>
+    <tr><th>Chain</th><td>{{ c.chain }}</td></tr>
+    <tr><th>Role on case</th><td>{{ c.role }}</td></tr>
+    {% if c.issuer %}<tr><th>Asset issuer</th><td>{{ c.issuer }}{% if c.asset_symbol %} ({{ c.asset_symbol }}){% endif %}</td></tr>{% endif %}
+    <tr><th>Prior snapshot</th><td class="mono">{{ c.prior_taken_at_human }} — USD {{ c.prior_usd_human }}, {{ c.prior_tx_count_human }} txs</td></tr>
+    <tr><th>Current snapshot</th><td class="mono">{{ c.new_taken_at_human }} — USD {{ c.new_usd_human }}, {{ c.new_tx_count_human }} txs</td></tr>
+    <tr><th>Net change</th><td class="amount">{{ c.delta_usd_human }} · {{ c.tx_count_delta_human }} new tx</td></tr>
+  </table>
+</div>
+{% endfor %}
+
+{% endif %}
+
+<h2>{{ '4' if material_count > 0 else '1' }}. Verification</h2>
+<p>
+  Every snapshot in this digest is sourced from public on-chain state
+  fetched between {{ tick_started_human }} and {{ tick_finished_human }} UTC.
+  Each address links to its block-explorer record. The watchlist itself
+  is populated automatically from the worker's freeze stage; manual
+  additions (via <span class="mono">scripts/recupero_watch.py</span>) are
+  marked with <span class="mono">flagged_by</span> set to the operator's
+  identifier.
+</p>
+<p class="small">
+  Source: Etherscan API v2 (multichain); CoinGecko historical pricing
+  (cached); our internal watchlist database. Snapshot history is
+  retained indefinitely in <span class="mono">public.watchlist_snapshots</span>
+  for audit purposes.
+</p>
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>{{ digest_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Strictly Confidential.</span> Distributed to subscribed operators only.
+  </div>
+</footer>
+
+</body>
+</html>

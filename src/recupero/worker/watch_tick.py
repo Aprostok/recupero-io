@@ -269,14 +269,17 @@ def _fetch_eligible(
                 OR last_snapshot_at < NOW() - make_interval(secs => %s))
          ORDER BY last_balance_usd DESC NULLS LAST, flagged_at ASC
     """
-    if limit:
+    # Treat None and 0 as "no limit" so the CLI flag can default
+    # safely to 0 without silently capping everything.
+    use_limit = limit if (limit is not None and limit > 0) else None
+    if use_limit is not None:
         sql += " LIMIT %s"
     pooled_dsn = _pooled_dsn(dsn)
     with psycopg.connect(pooled_dsn, autocommit=True, row_factory=dict_row,
                          prepare_threshold=None, connect_timeout=10) as conn:
         with conn.cursor() as cur:
-            if limit:
-                cur.execute(sql, (min_interval_sec, limit))
+            if use_limit is not None:
+                cur.execute(sql, (min_interval_sec, use_limit))
             else:
                 cur.execute(sql, (min_interval_sec,))
             return list(cur.fetchall())

@@ -307,48 +307,41 @@
      is fully clickable from a reviewer's desk (WeasyPrint
      converts <a> tags to PDF link annotations).
 
-     PDF-compatibility note: WeasyPrint 60-69 has flaky support
-     for the modern CSS3 text-decoration-{color,thickness,offset}
-     trio — especially when the color comes from a CSS variable.
-     We saw the styled treatment render correctly in the HTML
-     (visible in browser) but the PDF dropped the underline color
-     and thickness, leaving the addresses looking like plain mono
-     text. Switching to literal hex values + border-bottom (which
-     WeasyPrint has supported reliably since its earliest
-     versions) makes the PDF treatment identical to the HTML.
+     Treatment: ethereum-blue text + standard underline. Two
+     primitives WeasyPrint has rendered reliably since v40 — no
+     CSS variables, no border-bottom (which doesn't survive line
+     wrap on long mono content), no modern text-decoration-{color,
+     thickness,offset} (which WeasyPrint 60-69 drops). The BLUE
+     TEXT alone is the dominant cue; the underline is confirmation.
 
-     Visual treatment:
-       * Text color #1D4ED8 (Ethereum blue) — distinct from body
-         ink so the BLUE TEXT alone signals "link" even before
-         the underline is read.
-       * border-bottom 1.5px solid #9C7E3F (brand gold) — bold
-         enough to read at print resolution against the mono
-         monospaced glyphs.
-       * padding-bottom 1px so the underline doesn't kiss the
-         baseline. */
+     Specificity-bumped via !important to override the global `a`
+     rule lower in this stylesheet — without this, WeasyPrint
+     resolved the global rule's modern text-decoration-color and
+     left mono addresses looking like body ink. */
   a.mono,
   .mono a,
-  table.evidence a {
-    color: #1D4ED8;
-    text-decoration: none;
-    border-bottom: 1.5px solid #9C7E3F;
-    padding-bottom: 1px;
-  }
-  a.mono:hover,
-  .mono a:hover,
-  table.evidence a:hover {
-    color: #9C7E3F;
-    border-bottom-color: currentColor;
+  table.evidence a,
+  a[href*="etherscan"],
+  a[href*="arbiscan"],
+  a[href*="basescan"],
+  a[href*="polygonscan"],
+  a[href*="bscscan"],
+  a[href*="solscan"] {
+    color: #1D4ED8 !important;
+    text-decoration: underline !important;
+    /* Allow long hex addresses to wrap at any character — without
+       this they overflow the column on narrow body / table cells
+       and the PDF gets cut off on the right. */
+    word-break: break-all;
+    overflow-wrap: anywhere;
   }
   /* Non-mono prose links ("View on Etherscan", "Token transfer
-     history") — louder solid underline + semibold since they're
-     explicit CTAs in body prose, not in-line address chrome. */
+     history") — same color + semibold for visual emphasis since
+     they're explicit CTAs in body prose. */
   .summary-box a:not(.mono),
   p a:not(.mono):not([href*="@"]) {
-    color: #1D4ED8;
-    text-decoration: none;
-    border-bottom: 2px solid #9C7E3F;
-    padding-bottom: 1px;
+    color: #1D4ED8 !important;
+    text-decoration: underline !important;
     font-weight: 600;
   }
 
@@ -521,18 +514,20 @@
     font-family: var(--font-mono);
     font-weight: 500;
     word-break: break-all;
+    overflow-wrap: anywhere;
     font-feature-settings: "tnum" 1;
   }
   .small { font-size: var(--type-small); color: var(--ink-quiet); }
+  /* Default `a` styling — falls back to the address-link rule
+     above for anything matching the explorer-href patterns. Plain
+     prose links (non-clickable internal anchors, mailto, etc.)
+     get a quiet inherit-color + no underline so we don't end up
+     with a wall of blue text. Using literal values only —
+     WeasyPrint 60-69 drops the modern text-decoration-{color,
+     thickness,offset} CSS3 properties. */
   a {
-    color: var(--ink);
-    text-decoration: underline;
-    text-decoration-color: var(--gold-accent);
-    text-decoration-thickness: 1px;
-    text-underline-offset: 2px;
-  }
-  a:hover {
-    text-decoration-color: var(--ink);
+    color: inherit;
+    text-decoration: none;
   }
 
   /* Flow-diagram inline card removed in commit aa7dce7. The fund-flow

@@ -94,17 +94,17 @@ _MONO_FACE = "Menlo,Consolas,monospace"
 # Brand palette (matches _styles.html.j2)
 _BRAND_NAVY = "#0B2545"
 _BRAND_GOLD = "#B8924A"
-# Off-white paper for the canvas — subtle warmth, looks expensive on
-# print compared to flat #FFFFFF (which reads as "cheap web page").
-_BG_COLOR = "#FAFAF7"
+# Pure white canvas — TRM Forensics uses crisp white so entity
+# borders and letter-mark badges pop maximally. The earlier
+# #FAFAF7 off-white was warmer but muted the contrast.
+_BG_COLOR = "#FFFFFF"
 _TITLE_COLOR = _BRAND_NAVY
-_SUBTITLE_COLOR = "#64748B"
-# Edge color stack — quiet medium-grey for the line, a deeper but
-# still restrained slate for the label so the dollar values pop
-# without screaming.
-_EDGE_COLOR = "#CBD5E1"
-_EDGE_LABEL_COLOR = "#1F2937"
-_EDGE_LABEL_BG = "#FAFAF7"  # matches page bg so the "pill" reads as cut-out
+_SUBTITLE_COLOR = "#475569"
+# Edge color stack — slate-blue for the line so direction reads at
+# a glance; deep slate for the label so dollar values dominate.
+_EDGE_COLOR = "#94A3B8"
+_EDGE_LABEL_COLOR = "#0F172A"
+_EDGE_LABEL_BG = "#FFFFFF"  # matches page bg so the "pill" reads as cut-out
 
 # Per-category fill / border-stroke / label-text colors. The border color
 # is overridden later by the chain coloring; this is the *category* tint
@@ -119,36 +119,49 @@ _EDGE_LABEL_BG = "#FAFAF7"  # matches page bg so the "pill" reads as cut-out
 #     family so the label has serious contrast (4.5:1+).
 #   * Victim is intentionally a different blue from chain-ethereum
 #     so the seed node never gets confused with a generic ETH wallet.
+#
+# Palette upgrade (vibrant + clean, TRM-aligned):
+#
+#   * Fills are now bright, saturated — closer to brand-asset peak
+#     than mid-tone. On a pure-white canvas with thick chain-coded
+#     borders, the brighter fill reads as "premium product asset",
+#     the way TRM Forensics' entity nodes do. The earlier mid-tones
+#     were safe but muted.
+#   * Border colors are punchier — bumped saturation a step.
+#   * Text colors are deep near-black variants of each fill's hue
+#     family so the label still has 7:1+ contrast.
+#
 _NODE_PALETTE: dict[str, tuple[str, str, str]] = {
-    "victim":               ("#BFDBFE", "#1D4ED8", "#0C2A6E"),  # solid blue
-    "exchange_deposit":     ("#BBF7D0", "#15803D", "#0F3D1F"),  # solid green
-    "exchange_hot_wallet":  ("#BBF7D0", "#15803D", "#0F3D1F"),
-    "mixer":                ("#FECACA", "#B91C1C", "#5B1414"),  # solid red
-    "bridge":               ("#FED7AA", "#C2410C", "#5C1F09"),  # solid orange
-    "defi_protocol":        ("#DDD6FE", "#6D28D9", "#3C1380"),  # solid purple
-    "perpetrator":          ("#FECDD3", "#9F1239", "#5B0B1F"),  # solid crimson
-    "staking":              ("#BAE6FD", "#0369A1", "#0B3A57"),  # solid sky
-    # New: wallets that hold a token an issuer can freeze (USDC at
-    # Circle, USDT at Tether, DAI at Sky, USDP/PYUSD at Paxos).
-    # Distinct gold treatment so they read as the "freeze the funds
-    # here" callouts — visually different from exchanges (green) so
-    # operators can tell at a glance which path is issuer-controlled
-    # vs CEX-controlled.
-    "freezable_holding":    ("#FEF3C7", "#B45309", "#5C2D0F"),  # warm gold
-    # Fallback (unknown / unlabeled wallet) — quiet neutral.
+    "victim":               ("#93C5FD", "#1D4ED8", "#0C2A6E"),  # vibrant blue
+    "exchange_deposit":     ("#86EFAC", "#15803D", "#0F3D1F"),  # vibrant green
+    "exchange_hot_wallet":  ("#86EFAC", "#15803D", "#0F3D1F"),
+    "mixer":                ("#FCA5A5", "#B91C1C", "#5B1414"),  # vibrant red
+    "bridge":               ("#FDBA74", "#C2410C", "#5C1F09"),  # vibrant orange
+    "defi_protocol":        ("#C4B5FD", "#6D28D9", "#3C1380"),  # vibrant purple
+    "perpetrator":          ("#FDA4AF", "#9F1239", "#5B0B1F"),  # vibrant crimson
+    "staking":              ("#7DD3FC", "#0369A1", "#0B3A57"),  # vibrant sky
+    # Freezable holdings (Circle / Tether / Sky / Paxos USDC/USDT
+    # /DAI/USDP). Punchier gold so the "freeze the funds here"
+    # callout reads loudest of all categories — these are the
+    # actionable nodes.
+    "freezable_holding":    ("#FDE68A", "#B45309", "#5C2D0F"),  # vibrant gold
+    # Fallback (unknown / unlabeled wallet) — stays quiet neutral so
+    # entity badges win visual hierarchy.
     "wallet":               ("#F1F5F9", "#94A3B8", "#334155"),
 }
 
 # Chain-coded border color. TRM uses distinct chain colors on every node
 # so cross-chain hops jump out. The hue here roughly matches each
 # chain's own branding so a familiar reader doesn't need a legend.
+# Saturation bumped a step over each chain's flat brand color to
+# print legibly at 1pt+ stroke widths.
 _CHAIN_STROKE: dict[str, str] = {
-    "ethereum":    "#627EEA",
-    "arbitrum":    "#28A0F0",
-    "base":        "#0052FF",
-    "polygon":     "#8247E5",
-    "bsc":         "#F0B90B",
-    "solana":      "#9945FF",
+    "ethereum":    "#4F6FF3",
+    "arbitrum":    "#1392E5",
+    "base":        "#0046E5",
+    "polygon":     "#7B3FE4",
+    "bsc":         "#E6A800",
+    "solana":      "#8B2EFF",
     "hyperliquid": "#0F0F0F",
     "bitcoin":     "#F7931A",
 }
@@ -523,10 +536,14 @@ def render_flow_diagram(
         label=_html_title_label(case, title, omitted=omitted),
         fontname=_FONT_FACE,
         fontsize="14",
-        nodesep="0.35",
-        ranksep="0.55",
-        pad="0.4",
-        margin="0.2",
+        # Bigger ranksep + nodesep = more whitespace between nodes,
+        # which is the single most reliable visual cue for "this
+        # looks like a clean professional asset, not a tool dump".
+        # TRM Forensics graphs breathe — we copy that.
+        nodesep="0.55",
+        ranksep="0.85",
+        pad="0.5",
+        margin="0.25",
         splines="spline",
         concentrate="true",
         size="12,7.5!",
@@ -544,12 +561,16 @@ def render_flow_diagram(
     g.attr(
         "edge",
         fontname=_FONT_FACE,
-        fontsize="8",
+        fontsize="9",
         color=_EDGE_COLOR,
         fontcolor=_EDGE_LABEL_COLOR,
-        arrowsize="0.55",
-        arrowhead="normal",   # cleaner triangle than vee; refined post-process replaces
-        penwidth="1.1",
+        # Tighter, sharper arrowhead. Graphviz's "normal" triangle
+        # was already cleaner than "vee"; "open" is even more
+        # restrained — it draws as a hollow arrowhead which reads
+        # as "flow direction" without dominating the edge.
+        arrowsize="0.6",
+        arrowhead="open",
+        penwidth="1.2",
     )
 
     # Render nodes.
@@ -723,13 +744,13 @@ def _node_style(n: _NodeAttrs) -> dict[str, str]:
             "shape": "circle",
             "style": "filled",
             "fixedsize": "true",
-            "width": "1.55",
-            "height": "1.55",
+            "width": "1.65",         # bigger entity circles — more legible
+            "height": "1.65",
             "fillcolor": fill,
             "color": stroke,
             "fontcolor": text_color,
-            "fontsize": "9",
-            "penwidth": "2.4",
+            "fontsize": "10",        # bumped from 9 — easier read at print res
+            "penwidth": "3.0",       # thicker chain-coded border (was 2.4)
             "margin": "0.10,0.10",
             **_url_attrs(url, identity, short),
         }

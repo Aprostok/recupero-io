@@ -29,12 +29,40 @@ from uuid import uuid4
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from recupero import __version__
-from recupero.models import Case, Transfer
+from recupero.models import Case, Chain, Transfer
 from recupero.reports.victim import VictimInfo
 
 log = logging.getLogger(__name__)
 
 TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+# Chain → address-page explorer URL prefix.
+#
+# We mirror the prefix table that lives in worker/_flow_diagram.py
+# rather than importing it: brief.py runs from the standalone CLI too,
+# which doesn't carry the worker module. Keeping these in sync is
+# manual but stable — block explorers don't rebrand often.
+_ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
+    "ethereum":    "https://etherscan.io/address/",
+    "arbitrum":    "https://arbiscan.io/address/",
+    "polygon":     "https://polygonscan.com/address/",
+    "base":        "https://basescan.org/address/",
+    "bsc":         "https://bscscan.com/address/",
+    "solana":      "https://solscan.io/account/",
+    "hyperliquid": "https://app.hyperliquid.xyz/explorer/address/",
+}
+
+
+def _address_explorer_url(address: str, chain: Chain | str | None) -> str:
+    """Build a click-through URL for ``address`` on the appropriate
+    chain explorer. Falls back to Etherscan when chain is unknown."""
+    if not address:
+        return ""
+    chain_str = chain.value if isinstance(chain, Chain) else (chain or "ethereum")
+    prefix = _ADDRESS_EXPLORER_BY_CHAIN.get(chain_str,
+                                            "https://etherscan.io/address/")
+    return f"{prefix}{address}"
 
 
 @dataclass
@@ -164,6 +192,11 @@ def generate_briefs(
             "kyc_required": issuer.kyc_required,
             "kyc_minimum": issuer.kyc_minimum,
         },
+        # Address URLs are computed per-row so every raw address shown
+        # in the letter is a click-through link in the rendered PDF.
+        # WeasyPrint converts <a href=".."> annotations into PDF link
+        # rectangles, so compliance reviewers can jump straight from
+        # the document to the on-chain record.
         "theft_event": {
             "tx_hash": theft_transfer.tx_hash,
             "block_number": theft_transfer.block_number,
@@ -171,6 +204,12 @@ def generate_briefs(
             "from_address": theft_transfer.from_address,
             "to_address": theft_transfer.to_address,
             "explorer_url": theft_transfer.explorer_url,
+            "from_explorer_url": _address_explorer_url(
+                theft_transfer.from_address, theft_transfer.chain
+            ),
+            "to_explorer_url": _address_explorer_url(
+                theft_transfer.to_address, theft_transfer.chain
+            ),
         },
         "hops": [
             {
@@ -181,13 +220,29 @@ def generate_briefs(
                 "amount_human": _fmt_decimal(h.amount_decimal),
                 "symbol": h.token.symbol,
                 "explorer_url": h.explorer_url,
+                "from_explorer_url": _address_explorer_url(h.from_address, h.chain),
+                "to_explorer_url": _address_explorer_url(h.to_address, h.chain),
             }
             for h in hops
         ],
         "current_holder": {
             "address": current_holder_addr,
-            "explorer_url": f"https://etherscan.io/address/{current_holder_addr}",
+            "explorer_url": _address_explorer_url(
+                current_holder_addr, primary_case.chain
+            ),
         },
+        # Asset contract address: clickable token-contract page when
+        # the contract is known (None for native ETH / BTC).
+        "asset_contract_explorer_url": (
+            _address_explorer_url(theft_transfer.token.contract,
+                                  theft_transfer.chain)
+            if theft_transfer.token.contract else None
+        ),
+        # Victim wallet — first interaction many compliance reviewers
+        # will want is to verify the seed wallet on chain.
+        "victim_wallet_explorer_url": _address_explorer_url(
+            victim.wallet_address, primary_case.chain
+        ),
         "outbound_count_of_stolen_asset": outbound_count_of_stolen_asset,
         "identified_wallets": identified_wallets,
         # Fund-flow diagram lives in briefs/flow_<hash>.svg as a
@@ -338,6 +393,13 @@ def _build_identified_wallets(
     """Collect every distinct address mentioned across all cases, with role + label."""
     seen: dict[str, dict[str, Any]] = {}
 
+    # Each identified wallet carries an ``explorer_url`` so the
+    # rendered table makes every address a click-through to its
+    # on-chain page. We default the chain to the primary case's chain;
+    # multi-chain support is a follow-up (would need per-row chain
+    # tracking on the underlying transfers).
+    primary_chain = primary.chain
+
     def _add(addr: str, role: str, type_str: str, notes: str, row_class: str = ""):
         key = addr.lower()
         if key in seen:
@@ -346,6 +408,7 @@ def _build_identified_wallets(
         seen[key] = {
             "address": addr, "role": role, "type": type_str,
             "notes": notes, "row_class": row_class,
+            "explorer_url": _address_explorer_url(addr, primary_chain),
         }
 
     _add(victim.wallet_address, "Victim", "EOA", "Source of stolen funds", "victim-row")

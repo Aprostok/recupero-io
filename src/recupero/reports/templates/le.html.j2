@@ -74,7 +74,7 @@
   </p>
   <p style="margin:0 0 0.7em 0;">
     The position was promptly forwarded by the perpetrator to a secondary
-    wallet at <span class="mono">{{ current_holder.address }}</span>, where
+    wallet at <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>, where
     {{ outbound_count_of_stolen_asset }} outbound transfers have been
     observed as of {{ verified_at }} UTC.
   </p>
@@ -93,7 +93,7 @@
   {% if victim.address %}<dt>Residential address:</dt><dd>{{ victim.address }}</dd>{% endif %}
   {% if victim.email %}<dt>Email:</dt>      <dd>{{ victim.email }}</dd>{% endif %}
   {% if victim.phone %}<dt>Phone:</dt>      <dd>{{ victim.phone }}</dd>{% endif %}
-  <dt>Affected wallet:</dt>     <dd class="mono">{{ victim.wallet_address }}</dd>
+  <dt>Affected wallet:</dt>     <dd><a class="mono" href="{{ victim_wallet_explorer_url }}">{{ victim.wallet_address }}</a></dd>
   {% if victim.legal_counsel %}
   <dt>Legal counsel:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
   {% endif %}
@@ -109,8 +109,8 @@
   <div class="timeline-event theft">
     <time>{{ theft_event.timestamp_human }}</time> &nbsp;—&nbsp;
     <strong>Initial theft.</strong> {{ asset.amount_human }} {{ asset.symbol }} transferred
-    from victim wallet <span class="mono">{{ theft_event.from_address }}</span>
-    to perpetrator wallet <span class="mono">{{ theft_event.to_address }}</span>.
+    from victim wallet <a class="mono" href="{{ theft_event.from_explorer_url }}">{{ theft_event.from_address }}</a>
+    to perpetrator wallet <a class="mono" href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a>.
     Tx: <span class="mono"><a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a></span>
   </div>
   {% for hop in hops %}
@@ -118,15 +118,15 @@
     <time>{{ hop.timestamp_human }}</time> &nbsp;—&nbsp;
     <strong>Hop {{ loop.index }}.</strong>
     {{ hop.amount_human }} {{ hop.symbol }} transferred from
-    <span class="mono">{{ hop.from_address }}</span>
-    to <span class="mono">{{ hop.to_address }}</span>.
+    <a class="mono" href="{{ hop.from_explorer_url }}">{{ hop.from_address }}</a>
+    to <a class="mono" href="{{ hop.to_explorer_url }}">{{ hop.to_address }}</a>.
     Tx: <span class="mono"><a href="{{ hop.explorer_url }}">{{ hop.tx_hash }}</a></span>
   </div>
   {% endfor %}
   <div class="timeline-event current">
     <time>{{ verified_at }}</time> &nbsp;—&nbsp;
     <strong>Current state.</strong> Position remains in
-    <span class="mono">{{ current_holder.address }}</span>.
+    <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>.
     {{ outbound_count_of_stolen_asset }} outbound transfers of the stolen asset observed
     since receipt.
   </div>
@@ -145,7 +145,7 @@
 <h2>4. Stolen Asset Details</h2>
 <table class="evidence">
   <tr><th>Asset symbol</th>           <td>{{ asset.symbol }}</td></tr>
-  <tr><th>Token contract address</th> <td class="mono">{{ asset.contract }}</td></tr>
+  <tr><th>Token contract address</th> <td>{% if asset_contract_explorer_url %}<a class="mono" href="{{ asset_contract_explorer_url }}">{{ asset.contract }}</a>{% else %}<span class="mono">{{ asset.contract }}</span>{% endif %}</td></tr>
   <tr><th>Issuer (legal entity)</th>  <td>{{ asset.issuer }}</td></tr>
   {% if issuer.jurisdiction %}<tr><th>Issuer jurisdiction</th><td>{{ issuer.jurisdiction }}</td></tr>{% endif %}
   {% if issuer.secondary_party %}<tr><th>Underlying strategy operator</th><td>{{ issuer.secondary_party }} ({{ issuer.secondary_role }})</td></tr>{% endif %}
@@ -170,7 +170,7 @@
   </tr>
   {% for w in identified_wallets %}
   <tr class="{{ w.row_class }}">
-    <td class="mono">{{ w.address }}</td>
+    <td class="mono"><a href="{{ w.explorer_url }}">{{ w.address }}</a></td>
     <td>{{ w.role }}</td>
     <td>{{ w.type }}</td>
     <td>{{ w.notes }}</td>
@@ -188,7 +188,7 @@
     holds protocol-level authority over redemption and is the only party
     in a position to technically halt the {{ asset.amount_human }}
     {{ asset.symbol }} position at
-    <span class="mono">{{ current_holder.address }}</span>. A request
+    <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>. A request
     originating from your office is materially more enforceable than a
     third-party request.
     {% if issuer.kyc_required %}
@@ -215,7 +215,7 @@
 <ol>
   <li>Issue legal process to {{ issuer.short_name }} for KYC records on
       any party attempting to redeem or transfer the position out of
-      <span class="mono">{{ current_holder.address }}</span>.</li>
+      <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>.</li>
   <li>Issue legal process to any centralized exchange that receives
       onward transfers from the identified perpetrator wallets listed
       in Section 5.</li>

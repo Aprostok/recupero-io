@@ -291,6 +291,43 @@
     font-weight: 600;
   }
 
+  /* Address hyperlinks — restrained.
+     Every raw wallet/contract address in the letter is wrapped in
+     <a href="..."> so the rendered PDF is fully clickable from a
+     reviewer's desk (WeasyPrint converts <a> tags to PDF link
+     annotations). Default browser link styling (bright blue,
+     aggressive underline) would turn the document into a wall of
+     blue — we want links that read as part of the prose by default
+     and reveal themselves on hover / focus.
+
+     Color: deep navy (matches the brief letterhead) instead of
+     #0000EE browser blue. Underline: subtle dotted bottom border
+     so the linked status is visible without screaming. The mono
+     monospace face uses a slightly heavier dotted line so it
+     reads against the fixed-width letters. */
+  a.mono,
+  .mono a,
+  table.evidence a {
+    color: var(--ink);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--ink-quiet);
+  }
+  a.mono:hover,
+  .mono a:hover,
+  table.evidence a:hover {
+    color: var(--gold-accent);
+    border-bottom-color: var(--gold-accent);
+  }
+  /* Non-mono prose links (the few existing "View on Etherscan" /
+     "Token transfer history" CTAs) keep their slightly louder
+     treatment — they're explicit CTAs, not address chrome. */
+  .summary-box a:not(.mono),
+  p a:not(.mono):not([href*="@"]) {
+    color: var(--ink);
+    text-decoration: none;
+    border-bottom: 1px solid var(--gold-accent);
+  }
+
   /* Appendix-pointer — narrow inline note replacing the old
      attachment-pointer. Less prominent than .attachment-note because
      the diagram is included in the same document as Appendix A rather

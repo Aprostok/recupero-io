@@ -53,6 +53,7 @@ ACTIVE_STATUSES: frozenset[str] = frozenset({
     LISTING_FREEZE_TARGETS,
     EDITORIAL_DRAFTING,
     EMITTING,
+    BUILDING_PACKAGE,
 })
 
 TERMINAL_STATUSES: frozenset[str] = frozenset({COMPLETED, FAILED})

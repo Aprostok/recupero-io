@@ -112,6 +112,34 @@ A 03:00 UTC tick takes ~14 min on the current watchlist (1,227 rows)
 for the seconds the cron container is actually running (no idle
 charge between ticks).
 
+## Email delivery (optional)
+
+When configured, the cron sends the digest by email after the bucket
+upload. Plain-text body + HTML alternative (the rendered digest
+itself, inlined for HTML mail clients) + PDF attachment.
+
+Env vars (all required for sending):
+
+| Env var | Required? | Notes |
+|---|---|---|
+| `RECUPERO_DIGEST_RECIPIENTS` | yes (to enable) | Comma-separated email list. Absent = no email sent. |
+| `RECUPERO_SMTP_HOST` | yes | e.g. `smtp.sendgrid.net`, `smtp.postmarkapp.com`. |
+| `RECUPERO_SMTP_USER` | yes | SMTP username. For SendGrid use `apikey`. |
+| `RECUPERO_SMTP_PASSWORD` | yes | SMTP password or API key. |
+| `RECUPERO_SMTP_PORT` | optional | Default `587` (STARTTLS). |
+| `RECUPERO_DIGEST_FROM` | optional | `"Name <addr@host>"`. Default `"Recupero Digest <digest@recupero.io>"`. |
+| `RECUPERO_DIGEST_ALWAYS_SEND` | optional | `1` to send even on all-clear ticks. Default off (no inbox noise on quiet days). |
+
+Subject line lead with the actionable signal:
+
+- `[Recupero] 2 FREEZABLE wallets moved · 2026-05-14`
+- `[Recupero] 3 watched wallets moved · 2026-05-14`
+- `[Recupero] Daily Digest 2026-05-14 — all clear` (only when `ALWAYS_SEND=1`)
+
+Failures are best-effort: a delivery error logs a WARNING but
+doesn't fail the cron. The digest is always uploaded to the bucket
+first, so a failed email can be retrieved manually.
+
 ## Inspecting the output
 
 Per-tick digest files land in the bucket at:

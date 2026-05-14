@@ -464,6 +464,25 @@ def _run_watch_tick_once(*, limit: int | None) -> int:
                 bundle.html_path,
             )
 
+        # Email delivery — best-effort, runs after the bucket upload
+        # so the digest is durably stored before we try to push it
+        # outbound. A send failure logs but doesn't fail the cron.
+        try:
+            from recupero.worker.digest_email import maybe_send_digest_email
+            maybe_send_digest_email(
+                html_path=bundle.html_path,
+                pdf_path=bundle.pdf_path,
+                digest_id=bundle.digest_id,
+                material_count=bundle.summary.get("material_count", 0),
+                freezeable_count=bundle.summary.get("freezeable_count", 0),
+                total_outflow_usd=bundle.summary.get("total_outflow_usd", "0"),
+                tick_date=bundle.summary.get(
+                    "tick_started_at", ""
+                )[:10] or "today",
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("digest email path failed: %s", exc)
+
     return 0
 
 

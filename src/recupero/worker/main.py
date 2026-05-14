@@ -377,6 +377,52 @@ def health_check() -> int:
     return 0 if ok else 1
 
 
+def _run_watch_tick_once(*, limit: int | None) -> int:
+    """CLI entry point for ``recupero-worker --watch-tick``.
+
+    Runs one pass of the nightly watchlist snapshot loop and prints a
+    summary report. Designed to be invoked from a Railway cron entry
+    (e.g. ``0 3 * * *`` UTC). Returns 0 on a clean pass even when
+    individual wallets fail — only env / DB misconfiguration produces
+    a non-zero exit, so a partial-fail tick doesn't take down the cron.
+
+    The materially-changed rows are logged at WARNING level so the
+    operator can spot them in Railway log search even before the
+    digest deliverable lands.
+    """
+    from recupero.worker.watch_tick import run_watch_tick
+
+    cfg, env = load_config()
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        log.error("SUPABASE_DB_URL is not set; cannot run watch-tick")
+        return 2
+
+    log.info("watch-tick: starting; limit=%s", limit if limit else "none")
+    report = run_watch_tick(
+        dsn=dsn, config=cfg, env=env, limit=limit,
+    )
+
+    elapsed = (report.finished_at - report.started_at).total_seconds()
+    log.info(
+        "watch-tick: finished in %.1fs — candidates=%d snapshotted=%d "
+        "skipped_cooldown=%d skipped_unsupported_chain=%d "
+        "material_changes=%d errors=%d",
+        elapsed, report.candidates, report.snapshotted,
+        report.skipped_cooldown, report.skipped_unsupported_chain,
+        len(report.material_changes), len(report.errors),
+    )
+    for mc in report.material_changes:
+        log.warning(
+            "watch-tick MATERIAL CHANGE: %s on %s (role=%s issuer=%s) — %s",
+            mc.address, mc.chain, mc.role, mc.issuer or "-", mc.reason,
+        )
+    for err in report.errors:
+        log.warning("watch-tick error: %s", err)
+
+    return 0
+
+
 def cli() -> None:
     """Console-script entry point. Wired up in pyproject.toml as
     ``recupero-worker``."""
@@ -392,6 +438,19 @@ def cli() -> None:
              "on success / 1 on failure. Does not claim work.",
     )
     parser.add_argument(
+        "--watch-tick", action="store_true",
+        help="Run one watchlist snapshot pass: walks active watchlist rows, "
+             "fetches current balance + tx count, writes a snapshot row, and "
+             "reports material changes. Used as the entry point for the "
+             "nightly Railway cron. Exits after one pass; does not claim "
+             "investigations.",
+    )
+    parser.add_argument(
+        "--watch-tick-limit", type=int, default=None,
+        help="Cap how many watchlist rows --watch-tick processes in one pass. "
+             "Useful for first-run validation and rate-limit budgeting.",
+    )
+    parser.add_argument(
         "--log-level", default=os.environ.get("RECUPERO_LOG_LEVEL", "INFO"),
         help="Python logging level. Default INFO.",
     )
@@ -402,6 +461,9 @@ def cli() -> None:
 
     if args.health_check:
         sys.exit(health_check())
+
+    if args.watch_tick:
+        sys.exit(_run_watch_tick_once(limit=args.watch_tick_limit))
 
     heartbeat_sec = float(
         os.environ.get("RECUPERO_HEARTBEAT_INTERVAL_SEC", _HEARTBEAT_DEFAULT_SEC)

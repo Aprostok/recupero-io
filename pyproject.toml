@@ -57,6 +57,14 @@ dependencies = [
     # Pin major to avoid surprise breaking changes; floor matches the API
     # surface ai_editorial.py expects (Messages API + usage accounting).
     "anthropic>=0.40,<1.0",
+
+    # PDF generation for freeze-letter + LE-handoff deliverables.
+    # WeasyPrint renders the same Jinja-produced HTML to PDF, preserving
+    # the Etherscan hyperlinks in the fund-flow SVG as PDF link
+    # annotations. Lazy-imported in worker/_deliverables.py so the CLI
+    # paths that don't need PDF output (and don't have the apt-level
+    # Pango/Cairo libs installed) don't fail on import.
+    "weasyprint>=60,<70",
 ]
 
 [project.optional-dependencies]

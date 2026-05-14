@@ -17,11 +17,26 @@ WORKDIR /app
 #     package is a thin wrapper around the binary.
 #   - fonts-dejavu-core: clean sans-serif fallback so nodes/labels
 #     don't render in the awful default bitmap font.
+#   - WeasyPrint runtime libs (libpango / libcairo / libgdk-pixbuf / libffi /
+#     shared-mime-info): generate PDF versions of every freeze letter
+#     and LE handoff in the building_package stage. ~80MB image-size
+#     overhead; needed because PDFs are the deliverable format
+#     compliance teams expect.
+#   - fonts-liberation: serif/sans/mono fallbacks the letterhead uses
+#     when no system Georgia is present; WeasyPrint embeds these into
+#     the PDF for cross-reader consistency.
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         graphviz \
         fonts-dejavu-core \
-        ca-certificates && \
+        fonts-liberation \
+        ca-certificates \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+        libcairo2 \
+        libgdk-pixbuf-2.0-0 \
+        libffi8 \
+        shared-mime-info && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python deps. Order is set up so that adding a code-only change

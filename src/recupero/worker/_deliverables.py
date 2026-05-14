@@ -141,18 +141,21 @@ def build_all_deliverables(
     # HTML column. The standalone file opens at native resolution with
     # working Etherscan hyperlinks per the operator's design.
     flow_filename: str | None = None
+    flow_svg_path: Path | None = None
     try:
         from recupero.worker._flow_diagram import render_flow_diagram
         from uuid import uuid4
         briefs_dir = case_dir / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
-        flow_svg_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
-        if render_flow_diagram(case, flow_svg_path) is not None:
-            flow_filename = flow_svg_path.name
+        candidate_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
+        if render_flow_diagram(case, candidate_path) is not None:
+            flow_filename = candidate_path.name
+            flow_svg_path = candidate_path
     except Exception as e:  # noqa: BLE001
         log.warning("flow diagram generation failed (continuing without it): %s", e)
 
     written: list[Path] = []
+    html_paths: list[Path] = []  # HTMLs we should also produce PDFs for
     for issuer_name, issuer_info in issuers_seen.items():
         try:
             bundle = generate_briefs(
@@ -167,6 +170,7 @@ def build_all_deliverables(
             written.append(bundle.maple_path)
             written.append(bundle.le_path)
             written.append(bundle.manifest_path)
+            html_paths.extend([bundle.maple_path, bundle.le_path])
             log.info(
                 "wrote freeze brief for issuer=%s file=%s",
                 issuer_name, bundle.maple_path.name,
@@ -177,9 +181,89 @@ def build_all_deliverables(
             log.warning("brief generation failed for issuer=%s: %s",
                         issuer_name, e)
 
+    # Generate PDF versions of every HTML deliverable + the standalone
+    # flow SVG. Best-effort — a WeasyPrint failure on one file logs a
+    # warning but doesn't kill the stage (operators can still hand-deliver
+    # the HTML / SVG to compliance teams that don't strictly require PDF).
+    pdf_paths = _emit_pdfs(html_paths, flow_svg_path=flow_svg_path if flow_filename else None)
+    written.extend(pdf_paths)
+
     log.info("deliverables done: %d file(s) under %s/briefs/",
              len(written), case_dir.name)
     return written
+
+
+def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Path]:
+    """Render PDFs for each HTML deliverable plus the flow-diagram SVG.
+
+    Lazy-imports WeasyPrint so any code path that lacks the apt-installed
+    Pango/Cairo libs (CLI, dev machines without GTK stack) can still run
+    the rest of the pipeline.
+
+    Returns the list of PDFs written. Each failure logs a warning and
+    continues — the HTML deliverable is still on disk, so partial output
+    is more useful than failing the entire building_package stage.
+
+    On EVM-flavored fund-flow SVGs, WeasyPrint preserves the per-node
+    ``xlink:href`` Etherscan URLs as PDF link annotations so the PDF
+    output stays clickable.
+    """
+    out: list[Path] = []
+    try:
+        from weasyprint import HTML  # noqa: F401  (lazy import)
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "PDF generation skipped (WeasyPrint not importable): %s. "
+            "HTML deliverables still on disk; operators can print-to-PDF "
+            "from the browser if needed.", e,
+        )
+        return out
+
+    for html_path in html_paths:
+        pdf_path = html_path.with_suffix(".pdf")
+        try:
+            _html_to_pdf(html_path, pdf_path)
+            out.append(pdf_path)
+            log.info("rendered PDF: %s (%d bytes)", pdf_path.name, pdf_path.stat().st_size)
+        except Exception as e:  # noqa: BLE001
+            log.warning("PDF render failed for %s: %s", html_path.name, e)
+
+    if flow_svg_path is not None and flow_svg_path.exists():
+        pdf_path = flow_svg_path.with_suffix(".pdf")
+        try:
+            _svg_to_pdf(flow_svg_path, pdf_path)
+            out.append(pdf_path)
+            log.info("rendered PDF: %s (%d bytes)", pdf_path.name, pdf_path.stat().st_size)
+        except Exception as e:  # noqa: BLE001
+            log.warning("PDF render failed for %s: %s", flow_svg_path.name, e)
+
+    return out
+
+
+def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
+    from weasyprint import HTML
+    HTML(filename=str(html_path)).write_pdf(str(pdf_path))
+
+
+def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
+    """Render a standalone SVG to PDF by wrapping it in minimal HTML.
+
+    WeasyPrint doesn't render SVG files directly; it renders HTML
+    documents. Wrapping the SVG payload in a no-margin HTML shell lets
+    us emit a single-page PDF whose page size auto-fits the SVG's
+    intrinsic dimensions and preserves all ``href`` link annotations.
+    """
+    from weasyprint import HTML
+    svg_content = svg_path.read_text(encoding="utf-8")
+    # @page rule with size:auto picks up the SVG's width/height so the
+    # PDF page doesn't stretch or crop the diagram.
+    html_shell = (
+        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        "<style>@page{size:auto;margin:0}body{margin:0;padding:0}"
+        "svg{display:block}</style></head><body>"
+        f"{svg_content}</body></html>"
+    )
+    HTML(string=html_shell, base_url=str(svg_path.parent)).write_pdf(str(pdf_path))
 
 
 def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:

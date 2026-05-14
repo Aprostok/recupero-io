@@ -159,7 +159,16 @@ def build_all_deliverables(
         briefs_dir = case_dir / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
         candidate_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
-        if render_flow_diagram(case, candidate_path) is not None:
+        # Pass freeze_brief so wallets in the FREEZABLE list (which
+        # the trace may not have labeled at counterparty time) get
+        # promoted to "Circle holding (USDC)" / "Tether holding
+        # (USDT)" / etc. labeled circles in the diagram. Otherwise
+        # those wallets render as anonymous rounded-rect nodes even
+        # though the letter is asking the issuer to freeze them —
+        # the diagram visually surfaces exactly what's being requested.
+        if render_flow_diagram(
+            case, candidate_path, freeze_brief=freeze_brief,
+        ) is not None:
             flow_filename = candidate_path.name
             flow_svg_path = candidate_path
             flow_inline_svg = read_inline_svg(candidate_path)

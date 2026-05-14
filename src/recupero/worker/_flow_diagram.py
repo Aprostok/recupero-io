@@ -127,6 +127,13 @@ _NODE_PALETTE: dict[str, tuple[str, str, str]] = {
     "defi_protocol":        ("#DDD6FE", "#6D28D9", "#3C1380"),  # solid purple
     "perpetrator":          ("#FECDD3", "#9F1239", "#5B0B1F"),  # solid crimson
     "staking":              ("#BAE6FD", "#0369A1", "#0B3A57"),  # solid sky
+    # New: wallets that hold a token an issuer can freeze (USDC at
+    # Circle, USDT at Tether, DAI at Sky, USDP/PYUSD at Paxos).
+    # Distinct gold treatment so they read as the "freeze the funds
+    # here" callouts — visually different from exchanges (green) so
+    # operators can tell at a glance which path is issuer-controlled
+    # vs CEX-controlled.
+    "freezable_holding":    ("#FEF3C7", "#B45309", "#5C2D0F"),  # warm gold
     # Fallback (unknown / unlabeled wallet) — quiet neutral.
     "wallet":               ("#F1F5F9", "#94A3B8", "#334155"),
 }
@@ -334,6 +341,70 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
     return nodes, list(edges.values())
 
 
+def _promote_freezable_holdings(
+    nodes: dict[str, _NodeAttrs],
+    freeze_brief: dict[str, Any],
+) -> None:
+    """Mutate ``nodes`` in-place: for every (issuer, address) pair in
+    ``freeze_brief['FREEZABLE']``, promote the matching node to a
+    ``freezable_holding`` entity with identity ``"<issuer> holding"``.
+
+    Why this exists: the trace BFS records counterparty *labels* at
+    transfer time (Etherscan calls the address a "Binance hot wallet",
+    etc.). But freezable holdings are detected *after* the trace, by
+    walking final dormant balances and matching against issuer-token
+    pairs. Those wallets typically don't carry an exchange/mixer/
+    bridge label on the transfer itself — so without this promotion
+    they'd render as plain rounded-rectangle wallets, and the diagram
+    wouldn't visually surface the very wallets the letter is asking
+    to freeze.
+
+    Resolution rule: only promote nodes still classified as the
+    default ``wallet`` (don't downgrade a real exchange label). A
+    wallet that genuinely received USDC at a Binance hot-wallet
+    address stays labeled as Binance — that's more useful for the
+    reader than "Circle holding".
+
+    Address comparison is case-insensitive (EVM addresses get
+    checksummed inconsistently across sources; lower-case is the
+    safe normalization).
+    """
+    holdings = freeze_brief.get("FREEZABLE") or []
+    promoted = 0
+    addr_lower_to_node: dict[str, _NodeAttrs] = {
+        a.lower(): n for a, n in nodes.items()
+    }
+    for entry in holdings:
+        issuer = entry.get("issuer") or "Issuer"
+        token = entry.get("token") or ""
+        identity = f"{issuer}\nholding ({token})" if token else f"{issuer} holding"
+        for h in entry.get("holdings") or []:
+            addr = h.get("address")
+            if not addr:
+                continue
+            node = addr_lower_to_node.get(addr.lower())
+            if node is None:
+                # Wallet didn't appear in any transfer in the trace —
+                # the freezable holding is dormant. We don't add a
+                # synthetic node for it because there would be no
+                # edges to draw; the letter's body table already
+                # surfaces these addresses in the freeze ask.
+                continue
+            if node.category != "wallet":
+                # Real exchange/mixer/bridge label takes precedence —
+                # don't overwrite Binance with Circle just because
+                # Binance's hot wallet happens to hold USDC.
+                continue
+            node.category = "freezable_holding"
+            node.identity = identity
+            promoted += 1
+    if promoted:
+        log.info(
+            "flow diagram: promoted %d node(s) to freezable_holding "
+            "from freeze_brief cross-ref", promoted,
+        )
+
+
 def _select_for_render(
     nodes: dict[str, _NodeAttrs],
     edges: list[_EdgeAttrs],
@@ -385,6 +456,7 @@ def render_flow_diagram(
     output_svg: Path,
     *,
     title: str | None = None,
+    freeze_brief: dict[str, Any] | None = None,
 ) -> Path | None:
     """Render the case as an inline-SVG fund-flow diagram. Returns the
     output path on success, ``None`` on render failure (e.g. dot binary
@@ -396,6 +468,17 @@ def render_flow_diagram(
     parallel transfers; the function aggregates these and caps the
     visible edges to keep the page readable. The standalone case.json
     remains the source of truth for the full transfer set.
+
+    ``freeze_brief`` (optional, the same JSON shape emit_brief.py
+    writes to ``freeze_brief.json``) lets the renderer promote
+    wallets that appear in the FREEZABLE list to labeled circle
+    entities even when the trace itself didn't classify them. This
+    fixes the common pattern where a wallet receives USDC but the
+    counterparty label was missed at trace time, so the wallet would
+    otherwise render as a generic rounded-rectangle. With the
+    cross-ref, that same wallet shows as "Circle holding (USDC)" in
+    the diagram — matching what the letter's body asks the issuer to
+    freeze.
     """
     if not _dot_available():
         log.warning("graphviz `dot` binary not on PATH — skipping flow diagram")
@@ -412,6 +495,8 @@ def render_flow_diagram(
         return None
 
     nodes_all, edges_all = _aggregate(case)
+    if freeze_brief is not None:
+        _promote_freezable_holdings(nodes_all, freeze_brief)
     nodes, edges, omitted = _select_for_render(nodes_all, edges_all, case)
 
     g = Digraph("flow", format="svg", strict=True)
@@ -588,6 +673,7 @@ _ENTITY_CATEGORIES = {
     "defi_protocol",
     "perpetrator",
     "staking",
+    "freezable_holding",
 }
 
 

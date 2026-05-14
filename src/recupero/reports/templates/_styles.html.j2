@@ -57,12 +57,6 @@
     --space-xxxl: 4.5em;
 
     --doc-max-w: 8in;
-    --radius-sm: 3px;
-    --radius-md: 6px;
-
-    --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.04);
-    --shadow-md:  0 1px 3px rgba(0, 0, 0, 0.05),
-                  0 4px 12px rgba(0, 0, 0, 0.04);
   }
 
   /* ===================================================================
@@ -389,73 +383,9 @@
     text-decoration-color: var(--ink);
   }
 
-  /* ===================================================================
-     Flow diagram card — kept (per Alec's feedback)
-     =================================================================== */
-  .flow-diagram {
-    margin: var(--space-lg) 0 var(--space-xl);
-    padding: var(--space-md) var(--space-md) var(--space-md);
-    background:
-      radial-gradient(circle at 1px 1px, var(--rule-soft) 1px, transparent 0)
-        0 0 / 18px 18px,
-      var(--paper);
-    border: 1px solid var(--rule-soft);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-md);
-    text-align: center;
-    overflow-x: auto;
-    position: relative;
-  }
-  .flow-diagram::before {
-    content: "FUND FLOW · " attr(data-case);
-    position: absolute;
-    top: 0.7em; left: 1em;
-    font-size: var(--type-micro);
-    font-weight: 600;
-    letter-spacing: 0.22em;
-    color: var(--ink-quiet);
-  }
-  .flow-diagram svg {
-    max-width: 100%;
-    height: auto;
-    margin-top: 1.6em;
-  }
-  .flow-caption {
-    margin-top: var(--space-md);
-    padding: var(--space-sm) var(--space-md);
-    background: var(--paper-tint);
-    border-left: 2px solid var(--rule-soft);
-    font-size: var(--type-small);
-    color: var(--ink-muted);
-    text-align: left;
-    line-height: 1.55;
-  }
-  .flow-legend {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4em 0.9em;
-    margin-top: var(--space-sm);
-  }
-  .flow-legend .swatch {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35em;
-    font-size: var(--type-tiny);
-    color: var(--ink-soft);
-  }
-  .flow-legend .swatch::before {
-    content: "";
-    width: 0.85em; height: 0.85em;
-    border-radius: 2px;
-    background: currentColor;
-    opacity: 0.85;
-  }
-  .swatch.victim    { color: #3B82F6; }
-  .swatch.exchange  { color: #16A34A; }
-  .swatch.mixer     { color: #DC2626; }
-  .swatch.bridge    { color: #EA580C; }
-  .swatch.contract  { color: #7C3AED; }
-  .swatch.wallet    { color: #94A3B8; }
+  /* Flow-diagram inline card removed in commit aa7dce7. The fund-flow
+     SVG is now a separate file referenced via .attachment-note in the
+     letter; the inline embed produced unusable 21:1 aspect ratios. */
 
   /* ===================================================================
      Timeline — quiet, monochrome
@@ -573,7 +503,7 @@
       break-after: avoid;
     }
     .summary-box, .meta-grid, .signature-block, .timeline-event,
-    .cover, .flow-diagram {
+    .cover, .attachment-note {
       page-break-inside: avoid;
       break-inside: avoid;
     }

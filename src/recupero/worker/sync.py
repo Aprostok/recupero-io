@@ -80,12 +80,20 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
                 )
             continue
 
-        # building_package deliverables: case_dir/briefs/*.html etc.
+        # building_package deliverables: case_dir/briefs/*.html, *.pdf, *.svg etc.
         # Mirror the directory verbatim under the bucket prefix.
+        #
+        # IMPORTANT: read_bytes() rather than _read_text() — briefs/ now
+        # contains PDF files emitted by WeasyPrint, and PDF is a binary
+        # format (UTF-8 decoding chokes on the binary stream at the
+        # first non-ASCII byte after the `%PDF-1.4` header). HTML/SVG
+        # files written with utf-8 encoding round-trip fine through
+        # read_bytes — we just don't need to transcode here, so binary
+        # round-trip is the safer default.
         if parts[0] == "briefs":
-            bucket_path = "/".join(parts)  # e.g. briefs/freeze_request_circle_BRIEF-...html
+            bucket_path = "/".join(parts)
             content_type = _content_type_for(path.suffix.lower())
-            _upload_to_subpath(store, bucket_path, _read_text(path).encode("utf-8"),
+            _upload_to_subpath(store, bucket_path, path.read_bytes(),
                                content_type)
             uploaded += 1
             log.debug("uploaded %s", rel)
@@ -153,6 +161,13 @@ def _content_type_for(suffix: str) -> str:
         ".html": "text/html; charset=utf-8",
         ".htm": "text/html; charset=utf-8",
         ".txt": "text/plain; charset=utf-8",
+        # building_package deliverables — PDFs from WeasyPrint, SVGs
+        # from Graphviz. Browsers and compliance teams need the right
+        # content-type to open these inline rather than downloading as
+        # opaque bytes.
+        ".pdf": "application/pdf",
+        ".svg": "image/svg+xml",
+        ".png": "image/png",
     }.get(suffix, "application/octet-stream")
 
 

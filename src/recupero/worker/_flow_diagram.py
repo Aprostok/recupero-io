@@ -760,7 +760,11 @@ def read_inline_svg(path: Path) -> str | None:
     if not path or not path.exists():
         return None
     try:
-        raw = path.read_text(encoding="utf-8")
+        # ``errors="replace"`` so a rogue byte from a locale-misconfigured
+        # Graphviz binary (or a label string we didn't expect) becomes
+        # U+FFFD instead of failing the whole deliverables stage. Worst
+        # case the diagram has one mangled glyph; the letter still ships.
+        raw = path.read_text(encoding="utf-8", errors="replace")
     except Exception as exc:  # noqa: BLE001
         log.warning("flow SVG inline read failed for %s: %s", path, exc)
         return None

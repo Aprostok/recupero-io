@@ -269,7 +269,9 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
     intrinsic dimensions and preserves all ``href`` link annotations.
     """
     from weasyprint import HTML
-    svg_content = svg_path.read_text(encoding="utf-8")
+    # ``errors="replace"`` so a rogue byte from Graphviz doesn't fail
+    # the entire upload step — match read_inline_svg's tolerance.
+    svg_content = svg_path.read_text(encoding="utf-8", errors="replace")
     # @page rule with size:auto picks up the SVG's width/height so the
     # PDF page doesn't stretch or crop the diagram.
     html_shell = (

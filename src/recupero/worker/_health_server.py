@@ -85,8 +85,84 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                     self._respond(
                         500, {"error": str(e)}, write_body=write_body,
                     )
+            elif self.path.startswith("/investigations"):
+                # Investigation list + detail endpoints backing the
+                # admin UI's wallet-trace and case-driven views.
+                # Routes:
+                #   GET /investigations?status=...&chain=...&type=wallet_trace
+                #                       &label_prefix=...&limit=N&offset=N
+                #   GET /investigations/<uuid>
+                self._handle_investigations(write_body=write_body)
             else:
                 self._respond(404, {"error": "not found"}, write_body=write_body)
+
+        def _handle_investigations(self, *, write_body: bool) -> None:
+            import os as _os
+            from urllib.parse import urlsplit, parse_qs
+            from uuid import UUID
+
+            parsed = urlsplit(self.path)
+            path = parsed.path.rstrip("/")
+            qs = parse_qs(parsed.query)
+            dsn = _os.environ.get("SUPABASE_DB_URL", "")
+            sb_url = _os.environ.get("SUPABASE_URL", "").rstrip("/")
+            sb_key = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            try:
+                from recupero.worker.investigations_api import (
+                    list_investigations, get_investigation_detail,
+                )
+            except Exception as e:  # noqa: BLE001
+                self._respond(500, {"error": f"import failed: {e}"},
+                              write_body=write_body)
+                return
+
+            # /investigations (list) — path is exactly "/investigations".
+            if path == "/investigations":
+                try:
+                    payload = list_investigations(
+                        dsn=dsn,
+                        status=(qs.get("status") or [None])[0],
+                        chain=(qs.get("chain") or [None])[0],
+                        investigation_type=(qs.get("type") or [None])[0],
+                        label_prefix=(qs.get("label_prefix") or [None])[0],
+                        limit=int((qs.get("limit") or ["25"])[0]),
+                        offset=int((qs.get("offset") or ["0"])[0]),
+                    )
+                    self._respond(200, payload, write_body=write_body)
+                except ValueError as e:
+                    self._respond(400, {"error": f"bad query: {e}"},
+                                  write_body=write_body)
+                except Exception as e:  # noqa: BLE001
+                    self._respond(500, {"error": str(e)},
+                                  write_body=write_body)
+                return
+
+            # /investigations/<uuid> (detail). Anything else under the
+            # /investigations/ prefix is a 404.
+            rest = path[len("/investigations/"):] if path.startswith("/investigations/") else ""
+            if not rest or "/" in rest:
+                self._respond(404, {"error": "not found"},
+                              write_body=write_body)
+                return
+            try:
+                inv_id = UUID(rest)
+            except ValueError:
+                self._respond(400, {"error": "id must be a UUID"},
+                              write_body=write_body)
+                return
+            try:
+                payload = get_investigation_detail(
+                    dsn=dsn, supabase_url=sb_url, service_role_key=sb_key,
+                    investigation_id=inv_id,
+                )
+                if payload is None:
+                    self._respond(404, {"error": "investigation not found"},
+                                  write_body=write_body)
+                    return
+                self._respond(200, payload, write_body=write_body)
+            except Exception as e:  # noqa: BLE001
+                self._respond(500, {"error": str(e)},
+                              write_body=write_body)
 
         def _respond(self, code: int, body: dict, *, write_body: bool = True) -> None:
             payload = json.dumps(body).encode("utf-8")

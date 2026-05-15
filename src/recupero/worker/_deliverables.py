@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -215,9 +216,15 @@ def build_all_deliverables(
     # email. Two variants selected automatically based on whether
     # freezable funds were found; see worker/_victim_summary.py for
     # the dispatch + template logic.
+    is_recoverable = False
+    total_freezable_usd = Decimal(0)
+    total_suspected_usd = Decimal(0)
     if not skip_freeze_briefs:
         try:
-            from recupero.worker._victim_summary import render_victim_summary
+            from recupero.worker._victim_summary import (
+                classify_recovery_prospects,
+                render_victim_summary,
+            )
             briefs_dir = case_dir / "briefs"
             briefs_dir.mkdir(parents=True, exist_ok=True)
             victim_summary_path = render_victim_summary(
@@ -232,8 +239,40 @@ def build_all_deliverables(
                 written.append(victim_summary_path)
                 html_paths.append(victim_summary_path)
                 log.info("wrote victim summary: %s", victim_summary_path.name)
+            # Capture the classification for the engagement-letter
+            # decision below — same recoverability call should drive
+            # both decisions for consistency.
+            is_recoverable, total_freezable_usd, total_suspected_usd = (
+                classify_recovery_prospects(freeze_brief)
+            )
         except Exception as e:  # noqa: BLE001
             log.warning("victim summary generation failed (continuing): %s", e)
+
+    # Tier-2 engagement letter — the legal contract the customer
+    # signs to engage active recovery. Pre-generated for every
+    # recoverable case so the operator has it ready to send when a
+    # customer says yes. Skipped on wallet traces and on
+    # unrecoverable cases (where there's nothing to engage on).
+    if not skip_freeze_briefs and is_recoverable:
+        try:
+            from recupero.worker._engagement_letter import render_engagement_letter
+            briefs_dir = case_dir / "briefs"
+            briefs_dir.mkdir(parents=True, exist_ok=True)
+            engagement_path = render_engagement_letter(
+                case=case,
+                victim=victim,
+                investigator=investigator,
+                freeze_brief=freeze_brief,
+                briefs_dir=briefs_dir,
+                total_freezable_usd=total_freezable_usd,
+                total_suspected_usd=total_suspected_usd,
+            )
+            if engagement_path is not None:
+                written.append(engagement_path)
+                html_paths.append(engagement_path)
+                log.info("wrote engagement letter: %s", engagement_path.name)
+        except Exception as e:  # noqa: BLE001
+            log.warning("engagement letter generation failed (continuing): %s", e)
 
     if skip_freeze_briefs:
         log.info(

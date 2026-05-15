@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Engagement Letter — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Engagement Letter</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Active Recovery Engagement</div>
+    <h1>Engagement<br/>Letter</h1>
+    <p class="cover-subtitle">
+      This letter sets out the terms under which
+      {{ investigator.organization }} will pursue active recovery of
+      the stolen funds identified in our initial diagnostic. Please
+      review carefully and sign at Section 8 to engage.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Between</dt>
+      <dd>{{ investigator.organization }}<span class="secondary">{{ investigator.name }}, Investigator of record<br/>{{ investigator.email }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>And</dt>
+      <dd>{{ victim.name }}<span class="secondary">{% if victim.email %}{{ victim.email }}<br/>{% endif %}{% if victim.address %}{{ victim.address }}{% endif %}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Case Reference</dt>
+      <dd>{{ case_id }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Affected Wallet</dt>
+      <dd class="mono">{{ victim.wallet_address }}</dd>
+    </div>
+  </dl>
+</section>
+
+<h2>1. Background</h2>
+<p>
+  On {{ diagnostic_completed_at }}, Recupero completed a forensic
+  trace of the wallet at <span class="mono">{{ victim.wallet_address }}</span>
+  on {{ chain_display }} pursuant to your $499 initial-assessment
+  engagement. The trace identified
+  <strong>{{ total_freezable_usd }}</strong>
+  in confirmed-recoverable stolen funds held under
+  {{ freezable_issuer_count }} {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
+  protocol-level authority, plus an additional
+  <strong>{{ total_under_investigation_usd }}</strong>
+  in positions pending issuer KYC verification. The findings are
+  documented in the diagnostic report previously delivered to you.
+</p>
+<p>
+  You have indicated you wish to engage Recupero for active recovery
+  of these funds. This letter sets out the terms of that engagement.
+</p>
+
+<h2>2. Scope of services</h2>
+<p>
+  Under this engagement, {{ investigator.organization }} will:
+</p>
+<ol>
+  <li>
+    Within <strong>5 business days</strong> of your signature, send
+    the prepared compliance freeze-request letter to each of the
+    {{ freezable_issuer_count }} identified
+    {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
+    compliance teams. Copies of every letter sent will be provided
+    to you.
+  </li>
+  <li>
+    Within <strong>5 business days</strong> of your signature, send
+    the law-enforcement handoff package to the recommended filing
+    channels (see Section 6.1 of the LE handoff). You retain
+    independent rights to file with additional channels.
+  </li>
+  <li>
+    Follow up with each issuer's compliance desk on a documented
+    cadence (typically every 5-7 business days) until they confirm
+    acknowledgement and provide a substantive response.
+  </li>
+  <li>
+    Coordinate with the law-enforcement officer assigned to your
+    case (if filed) — providing chain-of-evidence support, answering
+    technical questions, and helping translate compliance-team
+    responses into LE-actionable form.
+  </li>
+  <li>
+    Provide weekly status reports to you in writing for
+    <strong>30 days</strong> from the engagement date, with longer
+    intervals thereafter if the case is still active.
+  </li>
+  <li>
+    Promote INVESTIGATE-flagged positions to FREEZABLE as issuer
+    KYC responses come in, and request hold extensions to cover
+    them where appropriate.
+  </li>
+</ol>
+
+<h2>3. What this engagement does NOT include</h2>
+<p>
+  To set honest expectations, {{ investigator.organization }} does
+  not promise or guarantee:
+</p>
+<ul>
+  <li>
+    <strong>That funds will actually be frozen or returned.</strong>
+    Issuer cooperation is voluntary outside formal legal process.
+    Even with a credible compliance request, an issuer may decline
+    to act until law enforcement engages with formal subpoena or
+    seizure order.
+  </li>
+  <li>
+    <strong>A specific recovery timeline.</strong> Typical issuer
+    response cycles are 1-4 weeks for substantive freeze decisions.
+    Actual fund return, when it happens, typically occurs
+    weeks-to-months after the freeze is placed.
+  </li>
+  <li>
+    <strong>Recovery of any specific amount.</strong> Partial
+    recovery is the typical outcome. Funds marked INVESTIGATE may
+    turn out to belong to KYC'd third parties unrelated to the
+    perpetrator, in which case those positions are not recoverable.
+  </li>
+  <li>
+    <strong>Legal representation.</strong> Recupero is not a law
+    firm. Nothing in this engagement constitutes legal advice or
+    the practice of law. You retain the right to engage counsel
+    independently; if a recovery action progresses to litigation
+    or formal legal process, you will need to retain an attorney
+    for that step.
+  </li>
+</ul>
+
+<h2>4. Fees</h2>
+
+<h3>Engagement fee</h3>
+<p>
+  The total engagement fee is <strong>{{ total_engagement_fee_text }}</strong>.
+  Your $499 initial-assessment fee is credited against this total,
+  so the incremental amount due upon signing is
+  <strong>{{ incremental_engagement_fee_text }}</strong>.
+</p>
+<p>
+  The incremental engagement fee is invoiced upon your signature and
+  is due within 7 days of invoice. It is <strong>non-refundable</strong>
+  once we have begun sending letters on your behalf — see Section 5
+  for the limited refund condition before letter-sending commences.
+</p>
+
+<h3>Contingency fee</h3>
+<p>
+  In addition to the engagement fee, Recupero is entitled to
+  <strong>{{ contingency_pct }}%</strong> of any funds actually
+  recovered through the engagement. "Recovered" means funds returned
+  to you or to a court-appointed custodian on your behalf, in
+  USD-equivalent value at the time of return.
+</p>
+<p>
+  The contingency fee is invoiced within 14 days of a recovery
+  event and is due within 30 days of invoice. Recoveries that occur
+  more than 12 months after the engagement date are not subject to
+  the contingency fee unless they result from actions Recupero was
+  actively pursuing at the time.
+</p>
+
+<h2>5. Termination</h2>
+<p>
+  Either party may terminate this engagement at any time by written
+  notice (email to <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>
+  is sufficient).
+</p>
+<p>
+  <strong>If you terminate</strong> before Recupero has sent the
+  compliance freeze letters: a 75% refund of the incremental
+  engagement fee is issued ($499 initial-assessment fee remains
+  earned). After letters have been sent, the engagement fee is
+  fully earned and non-refundable, but the contingency fee
+  obligation terminates with respect to any recovery occurring more
+  than 30 days after termination.
+</p>
+<p>
+  <strong>If Recupero terminates</strong> before the compliance
+  letters are sent: a full refund of the incremental engagement
+  fee is issued.
+</p>
+
+<h2>6. Authority &amp; consent</h2>
+<p>
+  By signing this letter you authorize {{ investigator.organization }}
+  to:
+</p>
+<ul>
+  <li>
+    Communicate with stablecoin issuers, exchanges, and law-enforcement
+    agencies regarding this matter on your behalf, identifying you
+    as the victim and citing your factual narrative as documented
+    in the case file.
+  </li>
+  <li>
+    Reference your case in aggregate statistics (e.g., "we have
+    pursued recovery of $X in N cases") provided no
+    individually-identifying information is disclosed.
+  </li>
+  <li>
+    Retain the diagnostic artifacts (trace report, flow diagram,
+    freeze letters, LE handoff) for the period required by
+    record-keeping best practices and applicable law, typically
+    7 years.
+  </li>
+</ul>
+
+<h2>7. Confidentiality</h2>
+<p>
+  Recupero will not disclose personally identifying information
+  about you to any party except (a) compliance teams and law
+  enforcement engaged for the purpose of this recovery, (b) as
+  required by valid legal process, or (c) as you authorize in
+  writing. All communications regarding this matter are treated as
+  confidential.
+</p>
+
+<h2>8. Governing law &amp; dispute resolution</h2>
+<p>
+  This engagement is governed by the laws of
+  {% if investigator_jurisdiction %}{{ investigator_jurisdiction }}{% else %}the State of Delaware{% endif %}.
+  Any dispute arising under this engagement that cannot be
+  resolved by good-faith discussion will be submitted to
+  binding arbitration administered by JAMS in
+  {% if investigator_jurisdiction %}{{ investigator_jurisdiction }}{% else %}Delaware{% endif %},
+  under JAMS' Streamlined Arbitration Rules.
+</p>
+
+<h2>9. Signature</h2>
+
+<div class="summary-box action">
+  <p style="margin:0 0 0.7em 0;">
+    <strong>By signing below, you confirm that you have read this
+    engagement letter in full, understand its terms (including the
+    fee structure and the explicit limits on what Recupero promises),
+    and authorize Recupero to begin the work described in Section 2.</strong>
+  </p>
+  <p style="margin:0;">
+    Sign and return to <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>
+    — electronic signature acceptable.
+  </p>
+</div>
+
+<table class="evidence" style="margin-top:2em;">
+  <tr>
+    <th style="width:50%;">For {{ victim.name }} (Client)</th>
+    <th style="width:50%;">For {{ investigator.organization }}</th>
+  </tr>
+  <tr>
+    <td>
+      <div class="signature-line"></div>
+      <div class="signature-fields">
+        <strong>{{ victim.name }}</strong>
+        Signature<br/>
+        Date: __________________________
+      </div>
+    </td>
+    <td>
+      <div class="signature-line"></div>
+      <div class="signature-fields">
+        <strong>{{ investigator.name }}</strong>
+        Investigator of record · {{ investigator.organization }}<br/>
+        Date: __________________________
+      </div>
+    </td>
+  </tr>
+</table>
+
+<p class="small" style="margin-top:2em;">
+  Recupero is not a law firm and does not provide legal advice.
+  Nothing in this engagement letter constitutes the formation of
+  an attorney-client relationship. For matters requiring legal
+  representation, please consult an attorney licensed in your
+  jurisdiction.
+</p>
+
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>Engagement {{ case_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Confidential.</span> Intended for {{ victim.name }}.
+  </div>
+</footer>
+
+</body>
+</html>

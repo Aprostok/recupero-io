@@ -26,7 +26,10 @@ class ChainAdapter(ABC):
         if chain == Chain.ethereum:
             from recupero.chains.ethereum.adapter import EthereumAdapter
             return EthereumAdapter(config)
-        if chain in (Chain.arbitrum, Chain.bsc):
+        if chain in (Chain.arbitrum, Chain.bsc, Chain.polygon, Chain.base):
+            # Etherscan V2 unified API covers every EVM-compatible chain
+            # via the chainid parameter — same client class, different
+            # chain_id + native-symbol per profile.
             from recupero.chains.evm.adapter import EvmAdapter
             return EvmAdapter(config, chain=chain)
         if chain == Chain.solana:

@@ -73,6 +73,24 @@ def _profile_for(chain: Chain, cfg: RecuperoConfig) -> EvmChainProfile:
             coingecko_native_id=p.coingecko_native_id,
             coingecko_platform=p.coingecko_platform,
         )
+    if chain == Chain.polygon:
+        p = cfg.polygon
+        return EvmChainProfile(
+            chain=chain, chain_id=p.chain_id, api_base=p.api_base,
+            native_symbol=p.native_symbol, native_decimals=p.native_decimals,
+            explorer_base=p.explorer_base,
+            coingecko_native_id=p.coingecko_native_id,
+            coingecko_platform=p.coingecko_platform,
+        )
+    if chain == Chain.base:
+        p = cfg.base
+        return EvmChainProfile(
+            chain=chain, chain_id=p.chain_id, api_base=p.api_base,
+            native_symbol=p.native_symbol, native_decimals=p.native_decimals,
+            explorer_base=p.explorer_base,
+            coingecko_native_id=p.coingecko_native_id,
+            coingecko_platform=p.coingecko_platform,
+        )
     raise NotImplementedError(f"No EVM profile for chain {chain}")
 
 

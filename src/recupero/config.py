@@ -73,6 +73,36 @@ class BscParams(BaseModel):
     coingecko_native_id: str = "binancecoin"
 
 
+class PolygonParams(BaseModel):
+    """Polygon PoS — Etherscan V2 unified API, chain_id=137. Native
+    gas token is MATIC (now branded POL but the on-chain symbol
+    remains MATIC for chain compatibility; CoinGecko id is
+    ``matic-network``)."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 137
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "MATIC"
+    native_decimals: int = 18
+    explorer_base: str = "https://polygonscan.com"
+    coingecko_platform: str = "polygon-pos"
+    coingecko_native_id: str = "matic-network"
+
+
+class BaseParams(BaseModel):
+    """Base mainnet — Etherscan V2 unified API, chain_id=8453.
+    Native gas token is ETH (Base is an L2 settling to Ethereum)."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 8453
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "ETH"
+    native_decimals: int = 18
+    explorer_base: str = "https://basescan.org"
+    coingecko_platform: str = "base"
+    coingecko_native_id: str = "ethereum"
+
+
 class PricingParams(BaseModel):
     provider: str = "coingecko"
     requests_per_second: float = 0.5
@@ -97,6 +127,8 @@ class RecuperoConfig(BaseModel):
     ethereum: EthereumParams = Field(default_factory=EthereumParams)
     arbitrum: ArbitrumParams = Field(default_factory=ArbitrumParams)
     bsc: BscParams = Field(default_factory=BscParams)
+    polygon: PolygonParams = Field(default_factory=PolygonParams)
+    base: BaseParams = Field(default_factory=BaseParams)
     pricing: PricingParams = Field(default_factory=PricingParams)
     storage: StorageParams = Field(default_factory=StorageParams)
     logging: LoggingParams = Field(default_factory=LoggingParams)

@@ -217,6 +217,9 @@ def get_investigation_detail(
         service_role_key=service_role_key,
         investigation_id=inv_id_str,
     )
+    detail["emails"] = _fetch_emails_summary(
+        dsn=dsn, investigation_id=inv_id_str,
+    )
     return detail
 
 
@@ -298,9 +301,216 @@ def _render_detail_row(row: dict[str, Any]) -> dict[str, Any]:
         "material_change_detected": bool(row.get("material_change_detected")),
         "change_summary": row.get("change_summary"),
 
+        # Tier-2 engagement state (columns from migration 006)
+        "engagement_started_at": _iso(row.get("engagement_started_at")),
+        "engagement_closed_at": _iso(row.get("engagement_closed_at")),
+        "engagement_fee_paid_usd": _decimal_str(row.get("engagement_fee_paid_usd")),
+        "last_followup_sent_at": _iso(row.get("last_followup_sent_at")),
+
         "is_wallet_trace": row["case_id"] is None,
         "duration_seconds": _compute_duration_secs(row),
+        # Higher-level engagement summary computed from the raw columns.
+        # The UI can render this directly without re-deriving status /
+        # days-remaining / etc.
+        "engagement": _build_engagement_summary(row),
     }
+    return out
+
+
+def _build_engagement_summary(row: dict[str, Any]) -> dict[str, Any]:
+    """Derive a UI-friendly engagement summary from the row's
+    engagement_* columns. Always returns a populated dict — the
+    ``status`` field carries the high-level state so the UI can
+    branch on a single value.
+
+    Possible statuses:
+
+      * ``not_engaged``  — engagement_started_at is NULL (only the
+                           $499 diagnostic was paid)
+      * ``active``       — engagement_started_at is set,
+                           engagement_closed_at is NULL
+      * ``closed``       — engagement_closed_at is set
+      * ``expired``      — engagement_started_at is set AND
+                           engagement_started_at + 30 days < NOW()
+                           AND engagement_closed_at is NULL
+                           (auto-derived; operator should run
+                           ``mark-closed`` to clean these up)
+
+    Other computed fields:
+      * days_since_start — int days since engagement_started_at,
+                           NULL if not engaged
+      * days_remaining   — max(0, 30 - days_since_start), NULL if
+                           not engaged
+      * needs_followup   — True if active engagement + last
+                           followup older than 6 days (or NULL)
+    """
+    from datetime import datetime, timezone
+
+    started = row.get("engagement_started_at")
+    closed = row.get("engagement_closed_at")
+    last_followup = row.get("last_followup_sent_at")
+
+    if not started:
+        return {
+            "status": "not_engaged",
+            "fee_paid_usd": None,
+            "started_at": None,
+            "closed_at": None,
+            "last_followup_at": None,
+            "days_since_start": None,
+            "days_remaining": None,
+            "needs_followup": False,
+        }
+
+    # Normalize tzinfo for arithmetic
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=timezone.utc)
+    if closed and closed.tzinfo is None:
+        closed = closed.replace(tzinfo=timezone.utc)
+    if last_followup and last_followup.tzinfo is None:
+        last_followup = last_followup.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    days_since = (now - started).days
+    days_remaining = max(0, 30 - days_since)
+
+    if closed:
+        status = "closed"
+        needs_followup = False
+    elif days_since > 30:
+        status = "expired"
+        needs_followup = False
+    else:
+        status = "active"
+        # Follow-up cadence: every 6 days. Trigger when never sent
+        # OR last send was more than 6 days ago.
+        if last_followup is None:
+            needs_followup = True
+        else:
+            needs_followup = (now - last_followup).days >= 6
+
+    return {
+        "status": status,
+        "fee_paid_usd": _decimal_str(row.get("engagement_fee_paid_usd")),
+        "started_at": _iso(row.get("engagement_started_at")),
+        "closed_at": _iso(row.get("engagement_closed_at")),
+        "last_followup_at": _iso(row.get("last_followup_sent_at")),
+        "days_since_start": days_since,
+        "days_remaining": days_remaining,
+        "needs_followup": needs_followup,
+    }
+
+
+def _fetch_emails_summary(
+    *, dsn: str, investigation_id: str,
+) -> dict[str, Any]:
+    """Aggregate the emails_sent audit log for one investigation
+    into a UI-friendly summary.
+
+    Returns:
+      {
+        "total":             N,            # total emails sent
+        "successful":        K,            # successful sends
+        "failed":            F,            # send attempts that errored
+        "by_type":           {             # successful sends grouped by
+          "victim_summary":   1,
+          "freeze_letter":    4,
+          "le_handoff":       1,
+          "followup_w1":      2,
+          ...
+        },
+        "last_sent_at":      "ISO timestamp" | None,
+        "recent": [                        # last 10 sends (any status)
+          {
+            "sent_at":      "...",
+            "to_address":   "...",
+            "email_type":   "...",
+            "subject":      "...",
+            "success":      true | false,
+            "error_message": "..." | None,
+          },
+          ...
+        ],
+      }
+
+    Defensive: returns the empty shape on DB error so the UI's
+    detail response is always renderable."""
+    out: dict[str, Any] = {
+        "total": 0,
+        "successful": 0,
+        "failed": 0,
+        "by_type": {},
+        "last_sent_at": None,
+        "recent": [],
+    }
+
+    pooled = _pooled_dsn(dsn)
+    try:
+        with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
+                             prepare_threshold=None, connect_timeout=10) as conn:
+            with conn.cursor() as cur:
+                # Aggregates first
+                cur.execute(
+                    """
+                    SELECT
+                        COUNT(*)                                       AS total,
+                        COUNT(*) FILTER (WHERE error_message IS NULL)  AS successful,
+                        COUNT(*) FILTER (WHERE error_message IS NOT NULL) AS failed,
+                        MAX(sent_at)                                   AS last_sent_at
+                      FROM public.emails_sent
+                     WHERE investigation_id = %s
+                    """,
+                    (investigation_id,),
+                )
+                agg = cur.fetchone() or {}
+                out["total"] = int(agg.get("total") or 0)
+                out["successful"] = int(agg.get("successful") or 0)
+                out["failed"] = int(agg.get("failed") or 0)
+                out["last_sent_at"] = _iso(agg.get("last_sent_at"))
+
+                # By-type counts (successful only — failures aren't
+                # categorized for the UI's "what's been sent" view)
+                cur.execute(
+                    """
+                    SELECT email_type, COUNT(*) AS n
+                      FROM public.emails_sent
+                     WHERE investigation_id = %s
+                       AND error_message IS NULL
+                     GROUP BY email_type
+                    """,
+                    (investigation_id,),
+                )
+                out["by_type"] = {
+                    r["email_type"]: int(r["n"])
+                    for r in cur.fetchall()
+                }
+
+                # Recent 10 sends, any status, newest first
+                cur.execute(
+                    """
+                    SELECT sent_at, to_address, email_type, subject,
+                           error_message
+                      FROM public.emails_sent
+                     WHERE investigation_id = %s
+                     ORDER BY sent_at DESC
+                     LIMIT 10
+                    """,
+                    (investigation_id,),
+                )
+                out["recent"] = [
+                    {
+                        "sent_at": _iso(r["sent_at"]),
+                        "to_address": r["to_address"],
+                        "email_type": r["email_type"],
+                        "subject": r["subject"],
+                        "success": r["error_message"] is None,
+                        "error_message": r["error_message"],
+                    }
+                    for r in cur.fetchall()
+                ]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("emails summary fetch failed for inv=%s: %s",
+                    investigation_id, exc)
     return out
 
 

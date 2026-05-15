@@ -159,9 +159,55 @@ and raw-case downloads).
   "material_change_detected": false,
   "change_summary":    null,
 
+  // ----- Tier-2 engagement state (added v0.4.x — migration 006) -----
+  "engagement_started_at":   "2026-05-15T22:28:05+00:00" | null,
+  "engagement_closed_at":    "..." | null,
+  "engagement_fee_paid_usd": "1500.00" | null,        // string, not float
+  "last_followup_sent_at":   "..." | null,
+
   // ----- Computed for UI convenience -----
   "is_wallet_trace":   true,
   "duration_seconds":  39.03,                         // claimed_at → completed_at|failed_at
+
+  // Engagement summary derived from the raw columns above. The
+  // ``status`` field is what the UI binds to — single value,
+  // covers every case.
+  "engagement": {
+    "status":           "not_engaged" | "active" | "closed" | "expired",
+    "fee_paid_usd":     "1500.00" | null,
+    "started_at":       "..." | null,
+    "closed_at":        "..." | null,
+    "last_followup_at": "..." | null,
+    "days_since_start": 5 | null,                     // days into engagement
+    "days_remaining":   25 | null,                    // 30 - days_since_start, floored at 0
+    "needs_followup":   true | false                  // active + (no last_followup_at OR > 6 days ago)
+  },
+
+  // ----- Emails sent audit summary (added v0.4.x — migration 005) -----
+  // Aggregated from public.emails_sent for the operator dashboard.
+  "emails": {
+    "total":         5,                               // all sends, incl. failures
+    "successful":    4,
+    "failed":        1,
+    "by_type": {                                      // successful sends, grouped
+      "victim_summary":   1,
+      "freeze_letter":    3,
+      "le_handoff":       0,
+      "followup_w1":      0
+    },
+    "last_sent_at":  "..." | null,
+    "recent": [                                       // last 10 sends (any status)
+      {
+        "sent_at":       "...",
+        "to_address":    "compliance@circle.com",
+        "email_type":    "freeze_letter",
+        "subject":       "Compliance Freeze Request — Case e917ffc5: USDC at $7,097.58 recoverable",
+        "success":       true,
+        "error_message": null
+      }
+      // ...
+    ]
+  },
 
   // ----- Bucket artifacts + signed URLs -----
   "artifacts": {

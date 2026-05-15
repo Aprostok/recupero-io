@@ -110,6 +110,12 @@ and raw-case downloads).
 |--------|------|-------|
 | `<uuid>` | UUID | Canonical hyphenated form (e.g. `849062ab-6a82-4af2-bfd9-d7092a2701c5`). |
 
+### Query parameters
+
+| Param           | Type    | Default | Notes |
+|-----------------|---------|---------|-------|
+| `latest_only`   | bool    | `true`  | When multiple brief sets exist per issuer (from pre-cleanup re-runs), return only the most-recent set per issuer. Set to `false` to get the full historical list — useful for an audit-trail view. Going forward (post commit `a507f12`), each `building_package` cleans the bucket before upload, so investigations should only ever have one set anyway. The filter is the UI-side safety net for historical rows. |
+
 ### Response shape
 
 ```jsonc

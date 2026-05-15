@@ -162,6 +162,7 @@ def get_investigation_detail(
     service_role_key: str,
     investigation_id: UUID | str,
     signed_url_ttl_sec: int = _DEFAULT_SIGNED_URL_TTL_SEC,
+    latest_only: bool = True,
 ) -> dict[str, Any] | None:
     """One investigation row + artifact metadata + signed URLs.
 
@@ -175,6 +176,13 @@ def get_investigation_detail(
     NOT fatal — they log a warning and the response carries empty
     ``artifacts`` (so the UI can still render the row metadata).
     This matches the dashboard_summary's defensive pattern.
+
+    ``latest_only`` (default True): when multiple brief artifacts exist
+    per issuer (from re-runs that pre-date the briefs/ auto-cleanup in
+    commit a507f12), return only the most-recent set per issuer. The
+    timestamp comes from the embedded ``BRIEF-YYYYMMDDTHHMMSS`` in the
+    filename. Set to False to get the full historical listing — useful
+    for the audit-trail view if we ever build one.
     """
     inv_id_str = str(investigation_id)
 
@@ -197,6 +205,8 @@ def get_investigation_detail(
             investigation_id=inv_id_str,
             ttl_sec=signed_url_ttl_sec,
         )
+        if latest_only:
+            artifacts = _filter_to_latest_briefs(artifacts)
     except Exception as exc:  # noqa: BLE001
         log.warning("artifact listing failed for inv=%s: %s", inv_id_str, exc)
         artifacts = _empty_artifacts()
@@ -327,6 +337,82 @@ def _empty_artifacts() -> dict[str, Any]:
         "raw": {},
         "freeze_letters": [],
     }
+
+
+def _filter_to_latest_briefs(artifacts: dict[str, Any]) -> dict[str, Any]:
+    """Collapse the freeze_letters list to one entry per issuer
+    (the most-recent by embedded BRIEF-YYYYMMDDTHHMMSS timestamp).
+
+    Pre-cleanup investigations have multiple brief sets in the bucket
+    from prior re-runs (case e917ffc5 had 74 brief artifacts spanning
+    14+ re-runs). The admin UI's default view shouldn't render all
+    of them — it'd be impossible to tell which is "current". This
+    filter keeps the list bounded.
+
+    Going forward, ``_stage_build_package`` cleans briefs/ before each
+    upload (commit a507f12), so new investigations will only ever
+    have one set anyway. This filter is the UI-side safety net for
+    historical rows.
+
+    Issuer grouping: ``Circle Brief-20260515T135939`` → issuer key
+    ``"Circle"``. The ``issuer_slug`` we built in
+    ``_build_artifacts_map`` includes both the issuer and the brief
+    ID; we strip back to the issuer for grouping.
+    """
+    letters = artifacts.get("freeze_letters") or []
+    if len(letters) <= 1:
+        # Nothing to filter — already a single-brief investigation
+        # (the common case after the auto-cleanup landed).
+        return artifacts
+
+    # Group by leading-issuer-word, retain the latest by timestamp.
+    latest_by_issuer: dict[str, tuple[str, dict[str, Any]]] = {}
+    for entry in letters:
+        issuer_slug = entry.get("issuer_slug") or ""
+        # Issuer is everything before the first space in the slug:
+        # "Circle Brief-20260515T135939" → "Circle".
+        issuer_root = issuer_slug.split()[0] if issuer_slug else ""
+        if not issuer_root:
+            # No issuer info — defensively keep this entry under a
+            # synthetic key so we don't silently drop it.
+            issuer_root = f"_unknown_{id(entry)}"
+
+        # Pull the timestamp from any of the brief's filenames; the
+        # filename pattern is freeze_request_<slug>_BRIEF-<ts>-<hash>.
+        ts = _extract_brief_timestamp(entry)
+
+        prior = latest_by_issuer.get(issuer_root)
+        if prior is None or ts > prior[0]:
+            latest_by_issuer[issuer_root] = (ts, entry)
+
+    # Sort by issuer name for stable ordering in the API response.
+    return {
+        **artifacts,
+        "freeze_letters": [
+            entry for _ts, entry in sorted(
+                latest_by_issuer.values(), key=lambda pair: pair[1].get("issuer_slug", "")
+            )
+        ],
+    }
+
+
+def _extract_brief_timestamp(entry: dict[str, Any]) -> str:
+    """Find a ``BRIEF-YYYYMMDDTHHMMSS`` timestamp inside any of the
+    entry's filenames. Returns a string suitable for lexicographic
+    comparison ("20260515T135939" > "20260514T182431"). Returns
+    empty string if no timestamp found — caller treats this as
+    "oldest" so a malformed entry never wins the latest-comparison."""
+    import re
+    pattern = re.compile(r"BRIEF-(\d{8}T\d{6})")
+    for key in ("html", "pdf", "le_handoff_html", "le_handoff_pdf"):
+        sub = entry.get(key)
+        if not sub:
+            continue
+        name = sub.get("name") or ""
+        m = pattern.search(name)
+        if m:
+            return m.group(1)
+    return ""
 
 
 def _build_artifacts_map(

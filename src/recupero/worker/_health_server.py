@@ -150,10 +150,16 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                 self._respond(400, {"error": "id must be a UUID"},
                               write_body=write_body)
                 return
+            # latest_only defaults to True (single brief per issuer).
+            # Pass latest_only=false in the query string to get the
+            # full historical listing (audit-trail use case).
+            latest_only_raw = (qs.get("latest_only") or ["true"])[0].lower()
+            latest_only = latest_only_raw not in ("false", "0", "no")
             try:
                 payload = get_investigation_detail(
                     dsn=dsn, supabase_url=sb_url, service_role_key=sb_key,
                     investigation_id=inv_id,
+                    latest_only=latest_only,
                 )
                 if payload is None:
                     self._respond(404, {"error": "investigation not found"},

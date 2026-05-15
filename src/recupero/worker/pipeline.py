@@ -38,17 +38,54 @@ from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
 
-# Default trace-window start for wallet-trace rows that don't supply an
-# incident_time. Set to Ethereum's genesis block timestamp — earlier
-# values cause Etherscan's getblocknobytime API to return "Error! No
-# closest block found" instead of clamping to block 1, which the tracer
-# then chokes on (the empirically-observed failure mode). All other
-# supported chains (Polygon, Base, Arbitrum, BSC, Solana) launched
-# AFTER 2015-07-30 and their adapters clamp internally, so this date is
-# also a safe lower bound for them.
-_WALLET_TRACE_DEFAULT_INCIDENT_TIME = datetime(
-    2015, 7, 30, 15, 26, 13, tzinfo=timezone.utc
-)  # Ethereum block 1 timestamp
+# Per-chain default trace-window start for wallet-trace rows that
+# don't supply an incident_time. Each entry is the chain's genesis-
+# block timestamp (UTC) — earlier values cause that chain's
+# block-by-timestamp explorer endpoint to return "no closest block
+# found" instead of clamping to block 1, which the tracer chokes on.
+#
+# Single-source documentation of chain genesis (canonical references):
+#
+#   * Ethereum block 1     — 2015-07-30 15:26:13 UTC (genesis at block 0
+#                            is null/uncles; block 1 is the first real
+#                            block — Etherscan's API answers from here.)
+#   * Polygon (Matic) genesis — 2020-05-30 06:23:35 UTC
+#   * BSC genesis            — 2020-08-29 03:24:14 UTC
+#   * Arbitrum One genesis   — 2021-08-31 22:09:39 UTC
+#   * Base genesis           — 2023-06-15 17:00:00 UTC
+#   * Solana mainnet-beta    — 2020-03-16 14:00:00 UTC (not actually used
+#                              by run_trace — Solana adapter uses its
+#                              own slot-based lookup — but kept here
+#                              for the fallback case if dispatch logic
+#                              ever changes.)
+#   * Hyperliquid launched   — 2024-06-01 (post-launch — not used by
+#                              run_trace either; scrape_hyperliquid_case
+#                              has its own start-time logic. Listed for
+#                              completeness only.)
+#
+# The fallback (used if a chain isn't in the map or fails to parse) is
+# the Ethereum block 1 timestamp — earliest known good value across
+# any supported chain.
+_CHAIN_GENESIS_TIMESTAMPS: dict[str, datetime] = {
+    "ethereum":    datetime(2015, 7, 30, 15, 26, 13, tzinfo=timezone.utc),
+    "polygon":     datetime(2020, 5, 30,  6, 23, 35, tzinfo=timezone.utc),
+    "bsc":         datetime(2020, 8, 29,  3, 24, 14, tzinfo=timezone.utc),
+    "arbitrum":    datetime(2021, 8, 31, 22,  9, 39, tzinfo=timezone.utc),
+    "base":        datetime(2023, 6, 15, 17,  0,  0, tzinfo=timezone.utc),
+    "solana":      datetime(2020, 3, 16, 14,  0,  0, tzinfo=timezone.utc),
+    "hyperliquid": datetime(2024, 6,  1,  0,  0,  0, tzinfo=timezone.utc),
+}
+
+_FALLBACK_GENESIS = _CHAIN_GENESIS_TIMESTAMPS["ethereum"]
+
+
+def _default_incident_time_for(chain: str) -> datetime:
+    """Resolve the per-chain wallet-trace default. Falls back to the
+    Ethereum genesis timestamp on unknown chains rather than raising,
+    so a new chain being added to the schema doesn't immediately wedge
+    the worker — it'll just trace from a "too early" window and the
+    chain adapter will clamp internally."""
+    return _CHAIN_GENESIS_TIMESTAMPS.get(chain.lower(), _FALLBACK_GENESIS)
 
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.reports.victim import VictimInfo, write_victim
@@ -282,14 +319,18 @@ def _stage_trace(
     """
     # Wallet-trace rows (case_id=NULL) typically arrive with
     # incident_time=NULL — Jacob's admin UI doesn't collect it because
-    # operators want full-history traces. Default to a pre-genesis date
-    # so the trace window is effectively unbounded on the lower end.
-    incident_time = inv.incident_time or _WALLET_TRACE_DEFAULT_INCIDENT_TIME
+    # operators want full-history traces. Resolve the per-chain
+    # genesis timestamp so the trace window covers the full chain
+    # history. Each chain has its own value because using Ethereum's
+    # 2015 genesis on a 2023-genesis chain like Base just wastes the
+    # explorer's "no closest block" round-trip.
+    incident_time = inv.incident_time or _default_incident_time_for(inv.chain)
     if inv.incident_time is None:
         log.info(
-            "investigation %s: incident_time=NULL — defaulting to %s "
+            "investigation %s: incident_time=NULL on chain=%s — "
+            "defaulting to chain-genesis timestamp %s "
             "(full-history wallet trace)",
-            inv.id, incident_time.isoformat(),
+            inv.id, inv.chain, incident_time.isoformat(),
         )
 
     if inv.chain == "hyperliquid":

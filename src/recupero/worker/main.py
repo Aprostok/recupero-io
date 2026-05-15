@@ -229,11 +229,34 @@ def run_forever(
         db.close()
 
 
+# Cooldown after a claim failure. Prevents a tight retry loop when
+# something is fundamentally broken (schema drift, DB down, etc.) —
+# we don't want to burn CPU + log spam re-trying the same broken
+# claim 30 times a second. claim_one is now self-recovering for
+# pydantic ValidationErrors (it marks the row failed and re-raises),
+# so the next claim sweep will get a DIFFERENT row.
+_CLAIM_FAILURE_COOLDOWN_SEC = 30.0
+
+
 def _try_claim(db: WorkerDB) -> Investigation | None:
     try:
         return db.claim_one()
     except Exception as e:  # noqa: BLE001
-        log.error("claim_one failed (will retry): %s", e)
+        # Use log.exception so the full traceback lands in Railway logs.
+        # The original bug was invisible for 12 hours because the brief
+        # one-line log message ("invalid literal for int...") didn't
+        # spell out the consequence (row stuck in 'claimed') or which
+        # column was the offender. exception() includes the traceback
+        # which makes pydantic ValidationErrors self-documenting.
+        log.exception(
+            "claim_one FAILED — investigation may be stuck in 'claimed' "
+            "state; admin UI should surface it as failed within seconds. "
+            "Cooling down %.0fs before next claim sweep. Cause: %s",
+            _CLAIM_FAILURE_COOLDOWN_SEC, e,
+        )
+        # Sleep on the shutdown event so a SIGTERM during the cooldown
+        # still drains cleanly instead of waiting the full 30s.
+        _shutdown.wait(_CLAIM_FAILURE_COOLDOWN_SEC)
         return None
 
 

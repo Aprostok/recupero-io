@@ -188,6 +188,24 @@ class WorkerDB:
         re-claimed — that's the reaper's job (``reap_stale_claims``).
         Failed rows stay terminal; humans re-queue by inserting a fresh
         investigation, not by mutating an old one.
+
+        Validation-failure recovery
+        ---------------------------
+
+        If pydantic model construction raises (e.g., a schema/model
+        mismatch like the incident_time-NULL regression we just fixed),
+        the row has ALREADY been UPDATEd to ``claimed`` by the time we
+        try to validate. Leaving it there wedges the row for 5 minutes
+        until the reaper kills it with a generic "heartbeat older than
+        300s" message — which masks the real cause and made the
+        original bug invisible for 12 hours of production.
+
+        Recovery: catch ``ValidationError`` here, mark the row as
+        ``failed`` with stage='claim_validation_failed' carrying the
+        actual pydantic error text, and re-raise. The polling loop
+        catches the re-raise in ``_try_claim`` and continues with
+        other rows. The admin UI now sees the real cause in seconds,
+        not minutes.
         """
         claimable_list = ",".join(f"'{s}'" for s in sorted(S.CLAIMABLE_STATUSES))
         sql = f"""
@@ -214,7 +232,34 @@ class WorkerDB:
                 row = cur.fetchone()
         if row is None:
             return None
-        return Investigation.model_validate(row)
+        try:
+            return Investigation.model_validate(row)
+        except Exception as e:  # noqa: BLE001
+            # The UPDATE already committed (autocommit=True) — we have
+            # to mark the row as failed ourselves or the reaper will
+            # take 5min to do it with a misleading message.
+            inv_id = row.get("id")
+            err_msg = (
+                f"claim_validation_failed: {type(e).__name__}: {e} "
+                f"(row schema doesn't match Investigation model — "
+                f"likely a missing migration or a model field that "
+                f"should be optional but isn't)"
+            )
+            try:
+                self.mark_failed(
+                    inv_id, stage="claim_validation_failed", error=err_msg,
+                )
+            except Exception as cleanup_err:  # noqa: BLE001
+                # Surface BOTH the original error and the cleanup
+                # failure — operator needs to see them together to
+                # diagnose. Don't let cleanup-failure mask the real
+                # cause.
+                raise RuntimeError(
+                    f"claim_one validation failed AND cleanup failed; "
+                    f"row {inv_id} likely stuck in 'claimed'. "
+                    f"validation_err={err_msg!r} cleanup_err={cleanup_err!r}"
+                ) from e
+            raise
 
     def reap_stale_claims(self, *, stale_after_sec: int) -> list[tuple[UUID, str]]:
         """Mark active-state rows whose heartbeat has lapsed as ``failed``.

@@ -587,6 +587,12 @@ def cli() -> None:
              "Useful for first-run validation and rate-limit budgeting.",
     )
     parser.add_argument(
+        "--dashboard-summary", action="store_true",
+        help="Print one-shot JSON of dashboard aggregate counters "
+             "(cases, investigations, watchlist, snapshots). Same shape "
+             "as the worker's /dashboard.json endpoint.",
+    )
+    parser.add_argument(
         "--log-level", default=os.environ.get("RECUPERO_LOG_LEVEL", "INFO"),
         help="Python logging level. Default INFO.",
     )
@@ -600,6 +606,16 @@ def cli() -> None:
 
     if args.watch_tick:
         sys.exit(_run_watch_tick_once(limit=args.watch_tick_limit))
+
+    if args.dashboard_summary:
+        import json as _json
+        from recupero.worker.dashboard_summary import build_dashboard_summary
+        dsn = os.environ.get("SUPABASE_DB_URL", "")
+        if not dsn:
+            log.error("SUPABASE_DB_URL is not set")
+            sys.exit(2)
+        print(_json.dumps(build_dashboard_summary(dsn=dsn), indent=2))
+        sys.exit(0)
 
     heartbeat_sec = float(
         os.environ.get("RECUPERO_HEARTBEAT_INTERVAL_SEC", _HEARTBEAT_DEFAULT_SEC)

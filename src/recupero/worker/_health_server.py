@@ -67,6 +67,24 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                     {"ok": ok, "checks": details},
                     write_body=write_body,
                 )
+            elif self.path == "/dashboard.json":
+                # Aggregated counters for the admin-UI homepage.
+                # Cached on demand — no in-process cache layer
+                # because the queries are cheap (<200ms typically)
+                # and the UI polls at 60s+, so cache hit rate is
+                # marginal. Add a TTL cache here if traffic warrants.
+                try:
+                    from recupero.worker.dashboard_summary import (
+                        build_dashboard_summary,
+                    )
+                    import os as _os
+                    dsn = _os.environ.get("SUPABASE_DB_URL", "")
+                    payload = build_dashboard_summary(dsn=dsn)
+                    self._respond(200, payload, write_body=write_body)
+                except Exception as e:  # noqa: BLE001
+                    self._respond(
+                        500, {"error": str(e)}, write_body=write_body,
+                    )
             else:
                 self._respond(404, {"error": "not found"}, write_body=write_body)
 

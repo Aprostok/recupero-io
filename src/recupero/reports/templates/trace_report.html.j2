@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Trace Report — {{ investigation_id }}</title>
+{% include "_styles.html.j2" %}
+<style>
+  /* Trace-report-specific overrides — internal forensic
+     worksheet aesthetic. Lighter on chrome, more density
+     than the customer-facing freeze letter. */
+  .internal-stamp {
+    display: inline-block;
+    margin-left: 0.6em;
+    padding: 2px 8px;
+    border: 1px solid var(--confidential);
+    color: var(--confidential);
+    font-size: var(--type-tiny);
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.4em 1.2em;
+    margin: var(--space-md) 0 var(--space-lg);
+    padding: 0.8em 1em;
+    background: var(--paper-tint);
+    border-left: 2px solid var(--gold-accent);
+  }
+  .stat-grid > div {
+    display: flex;
+    justify-content: space-between;
+    font-size: var(--type-small);
+  }
+  .stat-grid dt { color: var(--ink-quiet); font-weight: 500; }
+  .stat-grid dd { font-weight: 600; color: var(--ink); margin: 0; }
+  .freeze-badge {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 2px;
+    font-size: var(--type-tiny);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .freeze-badge.high   { background: #DCFCE7; color: #14532D; }
+  .freeze-badge.medium { background: #FEF3C7; color: #5C2D0F; }
+  .freeze-badge.low    { background: #FED7AA; color: #5C1F09; }
+  .freeze-badge.none   { background: #F1F5F9; color: #475569; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Internal Use Only</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Forensic Worksheet · Wallet Trace Report</div>
+    <h1>Trace Report
+      <span class="internal-stamp">Internal Use Only</span>
+    </h1>
+    <p class="cover-subtitle">
+      Data-only summary of on-chain trace findings.
+      {% if label %}Label: <strong>{{ label }}</strong>.{% endif %}
+      Not for external distribution — this artifact contains raw
+      investigative data without the case narrative or
+      customer-facing prose. For an externally-shareable summary,
+      see the freeze-request and LE-handoff deliverables.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Investigation ID</dt>
+      <dd class="mono">{{ investigation_id }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Traced Wallet</dt>
+      <dd><a class="mono" href="{{ wallet_explorer_url }}">{{ wallet_address }}</a></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Chain</dt>
+      <dd>{{ chain }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Run Timestamp</dt>
+      <dd>{{ generated_at }} UTC</dd>
+    </div>
+    {% if label %}
+    <div class="cover-meta-item">
+      <dt>Label</dt>
+      <dd>{{ label }}</dd>
+    </div>
+    {% endif %}
+  </dl>
+</section>
+
+<h2>1. Trace Summary</h2>
+<dl class="stat-grid">
+  <div><dt>Total transfers analyzed</dt><dd>{{ stats.total_transfers }}</dd></div>
+  <div><dt>Max depth reached</dt><dd>{{ stats.max_depth_reached }}</dd></div>
+  <div><dt>Total flow value (USD)</dt><dd>{{ stats.total_flow_usd }}</dd></div>
+  <div><dt>Destinations identified</dt><dd>{{ stats.destinations_count }}</dd></div>
+  <div><dt>Trace started</dt><dd class="mono">{{ stats.trace_started_at }}</dd></div>
+  <div><dt>Trace completed</dt><dd class="mono">{{ stats.trace_completed_at }}</dd></div>
+</dl>
+
+<h2>2. Destination Addresses</h2>
+{% if destinations %}
+<p class="small">
+  Every distinct destination wallet identified by the trace, with
+  current holdings priced at fetch time. Click any address to open
+  it on the chain explorer.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Address</th>
+      <th>Role / Label</th>
+      <th>Asset</th>
+      <th>Balance</th>
+      <th>USD Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in destinations %}
+    <tr>
+      <td class="mono"><a href="{{ d.explorer_url }}">{{ d.address_short }}</a></td>
+      <td>{{ d.role }}{% if d.label %}<br/><span class="small secondary">{{ d.label }}</span>{% endif %}</td>
+      <td>{{ d.symbol or '—' }}</td>
+      <td class="mono">{{ d.balance_human or '—' }}</td>
+      <td class="amount">{{ d.usd_value_human or '—' }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No destination addresses identified beyond the seed wallet.</p>
+{% endif %}
+
+<h2>3. Freeze Potential</h2>
+{% if freezable_rows %}
+<p class="small">
+  Destinations holding assets the issuer can freeze. Capability
+  taxonomy: <strong>HIGH</strong> (issuer has direct freeze
+  authority), <strong>MEDIUM</strong> (issuer can freeze with some
+  friction), <strong>LOW</strong> (technically possible but
+  unprecedented or contested), <strong>NOT FREEZABLE</strong>
+  (staking/permissionless contract — issuer has no power).
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Address</th>
+      <th>Asset</th>
+      <th>Balance</th>
+      <th>USD Value</th>
+      <th>Issuer</th>
+      <th>Freezability</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in freezable_rows %}
+    <tr>
+      <td class="mono"><a href="{{ f.explorer_url }}">{{ f.address_short }}</a></td>
+      <td>{{ f.symbol }}</td>
+      <td class="mono">{{ f.amount }}</td>
+      <td class="amount">{{ f.usd }}</td>
+      <td>{{ f.issuer }}</td>
+      <td>
+        <span class="freeze-badge {{ f.capability_class }}">
+          {{ f.capability }}
+        </span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No destinations identified holding freezable assets. The
+trace's terminal wallets either hold non-freezable assets (native
+gas tokens, non-stablecoin tokens with no issuer-level controls)
+or are at exchanges / mixers / bridges that require a different
+recovery path (subpoena, mixer report, bridge operator
+notification).</p>
+{% endif %}
+
+<h2>4. Flow Visualization</h2>
+{% if flow_filename %}
+<p class="attachment-note">
+  The complete fund-flow diagram is provided as a separate SVG
+  attachment (<span class="mono">{{ flow_filename }}</span>)
+  accompanying this report. Open in any modern browser to inspect
+  at full resolution; each wallet node links directly to its
+  on-chain explorer record.
+</p>
+{% else %}
+<p>Flow diagram unavailable for this trace.</p>
+{% endif %}
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>{{ investigation_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Internal Use Only.</span>
+    Not for distribution to issuers, exchanges, or law enforcement.
+    For external-shareable artifacts see freeze_request_*.html and
+    le_handoff_*.html in the same investigation folder.
+  </div>
+</footer>
+
+</body>
+</html>

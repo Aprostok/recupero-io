@@ -87,7 +87,13 @@ class Investigation(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     id: UUID
-    case_id: UUID
+    # case_id nullable as of the wallet-trace migration — rows with
+    # case_id=NULL are "scratch" wallet traces (intake calls,
+    # ZachXBT-tagged wallets, internal R&D). They have no associated
+    # cases row, no victim info, and typically run with skip_editorial
+    # and skip_freeze_briefs both set. The pipeline branches on this:
+    # see worker/pipeline.py for the null-case_id codepath.
+    case_id: UUID | None = None
     status: str
     triggered_by: str | None = None
     triggered_at: datetime | None = None
@@ -105,6 +111,14 @@ class Investigation(BaseModel):
     incident_time: datetime
     max_depth: int = 1
     dust_threshold_usd: Decimal | None = None
+
+    # Wallet-trace metadata (Phase 4 — Jacob spec, migration adds
+    # label / skip_editorial / skip_freeze_briefs columns). Existing
+    # case-driven rows ignore these (defaults match pre-migration
+    # behavior — no label, no skips).
+    label: str | None = None
+    skip_editorial: bool = False
+    skip_freeze_briefs: bool = False
 
 
 class CaseData(BaseModel):

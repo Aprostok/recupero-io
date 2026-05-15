@@ -66,21 +66,26 @@ def build_all_deliverables(
     freeze_brief: dict[str, Any],
     case_dir: Path,
     investigator: InvestigatorInfo | None = None,
+    skip_freeze_briefs: bool = False,
+    investigation_id: str | None = None,
+    label: str | None = None,
 ) -> list[Path]:
     """Generate one freeze-request HTML per unique issuer in FREEZABLE,
     plus one LE handoff. Returns the list of paths written.
 
-    Skip conditions (return empty list, log, no error):
+    Also unconditionally emits ``trace_report_<hash>.html`` — the new
+    internal-facing data summary every investigation ships (Phase 4).
+    On wallet traces (skip_freeze_briefs=True, often with case_id=NULL)
+    the trace report is the only HTML produced.
 
+    Skip conditions for the customer-facing freeze letters (still
+    emits trace_report, returns the trace_report path):
+
+      * ``skip_freeze_briefs=True`` — wallet trace / R&D run.
       * The case has no transfers — nothing to seize.
       * FREEZABLE is empty — no labeled-issuer holding to address.
         This is the right outcome for cases that route entirely to
-        exchange deposits / mixers / unlabeled wallets: those paths
-        need different deliverables (exchange subpoena, mixer report)
-        that the worker doesn't generate today, and producing a
-        canned letter to a random issuer (e.g. defaulting to Midas)
-        would be misleading. Operators see no briefs/ subdir → handle
-        the case via the appropriate other path.
+        exchange deposits / mixers / unlabeled wallets.
 
     The legacy ``recupero brief`` CLI command remains available for
     one-off overrides if an operator wants to manually generate a
@@ -122,14 +127,15 @@ def build_all_deliverables(
             continue
         issuers_seen[issuer_name] = _issuer_info_for(issuer_name, entry)
 
+    # NB: we no longer early-return when issuers_seen is empty — the
+    # trace_report still ships on every investigation. The customer-
+    # facing freeze letters are the only thing skipped on the
+    # empty-FREEZABLE path.
     if not issuers_seen:
         log.info(
-            "FREEZABLE list is empty (no labeled-issuer holdings matched). "
-            "Skipping HTML deliverable generation — no canned letter applies. "
-            "Operator should review freeze_asks.json's exchange_deposits and "
-            "the case.json transfers for non-issuer recovery paths.",
+            "FREEZABLE list is empty — skipping customer-facing freeze "
+            "letters but still emitting trace_report.html",
         )
-        return []
 
     investigator = investigator or _DEFAULT_INVESTIGATOR
 
@@ -179,31 +185,61 @@ def build_all_deliverables(
 
     written: list[Path] = []
     html_paths: list[Path] = []  # HTMLs we should also produce PDFs for
-    for issuer_name, issuer_info in issuers_seen.items():
-        try:
-            bundle = generate_briefs(
-                primary_case=case,
-                linked_cases=[],
-                victim=victim,
-                investigator=investigator,
-                case_dir=case_dir,
-                issuer=issuer_info,
-                flow_filename=flow_filename,
-                flow_inline_svg=flow_inline_svg,
-            )
-            written.append(bundle.maple_path)
-            written.append(bundle.le_path)
-            written.append(bundle.manifest_path)
-            html_paths.extend([bundle.maple_path, bundle.le_path])
-            log.info(
-                "wrote freeze brief for issuer=%s file=%s",
-                issuer_name, bundle.maple_path.name,
-            )
-        except Exception as e:  # noqa: BLE001
-            # One issuer's brief failing shouldn't kill the whole stage —
-            # log and continue so other issuers still get briefs.
-            log.warning("brief generation failed for issuer=%s: %s",
-                        issuer_name, e)
+
+    # Trace report — internal-facing data summary, always emitted
+    # regardless of skip_freeze_briefs / FREEZABLE / case_id. This
+    # is the artifact the admin UI's "Wallet trace" detail page
+    # surfaces as the primary deliverable.
+    try:
+        from recupero.worker._trace_report import render_trace_report
+        briefs_dir = case_dir / "briefs"
+        briefs_dir.mkdir(parents=True, exist_ok=True)
+        trace_report_path = render_trace_report(
+            case=case,
+            freeze_brief=freeze_brief,
+            briefs_dir=briefs_dir,
+            flow_filename=flow_filename,
+            investigation_id=investigation_id,
+            label=label,
+        )
+        if trace_report_path is not None:
+            written.append(trace_report_path)
+            html_paths.append(trace_report_path)
+            log.info("wrote trace report: %s", trace_report_path.name)
+    except Exception as e:  # noqa: BLE001
+        log.warning("trace_report generation failed (continuing): %s", e)
+
+    if skip_freeze_briefs:
+        log.info(
+            "skip_freeze_briefs=true — emitting only trace_report; "
+            "customer-facing freeze letters + LE handoffs not generated",
+        )
+    else:
+        for issuer_name, issuer_info in issuers_seen.items():
+            try:
+                bundle = generate_briefs(
+                    primary_case=case,
+                    linked_cases=[],
+                    victim=victim,
+                    investigator=investigator,
+                    case_dir=case_dir,
+                    issuer=issuer_info,
+                    flow_filename=flow_filename,
+                    flow_inline_svg=flow_inline_svg,
+                )
+                written.append(bundle.maple_path)
+                written.append(bundle.le_path)
+                written.append(bundle.manifest_path)
+                html_paths.extend([bundle.maple_path, bundle.le_path])
+                log.info(
+                    "wrote freeze brief for issuer=%s file=%s",
+                    issuer_name, bundle.maple_path.name,
+                )
+            except Exception as e:  # noqa: BLE001
+                # One issuer's brief failing shouldn't kill the whole stage —
+                # log and continue so other issuers still get briefs.
+                log.warning("brief generation failed for issuer=%s: %s",
+                            issuer_name, e)
 
     # Generate PDF versions of every HTML deliverable + the standalone
     # flow SVG. Best-effort — a WeasyPrint failure on one file logs a

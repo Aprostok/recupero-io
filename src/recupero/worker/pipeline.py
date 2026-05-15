@@ -79,21 +79,47 @@ def run_one(
     if inv.dust_threshold_usd is not None:
         cfg.trace.dust_threshold_usd = float(inv.dust_threshold_usd)
 
-    # Pull the cases row for victim info + narrative.
-    case_data = db.fetch_case(inv.case_id)
-    if case_data is None:
-        # Don't crash silently — surface the FK referent missing so it
-        # can be triaged from the admin UI.
-        db.mark_failed(inv.id, stage="setup",
-                       error=f"cases row {inv.case_id} not found (FK violation)")
-        return
+    # Wallet-trace investigations (case_id=NULL) don't have a backing
+    # cases row — no victim, no incident narrative, just a wallet to
+    # trace. Force skip_editorial + skip_freeze_briefs on this path
+    # regardless of what the row carries, since editorial needs victim
+    # context and freeze letters need a victim to address.
+    case_data = None
+    if inv.case_id is not None:
+        case_data = db.fetch_case(inv.case_id)
+        if case_data is None:
+            # Don't crash silently — surface the FK referent missing so it
+            # can be triaged from the admin UI.
+            db.mark_failed(
+                inv.id, stage="setup",
+                error=f"cases row {inv.case_id} not found (FK violation)",
+            )
+            return
+    else:
+        log.info(
+            "investigation %s has case_id=NULL (wallet trace) — "
+            "forcing skip_editorial + skip_freeze_briefs",
+            inv.id,
+        )
+        # Make this a no-op mutation in-memory; the row's own columns
+        # are typically already true on this path, but if Jacob's
+        # admin UI mis-sets them we recover gracefully.
+        inv = inv.model_copy(update={
+            "skip_editorial": True,
+            "skip_freeze_briefs": True,
+        })
 
     api_costs_usd: Decimal | None = None
 
     try:
         with _local_case_dir(cfg, case_id_str) as (local_store, case_dir):
-            # Always seed victim.json — idempotent, cheap.
-            _write_victim_from_case(case_dir, inv, case_data)
+            # Seed victim.json only when we have a backing case.
+            # Wallet traces leave victim.json absent — the trace
+            # report doesn't need it, and downstream stages that
+            # WOULD need it (editorial / freeze letters) are all
+            # skipped on this path.
+            if case_data is not None:
+                _write_victim_from_case(case_dir, inv, case_data)
 
             has_case = store.exists("case.json")
             has_freeze = store.exists("freeze_asks.json")
@@ -126,7 +152,19 @@ def run_one(
             _populate_watchlist(inv, local_store, case_dir, db)
 
             # Editorial stage ----------------------------------------------
-            if not has_editorial:
+            # Skipped when the row has skip_editorial=True (wallet
+            # traces, internal R&D — no real victim to write prose
+            # about, no compliance team to address). The pipeline
+            # bypasses the awaiting_review checkpoint entirely on
+            # this path and proceeds straight to emit + building_package
+            # with whatever computed-only artifacts we have.
+            if inv.skip_editorial:
+                log.info(
+                    "investigation %s: skip_editorial=true — bypassing "
+                    "Anthropic + awaiting_review checkpoint",
+                    inv.id,
+                )
+            elif not has_editorial:
                 api_costs_usd = _run_stage(
                     db, inv.id, S.EDITORIAL_DRAFTING,
                     lambda: _stage_ai_editorial(inv, case_id_str, case_data,
@@ -139,23 +177,40 @@ def run_one(
                 log.info("investigation %s paused at review_required (api_costs=$%s)",
                          inv.id, api_costs_usd)
                 return
-
-            # Editorial already exists. Re-read from bucket (UI may have
-            # rewritten it during review) and decide whether to pause or emit.
-            download_editorial(store, case_dir)
-            editorial = json.loads(
-                (case_dir / "brief_editorial.json").read_text(encoding="utf-8-sig")
-            )
-            if editorial.get("REVIEW_REQUIRED", False):
-                db.mark_review_required(inv.id)
-                log.info("investigation %s still REVIEW_REQUIRED; pausing", inv.id)
-                return
+            else:
+                # Editorial already exists. Re-read from bucket (UI may have
+                # rewritten it during review) and decide whether to pause or emit.
+                download_editorial(store, case_dir)
+                editorial = json.loads(
+                    (case_dir / "brief_editorial.json").read_text(encoding="utf-8-sig")
+                )
+                if editorial.get("REVIEW_REQUIRED", False):
+                    db.mark_review_required(inv.id)
+                    log.info("investigation %s still REVIEW_REQUIRED; pausing", inv.id)
+                    return
 
             # Emit stage ---------------------------------------------------
-            _run_stage(
-                db, inv.id, S.EMITTING,
-                lambda: _stage_emit_brief(inv, case_id_str, local_store, case_dir, store),
-            )
+            # The emit-brief stage produces freeze_brief.json from
+            # freeze_asks.json + editorial. On skip_editorial paths
+            # we bypass emit_brief entirely and synthesize a minimal
+            # freeze_brief.json from freeze_asks alone — the trace
+            # report's freeze-potential table only reads the
+            # FREEZABLE list, which we can rebuild from freeze_asks
+            # without any editorial input.
+            if inv.skip_editorial:
+                _run_stage(
+                    db, inv.id, S.EMITTING,
+                    lambda: _synthesize_freeze_brief_from_asks(
+                        case_dir, store,
+                    ),
+                )
+            else:
+                _run_stage(
+                    db, inv.id, S.EMITTING,
+                    lambda: _stage_emit_brief(
+                        inv, case_id_str, local_store, case_dir, store,
+                    ),
+                )
 
             # Per docs/investigation-integration.md, the worker passes
             # through `building_package` (output columns written here),
@@ -365,6 +420,91 @@ def _stage_emit_brief(
     upload_case_dir(case_dir, bucket)
 
 
+def _synthesize_freeze_brief_from_asks(
+    case_dir: Path, bucket: SupabaseCaseStore,
+) -> None:
+    """Write a minimal freeze_brief.json directly from freeze_asks.json
+    — used on skip_editorial paths where emit_brief can't run because
+    there's no editorial document.
+
+    Output shape matches what trace_report._build_freezable_table
+    reads from FREEZABLE (issuer/token/freeze_capability/holdings).
+    No narrative prose; no TOTAL_LOSS_USD / MAX_RECOVERABLE_USD
+    aggregates beyond what's directly computable from the asks.
+    """
+    freeze_asks_path = case_dir / "freeze_asks.json"
+    out_path = case_dir / "freeze_brief.json"
+    if not freeze_asks_path.exists():
+        # No freeze asks emitted (the freeze stage produced nothing).
+        # Still write a stub so downstream code sees a valid file.
+        out_path.write_text(
+            json.dumps({"FREEZABLE": [], "DESTINATIONS": [],
+                        "TOTAL_LOSS_USD": "$0", "MAX_RECOVERABLE_USD": "$0"},
+                       indent=2),
+            encoding="utf-8",
+        )
+        upload_case_dir(case_dir, bucket)
+        return
+
+    asks = json.loads(freeze_asks_path.read_text(encoding="utf-8-sig"))
+    by_issuer = asks.get("by_issuer") or {}
+
+    freezable: list[dict[str, Any]] = []
+    total_recoverable = Decimal(0)
+    total_suspected = Decimal(0)
+    for issuer, entries in by_issuer.items():
+        if not entries:
+            continue
+        # Group holdings under one entry per issuer/token pair so the
+        # trace_report's table groups cleanly.
+        by_token: dict[str, dict[str, Any]] = {}
+        for e in entries:
+            symbol = e.get("symbol") or "TOKEN"
+            usd_str = e.get("usd_value")
+            try:
+                usd = Decimal(usd_str) if usd_str else Decimal(0)
+            except (TypeError, ValueError):
+                usd = Decimal(0)
+            if usd > 0:
+                total_recoverable += usd
+            total_suspected += usd
+            token_entry = by_token.setdefault(symbol, {
+                "issuer": issuer,
+                "token": symbol,
+                "freeze_capability": "HIGH",  # default; trace doesn't
+                                              # know issuer's capability
+                                              # without the cases context
+                "holdings": [],
+                "total_usd": Decimal(0),
+            })
+            token_entry["holdings"].append({
+                "address": e.get("address"),
+                "amount": (
+                    f"{e.get('amount', '?')} {symbol}"
+                    if e.get("amount") else "?"
+                ),
+                "usd": f"${usd:,.2f}" if usd > 0 else "$0",
+                "status": "FREEZABLE" if usd > 1000 else "INVESTIGATE",
+            })
+            token_entry["total_usd"] += usd
+        for token_entry in by_token.values():
+            token_entry["total_usd"] = f"${token_entry['total_usd']:,.2f}"
+            freezable.append(token_entry)
+
+    out = {
+        "FREEZABLE": freezable,
+        "DESTINATIONS": asks.get("exchange_deposits") or [],
+        "TOTAL_LOSS_USD": f"${total_suspected:,.2f}",
+        "MAX_RECOVERABLE_USD": f"${total_recoverable:,.2f}",
+        "SOURCE": "synthesized from freeze_asks.json (skip_editorial path)",
+    }
+    out_path.write_text(json.dumps(out, indent=2, default=str),
+                        encoding="utf-8")
+    upload_case_dir(case_dir, bucket)
+    log.info("synthesized freeze_brief.json for skip_editorial path: "
+             "%d freezable issuer(s)", len(freezable))
+
+
 def _stage_build_package(
     inv: Investigation,
     case_id_str: str,
@@ -383,19 +523,46 @@ def _stage_build_package(
     No exceptions caught here — any failure marks the row failed at
     stage='building_package', surfaced via the admin UI.
     """
-    from recupero.reports.victim import load_victim
+    from recupero.reports.victim import VictimInfo, load_victim
     from recupero.worker._deliverables import build_all_deliverables
 
     case = local_store.read_case(case_id_str)
-    victim = load_victim(case_dir)
+
+    # Victim may be absent on wallet-trace investigations (case_id=NULL).
+    # We construct a synthetic placeholder so downstream code that expects
+    # a VictimInfo (template renders, brief builder) doesn't need branching
+    # — the trace_report template doesn't render victim fields anyway and
+    # the freeze-letter renderer is skipped on this path.
+    victim_path = case_dir / "victim.json"
+    if victim_path.exists():
+        victim = load_victim(case_dir)
+    else:
+        victim = VictimInfo(
+            name=inv.label or "Wallet trace (no case)",
+            wallet_address=inv.seed_address,
+        )
+
+    # freeze_brief.json may be a thin no-FREEZABLE shell on
+    # skip-editorial wallet traces — emit_brief still writes it for
+    # the freezable-issuer summary used by the trace report.
     freeze_brief_path = case_dir / "freeze_brief.json"
-    freeze_brief = json.loads(freeze_brief_path.read_text(encoding="utf-8-sig"))
+    if freeze_brief_path.exists():
+        freeze_brief = json.loads(freeze_brief_path.read_text(encoding="utf-8-sig"))
+    else:
+        freeze_brief = {"FREEZABLE": [], "TOTAL_LOSS_USD": "$0",
+                        "MAX_RECOVERABLE_USD": "$0", "DESTINATIONS": []}
 
     written = build_all_deliverables(
         case=case,
         victim=victim,
         freeze_brief=freeze_brief,
         case_dir=case_dir,
+        # Pipeline forwards the row's skip flags so the deliverables
+        # builder can omit freeze letters / LE handoffs on
+        # wallet-trace runs while still emitting the trace_report.
+        skip_freeze_briefs=inv.skip_freeze_briefs,
+        investigation_id=str(inv.id),
+        label=inv.label,
     )
     log.info("building_package wrote %d deliverable file(s)", len(written))
     upload_case_dir(case_dir, bucket)

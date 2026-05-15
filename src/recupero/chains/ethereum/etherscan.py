@@ -84,14 +84,35 @@ class EtherscanClient:
     # ---------- High-level wrappers ----------
 
     def get_block_number_by_time(self, ts_unix: int, closest: str = "before") -> int:
-        """Module=block, action=getblocknobytime."""
+        """Module=block, action=getblocknobytime.
+
+        Etherscan returns ``"Error! No closest block found"`` (as the
+        ``result`` string) for timestamps before the chain's first
+        block — closest=before has no answer in that case. We clamp
+        to block 1 instead of raising, which matches the
+        semantically-correct interpretation: "give me the earliest
+        block you have" should return the earliest block, not crash.
+
+        This was the empirical failure mode on wallet-trace runs
+        when ``incident_time`` defaults to the chain-genesis
+        timestamp. The trace was emitting "trace hop failed:
+        invalid literal for int()" and returning 0 transfers — a
+        misleading "found nothing" result on wallets that actually
+        had activity. Clamping to block 1 lets the txlist call below
+        actually return the wallet's history.
+        """
         data = self._call(
             module="block",
             action="getblocknobytime",
             timestamp=str(ts_unix),
             closest=closest,
         )
-        return int(data["result"])
+        result = data.get("result")
+        if isinstance(result, str) and "no closest block" in result.lower():
+            # Pre-genesis timestamp. Clamp to block 1 (block 0 has a
+            # null timestamp on Ethereum mainnet — not a real block).
+            return 1
+        return int(result)
 
     def get_eth_balance(self, address: str, tag: str = "latest") -> int:
         data = self._call(module="account", action="balance", address=address, tag=tag)

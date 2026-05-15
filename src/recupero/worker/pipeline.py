@@ -32,10 +32,23 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import UUID
+
+# Default trace-window start for wallet-trace rows that don't supply an
+# incident_time. Set to Ethereum's genesis block timestamp — earlier
+# values cause Etherscan's getblocknobytime API to return "Error! No
+# closest block found" instead of clamping to block 1, which the tracer
+# then chokes on (the empirically-observed failure mode). All other
+# supported chains (Polygon, Base, Arbitrum, BSC, Solana) launched
+# AFTER 2015-07-30 and their adapters clamp internally, so this date is
+# also a safe lower bound for them.
+_WALLET_TRACE_DEFAULT_INCIDENT_TIME = datetime(
+    2015, 7, 30, 15, 26, 13, tzinfo=timezone.utc
+)  # Ethereum block 1 timestamp
 
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.reports.victim import VictimInfo, write_victim
@@ -267,12 +280,24 @@ def _stage_trace(
     chain=ethereum baked in (Hyperliquid uses Ethereum-format addresses)
     even though the investigations row has chain='hyperliquid'.
     """
+    # Wallet-trace rows (case_id=NULL) typically arrive with
+    # incident_time=NULL — Jacob's admin UI doesn't collect it because
+    # operators want full-history traces. Default to a pre-genesis date
+    # so the trace window is effectively unbounded on the lower end.
+    incident_time = inv.incident_time or _WALLET_TRACE_DEFAULT_INCIDENT_TIME
+    if inv.incident_time is None:
+        log.info(
+            "investigation %s: incident_time=NULL — defaulting to %s "
+            "(full-history wallet trace)",
+            inv.id, incident_time.isoformat(),
+        )
+
     if inv.chain == "hyperliquid":
         from recupero.chains.hyperliquid.scraper import scrape_hyperliquid_case
         case = scrape_hyperliquid_case(
             user_address=inv.seed_address,
             case_id=case_id_str,
-            incident_time=inv.incident_time,
+            incident_time=incident_time,
             config=config,
             env=env,
         )
@@ -286,7 +311,7 @@ def _stage_trace(
         case = run_trace(
             chain=chain,
             seed_address=inv.seed_address,
-            incident_time=inv.incident_time,
+            incident_time=incident_time,
             case_id=case_id_str,
             config=config,
             env=env,

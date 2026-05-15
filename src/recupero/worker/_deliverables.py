@@ -91,9 +91,18 @@ def build_all_deliverables(
     one-off overrides if an operator wants to manually generate a
     letter to a specific issuer that wasn't matched automatically.
     """
-    if not case.transfers:
-        log.info("no transfers in case; skipping deliverable generation")
-        return []
+    # An empty transfers list is a valid outcome for wallet-trace runs
+    # (the seed address may legitimately have no on-chain activity in
+    # the trace window) — we still emit the trace_report.html so the
+    # operator has a record of the "found nothing" finding. The early
+    # return was masking this: removing it means trace_report ships
+    # even when transfers is empty.
+    has_transfers = bool(case.transfers)
+    if not has_transfers:
+        log.info(
+            "case has 0 transfers — skipping freeze letters / LE handoff, "
+            "but still emitting trace_report.html",
+        )
 
     freezable = freeze_brief.get("FREEZABLE") or []
 
@@ -201,6 +210,11 @@ def build_all_deliverables(
             "skip_freeze_briefs=true — emitting only trace_report; "
             "customer-facing freeze letters + LE handoffs not generated",
         )
+    elif not has_transfers:
+        # No transfers means nothing to seize — freeze letters would
+        # be addressed to issuers with no destinations to name. Skip
+        # the loop; trace_report already shipped above.
+        pass
     else:
         for issuer_name, issuer_info in issuers_seen.items():
             try:

@@ -108,7 +108,19 @@ class Investigation(BaseModel):
     review_required_at: datetime | None = None
     chain: str
     seed_address: str
-    incident_time: datetime
+    # Nullable for wallet-trace rows (case_id=NULL) — Jacob's admin UI
+    # doesn't collect an incident moment when the operator just wants to
+    # trace a wallet's full history. The pipeline's _stage_trace defaults
+    # this to an early-chain timestamp on the wallet-trace path so the
+    # trace covers everything the seed address ever touched.
+    #
+    # IMPORTANT: this MUST stay nullable. The previous non-null version
+    # caused claim_one() to UPDATE the row to `claimed` and THEN raise a
+    # pydantic ValidationError, leaving the row stuck in `claimed`
+    # status with heartbeat==claimed_at until the reaper killed it 5min
+    # later. Three workers in a row hit this exact pattern in prod
+    # before we caught it. See test_claim_one_with_null_incident_time.
+    incident_time: datetime | None = None
     max_depth: int = 1
     dust_threshold_usd: Decimal | None = None
 

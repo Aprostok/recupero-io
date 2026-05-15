@@ -1289,63 +1289,6 @@ def _wrap_edge_labels_in_pills(svg: str) -> str:
     return "".join(out)
 
 
-# ----- Inline-SVG helper used by the deliverables stage ----- #
-
-
-def read_inline_svg(path: Path) -> str | None:
-    """Read a rendered flow SVG from disk and return it as an inline-able
-    fragment suitable for embedding inside an HTML template.
-
-    Graphviz emits a standalone document beginning with ``<?xml ...?>``
-    and a DOCTYPE block. We strip those so the SVG can drop directly
-    into the body of a Jinja2 template and inherit the page's font
-    rendering. Width/height attributes are also dropped so the
-    enclosing block's CSS controls scaling — otherwise the SVG forces
-    its rendered pixel size and overflows on letter-portrait PDFs.
-    """
-    if not path or not path.exists():
-        return None
-    try:
-        # ``errors="replace"`` so a rogue byte from a locale-misconfigured
-        # Graphviz binary (or a label string we didn't expect) becomes
-        # U+FFFD instead of failing the whole deliverables stage. Worst
-        # case the diagram has one mangled glyph; the letter still ships.
-        raw = path.read_text(encoding="utf-8", errors="replace")
-    except Exception as exc:  # noqa: BLE001
-        log.warning("flow SVG inline read failed for %s: %s", path, exc)
-        return None
-    # Trim everything before the first <svg ...>
-    idx = raw.find("<svg")
-    if idx == -1:
-        log.warning("flow SVG inline: no <svg> root in %s", path)
-        return None
-    body = raw[idx:]
-    # Strip explicit width="..." and height="..." attributes on the
-    # root <svg> so CSS controls layout. We keep the viewBox so the
-    # browser/PDF renderer can compute aspect ratio.
-    body = _strip_root_svg_size(body)
-    return body
-
-
-def _strip_root_svg_size(svg: str) -> str:
-    """Remove width=".." height=".." attributes from the root <svg> tag.
-
-    Naive but safe enough — we only operate on the first ``<svg``
-    occurrence in the document (the root). Done with string-level
-    regex rather than an XML parser because we want zero deps on
-    lxml and the SVG body itself stays untouched."""
-    import re
-    pattern = re.compile(r"(<svg\b[^>]*?)\s+(width|height)=\"[^\"]*\"", re.IGNORECASE)
-    prev = None
-    out = svg
-    # Loop because there may be both width AND height to strip.
-    while prev != out:
-        prev = out
-        out = pattern.sub(r"\1", out)
-    return out
-
-
 __all__ = (
     "render_flow_diagram",
-    "read_inline_svg",
 )

@@ -139,47 +139,34 @@ def build_all_deliverables(
 
     investigator = investigator or _DEFAULT_INVESTIGATOR
 
-    # Render the fund-flow SVG once into briefs/flow_<hash>.svg. The
-    # SVG now ships in two ways:
-    #
-    #   1. As an inline block at the END of each HTML deliverable
-    #      (Appendix A: Fund Flow Diagram). The compact TRM-style
-    #      renderer produces a letter-landscape-shaped SVG sized to
-    #      fit a single page, so inlining it no longer breaks PDF
-    #      output the way the old 21:1-aspect-ratio version did.
-    #
-    #   2. As a standalone SVG file in the briefs/ directory, with a
-    #      matching standalone PDF rendered by _emit_pdfs. Operators
-    #      who want to share just the flow diagram (without the whole
-    #      letter) use this artifact.
-    #
-    # Both letters and LE handoffs receive the inline SVG via
-    # ``flow_inline_svg``; the templates render it as the final
-    # appendix so the case narrative isn't interrupted mid-section.
+    # Render the fund-flow SVG once into briefs/flow_<hash>.svg.
+    # Letters reference this file as an attachment-pointer in
+    # section 3; no inline embed (per Jacob's spec — the inline
+    # SVG was unreadable when recipients printed the letter to
+    # PDF and re-printed to portrait). The standalone file ships
+    # alongside the HTMLs/PDFs in briefs/ and gets its own
+    # WeasyPrint-rendered PDF for sharing-without-the-letter
+    # workflows.
     flow_filename: str | None = None
     flow_svg_path: Path | None = None
-    flow_inline_svg: str | None = None
     try:
-        from recupero.worker._flow_diagram import read_inline_svg, render_flow_diagram
+        from recupero.worker._flow_diagram import render_flow_diagram
         from uuid import uuid4
         briefs_dir = case_dir / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
         candidate_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
-        # Pass freeze_brief so wallets in the FREEZABLE list (which
-        # the trace may not have labeled at counterparty time) get
-        # promoted to "Circle holding (USDC)" / "Tether holding
-        # (USDT)" / etc. labeled circles in the diagram. Otherwise
-        # those wallets render as anonymous rounded-rect nodes even
-        # though the letter is asking the issuer to freeze them —
-        # the diagram visually surfaces exactly what's being requested.
+        # Pass freeze_brief so wallets in the FREEZABLE list get
+        # promoted to "Circle holding (USDC)" / "Tether holding"
+        # / etc. labeled circles in the diagram. The trace itself
+        # often doesn't carry counterparty labels on these wallets,
+        # so without the cross-ref they'd render as anonymous
+        # rounded-rect nodes — uninformative on the very wallets
+        # the letter is asking to freeze.
         if render_flow_diagram(
             case, candidate_path, freeze_brief=freeze_brief,
         ) is not None:
             flow_filename = candidate_path.name
             flow_svg_path = candidate_path
-            flow_inline_svg = read_inline_svg(candidate_path)
-            if flow_inline_svg is None:
-                log.warning("flow SVG inline-read returned None; appendix will be skipped")
     except Exception as e:  # noqa: BLE001
         log.warning("flow diagram generation failed (continuing without it): %s", e)
 
@@ -225,7 +212,6 @@ def build_all_deliverables(
                     case_dir=case_dir,
                     issuer=issuer_info,
                     flow_filename=flow_filename,
-                    flow_inline_svg=flow_inline_svg,
                 )
                 written.append(bundle.maple_path)
                 written.append(bundle.le_path)

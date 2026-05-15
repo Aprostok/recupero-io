@@ -132,7 +132,6 @@ def generate_briefs(
     asset_usd_value_current: str | None = None,
     outbound_count_of_stolen_asset: int = 0,
     flow_filename: str | None = None,
-    flow_inline_svg: str | None = None,
 ) -> BriefBundle:
     """Render both briefs and write them to disk."""
     # Identify the theft event: the largest USD transfer in the primary case
@@ -246,25 +245,11 @@ def generate_briefs(
         "outbound_count_of_stolen_asset": outbound_count_of_stolen_asset,
         "identified_wallets": identified_wallets,
         # Fund-flow diagram lives in briefs/flow_<hash>.svg as a
-        # standalone artifact and is also embedded inline in each HTML
-        # deliverable as Appendix A.
-        #
-        # The earlier inline approach produced a 984×20,261pt block
-        # crammed into a letter-width column with microscopic labels
-        # and dead hyperlinks on print render. The current renderer
-        # (worker/_flow_diagram.py) aggregates parallel edges, caps to
-        # top-N flows by USD, and forces letter-landscape size — the
-        # result is a single-page-friendly diagram safe to embed.
-        #
-        # ``flow_inline_svg`` is the SVG body (no <?xml?>, no DOCTYPE,
-        # no fixed width/height) — drops directly into the template.
-        # ``flow_filename`` is kept for backward compat / operator
-        # workflows that share just the standalone artifact.
-        # Both are None when no diagram was rendered (CLI path without
-        # the worker diagram pipeline); templates guard with ``{% if
-        # flow_inline_svg %}``.
+        # standalone artifact. Letters reference it via attachment-
+        # pointer in section 3 (no inline embed — the inline version
+        # was unreadable when recipients re-printed the letter to
+        # PDF). Templates guard with ``{% if flow_filename %}``.
         "flow_filename": flow_filename,
-        "flow_inline_svg": flow_inline_svg,
     }
 
     env = Environment(

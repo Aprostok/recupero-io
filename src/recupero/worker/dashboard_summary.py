@@ -50,6 +50,23 @@ Schema:
         "last_run_at":     "2026-05-14T03:00:00+00:00",
         "latest_digest_id": "DIGEST-20260514T030042-a1b2c3",
         "latest_path":     "watchlist-digest/2026-05-14/DIGEST-...json"
+    },
+    "stale_review": {
+        "count":           2,
+        "threshold_hours": 24,
+        "rows": [
+            {
+                "investigation_id":   "...",
+                "case_id":            "...",
+                "case_number":        "...",
+                "client_name":        "...",
+                "chain":              "ethereum",
+                "seed_address":       "0x...",
+                "label":              null,
+                "review_required_at": "2026-05-09T18:54:33+00:00",
+                "hours_stale":        140.7
+            }
+        ]
     }
   }
 """
@@ -83,6 +100,7 @@ def build_dashboard_summary(*, dsn: str) -> dict[str, Any]:
         "watchlist": _empty_watchlist(),
         "snapshots": _empty_snapshots(),
         "digest": _empty_digest(),
+        "stale_review": _empty_stale_review(),
     }
 
     pooled = _pooled_dsn(dsn)
@@ -93,6 +111,7 @@ def build_dashboard_summary(*, dsn: str) -> dict[str, Any]:
             payload["investigations"] = _query_investigations(conn) or payload["investigations"]
             payload["watchlist"]      = _query_watchlist(conn) or payload["watchlist"]
             payload["snapshots"]      = _query_snapshots(conn) or payload["snapshots"]
+            payload["stale_review"]   = _query_stale_review(conn) or payload["stale_review"]
     except Exception as exc:  # noqa: BLE001
         log.warning("dashboard summary: DB connection failed: %s", exc)
     return payload
@@ -257,6 +276,117 @@ def _empty_digest() -> dict[str, Any]:
         "latest_digest_id": None,
         "latest_path": None,
     }
+
+
+def _empty_stale_review() -> dict[str, Any]:
+    """Default shape for the stale_review section. Comes back zero-
+    filled when no rows match or the query fails — the UI shows a
+    green "all caught up" widget on the homepage when count is 0."""
+    return {
+        "count": 0,
+        # Threshold in hours used for this snapshot. Surfaced so the
+        # UI can render "X rows stuck in review for > 24h" without
+        # hard-coding the value.
+        "threshold_hours": 24,
+        "rows": [],
+    }
+
+
+# ----- Stale review query ----- #
+#
+# The Hekla case (real intake, Phase-4 wallet-trace push) surfaced a
+# 6-day stale awaiting_review row. The pipeline correctly paused for
+# operator review, but nothing surfaced the wait to the operator.
+# This section adds proactive visibility: any row in awaiting_review
+# older than the threshold (default 24h) appears in the dashboard
+# summary so the admin UI homepage can show a "needs attention"
+# badge. Threshold is overridable via the
+# RECUPERO_STALE_REVIEW_THRESHOLD_HOURS env var for ops who want a
+# tighter or looser window.
+
+_DEFAULT_STALE_REVIEW_THRESHOLD_HOURS = 24
+_MAX_STALE_ROWS_RETURNED = 10  # cap payload size — UI links to full list
+
+
+def _query_stale_review(conn) -> dict[str, Any]:
+    """List investigations stuck in ``awaiting_review`` past the
+    staleness threshold. Returns the count + up to N row summaries
+    so the admin UI can render a "needs attention" widget without
+    a second fetch.
+
+    Threshold defaults to 24 hours. Override via env var. Rows are
+    ordered oldest-first so the worst-stale appears at the top.
+    """
+    import os
+    try:
+        threshold_hours = int(
+            os.environ.get(
+                "RECUPERO_STALE_REVIEW_THRESHOLD_HOURS",
+                str(_DEFAULT_STALE_REVIEW_THRESHOLD_HOURS),
+            )
+        )
+    except ValueError:
+        threshold_hours = _DEFAULT_STALE_REVIEW_THRESHOLD_HOURS
+    out = _empty_stale_review()
+    out["threshold_hours"] = threshold_hours
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT i.id, i.case_id, i.chain, i.seed_address,
+                       i.label, i.review_required_at,
+                       c.case_number, c.client_name,
+                       EXTRACT(EPOCH FROM (NOW() - i.review_required_at))
+                           / 3600.0 AS hours_stale
+                  FROM public.investigations i
+                  LEFT JOIN public.cases c ON c.id = i.case_id
+                 WHERE i.status = 'awaiting_review'
+                   AND i.review_required_at IS NOT NULL
+                   AND i.review_required_at
+                       < NOW() - make_interval(hours => %(threshold)s)
+                 ORDER BY i.review_required_at ASC
+                 LIMIT %(limit)s
+                """,
+                {"threshold": threshold_hours,
+                 "limit": _MAX_STALE_ROWS_RETURNED + 1},
+            )
+            rows = cur.fetchall()
+            # Get the true count separately so the UI knows if there
+            # are more than _MAX_STALE_ROWS_RETURNED (display "+3 more").
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n
+                  FROM public.investigations
+                 WHERE status = 'awaiting_review'
+                   AND review_required_at IS NOT NULL
+                   AND review_required_at
+                       < NOW() - make_interval(hours => %(threshold)s)
+                """,
+                {"threshold": threshold_hours},
+            )
+            total_row = cur.fetchone()
+            out["count"] = int(total_row["n"]) if total_row else 0
+            # Truncate rows array to the display cap.
+            out["rows"] = [
+                {
+                    "investigation_id": str(r["id"]),
+                    "case_id": str(r["case_id"]) if r["case_id"] else None,
+                    "case_number": r["case_number"],
+                    "client_name": r["client_name"],
+                    "chain": r["chain"],
+                    "seed_address": r["seed_address"],
+                    "label": r.get("label"),
+                    "review_required_at": (
+                        r["review_required_at"].isoformat()
+                        if r["review_required_at"] else None
+                    ),
+                    "hours_stale": round(float(r["hours_stale"]), 1),
+                }
+                for r in rows[:_MAX_STALE_ROWS_RETURNED]
+            ]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("stale_review summary: %s", exc)
+    return out
 
 
 # ----- DSN pooler rewrite (mirrors watch_tick._pooled_dsn) ----- #

@@ -22,6 +22,7 @@ from recupero.worker.dashboard_summary import (
     _empty_digest,
     _empty_investigations,
     _empty_snapshots,
+    _empty_stale_review,
     _empty_watchlist,
     _pooled_dsn,
 )
@@ -71,6 +72,19 @@ def test_empty_digest_shape() -> None:
     out = _empty_digest()
     assert set(out.keys()) == {"last_run_at", "latest_digest_id", "latest_path"}
     assert all(v is None for v in out.values())
+
+
+def test_empty_stale_review_shape() -> None:
+    """stale_review section surfaces investigations stuck in
+    awaiting_review past the staleness threshold. Empty shape means
+    "no rows past the threshold" — the UI renders an "all caught up"
+    state. Keys are locked so the UI's "needs attention" widget
+    binds to a stable contract."""
+    out = _empty_stale_review()
+    assert set(out.keys()) == {"count", "threshold_hours", "rows"}
+    assert out["count"] == 0
+    assert out["threshold_hours"] == 24
+    assert out["rows"] == []
 
 
 # ---- _pooled_dsn ---- #

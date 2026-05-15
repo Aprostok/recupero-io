@@ -375,3 +375,369 @@ src/recupero/reports/templates/trace_report.html.j2
 src/recupero/reports/templates/mini_freeze_digest.html.j2
 ```
 
+## Phase 5 additions (v0.4.x — 2026-05-15)
+
+This section covers the customer-facing workflow that v0.4.x
+shipped. If you've never engaged a real customer through Recupero
+before, **read this section in full once before your first Tier-2
+case**. The operator commands below are the only path you should
+need — direct SQL into `public.investigations` is a fallback for
+abnormal cases.
+
+### The customer lifecycle in one diagram
+
+```
+  Victim submits intake form (Jacob's UI)
+        │
+        ▼
+  Pay $499 ──► Diagnostic auto-runs on Railway
+        │
+        ▼
+  Pipeline produces:
+    - trace_report.html + PDF
+    - flow_diagram.svg + PDF
+    - case.json, manifest.json, freeze_brief.json, ...
+    - If recoverable:
+        - per-issuer freeze_request HTML + PDF (one per issuer)
+        - per-issuer le_handoff HTML + PDF (one per issuer)
+        - engagement_letter.html + PDF (Tier-2 contract)
+        - victim_summary_recoverable.html + PDF
+    - If unrecoverable:
+        - victim_summary_unrecoverable.html + PDF
+        - (no engagement letter — nothing to engage on)
+        │
+        ▼
+  Auto-email victim_summary + attached PDFs ──► victim's email
+  (handled by build_all_deliverables on case completion)
+        │
+        ▼
+  Victim emails operator: "Yes, engage you for active recovery"
+        │
+        ▼
+  Operator: `recupero-ops mark-engaged <inv_id> --fee 1500`
+        │
+        ▼
+  Operator: `recupero-ops send-freeze-letters <inv_id>`
+       (batch confirmation prompt before any send)
+        │
+        ▼
+  Operator: `recupero-ops send-le-handoff <inv_id> --to officer@...`
+        │
+        ▼
+  Daily Railway cron: `recupero-worker --send-followups`
+       (sends a weekly status update to victim for 30 days)
+        │
+        ▼
+  Recovery happens (or doesn't)
+        │
+        ▼
+  Operator: `recupero-ops mark-closed <inv_id> --reason "..."`
+       (cron stops sending follow-ups)
+```
+
+**Total operator time per case** (excluding diagnostic auto-run +
+weekly cron auto-sends): roughly **10 minutes** spread across the
+30-day engagement window.
+
+### The `recupero-ops` CLI (v0.4.1)
+
+Six commands. Run `recupero-ops <command> --help` for arg detail.
+
+#### `recupero-ops status <inv_id>`
+
+Read-only. Single command that shows everything: row metadata,
+engagement status (days remaining, fee paid, last follow-up),
+emails-sent audit log, artifact inventory from the bucket. Run
+this first when you're not sure what state a case is in.
+
+```bash
+recupero-ops status e917ffc5-36ec-40e0-a0b3-cc5a6b03f31c
+```
+
+#### `recupero-ops mark-engaged <inv_id> [--fee 1500]`
+
+Activate a Tier-2 engagement. Sets `engagement_started_at=NOW()`
+and `engagement_fee_paid_usd=<fee>`. Activates the daily
+follow-up cron for this case.
+
+**Idempotent** — running twice does NOT reset the start time
+(preserves the 30-day anchor).
+
+The `--fee` is the **incremental** engagement fee, NOT the total.
+For a standard Tier-2 case: $1,500 incremental on top of the
+$499 already paid for the diagnostic (total $1,999). For a
+Tier-3 case: $4,500 incremental ($4,999 total).
+
+```bash
+# Tier 2 standard
+recupero-ops mark-engaged <inv_id> --fee 1500
+
+# Tier 3 high-value
+recupero-ops mark-engaged <inv_id> --fee 4500
+```
+
+#### `recupero-ops send-freeze-letters <inv_id> [--issuer NAME]`
+
+**Most sensitive command.** Sends prepared compliance freeze
+letters to issuer compliance teams. Always shows the full
+dispatch plan first (issuer + email + amount + filename) and
+asks for batch confirmation BEFORE sending any letter. This is
+the operator's "spot the wrong-typed compliance@ before it
+goes out" checkpoint.
+
+```bash
+# Send to every issuer in the FREEZABLE list
+recupero-ops send-freeze-letters <inv_id>
+
+# Send to only one issuer (e.g., re-send to Circle after a
+# response from another issuer changed the analysis)
+recupero-ops send-freeze-letters <inv_id> --issuer Circle
+```
+
+Per-issuer-per-recipient idempotency via `public.emails_sent`.
+Re-running skips issuers we've already sent for (logged as
+"SKIP <issuer>: freeze letter already sent to ...").
+
+#### `recupero-ops send-le-handoff <inv_id> --to EMAIL`
+
+Sends the LE handoff package to a specific officer or attorney.
+The recipient address is **operator-supplied** (no auto-routing)
+because the right recipient depends on which agency the
+operator + victim selected from the LE routing recommendation in
+section 6.1 of the LE handoff.
+
+```bash
+recupero-ops send-le-handoff <inv_id> --to officer@fbi.gov
+recupero-ops send-le-handoff <inv_id> --to attorney@firm.example
+```
+
+Attaches:
+- The LE handoff PDF (primary artifact for LE)
+- The trace_report PDF (full forensic detail)
+- The flow_diagram PDF (visualization)
+
+Per-recipient idempotency — re-sending to the same email is a no-op.
+
+#### `recupero-ops followup-now <inv_id>`
+
+Force-send a follow-up status email immediately, bypassing the
+6-day cadence check. Used when:
+
+- You just activated the engagement and want to send the first
+  weekly status right away (don't want to wait for the cron's
+  next firing).
+- You have material news to share (issuer responded, LE
+  engaged, recovery occurred) and want to update the victim
+  sooner than the 6-day cadence.
+- You're testing the follow-up rendering for a specific case.
+
+Updates `last_followup_sent_at` on success.
+
+```bash
+recupero-ops followup-now <inv_id>
+```
+
+#### `recupero-ops mark-closed <inv_id> [--reason TEXT]`
+
+Closes an active engagement. Sets `engagement_closed_at=NOW()`
+and appends an audit event to `change_summary` (jsonb).
+
+Cron stops sending follow-ups for this case once closed.
+
+```bash
+recupero-ops mark-closed <inv_id> --reason "$14k recovered, victim notified"
+recupero-ops mark-closed <inv_id> --reason "victim withdrew, refund processed"
+recupero-ops mark-closed <inv_id> --reason "30-day window elapsed"
+```
+
+### Email automation + audit log (v0.4.0 — migration 005)
+
+The worker now auto-sends the victim summary letter (with all
+PDF attachments) to the victim's email the moment the diagnostic
+completes. **No operator action required** for that send.
+
+Operator-controlled sends (freeze letters, LE handoff,
+followup-now) go through the same `worker/_email.py` primitive,
+which writes every send attempt — success or failure — to the
+`public.emails_sent` audit table.
+
+**Idempotency:** the audit log doubles as a "have we already sent
+this?" check. Re-running send commands skips successful prior
+sends. Failed sends DO retry on re-run.
+
+**Configuration:**
+- `RESEND_API_KEY` — required for actual sends
+- `RECUPERO_EMAIL_FROM` — default `alec@recupero.io`
+- `RECUPERO_EMAIL_FROM_NAME` — default `"Recupero Investigation Services"`
+- `RECUPERO_DISABLE_EMAIL=1` — skip sending entirely (local dev /
+  testing — the dispatch logs what *would* have been sent so the
+  operator can see the plan without committing)
+- `RECUPERO_OPS_ASSUME_YES=1` — skip confirmation prompts in
+  ops commands (for scripted batch ops)
+
+**Audit log columns** (`public.emails_sent`):
+```
+id              uuid
+investigation_id uuid (FK, SET NULL on delete)
+to_address      text
+subject         text
+preview_text    text
+email_type      text  -- 'victim_summary' / 'engagement_letter'
+                      -- / 'freeze_letter' / 'le_handoff'
+                      -- / 'followup_w<N>'
+sent_at         timestamptz
+message_id      text  -- Resend's message ID on success
+error_message   text  -- populated on failure
+sent_by         text  -- 'worker:auto' or 'recupero-ops:operator'
+                      -- or 'worker:followup-cron'
+attachments     text[]
+```
+
+### Tier-2 engagement tracking (v0.4.0 — migration 006)
+
+Four new columns on `public.investigations`:
+
+- `engagement_started_at` — when operator confirmed Tier 2 active
+- `engagement_closed_at` — when engagement ended (set by mark-closed)
+- `engagement_fee_paid_usd` — incremental engagement fee
+- `last_followup_sent_at` — daily-cron's last-send timestamp
+
+The daily cron (`recupero-worker --send-followups`) eligibility
+query:
+
+```sql
+SELECT i.id, c.client_email, ...
+  FROM public.investigations i
+  LEFT JOIN public.cases c ON c.id = i.case_id
+ WHERE i.engagement_started_at IS NOT NULL
+   AND i.engagement_closed_at IS NULL
+   AND i.engagement_started_at > NOW() - INTERVAL '30 days'
+   AND (i.last_followup_sent_at IS NULL
+        OR i.last_followup_sent_at < NOW() - INTERVAL '6 days')
+   AND c.client_email IS NOT NULL
+ ORDER BY i.last_followup_sent_at ASC NULLS FIRST
+```
+
+Cron is wired in via the `--send-followups` flag. Set up the
+daily Railway cron as a second service with start command:
+
+```
+recupero-worker --send-followups
+```
+
+Schedule: daily, e.g., `0 9 * * *` (9 AM UTC).
+
+### Customer-facing artifact templates (v0.3.x → v0.4.x)
+
+Every case-driven investigation with case_id set produces:
+
+| Artifact | Audience | Notes |
+|---|---|---|
+| `trace_report.html` + PDF | Internal-facing | Operator + audit |
+| `flow_diagram.svg` + PDF | Reference | Embedded in letters |
+| `freeze_request_<issuer>.html` + PDF (one per issuer) | Issuer compliance team | Sent via `send-freeze-letters` |
+| `le_handoff_<issuer>.html` + PDF (one per issuer) | Law enforcement | Sent via `send-le-handoff` |
+| `victim_summary_recoverable.html` + PDF | Victim | Auto-sent on case completion |
+| `victim_summary_unrecoverable.html` + PDF | Victim | Auto-sent when no recoverable funds (carries the $99 refund notice) |
+| `engagement_letter.html` + PDF | Victim (signs for Tier 2) | Pre-generated; sent on operator request |
+| `followup_status.html` (per weekly send) | Victim | Auto-sent by daily cron during active engagement |
+
+Wallet-trace investigations (case_id=NULL) skip everything except
+the trace_report + flow_diagram — they have no victim to address.
+
+### Daily cron schedule (Railway)
+
+Three scheduled tasks to set up on Railway:
+
+| Cron service | Start command | Schedule |
+|---|---|---|
+| `recupero-worker` (main) | `recupero-worker` | Long-running, always on |
+| Watchlist tick | `recupero-worker --watch-tick` | Hourly during active hours, or every 12h for standard tier |
+| **Follow-up sends** | `recupero-worker --send-followups` | Daily at 9 AM UTC |
+
+The follow-up cron exits 0 unless real sends failed (NOT
+including `RECUPERO_DISABLE_EMAIL=1` skips). Hook Railway's
+failure alerts to the non-zero exit code.
+
+### Backfilling pre-v0.4.x cases
+
+Investigations completed before the v0.4.x changes shipped don't
+have engagement_started_at set. They also don't have the
+engagement_letter artifact (it's only generated for new runs).
+
+If a customer wants to engage a pre-v0.4.x case:
+
+1. **Re-trigger the investigation** so it regenerates with the
+   new artifact set (engagement_letter + auto-email):
+   ```sql
+   UPDATE public.investigations
+      SET status = 'pending', worker_id = NULL,
+          claimed_at = NULL, last_heartbeat_at = NULL,
+          completed_at = NULL, failed_at = NULL,
+          error_message = NULL, error_stage = NULL,
+          supabase_storage_path = NULL
+    WHERE id = '<inv_id>';
+   ```
+   Worker auto-picks it up (60-90s for a re-run since the trace
+   is cached).
+2. Then activate engagement normally: `recupero-ops mark-engaged
+   <inv_id> --fee 1500`
+
+### Quick reference SQL (when ops CLI isn't enough)
+
+These should rarely be needed — the ops CLI covers the
+operator-friendly paths. Reach for direct SQL when something is
+abnormal:
+
+```sql
+-- Manually set engagement (bypass mark-engaged, e.g., to override
+-- a historical date the operator wants to record)
+UPDATE public.investigations
+   SET engagement_started_at = '2026-05-01 12:00:00+00',
+       engagement_fee_paid_usd = 1500
+ WHERE id = '<inv_id>';
+
+-- Force-clear all engagement state (e.g., to redo from scratch)
+UPDATE public.investigations
+   SET engagement_started_at = NULL,
+       engagement_closed_at = NULL,
+       engagement_fee_paid_usd = NULL,
+       last_followup_sent_at = NULL,
+       change_summary = NULL
+ WHERE id = '<inv_id>';
+
+-- Find all stale-expired engagements (active >30 days, no close)
+SELECT id, engagement_started_at,
+       NOW() - engagement_started_at AS age
+  FROM public.investigations
+ WHERE engagement_started_at IS NOT NULL
+   AND engagement_closed_at IS NULL
+   AND engagement_started_at < NOW() - INTERVAL '30 days'
+ ORDER BY engagement_started_at ASC;
+
+-- Audit log: what emails went out for an investigation
+SELECT sent_at, email_type, to_address,
+       message_id, error_message
+  FROM public.emails_sent
+ WHERE investigation_id = '<inv_id>'
+ ORDER BY sent_at ASC;
+
+-- Audit log: failures across all cases in the last 7 days
+SELECT investigation_id, sent_at, email_type,
+       to_address, error_message
+  FROM public.emails_sent
+ WHERE sent_at > NOW() - INTERVAL '7 days'
+   AND error_message IS NOT NULL
+ ORDER BY sent_at DESC;
+```
+
+### When something goes wrong
+
+| Symptom | Investigation step |
+|---|---|
+| Operator sees no auto-email after diagnostic completes | Check `emails_sent` for the investigation_id. If error_message says `RESEND_API_KEY not configured`, set the env var on Railway. |
+| Follow-up cron logs `failed=N` daily | Run `recupero-ops status <inv_id>` on the affected investigation. Check `emails_sent.error_message` for the actual failure. |
+| `mark-engaged` errors `change_summary` constraint | Check the column type — should be jsonb. Migration 006 should have applied. |
+| Cron says `candidates=0` but I know I just engaged a case | Check `engagement_started_at` IS NOT NULL + `engagement_closed_at` IS NULL + cases.client_email IS NOT NULL. The cron requires all three. |
+| `recupero-ops send-freeze-letters` says no letters in bucket | The investigation was probably run before the per-issuer letter changes (v0.2.1). Re-trigger the row to regenerate artifacts. |
+

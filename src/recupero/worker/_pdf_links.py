@@ -85,9 +85,14 @@ def _build_address_to_url_map(html_path: Path) -> dict[str, str]:
     except Exception:
         return {}
     out: dict[str, str] = {}
-    # Find every <a href="https://<explorer>/.../<address>">…</a>.
+    # Find every <a href="https://<explorer>/.../<address>">PLAIN_TEXT</a>
+    # in the HTML body. The negative-lookahead ``(?![^>]*\bxlink:)``
+    # excludes the SVG-namespace anchors inside the embedded flow
+    # diagram (`<a xlink:href="...">` wrapping `<path>` elements) —
+    # those carry the same Etherscan URLs but their content isn't
+    # plain text, and WeasyPrint already handles SVG xlinks natively.
     anchor_pattern = re.compile(
-        r'<a\s+[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
+        r'<a\b(?![^>]*\bxlink:)[^>]*?\bhref="([^"]+)"[^>]*?>([^<]+)</a>',
         re.IGNORECASE | re.DOTALL,
     )
     for m in anchor_pattern.finditer(html):

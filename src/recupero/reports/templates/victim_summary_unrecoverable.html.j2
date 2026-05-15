@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Recovery Investigation Summary — {{ victim.name }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Confidential — Client Summary</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Recovery Investigation</div>
+    <h1>Findings &amp;<br/>Honest Next Steps</h1>
+    <p class="cover-subtitle">
+      We've completed the forensic trace of your wallet. The results
+      are documented here. Unfortunately, the path your stolen funds
+      took means we cannot pursue recovery through our standard
+      issuer-freeze process. This summary explains what we found,
+      what it means, and what you can still do.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Prepared For</dt>
+      <dd>{{ victim.name }}<span class="secondary">{% if victim.email %}{{ victim.email }}{% endif %}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Prepared By</dt>
+      <dd>{{ investigator.name }}<span class="secondary">{{ investigator.organization }}<br/>{{ investigator.email }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Case Reference</dt>
+      <dd>{{ case_id }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Affected Wallet</dt>
+      <dd class="mono">{{ victim.wallet_address }}</dd>
+    </div>
+  </dl>
+</section>
+
+<div class="summary-box urgent">
+  <p style="margin:0 0 0.7em 0;">
+    <strong>Bottom line.</strong>
+    We traced your wallet across {{ summary.addresses_traced }}
+    addresses on {{ chain_display }}. {% if unrecoverable_reason_short %}{{ unrecoverable_reason_short }}{% else %}The funds did not end up in custody under any issuer we can practically request a freeze from.{% endif %}
+    We do not believe we can help you recover the funds through our
+    standard process.
+  </p>
+  <p style="margin:0;">
+    <strong>Per our service agreement, $99 of your $499 fee is being
+    refunded.</strong> The trace report, fund-flow diagram, and the
+    law-enforcement handoff package are yours to keep regardless,
+    and we recommend you use them as outlined in Section 4.
+  </p>
+</div>
+
+<h2>1. What we did</h2>
+<p>
+  Following your engagement, we performed a forensic trace of the
+  wallet at <span class="mono">{{ victim.wallet_address }}</span>
+  on {{ chain_display }}. The trace followed every outbound
+  transfer up to {{ max_depth }} {{ "hop" if max_depth == 1 else "hops" }}
+  deep — meaning we tracked where your funds went, then where those
+  recipient wallets sent them, and so on. The trace identified
+  {{ summary.transfers }} transactions involving
+  {{ summary.addresses_traced }} unique addresses.
+</p>
+<p>
+  The full forensic detail — every transaction hash, exact USD value,
+  block timestamp, and chain-explorer link — is in the attached
+  <span class="mono">trace_report.html</span>. The fund-flow diagram
+  (<span class="mono">{{ flow_filename | default("flow.svg") }}</span>)
+  visualizes where your money moved.
+</p>
+
+<h2>2. Where the money went</h2>
+{% if unrecoverable_explanation %}
+<p>{{ unrecoverable_explanation }}</p>
+{% else %}
+<p>
+  After tracing the perpetrator's movements through
+  {{ max_depth }} {{ "hop" if max_depth == 1 else "hops" }}, the
+  funds did not arrive at any address held under a stablecoin
+  issuer's protocol-level authority. Without that issuer-level
+  control point, there is no party from whom we can request a
+  precautionary freeze. The trace report's destinations table
+  shows the exact path the funds took.
+</p>
+{% endif %}
+
+<h2>3. Why this means we can't help recover</h2>
+<p>
+  Recupero's recovery model relies on stablecoin issuers
+  (Circle for USDC, Tether for USDT, Sky for DAI, Paxos for PYUSD)
+  having protocol-level authority to freeze redemption of their
+  tokens at any wallet. When stolen funds end up held as one of
+  these stablecoins in an identifiable address, we can credibly
+  request a freeze.
+</p>
+<p>
+  In your case, the funds did not end up in this configuration.
+  Common reasons (one of which applies to your case — the
+  trace_report.html shows which):
+</p>
+<ul>
+  <li><strong>Funds were laundered through a privacy mixer</strong>
+      (Tornado Cash, Wasabi, etc.). After a mixer, the funds are
+      pooled with other users' deposits and re-emerge at addresses
+      we cannot link back to the original theft. Recovery from this
+      point requires sophisticated chain-analysis tooling that
+      typically only law-enforcement agencies have.</li>
+  <li><strong>Funds were cashed out at a centralized exchange that
+      has already processed the withdrawal.</strong> If the perpetrator
+      deposited to a CEX and converted to fiat or other assets, the
+      issuer no longer holds the position. Recovery from this point
+      requires legal process against the exchange.</li>
+  <li><strong>Funds remain in self-custody wallets with no issuer
+      control.</strong> Native ETH, BTC, or other non-issuer assets
+      held in standard wallets have no party with technical freeze
+      authority. Only the holder of the private key can move them.</li>
+  <li><strong>Recoverable amount is below the threshold where pursuit
+      is economically rational.</strong> If less than $500 worth of
+      identifiable stablecoin remains, the recovery cost exceeds
+      the potential return.</li>
+</ul>
+
+<h2>4. What we recommend you do</h2>
+
+<h3 style="margin-top:1.5em;">File with law enforcement</h3>
+<p>
+  The trace report and LE handoff package we're sending you are
+  professionally formatted for direct submission to law enforcement.
+  Even when our path can't help directly, an LE filing creates a
+  formal record that has multiple benefits:
+</p>
+<ul>
+  <li>It establishes your status as the victim of a theft, which is
+      essential for any insurance claim or tax loss deduction.</li>
+  <li>It feeds into the FBI's larger pattern-tracking — your case
+      may be one of dozens by the same perpetrator, and law
+      enforcement may be developing a case that includes yours.</li>
+  <li>If the perpetrator is later identified and prosecuted, your
+      filing puts you in the queue for restitution.</li>
+  <li>For cases involving exchange withdrawals, the LE handoff
+      identifies the exchange and provides the evidence basis for
+      a subpoena. Law enforcement can subpoena exchanges for
+      identifying information; private parties cannot.</li>
+</ul>
+
+<h3>Specifically, file with:</h3>
+<ul>
+  <li><strong>IC3 (FBI Internet Crime Complaint Center)</strong> at
+      <a href="https://www.ic3.gov">ic3.gov</a> — federal portal,
+      free, takes ~30 minutes. This is the canonical "I was a
+      victim of crypto theft" filing.</li>
+  <li><strong>Your local FBI field office</strong> if the loss is
+      over $50,000 or involves a clear individual perpetrator.
+      The field office can escalate to the FBI's Virtual Assets
+      Unit. Submit the LE handoff package directly.</li>
+  <li><strong>Your state's Attorney General consumer protection
+      unit</strong> for any loss. Many states have dedicated
+      cyber-crime liaisons.</li>
+</ul>
+
+<h3>Other considerations</h3>
+<ul>
+  <li><strong>Tax loss deduction.</strong> For US victims, theft
+      losses on cryptocurrency may be deductible. The trace
+      report provides the documentation a tax preparer needs to
+      support the claim. Consult a CPA.</li>
+  <li><strong>Insurance / employer benefits.</strong> Some homeowner's
+      or umbrella policies cover cyber-theft losses. Some
+      employers offer identity-theft programs that extend to
+      crypto losses. The trace report serves as proof of incident.</li>
+  <li><strong>Attorney consultation for large losses.</strong> If
+      your loss exceeds $50,000, a 30-minute consultation with
+      a crypto-recovery attorney (typically $200-$500) is worth
+      it. Some firms work on contingency for high-value cases.</li>
+</ul>
+
+<h2>5. Your refund</h2>
+<p>
+  Per our service agreement, $99 of your $499 diagnostic fee is
+  being refunded to the original payment method within 5 business
+  days. The trace report, fund-flow diagram, and law-enforcement
+  handoff package remain yours — they retain real value for the
+  filings above even when our direct recovery path isn't available.
+</p>
+
+<h2>6. We're available for follow-up</h2>
+<p>
+  For 30 days from the date of this report, we're available at
+  <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>
+  to answer clarification questions about the trace findings — for
+  example, what to highlight when filing with IC3, or how to share
+  the package with an attorney. No additional charge.
+</p>
+<p>
+  If new information surfaces that changes the recovery picture
+  (e.g., the exchange that received the funds is later subject to
+  enforcement action and announces a victim-restitution process),
+  we will reach out if your case appears eligible. We do this as
+  a matter of professional care; no fee.
+</p>
+
+<div class="signature-block">
+  <p style="margin:0 0 var(--space-md);">
+    With sincere regret that the news isn't better,
+  </p>
+  <div class="signature-fields">
+    <strong>{{ investigator.name }}</strong>
+    Investigator of record · {{ investigator.email }}
+  </div>
+</div>
+
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>Case {{ case_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Confidential.</span> Intended for {{ victim.name }}.
+  </div>
+</footer>
+
+</body>
+</html>

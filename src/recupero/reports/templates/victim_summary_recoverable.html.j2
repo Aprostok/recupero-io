@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Recovery Investigation Summary — {{ victim.name }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Confidential — Client Summary</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Recovery Investigation</div>
+    <h1>Findings &amp;<br/>Next Steps</h1>
+    <p class="cover-subtitle">
+      Your stolen funds have been traced. Recoverable positions have
+      been identified. This summary explains what we found, what
+      it means for you, and the options you have from here.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Prepared For</dt>
+      <dd>{{ victim.name }}<span class="secondary">{% if victim.email %}{{ victim.email }}{% endif %}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Prepared By</dt>
+      <dd>{{ investigator.name }}<span class="secondary">{{ investigator.organization }}<br/>{{ investigator.email }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Case Reference</dt>
+      <dd>{{ case_id }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Affected Wallet</dt>
+      <dd class="mono">{{ victim.wallet_address }}</dd>
+    </div>
+  </dl>
+</section>
+
+<div class="summary-box action">
+  <p style="margin:0">
+    <strong>Bottom line.</strong>
+    Your wallet was traced across {{ summary.addresses_traced }} addresses on
+    {{ chain_display }}. We identified recoverable stolen funds totaling
+    <strong>{{ total_recoverable_freezable_usd }}</strong>
+    currently held under {{ freezable_issuer_count }}
+    {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
+    authority, plus an additional
+    <strong>{{ total_under_investigation_usd }}</strong>
+    in positions pending issuer verification. Your options for
+    pursuing recovery are explained in Section 3 below.
+  </p>
+</div>
+
+<h2>1. What we did</h2>
+<p>
+  Following your engagement, we performed a forensic trace of the
+  wallet at <span class="mono">{{ victim.wallet_address }}</span>
+  on {{ chain_display }}. The trace followed every outbound
+  transfer up to {{ max_depth }} {{ "hop" if max_depth == 1 else "hops" }}
+  deep — meaning we tracked where your funds went, then where THOSE
+  recipient wallets sent them, and so on. The trace identified
+  {{ summary.transfers }} transactions involving
+  {{ summary.addresses_traced }} unique addresses.
+</p>
+<p>
+  The full forensic detail — every transaction hash, exact USD value,
+  block timestamp, and chain-explorer link — is in the attached
+  <span class="mono">trace_report.html</span>. The fund-flow diagram
+  (<span class="mono">{{ flow_filename | default("flow.svg") }}</span>)
+  visualizes where your money moved.
+</p>
+
+<h2>2. Where the money went</h2>
+<p>
+  The trace identified the following stablecoin holdings under
+  authorities that have technical ability to freeze redemption.
+  These are your most-likely recovery targets.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Issuer</th>
+      <th>Stablecoin</th>
+      <th class="amount">Recoverable*</th>
+      <th class="amount">Under Investigation</th>
+      <th>Freeze Capability</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in freezable_summary %}
+    <tr>
+      <td>{{ entry.issuer }}</td>
+      <td>{{ entry.token }}</td>
+      <td class="amount mono">{{ entry.total_usd_freezable }}</td>
+      <td class="amount mono">{{ entry.total_usd_suspected_only }}</td>
+      <td>{{ entry.freeze_capability }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="small">
+  *<strong>Recoverable</strong>: positions confirmed in addresses with
+  no matching customer-of-record at the issuer. These are the
+  primary targets for an immediate freeze request.
+  <strong>Under Investigation</strong>: positions in addresses where
+  the issuer would need to verify customer records before status
+  can be confirmed. Often promotes to Recoverable once the issuer
+  responds.
+</p>
+
+<h2>3. Your options from here</h2>
+
+<h3 style="margin-top:1.5em;">Option A: Engage Recupero for active recovery</h3>
+<p>
+  We coordinate the recovery process on your behalf — sending the
+  prepared compliance letters to {{ freezable_issuer_count }}
+  {{ "issuer" if freezable_issuer_count == 1 else "issuers" }},
+  following up with their compliance teams, coordinating with the
+  law-enforcement officer assigned to your case if you've filed,
+  and reporting status back to you weekly for 30 days.
+</p>
+<div class="summary-box">
+  <p style="margin:0 0 0.7em 0;">
+    <strong>Engagement fee:</strong> {{ engagement_fee_text }}, plus
+    {{ contingency_pct }}% of any funds actually recovered.
+    The $499 you've already paid is credited toward the engagement fee.
+  </p>
+  <p style="margin:0;">
+    <strong>What we promise:</strong> we will send each compliance
+    letter, coordinate follow-up, and pursue every reasonable
+    avenue. <strong>What we don't promise:</strong> a specific
+    recovery amount or timeline. Issuer cooperation is voluntary
+    until law-enforcement engagement compels it.
+  </p>
+</div>
+
+<h3>Option B: Use the artifacts yourself</h3>
+<p>
+  All artifacts in this package are yours to use. You can take the
+  law-enforcement handoff (the most detailed package) directly to
+  the FBI, your local cyber-crime unit, or an attorney — they're
+  professionally formatted for compliance and LE consumption. You
+  can also forward the compliance freeze letters directly to each
+  issuer's contact email (listed in the LE handoff). If you choose
+  this path, you keep all artifacts and the case is closed on our
+  side; we're available for clarification questions for 30 days at
+  no additional charge.
+</p>
+
+<h2>4. Realistic timeline expectations</h2>
+<p>
+  Once a compliance freeze letter is sent to an issuer, typical
+  response patterns we've observed:
+</p>
+<ul>
+  <li><strong>Acknowledgement:</strong> within 24-72 hours for major
+      issuers (Circle, Tether, Paxos). Smaller or less-experienced
+      compliance desks can take 1-2 weeks.</li>
+  <li><strong>Substantive response on freeze action:</strong> typically
+      1-4 weeks. Major issuers prefer to wait for formal
+      law-enforcement engagement before placing a hold. This is
+      why filing with law enforcement (FBI / IC3 / state cyber
+      unit) in parallel with the compliance request meaningfully
+      improves outcomes.</li>
+  <li><strong>Actual fund return:</strong> when it happens, typically
+      weeks-to-months after the freeze is placed. Returns are
+      processed by the issuer back to a verified victim wallet or
+      to a court-appointed custodian, depending on the legal
+      process used.</li>
+</ul>
+
+<h2>5. Important caveats</h2>
+<ul>
+  <li>Recovery is never guaranteed. Issuers have technical control
+      but their cooperation is voluntary outside of formal legal
+      process. Pursuing recovery without a law-enforcement
+      complaint filed substantially reduces success rates.</li>
+  <li>Funds marked <strong>Under Investigation</strong> may turn out
+      to belong to the original KYC'd subscribers, not to the
+      perpetrator. The issuer's KYC review determines that. We
+      cannot predict the outcome of those reviews in advance.</li>
+  <li>Partial recovery is the typical outcome. Even with a successful
+      freeze, the amount returned is often less than the total
+      identified — perpetrators often launder a portion through
+      paths we cannot trace.</li>
+  <li>If new fund movements occur after this report's date
+      ({{ verified_at }}), the available recovery targets may
+      change. We recommend acting within 30 days of this report.</li>
+</ul>
+
+<h2>6. How to proceed</h2>
+<p>
+  If you'd like to engage us for active recovery (Option A above),
+  reply to this email or contact us at
+  <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>.
+  We'll send you a one-page engagement letter that confirms the
+  fee structure, the addresses we'll address, and the 30-day
+  reporting cadence. The engagement begins when you sign and we've
+  applied your $499 credit.
+</p>
+<p>
+  If you'd like to use the artifacts yourself (Option B), no action
+  is required from you — the package is yours. We recommend
+  filing your complaint with law enforcement before forwarding
+  the compliance letters to issuers; issuer freeze cooperation
+  rates are several times higher with an active LE case number on
+  file.
+</p>
+
+<div class="signature-block">
+  <p style="margin:0 0 var(--space-md);">
+    On behalf of {{ investigator.organization }},
+  </p>
+  <div class="signature-fields">
+    <strong>{{ investigator.name }}</strong>
+    Investigator of record · {{ investigator.email }}
+  </div>
+</div>
+
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>Case {{ case_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Confidential.</span> Intended for {{ victim.name }}.
+  </div>
+</footer>
+
+</body>
+</html>

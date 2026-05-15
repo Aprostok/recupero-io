@@ -208,6 +208,33 @@ def build_all_deliverables(
     except Exception as e:  # noqa: BLE001
         log.warning("trace_report generation failed (continuing): %s", e)
 
+    # Victim-facing summary letter. Skipped on wallet traces
+    # (skip_freeze_briefs=True / case_id=NULL) — those rows don't
+    # have a real victim to address the letter to. Only ships on
+    # case-driven runs where we have a VictimInfo with a real name +
+    # email. Two variants selected automatically based on whether
+    # freezable funds were found; see worker/_victim_summary.py for
+    # the dispatch + template logic.
+    if not skip_freeze_briefs:
+        try:
+            from recupero.worker._victim_summary import render_victim_summary
+            briefs_dir = case_dir / "briefs"
+            briefs_dir.mkdir(parents=True, exist_ok=True)
+            victim_summary_path = render_victim_summary(
+                case=case,
+                victim=victim,
+                investigator=investigator,
+                freeze_brief=freeze_brief,
+                briefs_dir=briefs_dir,
+                flow_filename=flow_filename,
+            )
+            if victim_summary_path is not None:
+                written.append(victim_summary_path)
+                html_paths.append(victim_summary_path)
+                log.info("wrote victim summary: %s", victim_summary_path.name)
+        except Exception as e:  # noqa: BLE001
+            log.warning("victim summary generation failed (continuing): %s", e)
+
     if skip_freeze_briefs:
         log.info(
             "skip_freeze_briefs=true — emitting only trace_report; "

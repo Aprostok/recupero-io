@@ -219,6 +219,19 @@ def build_all_deliverables(
         # the loop; trace_report already shipped above.
         pass
     else:
+        # Index freeze_brief.FREEZABLE entries by issuer name so each
+        # per-issuer letter gets the holdings list for THAT specific
+        # issuer — Circle's letter asks for USDC at Circle-controlled
+        # addresses, Tether's letter asks for USDT at Tether-controlled
+        # addresses, etc. Pre-fix every letter asked for the original
+        # theft asset (e.g., 130 ETH) at the first hop, which is the
+        # wrong question for stablecoin issuers (they don't control ETH).
+        freezable_by_issuer: dict[str, dict] = {}
+        for entry in freezable:
+            issuer_name = entry.get("issuer")
+            if issuer_name:
+                freezable_by_issuer[issuer_name] = entry
+
         for issuer_name, issuer_info in issuers_seen.items():
             try:
                 bundle = generate_briefs(
@@ -229,6 +242,7 @@ def build_all_deliverables(
                     case_dir=case_dir,
                     issuer=issuer_info,
                     flow_filename=flow_filename,
+                    issuer_freezable=freezable_by_issuer.get(issuer_name),
                 )
                 written.append(bundle.maple_path)
                 written.append(bundle.le_path)

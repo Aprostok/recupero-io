@@ -132,8 +132,41 @@ def generate_briefs(
     asset_usd_value_current: str | None = None,
     outbound_count_of_stolen_asset: int = 0,
     flow_filename: str | None = None,
+    issuer_freezable: dict | None = None,
 ) -> BriefBundle:
-    """Render both briefs and write them to disk."""
+    """Render both briefs and write them to disk.
+
+    ``issuer_freezable`` (added 2026-05-15 in response to the
+    operator-quality review on case e917ffc5) is the per-issuer
+    FREEZABLE entry from ``freeze_brief.json``. When provided, the
+    template renders an issuer-specific "current location + ask"
+    that lists each holding (status FREEZABLE or INVESTIGATE) the
+    issuer actually controls, instead of generically asking every
+    issuer to freeze the original ETH at the first hop.
+
+    Shape (matches freeze_brief.json):
+
+      {
+        "issuer": "Circle",
+        "token": "USDC",
+        "total_usd": "$7,097.58",
+        "total_suspected_usd": "$1,037,451.35",
+        "freeze_capability": "HIGH",
+        "holdings": [
+          {"address": "0xABC...",
+           "amount": "1066.27 USDC",
+           "usd": "$1,066.27",
+           "status": "FREEZABLE"},
+          ...
+        ],
+        ...
+      }
+
+    When None (the legacy/wallet-trace path), the template falls
+    back to single-asset/single-holder rendering using
+    ``theft_transfer`` as the source. Backward-compatible for any
+    caller that hasn't yet been updated to pass per-issuer data.
+    """
     # Identify the theft event: the largest USD transfer in the primary case
     theft_transfer = _find_theft_transfer(primary_case)
     if theft_transfer is None:
@@ -250,6 +283,13 @@ def generate_briefs(
         # was unreadable when recipients re-printed the letter to
         # PDF). Templates guard with ``{% if flow_filename %}``.
         "flow_filename": flow_filename,
+        # Per-issuer freezable holdings — see docstring above.
+        # Pre-rendered for the template via ``_build_issuer_freezable_ctx``
+        # so the template doesn't have to know about freeze_brief.json
+        # internals or compute explorer URLs.
+        "issuer_freezable": _build_issuer_freezable_ctx(
+            issuer_freezable, primary_case.chain,
+        ),
     }
 
     env = Environment(
@@ -445,3 +485,86 @@ def _fmt_usd(d: Decimal | None) -> str:
     if d is None:
         return "(unknown)"
     return f"{d:,.2f}"
+
+
+def _build_issuer_freezable_ctx(
+    raw: dict | None, chain: Chain | str,
+) -> dict | None:
+    """Convert a freeze_brief.json FREEZABLE entry into the template-
+    friendly shape the issuer_freeze_request template expects.
+
+    Returns None if ``raw`` is None — the template falls back to the
+    single-asset/single-holder rendering path in that case (legacy
+    callers or wallet-trace runs that skip freeze letters entirely).
+
+    Output shape:
+
+      {
+        "token":                "USDC",
+        "freeze_capability":    "HIGH",
+        "total_usd_freezable":  "$7,097.58",
+        "total_usd_suspected":  "$1,037,451.35",
+        "holdings": [
+          {"address": "...",
+           "address_short": "0xABC…1234",
+           "explorer_url": "https://etherscan.io/...",
+           "amount": "1066.27 USDC",
+           "usd": "$1,066.27",
+           "status": "FREEZABLE"},
+          ...
+        ],
+        "freezable_holdings":   [...only status=FREEZABLE...],
+        "investigate_holdings": [...only status=INVESTIGATE...],
+        "has_freezable":        True,
+        "has_investigate":      True,
+        "freezable_count":      2,
+        "investigate_count":    4,
+        "total_count":          6,
+      }
+
+    The template uses these to drive Sections 4 + 5 of the letter,
+    which under the old behavior listed a single "current_holder"
+    holding the original theft asset (e.g., 130 ETH at the first
+    hop). With per-issuer holdings threaded through, each issuer
+    gets a letter asking for a hold on the SPECIFIC stablecoin
+    addresses that issuer actually controls.
+    """
+    if not raw:
+        return None
+    holdings_in = raw.get("holdings") or []
+    holdings_out: list[dict] = []
+    for h in holdings_in:
+        addr = h.get("address", "")
+        holdings_out.append({
+            "address": addr,
+            "address_short": _short_addr(addr),
+            "explorer_url": _address_explorer_url(addr, chain),
+            "amount": h.get("amount", "—"),
+            "usd": h.get("usd", "—"),
+            "status": h.get("status", "INVESTIGATE"),
+        })
+
+    freezable = [h for h in holdings_out if h["status"] == "FREEZABLE"]
+    investigate = [h for h in holdings_out if h["status"] == "INVESTIGATE"]
+
+    return {
+        "token": raw.get("token") or "—",
+        "freeze_capability": raw.get("freeze_capability") or "UNKNOWN",
+        "total_usd_freezable": raw.get("total_usd") or "$0",
+        "total_usd_suspected": raw.get("total_suspected_usd") or "$0",
+        "holdings": holdings_out,
+        "freezable_holdings": freezable,
+        "investigate_holdings": investigate,
+        "has_freezable": bool(freezable),
+        "has_investigate": bool(investigate),
+        "freezable_count": len(freezable),
+        "investigate_count": len(investigate),
+        "total_count": len(holdings_out),
+    }
+
+
+def _short_addr(addr: str) -> str:
+    """Truncate hex addresses for inline display: 0xABCDEF…1234."""
+    if not addr or len(addr) < 12:
+        return addr or ""
+    return f"{addr[:8]}…{addr[-4:]}"

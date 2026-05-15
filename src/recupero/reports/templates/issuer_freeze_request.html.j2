@@ -23,10 +23,19 @@
     <div class="cover-eyebrow">Time-Sensitive Compliance Matter</div>
     <h1>Compliance<br/>Freeze Request</h1>
     <p class="cover-subtitle">
+      {% if issuer_freezable %}
+      Stolen funds traced from the victim's wallet have been laundered
+      into {{ issuer_freezable.token }} and are currently held at
+      {{ issuer_freezable.total_count }} {{ "wallet" if issuer_freezable.total_count == 1 else "wallets" }}
+      under {{ issuer.short_name }}'s issuance authority. We respectfully
+      request a voluntary precautionary freeze pending law-enforcement
+      engagement.
+      {% else %}
       A stolen {{ asset.symbol }} position is currently held in an
       identifiable wallet under {{ issuer.short_name }}'s issuance
       authority. We respectfully request a voluntary precautionary
       freeze pending law-enforcement engagement.
+      {% endif %}
     </p>
     <div class="cover-rule"></div>
   </div>
@@ -48,6 +57,16 @@
       <dt>Brief Identifier</dt>
       <dd class="mono">{{ brief_id }}</dd>
     </div>
+    {% if issuer_freezable %}
+    <div class="cover-meta-item">
+      <dt>Recoverable Asset</dt>
+      <dd>{{ issuer_freezable.token }}<span class="secondary">issued by {{ issuer.short_name }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Freezable Holdings</dt>
+      <dd>{{ issuer_freezable.total_usd_freezable }}<span class="secondary">across {{ issuer_freezable.freezable_count }} {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }} (status: FREEZABLE)</span></dd>
+    </div>
+    {% else %}
     <div class="cover-meta-item">
       <dt>Stolen Asset</dt>
       <dd>{{ asset.symbol }}<span class="secondary mono">{{ asset.contract }}</span></dd>
@@ -56,11 +75,34 @@
       <dt>Initial Value</dt>
       <dd>USD {{ asset.usd_value_at_theft }}</dd>
     </div>
+    {% endif %}
   </dl>
 </section>
 
 <div class="summary-box urgent">
   <p style="margin:0">
+    {% if issuer_freezable %}
+    On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
+    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ victim.name }}'s wallet without authorization. After tracing through
+    on-chain forwarding, stolen funds totaling
+    <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
+    are currently held as <strong>{{ issuer_freezable.token }}</strong>
+    across
+    {{ issuer_freezable.freezable_count }}
+    {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority.
+    {% if issuer_freezable.has_investigate %}
+    An additional
+    {{ issuer_freezable.investigate_count }}
+    {{ "wallet" if issuer_freezable.investigate_count == 1 else "wallets" }}
+    (suspected, pending verification) are also identified in section 4.
+    {% endif %}
+    We are writing to request that {{ issuer.short_name }} place a
+    precautionary hold on the
+    {{ issuer_freezable.token }} positions listed below, pending
+    law-enforcement engagement.
+    {% else %}
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
     {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
     {{ victim.name }}'s wallet without authorization and forwarded to
@@ -70,6 +112,7 @@
     asset since receipt. We are writing to request that {{ issuer.short_name }}
     place a precautionary hold on the position pending law-enforcement
     engagement.
+    {% endif %}
   </p>
 </div>
 
@@ -94,13 +137,22 @@
 <div class="summary-box action">
   <p style="margin:0">
     <strong>KYC asymmetry.</strong>
-    {{ issuer.short_name }} required full KYC for the original {{ asset.symbol }}
+    {{ issuer.short_name }} required full KYC for the original
+    {% if issuer_freezable %}{{ issuer_freezable.token }}{% else %}{{ asset.symbol }}{% endif %}
     subscription{% if issuer.kyc_minimum %} (minimum {{ issuer.kyc_minimum }}){% endif %}.
+    {% if issuer_freezable %}
+    The {{ issuer_freezable.total_count }} recipient
+    {{ "wallet" if issuer_freezable.total_count == 1 else "wallets" }}
+    listed in section 4 received these positions via direct on-chain
+    transfer and have no corresponding KYC history. The disparity
+    supports the basis for a precautionary hold.
+    {% else %}
     {{ victim.name }} should appear in {{ issuer.short_name }}'s records as the
     KYC'd holder of this position. The recipient wallet at
     <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a> has no
     corresponding KYC history; it received the position by direct on-chain
     transfer. The disparity supports the basis for a precautionary hold.
+    {% endif %}
   </p>
 </div>
 {% endif %}
@@ -153,6 +205,54 @@
 {% endif %}
 
 <h2>4. Current Location</h2>
+{% if issuer_freezable %}
+<p>
+  Stolen funds are currently held as
+  <strong>{{ issuer_freezable.token }}</strong> at
+  the following {{ issuer_freezable.total_count }}
+  {{ "wallet" if issuer_freezable.total_count == 1 else "wallets" }}
+  under {{ issuer.short_name }}'s issuance authority. Each address
+  links to its on-chain record for independent verification.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th style="width:5em;">Status</th>
+      <th>Address</th>
+      <th class="amount" style="width:11em;">Balance</th>
+      <th class="amount" style="width:9em;">USD value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in issuer_freezable.holdings %}
+    <tr>
+      <td>
+        {% if h.status == 'FREEZABLE' %}
+        <span class="label-pill" style="color:#2F6B3E;">FREEZABLE</span>
+        {% else %}
+        <span class="label-pill" style="color:#7C2D12;">INVESTIGATE</span>
+        {% endif %}
+      </td>
+      <td class="mono"><a href="{{ h.explorer_url }}">{{ h.address }}</a></td>
+      <td class="amount mono">{{ h.amount }}</td>
+      <td class="amount mono">{{ h.usd }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<div class="summary-box action">
+  <p style="margin:0;">
+    <strong>Totals:</strong>
+    {{ issuer_freezable.total_usd_freezable }} confirmed FREEZABLE
+    {% if issuer_freezable.has_investigate %}
+    · {{ issuer_freezable.total_usd_suspected }} including positions still under
+    investigation
+    {% endif %}
+    · Last verified {{ verified_at }} UTC
+    · Freeze capability: <strong>{{ issuer_freezable.freeze_capability }}</strong>
+  </p>
+</div>
+{% else %}
 <div class="summary-box action">
   <p style="margin:0 0 0.4em 0;">
     {{ asset.amount_human }} {{ asset.symbol }} held at:
@@ -167,12 +267,34 @@
     Outbound transfers of this asset since receipt: {{ outbound_count_of_stolen_asset }}.
   </p>
 </div>
+{% endif %}
 
 <h2>5. Specific Request</h2>
 <p>
   We ask that {{ issuer.name }}:
 </p>
 <ol>
+  {% if issuer_freezable %}
+  <li>
+    Place a precautionary hold on the
+    {{ issuer_freezable.token }} positions listed in section 4
+    {% if issuer_freezable.has_freezable %}
+    — specifically, the
+    {{ issuer_freezable.freezable_count }} {{ "address" if issuer_freezable.freezable_count == 1 else "addresses" }}
+    marked <strong>FREEZABLE</strong> totaling
+    {{ issuer_freezable.total_usd_freezable }}
+    {% endif %}
+    — in effect until law enforcement authorities representing the
+    victim have engaged.
+    {% if issuer_freezable.has_investigate %}
+    For the {{ issuer_freezable.investigate_count }}
+    {{ "address" if issuer_freezable.investigate_count == 1 else "addresses" }}
+    marked <strong>INVESTIGATE</strong>, we ask that {{ issuer.short_name }}
+    review the corresponding KYC / subscription history and indicate
+    whether the position can be added to the hold.
+    {% endif %}
+  </li>
+  {% else %}
   <li>
     Place a precautionary hold on redemption of the
     {{ asset.amount_human }} {{ asset.symbol }} position at
@@ -180,6 +302,7 @@
     in effect until law enforcement authorities representing the victim
     have engaged.
   </li>
+  {% endif %}
   <li>
     Confirm receipt of this request in writing and record the date and
     time of notice.
@@ -190,10 +313,18 @@
   </li>
   {% if issuer.kyc_required %}
   <li>
+    {% if issuer_freezable %}
+    Verify internally whether {{ victim.name }} is the KYC'd subscriber
+    of record for any of the {{ issuer_freezable.token }} positions
+    listed in section 4. The result need not be shared externally; we
+    ask only that {{ issuer.short_name }} confirm the review has been
+    performed.
+    {% else %}
     Verify internally whether {{ victim.name }} is the KYC'd subscriber
     of record for the affected position. The result need not be shared
     externally; we ask only that {{ issuer.short_name }} confirm the
     review has been performed.
+    {% endif %}
   </li>
   {% endif %}
 </ol>

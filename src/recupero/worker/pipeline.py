@@ -146,6 +146,67 @@ from recupero.worker.sync import download_editorial, upload_case_dir
 log = logging.getLogger(__name__)
 
 
+# ----- Placeholder-address detection ----- #
+
+
+def _is_obvious_placeholder_address(addr: str) -> bool:
+    """Detect intake-form placeholder / sentinel addresses that
+    were obviously not real on-chain wallets.
+
+    Catches the failure mode discovered against the Hekla case
+    (a real intake submission with seed_address
+    ``0x1234567890123456789012345678901234567890`` — sequential
+    digits the user filled in to advance the form). Running the
+    full pipeline on these burns ~$0.15 of Anthropic budget per
+    submission and produces a useless empty case with a stale
+    REVIEW_REQUIRED flag the operator has to triage manually.
+
+    Patterns detected (all case-insensitive on the hex body):
+
+      * All-same-character — zero address (``0x000…000``), max
+        address (``0xfff…fff``), repeating-digit fillers
+        (``0x111…111``, ``0xaaa…aaa``).
+      * Cycling-digit pattern — e.g. ``1234567890`` repeating four
+        times, ``abcdef0123456789`` etc.
+      * Known test sentinels (``0xdead…beef``).
+
+    Real Ethereum addresses derived from cryptographic hashes
+    practically never exhibit these patterns. The function is
+    conservative — it explicitly does NOT flag addresses that
+    *contain* a placeholder-like substring; only addresses whose
+    *entire body* matches a placeholder pattern.
+
+    Returns False for any non-EVM-shaped input (wrong length,
+    missing 0x prefix, etc.) — the chain adapter handles
+    validation for those cases.
+    """
+    if not addr or not addr.startswith("0x"):
+        return False
+    body = addr[2:].lower()
+    if len(body) != 40:
+        return False
+    # All same character — zero / max / repeating filler addresses.
+    if len(set(body)) == 1:
+        return True
+    # Cycling-digit pattern. Try cycle lengths that divide 40 evenly.
+    # 10 catches Hekla's 1234567890-repeating; 8/5/4/2 catch other
+    # plausible filler patterns.
+    for cycle_len in (2, 4, 5, 8, 10, 20):
+        if len(body) % cycle_len != 0:
+            continue
+        first = body[:cycle_len]
+        if body == first * (len(body) // cycle_len):
+            return True
+    # Known test sentinels operators sometimes paste.
+    _KNOWN_SENTINELS = {
+        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+        "cafebabecafebabecafebabecafebabecafebabe",
+    }
+    if body in _KNOWN_SENTINELS:
+        return True
+    return False
+
+
 # ----- Public entry point ----- #
 
 
@@ -165,6 +226,34 @@ def run_one(
     """
     log.info("running investigation id=%s case_id=%s status=%s",
              inv.id, inv.case_id, inv.status)
+
+    # Fail-fast on intake-form placeholder addresses. The Hekla case
+    # (seed_address 0x12345...7890) burned ~$0.15 of Anthropic budget
+    # before producing an empty case stuck in REVIEW_REQUIRED for 6+
+    # days. Catching these at claim time saves both the API cost AND
+    # the operator triage time — the admin UI surfaces the failure
+    # immediately with a clear, actionable error_message.
+    #
+    # Skipped for chains we can't pattern-check (Solana addresses
+    # are base58, not 0x-hex — the detector returns False for them
+    # by construction).
+    if _is_obvious_placeholder_address(inv.seed_address):
+        log.warning(
+            "investigation %s: seed_address %s looks like an intake "
+            "placeholder — failing fast before burning API budget",
+            inv.id, inv.seed_address,
+        )
+        db.mark_failed(
+            inv.id,
+            stage="setup",
+            error=(
+                f"seed_address {inv.seed_address!r} looks like an intake "
+                f"placeholder (repeating-digit or sequential pattern). "
+                f"Verify the address with the client and re-trigger the "
+                f"investigation with the real wallet."
+            ),
+        )
+        return
 
     # Local Case.case_id is the investigation UUID — keeps local case_dir,
     # bucket prefix, and trace artifacts in lockstep.

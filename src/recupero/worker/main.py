@@ -680,10 +680,13 @@ def cli() -> None:
         report = run_followup_cron(dsn=dsn)
         log.info(
             "followup cron: candidates=%d sent=%d failed=%d "
-            "skipped_no_email=%d",
+            "skipped_no_email=%d skipped_disabled=%d",
             report["candidates"], report["sent"], report["failed"],
             report["skipped_no_email"],
+            report.get("skipped_disabled", 0),
         )
+        # Skipped-disabled is RECUPERO_DISABLE_EMAIL=1 (intentional),
+        # not a failure. Only true failures trip non-zero exit code.
         sys.exit(0 if report["failed"] == 0 else 1)
 
     heartbeat_sec = float(

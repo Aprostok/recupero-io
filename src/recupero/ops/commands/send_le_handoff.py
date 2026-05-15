@@ -139,7 +139,11 @@ def run(
         print(f"     attached: {len(attachments)} PDF(s)")
         return 0
     if result.skipped:
-        print("Skipped (RECUPERO_DISABLE_EMAIL=1)")
+        # RECUPERO_DISABLE_EMAIL=1: configured no-op, not a failure.
+        # Exit 0 so dry-run scripts can chain commands without
+        # tripping `set -e`.
+        print(f"SKIP — email disabled (RECUPERO_DISABLE_EMAIL=1). Would have "
+              f"sent LE handoff to {to_email} with {len(attachments)} PDF(s).")
         return 0
     print(f"FAIL — {result.error}")
     return 1

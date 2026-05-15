@@ -105,9 +105,23 @@ def run(
         freezable_issuers=row["freezable_issuers"],
     )
 
+    # If email is disabled (RECUPERO_DISABLE_EMAIL=1), don't treat
+    # the skipped send as a failure for the operator's exit code.
+    # send_followup returns False on skip OR fail; we check the
+    # env directly to distinguish.
+    import os as _os
+    email_disabled = _os.environ.get("RECUPERO_DISABLE_EMAIL", "").strip() == "1"
+
     ok = send_followup(candidate=candidate, dsn=dsn)
     if ok:
         print("OK — follow-up sent + last_followup_sent_at updated.")
+        return 0
+    if email_disabled:
+        print(
+            "SKIP — email disabled (RECUPERO_DISABLE_EMAIL=1). Would have "
+            f"sent week-{(candidate.last_followup_sent_at or candidate.engagement_started_at).strftime('%U')} "
+            f"status update to {candidate.victim_email}."
+        )
         return 0
     print("FAIL — see logs for details.")
     return 1

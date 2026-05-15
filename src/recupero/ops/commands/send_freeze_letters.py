@@ -163,6 +163,12 @@ def run(
         if result.success:
             print(f"  OK    {entry['issuer']}: message_id={result.message_id}")
             sent += 1
+        elif result.skipped:
+            # RECUPERO_DISABLE_EMAIL=1 path — not a failure, just a
+            # configured no-op. Distinguish in the output so the
+            # operator doesn't see "FAIL" on every line during a
+            # disabled-email dry-run.
+            print(f"  SKIP  {entry['issuer']}: email disabled (RECUPERO_DISABLE_EMAIL=1)")
         else:
             print(f"  FAIL  {entry['issuer']}: {result.error}")
             failed += 1

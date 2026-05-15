@@ -262,12 +262,24 @@ def run_followup_cron(*, dsn: str) -> dict[str, Any]:
     engagements and sends followups for each.
 
     Returns a dict suitable for logging at INFO level:
-      {"candidates": N, "sent": K, "failed": F, "skipped": S}
+      {"candidates": N, "sent": K, "failed": F,
+       "skipped_no_email": S, "skipped_disabled": D}
+
+    The two skipped counters distinguish:
+      * skipped_no_email — case has no victim email on file (operator
+        error, worth flagging)
+      * skipped_disabled — RECUPERO_DISABLE_EMAIL=1 was set (intended
+        no-op for local dev / dry-runs, NOT a failure)
+
+    The cron caller uses ``failed`` to set the process exit code;
+    skipped-disabled does not count as failed.
     """
+    email_disabled = os.environ.get("RECUPERO_DISABLE_EMAIL", "").strip() == "1"
     candidates = find_followups_due(dsn=dsn)
     sent = 0
     failed = 0
     skipped_no_email = 0
+    skipped_disabled = 0
 
     for c in candidates:
         if not c.victim_email:
@@ -280,6 +292,11 @@ def run_followup_cron(*, dsn: str) -> dict[str, Any]:
         ok = send_followup(candidate=c, dsn=dsn)
         if ok:
             sent += 1
+        elif email_disabled:
+            # RECUPERO_DISABLE_EMAIL was set — not a real failure.
+            # The cron should exit 0 in this case so dev / dry-run
+            # workflows don't trip `set -e` or cron-failure alerts.
+            skipped_disabled += 1
         else:
             failed += 1
 
@@ -288,6 +305,7 @@ def run_followup_cron(*, dsn: str) -> dict[str, Any]:
         "sent": sent,
         "failed": failed,
         "skipped_no_email": skipped_no_email,
+        "skipped_disabled": skipped_disabled,
     }
 
 

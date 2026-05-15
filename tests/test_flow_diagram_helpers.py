@@ -23,8 +23,10 @@ from decimal import Decimal
 import pytest
 
 from recupero.worker._flow_diagram import (
+    _edge_label,
     _edge_penwidth,
     _entity_badge,
+    _EdgeAttrs,
     _escape,
     _explorer_url,
     _fmt_usd_compact,
@@ -255,6 +257,84 @@ def test_escape_none_returns_empty() -> None:
 def test_escape_idempotent_for_safe_text() -> None:
     """Plain alphanumeric stays unchanged."""
     assert _escape("Circle USDC") == "Circle USDC"
+
+
+# ---- _edge_label ---- #
+
+
+def _edge(total_usd, symbol, count=1):
+    """Helper: build a minimal _EdgeAttrs for label testing."""
+    return _EdgeAttrs(
+        src="0x" + "1" * 40,
+        dst="0x" + "2" * 40,
+        total_usd=total_usd,
+        transfer_count=count,
+        dominant_symbol=symbol,
+    )
+
+
+def test_edge_label_priced_single() -> None:
+    """The simple case: priced transfer, recognized symbol."""
+    label = _edge_label(_edge(total_usd=Decimal("12300"), symbol="USDC"))
+    assert "$12K" in label
+    assert "USDC" in label
+
+
+def test_edge_label_aggregated_priced() -> None:
+    """Multiple priced transfers: the count suffix attaches to the
+    last existing part ($X SYM ×N)."""
+    label = _edge_label(_edge(
+        total_usd=Decimal("45000"), symbol="USDC", count=3,
+    ))
+    assert "$45K" in label
+    assert "USDC" in label
+    assert "×3" in label
+
+
+def test_edge_label_no_price_with_symbol() -> None:
+    """No USD pricing but the token symbol is known. Edge still
+    gets a meaningful label: just the symbol + count."""
+    label = _edge_label(_edge(total_usd=Decimal("0"), symbol="WEIRD"))
+    assert "WEIRD" in label
+
+
+def test_edge_label_aggregated_no_price_with_symbol() -> None:
+    """Multiple unpriced transfers, recognized symbol. Count
+    suffix attaches to the symbol."""
+    label = _edge_label(_edge(
+        total_usd=Decimal("0"), symbol="MEMECOIN", count=4,
+    ))
+    assert "MEMECOIN" in label
+    assert "×4" in label
+
+
+def test_edge_label_no_price_no_symbol_aggregated() -> None:
+    """Regression: when an aggregated edge has total_usd=0 AND
+    dominant_symbol=None, the prior code did ``parts[-1] = ...``
+    on an empty list and crashed with IndexError, dropping the
+    entire flow diagram from the artifact bundle.
+
+    Real-data Arbitrum cases (case 9928b53e..., 198 transfers) hit
+    this because some transfers are in tokens without CoinGecko
+    pricing AND without a recognized symbol in our label store
+    (typical for memecoins / illiquid ERC-20s).
+
+    Post-fix: the count alone gets used as the label."""
+    label = _edge_label(_edge(
+        total_usd=Decimal("0"), symbol=None, count=3,
+    ))
+    assert "×3" in label
+    # No crash is the main assertion here.
+
+
+def test_edge_label_zero_usd_no_symbol_single_transfer() -> None:
+    """Single transfer with no price + no symbol → generic
+    '(transfer)' fallback. Catches the other empty-parts edge case
+    (count == 1 path)."""
+    label = _edge_label(_edge(
+        total_usd=Decimal("0"), symbol=None, count=1,
+    ))
+    assert label == "(transfer)"
 
 
 # ---- _inject_letter_mark_badges (SVG post-processor) ---- #

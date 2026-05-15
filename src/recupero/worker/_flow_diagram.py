@@ -908,14 +908,27 @@ def _edge_label(e: _EdgeAttrs) -> str:
       * Aggregated, same day: "$45,000 USDC ×3 · Apr 14"
       * Aggregated, range:    "$1.2M USDC ×17 · Apr 12–14"
       * No USD pricing:       "USDC ×3 · Apr 12–14"
+      * No symbol/no USD:     "×3 · Apr 12-14" (e.g., unpriced
+                              memecoins on Arbitrum/BSC — neither
+                              CoinGecko nor our label store
+                              recognized them).
     """
     parts: list[str] = []
     if e.total_usd > 0:
         parts.append(_fmt_usd_compact(e.total_usd))
     if e.dominant_symbol:
         parts.append(e.dominant_symbol)
+    # The aggregated-count suffix attaches to the last existing part,
+    # but parts may legitimately be empty (transfer with no USD price
+    # AND no recognized symbol — common on unpriced ERC-20 tokens
+    # like memecoins on Arbitrum/BSC). Without this guard, real-data
+    # Arbitrum traces crashed with IndexError mid-flow-diagram render,
+    # silently dropping the entire SVG from the artifact bundle.
     if e.transfer_count > 1:
-        parts[-1] = parts[-1] + f" ×{e.transfer_count}"
+        if parts:
+            parts[-1] = parts[-1] + f" ×{e.transfer_count}"
+        else:
+            parts.append(f"×{e.transfer_count}")
     head = " ".join(parts) if parts else "(transfer)"
 
     if e.first_time and e.last_time:

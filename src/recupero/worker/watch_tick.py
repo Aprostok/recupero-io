@@ -308,14 +308,11 @@ def run_watch_tick(
                 delta_usd_threshold=delta_usd_threshold, report=report,
             )
         elif chain == _HYPERLIQUID_CHAIN:
-            # Hyperliquid balance fetch isn't on the existing scraper
-            # client. Skip with a per-row error so the operator sees
-            # we tracked the row but didn't sample it.
-            for row in chain_rows:
-                report.errors.append(
-                    f"hyperliquid snapshot not implemented for {row['address']}"
-                )
-                report.skipped_unsupported_chain += 1
+            _run_hyperliquid_chain(
+                rows=chain_rows, dsn=dsn,
+                price_client=cg, parallelism=parallelism,
+                delta_usd_threshold=delta_usd_threshold, report=report,
+            )
 
     report.finished_at = datetime.now(timezone.utc)
     log.info(
@@ -446,6 +443,109 @@ def _run_evm_chain(
         )
     finally:
         client.close()
+
+
+def _run_hyperliquid_chain(
+    *,
+    rows: list[dict[str, Any]],
+    dsn: str,
+    price_client: Any,
+    parallelism: int,
+    delta_usd_threshold: Decimal,
+    report: WatchTickReport,
+) -> None:
+    """Snapshot Hyperliquid wallets via the /info endpoint.
+
+    No API key needed — Hyperliquid's info endpoint is public.
+    Each wallet snapshot fetches the perp clearinghouse state +
+    spot clearinghouse state and totals the USD across both.
+    """
+    from recupero.chains.hyperliquid.client import HyperliquidClient
+    client = HyperliquidClient()
+    try:
+        _run_chain_pool(
+            rows=rows, dsn=dsn,
+            snapshot_fn=lambda row: _snapshot_hyperliquid_one(row, client, price_client),
+            parallelism=parallelism,
+            delta_usd_threshold=delta_usd_threshold,
+            report=report,
+        )
+    finally:
+        client.close()
+
+
+def _snapshot_hyperliquid_one(
+    row: dict[str, Any], client: Any, price_client: Any,
+) -> _Snapshot:
+    """Hyperliquid /info-based snapshot.
+
+    Combines two info queries:
+      * clearinghouseState     — perp account_value + withdrawable
+      * spotClearinghouseState — spot balances (USDC, etc.)
+
+    The total_usd is the sum of perp accountValue + spot USDC-equivalent
+    balances. Hyperliquid USDC is already USD-priced 1:1 so we don't
+    route through CoinGecko for it.
+
+    tx_count is left None — Hyperliquid doesn't have a per-wallet
+    "lifetime tx count" concept the way EVM does; the existing
+    non-funding-ledger paginator could count events but at the cost
+    of a much longer snapshot per wallet, so we keep this snapshot
+    lightweight and defer ledger counting to the trace stage.
+    """
+    addr = row["address"]
+    snap = _Snapshot(
+        native_balance_raw=None, tx_count=None, total_usd=None,
+        source="hyperliquid",
+    )
+
+    try:
+        perp_state = client.get_clearinghouse_state(addr)
+        spot_state = client.get_spot_clearinghouse_state(addr)
+    except Exception as exc:  # noqa: BLE001
+        snap.error = f"hl info: {exc}"
+        return snap
+
+    total_usd = Decimal(0)
+    # Perp side — marginSummary.accountValue is USD-denominated.
+    try:
+        ms = (perp_state or {}).get("marginSummary") or {}
+        av = ms.get("accountValue")
+        if av:
+            total_usd += Decimal(str(av))
+    except (ValueError, TypeError):
+        pass
+
+    # Spot side — balances[].total per coin. USDC is USD 1:1.
+    # Non-USDC spot tokens are rare on HL spot today — we'd need a
+    # price-lookup path if they show up. For now we only sum coins
+    # we can confidently 1:1 to USD; others get logged + skipped.
+    try:
+        balances = (spot_state or {}).get("balances") or []
+        for b in balances:
+            coin = (b.get("coin") or "").upper()
+            total = b.get("total")
+            if not total:
+                continue
+            if coin in {"USDC", "USDC0", "USD"}:
+                total_usd += Decimal(str(total))
+                snap.token_balances.append({
+                    "symbol": coin, "contract": None,
+                    "raw_amount": str(total), "decimal_amount": str(total),
+                    "usd_value": str(Decimal(str(total))),
+                })
+            else:
+                # Unknown spot coin — record balance but no USD.
+                snap.token_balances.append({
+                    "symbol": coin, "contract": None,
+                    "raw_amount": str(total), "decimal_amount": str(total),
+                    "usd_value": None,
+                })
+    except Exception as exc:  # noqa: BLE001
+        log.debug("hl spot parse failed for %s: %s", addr, exc)
+
+    snap.total_usd = total_usd
+    return snap
 
 
 def _run_solana_chain(
@@ -621,11 +721,12 @@ def _snapshot_solana_one(
         report a ceiling rather than the true count — flagged in
         materiality detection by also tracking when this hits 1000.
 
-    SPL token balances are deferred — the watchlist row's
-    ``asset_contract`` for Solana means the mint address, which
-    would route through ``getTokenAccountsByOwner`` per mint.
-    Worth adding once we have a Solana case that actually
-    produces freezable rows (none in production today).
+    SPL token balance: when the watchlist row carries an
+    ``asset_contract`` (the SPL mint address for Solana), we use
+    ``getTokenAccountsByOwner`` filtered by that mint and sum the
+    balances across all token accounts the wallet owns of that
+    mint. Most wallets have exactly one token account per mint;
+    aggregating handles the unusual case of split positions.
     """
     addr = row["address"]
     snap = _Snapshot(
@@ -655,6 +756,64 @@ def _snapshot_solana_one(
     except Exception as exc:  # noqa: BLE001
         log.debug("sol getSignaturesForAddress failed for %s: %s", addr, exc)
 
+    # SPL token balance — sum across all token accounts the wallet
+    # owns of the given mint. getTokenAccountsByOwner returns a list
+    # of token-account entries each with a uiTokenAmount.amount
+    # (string, raw integer) + decimals.
+    contract = row.get("asset_contract")
+    symbol = row.get("asset_symbol") or "TOKEN"
+    if contract:
+        try:
+            data = client._rpc_call(  # noqa: SLF001
+                "getTokenAccountsByOwner",
+                [
+                    addr,
+                    {"mint": contract},
+                    {"encoding": "jsonParsed"},
+                ],
+            )
+            accounts = (data.get("result") or {}).get("value") or []
+            raw_total = 0
+            decimals = 9  # SPL default if we can't read it
+            for acc in accounts:
+                info = (((acc or {}).get("account") or {})
+                        .get("data") or {}).get("parsed") or {}
+                token_info = (info.get("info") or {}).get("tokenAmount") or {}
+                if token_info:
+                    try:
+                        raw_total += int(token_info.get("amount") or 0)
+                        decimals = int(
+                            token_info.get("decimals") or decimals
+                        )
+                    except (ValueError, TypeError):
+                        continue
+            if raw_total > 0:
+                decimal_amount = Decimal(raw_total) / Decimal(10 ** decimals)
+                token_ref = TokenRef(
+                    chain=Chain.solana, contract=contract,
+                    symbol=symbol, decimals=decimals,
+                )
+                try:
+                    price = price_client.price_now(token_ref)
+                    token_usd = (
+                        price.usd_value * decimal_amount
+                        if price.usd_value is not None else None
+                    )
+                except Exception:  # noqa: BLE001
+                    token_usd = None
+                snap.token_balances.append({
+                    "symbol": symbol,
+                    "contract": contract,
+                    "raw_amount": str(raw_total),
+                    "decimal_amount": str(decimal_amount),
+                    "usd_value": (
+                        str(token_usd) if token_usd is not None else None
+                    ),
+                })
+        except Exception as exc:  # noqa: BLE001
+            log.debug("sol SPL fetch failed for %s/%s: %s",
+                      addr, contract, exc)
+
     # Native value in USD. Solana lamports → SOL via 10^9.
     native_usd = Decimal(0)
     if snap.native_balance_raw and snap.native_balance_raw > 0:
@@ -667,7 +826,15 @@ def _snapshot_solana_one(
                     native_usd = price.usd_value * sol_decimal
             except Exception as exc:  # noqa: BLE001
                 log.debug("SOL price fetch failed for %s: %s", addr, exc)
-    snap.total_usd = native_usd
+
+    total = native_usd
+    for tb in snap.token_balances:
+        if tb.get("usd_value"):
+            try:
+                total += Decimal(tb["usd_value"])
+            except (ValueError, TypeError):
+                pass
+    snap.total_usd = total
     return snap
 
 

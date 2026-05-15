@@ -90,6 +90,44 @@ class HyperliquidClient:
 
     # ---------- High-level wrappers ----------
 
+    def get_clearinghouse_state(self, user: str) -> dict[str, Any]:
+        """Return the perpetual clearinghouse state for ``user``.
+
+        Shape: ``{ "marginSummary": { "accountValue": "...", ... },
+                   "withdrawable": "...",
+                   "assetPositions": [...], ... }``
+        — empty dict on miss / error so callers can default to 0.
+
+        Used by the watch-tick snapshot path to total a Hyperliquid
+        account's USD value (perp account equity + cross-margin
+        balance). Spot is a separate clearinghouse — call
+        ``get_spot_clearinghouse_state`` for that.
+        """
+        return self._call_info({"type": "clearinghouseState", "user": user})
+
+    def get_spot_clearinghouse_state(self, user: str) -> dict[str, Any]:
+        """Return spot balances for ``user``: { "balances": [
+        { "coin": "USDC", "total": "...", "hold": "..." }, ...] }."""
+        return self._call_info({"type": "spotClearinghouseState", "user": user})
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        retry=retry_if_exception_type((HyperliquidRateLimitError, httpx.TransportError)),
+        reraise=True,
+    )
+    def _call_info(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Generic POST /info wrapper for simple { type, user } queries."""
+        self.limiter.wait()
+        resp = self._client.post(f"{self.BASE}/info", json=payload)
+        if resp.status_code == 429:
+            raise HyperliquidRateLimitError("HTTP 429")
+        resp.raise_for_status()
+        try:
+            return resp.json() or {}
+        except Exception:  # noqa: BLE001
+            return {}
+
     def get_non_funding_ledger_updates(
         self,
         user: str,

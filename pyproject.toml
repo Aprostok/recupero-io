@@ -69,6 +69,13 @@ dependencies = [
     # rendered anchors clickable in PDF viewers). 63.x lands the rewrite
     # that emits link rectangles correctly aligned with rendered text.
     "weasyprint>=63,<70",
+
+    # pypdf for the post-processor in worker/_pdf_links.py — walks
+    # WeasyPrint's PDF output and injects /Link annotations for every
+    # rendered Etherscan/Arbiscan/etc. URL that didn't get one
+    # automatically. Closes the coverage gap from ~54% to ~100% on
+    # the deep-trace fixture. Tiny dependency, no native build.
+    "pypdf>=4.0,<6.0",
 ]
 
 [project.optional-dependencies]

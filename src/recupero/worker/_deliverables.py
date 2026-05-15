@@ -261,6 +261,24 @@ def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Pa
         pdf_path = html_path.with_suffix(".pdf")
         try:
             _html_to_pdf(html_path, pdf_path)
+            # Post-process to inject any missing chain-explorer
+            # /Link annotations. WeasyPrint 60-69 misses ~46% of
+            # them on freeze letters with many addresses; the
+            # patcher walks the rendered PDF text and emits
+            # /Link rectangles for every URL found.
+            try:
+                from recupero.worker._pdf_links import patch_pdf_links
+                added = patch_pdf_links(pdf_path)
+                if added:
+                    log.info(
+                        "patched %d clickable links into %s",
+                        added, pdf_path.name,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "link patch failed for %s (continuing with WeasyPrint output): %s",
+                    pdf_path.name, exc,
+                )
             out.append(pdf_path)
             log.info("rendered PDF: %s (%d bytes)", pdf_path.name, pdf_path.stat().st_size)
         except Exception as e:  # noqa: BLE001

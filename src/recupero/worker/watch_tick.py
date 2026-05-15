@@ -106,6 +106,10 @@ _DEFAULT_PARALLELISM = 4
 _ENV_DELTA_USD_THRESHOLD = "RECUPERO_WATCH_DELTA_USD_THRESHOLD"
 _ENV_MIN_INTERVAL_SEC    = "RECUPERO_WATCH_MIN_INTERVAL_SEC"
 _ENV_PARALLELISM         = "RECUPERO_WATCH_PARALLELISM"
+# Priority-tier cooldowns. Hot rows poll every hour by default,
+# standard rows fall through to MIN_INTERVAL_SEC (default 12h).
+_ENV_HOT_INTERVAL_SEC    = "RECUPERO_WATCH_HOT_INTERVAL_SEC"
+_DEFAULT_HOT_INTERVAL_SEC = 3600   # 1 hour
 
 
 def _env_decimal(name: str, default: Decimal) -> Decimal:
@@ -329,9 +333,49 @@ def run_watch_tick(
 
 def _fetch_eligible(
     dsn: str, *, min_interval_sec: int, limit: int | None,
+    hot_interval_sec: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Pull active watchlist rows due for a fresh snapshot."""
-    sql = """
+    """Pull active watchlist rows due for a fresh snapshot.
+
+    Priority-aware eligibility (migration 004_watchlist_priority.sql
+    must be applied for the ``priority`` column to exist):
+
+      * ``hot``       — re-snapshot if older than ``hot_interval_sec``
+                        (default 3600s / 1h, env
+                        ``RECUPERO_WATCH_HOT_INTERVAL_SEC``)
+      * ``standard``  — re-snapshot if older than ``min_interval_sec``
+                        (default 43200s / 12h)
+      * ``paused``    — never snapshotted; stays on the list for
+                        cross-reference but burns no API budget
+
+    Backward-compat: if the ``priority`` column doesn't exist yet
+    (migration not applied), the query falls back to the legacy
+    single-tier behavior — every active row uses ``min_interval_sec``.
+    """
+    if hot_interval_sec is None:
+        hot_interval_sec = _env_int(
+            _ENV_HOT_INTERVAL_SEC, _DEFAULT_HOT_INTERVAL_SEC,
+        )
+
+    sql_with_priority = """
+        SELECT id, address, chain, role, label_category, label_name,
+               is_freezeable, issuer, asset_symbol, asset_contract,
+               last_snapshot_at, priority
+          FROM public.watchlist
+         WHERE status = 'active'
+           AND priority IN ('standard', 'hot')
+           AND (last_snapshot_at IS NULL
+                OR last_snapshot_at < NOW() - (
+                    CASE priority
+                      WHEN 'hot' THEN make_interval(secs => %s)
+                      ELSE             make_interval(secs => %s)
+                    END
+                ))
+         ORDER BY
+           CASE priority WHEN 'hot' THEN 0 ELSE 1 END,
+           last_balance_usd DESC NULLS LAST, flagged_at ASC
+    """
+    sql_legacy = """
         SELECT id, address, chain, role, label_category, label_name,
                is_freezeable, issuer, asset_symbol, asset_contract,
                last_snapshot_at
@@ -341,19 +385,34 @@ def _fetch_eligible(
                 OR last_snapshot_at < NOW() - make_interval(secs => %s))
          ORDER BY last_balance_usd DESC NULLS LAST, flagged_at ASC
     """
+
     # Treat None and 0 as "no limit" so the CLI flag can default
     # safely to 0 without silently capping everything.
     use_limit = limit if (limit is not None and limit > 0) else None
-    if use_limit is not None:
-        sql += " LIMIT %s"
     pooled_dsn = _pooled_dsn(dsn)
     with psycopg.connect(pooled_dsn, autocommit=True, row_factory=dict_row,
                          prepare_threshold=None, connect_timeout=10) as conn:
         with conn.cursor() as cur:
-            if use_limit is not None:
-                cur.execute(sql, (min_interval_sec, use_limit))
-            else:
-                cur.execute(sql, (min_interval_sec,))
+            sql, params = sql_with_priority, (hot_interval_sec, min_interval_sec)
+            try:
+                if use_limit is not None:
+                    cur.execute(sql + " LIMIT %s", (*params, use_limit))
+                else:
+                    cur.execute(sql, params)
+            except psycopg.errors.UndefinedColumn:
+                # Migration 004 not applied — fall back to single-tier.
+                log.warning(
+                    "watchlist.priority column missing — fallback to "
+                    "single-tier cooldown (apply migration 004 to enable hot tier)"
+                )
+                # Need a fresh transaction since the prior errored.
+                with conn.cursor() as cur2:
+                    if use_limit is not None:
+                        cur2.execute(sql_legacy + " LIMIT %s",
+                                     (min_interval_sec, use_limit))
+                    else:
+                        cur2.execute(sql_legacy, (min_interval_sec,))
+                    return list(cur2.fetchall())
             return list(cur.fetchall())
 
 

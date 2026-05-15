@@ -32,7 +32,7 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator
@@ -79,13 +79,61 @@ _CHAIN_GENESIS_TIMESTAMPS: dict[str, datetime] = {
 _FALLBACK_GENESIS = _CHAIN_GENESIS_TIMESTAMPS["ethereum"]
 
 
-def _default_incident_time_for(chain: str) -> datetime:
-    """Resolve the per-chain wallet-trace default. Falls back to the
-    Ethereum genesis timestamp on unknown chains rather than raising,
-    so a new chain being added to the schema doesn't immediately wedge
-    the worker — it'll just trace from a "too early" window and the
-    chain adapter will clamp internally."""
-    return _CHAIN_GENESIS_TIMESTAMPS.get(chain.lower(), _FALLBACK_GENESIS)
+# How far back to trace by default for wallet-trace runs that don't
+# supply an incident_time. 365 days is the operationally-sane window:
+#
+#   * Long enough to cover any reasonably-recent scam or hack the
+#     operator is investigating in real time.
+#   * Short enough that a trace at max_depth=2 on an active wallet
+#     finishes within the 5-minute reaper threshold — real-case
+#     validation showed full-history (chain-genesis) traces on active
+#     wallets blow past 5 minutes and get reaped mid-trace.
+#   * Override via RECUPERO_WALLET_TRACE_LOOKBACK_DAYS env var; set to
+#     a large value (e.g. 99999) to effectively re-enable full-history
+#     tracing.
+#   * Per-row override via Investigation.incident_time — when the
+#     operator sets that column explicitly, we use it verbatim and
+#     this default doesn't apply.
+#
+# Operators who need genuinely-full history on an old wallet should
+# set incident_time to a specific date via the admin UI. The
+# chain-genesis dict above documents the absolute floor per chain.
+_DEFAULT_WALLET_TRACE_LOOKBACK_DAYS = 365
+
+
+def _default_incident_time_for(chain: str, *, now: datetime | None = None) -> datetime:
+    """Resolve the default trace-window start for a wallet-trace row
+    that doesn't supply an incident_time.
+
+    Returns ``now - lookback_days`` unless that would fall before the
+    chain's genesis, in which case the chain-genesis timestamp wins.
+    This keeps the recent-activity default fast on active wallets
+    while still working on chains newer than 365 days (Base launched
+    in mid-2023 — a 365-day lookback today still post-dates genesis,
+    but in mid-2024 it didn't).
+
+    ``now`` is injectable for tests. The lookback days are read from
+    the ``RECUPERO_WALLET_TRACE_LOOKBACK_DAYS`` env var on each call
+    so tests / ops can flip behavior without restarting the worker.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        lookback_days = int(
+            os.environ.get(
+                "RECUPERO_WALLET_TRACE_LOOKBACK_DAYS",
+                str(_DEFAULT_WALLET_TRACE_LOOKBACK_DAYS),
+            )
+        )
+    except ValueError:
+        lookback_days = _DEFAULT_WALLET_TRACE_LOOKBACK_DAYS
+    candidate = now - timedelta(days=max(1, lookback_days))
+    genesis = _CHAIN_GENESIS_TIMESTAMPS.get(chain.lower(), _FALLBACK_GENESIS)
+    # If the candidate would fall before chain genesis, use genesis.
+    # This matters for newer chains (a 365-day lookback in early 2024
+    # would have predated Base's June 2023 genesis on the next-month
+    # boundary).
+    return max(candidate, genesis)
 
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.reports.victim import VictimInfo, write_victim

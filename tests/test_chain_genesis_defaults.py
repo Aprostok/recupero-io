@@ -1,19 +1,32 @@
-"""Unit tests for per-chain genesis-timestamp defaults.
+"""Unit tests for chain-genesis timestamps + wallet-trace defaults.
 
-The wallet-trace path uses these as the default trace-window start
-when the investigation row has incident_time=NULL. The values matter
-because each chain's block-by-timestamp explorer endpoint returns
-"no closest block found" for timestamps before that chain's genesis,
-and the tracer chokes on that error string.
+Two concerns:
 
-These tests just lock in the per-chain values + the fallback path —
-they're calendar facts, not behavior we'd ever want to change without
-explicit intent.
+  1. ``_CHAIN_GENESIS_TIMESTAMPS`` locks each supported chain's
+     genesis-block timestamp. These are calendar facts — earlier
+     values cause each chain's block-by-timestamp explorer endpoint
+     to return "no closest block found", which the tracer chokes on
+     (the original empirical bug). Tests guard against accidental
+     edits to these values.
+
+  2. ``_default_incident_time_for`` resolves the *operational*
+     default for wallet-trace runs that don't supply an
+     incident_time. As of the 365-day-lookback change, this returns
+     ``now - lookback_days`` UNLESS that would predate chain-genesis,
+     in which case genesis wins. The previous chain-genesis-only
+     behavior was technically correct but operationally too slow
+     for active wallets (depth-2 traces from 2015 routinely
+     exceeded the 5-minute reaper threshold).
+
+The lookback default is 365 days, configurable per-call via the
+``RECUPERO_WALLET_TRACE_LOOKBACK_DAYS`` env var. Per-row overrides
+work too — when the operator sets ``Investigation.incident_time``
+explicitly, the default doesn't apply at all.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -73,33 +86,119 @@ def test_hyperliquid_launched() -> None:
     assert _CHAIN_GENESIS_TIMESTAMPS["hyperliquid"] == expected
 
 
-# ---- dispatch behavior ---- #
+# ---- dispatch behavior (operational default) ---- #
 
 
 @pytest.mark.parametrize(
     "chain",
     ["ethereum", "polygon", "bsc", "arbitrum", "base", "solana", "hyperliquid"],
 )
-def test_default_resolves_per_chain(chain: str) -> None:
-    """Every supported chain has a per-chain default — no chain
-    silently falls through to the generic fallback."""
-    out = _default_incident_time_for(chain)
-    assert out == _CHAIN_GENESIS_TIMESTAMPS[chain]
+def test_default_returns_one_year_lookback_for_recent_now(chain: str, monkeypatch) -> None:
+    """For a 'now' that's well past every chain's genesis (the
+    operational case), the default is ``now - 365 days``. Faster than
+    chain-genesis on active wallets — that was the operational
+    bottleneck the change addresses."""
+    # Pin lookback to the default explicitly so the env var can't
+    # change the test's expected math.
+    monkeypatch.delenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", raising=False)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    out = _default_incident_time_for(chain, now=now)
+    expected = now - timedelta(days=365)
+    assert out == expected, (
+        f"chain={chain}: expected lookback {expected.isoformat()}, "
+        f"got {out.isoformat()}"
+    )
 
 
-def test_case_insensitive_lookup() -> None:
-    """Chain names are normalized to lowercase before lookup so a
-    capitalization mismatch in the DB doesn't blow up the trace."""
-    assert _default_incident_time_for("ETHEREUM") == _CHAIN_GENESIS_TIMESTAMPS["ethereum"]
-    assert _default_incident_time_for("Polygon") == _CHAIN_GENESIS_TIMESTAMPS["polygon"]
+def test_default_clamps_to_genesis_for_new_chain(monkeypatch) -> None:
+    """When ``now - lookback`` predates chain genesis (e.g., the
+    365-day lookback in mid-2024 would have predated Base's June
+    2023 genesis by a few months), the chain's genesis timestamp
+    wins. Prevents the trace start from falling into the explorer's
+    "no closest block found" error path."""
+    monkeypatch.delenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", raising=False)
+    # Pick a 'now' close enough to Base's genesis that a 365-day
+    # lookback predates it. Base genesis is 2023-06-15; pick now =
+    # 2024-04-01 so candidate=2023-04-01 (before genesis).
+    now = datetime(2024, 4, 1, 12, 0, tzinfo=timezone.utc)
+    out = _default_incident_time_for("base", now=now)
+    assert out == _CHAIN_GENESIS_TIMESTAMPS["base"], (
+        f"expected genesis clamp, got {out.isoformat()}"
+    )
 
 
-def test_unknown_chain_falls_back_to_ethereum() -> None:
-    """An unknown chain falls back to the Ethereum genesis rather than
-    raising. A new chain in the DB schema shouldn't immediately wedge
-    the worker — it'll just trace from "too early" and the chain
-    adapter will clamp internally."""
-    out = _default_incident_time_for("hypothetical_new_chain_v2")
+def test_env_var_override_lookback(monkeypatch) -> None:
+    """RECUPERO_WALLET_TRACE_LOOKBACK_DAYS overrides the 365-day
+    default. Set to a large value to effectively re-enable
+    full-history tracing for an ops emergency."""
+    monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "30")
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    out = _default_incident_time_for("ethereum", now=now)
+    assert out == now - timedelta(days=30)
+
+
+def test_env_var_huge_value_falls_back_to_genesis(monkeypatch) -> None:
+    """A pragmatically-infinite lookback (99999 days) is the operator
+    escape hatch for "trace full history" — should fall back to the
+    chain genesis after clamping."""
+    monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "99999")
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    out = _default_incident_time_for("ethereum", now=now)
+    # 99999 days ago is well before Ethereum genesis → clamps.
+    assert out == _CHAIN_GENESIS_TIMESTAMPS["ethereum"]
+
+
+def test_env_var_invalid_falls_back_to_default(monkeypatch) -> None:
+    """A garbled env var doesn't crash the worker — falls back to the
+    365-day default."""
+    monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "not-a-number")
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    out = _default_incident_time_for("ethereum", now=now)
+    assert out == now - timedelta(days=365)
+
+
+def test_env_var_zero_or_negative_minimum_one_day(monkeypatch) -> None:
+    """Defensive: zero or negative lookback would default to "now"
+    or future, which would emit zero transfers. Clamp to 1 day minimum
+    so a misconfigured env doesn't silently produce empty traces."""
+    for bad_value in ["0", "-5"]:
+        monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", bad_value)
+        now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+        out = _default_incident_time_for("ethereum", now=now)
+        assert out == now - timedelta(days=1), (
+            f"lookback={bad_value!r}: expected 1-day clamp"
+        )
+
+
+def test_case_insensitive_lookup(monkeypatch) -> None:
+    """Chain names are normalized to lowercase before genesis lookup so
+    a capitalization mismatch in the DB doesn't blow up the trace."""
+    monkeypatch.delenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", raising=False)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    out_upper = _default_incident_time_for("ETHEREUM", now=now)
+    out_mixed = _default_incident_time_for("Polygon", now=now)
+    # Both should resolve to the 365-day default (post-genesis on both chains)
+    assert out_upper == now - timedelta(days=365)
+    assert out_mixed == now - timedelta(days=365)
+
+
+def test_unknown_chain_uses_fallback_genesis_as_floor(monkeypatch) -> None:
+    """An unknown chain uses the Ethereum-block-1 fallback as its
+    genesis floor. A new chain in the DB schema shouldn't wedge the
+    worker — it'll just use a defensive earliest-known-good floor."""
+    monkeypatch.delenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", raising=False)
+    # 'now' well past Ethereum genesis — 365-day lookback wins.
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    out = _default_incident_time_for("hypothetical_new_chain_v2", now=now)
+    assert out == now - timedelta(days=365)
+
+
+def test_unknown_chain_clamps_to_eth_genesis_floor(monkeypatch) -> None:
+    """If the lookback would predate even Ethereum genesis (huge env
+    var), the unknown-chain path still floors at Ethereum block 1."""
+    monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "99999")
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    out = _default_incident_time_for("hypothetical_new_chain_v2", now=now)
     assert out == _FALLBACK_GENESIS
     assert out == _CHAIN_GENESIS_TIMESTAMPS["ethereum"]
 

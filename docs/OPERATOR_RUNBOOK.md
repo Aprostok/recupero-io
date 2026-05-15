@@ -203,3 +203,175 @@ If everything is broken and you can't figure out why:
 The stale-claim reaper means orphaned rows recover automatically on
 worker restart — you can't permanently corrupt the queue by killing
 the worker mid-stage.
+
+---
+
+## Phase 4 additions (2026-05-15)
+
+Phase 4 added a watch-tick cron + digest deliverable, wallet-trace
+investigations (case_id=NULL), multi-chain watchlist coverage
+(Solana + Hyperliquid), a dashboard endpoint, kill switches for
+optional building_package features, and an internal forensic
+worksheet artifact.
+
+### Second Railway service: watch-tick cron
+
+The nightly watchlist snapshot loop runs in a **separate Railway
+service**, not the main worker. Same Docker image, different start
+command + cron schedule:
+
+| Setting | Value |
+|---|---|
+| Builder | `DOCKERFILE` |
+| Dockerfile path | `Dockerfile` |
+| Start command | `recupero-worker --watch-tick` |
+| Cron schedule | `0 3 * * *` (03:00 UTC — 23:00 EST) |
+| Restart policy | never (cron jobs shouldn't auto-restart on exit) |
+
+Env vars are shared with the main worker; SMTP + digest recipient
+vars are additional. See `docs/WATCHLIST_DIGEST.md` for the deep
+dive on watch-tick behavior.
+
+**Triage if a tick didn't fire:** check the Railway cron service's
+Deployments tab. Cron failures usually show up as a non-zero exit
+on the latest deploy.
+
+### Wallet-trace investigations (case_id=NULL)
+
+Investigations with `case_id IS NULL` are "scratch" traces — intake
+calls, ZachXBT-tagged wallets, internal R&D. They have no backing
+`cases` row and no victim info. The pipeline:
+
+1. Skips `cases` row fetch + victim.json seed.
+2. Force-sets `skip_editorial=True` and `skip_freeze_briefs=True`
+   regardless of what the row carries (editorial needs victim
+   context; freeze letters need a victim to address).
+3. Runs trace → freeze → emit (synthesized freeze_brief.json from
+   freeze_asks.json) → building_package.
+4. Produces ONLY `trace_report_<hash>.html` (the internal forensic
+   worksheet). No customer-facing freeze letters or LE handoffs.
+
+The admin UI surfaces these at `/admin/wallet-trace`. Schema:
+`investigations.case_id` nullable, plus columns `label`,
+`skip_editorial`, `skip_freeze_briefs`.
+
+### Internal trace_report.html artifact
+
+Emitted on **every** investigation (regardless of case_id /
+skip flags / FREEZABLE count). Filename: `trace_report_<hash>.html`
+in `briefs/`. Contains:
+
+1. Trace summary stats (transfers, depth, total flow USD, destinations)
+2. Destinations table (every distinct destination + holdings + USD)
+3. Freeze-potential table (only destinations with freezable assets,
+   with HIGH / MEDIUM / LOW / NOT FREEZABLE capability badges)
+4. Flow visualization pointer (to `flow_<hash>.svg`)
+
+"Internal Use Only" marker in the cover + footer. Forensic
+worksheet aesthetic; no salutations or customer prose. For the
+external-shareable summary, see `freeze_request_*.html` and
+`le_handoff_*.html`.
+
+### Multi-chain watchlist coverage
+
+Watch-tick now supports:
+
+| Chain | Provider | What gets snapshotted |
+|---|---|---|
+| ethereum | Etherscan v2 | Native ETH + named ERC-20 (from `asset_contract`) + tx count |
+| arbitrum | Etherscan v2 | same |
+| base | Etherscan v2 | same |
+| polygon | Etherscan v2 | same |
+| bsc | Etherscan v2 | same |
+| solana | Helius RPC | Native SOL + SPL tokens via `getTokenAccountsByOwner` |
+| hyperliquid | Public `/info` | Perp `clearinghouseState.accountValue` + spot USDC |
+
+### Watchlist priority tier (migration 004)
+
+`public.watchlist.priority` column with three values:
+
+| Value | Cooldown | Use case |
+|---|---|---|
+| `standard` (default) | 12h (`RECUPERO_WATCH_MIN_INTERVAL_SEC`) | Steady-state watchlist |
+| `hot` | 1h (`RECUPERO_WATCH_HOT_INTERVAL_SEC`) | Active investigation: perpetrator is moving funds |
+| `paused` | never | Keep on watchlist for cross-reference; don't burn API budget |
+
+Toggle via the admin UI (priority column on the wallet detail
+page) or directly:
+
+```sql
+UPDATE public.watchlist SET priority='hot'
+ WHERE address IN ('0xabc...', '0xdef...');
+```
+
+### `/dashboard.json` endpoint
+
+Aggregated counters for the admin UI homepage. Same Railway port
+as `/healthz`. Schema in `src/recupero/worker/dashboard_summary.py`.
+
+```bash
+# CLI form for one-shot inspection:
+python -m recupero.worker.main --dashboard-summary
+```
+
+### Kill switches (escape hatches)
+
+Two kept on purpose (production has neither set in normal operation):
+
+| Var | Effect | When to set |
+|---|---|---|
+| `RECUPERO_DISABLE_PDF_RENDER=1` | Skip WeasyPrint entirely. Ships HTML deliverables only. | WeasyPrint is breaking on production and you need to ship deliverables now. Recipients can print-to-PDF from a browser. |
+| `RECUPERO_ENABLE_LINK_PATCH=1` | Opt-in pypdf link-annotation patcher. WeasyPrint native gives ~54% clickable-address coverage in body PDFs; the patcher closes the gap to ~100%. | Once verified non-hanging on Railway, this becomes default-on. Until then it's opt-in due to historical worker-hang issues on Railway runtime. |
+
+Two **removed** kill switches that no longer earn their keep
+(both were debug crutches; their root causes are fixed):
+
+- `RECUPERO_DISABLE_FLOW_POLISH` — was for OOM debugging. Subprocess
+  isolation fixed the OOM; the switch is dead.
+- `RECUPERO_DISABLE_FREEZABLE_PROMOTION` — same.
+
+### Subprocess isolation for PDF rendering
+
+WeasyPrint and pypdf both run in one-shot Python subprocesses
+(`worker/_deliverables.py:_render_pdf_in_subprocess` and
+`_patch_pdf_links_subprocess`). Pattern uses `Popen` + a 1s
+poll() loop so the parent worker's heartbeat thread keeps firing
+during long renders (CPU-throttled Railway containers can take
+30s+ on a single PDF). Subprocess stderr lands in a tempfile, not
+a PIPE, to avoid the 64KB buffer deadlock on noisy stderr output.
+
+If a render hangs or exceeds the per-PDF timeout (120s WeasyPrint,
+60s pypdf), the subprocess is killed and the worker continues to
+the next file. Partial deliverable output is shipped — the HTML
+always lands even if the PDF doesn't.
+
+### Files added in Phase 4
+
+```
+docs/WATCHLIST_DIGEST.md             Watch-tick + digest deep dive
+docs/OPERATOR_RUNBOOK.md             This file (with the Phase 4
+                                     section above)
+
+migrations/004_watchlist_priority.sql priority column
+
+scripts/insert_validation_row.py     Quick "insert pending row"
+scripts/approve_validation_row.py    Quick "fill TODOs + flip to
+                                     review_approved"
+scripts/e2e_smoke.py                 Single-command full pipeline
+                                     validation
+scripts/download_validation_briefs.py Pull bucket → local disk
+
+src/recupero/worker/_pdf_links.py    Stdlib html.parser anchor
+                                     extractor + pypdf /Link
+                                     annotation injector
+src/recupero/worker/_trace_report.py Internal forensic worksheet
+                                     renderer
+src/recupero/worker/watch_tick.py    Nightly snapshot loop
+src/recupero/worker/mini_freeze.py   Daily digest deliverable
+src/recupero/worker/digest_email.py  SMTP email delivery
+src/recupero/worker/dashboard_summary.py /dashboard.json builder
+
+src/recupero/reports/templates/trace_report.html.j2
+src/recupero/reports/templates/mini_freeze_digest.html.j2
+```
+

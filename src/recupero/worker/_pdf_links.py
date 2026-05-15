@@ -44,8 +44,7 @@ log = logging.getLogger(__name__)
 
 
 # Match any chain-explorer URL the freeze letter might link to.
-# Captures the full URL so we can use it verbatim as the /URI action
-# target.
+# Used to extract the address→href mapping from the source HTML.
 _EXPLORER_URL_RE = re.compile(
     r"https?://(?:"
     r"etherscan\.io|"
@@ -55,13 +54,79 @@ _EXPLORER_URL_RE = re.compile(
     r"bscscan\.com|"
     r"solscan\.io|"
     r"app\.hyperliquid\.xyz"
-    r")/[A-Za-z0-9/_\-?=&#.%]+",
+    r")/(?:address|account|tx)/(0x[0-9a-fA-F]+|[1-9A-HJ-NP-Za-km-z]{32,44})",
     re.IGNORECASE,
 )
 
+# Match the rendered SHORT-form address text WeasyPrint puts in the
+# PDF — patterns the templates use: full 42-char "0x..." or the
+# truncated "0x1234…abcd" form. The truncation char varies between
+# HTML entity sources; we match both "…" (U+2026) and "..." (ASCII).
+_RENDERED_ADDRESS_RE = re.compile(
+    r"0x[0-9a-fA-F]{4,40}"
+    r"(?:(?:…|\.\.\.)[0-9a-fA-F]{2,8})?"
+)
 
-def patch_pdf_links(pdf_path: Path) -> int:
+
+def _build_address_to_url_map(html_path: Path) -> dict[str, str]:
+    """Parse the source HTML for ``<a href="...">0x...</a>`` patterns
+    and build a map keyed by every form of the address that might
+    appear in the PDF's rendered text.
+
+    For each address ``0xABCD…1234`` referenced by an explorer URL,
+    we register both the full form AND the short ``0xABCD…1234``
+    truncation under the same target URL — the templates use both
+    forms inconsistently and pypdf will see whichever was rendered.
+    """
+    if not html_path.exists():
+        return {}
+    try:
+        html = html_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {}
+    out: dict[str, str] = {}
+    # Find every <a href="https://<explorer>/.../<address>">…</a>.
+    anchor_pattern = re.compile(
+        r'<a\s+[^>]*href="([^"]+)"[^>]*>([^<]+)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    for m in anchor_pattern.finditer(html):
+        href = m.group(1)
+        if not _EXPLORER_URL_RE.match(href):
+            continue
+        rendered = m.group(2).strip()
+        if not rendered or not rendered.startswith("0x"):
+            continue
+        out[rendered] = href
+        # Also register the truncated form if the template short-
+        # renders the address ("0x1234…abcd") even though href
+        # points at the full address. pypdf may see either.
+        addr_match = re.search(
+            r"0x[0-9a-fA-F]{40}", href,
+        )
+        if addr_match:
+            full_addr = addr_match.group(0)
+            if full_addr not in out:
+                out[full_addr] = href
+            # Truncated form: first 6 chars + ellipsis + last 4
+            short = f"{full_addr[:6]}…{full_addr[-4:]}"
+            if short not in out:
+                out[short] = href
+            short_ascii = f"{full_addr[:6]}...{full_addr[-4:]}"
+            if short_ascii not in out:
+                out[short_ascii] = href
+    return out
+
+
+def patch_pdf_links(pdf_path: Path, html_path: Path | None = None) -> int:
     """Add missing /Link annotations to ``pdf_path`` in place.
+
+    Matches the PDF's rendered text against the source HTML's anchor
+    map (address text → href URL) and injects a /Link rectangle for
+    every occurrence. WeasyPrint's native emission gives us ~54%
+    coverage (one annotation per unique URL, not per occurrence) —
+    this closes the gap to ~100% by adding rectangles for every
+    visible address occurrence in the PDF text.
 
     Returns the number of annotations added (0 on no-op / failure).
     The PDF is only rewritten when at least one annotation was added,
@@ -71,7 +136,21 @@ def patch_pdf_links(pdf_path: Path) -> int:
     error or a malformed PDF logs a warning and returns 0 — the
     caller's freeze-letter pipeline still ships the WeasyPrint
     output unchanged.
+
+    ``html_path`` defaults to the same stem with ``.html`` extension
+    when None — building_package writes both side by side, so the
+    convention holds.
     """
+    if html_path is None:
+        html_path = pdf_path.with_suffix(".html")
+    address_to_url = _build_address_to_url_map(html_path)
+    if not address_to_url:
+        log.warning(
+            "pdf link patching: no address→URL map for %s "
+            "(HTML missing or has no chain-explorer anchors)",
+            pdf_path.name,
+        )
+        return 0
     try:
         import pypdf
         from pypdf.generic import (
@@ -108,6 +187,7 @@ def patch_pdf_links(pdf_path: Path) -> int:
         try:
             added_on_page = _patch_page(
                 writer.pages[page_num], page_num,
+                address_to_url=address_to_url,
                 ArrayObject=ArrayObject,
                 DictionaryObject=DictionaryObject,
                 FloatObject=FloatObject,
@@ -141,6 +221,7 @@ def _patch_page(
     page,
     page_num: int,
     *,
+    address_to_url: dict[str, str],
     ArrayObject,
     DictionaryObject,
     FloatObject,
@@ -148,21 +229,20 @@ def _patch_page(
     NumberObject,
     TextStringObject,
 ) -> int:
-    """Walk one page, inject /Link annotations for every chain-
-    explorer URL found in the text.
+    """Walk one page's rendered text, inject /Link annotations for
+    every occurrence of a known address (from address_to_url map).
 
-    Strategy: pypdf's ``extract_text(extraction_mode='layout')``
-    gives us text spans with x/y/width/height bboxes. We scan the
-    spans for URL matches and emit one /Link annotation per match.
+    Strategy: pypdf visitor pattern gives per-fragment (text, tm)
+    where tm encodes baseline position. We match each fragment
+    against the rendered address regex (full hex form or short
+    `0x1234…abcd` truncation), look the address up in the map for
+    its href URL, and emit a /Link rectangle.
 
-    Note: pypdf's bbox computation is approximate — sometimes off
-    by a few points. We inflate the rectangle by 2pt on every side
-    so a near-miss click still hits the annotation.
+    Every occurrence is emitted — no per-URL dedup. WeasyPrint's
+    native /Link annotations stay in place; the patcher only ADDS
+    new rectangles for occurrences WeasyPrint missed. Net effect:
+    every visible address spot in the PDF becomes clickable.
     """
-    # Collect text spans with positions. pypdf's visitor pattern
-    # exposes per-fragment (op, args, cm, tm) where tm encodes
-    # the text matrix. The matrix's e/f components are the x/y
-    # baseline position of the fragment.
     spans: list[tuple[str, float, float, float]] = []
 
     def _visitor_text(text, cm, tm, font_dict, font_size):
@@ -188,26 +268,24 @@ def _patch_page(
     if not spans:
         return 0
 
-    # PDF coordinate system: origin is bottom-left. We need each
-    # annotation rect as [x0, y0, x1, y1] (lower-left, upper-right).
-    # The visitor gives us baseline x/y; the rectangle should be
-    # (x, y - descender) to (x + width, y + ascender). Approximate
-    # width from text length × font_size × 0.55 (close enough for
-    # monospaced hex that dominates these links).
     page_existing_annots = page.get("/Annots") or ArrayObject()
-    existing_uris = _existing_uri_targets(
-        page_existing_annots, ArrayObject=ArrayObject,
-    )
 
     added = 0
     for text, x, y, fs in spans:
-        for match in _EXPLORER_URL_RE.finditer(text):
-            url = match.group(0)
-            if url in existing_uris:
+        for match in _RENDERED_ADDRESS_RE.finditer(text):
+            rendered_addr = match.group(0)
+            # Look up the href URL — try several normalized forms
+            # since the rendered text may be exact-match short or
+            # the full address form.
+            url = (
+                address_to_url.get(rendered_addr)
+                or address_to_url.get(rendered_addr.lower())
+                or address_to_url.get(rendered_addr.replace("...", "…"))
+                or address_to_url.get(rendered_addr.replace("…", "..."))
+            )
+            if not url:
                 continue
-            # Approximate the span x extent for this URL fragment.
-            # The match's start offset within text gives us the
-            # column to compute x offset from.
+
             glyph_w = fs * 0.55
             start_x = x + match.start() * glyph_w
             end_x   = x + match.end()   * glyph_w

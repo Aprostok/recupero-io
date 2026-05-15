@@ -418,16 +418,21 @@ def _patch_pdf_links_subprocess(
     """
     import subprocess
     import sys
+    # Pass html_path explicitly so the patcher can build its
+    # address→href map. The html lives at the same stem with
+    # ``.html`` extension — building_package writes both side
+    # by side.
+    html_path = pdf_path.with_suffix(".html")
     script = (
         "import sys; "
         "from pathlib import Path; "
         "from recupero.worker._pdf_links import patch_pdf_links; "
-        "n = patch_pdf_links(Path(sys.argv[1])); "
+        "n = patch_pdf_links(Path(sys.argv[1]), Path(sys.argv[2])); "
         "print(f'patched {n}')"
     )
     try:
         result = subprocess.run(
-            [sys.executable, "-c", script, str(pdf_path)],
+            [sys.executable, "-c", script, str(pdf_path), str(html_path)],
             capture_output=True, timeout=timeout_sec,
         )
     except subprocess.TimeoutExpired as exc:

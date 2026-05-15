@@ -637,6 +637,16 @@ def cli() -> None:
              "as the worker's /dashboard.json endpoint.",
     )
     parser.add_argument(
+        "--send-followups", action="store_true",
+        help="Send weekly follow-up status emails for active "
+             "engagements. Used as the entry point for a daily "
+             "Railway cron. Finds investigations where "
+             "engagement_started_at is set, engagement_closed_at is "
+             "null, and last_followup_sent_at is older than 6 days "
+             "(or null). Sends one email per eligible investigation "
+             "and updates last_followup_sent_at. Exits after one pass.",
+    )
+    parser.add_argument(
         "--log-level", default=os.environ.get("RECUPERO_LOG_LEVEL", "INFO"),
         help="Python logging level. Default INFO.",
     )
@@ -660,6 +670,21 @@ def cli() -> None:
             sys.exit(2)
         print(_json.dumps(build_dashboard_summary(dsn=dsn), indent=2))
         sys.exit(0)
+
+    if args.send_followups:
+        from recupero.worker._followup import run_followup_cron
+        dsn = os.environ.get("SUPABASE_DB_URL", "")
+        if not dsn:
+            log.error("SUPABASE_DB_URL is not set")
+            sys.exit(2)
+        report = run_followup_cron(dsn=dsn)
+        log.info(
+            "followup cron: candidates=%d sent=%d failed=%d "
+            "skipped_no_email=%d",
+            report["candidates"], report["sent"], report["failed"],
+            report["skipped_no_email"],
+        )
+        sys.exit(0 if report["failed"] == 0 else 1)
 
     heartbeat_sec = float(
         os.environ.get("RECUPERO_HEARTBEAT_INTERVAL_SEC", _HEARTBEAT_DEFAULT_SEC)

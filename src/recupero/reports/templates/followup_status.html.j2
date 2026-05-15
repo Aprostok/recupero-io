@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Recovery Status Update — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Confidential — Client Update</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Week {{ week_number }} Status</div>
+    <h1>Recovery<br/>Status Update</h1>
+    <p class="cover-subtitle">
+      {{ days_since_engagement }} days into the active recovery
+      engagement. This is your scheduled weekly status update under
+      our 30-day reporting commitment.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Client</dt>
+      <dd>{{ victim.name }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Case Reference</dt>
+      <dd>{{ case_id }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Engagement Started</dt>
+      <dd>{{ engagement_started_human }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Remaining in 30-day Window</dt>
+      <dd>{{ days_remaining }} days</dd>
+    </div>
+  </dl>
+</section>
+
+<h2>1. Where things stand</h2>
+<div class="summary-box">
+  <p style="margin:0;">
+    {{ status_summary_paragraph }}
+  </p>
+</div>
+
+<h2>2. Actions taken since engagement started</h2>
+{% if recent_actions %}
+<table class="evidence">
+  <thead>
+    <tr>
+      <th style="width:11em;">Date (UTC)</th>
+      <th>Action</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for action in recent_actions %}
+    <tr>
+      <td class="mono">{{ action.timestamp }}</td>
+      <td>{{ action.description }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>
+  Recupero is preparing to send the compliance freeze letters and
+  law-enforcement handoff package. The first sends will go out
+  within the 5-business-day commitment of the engagement letter.
+</p>
+{% endif %}
+
+{% if compliance_responses %}
+<h2>3. Compliance team responses</h2>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Issuer</th>
+      <th>Status</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for resp in compliance_responses %}
+    <tr>
+      <td>{{ resp.issuer }}</td>
+      <td>{{ resp.status }}</td>
+      <td class="small">{{ resp.notes }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<h2>{% if compliance_responses %}4{% else %}3{% endif %}. What's next this week</h2>
+<ul>
+  {% for item in next_steps %}
+  <li>{{ item }}</li>
+  {% endfor %}
+</ul>
+
+<h2>{% if compliance_responses %}5{% else %}4{% endif %}. Anything you'd like to flag?</h2>
+<p>
+  If you've had direct communication with any law-enforcement
+  officer, attorney, or compliance team about this case since our
+  last update — or if you've noticed any new on-chain activity
+  related to the affected wallet — please reply to this email and
+  let us know. It helps us coordinate.
+</p>
+<p>
+  As a reminder: this engagement covers our work through
+  {{ engagement_closes_human }}. After that date, this case
+  transitions to a no-charge follow-up status — we remain
+  available for clarification questions and will reach out if
+  material developments occur (e.g., an issuer enforcement action,
+  a court-appointed restitution program), but the weekly status
+  cadence ends.
+</p>
+
+
+<div class="signature-block">
+  <p style="margin:0 0 var(--space-md);">
+    Best regards,
+  </p>
+  <div class="signature-fields">
+    <strong>{{ investigator.name }}</strong>
+    Investigator of record · {{ investigator.email }}
+  </div>
+</div>
+
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>Followup-W{{ week_number }} {{ case_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Confidential.</span> Intended for {{ victim.name }}.
+  </div>
+</footer>
+
+</body>
+</html>

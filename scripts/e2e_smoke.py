@@ -266,8 +266,10 @@ def main() -> int:
         "--incident", default="2026-01-02T00:00:00Z",
     )
     parser.add_argument(
-        "--timeout-sec", type=int, default=900,
-        help="Max total wait time for pipeline completion. Default 15 min.",
+        "--timeout-sec", type=int, default=None,
+        help="Max total wait time for awaiting_review. Default scales "
+             "with max_depth: 900s (15 min) at depth 1, 2700s (45 min) "
+             "at depth >=3. Override with this flag for tighter ceilings.",
     )
     parser.add_argument(
         "--keep", action="store_true",
@@ -275,6 +277,13 @@ def main() -> int:
              "useful for inspecting artifacts manually.",
     )
     args = parser.parse_args()
+
+    # Scale the awaiting_review timeout with max_depth — a depth=3
+    # trace on a fan-out-heavy wallet legitimately takes 25-35 min;
+    # depth=1 is 30-60s. A flat 15-min default was rejecting healthy
+    # depth=3 runs as timeouts.
+    if args.timeout_sec is None:
+        args.timeout_sec = 2700 if args.max_depth >= 3 else 900
 
     load_dotenv(override=True)
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()

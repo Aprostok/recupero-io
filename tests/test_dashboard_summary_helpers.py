@@ -22,6 +22,7 @@ from recupero.worker.dashboard_summary import (
     _empty_digest,
     _empty_investigations,
     _empty_snapshots,
+    _empty_stale_engagements,
     _empty_stale_review,
     _empty_watchlist,
     _pooled_dsn,
@@ -84,6 +85,23 @@ def test_empty_stale_review_shape() -> None:
     assert set(out.keys()) == {"count", "threshold_hours", "rows"}
     assert out["count"] == 0
     assert out["threshold_hours"] == 24
+    assert out["rows"] == []
+
+
+def test_empty_stale_engagements_shape() -> None:
+    """stale_engagements surfaces active engagements that have aged
+    past the 30-day commitment window without being marked closed.
+    Same UI-contract reasoning as stale_review — empty shape is the
+    healthy steady state, keys are locked so the homepage's "needs
+    closing" widget binds against a stable contract.
+
+    Note: threshold is in DAYS (engagement cadence), not hours
+    (review cadence). The two sections use different units on
+    purpose — don't unify them."""
+    out = _empty_stale_engagements()
+    assert set(out.keys()) == {"count", "threshold_days", "rows"}
+    assert out["count"] == 0
+    assert out["threshold_days"] == 30
     assert out["rows"] == []
 
 

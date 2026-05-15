@@ -67,6 +67,24 @@ Schema:
                 "hours_stale":        140.7
             }
         ]
+    },
+    "stale_engagements": {
+        "count":          1,
+        "threshold_days": 30,
+        "rows": [
+            {
+                "investigation_id":      "...",
+                "case_id":               "...",
+                "case_number":           "...",
+                "client_name":           "...",
+                "chain":                 "ethereum",
+                "seed_address":          "0x...",
+                "engagement_started_at": "2026-04-10T12:00:00+00:00",
+                "last_followup_sent_at": "2026-05-04T03:00:00+00:00",
+                "days_since_start":      35,
+                "days_overdue":          5
+            }
+        ]
     }
   }
 """
@@ -101,17 +119,21 @@ def build_dashboard_summary(*, dsn: str) -> dict[str, Any]:
         "snapshots": _empty_snapshots(),
         "digest": _empty_digest(),
         "stale_review": _empty_stale_review(),
+        "stale_engagements": _empty_stale_engagements(),
     }
 
     pooled = _pooled_dsn(dsn)
     try:
         with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
                              prepare_threshold=None, connect_timeout=10) as conn:
-            payload["cases"]          = _query_cases(conn) or payload["cases"]
-            payload["investigations"] = _query_investigations(conn) or payload["investigations"]
-            payload["watchlist"]      = _query_watchlist(conn) or payload["watchlist"]
-            payload["snapshots"]      = _query_snapshots(conn) or payload["snapshots"]
-            payload["stale_review"]   = _query_stale_review(conn) or payload["stale_review"]
+            payload["cases"]             = _query_cases(conn) or payload["cases"]
+            payload["investigations"]    = _query_investigations(conn) or payload["investigations"]
+            payload["watchlist"]         = _query_watchlist(conn) or payload["watchlist"]
+            payload["snapshots"]         = _query_snapshots(conn) or payload["snapshots"]
+            payload["stale_review"]      = _query_stale_review(conn) or payload["stale_review"]
+            payload["stale_engagements"] = (
+                _query_stale_engagements(conn) or payload["stale_engagements"]
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("dashboard summary: DB connection failed: %s", exc)
     return payload
@@ -292,6 +314,29 @@ def _empty_stale_review() -> dict[str, Any]:
     }
 
 
+def _empty_stale_engagements() -> dict[str, Any]:
+    """Default shape for the stale_engagements section. Same UI-
+    contract reasoning as _empty_stale_review — zero-filled means
+    "no engagements past the 30-day window without a close marker",
+    which is the green/healthy steady state.
+
+    The Tier-2 engagement model commits us to 30 days of monitoring
+    + freeze-letter follow-ups. After that window the operator should
+    either renew (rare) or run ``recupero-ops mark-closed`` to wrap
+    the engagement. This widget surfaces engagements that have aged
+    out without being explicitly closed, so the operator sees them
+    on the homepage instead of having to remember to check."""
+    return {
+        "count": 0,
+        # Threshold in days used for this snapshot. 30 matches the
+        # standard engagement commitment. Surfaced so the UI can
+        # render "X engagements past the 30-day window" without
+        # hard-coding the value.
+        "threshold_days": 30,
+        "rows": [],
+    }
+
+
 # ----- Stale review query ----- #
 #
 # The Hekla case (real intake, Phase-4 wallet-trace push) surfaced a
@@ -386,6 +431,119 @@ def _query_stale_review(conn) -> dict[str, Any]:
             ]
     except Exception as exc:  # noqa: BLE001
         log.warning("stale_review summary: %s", exc)
+    return out
+
+
+# ----- Stale engagements query ----- #
+#
+# The Tier-2 engagement model (migration 006) commits the service to
+# 30 days of follow-ups + monitoring. Beyond that window an
+# engagement is either renewed or wrapped via
+# ``recupero-ops mark-closed``. The follow-up cron correctly skips
+# expired-but-unmarked engagements (its WHERE clause excludes them),
+# but nothing else surfaces them — they just sit in the DB looking
+# like active engagements until the operator notices. This widget
+# closes that gap: any investigation with
+# ``engagement_started_at + threshold < NOW() AND
+#   engagement_closed_at IS NULL``
+# shows up here so the operator sees it on the dashboard homepage
+# and can run mark-closed.
+
+_DEFAULT_STALE_ENGAGEMENT_THRESHOLD_DAYS = 30
+_MAX_STALE_ENGAGEMENT_ROWS_RETURNED = 10  # cap payload size — UI links to full list
+
+
+def _query_stale_engagements(conn) -> dict[str, Any]:
+    """List investigations whose engagement has aged past the
+    threshold (default 30 days) without being marked closed. Returns
+    the count + up to N row summaries so the admin UI can render a
+    "needs closing" widget without a second fetch.
+
+    Defensive against the engagement_* columns not existing yet —
+    catches UndefinedColumn and returns the empty shape so this
+    works on deployments where migration 006 hasn't been applied.
+
+    Rows are ordered oldest-first so the most-overdue engagement
+    appears at the top.
+    """
+    import os
+    try:
+        threshold_days = int(
+            os.environ.get(
+                "RECUPERO_STALE_ENGAGEMENT_THRESHOLD_DAYS",
+                str(_DEFAULT_STALE_ENGAGEMENT_THRESHOLD_DAYS),
+            )
+        )
+    except ValueError:
+        threshold_days = _DEFAULT_STALE_ENGAGEMENT_THRESHOLD_DAYS
+    out = _empty_stale_engagements()
+    out["threshold_days"] = threshold_days
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT i.id, i.case_id, i.chain, i.seed_address,
+                       i.engagement_started_at, i.last_followup_sent_at,
+                       c.case_number, c.client_name,
+                       EXTRACT(EPOCH FROM (NOW() - i.engagement_started_at))
+                           / 86400.0 AS days_since_start
+                  FROM public.investigations i
+                  LEFT JOIN public.cases c ON c.id = i.case_id
+                 WHERE i.engagement_started_at IS NOT NULL
+                   AND i.engagement_closed_at IS NULL
+                   AND i.engagement_started_at
+                       < NOW() - make_interval(days => %(threshold)s)
+                 ORDER BY i.engagement_started_at ASC
+                 LIMIT %(limit)s
+                """,
+                {"threshold": threshold_days,
+                 "limit": _MAX_STALE_ENGAGEMENT_ROWS_RETURNED + 1},
+            )
+            rows = cur.fetchall()
+            # Get the true count separately so the UI can show
+            # "+N more" if rows are truncated.
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n
+                  FROM public.investigations
+                 WHERE engagement_started_at IS NOT NULL
+                   AND engagement_closed_at IS NULL
+                   AND engagement_started_at
+                       < NOW() - make_interval(days => %(threshold)s)
+                """,
+                {"threshold": threshold_days},
+            )
+            total_row = cur.fetchone()
+            out["count"] = int(total_row["n"]) if total_row else 0
+            out["rows"] = [
+                {
+                    "investigation_id": str(r["id"]),
+                    "case_id": str(r["case_id"]) if r["case_id"] else None,
+                    "case_number": r["case_number"],
+                    "client_name": r["client_name"],
+                    "chain": r["chain"],
+                    "seed_address": r["seed_address"],
+                    "engagement_started_at": (
+                        r["engagement_started_at"].isoformat()
+                        if r["engagement_started_at"] else None
+                    ),
+                    "last_followup_sent_at": (
+                        r["last_followup_sent_at"].isoformat()
+                        if r["last_followup_sent_at"] else None
+                    ),
+                    "days_since_start": int(float(r["days_since_start"])),
+                    "days_overdue": max(
+                        0, int(float(r["days_since_start"])) - threshold_days
+                    ),
+                }
+                for r in rows[:_MAX_STALE_ENGAGEMENT_ROWS_RETURNED]
+            ]
+    except psycopg.errors.UndefinedColumn:
+        # Migration 006 not applied yet — return empty shape so the
+        # response is still well-formed on older deployments.
+        log.info("stale_engagements summary: engagement_* columns not present")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("stale_engagements summary: %s", exc)
     return out
 
 

@@ -143,11 +143,12 @@
 <p>No subsequent forwarding observed; the funds remain in the perpetrator's initial receiving wallet.</p>
 {% endif %}
 
-{% if flow_inline_svg %}
-<p class="appendix-pointer">
-  A visualization of the fund flow accompanies this letter as
-  <strong>Appendix&nbsp;A</strong> at the end of this document. Each
-  wallet node links to its on-chain explorer record.
+{% if flow_filename %}
+<p class="attachment-note">
+  A complete fund-flow visualization is provided as a separate SVG
+  attachment (<span class="mono">{{ flow_filename }}</span>) accompanying
+  this letter. Open the file in any modern browser to inspect at full
+  resolution; each wallet node links directly to its Etherscan record.
 </p>
 {% endif %}
 
@@ -234,32 +235,6 @@
   {% if investigator.phone %}<tr><th>Phone</th><td>{{ investigator.phone }}</td></tr>{% endif %}
   <tr><th>Reply expected</th><td>Acknowledgement within 24 hours; substantive response within 72 hours</td></tr>
 </table>
-
-{% if flow_inline_svg %}
-<section class="appendix">
-  <div class="appendix-eyebrow">Appendix A</div>
-  <h2 class="appendix-title">Fund Flow Diagram</h2>
-  <p class="appendix-subtitle">
-    Top USD flows from the victim wallet through identified
-    counterparties. Each node links to its on-chain explorer record;
-    labeled entities are rendered as hex-shaped badges and intermediate
-    wallets as compact rounded nodes. Edge thickness scales with
-    transferred USD value, and dashed orange edges indicate
-    cross-chain bridge crossings.
-  </p>
-  <div class="appendix-flow-frame">
-    {{ flow_inline_svg | safe }}
-  </div>
-  <p class="appendix-note small">
-    Source: on-chain trace fetched between {{ trace_started_at }} and
-    {{ generated_at }} UTC. The complete transfer set lives in the
-    accompanying case archive; the diagram above is a top-flow summary
-    rendered for at-a-glance review. The standalone version of this
-    SVG is also delivered as
-    <span class="mono">{{ flow_filename }}</span> in the case package.
-  </p>
-</section>
-{% endif %}
 
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>

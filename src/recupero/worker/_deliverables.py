@@ -297,24 +297,24 @@ def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Pa
         pdf_path = html_path.with_suffix(".pdf")
         try:
             _html_to_pdf(html_path, pdf_path)
-            # Post-process to inject any missing chain-explorer
-            # /Link annotations. WeasyPrint 60-69 misses ~46% of
-            # them on freeze letters with many addresses; the
-            # patcher walks the rendered PDF text and emits
-            # /Link rectangles for every URL found.
-            try:
-                from recupero.worker._pdf_links import patch_pdf_links
-                added = patch_pdf_links(pdf_path)
-                if added:
-                    log.info(
-                        "patched %d clickable links into %s",
-                        added, pdf_path.name,
+            # Post-process to inject missing chain-explorer /Link
+            # annotations — subprocess-isolated so a pypdf hang
+            # (GIL-held pure-Python work on a large PDF can starve
+            # the worker's heartbeat thread → stale-reap reap) only
+            # kills the patcher subprocess, not the parent worker.
+            #
+            # Kill-switch: RECUPERO_DISABLE_LINK_PATCH=1 skips it
+            # entirely. The PDFs still ship with WeasyPrint's
+            # native ~54% link coverage if patching is disabled.
+            if os.environ.get("RECUPERO_DISABLE_LINK_PATCH", "").strip() != "1":
+                try:
+                    _patch_pdf_links_subprocess(pdf_path)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "link patch subprocess failed for %s "
+                        "(continuing with WeasyPrint output): %s",
+                        pdf_path.name, exc,
                     )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "link patch failed for %s (continuing with WeasyPrint output): %s",
-                    pdf_path.name, exc,
-                )
             out.append(pdf_path)
             log.info("rendered PDF: %s (%d bytes)", pdf_path.name, pdf_path.stat().st_size)
         except Exception as e:  # noqa: BLE001
@@ -399,6 +399,50 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
             shell_path.unlink()
         except OSError:
             pass
+
+
+def _patch_pdf_links_subprocess(
+    pdf_path: Path, *, timeout_sec: float = 60.0,
+) -> None:
+    """Invoke worker._pdf_links.patch_pdf_links in a subprocess so a
+    hang (pypdf is pure-Python and GIL-bound — a slow text-extraction
+    walk on a large PDF starves the parent worker's heartbeat thread,
+    leading to a stale-reap reap and a failed-state investigation).
+
+    Subprocess isolation means a hang kills only the patcher
+    subprocess after the timeout; the parent worker keeps
+    heartbeating and proceeds to the next PDF.
+
+    Best-effort: a non-zero exit / timeout / import failure logs a
+    warning. The WeasyPrint-native PDF is shipped unchanged.
+    """
+    import subprocess
+    import sys
+    script = (
+        "import sys; "
+        "from pathlib import Path; "
+        "from recupero.worker._pdf_links import patch_pdf_links; "
+        "n = patch_pdf_links(Path(sys.argv[1])); "
+        "print(f'patched {n}')"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(pdf_path)],
+            capture_output=True, timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"pypdf patcher timed out after {timeout_sec}s on {pdf_path.name}"
+        ) from exc
+    if result.returncode != 0:
+        tail = (result.stderr or b"").decode("utf-8", errors="replace")[-300:]
+        raise RuntimeError(
+            f"pypdf patcher exit={result.returncode} on {pdf_path.name}: ...{tail}"
+        )
+    # Surface the "patched N" stdout line to our logs.
+    out_msg = (result.stdout or b"").decode("utf-8", errors="replace").strip()
+    if out_msg:
+        log.info("link patcher: %s on %s", out_msg, pdf_path.name)
 
 
 def _render_pdf_in_subprocess(

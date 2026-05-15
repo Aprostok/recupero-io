@@ -89,10 +89,22 @@ def patch_pdf_links(pdf_path: Path) -> int:
                     pdf_path.name, exc)
         return 0
 
+    # Cap the number of pages we walk — a long LE handoff PDF can
+    # have 30+ pages and pypdf's visitor-text extraction is pure-
+    # Python, GIL-bound. Past ~10 pages the cost crosses the
+    # heartbeat threshold of our parent worker (when called
+    # in-process). Even subprocess-isolated, we want to cap so the
+    # subprocess timeout doesn't fire and waste budget. Most of the
+    # value is in pages 1-5 (top of letter) where the bulk of the
+    # repeated address links live.
+    _MAX_PAGES = 8
+
     writer = pypdf.PdfWriter()
     added = 0
     for page_num, page in enumerate(reader.pages):
         writer.add_page(page)
+        if page_num >= _MAX_PAGES:
+            continue  # still copy the page, just don't patch it
         try:
             added_on_page = _patch_page(
                 writer.pages[page_num], page_num,

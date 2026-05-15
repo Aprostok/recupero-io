@@ -21,8 +21,11 @@ overwrite each other:
     case_dir/briefs/le_handoff_<brief_id>.html
     case_dir/briefs/manifest_<brief_id>.json
 
-If the trace produced no transfers (empty case), no deliverables are
-written — the building_package stage no-ops gracefully.
+If the trace produced no transfers (empty case), the freeze letters
++ LE handoff are skipped (there are no destinations to name), but
+``trace_report.html`` still ships. The trace report is the operator's
+record that the trace ran and found nothing — itself useful, and
+required by the admin UI's wallet-trace view.
 """
 
 from __future__ import annotations

@@ -418,11 +418,27 @@ def _patch_pdf_links_subprocess(
     subprocess after the timeout; the parent worker keeps
     heartbeating and proceeds to the next PDF.
 
+    Uses Popen + poll() loop rather than subprocess.run(timeout=) so
+    the parent thread returns to the GIL every 1s during the wait.
+    On CPU-throttled containers (Railway free tier under contention),
+    a 30s patcher run inside subprocess.run blocks the heartbeat
+    thread from getting CPU; the reaper then kills the investigation
+    even though the subprocess itself is making progress. The poll
+    loop costs ~0 (a single os.read or wait check per second) and
+    keeps the parent's heartbeat thread alive.
+
     Best-effort: a non-zero exit / timeout / import failure logs a
     warning. The WeasyPrint-native PDF is shipped unchanged.
+
+    Subprocess stderr is written to a tempfile (not PIPE) — pypdf
+    can emit substantial warning output on PDFs with deprecated
+    features, and the default 64KB pipe buffer can deadlock when
+    we'd otherwise read it only after subprocess completion.
     """
     import subprocess
     import sys
+    import tempfile
+    import time
     # Pass html_path explicitly so the patcher can build its
     # address→href map. The html lives at the same stem with
     # ``.html`` extension — building_package writes both side
@@ -435,33 +451,63 @@ def _patch_pdf_links_subprocess(
         "n = patch_pdf_links(Path(sys.argv[1]), Path(sys.argv[2])); "
         "print(f'patched {n}')"
     )
+
+    stderr_file = tempfile.NamedTemporaryFile(
+        mode="w+b", delete=False, prefix="recupero-patcher-stderr-",
+    )
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             [sys.executable, "-c", script, str(pdf_path), str(html_path)],
-            capture_output=True, timeout=timeout_sec,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"pypdf patcher timed out after {timeout_sec}s on {pdf_path.name}"
-        ) from exc
+        deadline = time.monotonic() + timeout_sec
+        # Poll loop — yields CPU back to other threads (heartbeat)
+        # every second instead of blocking on a single .wait() call.
+        while True:
+            ret = proc.poll()
+            if ret is not None:
+                break
+            if time.monotonic() >= deadline:
+                proc.kill()
+                proc.wait(timeout=5)
+                raise RuntimeError(
+                    f"pypdf patcher timed out after {timeout_sec}s "
+                    f"on {pdf_path.name}"
+                )
+            time.sleep(1.0)
 
-    # Surface subprocess output for visibility regardless of exit
-    # status — silent subprocess crashes are otherwise invisible
-    # in Railway logs and a recurring root-cause for "patcher did
-    # nothing" symptoms.
-    out_msg = (result.stdout or b"").decode("utf-8", errors="replace").strip()
-    err_msg = (result.stderr or b"").decode("utf-8", errors="replace").strip()
-    if out_msg:
-        log.info("link patcher stdout on %s: %s", pdf_path.name, out_msg)
-    if err_msg:
-        log.warning("link patcher stderr on %s: %s",
-                    pdf_path.name, err_msg[-500:])
+        out_msg = b""
+        if proc.stdout is not None:
+            try:
+                out_msg = proc.stdout.read() or b""
+            finally:
+                proc.stdout.close()
 
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"pypdf patcher exit={result.returncode} on {pdf_path.name}; "
-            f"see prior stderr log line"
-        )
+        stderr_file.flush()
+        stderr_file.seek(0)
+        err_bytes = stderr_file.read()
+
+        out_decoded = out_msg.decode("utf-8", errors="replace").strip()
+        err_decoded = err_bytes.decode("utf-8", errors="replace").strip()
+        if out_decoded:
+            log.info("link patcher stdout on %s: %s",
+                     pdf_path.name, out_decoded)
+        if err_decoded:
+            log.warning("link patcher stderr on %s: %s",
+                        pdf_path.name, err_decoded[-500:])
+
+        if ret != 0:
+            raise RuntimeError(
+                f"pypdf patcher exit={ret} on {pdf_path.name}; "
+                f"see prior stderr log line"
+            )
+    finally:
+        stderr_file.close()
+        try:
+            Path(stderr_file.name).unlink()
+        except OSError:
+            pass
 
 
 def _render_pdf_in_subprocess(
@@ -472,28 +518,66 @@ def _render_pdf_in_subprocess(
     ``args``. Isolates WeasyPrint memory + GC churn from the parent
     worker process so a render-time OOM doesn't take down the cron.
 
+    Uses Popen + poll loop (not subprocess.run(timeout=)) so the
+    parent thread yields CPU to the heartbeat thread every second.
+    On CPU-throttled containers a 30s WeasyPrint render inside
+    subprocess.run blocks the heartbeat thread from getting CPU;
+    the reaper then kills the row. The poll loop is the standard
+    fix.
+
+    Stderr lands in a tempfile so a large WeasyPrint warning dump
+    can't deadlock on the default 64KB pipe buffer.
+
     Surfaces non-zero exit + timeout + stderr tail as a RuntimeError
     so the caller's try/except can log them. Stdout is captured but
     ignored (WeasyPrint normally writes nothing useful to stdout).
     """
     import subprocess
     import sys
+    import tempfile
+    import time
     cmd = [sys.executable, "-c", script, *args]
+
+    stderr_file = tempfile.NamedTemporaryFile(
+        mode="w+b", delete=False, prefix="recupero-render-stderr-",
+    )
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, timeout=timeout_sec,
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=stderr_file,
         )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"weasyprint subprocess timed out after {timeout_sec}s "
-            f"on {label}"
-        ) from exc
-    if result.returncode != 0:
-        tail = (result.stderr or b"").decode("utf-8", errors="replace")[-500:]
-        raise RuntimeError(
-            f"weasyprint subprocess exit={result.returncode} on {label}: "
-            f"...{tail}"
-        )
+        deadline = time.monotonic() + timeout_sec
+        while True:
+            ret = proc.poll()
+            if ret is not None:
+                break
+            if time.monotonic() >= deadline:
+                proc.kill()
+                proc.wait(timeout=5)
+                raise RuntimeError(
+                    f"weasyprint subprocess timed out after {timeout_sec}s "
+                    f"on {label}"
+                )
+            time.sleep(1.0)
+
+        if proc.stdout is not None:
+            try:
+                proc.stdout.read()
+            finally:
+                proc.stdout.close()
+
+        if ret != 0:
+            stderr_file.flush()
+            stderr_file.seek(0)
+            tail = stderr_file.read()[-500:].decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"weasyprint subprocess exit={ret} on {label}: ...{tail}"
+            )
+    finally:
+        stderr_file.close()
+        try:
+            Path(stderr_file.name).unlink()
+        except OSError:
+            pass
 
 
 def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:

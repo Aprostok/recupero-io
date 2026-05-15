@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import logging
 import re
+from html.parser import HTMLParser
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -68,15 +69,84 @@ _RENDERED_ADDRESS_RE = re.compile(
 )
 
 
+class _AnchorExtractor(HTMLParser):
+    """Stdlib HTMLParser that walks the document and collects the
+    text content of every ``<a href="...">`` whose href points at a
+    chain-explorer (etherscan/arbiscan/basescan/etc.).
+
+    Why a parser instead of a regex: the regex version had to be
+    extended once already to exclude SVG-namespace anchors
+    (`<a xlink:href="..." target="_blank">` wrapping `<path>`/`<text>`
+    SVG elements). A real parser handles nesting, namespaces, and
+    attribute ordering correctly by construction — no future bug
+    class around malformed-looking-but-valid HTML.
+
+    Implementation:
+      * ``handle_starttag(tag, attrs)`` — on ``<a>``, check if it
+        carries a regular ``href`` (NOT ``xlink:href``) that matches
+        an explorer URL. If so, start collecting text under this
+        anchor.
+      * ``handle_data(data)`` — append text content while inside a
+        tracked anchor.
+      * ``handle_endtag(tag)`` — on ``</a>``, store the collected
+        (rendered text → href) pair and reset state.
+      * SVG namespace anchors carry ``xlink:href`` in the standard
+        Graphviz output. The parser sees them as regular ``<a>``
+        elements but our explicit ``has_plain_href`` check filters
+        them out cleanly.
+
+    Multiple anchors per page, anchors inside table cells, anchors
+    spanning multiple lines — all handled the same way.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        # Stack-style state so nested anchors (unusual but legal in
+        # SVG) don't corrupt the collected text.
+        self._href_stack: list[str] = []
+        self._text_stack: list[list[str]] = []
+        self.pairs: list[tuple[str, str]] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]],
+    ) -> None:
+        if tag.lower() != "a":
+            return
+        attr_dict = {k.lower(): (v or "") for k, v in attrs}
+        # Skip SVG xlink:href anchors — they wrap non-text content
+        # (paths, text spans) and WeasyPrint emits their /Link
+        # annotations natively when it renders the SVG to PDF.
+        if "xlink:href" in attr_dict and "href" not in attr_dict:
+            return
+        href = attr_dict.get("href", "")
+        if not href or not _EXPLORER_URL_RE.match(href):
+            return
+        self._href_stack.append(href)
+        self._text_stack.append([])
+
+    def handle_data(self, data: str) -> None:
+        if self._text_stack:
+            self._text_stack[-1].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "a" or not self._href_stack:
+            return
+        href = self._href_stack.pop()
+        text = "".join(self._text_stack.pop()).strip()
+        if text:
+            self.pairs.append((text, href))
+
+
 def _build_address_to_url_map(html_path: Path) -> dict[str, str]:
     """Parse the source HTML for ``<a href="...">0x...</a>`` patterns
     and build a map keyed by every form of the address that might
     appear in the PDF's rendered text.
 
     For each address ``0xABCD…1234`` referenced by an explorer URL,
-    we register both the full form AND the short ``0xABCD…1234``
-    truncation under the same target URL — the templates use both
-    forms inconsistently and pypdf will see whichever was rendered.
+    we register the rendered form (whatever was in the anchor's text
+    content) AND the full hex form AND both truncation variants
+    (unicode ellipsis + ASCII dots). pypdf may see any of these in
+    the rendered PDF text depending on the template's rendering.
     """
     if not html_path.exists():
         return {}
@@ -84,42 +154,28 @@ def _build_address_to_url_map(html_path: Path) -> dict[str, str]:
         html = html_path.read_text(encoding="utf-8", errors="replace")
     except Exception:
         return {}
+    parser = _AnchorExtractor()
+    try:
+        parser.feed(html)
+        parser.close()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("html parser failed on %s: %s", html_path.name, exc)
+        return {}
     out: dict[str, str] = {}
-    # Find every <a href="https://<explorer>/.../<address>">PLAIN_TEXT</a>
-    # in the HTML body. The negative-lookahead ``(?![^>]*\bxlink:)``
-    # excludes the SVG-namespace anchors inside the embedded flow
-    # diagram (`<a xlink:href="...">` wrapping `<path>` elements) —
-    # those carry the same Etherscan URLs but their content isn't
-    # plain text, and WeasyPrint already handles SVG xlinks natively.
-    anchor_pattern = re.compile(
-        r'<a\b(?![^>]*\bxlink:)[^>]*?\bhref="([^"]+)"[^>]*?>([^<]+)</a>',
-        re.IGNORECASE | re.DOTALL,
-    )
-    for m in anchor_pattern.finditer(html):
-        href = m.group(1)
-        if not _EXPLORER_URL_RE.match(href):
-            continue
-        rendered = m.group(2).strip()
-        if not rendered or not rendered.startswith("0x"):
+    for rendered, href in parser.pairs:
+        if not rendered.startswith("0x"):
             continue
         out[rendered] = href
-        # Also register the truncated form if the template short-
-        # renders the address ("0x1234…abcd") even though href
-        # points at the full address. pypdf may see either.
-        addr_match = re.search(
-            r"0x[0-9a-fA-F]{40}", href,
-        )
-        if addr_match:
-            full_addr = addr_match.group(0)
-            if full_addr not in out:
-                out[full_addr] = href
-            # Truncated form: first 6 chars + ellipsis + last 4
-            short = f"{full_addr[:6]}…{full_addr[-4:]}"
-            if short not in out:
-                out[short] = href
+        # Also register the full-address form + truncation variants
+        # so we match whichever the PDF rendered.
+        m = re.search(r"0x[0-9a-fA-F]{40}", href)
+        if m:
+            full_addr = m.group(0)
+            out.setdefault(full_addr, href)
+            short_uni = f"{full_addr[:6]}…{full_addr[-4:]}"
+            out.setdefault(short_uni, href)
             short_ascii = f"{full_addr[:6]}...{full_addr[-4:]}"
-            if short_ascii not in out:
-                out[short_ascii] = href
+            out.setdefault(short_ascii, href)
     return out
 
 

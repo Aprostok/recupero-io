@@ -64,7 +64,11 @@ dependencies = [
     # annotations. Lazy-imported in worker/_deliverables.py so the CLI
     # paths that don't need PDF output (and don't have the apt-level
     # Pango/Cairo libs installed) don't fail on import.
-    "weasyprint>=60,<70",
+    # Pin to >=63 — earlier 60.x / 61.x had known issues with PDF link
+    # annotation generation (the /Link /Annot entries that make
+    # rendered anchors clickable in PDF viewers). 63.x lands the rewrite
+    # that emits link rectangles correctly aligned with rendered text.
+    "weasyprint>=63,<70",
 ]
 
 [project.optional-dependencies]

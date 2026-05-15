@@ -290,6 +290,14 @@ def generate_briefs(
         "issuer_freezable": _build_issuer_freezable_ctx(
             issuer_freezable, primary_case.chain,
         ),
+        # Law-enforcement filing-route recommendation. Only the LE
+        # template uses this; the issuer freeze letter ignores the
+        # ``le_routing`` context key. Built from victim's state +
+        # country + (approximate) total loss so the LE handoff names
+        # specific filing channels (IC3 + state AG + escalation tiers).
+        "le_routing": _build_le_routing_ctx(
+            victim, theft_transfer.usd_value_at_tx,
+        ),
     }
 
     env = Environment(
@@ -568,3 +576,49 @@ def _short_addr(addr: str) -> str:
     if not addr or len(addr) < 12:
         return addr or ""
     return f"{addr[:8]}…{addr[-4:]}"
+
+
+def _build_le_routing_ctx(
+    victim: VictimInfo,
+    estimated_loss_usd: Decimal | None,
+) -> dict[str, Any]:
+    """Translate the structured LERoutingPlan into a template-friendly
+    dict. The LE template iterates ``primary_routes``, ``state_routes``,
+    and ``escalation_routes`` to generate the "Suggested Filing Routes"
+    section.
+
+    Loss-tier escalation thresholds are evaluated against
+    ``estimated_loss_usd`` — which is the originally-stolen-asset's
+    USD value at theft, as a reasonable approximation for routing
+    decisions. This is NOT the freezable-USD total (which depends on
+    the freeze_brief), because the routing decision needs to reflect
+    the SCALE of the crime, not just the partial-recovery amount.
+    """
+    from recupero.worker._le_routing import recommend_le_routes
+
+    plan = recommend_le_routes(
+        state=victim.state,
+        country=victim.country or victim.citizenship,
+        total_loss_usd=estimated_loss_usd,
+    )
+
+    def _route_dict(route) -> dict[str, Any]:
+        return {
+            "name": route.name,
+            "jurisdiction": route.jurisdiction,
+            "url": route.url,
+            "phone": route.phone,
+            "email": route.email,
+            "description": route.description,
+            "expected_response": route.expected_response,
+        }
+
+    return {
+        "has_routes": bool(
+            plan.primary_routes or plan.state_routes or plan.escalation_routes
+        ),
+        "primary_routes":     [_route_dict(r) for r in plan.primary_routes],
+        "state_routes":       [_route_dict(r) for r in plan.state_routes],
+        "escalation_routes":  [_route_dict(r) for r in plan.escalation_routes],
+        "notes":              list(plan.notes),
+    }

@@ -383,6 +383,100 @@
   {% endif %}
 </ol>
 
+{% if le_routing and le_routing.has_routes %}
+<h2>6.1 Suggested Filing Routes</h2>
+<p>
+  The following channels are the recommended filing destinations for
+  this case, based on the victim's location and the scale of loss.
+  Filing in parallel across multiple channels is the norm —
+  IC3 establishes the federal record; state-level filings engage
+  state-prosecutorial resources the FBI doesn't have; loss-tier
+  escalations engage specialized federal units.
+</p>
+
+{% if le_routing.primary_routes %}
+<h3>Primary (federal / always-applicable)</h3>
+<table class="evidence">
+  <thead>
+    <tr><th>Channel</th><th>Jurisdiction</th><th>Contact</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    {% for route in le_routing.primary_routes %}
+    <tr>
+      <td><strong>{{ route.name }}</strong></td>
+      <td>{{ route.jurisdiction }}</td>
+      <td class="small">
+        {% if route.url %}<a href="{{ route.url }}">{{ route.url }}</a><br/>{% endif %}
+        {% if route.email %}<a href="mailto:{{ route.email }}">{{ route.email }}</a><br/>{% endif %}
+        {% if route.phone %}{{ route.phone }}<br/>{% endif %}
+        {% if route.expected_response %}<span class="small">Response: {{ route.expected_response }}</span>{% endif %}
+      </td>
+      <td class="small">{{ route.description }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if le_routing.state_routes %}
+<h3>State-level (US)</h3>
+<table class="evidence">
+  <thead>
+    <tr><th>Channel</th><th>Jurisdiction</th><th>Contact</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    {% for route in le_routing.state_routes %}
+    <tr>
+      <td><strong>{{ route.name }}</strong></td>
+      <td>{{ route.jurisdiction }}</td>
+      <td class="small">
+        {% if route.url %}<a href="{{ route.url }}">{{ route.url }}</a><br/>{% endif %}
+        {% if route.email %}<a href="mailto:{{ route.email }}">{{ route.email }}</a><br/>{% endif %}
+        {% if route.phone %}{{ route.phone }}<br/>{% endif %}
+      </td>
+      <td class="small">{{ route.description }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if le_routing.escalation_routes %}
+<h3>Loss-tier escalations</h3>
+<table class="evidence">
+  <thead>
+    <tr><th>Channel</th><th>Jurisdiction</th><th>Contact</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    {% for route in le_routing.escalation_routes %}
+    <tr>
+      <td><strong>{{ route.name }}</strong></td>
+      <td>{{ route.jurisdiction }}</td>
+      <td class="small">
+        {% if route.url %}<a href="{{ route.url }}">{{ route.url }}</a><br/>{% endif %}
+        {% if route.email %}<a href="mailto:{{ route.email }}">{{ route.email }}</a><br/>{% endif %}
+        {% if route.phone %}{{ route.phone }}<br/>{% endif %}
+        {% if route.expected_response %}<span class="small">Response: {{ route.expected_response }}</span>{% endif %}
+      </td>
+      <td class="small">{{ route.description }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{% if le_routing.notes %}
+<div class="summary-box">
+  <p style="margin:0 0 0.5em 0;"><strong>Filing notes:</strong></p>
+  <ul style="margin:0;">
+    {% for note in le_routing.notes %}
+    <li class="small">{{ note }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+{% endif %}
+
 <h2>7. Service Providers Involved</h2>
 <table class="evidence">
   <tr>

@@ -24,10 +24,19 @@ class VictimInfo(BaseModel):
 
     name: str
     citizenship: str | None = None
-    address: str | None = None       # postal address
+    address: str | None = None       # postal address (free-form)
     email: str | None = None
     phone: str | None = None
     wallet_address: str               # the victim's wallet (matches case.seed_address)
+
+    # State / region — used by the LE-routing module to recommend the
+    # right filing channel (state-AG cyber unit vs IC3 vs direct FBI
+    # field office). For US victims, accept either a two-letter postal
+    # code ("CA") or the full state name ("California"). For non-US
+    # victims, leave blank and the routing module falls back to
+    # generic federal-level guidance.
+    state: str | None = None
+    country: str | None = None       # ISO 3166-1 alpha-2 ("US", "GB", "CA") or full name
 
     # Free-form narrative the brief author wants embedded
     incident_summary: str | None = None

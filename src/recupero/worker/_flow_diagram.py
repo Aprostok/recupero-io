@@ -150,6 +150,34 @@ _NODE_PALETTE: dict[str, tuple[str, str, str]] = {
     "wallet":               ("#F1F5F9", "#94A3B8", "#334155"),
 }
 
+# Per-token edge color. Each major asset gets a distinct hue so the
+# reader can scan a busy diagram and see at a glance "this flow is
+# USDC, that one is USDT" — TRM-aligned. The hue roughly tracks
+# each issuer's brand color so the edge color and the matching
+# freezable-holding circle's fill read as a pair.
+#
+# Symbols matched case-insensitively against the edge's
+# ``dominant_symbol`` (the token symbol of the largest single
+# transfer in the aggregated edge). Unmatched tokens fall through
+# to the chain edge color so we never block on an unknown asset.
+_TOKEN_EDGE_COLOR: dict[str, str] = {
+    "USDC":  "#1A85FF",   # Circle blue
+    "USDT":  "#26A17B",   # Tether teal
+    "DAI":   "#F4B731",   # Maker / Sky gold
+    "USDP":  "#FFB800",   # Paxos amber
+    "PYUSD": "#FFB800",
+    "ETH":   "#6B7280",   # neutral slate (gas)
+    "WETH":  "#6B7280",
+    "WBTC":  "#F7931A",   # Bitcoin orange
+    "BTC":   "#F7931A",
+    "SOL":   "#9945FF",   # Solana violet
+    "MATIC": "#8247E5",   # Polygon purple
+    "BNB":   "#F0B90B",   # BSC gold
+    "LDO":   "#00A3FF",   # Lido
+    "stETH": "#00A3FF",
+}
+
+
 # Chain-coded border color. TRM uses distinct chain colors on every node
 # so cross-chain hops jump out. The hue here roughly matches each
 # chain's own branding so a familiar reader doesn't need a legend.
@@ -252,6 +280,10 @@ class _NodeAttrs:
     chain: str = "ethereum"
     inbound_usd: Decimal = Decimal(0)
     outbound_usd: Decimal = Decimal(0)
+    # Issuer family for cluster grouping — set by the freeze_brief
+    # cross-ref step. None for trace-labeled entities (exchanges,
+    # mixers, bridges) which don't roll up under an issuer.
+    issuer: str | None = None
 
 
 @dataclass
@@ -411,6 +443,7 @@ def _promote_freezable_holdings(
                 continue
             node.category = "freezable_holding"
             node.identity = identity
+            node.issuer = issuer
             promoted += 1
     if promoted:
         log.info(
@@ -573,8 +606,33 @@ def render_flow_diagram(
         penwidth="1.2",
     )
 
-    # Render nodes.
+    # Render nodes. Group freezable_holding nodes that share the same
+    # issuer into Graphviz subgraphs (clusters) so multiple Circle
+    # holdings render with a thin gold frame around them, multiple
+    # Tether holdings in their own frame, etc. — TRM-style entity
+    # family grouping. Non-clustered nodes (victim, plain wallets,
+    # exchanges, mixers) go in the root graph.
+    by_issuer: dict[str, list[tuple[str, _NodeAttrs]]] = {}
+    ungrouped: list[tuple[str, _NodeAttrs]] = []
     for addr, n in nodes.items():
+        if n.category == "freezable_holding" and n.issuer:
+            by_issuer.setdefault(n.issuer, []).append((addr, n))
+        else:
+            ungrouped.append((addr, n))
+
+    # Single-holding clusters look like clutter — only emit a cluster
+    # frame when the issuer has at least 2 nodes in this diagram.
+    for issuer, members in by_issuer.items():
+        if len(members) < 2:
+            ungrouped.extend(members)
+            continue
+        cluster_attrs = _cluster_style(issuer)
+        with g.subgraph(name=f"cluster_{_slug(issuer)}") as sg:
+            sg.attr(**cluster_attrs)
+            for addr, n in members:
+                sg.node(_node_id(addr), **_node_style(n))
+
+    for addr, n in ungrouped:
         g.node(_node_id(addr), **_node_style(n))
 
     # Render edges.
@@ -632,6 +690,33 @@ def _dot_available() -> bool:
 def _node_id(address: str) -> str:
     """Stable Graphviz-safe identifier from a hex address."""
     return "n_" + address.lower().replace("0x", "")[:16]
+
+
+def _slug(text: str) -> str:
+    """Lowercase, alphanumeric+underscore slug for cluster IDs."""
+    import re
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_") or "x"
+
+
+def _cluster_style(issuer: str) -> dict[str, str]:
+    """Graphviz attrs for an issuer family's cluster box.
+
+    Subtle gold frame with a small italic label at the top —
+    TRM-style "this group of nodes all belong to the same entity".
+    """
+    return {
+        "label": f"{issuer} holdings",
+        "labelloc": "t",
+        "labeljust": "c",
+        "fontname": _FONT_FACE,
+        "fontsize": "9",
+        "fontcolor": "#92400E",   # dark gold, matches freezable text
+        "color":     "#B45309",   # gold frame
+        "style":     "rounded,filled",
+        "fillcolor": "#FFFBEB",   # very pale gold tint, lower than entity fill
+        "penwidth":  "1.2",
+        "margin":    "12",
+    }
 
 
 def _short_addr(addr: str) -> str:
@@ -792,10 +877,16 @@ def _url_attrs(url: str | None, identity: str | None, short: str) -> dict[str, s
 def _edge_style(e: _EdgeAttrs) -> dict[str, str]:
     """Build Graphviz edge attrs for an aggregated edge.
 
-    Edge thickness scales log10(USD). Cross-chain hops (src_chain !=
-    dst_chain) render as dashed lines — visually obvious that funds
-    left a chain. Edge labels show summed USD plus a compact date hint
-    when the aggregated date range spans multiple days.
+    Visual encoding:
+      * Edge thickness scales log10(USD) — bigger flows read as
+        thicker lines.
+      * Cross-chain hops (src_chain != dst_chain) render as dashed
+        orange — bridge indicator overrides token color so the
+        chain-crossing reads loudest.
+      * Same-chain edges are tinted by their dominant token (USDC=
+        Circle blue, USDT=Tether teal, DAI=Maker gold, etc.). The
+        edge color and the matching freezable-holding circle's
+        fill (warm gold for issuer-controlled) form a visual pair.
     """
     pen = _edge_penwidth(e.total_usd)
     attrs: dict[str, str] = {
@@ -803,9 +894,24 @@ def _edge_style(e: _EdgeAttrs) -> dict[str, str]:
         "penwidth": f"{pen:.2f}",
     }
     if e.src_chain != e.dst_chain:
+        # Cross-chain crossing — bridge takes visual precedence.
         attrs["style"] = "dashed"
-        attrs["color"] = "#EA580C"  # match the bridge category color
+        attrs["color"] = "#EA580C"
         attrs["fontcolor"] = "#7C2D12"
+    else:
+        # Same-chain — tint by dominant token if recognized.
+        token_color = _TOKEN_EDGE_COLOR.get(
+            (e.dominant_symbol or "").upper(),
+        )
+        if token_color:
+            attrs["color"] = token_color
+    # Dominant edges (>= $100K USD) get a bigger, darker label so
+    # the eye is drawn to the biggest flows — TRM-style emphasis on
+    # "where the money actually went". Graphviz reuses the node-
+    # level `fontsize`/`fontcolor` attrs for edge labels.
+    if e.total_usd >= Decimal("100000"):
+        attrs["fontsize"] = "11"
+        attrs["fontcolor"] = "#0F172A"
     return attrs
 
 

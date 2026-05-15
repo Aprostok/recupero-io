@@ -148,7 +148,15 @@ def patch_pdf_links(pdf_path: Path, html_path: Path | None = None) -> int:
     """
     if html_path is None:
         html_path = pdf_path.with_suffix(".html")
+    log.info(
+        "pdf link patching: pdf=%s html=%s (html exists: %s)",
+        pdf_path.name, html_path.name, html_path.exists(),
+    )
     address_to_url = _build_address_to_url_map(html_path)
+    log.info(
+        "pdf link patching: address map size=%d unique_urls=%d",
+        len(address_to_url), len(set(address_to_url.values())),
+    )
     if not address_to_url:
         log.warning(
             "pdf link patching: no address→URL map for %s "

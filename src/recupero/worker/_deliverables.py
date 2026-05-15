@@ -298,17 +298,20 @@ def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Pa
         try:
             _html_to_pdf(html_path, pdf_path)
             # Post-process to inject missing chain-explorer /Link
-            # annotations — subprocess-isolated so a pypdf hang
-            # (GIL-held pure-Python work on a large PDF can starve
-            # the worker's heartbeat thread → stale-reap reap) only
-            # kills the patcher subprocess, not the parent worker.
-            #
-            # Kill-switch: RECUPERO_DISABLE_LINK_PATCH=1 skips it
-            # entirely. The PDFs still ship with WeasyPrint's
-            # native ~54% link coverage if patching is disabled.
-            if os.environ.get("RECUPERO_DISABLE_LINK_PATCH", "").strip() != "1":
+            # annotations — subprocess-isolated.
+            link_patch_env = os.environ.get(
+                "RECUPERO_DISABLE_LINK_PATCH", ""
+            ).strip()
+            if link_patch_env == "1":
+                log.info(
+                    "link patch skipped for %s (RECUPERO_DISABLE_LINK_PATCH=1)",
+                    pdf_path.name,
+                )
+            else:
+                log.info("link patch starting for %s", pdf_path.name)
                 try:
                     _patch_pdf_links_subprocess(pdf_path)
+                    log.info("link patch finished for %s", pdf_path.name)
                 except Exception as exc:  # noqa: BLE001
                     log.warning(
                         "link patch subprocess failed for %s "
@@ -439,15 +442,24 @@ def _patch_pdf_links_subprocess(
         raise RuntimeError(
             f"pypdf patcher timed out after {timeout_sec}s on {pdf_path.name}"
         ) from exc
-    if result.returncode != 0:
-        tail = (result.stderr or b"").decode("utf-8", errors="replace")[-300:]
-        raise RuntimeError(
-            f"pypdf patcher exit={result.returncode} on {pdf_path.name}: ...{tail}"
-        )
-    # Surface the "patched N" stdout line to our logs.
+
+    # Surface subprocess output for visibility regardless of exit
+    # status — silent subprocess crashes are otherwise invisible
+    # in Railway logs and a recurring root-cause for "patcher did
+    # nothing" symptoms.
     out_msg = (result.stdout or b"").decode("utf-8", errors="replace").strip()
+    err_msg = (result.stderr or b"").decode("utf-8", errors="replace").strip()
     if out_msg:
-        log.info("link patcher: %s on %s", out_msg, pdf_path.name)
+        log.info("link patcher stdout on %s: %s", pdf_path.name, out_msg)
+    if err_msg:
+        log.warning("link patcher stderr on %s: %s",
+                    pdf_path.name, err_msg[-500:])
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"pypdf patcher exit={result.returncode} on {pdf_path.name}; "
+            f"see prior stderr log line"
+        )
 
 
 def _render_pdf_in_subprocess(

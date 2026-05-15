@@ -768,6 +768,32 @@ def _stage_build_package(
         label=inv.label,
     )
     log.info("building_package wrote %d deliverable file(s)", len(written))
+
+    # Wipe the bucket's briefs/ subdir before uploading fresh artifacts.
+    # Each re-run produces new BRIEF-<timestamp> IDs, so without cleanup
+    # we accumulate ~74 brief artifacts per investigation across 14+
+    # re-runs (real production case e917ffc5 hit this). Customer-facing
+    # admin UI showing "74 freeze letters" for what should be ~4 is
+    # the actual operational pain. See docs/CUSTOMER_DRY_RUN_2026-05-15.md.
+    #
+    # Scoped to briefs/ only — root-level case.json, manifest.json, etc.
+    # get upserted by upload_case_dir below and don't accumulate.
+    #
+    # Cleanup failure is non-fatal: log + continue. The new run's
+    # artifacts still upload; stale artifacts persist for one more
+    # cycle until the next successful cleanup. This matches our
+    # "be defensive at storage boundaries" pattern from upload_case_dir
+    # itself (PayloadTooLargeError handling).
+    try:
+        deleted = bucket.delete_under("briefs")
+        if deleted:
+            log.info("building_package: cleaned %d stale brief(s) from bucket", deleted)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "building_package: brief cleanup failed (continuing with upload): %s",
+            exc,
+        )
+
     upload_case_dir(case_dir, bucket)
 
 

@@ -221,7 +221,35 @@ class SupabaseCaseStore:
     # ----- Cleanup ----- #
 
     def delete_all(self) -> int:
-        paths = self._walk_all_files(self.storage_prefix)
+        return self._delete_under_prefix(self.storage_prefix)
+
+    def delete_under(self, subpath: str) -> int:
+        """Delete every file under ``storage_prefix + subpath``.
+
+        Intended for "fresh start" stages that re-generate all their
+        outputs and want to remove stale artifacts from prior runs.
+        The canonical use case is ``building_package``: each run
+        produces fresh per-issuer briefs with a new BRIEF-<timestamp>
+        ID, so prior runs' briefs accumulate in the bucket without
+        cleanup. Calling ``delete_under("briefs")`` before upload
+        keeps the bucket bounded.
+
+        Idempotent — returns 0 if the prefix is already empty.
+        Returns the number of files deleted so callers can log.
+        """
+        if not subpath:
+            raise ValueError(
+                "delete_under requires a non-empty subpath; use delete_all() "
+                "to wipe the entire investigation's bucket prefix"
+            )
+        full_prefix = self.storage_prefix + subpath.strip("/") + "/"
+        return self._delete_under_prefix(full_prefix)
+
+    def _delete_under_prefix(self, prefix: str) -> int:
+        """Batch-delete every file under ``prefix``. Shared
+        implementation between delete_all and delete_under so the
+        batching + error-handling stays in one place."""
+        paths = self._walk_all_files(prefix)
         if not paths:
             return 0
 

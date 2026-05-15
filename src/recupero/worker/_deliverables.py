@@ -253,6 +253,7 @@ def build_all_deliverables(
     # recoverable case so the operator has it ready to send when a
     # customer says yes. Skipped on wallet traces and on
     # unrecoverable cases (where there's nothing to engage on).
+    engagement_path = None
     if not skip_freeze_briefs and is_recoverable:
         try:
             from recupero.worker._engagement_letter import render_engagement_letter
@@ -345,9 +346,123 @@ def build_all_deliverables(
         pdf_paths = _emit_pdfs(html_paths, flow_svg_path=flow_svg_path if flow_filename else None)
     written.extend(pdf_paths)
 
+    # Auto-send the victim-summary letter to the victim. Skipped on
+    # wallet traces (no real victim email), on cases without a
+    # victim email (operator didn't capture one), and on cases
+    # we've already sent for (idempotency via emails_sent audit log).
+    # Disable globally with RECUPERO_DISABLE_EMAIL=1 for local dev.
+    _maybe_auto_send_victim_summary(
+        investigation_id=investigation_id,
+        victim=victim,
+        case_dir=case_dir,
+        pdf_paths=pdf_paths,
+        skip=skip_freeze_briefs,
+    )
+
     log.info("deliverables done: %d file(s) under %s/briefs/",
              len(written), case_dir.name)
     return written
+
+
+def _maybe_auto_send_victim_summary(
+    *,
+    investigation_id: str | None,
+    victim: VictimInfo,
+    case_dir: Path,
+    pdf_paths: list[Path],
+    skip: bool,
+) -> None:
+    """Send the victim summary letter to the victim if eligible.
+
+    Eligibility:
+      * Not a wallet trace (skip == False, i.e., case-driven)
+      * Victim has an email address on file
+      * Investigation_id is known (needed for audit + idempotency)
+      * No prior successful send for this (investigation_id,
+        victim_summary) pair
+
+    Sends the victim_summary HTML + attaches:
+      * trace_report.pdf
+      * flow_*.pdf
+      * victim_summary_*.pdf
+      * engagement_letter_*.pdf (if recoverable)
+
+    The freeze-letter PDFs are NOT attached to the victim email —
+    those are operator-controlled sends to compliance teams.
+    """
+    if skip or not investigation_id or not victim.email:
+        return
+
+    try:
+        from recupero.worker._email import has_been_sent, send_email
+    except Exception as e:  # noqa: BLE001
+        log.warning("email module import failed (skipping auto-send): %s", e)
+        return
+
+    if has_been_sent(
+        investigation_id=investigation_id,
+        email_type="victim_summary",
+    ):
+        log.info(
+            "auto-send skip: victim_summary already sent for inv=%s",
+            investigation_id,
+        )
+        return
+
+    # Find the rendered victim_summary HTML
+    briefs_dir = case_dir / "briefs"
+    summary_htmls = list(briefs_dir.glob("victim_summary_*.html"))
+    if not summary_htmls:
+        log.info(
+            "auto-send skip: no victim_summary HTML found for inv=%s",
+            investigation_id,
+        )
+        return
+    summary_html_path = summary_htmls[0]
+
+    # Build attachment list — customer-relevant PDFs only
+    attachment_globs = [
+        "trace_report_*.pdf",
+        "flow_*.pdf",
+        "victim_summary_*.pdf",
+        "engagement_letter_*.pdf",
+    ]
+    attachments: list[Path] = []
+    for pattern in attachment_globs:
+        attachments.extend(briefs_dir.glob(pattern))
+
+    subject = f"Recupero Investigation Summary — Case {investigation_id[:8]}"
+    html_body = summary_html_path.read_text(encoding="utf-8")
+    preview = (
+        f"Recupero forensic-trace results for {victim.name}. "
+        "Findings and next-step options inside."
+    )
+
+    try:
+        result = send_email(
+            to=victim.email,
+            subject=subject,
+            html=html_body,
+            investigation_id=investigation_id,
+            email_type="victim_summary",
+            attachments=attachments,
+            preview_text=preview,
+        )
+        if result.success:
+            log.info(
+                "auto-sent victim summary to=%s inv=%s message_id=%s "
+                "(%d attachment(s))",
+                victim.email, investigation_id, result.message_id,
+                len(attachments),
+            )
+        elif result.skipped:
+            log.info("auto-send skipped (RECUPERO_DISABLE_EMAIL=1): inv=%s",
+                     investigation_id)
+        else:
+            log.warning("auto-send victim summary FAILED to=%s inv=%s err=%s",
+                        victim.email, investigation_id, result.error)
+    except Exception as e:  # noqa: BLE001
+        log.warning("auto-send victim summary unexpected error: %s", e)
 
 
 def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Path]:

@@ -298,17 +298,27 @@ def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Pa
         try:
             _html_to_pdf(html_path, pdf_path)
             # Post-process to inject missing chain-explorer /Link
-            # annotations — subprocess-isolated.
+            # annotations.
+            #
+            # Default: OFF. Three successive Railway deployments of
+            # this patcher (subprocess-isolated + page-capped) have
+            # left workers hung mid-building_package — same symptom
+            # every time: heartbeat stops at the building_package
+            # status flip, reaper picks it up 300s later. The
+            # patcher works perfectly locally (adds 11 /Link
+            # annotations to the exact same Railway-produced PDF
+            # in <1s) so we have an environment-specific bug we
+            # haven't reproduced yet.
+            #
+            # To unblock shipping today, the patcher is now opt-in
+            # via RECUPERO_ENABLE_LINK_PATCH=1. Production runs with
+            # the WeasyPrint native ~54% link coverage until we have
+            # a reproduction trace of the Railway-side hang.
             link_patch_env = os.environ.get(
-                "RECUPERO_DISABLE_LINK_PATCH", ""
+                "RECUPERO_ENABLE_LINK_PATCH", ""
             ).strip()
             if link_patch_env == "1":
-                log.info(
-                    "link patch skipped for %s (RECUPERO_DISABLE_LINK_PATCH=1)",
-                    pdf_path.name,
-                )
-            else:
-                log.info("link patch starting for %s", pdf_path.name)
+                log.info("link patch starting for %s (opt-in)", pdf_path.name)
                 try:
                     _patch_pdf_links_subprocess(pdf_path)
                     log.info("link patch finished for %s", pdf_path.name)
@@ -318,6 +328,12 @@ def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Pa
                         "(continuing with WeasyPrint output): %s",
                         pdf_path.name, exc,
                     )
+            else:
+                log.debug(
+                    "link patch skipped for %s "
+                    "(set RECUPERO_ENABLE_LINK_PATCH=1 to enable)",
+                    pdf_path.name,
+                )
             out.append(pdf_path)
             log.info("rendered PDF: %s (%d bytes)", pdf_path.name, pdf_path.stat().st_size)
         except Exception as e:  # noqa: BLE001

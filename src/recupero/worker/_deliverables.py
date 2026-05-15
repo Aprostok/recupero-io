@@ -643,10 +643,19 @@ def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:
     # Short-name slug used for the output filename.
     short_name = name.split(" ")[0].split("/")[0].lower()
 
+    # freeze_brief.json's contact key is literally "contact_email" (see
+    # the v0.2.0 schema in freeze_brief.json — earlier code looked up
+    # "primary_contact" and always got the empty fallback, which is why
+    # rendered LE handoffs read "Issue a preservation request to Circle ()"
+    # with empty parens. Fix: use the right key.
     return IssuerInfo(
         name=name,
         short_name=short_name.title(),
-        contact_email=freezable_entry.get("primary_contact") or "",
+        contact_email=(
+            freezable_entry.get("contact_email")
+            or freezable_entry.get("primary_contact")
+            or ""
+        ),
         jurisdiction=None,  # not in freeze_brief; template handles None
         regulatory_framework=None,
         secondary_party=None,

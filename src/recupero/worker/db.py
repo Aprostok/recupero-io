@@ -261,6 +261,74 @@ class WorkerDB:
                 ) from e
             raise
 
+    def reap_post_deploy_orphans(
+        self,
+        *,
+        stale_after_sec: int = 90,
+    ) -> list[tuple[UUID, str]]:
+        """Eager one-shot reaper for rows orphaned by a Railway redeploy.
+
+        Called once on worker startup, BEFORE the main poll loop.
+        Catches rows whose previous worker container got SIGKILL'd
+        during a deploy + restart cycle, faster than the standard
+        300s reaper.
+
+        Risk profile and threshold choice
+        ---------------------------------
+
+        The standard reaper uses 300s = 10x the 30s heartbeat
+        interval — generous because the worker may legitimately spend
+        minutes in a single stage (deep trace, slow Anthropic response).
+        That margin is wasted on the post-deploy path: by the time a
+        worker has started up and reached this point, any heartbeat
+        older than ~3 missed ticks (90s) means the OLD container is
+        either dead or hung-and-not-coming-back.
+
+        Filter is identical to the standard reaper EXCEPT we exclude
+        rows owned by self.worker_id — newly-started workers haven't
+        claimed anything yet, but the guard is defensive against
+        future code paths that might claim before this is called.
+
+        Returns the same shape as reap_stale_claims so callers can
+        log identically.
+        """
+        active_list = ",".join(f"'{s}'" for s in sorted(S.ACTIVE_STATUSES))
+        sql = f"""
+            WITH stale AS (
+                SELECT {COL_ID}, {COL_STATUS}
+                  FROM {T_INV}
+                 WHERE {COL_STATUS} IN ({active_list})
+                   AND {COL_WORKER_ID} IS DISTINCT FROM %(self_worker)s
+                   AND {COL_HEARTBEAT} IS NOT NULL
+                   AND {COL_HEARTBEAT} < NOW() - make_interval(secs => %(stale)s)
+                 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE {T_INV} i
+               SET {COL_STATUS} = %(failed)s,
+                   {COL_FAILED_AT} = NOW(),
+                   {COL_ERROR_MESSAGE} = %(msg)s,
+                   {COL_ERROR_STAGE} = stale.{COL_STATUS}
+              FROM stale
+             WHERE i.{COL_ID} = stale.{COL_ID}
+            RETURNING i.{COL_ID}, stale.{COL_STATUS};
+        """
+        with psycopg.connect(self._dsn, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql,
+                    {
+                        "stale": stale_after_sec,
+                        "self_worker": self.worker_id,
+                        "failed": S.FAILED,
+                        "msg": (
+                            f"post-deploy reaper: heartbeat older than "
+                            f"{stale_after_sec}s — orphaned during deploy/restart"
+                        ),
+                    },
+                )
+                rows = cur.fetchall()
+        return [(r[0], r[1]) for r in rows]
+
     def reap_stale_claims(self, *, stale_after_sec: int) -> list[tuple[UUID, str]]:
         """Mark active-state rows whose heartbeat has lapsed as ``failed``.
 

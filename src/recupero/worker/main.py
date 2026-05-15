@@ -178,6 +178,27 @@ def run_forever(
 
     db = WorkerDB(db_url, worker_id=worker_id)
 
+    # One-shot eager reaper at startup. Catches rows orphaned by a
+    # Railway redeploy faster than the standard 300s reaper — when
+    # the OLD container gets SIGKILL'd mid-pipeline, its rows would
+    # otherwise sit in 'claimed'/'tracing'/etc for 5 minutes before
+    # the standard reaper notices. With this, the post-deploy
+    # recovery window shrinks to ~90 seconds (3 missed heartbeats).
+    # Only touches rows owned by OTHER workers; our own claims are
+    # excluded by the WHERE clause.
+    try:
+        orphans = db.reap_post_deploy_orphans()
+        if orphans:
+            log.warning(
+                "post-deploy reaper recovered %d orphaned row(s): %s",
+                len(orphans),
+                [(str(i), s) for i, s in orphans],
+            )
+        else:
+            log.info("post-deploy reaper: no orphaned rows found")
+    except Exception as e:  # noqa: BLE001
+        log.error("post-deploy reaper failed (continuing): %s", e)
+
     backoff = poll_idle_sec
     try:
         while not _shutdown.is_set():

@@ -54,6 +54,18 @@
       <dt>Asset Issuer</dt>
       <dd>{{ issuer.name }}{% if issuer.jurisdiction %}<span class="secondary">{{ issuer.jurisdiction }}</span>{% endif %}</dd>
     </div>
+    {% if issuer_freezable %}
+    <div class="cover-meta-item">
+      <dt>Recoverable Position</dt>
+      <dd>{{ issuer_freezable.total_usd_freezable }}<span class="secondary">{{ issuer_freezable.token }} at {{ issuer_freezable.freezable_count }} {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }} ({{ issuer_freezable.freeze_capability }} freeze capability)</span></dd>
+    </div>
+    {% if issuer_freezable.has_investigate %}
+    <div class="cover-meta-item">
+      <dt>Additional Under Review</dt>
+      <dd>{{ issuer_freezable.total_usd_suspected }}<span class="secondary">incl. {{ issuer_freezable.investigate_count }} wallets pending KYC verification</span></dd>
+    </div>
+    {% endif %}
+    {% endif %}
   </dl>
 </section>
 
@@ -72,6 +84,37 @@
     ({{ issuer.secondary_role }}).
     {% endif %}
   </p>
+  {% if issuer_freezable %}
+  <p style="margin:0 0 0.7em 0;">
+    The position was forwarded by the perpetrator through a chain of
+    intermediate wallets and converted into
+    <strong>{{ issuer_freezable.token }}</strong>, the stablecoin
+    issued by {{ issuer.name }}. As of {{ verified_at }} UTC,
+    <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
+    of stolen funds is held in {{ issuer_freezable.token }} at
+    {{ issuer_freezable.freezable_count }}
+    {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority — these
+    positions are flagged FREEZABLE in section 5.
+    {% if issuer_freezable.has_investigate %}
+    An additional
+    {{ issuer_freezable.investigate_count }}
+    {{ "wallet" if issuer_freezable.investigate_count == 1 else "wallets" }}
+    holding {{ issuer_freezable.token }} are flagged INVESTIGATE,
+    representing
+    {{ issuer_freezable.total_usd_suspected }}
+    in further funds pending KYC verification at {{ issuer.short_name }}.
+    {% endif %}
+  </p>
+  <p style="margin:0;">
+    {{ issuer.short_name }}'s protocol-level controls over
+    {{ issuer_freezable.token }} are the available mechanism for
+    pausing redemption of the recoverable positions. We recommend
+    that a preservation request be issued to {{ issuer.short_name }}
+    as a matter of priority, citing the addresses listed in
+    section 5 of this package.
+  </p>
+  {% else %}
   <p style="margin:0 0 0.7em 0;">
     The position was promptly forwarded by the perpetrator to a secondary
     wallet at <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>, where
@@ -84,6 +127,7 @@
     a preservation request be issued to {{ issuer.short_name }} as a
     matter of priority.
   </p>
+  {% endif %}
 </div>
 
 <h2>2. Victim Information</h2>
@@ -125,10 +169,24 @@
   {% endfor %}
   <div class="timeline-event current">
     <time>{{ verified_at }}</time> &nbsp;—&nbsp;
+    {% if issuer_freezable %}
+    <strong>Current state.</strong> Recoverable funds totaling
+    {{ issuer_freezable.total_usd_freezable }} held as
+    {{ issuer_freezable.token }} across
+    {{ issuer_freezable.freezable_count }}
+    {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority
+    {% if issuer_freezable.has_investigate %}
+    (plus {{ issuer_freezable.investigate_count }} additional
+    {{ issuer_freezable.token }} positions under KYC verification).
+    {% else %}.{% endif %}
+    Specific addresses enumerated in section 5.
+    {% else %}
     <strong>Current state.</strong> Position remains in
     <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>.
     {{ outbound_count_of_stolen_asset }} outbound transfers of the stolen asset observed
     since receipt.
+    {% endif %}
   </div>
 </div>
 
@@ -163,6 +221,62 @@
   {% endif %}
 </table>
 
+{% if issuer_freezable %}
+<h2>4.1 Recoverable Positions under {{ issuer.short_name }}'s Authority</h2>
+<p>
+  After tracing through the perpetrator's on-chain forwarding,
+  the following {{ issuer_freezable.total_count }}
+  {{ "wallet holds" if issuer_freezable.total_count == 1 else "wallets hold" }}
+  recoverable {{ issuer_freezable.token }} positions issued by
+  {{ issuer.name }}. Each address is independently verifiable on
+  Etherscan and was confirmed at the timestamp shown in the footer.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th style="width:5em;">Status</th>
+      <th>Address</th>
+      <th class="amount" style="width:11em;">Balance</th>
+      <th class="amount" style="width:9em;">USD value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in issuer_freezable.holdings %}
+    <tr>
+      <td>
+        {% if h.status == 'FREEZABLE' %}
+        <span class="label-pill" style="color:#2F6B3E;">FREEZABLE</span>
+        {% else %}
+        <span class="label-pill" style="color:#7C2D12;">INVESTIGATE</span>
+        {% endif %}
+      </td>
+      <td class="mono"><a href="{{ h.explorer_url }}">{{ h.address }}</a></td>
+      <td class="amount mono">{{ h.amount }}</td>
+      <td class="amount mono">{{ h.usd }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="small">
+  <strong>FREEZABLE</strong> positions are
+  ({{ issuer_freezable.freezable_count }} addresses,
+  {{ issuer_freezable.total_usd_freezable }} total) confirmed-held
+  in wallets that have no matching KYC subscription on file with
+  {{ issuer.short_name }} — they were received via direct on-chain
+  transfer, not via subscription. These are the highest-priority
+  targets for an immediate preservation request.
+  {% if issuer_freezable.has_investigate %}
+  <strong>INVESTIGATE</strong> positions
+  ({{ issuer_freezable.investigate_count }} addresses,
+  representing additional funds in
+  {{ issuer_freezable.total_usd_suspected }} cumulative
+  including freezable) require KYC verification at
+  {{ issuer.short_name }} before status can be confirmed.
+  {% endif %}
+  Freeze capability assessment: <strong>{{ issuer_freezable.freeze_capability }}</strong>.
+</p>
+{% endif %}
+
 <h2>5. Identified Wallets</h2>
 <table class="evidence">
   <tr>
@@ -186,6 +300,31 @@
 <h3>Immediate</h3>
 <ol>
   <li>
+    {% if issuer_freezable %}
+    Issue a preservation request to {{ issuer.name }}
+    ({{ issuer.contact_email }}) covering the
+    {{ issuer_freezable.token }} positions enumerated in section 4.1.
+    As issuer of {{ issuer_freezable.token }}, {{ issuer.short_name }}
+    holds protocol-level authority over those balances and is the
+    only party in a position to technically halt redemption. A
+    request originating from your office is materially more
+    enforceable than a third-party request. The
+    {{ issuer_freezable.freezable_count }}
+    <strong>FREEZABLE</strong>
+    {{ "address" if issuer_freezable.freezable_count == 1 else "addresses" }}
+    ({{ issuer_freezable.total_usd_freezable }} total) are the
+    primary targets;
+    {% if issuer_freezable.has_investigate %}
+    the {{ issuer_freezable.investigate_count }}
+    <strong>INVESTIGATE</strong> addresses additionally warrant a
+    KYC review request as part of the same preservation effort.
+    {% endif %}
+    {% if issuer.kyc_required %}
+    {{ issuer.short_name }} required full KYC at the original
+    {{ issuer_freezable.token }} subscription path; they hold
+    identifying information for the original subscribers on file.
+    {% endif %}
+    {% else %}
     Issue a preservation request to {{ issuer.name }}
     ({{ issuer.contact_email }}). As issuer, {{ issuer.short_name }}
     holds protocol-level authority over redemption and is the only party
@@ -197,6 +336,7 @@
     {% if issuer.kyc_required %}
     {{ issuer.short_name }} required full KYC at original subscription;
     they hold identifying information for {{ victim.name }} on file.
+    {% endif %}
     {% endif %}
   </li>
   {% if issuer.secondary_party %}
@@ -216,9 +356,23 @@
 
 <h3>Investigative (over the following 1–2 weeks)</h3>
 <ol>
+  {% if issuer_freezable %}
+  <li>Issue legal process to {{ issuer.short_name }} for KYC records on
+      any party attempting to redeem or transfer
+      {{ issuer_freezable.token }} from any of the
+      {{ issuer_freezable.total_count }} addresses listed in
+      section 4.1.
+      {% if issuer_freezable.has_investigate %}
+      Where {{ issuer.short_name }}'s KYC records confirm a third-party
+      subscriber for an INVESTIGATE address, that address can be
+      promoted to FREEZABLE and added to the preservation request.
+      {% endif %}
+  </li>
+  {% else %}
   <li>Issue legal process to {{ issuer.short_name }} for KYC records on
       any party attempting to redeem or transfer the position out of
       <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>.</li>
+  {% endif %}
   <li>Issue legal process to any centralized exchange that receives
       onward transfers from the identified perpetrator wallets listed
       in Section 5.</li>
@@ -236,8 +390,13 @@
   </tr>
   <tr>
     <td>{{ issuer.name }}</td>
+    {% if issuer_freezable %}
+    <td>Issuer of {{ issuer_freezable.token }} (recoverable positions held under their authority)</td>
+    <td>Protocol-level control over {{ issuer_freezable.token }} redemption at the addresses in section 4.1; primary freeze target</td>
+    {% else %}
     <td>Issuer of stolen {{ asset.symbol }} wrapper token</td>
     <td>Has protocol-level control over redemption; primary freeze target</td>
+    {% endif %}
     <td>{{ issuer.contact_email }} (request escalation to compliance)</td>
   </tr>
   {% if issuer.secondary_party %}

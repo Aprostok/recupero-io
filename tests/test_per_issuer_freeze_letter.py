@@ -356,3 +356,179 @@ def test_generate_briefs_legacy_path_unchanged() -> None:
     # and the to_address as the current holder.
     assert "ETH" in html
     assert "0x" + "2" * 40 in html
+
+
+# ---- LE handoff per-issuer rendering ---- #
+
+
+def test_le_handoff_renders_recoverable_positions_section() -> None:
+    """End-to-end: when issuer_freezable is provided, the LE handoff
+    template renders a new section 4.1 'Recoverable Positions' with
+    every holding listed. Mirror of the freeze-letter test above —
+    this is the law-enforcement-facing variant of the same fix."""
+    case = _make_minimal_case()
+    victim = VictimInfo(name="Jane Doe", wallet_address="0x" + "1" * 40,
+                        citizenship="USA")
+    investigator = InvestigatorInfo(
+        name="Alec Prostok", organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+    issuer = IssuerInfo(
+        name="Circle", short_name="Circle",
+        contact_email="compliance@circle.com",
+        jurisdiction="USA", regulatory_framework="",
+        kyc_required=True,
+    )
+
+    with TemporaryDirectory() as tmp:
+        case_dir = Path(tmp)
+        bundle = generate_briefs(
+            primary_case=case, linked_cases=[],
+            victim=victim, investigator=investigator,
+            case_dir=case_dir, issuer=issuer,
+            issuer_freezable=_circle_freeze_brief_entry(),
+        )
+        le_html = bundle.le_path.read_text(encoding="utf-8")
+
+    # The new section 4.1 should exist
+    assert "4.1 Recoverable Positions" in le_html
+    # Stablecoin symbol shows up (not just the original ETH)
+    assert "USDC" in le_html
+    # FREEZABLE / INVESTIGATE status badges both render
+    assert "FREEZABLE" in le_html
+    assert "INVESTIGATE" in le_html
+    # Both addresses appear
+    assert "0x016606Acc6B0cFE537acc221e3bf1bb44B4049Ee" in le_html
+    assert "0x480CD46E6faDe651a0437DeaddA53D5c8e7D846A" in le_html
+    # Section 6 (Recommended Actions) mentions section 4.1 in its ask
+    assert "section 4.1" in le_html
+    # Freeze capability surfaces
+    assert "HIGH" in le_html
+
+
+def test_le_handoff_executive_summary_mentions_stablecoin() -> None:
+    """Section 1 (Executive Summary) of the LE handoff should
+    explicitly mention the recoverable stablecoin + the freezable
+    USD total when issuer_freezable is provided. LE officers
+    triage by what's recoverable; burying this in section 4.1 is
+    not enough — it has to be in the lead paragraph."""
+    case = _make_minimal_case()
+    victim = VictimInfo(name="Jane Doe", wallet_address="0x" + "1" * 40)
+    investigator = InvestigatorInfo(
+        name="Alec Prostok", organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+    issuer = IssuerInfo(name="Circle", short_name="Circle",
+                       contact_email="compliance@circle.com")
+
+    with TemporaryDirectory() as tmp:
+        case_dir = Path(tmp)
+        bundle = generate_briefs(
+            primary_case=case, linked_cases=[],
+            victim=victim, investigator=investigator,
+            case_dir=case_dir, issuer=issuer,
+            issuer_freezable=_circle_freeze_brief_entry(),
+        )
+        le_html = bundle.le_path.read_text(encoding="utf-8")
+
+    # Grab the executive summary (section 1)
+    import re
+    body = re.search(r'<body[^>]*>(.*?)</body>', le_html, re.DOTALL)
+    assert body is not None
+    body_text = re.sub(r'<style[^>]*>.*?</style>', '', body.group(1), flags=re.DOTALL)
+    body_text = re.sub(r'<[^>]+>', ' ', body_text)
+    body_text = re.sub(r'\s+', ' ', body_text).strip()
+
+    # Section 1 starts at "1. Executive Summary" and ends at "2. Victim"
+    start = body_text.find("1. Executive Summary")
+    end = body_text.find("2. Victim Information")
+    assert start >= 0 and end > start
+    section_1 = body_text[start:end]
+
+    # The executive summary mentions USDC explicitly
+    assert "USDC" in section_1
+    # And the freezable total
+    assert "$7,097.58" in section_1
+    # And references the Recoverable Positions section to follow
+    assert "FREEZABLE" in section_1
+
+
+def test_le_handoff_legacy_path_unchanged() -> None:
+    """When issuer_freezable is None (wallet-trace cases that don't
+    generate freeze letters, or backward-compat callers), the LE
+    handoff renders the single-asset / single-current_holder
+    framing it always did."""
+    case = _make_minimal_case()
+    victim = VictimInfo(name="Jane Doe", wallet_address="0x" + "1" * 40)
+    investigator = InvestigatorInfo(
+        name="Alec Prostok", organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+    issuer = IssuerInfo(name="Circle", short_name="Circle",
+                       contact_email="compliance@circle.com")
+
+    with TemporaryDirectory() as tmp:
+        case_dir = Path(tmp)
+        bundle = generate_briefs(
+            primary_case=case, linked_cases=[],
+            victim=victim, investigator=investigator,
+            case_dir=case_dir, issuer=issuer,
+        )
+        le_html = bundle.le_path.read_text(encoding="utf-8")
+
+    # No section 4.1 in the legacy path
+    assert "4.1 Recoverable Positions" not in le_html
+    # The legacy text still references the original asset + to_address
+    assert "ETH" in le_html
+    assert "0x" + "2" * 40 in le_html
+
+
+def test_le_handoff_only_freezable_no_investigate() -> None:
+    """When all holdings are FREEZABLE (no INVESTIGATE), the
+    INVESTIGATE-specific copy doesn't render in the LE handoff."""
+    case = _make_minimal_case()
+    victim = VictimInfo(name="Jane Doe", wallet_address="0x" + "1" * 40)
+    investigator = InvestigatorInfo(
+        name="Alec Prostok", organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+    issuer = IssuerInfo(name="Circle", short_name="Circle",
+                       contact_email="compliance@circle.com")
+
+    # Build a freezable entry with only FREEZABLE statuses
+    entry = _circle_freeze_brief_entry()
+    for h in entry["holdings"]:
+        h["status"] = "FREEZABLE"
+
+    with TemporaryDirectory() as tmp:
+        case_dir = Path(tmp)
+        bundle = generate_briefs(
+            primary_case=case, linked_cases=[],
+            victim=victim, investigator=investigator,
+            case_dir=case_dir, issuer=issuer,
+            issuer_freezable=entry,
+        )
+        le_html = bundle.le_path.read_text(encoding="utf-8")
+
+    # FREEZABLE badges present
+    assert "FREEZABLE" in le_html
+    # No INVESTIGATE badge in the table when none are flagged
+    # (the word may still appear in static prose, but the status pill
+    # would only render when investigate_count > 0).
+    # Check more specifically: section 4.1 status badges
+    import re
+    sec_4_1 = re.search(
+        r'4\.1 Recoverable Positions.*?(?=<h2>|</body>)',
+        le_html, re.DOTALL,
+    )
+    assert sec_4_1 is not None
+    sec_text = sec_4_1.group(0)
+    # All status pills in the table should be FREEZABLE
+    investigate_pills = sec_text.count('INVESTIGATE</span>')
+    freezable_pills = sec_text.count('FREEZABLE</span>')
+    assert investigate_pills == 0, (
+        f"unexpected INVESTIGATE pills in only-FREEZABLE scenario: {investigate_pills}"
+    )
+    assert freezable_pills == 2, (
+        f"expected 2 FREEZABLE pills (one per holding), got {freezable_pills}"
+    )

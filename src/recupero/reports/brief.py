@@ -167,12 +167,17 @@ def generate_briefs(
     ``theft_transfer`` as the source. Backward-compatible for any
     caller that hasn't yet been updated to pass per-issuer data.
     """
-    # Identify the theft event: the largest USD transfer in the primary case
-    theft_transfer = _find_theft_transfer(primary_case)
-    if theft_transfer is None:
+    # Identify the theft event(s). _find_theft_events returns the full
+    # drain cluster (primary event first, then any others within the
+    # 7-day window). For real-world cases drained across multiple
+    # transactions, this surfaces the full timeline in the LE handoff
+    # while keeping the freeze letter focused on the primary event.
+    theft_events = _find_theft_events(primary_case)
+    if not theft_events:
         raise ValueError(
             f"No transfers in case {primary_case.case_id} could be identified as the theft event."
         )
+    theft_transfer = theft_events[0]  # primary (headline) event
 
     # Build the forwarding chain across linked cases
     hops = _build_hops(theft_transfer, linked_cases)
@@ -243,6 +248,37 @@ def generate_briefs(
                 theft_transfer.to_address, theft_transfer.chain
             ),
         },
+        # Full theft-event cluster, sorted by block_time ascending for
+        # chronological rendering in section 3 of the LE handoff.
+        # The primary event is at index 0 unless block_time orders it
+        # later; templates that want strictly chronological should sort.
+        # ``theft_event_count`` and ``theft_event_total_usd`` are
+        # convenience aggregates for prose generation.
+        "theft_events": [
+            {
+                "tx_hash": t.tx_hash,
+                "block_number": t.block_number,
+                "timestamp_human": t.block_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "from_address": t.from_address,
+                "to_address": t.to_address,
+                "amount_human": _fmt_decimal(t.amount_decimal),
+                "symbol": t.token.symbol,
+                "usd_value": _fmt_usd(t.usd_value_at_tx),
+                "explorer_url": t.explorer_url,
+                "from_explorer_url": _address_explorer_url(t.from_address, t.chain),
+                "to_explorer_url": _address_explorer_url(t.to_address, t.chain),
+                "is_primary": t.transfer_id == theft_transfer.transfer_id,
+            }
+            for t in sorted(theft_events, key=lambda x: x.block_time)
+        ],
+        "theft_event_count": len(theft_events),
+        "theft_event_total_usd": _fmt_usd(
+            sum(
+                (t.usd_value_at_tx for t in theft_events
+                 if t.usd_value_at_tx is not None),
+                start=Decimal(0),
+            )
+        ),
         "hops": [
             {
                 "tx_hash": h.tx_hash,
@@ -368,12 +404,108 @@ def generate_briefs(
 
 
 def _find_theft_transfer(case: Case) -> Transfer | None:
-    """The theft event is the highest-USD transfer in the case."""
-    candidates = [t for t in case.transfers if t.usd_value_at_tx is not None]
-    if not candidates:
-        # No USD info — fall back to highest amount_decimal (less reliable)
-        return max(case.transfers, key=lambda t: t.amount_decimal, default=None)
-    return max(candidates, key=lambda t: t.usd_value_at_tx)
+    """The primary theft event — the highest-USD transfer in the
+    drain cluster. Backward-compat wrapper around
+    ``_find_theft_events``; returns the first (largest-by-USD) item.
+
+    Most letter sections render this single transfer as the headline
+    "Theft Event". Section 3 of the LE handoff additionally renders
+    the full cluster from ``_find_theft_events`` when the drain
+    spans multiple transactions.
+    """
+    events = _find_theft_events(case)
+    return events[0] if events else None
+
+
+def _find_theft_events(
+    case: Case,
+    *,
+    time_window_hours: int = 168,
+) -> list[Transfer]:
+    """Find every transfer that looks like part of the drain.
+
+    Real victims are often drained across multiple transactions —
+    e.g., a phishing attack that approves a token's spender contract
+    and then drains $X in piece-meal trades over hours, or a wallet
+    that's slowly emptied as the perpetrator avoids triggering
+    exchange-side monitoring thresholds. Before this function, the
+    brief rendered ONE event (the biggest), implying a single
+    theft; the letter prose said "$X was stolen on day Y", missing
+    the actual story of "$X was stolen across N transactions on
+    days Y through Y+3".
+
+    Algorithm
+    ---------
+
+    1. Identify the largest-USD transfer in the case (the primary
+       theft event). Same logic as the legacy single-event picker.
+    2. Cluster around it: include every other transfer with
+       ``block_time`` within ``time_window_hours`` of the primary
+       event's block_time. The default window (168 hours / 7 days)
+       is conservative — most drain campaigns wrap in under a week.
+    3. Return the cluster ordered by block_time ascending (so the
+       template can render them chronologically).
+
+    Notes
+    -----
+    * Only outbound transfers from the seed (victim) address count
+      as theft events. Internal-to-internal transfers (e.g., the
+      perpetrator moving funds around) are part of the
+      ``hops`` chain, not the theft events.
+    * Returns the primary event first in the returned list (which
+      may not be chronologically first), so callers reading
+      ``events[0]`` get the headline. The chronological ordering is
+      via ``sorted(events, key=block_time)`` if needed for the
+      timeline render.
+    * Empty list if no transfers at all in the case (wallet trace
+      that returned nothing).
+
+    Returns
+    -------
+    A list ordered with the primary event first, then all other
+    events in the cluster sorted by block_time ascending. Empty
+    list if no transfers in the case.
+    """
+    if not case.transfers:
+        return []
+
+    seed_lower = case.seed_address.lower()
+
+    # Outbound transfers from the victim
+    outbound = [
+        t for t in case.transfers
+        if t.from_address.lower() == seed_lower
+    ]
+    if not outbound:
+        # Fallback: any transfer in the case (preserves legacy
+        # behavior for cases where the seed_address normalization
+        # diverges or the case has no direct-from-seed transfers).
+        outbound = list(case.transfers)
+
+    # Primary event: highest-USD with sensible fallback
+    priced = [t for t in outbound if t.usd_value_at_tx is not None]
+    if priced:
+        primary = max(priced, key=lambda t: t.usd_value_at_tx)
+    else:
+        primary = max(outbound, key=lambda t: t.amount_decimal, default=None)
+    if primary is None:
+        return []
+
+    # Cluster around the primary event's block_time
+    from datetime import timedelta
+    window = timedelta(hours=time_window_hours)
+    primary_time = primary.block_time
+
+    cluster = [
+        t for t in outbound
+        if abs(t.block_time - primary_time) <= window
+        and t.transfer_id != primary.transfer_id
+    ]
+
+    # Sort cluster by block_time ascending; prepend primary so
+    # callers reading [0] get the headline event consistently
+    cluster.sort(key=lambda t: t.block_time)
+    return [primary] + cluster
 
 
 def _build_hops(theft: Transfer, linked_cases: list[Case]) -> list[Transfer]:

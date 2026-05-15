@@ -149,7 +149,31 @@
 {% endif %}
 
 <h2>3. Timeline of Events (UTC)</h2>
+{% if theft_event_count and theft_event_count > 1 %}
+<p class="small">
+  This drain involved <strong>{{ theft_event_count }} unauthorized
+  outbound transfers</strong> from the victim wallet within a 7-day
+  window, totaling <strong>{{ theft_event_total_usd }}</strong>.
+  Each is listed below in chronological order. The "primary" event is
+  the highest-USD transfer and is the headline transaction described
+  in section 2.
+</p>
+{% endif %}
 <div class="timeline">
+  {% if theft_events and theft_event_count > 1 %}
+    {% for ev in theft_events %}
+    <div class="timeline-event theft">
+      <time>{{ ev.timestamp_human }}</time> &nbsp;—&nbsp;
+      <strong>{% if ev.is_primary %}Primary theft event.{% else %}Drain event.{% endif %}</strong>
+      {{ ev.amount_human }} {{ ev.symbol }}
+      {% if ev.usd_value and ev.usd_value != '(unknown)' %}(USD {{ ev.usd_value }}){% endif %}
+      transferred from
+      <a class="mono" href="{{ ev.from_explorer_url }}">{{ ev.from_address }}</a>
+      to <a class="mono" href="{{ ev.to_explorer_url }}">{{ ev.to_address }}</a>.
+      Tx: <span class="mono"><a href="{{ ev.explorer_url }}">{{ ev.tx_hash }}</a></span>
+    </div>
+    {% endfor %}
+  {% else %}
   <div class="timeline-event theft">
     <time>{{ theft_event.timestamp_human }}</time> &nbsp;—&nbsp;
     <strong>Initial theft.</strong> {{ asset.amount_human }} {{ asset.symbol }} transferred
@@ -157,6 +181,7 @@
     to perpetrator wallet <a class="mono" href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a>.
     Tx: <span class="mono"><a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a></span>
   </div>
+  {% endif %}
   {% for hop in hops %}
   <div class="timeline-event transfer">
     <time>{{ hop.timestamp_human }}</time> &nbsp;—&nbsp;

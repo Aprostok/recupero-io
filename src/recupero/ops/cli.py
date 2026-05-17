@@ -189,6 +189,36 @@ def cli() -> None:
              "cadence: monthly review.",
     )
 
+    # ----- custody-keygen ----- #
+    p_keygen = sub.add_parser(
+        "custody-keygen",
+        help="Generate a new Ed25519 keypair for court-admissible "
+             "chain-of-custody signing. One-time setup per operator.",
+    )
+    p_keygen.add_argument(
+        "--output-path", type=str, default=None,
+        help="Path to write the private key (default "
+             "~/.recupero/custody_key, overridable via "
+             "RECUPERO_CUSTODY_KEY_PATH env var).",
+    )
+
+    # ----- custody-verify ----- #
+    p_verify = sub.add_parser(
+        "custody-verify",
+        help="Verify a case's chain-of-custody chain. Walks every "
+             "signed attestation, checks hash links, re-hashes "
+             "attested artifacts, and reports tampering.",
+    )
+    p_verify.add_argument(
+        "case_dir", help="Path to the case directory.",
+    )
+    p_verify.add_argument(
+        "--public-key", type=str, default=None,
+        help="Base64-encoded Ed25519 public key. If omitted, read "
+             "from case_dir/custody/public_key.txt. For court use, "
+             "ALWAYS supply this from an independently-trusted source.",
+    )
+
     # ----- list-payments ----- #
     p_lpay = sub.add_parser(
         "list-payments",
@@ -358,6 +388,20 @@ def cli() -> None:
     if args.command == "correlation-stats":
         from recupero.ops.commands import correlation_stats as cmd
         sys.exit(cmd.run(dsn=_require_dsn()))
+
+    if args.command == "custody-keygen":
+        from recupero.ops.commands import custody_cmd as cmd
+        from pathlib import Path as _Path
+        out = _Path(args.output_path) if args.output_path else None
+        sys.exit(cmd.run_keygen(output_path=out))
+
+    if args.command == "custody-verify":
+        from recupero.ops.commands import custody_cmd as cmd
+        from pathlib import Path as _Path
+        sys.exit(cmd.run_verify(
+            case_dir=_Path(args.case_dir),
+            public_key_b64=args.public_key,
+        ))
 
     if args.command == "list-payments":
         from recupero.ops.commands import list_payments as cmd

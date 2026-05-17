@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recupero"
-version = "0.13.6"
+version = "0.13.7"
 description = "Trace stolen crypto from a victim wallet to law-enforcement-actionable endpoints"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -76,6 +76,12 @@ dependencies = [
     # automatically. Closes the coverage gap from ~54% to ~100% on
     # the deep-trace fixture. Tiny dependency, no native build.
     "pypdf>=4.0,<6.0",
+
+    # Ed25519 signing for court-admissible chain-of-custody
+    # attestations (v0.13.7). Battle-tested Python crypto wrapper
+    # over OpenSSL; standard for any prod app needing real
+    # asymmetric signatures.
+    "cryptography>=42,<45",
 ]
 
 [project.optional-dependencies]

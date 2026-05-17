@@ -745,19 +745,24 @@ def emit_brief(
     except Exception as _exc:  # noqa: BLE001 — non-fatal
         entity_clusters = {"clusters": [], "unclustered_addresses": []}
 
-    # --- Risk scoring (v0.9.1) ---
-    # OFAC sanctions + mixer + darknet exposure assessment per
-    # address. Direct OFAC contact triggers SANCTIONED verdict
-    # regardless of numeric score. Critical for government /
-    # compliance workflows.
+    # --- Risk scoring (v0.9.1 + v0.10.0) ---
+    # Direct exposure (v0.9.1): OFAC + mixer + darknet contact
+    #   triggers SANCTIONED verdict regardless of numeric score.
+    # Indirect exposure (v0.10.0): N-hop graph traversal with
+    #   decay factor + amount-share normalization. Catches the
+    #   "funds 2-3 hops from Lazarus" cases that direct-only
+    #   scoring misses.
     try:
         from recupero.trace.risk_scoring import (
+            load_high_risk_db,
             risk_scores_to_brief_section,
             score_addresses,
         )
-        risk_scores = score_addresses(case)
+        high_risk_db = load_high_risk_db()
+        risk_scores = score_addresses(case, high_risk_db=high_risk_db)
         risk_assessment = risk_scores_to_brief_section(risk_scores)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        high_risk_db = {}
         risk_assessment = {
             "addresses": {},
             "summary": {
@@ -766,6 +771,24 @@ def emit_brief(
                 "mixer_exposed_count": 0,
                 "highest_score": 0,
                 "highest_score_address": None,
+            },
+        }
+
+    try:
+        from recupero.trace.indirect_exposure import (
+            compute_indirect_exposure,
+            indirect_exposure_to_brief_section,
+        )
+        indirect_results = compute_indirect_exposure(case, high_risk_db)
+        indirect_exposure = indirect_exposure_to_brief_section(indirect_results)
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        indirect_exposure = {
+            "addresses": {},
+            "summary": {
+                "addresses_with_indirect_exposure": 0,
+                "indirect_ofac_exposed_count": 0,
+                "highest_indirect_usd": "$0.00",
+                "highest_indirect_address": None,
             },
         }
 
@@ -806,12 +829,16 @@ def emit_brief(
         # evidence so the investigator can verify the heuristic
         # fired correctly.
         "ENTITY_CLUSTERS": entity_clusters,
-        # v0.9.1: risk scoring. Per-address OFAC + mixer + darknet
-        # exposure assessment. SANCTIONED verdict on any direct OFAC
-        # contact (dispositive — matches Treasury's 50% Rule).
-        # The summary block surfaces ofac_exposed_count + highest_
-        # score for one-glance government / compliance review.
+        # v0.9.1: risk scoring (direct counterparty). Per-address
+        # OFAC + mixer + darknet exposure. SANCTIONED on any direct
+        # OFAC contact (dispositive — Treasury's 50% Rule).
         "RISK_ASSESSMENT": risk_assessment,
+        # v0.10.0: indirect exposure (N-hop graph traversal with
+        # decay + amount-share). Catches the "funds 2-3 hops from
+        # Lazarus" cases that direct-only scoring misses. Same
+        # shape as RISK_ASSESSMENT but with hop_count + path on
+        # each entry.
+        "INDIRECT_EXPOSURE": indirect_exposure,
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 

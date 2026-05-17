@@ -353,6 +353,11 @@ def build_all_deliverables(
     # Disable globally with RECUPERO_DISABLE_EMAIL=1 for local dev.
     _maybe_auto_send_victim_summary(
         investigation_id=investigation_id,
+        # Plumb the case UUID through so the auto-send can mint a
+        # portal token for /portal/<token>. case.case_id is a str on
+        # the Pydantic model; the portal tokens.generate_token call
+        # converts via UUID() inside.
+        case_id=str(case.case_id) if case.case_id else None,
         victim=victim,
         case_dir=case_dir,
         pdf_paths=pdf_paths,
@@ -367,6 +372,7 @@ def build_all_deliverables(
 def _maybe_auto_send_victim_summary(
     *,
     investigation_id: str | None,
+    case_id: str | None,
     victim: VictimInfo,
     case_dir: Path,
     pdf_paths: list[Path],
@@ -438,6 +444,18 @@ def _maybe_auto_send_victim_summary(
         "Findings and next-step options inside."
     )
 
+    # Mint a customer-portal token + inject a banner at the top of
+    # the email body. This is the link the victim clicks to view
+    # case status, download artifacts, and e-sign the engagement
+    # letter — without it the portal we shipped in v0.5.0 has no
+    # delivery channel. Failure to mint a token is non-fatal: we
+    # still send the email (with the existing PDF attachments) but
+    # without the banner. The operator can re-issue manually via
+    # `recupero-ops generate-customer-link`.
+    portal_banner = _build_portal_banner_html(case_id=case_id)
+    if portal_banner:
+        html_body = portal_banner + html_body
+
     try:
         result = send_email(
             to=victim.email,
@@ -463,6 +481,72 @@ def _maybe_auto_send_victim_summary(
                         victim.email, investigation_id, result.error)
     except Exception as e:  # noqa: BLE001
         log.warning("auto-send victim summary unexpected error: %s", e)
+
+
+def _build_portal_banner_html(*, case_id: str | None) -> str:
+    """Mint a customer-portal token for `case_id` and return the
+    HTML banner that prepends the auto-sent victim-summary email.
+
+    Returns an empty string (so the prepend is a no-op) on any of:
+      * case_id is None (wallet trace — no real case → no portal)
+      * SUPABASE_DB_URL env var unset (we can't reach the tokens table)
+      * Token generation fails for any reason
+
+    The banner is intentionally self-contained — inline-styled, no
+    external assets — so it renders consistently across Gmail /
+    Outlook / Apple Mail without depending on the recipient mail
+    client's CSS support.
+    """
+    if not case_id:
+        return ""
+    import os
+    from uuid import UUID
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        log.info("portal banner skipped: no SUPABASE_DB_URL")
+        return ""
+    try:
+        from recupero.portal.tokens import generate_token, public_portal_url
+    except Exception as exc:  # noqa: BLE001
+        log.warning("portal banner: import failed (%s) — skipping", exc)
+        return ""
+    try:
+        _, token, _ = generate_token(
+            case_id=UUID(case_id),
+            dsn=dsn,
+            ttl_days=90,
+            label="auto-from-victim-summary",
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("portal banner: token mint failed (%s) — skipping", exc)
+        return ""
+    url = public_portal_url(token=token)
+    # Inline styles only — Gmail strips <style> blocks aggressively.
+    # Colors mirror the portal's own brand pallet (deep green accent
+    # on light-cream background).
+    return (
+        '<div style="margin:0 0 24px;padding:20px 24px;'
+        'background:#f7f5ed;border-left:4px solid #2a5e3e;'
+        'border-radius:4px;font-family:-apple-system,BlinkMacSystemFont,'
+        '\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
+        '<div style="font-size:13px;color:#555;'
+        'text-transform:uppercase;letter-spacing:0.05em;'
+        'font-weight:600;margin-bottom:8px;">Your Recupero case page</div>'
+        '<div style="font-size:15px;color:#1a1a1a;line-height:1.5;'
+        'margin-bottom:14px;">'
+        'View case status, download your artifacts, and (if applicable) '
+        'sign the engagement letter electronically from one place.'
+        '</div>'
+        f'<a href="{url}" '
+        'style="display:inline-block;background:#2a5e3e;color:#ffffff;'
+        'text-decoration:none;padding:10px 18px;border-radius:5px;'
+        'font-weight:600;font-size:14px;">Open case page →</a>'
+        '<div style="font-size:12px;color:#888;margin-top:14px;">'
+        'This link is private to your case and expires in 90 days. '
+        'If you ever lose it, reply to this email and we will reissue.'
+        '</div>'
+        '</div>'
+    )
 
 
 def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Path]:

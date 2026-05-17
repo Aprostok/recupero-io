@@ -55,8 +55,32 @@ def test_public_portal_url_unset_env_falls_back_to_localhost(monkeypatch) -> Non
     """No env var, no explicit base → fall back to localhost. The CLI
     prints a WARN in this case so the operator notices."""
     monkeypatch.delenv("RECUPERO_PORTAL_BASE_URL", raising=False)
+    monkeypatch.delenv("RAILWAY_PUBLIC_DOMAIN", raising=False)
     url = public_portal_url(token="abc")
     assert url == "http://localhost:8080/portal/abc"
+
+
+def test_public_portal_url_railway_domain_fallback(monkeypatch) -> None:
+    """When the canonical portal hostname isn't set but Railway's
+    auto-populated RAILWAY_PUBLIC_DOMAIN is, we use that. Makes the
+    portal usable end-to-end the moment v0.5.4 ships, even before
+    DNS is configured. The bare hostname gets prefixed with https://
+    to form a valid URL."""
+    monkeypatch.delenv("RECUPERO_PORTAL_BASE_URL", raising=False)
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "recupero-io-production.up.railway.app")
+    url = public_portal_url(token="xyz")
+    assert url == "https://recupero-io-production.up.railway.app/portal/xyz"
+
+
+def test_public_portal_url_explicit_base_beats_railway_fallback(monkeypatch) -> None:
+    """The canonical hostname (RECUPERO_PORTAL_BASE_URL) wins over
+    the Railway auto-domain when both are set — once we point a
+    proper portal.recupero.io subdomain, the Railway URL should
+    stop appearing in customer emails."""
+    monkeypatch.setenv("RECUPERO_PORTAL_BASE_URL", "https://portal.recupero.io")
+    monkeypatch.setenv("RAILWAY_PUBLIC_DOMAIN", "recupero-io-production.up.railway.app")
+    url = public_portal_url(token="xyz")
+    assert url == "https://portal.recupero.io/portal/xyz"
 
 
 # ---- generate_token (mocked) ---- #

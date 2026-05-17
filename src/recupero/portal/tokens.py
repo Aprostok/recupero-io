@@ -254,13 +254,26 @@ def revoke_token(*, token_id: UUID, dsn: str) -> bool:
 def public_portal_url(*, token: str, base_url: str | None = None) -> str:
     """Construct the user-facing portal URL.
 
-    `base_url` defaults to the `RECUPERO_PORTAL_BASE_URL` env var
-    (e.g., `https://portal.recupero.io`). If unset, falls back to
-    a localhost-ish URL — useful for local testing but the CLI
-    should warn when this path is taken so the operator doesn't
-    accidentally email a customer a non-resolvable link.
+    Resolution order:
+      1. Explicit ``base_url`` kwarg (tests + ops scripts).
+      2. ``RECUPERO_PORTAL_BASE_URL`` env var (preferred — set on
+         Railway to the canonical hostname, e.g.
+         ``https://portal.recupero.io``).
+      3. Railway-assigned hostname from ``RAILWAY_PUBLIC_DOMAIN``
+         (auto-populated on every Railway deploy). This makes the
+         portal usable end-to-end the moment v0.5.4 ships, even
+         before DNS is configured.
+      4. Localhost fallback for local dev — the CLI's
+         generate-customer-link warns if this path is taken.
     """
-    base = (base_url or os.environ.get("RECUPERO_PORTAL_BASE_URL", "")).rstrip("/")
+    base = (base_url or "").rstrip("/")
+    if not base:
+        base = os.environ.get("RECUPERO_PORTAL_BASE_URL", "").rstrip("/")
+    if not base:
+        railway_host = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "").rstrip("/")
+        if railway_host:
+            # RAILWAY_PUBLIC_DOMAIN is a bare hostname (no scheme).
+            base = f"https://{railway_host}"
     if not base:
         # Conservative fallback. The CLI wraps this and adds a
         # "WARN: RECUPERO_PORTAL_BASE_URL is not set" notice so the

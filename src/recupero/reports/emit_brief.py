@@ -187,50 +187,107 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
     }
 
 
+# Dust threshold (USD) for inclusion in the DESTINATIONS list. Below this
+# we drop the destination as noise — token-contract dust, MEV-bot pennies,
+# wrapped-stablecoin micro-routing. Tunable via env for case-specific
+# investigations that need finer granularity.
+_DESTINATION_DUST_USD_DEFAULT = Decimal(
+    os.environ.get("RECUPERO_DESTINATION_DUST_USD", "1000.00")
+)
+
+
 def _extract_destinations(
     case: Case,
     editorial_notes: dict[str, str],
     freeze_targets_by_addr: dict[str, dict[str, Any]],
+    *,
+    dust_threshold_usd: Decimal | None = None,
 ) -> list[dict[str, Any]]:
     """Build the DESTINATIONS list for the report.
 
-    Each destination is a downstream address with USD flowing INTO it from
-    the trace. We rank by recent USD value (freeze targets high, others by
-    received total).
+    v0.13.4 fix (Jacob V-CFI01 follow-up):
+      Previously this function filtered to ONLY addresses the AI editorial
+      labeled in editorial_notes. On multi-destination cases (perp hub
+      consolidates then disperses to 14+ downstream addresses, each
+      holding $K-$M in freezable tokens) the AI often labeled only the
+      hub, silently dropping every downstream destination from the
+      customer-facing brief — so the Triage Report would render
+      "Freezable: $0" when the trace had identified $3M+ in freezable
+      downstream holdings.
 
-    The list is filtered to addresses the AI editorial explicitly labeled
-    (i.e., addresses present in editorial_notes). This keeps the customer-
-    facing list to the ~10 addresses that matter, rather than the 100+
-    addresses the trace touched (token contracts, intermediaries, etc.).
-    If editorial_notes is empty (no AI editorial run), we fall back to
-    the full ranked list so the report still works.
+    Now we enumerate every destination from ``case.transfers`` above a
+    dust threshold (default $1,000 USD, overridable via
+    RECUPERO_DESTINATION_DUST_USD env var). Editorial notes refine the
+    per-destination note when present, but no longer FILTER the list.
+
+    Each destination carries:
+      * address + short form
+      * role (freezable / mixer / labeled / intermediate)
+      * USD currently held (from freeze_targets_by_addr if known)
+      * USD received in trace (sum across all transfers in)
+      * status emoji classification (from editorial_notes if AI labeled,
+        else mechanical fallback based on freeze_targets / label data)
+      * notes (editorial-supplied or mechanical fallback)
+
+    Returns destinations sorted by USD received descending.
     """
+    threshold = (
+        dust_threshold_usd if dust_threshold_usd is not None
+        else _DESTINATION_DUST_USD_DEFAULT
+    )
+
     # Aggregate: for each downstream address, sum of USD received in trace,
     # and figure a role from counterparty labels.
     per_addr_received: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_addr_label_name: dict[str, str | None] = {}
     per_addr_category: dict[str, str | None] = {}
     per_addr_is_mixer: dict[str, bool] = defaultdict(bool)
+    per_addr_tokens: dict[str, set[str]] = defaultdict(set)
 
+    seed_lower = case.seed_address.lower()
     for t in case.transfers:
         to = t.to_address
+        # Skip transfers back to the victim's seed wallet — those aren't
+        # destinations we'd freeze. (Should already be filtered upstream
+        # but defensive here.)
+        if to.lower() == seed_lower:
+            continue
         if t.usd_value_at_tx is not None:
             per_addr_received[to] += t.usd_value_at_tx
+        if t.token and t.token.symbol:
+            per_addr_tokens[to].add(t.token.symbol)
         if t.counterparty.address == to and t.counterparty.label:
             per_addr_label_name[to] = t.counterparty.label.name
             per_addr_category[to] = t.counterparty.label.category.value
             if t.counterparty.label.category == LabelCategory.mixer:
                 per_addr_is_mixer[to] = True
 
-    # Only include addresses the AI editorial explicitly labeled.
-    # Fall back to all addresses if no editorial labels exist.
-    if editorial_notes:
-        candidate_addrs = [a for a in per_addr_received.keys() if a in editorial_notes]
-    else:
-        candidate_addrs = list(per_addr_received.keys())
+    # Enumerate every destination >= dust_threshold. Also unconditionally
+    # include addresses present in freeze_targets_by_addr (so a known
+    # freezable destination with low trace-inflow but a real current
+    # balance — e.g. $3M mSyrupUSDp at a wallet that only received $1
+    # of trace-attributable inflow — still surfaces).
+    candidate_addrs: set[str] = {
+        a for a, received in per_addr_received.items()
+        if received >= threshold
+    }
+    candidate_addrs.update(freeze_targets_by_addr.keys())
+
+    # Always preserve any address the editorial explicitly labeled (back-
+    # compat: if the operator hand-wrote an entry for a $50 address
+    # because it's evidentially relevant, don't drop it).
+    candidate_addrs.update(editorial_notes.keys())
+
+    # Don't include the victim's own seed if it somehow slipped through.
+    candidate_addrs.discard(case.seed_address)
+    candidate_addrs.discard(seed_lower)
 
     destinations = []
-    for addr in sorted(candidate_addrs, key=lambda a: per_addr_received[a], reverse=True):
+    for addr in sorted(
+        candidate_addrs,
+        key=lambda a: per_addr_received.get(a, Decimal("0")),
+        reverse=True,
+    ):
         label_name = per_addr_label_name.get(addr)
         is_freezable = addr in freeze_targets_by_addr
         is_mixer = per_addr_is_mixer[addr]
@@ -250,23 +307,136 @@ def _extract_destinations(
             role = "Intermediate wallet"
             holding_now = "unknown (see explorer)"
 
-        # Editorial note if provided, otherwise mechanical
-        notes = editorial_notes.get(addr, f"Received {usd(per_addr_received[addr])} in trace")
+        # Editorial note if provided, otherwise mechanical fallback that
+        # carries the right emoji status from freeze_targets / label data.
+        if addr in editorial_notes:
+            notes = editorial_notes[addr]
+        else:
+            notes = _mechanical_destination_note(
+                addr=addr,
+                usd_received=per_addr_received.get(addr, Decimal("0")),
+                tokens_observed=per_addr_tokens.get(addr, set()),
+                freeze_info=freeze_targets_by_addr.get(addr),
+                label_name=label_name,
+                is_mixer=is_mixer,
+            )
 
-        # Status from editorial classification (drives JS rendering)
-        status = _classify_address_status(addr, editorial_notes)
+        # Status from editorial classification. If no editorial note,
+        # derive status from the mechanical-note emoji prefix we just
+        # synthesized — so the JS builder still gets correct rendering.
+        if addr in editorial_notes:
+            status = _classify_address_status(addr, editorial_notes)
+        else:
+            status = _classify_address_status(addr, {addr: notes})
 
         destinations.append({
             "address": addr,
             "short": short_addr(addr),
             "role": role,
             "usd_holding_now": holding_now,
-            "usd_received_in_trace": usd(per_addr_received[addr]),
+            "usd_received_in_trace": usd(per_addr_received.get(addr, Decimal("0"))),
             "status": status,
             "notes": notes,
         })
 
     return destinations
+
+
+def _mechanical_destination_note(
+    *,
+    addr: str,
+    usd_received: Decimal,
+    tokens_observed: set[str],
+    freeze_info: dict[str, Any] | None,
+    label_name: str | None,
+    is_mixer: bool,
+) -> str:
+    """Build a fallback DESTINATION_NOTES entry when AI editorial didn't
+    label this address.
+
+    Carries the correct emoji prefix so downstream classification +
+    JS rendering work identically to AI-labeled entries. This means
+    a multi-destination case with sparse AI labels still surfaces
+    correctly in the Triage Report.
+
+    Heuristics:
+      * Address has a freeze-asks entry → 🟩 FREEZABLE with issuer
+        + USD called out.
+      * Address is a known mixer → ⬛ UNRECOVERABLE.
+      * Address has a counterparty label (exchange / bridge / etc.) →
+        🟦 EXCHANGE if exchange-class, 🟧 INVESTIGATE otherwise.
+      * Otherwise → 🟧 INVESTIGATE with the tokens observed + USD
+        received. The operator reviews these in brief_editorial.json
+        and re-classifies (this is the "review required" pathway).
+    """
+    received_str = usd(usd_received) if usd_received > 0 else "$0"
+    tokens_str = "/".join(sorted(tokens_observed)) if tokens_observed else "tokens"
+
+    if freeze_info is not None:
+        issuer = freeze_info.get("issuer", "issuer")
+        symbol = freeze_info.get("symbol", "tokens")
+        balance_usd_raw = freeze_info.get("usd_value") or "0"
+        try:
+            balance_usd = Decimal(str(balance_usd_raw))
+            balance_str = usd(balance_usd)
+        except Exception:  # noqa: BLE001
+            balance_str = "(unknown)"
+        capability = (freeze_info.get("freeze_capability") or "").lower()
+        if capability == "yes":
+            cap_phrase = "Freezability HIGH"
+        elif capability == "limited":
+            cap_phrase = "Freezability LIMITED (issuer pause / admin gate required)"
+        elif capability == "no":
+            cap_phrase = "Freezability LOW (no issuer-level freeze pathway)"
+        else:
+            cap_phrase = "Freezability TBD"
+        # If freeze_capability is 'no' (e.g., DAI, wstETH), this is not
+        # actually freezable — emit a DORMANT/UNRECOVERABLE-flavored
+        # note instead so the operator doesn't send a useless freeze
+        # letter to a non-freezing issuer.
+        if capability == "no":
+            return (
+                f"⬛ UNRECOVERABLE — Holds {balance_str} {symbol} ({issuer}). "
+                f"{cap_phrase}. Candidate for seizure if perpetrator "
+                "identified, but no issuer-level freeze pathway."
+            )
+        return (
+            f"🟩 FREEZABLE — Holds {balance_str} {symbol} ({issuer}). "
+            f"{cap_phrase}. Received {received_str} in trace."
+        )
+
+    if is_mixer:
+        return (
+            f"⬛ UNRECOVERABLE — Mixer deposit ({label_name or 'unknown mixer'}). "
+            f"Received {received_str}; funds mixed and not traceable."
+        )
+
+    if label_name:
+        # Exchange-class labels → EXCHANGE; other service labels →
+        # INVESTIGATE so the operator decides.
+        label_lower = label_name.lower()
+        if any(
+            kw in label_lower
+            for kw in ("binance", "coinbase", "kraken", "okx", "bybit",
+                       "huobi", "kucoin", "gate.io", "bitfinex", "gemini")
+        ):
+            return (
+                f"🟦 EXCHANGE — {label_name}. Received {received_str}. "
+                "Recovery via subpoena to exchange compliance, not "
+                "issuer freeze."
+            )
+        return (
+            f"🟧 INVESTIGATE — Labeled {label_name}. Received {received_str} "
+            f"({tokens_str}). Status pending operator review."
+        )
+
+    # Generic intermediate/transit wallet — operator should re-check.
+    return (
+        f"🟧 INVESTIGATE — Received {received_str} ({tokens_str}). "
+        "Address is not on the issuer freeze-target list; verify "
+        "whether it currently holds freezable balances before "
+        "writing it off."
+    )
 
 
 def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:

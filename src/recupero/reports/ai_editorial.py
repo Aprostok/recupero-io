@@ -238,9 +238,21 @@ You must output ONLY a valid JSON object — no preamble, no markdown fences, no
   UNRECOVERABLE_ITEMS                  (array of objects with `asset` and `reason` keys)
   UNRECOVERABLE_ITEMS_AI_CONFIDENCE
 
+DESTINATION_NOTES ENUMERATION (v0.13.4 — IMPORTANT):
+
+You MUST emit one DESTINATION_NOTES entry for EVERY address in the input's `all_significant_destinations` list. This list already filters to destinations above the dust threshold (~$1,000 USD received). It is not optional to label these — Jacob's V-CFI01 review showed that on multi-destination cases (perp hub disperses to 10+ downstream addresses), missing any one of them silently drops it from the customer's Triage Report, which makes the case look smaller than it is.
+
+For each entry in `all_significant_destinations`:
+  * If it has `is_in_freeze_asks=true` AND `freeze_capability=yes` → 🟩 FREEZABLE with the issuer and balance called out by name.
+  * If it has `is_in_freeze_asks=true` AND `freeze_capability=limited` → 🟧 INVESTIGATE (or 🟩 if you're confident — e.g. Maple Finance admin pause is documented).
+  * If it has `is_in_freeze_asks=true` AND `freeze_capability=no` → ⬛ UNRECOVERABLE (e.g. DAI, wstETH — no issuer freeze pathway). Still enumerate it so the customer sees the dollar amount in UNRECOVERABLE_ITEMS.
+  * If it has a `label_hint` matching a known mixer / bridge → ⬛ UNRECOVERABLE.
+  * If it has a `label_hint` matching a known exchange → 🟦 EXCHANGE.
+  * Otherwise (no freeze_asks entry, no useful label) → 🟧 INVESTIGATE with a note about what tokens were observed and how much USD was received.
+
 For DESTINATION_NOTES, use these emoji prefixes consistently:
-  🟩 FREEZABLE — for addresses currently holding freezable tokens (Circle USDC, Tether USDT, Paxos, etc.) where the on-chain balance plausibly represents perpetrator-controlled funds.
-  ⬛ UNRECOVERABLE — for mixer deposits, bridges to anonymous chains, burn addresses, AND for DEX aggregator routers (1inch, CoW Protocol GPv2 settlement, 0x, ParaSwap), the WETH9 contract when funds were wrapped and swapped, and liquid-staking token contracts (Lido stETH, Rocket Pool rETH). Briefly say WHY (e.g., "DEX aggregator routing — funds dispersed to swap counterparties; not freezable")
+  🟩 FREEZABLE — for addresses currently holding freezable tokens (Circle USDC, Tether USDT, Paxos, Maple admin-pausable tokens, etc.) where the on-chain balance plausibly represents perpetrator-controlled funds.
+  ⬛ UNRECOVERABLE — for mixer deposits, bridges to anonymous chains, burn addresses, AND for DEX aggregator routers (1inch, CoW Protocol GPv2 settlement, 0x, ParaSwap), the WETH9 contract when funds were wrapped and swapped, liquid-staking token contracts (Lido stETH, Rocket Pool rETH), AND addresses holding non-freezable assets (DAI/MakerDAO, wstETH, ETH-native) where there's no issuer-level freeze pathway. Briefly say WHY (e.g., "DEX aggregator routing — funds dispersed to swap counterparties; not freezable" or "DAI is permissionless — no issuer freeze authority").
   🟦 EXCHANGE — for known exchange deposit addresses (Binance, Coinbase, Kraken, etc.)
   🟧 INVESTIGATE — for addresses worth investigating but unclear status (e.g., very large balances that may be unrelated, addresses that look like protocol contracts but you're not certain)
   (no emoji) — for transit/intermediate wallets the perpetrator controls but with no current freezable balance
@@ -275,7 +287,11 @@ For UNRECOVERABLE_ITEMS, include any portion of the stolen funds that the chain 
   - Funds converted to liquid-staking tokens (Lido stETH at 0xae7ab96520DE3A18E5e111B5EaAb095312D7fE84, Rocket Pool rETH, Frax sfrxETH) — these tokens have no issuer freeze mechanism comparable to USDC/USDT
   - Funds deposited into a centralized exchange's hot wallet WITHOUT a clear deposit attribution (e.g., funds went to a known exchange but not via an identifiable user-deposit address) — exchange compliance teams may help, but the triage report should not promise recovery
 
-For each unrecoverable item include `asset` (e.g., "approximately 6.4 ETH (~$15,200)") and `reason` (e.g., "Wrapped to WETH and swapped via 1inch Aggregation Router; recovery requires identifying each swap counterparty and is not feasible in a triage report"). Be specific about the dollar amount and the mechanism. If nothing is clearly unrecoverable, return an empty array. Do not invent unrecoverable losses.
+For each unrecoverable item include `asset` (e.g., "approximately 6.4 ETH (~$15,200) at 0xabc…def") and `reason` (e.g., "Wrapped to WETH and swapped via 1inch Aggregation Router; recovery requires identifying each swap counterparty and is not feasible in a triage report"). Be specific about the dollar amount, the address, AND the mechanism.
+
+v0.13.4 (Jacob V-CFI01 follow-up): UNRECOVERABLE_ITEMS must be enumerated PER-ADDRESS, not aggregated to the hub. If two different downstream destinations both hold non-freezable DAI, that's TWO entries in UNRECOVERABLE_ITEMS — one per address — each citing the address and dollar amount. The customer sees this list verbatim in the Triage Report's "Not Recoverable" section; pooling unrecoverable holdings across addresses understates the per-asset story and makes it harder for the operator to verify completeness.
+
+If nothing is clearly unrecoverable, return an empty array. Do not invent unrecoverable losses.
 
 You'll be given a working example with input and ideal output. Use it to calibrate voice and structure. Do NOT copy its specific facts; use only the facts in the actual case input."""
 
@@ -414,6 +430,19 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
             "category": "mixer" if addr in mixer_addresses else "bridge",
         })
 
+    # v0.13.4 (Jacob V-CFI01 follow-up): enumerate EVERY downstream
+    # destination above a dust threshold, not just the freeze-asks
+    # matches. Without this, the AI prompt could only see destinations
+    # that already had a freeze_asks entry, so multi-destination cases
+    # (perp hub → 14 downstream addresses) silently dropped the
+    # downstream destinations from DESTINATION_NOTES.
+    all_significant_destinations = _enumerate_all_destinations(
+        case=case,
+        freeze_asks=freeze_asks,
+        label_hints=label_hints,
+        seed_lower=seed_lower,
+    )
+
     return {
         "victim": {
             "wallet_full": case.seed_address,
@@ -432,9 +461,97 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
         "first_hop": first_hop_candidate,
         "victim_supplied_narrative": victim_narrative or "[victim did not supply a narrative — draft conservatively from chain data]",
         "current_freezable_holdings": freezable_summary,
+        # v0.13.4: every destination >= dust threshold, with USD-received,
+        # observed tokens, and freezability hint from freeze_asks where
+        # applicable. The AI MUST emit a DESTINATION_NOTES entry per
+        # row here. See SYSTEM_PROMPT.
+        "all_significant_destinations": all_significant_destinations,
         "non_freezable_destinations": non_freezable_destinations,
         "label_hints": label_hints,
     }
+
+
+# Dust threshold for the AI's destination enumeration. Matches the brief
+# generator's default at recupero.reports.emit_brief.
+_AI_DESTINATION_DUST_USD = Decimal("1000.00")
+
+
+def _enumerate_all_destinations(
+    *,
+    case: Any,
+    freeze_asks: dict[str, Any],
+    label_hints: dict[str, str],
+    seed_lower: str,
+) -> list[dict[str, Any]]:
+    """Enumerate every downstream destination in the case above the
+    dust threshold so the AI can label every one in DESTINATION_NOTES.
+
+    Pre-v0.13.4 the AI only saw destinations that had a freeze_asks
+    entry (i.e., currently hold freezable tokens), missing the
+    transit / dormant / non-freezable destinations entirely. The
+    Triage Report would then render zero DESTINATION_NOTES for the
+    14 downstream addresses in a multi-destination case.
+
+    Returns one dict per destination address with:
+      * address + short form
+      * usd_received_in_trace (sum across all transfers in)
+      * tokens_observed (set of token symbols seen)
+      * is_in_freeze_asks (bool) + freezable_token / freezable_usd /
+        freeze_capability when applicable
+      * label_hint (mixer/bridge/exchange/protocol label if any)
+    """
+    per_addr_received: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
+    per_addr_tokens: dict[str, set[str]] = defaultdict(set)
+    for t in case.transfers:
+        to = t.to_address
+        if not to or to.lower() == seed_lower:
+            continue
+        if t.usd_value_at_tx is not None:
+            per_addr_received[to] += t.usd_value_at_tx
+        if t.token and t.token.symbol:
+            per_addr_tokens[to].add(t.token.symbol)
+
+    # Index freeze_asks by address for quick lookup.
+    freeze_by_addr: dict[str, dict[str, Any]] = {}
+    for issuer, asks in freeze_asks.get("by_issuer", {}).items():
+        for a in asks:
+            addr = a.get("address")
+            if isinstance(addr, str) and addr:
+                freeze_by_addr[addr] = {**a, "issuer": issuer}
+
+    candidates: set[str] = {
+        a for a, received in per_addr_received.items()
+        if received >= _AI_DESTINATION_DUST_USD
+    }
+    # Always include freeze-asks addresses even if trace inflow is sub-
+    # threshold (e.g., $1 of attribution-share but $3M in current
+    # balance). The freezable position is what matters for the AI's
+    # FREEZABLE classification.
+    candidates.update(freeze_by_addr.keys())
+
+    rows: list[dict[str, Any]] = []
+    for addr in sorted(
+        candidates,
+        key=lambda a: per_addr_received.get(a, Decimal("0")),
+        reverse=True,
+    ):
+        row: dict[str, Any] = {
+            "address": addr,
+            "address_short": _short_addr(addr),
+            "usd_received_in_trace": f"${per_addr_received.get(addr, Decimal('0')):,.2f}",
+            "tokens_observed": sorted(per_addr_tokens.get(addr, set())),
+            "label_hint": label_hints.get(addr),
+            "is_in_freeze_asks": addr in freeze_by_addr,
+        }
+        fa = freeze_by_addr.get(addr)
+        if fa is not None:
+            row["freezable_token"] = fa.get("symbol")
+            row["freezable_amount"] = fa.get("amount")
+            row["freezable_usd"] = f"${Decimal(str(fa.get('usd_value') or '0')):,.2f}"
+            row["freeze_capability"] = fa.get("freeze_capability")
+            row["issuer"] = fa.get("issuer")
+        rows.append(row)
+    return rows
 
 
 def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:

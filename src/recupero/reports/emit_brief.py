@@ -670,7 +670,18 @@ def emit_brief(
         "FREEZABLE_PERCENT": totals["FREEZABLE_PERCENT"],
         "RECOVERABLE_PERCENT": totals["RECOVERABLE_PERCENT"],
 
+        # Two distinct IDs survive into the brief:
+        #   - IC3_COMPLAINT_NUMBER: legacy field (kept for template
+        #     compatibility). Reserved for IC3-assigned complaint
+        #     numbers that come back AFTER filing.
+        #   - IC3_CASE_ID: operator-curated reference captured at
+        #     intake (cases.ic3_case_id). Pre-filled from the cases
+        #     row by the editorial drafting stage when present; None
+        #     otherwise. Surfaces in freeze-letter exhibits + LE
+        #     handoffs so issuer compliance / law enforcement can
+        #     cross-reference the IC3 record.
         "IC3_COMPLAINT_NUMBER": None,
+        "IC3_CASE_ID": editorial.get("IC3_CASE_ID"),
 
         "INVESTIGATOR_NAME": editorial["INVESTIGATOR_NAME"],
         "INVESTIGATOR_EMAIL": editorial["INVESTIGATOR_EMAIL"],

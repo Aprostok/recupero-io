@@ -76,6 +76,16 @@ COL_CLIENT_PHONE = "phone"
 COL_COUNTRY = "country"
 COL_DESCRIPTION = "description"
 COL_INCIDENT_DATE = "incident_date"
+# Postal address + jurisdiction + IC3 reference, added in PR #12 on
+# the admin-UI side. The worker reads these to pre-fill the
+# editorial-drafting TODOs so the operator review form stops being
+# a data-entry exercise on case-driven runs. See Jacob's reliability
+# Ask #2 (v0.5.2): the AI no longer hallucinates a TODO when the
+# cases row already has the answer.
+COL_ADDRESS_LINE1 = "address_line1"
+COL_ADDRESS_LINE2 = "address_line2"
+COL_JURISDICTION = "jurisdiction"
+COL_IC3_CASE_ID = "ic3_case_id"
 
 
 # ----- Row models ----- #
@@ -145,6 +155,17 @@ class CaseData(BaseModel):
     phone: str | None = None
     country: str | None = None
     description: str | None = None
+
+    # Postal address + jurisdiction + IC3 reference. These come from
+    # PR #12's intake form on the admin-UI side. When present, the
+    # editorial-drafting stage uses them to pre-fill the corresponding
+    # placeholders so the operator review form is a 30-second sanity
+    # check rather than a re-typing exercise. nullable for backward
+    # compatibility with pre-PR-#12 rows.
+    address_line1: str | None = None
+    address_line2: str | None = None
+    jurisdiction: str | None = None
+    ic3_case_id: str | None = None
 
 
 # ----- DB layer ----- #
@@ -386,6 +407,10 @@ class WorkerDB:
         cols = [
             COL_ID, COL_CASE_NUMBER, COL_CLIENT_NAME, COL_CLIENT_EMAIL,
             COL_CLIENT_PHONE, COL_COUNTRY, COL_DESCRIPTION,
+            # Editorial pre-fill (v0.5.2). Columns are nullable so
+            # we accept NULL on pre-PR-#12 rows without erroring.
+            COL_ADDRESS_LINE1, COL_ADDRESS_LINE2, COL_JURISDICTION,
+            COL_IC3_CASE_ID,
         ]
         sql = f"SELECT {', '.join(cols)} FROM {T_CASES} WHERE {COL_ID} = %s;"
         with psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row) as conn:

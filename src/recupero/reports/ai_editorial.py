@@ -694,7 +694,13 @@ def call_anthropic_for_editorial(
     raise RuntimeError(last_error or "Unknown failure calling Anthropic API")
 
 
-def build_editorial_dict(ai_output: dict[str, Any], case_summary: dict[str, Any], case_id: str | None = None) -> dict[str, Any]:
+def build_editorial_dict(
+    ai_output: dict[str, Any],
+    case_summary: dict[str, Any],
+    case_id: str | None = None,
+    *,
+    case_row_prefill: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Combine AI-drafted fields with static defaults and review markers.
 
     Output is the brief_editorial.json that emit-brief consumes (with the
@@ -777,10 +783,58 @@ def build_editorial_dict(ai_output: dict[str, Any], case_summary: dict[str, Any]
     for k, v in STATIC_EDITORIAL_DEFAULTS.items():
         editorial[k] = v
 
+    # Pre-fill from the cases row (PR #12 columns: address_line1,
+    # address_line2, jurisdiction, ic3_case_id). Applied LAST so a
+    # non-empty case-row value beats both the heuristic-derived
+    # VICTIM_ADDRESS_LINE1/2 from victim.json and the AI's TODO
+    # placeholder for VICTIM_JURISDICTION. Empty / None values are
+    # skipped — the existing TODO placeholders remain so the
+    # operator review form still prompts for them.
+    #
+    # This eliminates the "operator re-types data that's already in
+    # the database" friction Jacob flagged in the reliability ask.
+    # See docs/INTAKE_ADDRESS_VALIDATION.md for the upstream
+    # validation rules that ensure these columns are reasonably
+    # well-formed when present.
+    if case_row_prefill:
+        for key, value in case_row_prefill.items():
+            if not value:
+                continue
+            stripped = str(value).strip()
+            if not stripped:
+                continue
+            # Defensive: reject case-row values that ALREADY look
+            # like TODO placeholders. Discovered on V-ZTST01 where
+            # 'TODO: victim city/state/zip' had been persisted into
+            # the address_line2 column during smoke testing.
+            # Without this guard we'd cheerfully pre-fill a TODO,
+            # which slips past the validator at this layer and
+            # forces the operator review form back into the data-
+            # entry mode Jacob's ask was trying to eliminate.
+            if stripped.upper().startswith("TODO"):
+                continue
+            editorial[key] = value
+            # Mark high confidence — these came directly from
+            # the operator-curated cases row, not from AI
+            # inference. Lets the review form surface them
+            # differently if Jacob's UI cares.
+            conf_key = f"{key}_AI_CONFIDENCE"
+            if conf_key in editorial or key in {
+                "VICTIM_JURISDICTION", "IC3_CASE_ID",
+            }:
+                editorial[conf_key] = "high"
+
     return editorial
 
 
-def run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str | None = None, api_key: str | None = None) -> tuple[Path, dict[str, Any], dict[str, Any]]:
+def run_ai_editorial(
+    case_id: str,
+    case_store: Any,
+    victim_narrative: str | None = None,
+    api_key: str | None = None,
+    *,
+    case_row_prefill: dict[str, str] | None = None,
+) -> tuple[Path, dict[str, Any], dict[str, Any]]:
     """Top-level orchestration.
 
     Returns ``(output_path, editorial_dict, usage_info)`` where
@@ -827,7 +881,10 @@ def run_ai_editorial(case_id: str, case_store: Any, victim_narrative: str | None
     ai_output, usage_info = call_anthropic_for_editorial(case_summary, api_key=api_key)
 
     # 6. Build the editorial dict
-    editorial = build_editorial_dict(ai_output, case_summary, case_id=case_id)
+    editorial = build_editorial_dict(
+        ai_output, case_summary, case_id=case_id,
+        case_row_prefill=case_row_prefill,
+    )
 
     # 7. Write
     out_path = case_dir / "brief_editorial.json"

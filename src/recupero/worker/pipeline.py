@@ -594,10 +594,26 @@ def _stage_ai_editorial(
     """Run editorial drafting, return USD cost from this call (None on failure)."""
     from recupero.reports.ai_editorial import run_ai_editorial
 
+    # Build a pre-fill map from the cases row. The drafting stage uses
+    # this to replace TODO placeholders for fields the operator already
+    # provided at intake (address_line1/2, jurisdiction, ic3_case_id).
+    # Empty / None values fall through to the existing TODO behavior so
+    # the review form still prompts for them on pre-PR-#12 rows.
+    case_row_prefill: dict[str, str] = {}
+    if case_data.address_line1:
+        case_row_prefill["VICTIM_ADDRESS_LINE1"] = case_data.address_line1
+    if case_data.address_line2:
+        case_row_prefill["VICTIM_ADDRESS_LINE2"] = case_data.address_line2
+    if case_data.jurisdiction:
+        case_row_prefill["VICTIM_JURISDICTION"] = case_data.jurisdiction
+    if case_data.ic3_case_id:
+        case_row_prefill["IC3_CASE_ID"] = case_data.ic3_case_id
+
     _path, _editorial, usage = run_ai_editorial(
         case_id=case_id_str,
         case_store=local_store,
         victim_narrative=case_data.description,
+        case_row_prefill=case_row_prefill,
         # api_key falls through to ANTHROPIC_API_KEY env var
     )
     upload_case_dir(case_dir, bucket)

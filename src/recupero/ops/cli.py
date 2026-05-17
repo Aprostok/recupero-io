@@ -165,6 +165,26 @@ def cli() -> None:
              "(e.g., 'victim', 'attorney', 'family-member').",
     )
 
+    # ----- list-payments ----- #
+    p_lpay = sub.add_parser(
+        "list-payments",
+        help="List recent Stripe payment events with workflow "
+             "correlation. The operator's go-to for 'did the "
+             "webhook fire for case V-...?'",
+    )
+    p_lpay.add_argument(
+        "--limit", type=int, default=10,
+        help="Max rows (default 10, max 1000).",
+    )
+    p_lpay.add_argument(
+        "--since", type=str, default="7d",
+        help="Time window: 24h, 7d, 30d, 90d, or all (default 7d).",
+    )
+    p_lpay.add_argument(
+        "--case-id", dest="case_id_filter", type=str, default=None,
+        help="Filter to one specific case_id (UUID).",
+    )
+
     # ----- generate-payment-link ----- #
     p_paylink = sub.add_parser(
         "generate-payment-link",
@@ -301,6 +321,16 @@ def cli() -> None:
             force=args.force,
             dsn=_require_dsn(),
             confirm=_confirm,
+        ))
+
+    if args.command == "list-payments":
+        from recupero.ops.commands import list_payments as cmd
+        case_uuid: UUID | None = None
+        if args.case_id_filter:
+            case_uuid = _parse_uuid(args.case_id_filter, field_name="case_id")
+        sys.exit(cmd.run(
+            limit=args.limit, since=args.since, case_id=case_uuid,
+            dsn=_require_dsn(),
         ))
 
     if args.command == "generate-payment-link":

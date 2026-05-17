@@ -120,6 +120,7 @@ def build_dashboard_summary(*, dsn: str) -> dict[str, Any]:
         "digest": _empty_digest(),
         "stale_review": _empty_stale_review(),
         "stale_engagements": _empty_stale_engagements(),
+        "payments": _empty_payments(),
     }
 
     pooled = _pooled_dsn(dsn)
@@ -134,6 +135,7 @@ def build_dashboard_summary(*, dsn: str) -> dict[str, Any]:
             payload["stale_engagements"] = (
                 _query_stale_engagements(conn) or payload["stale_engagements"]
             )
+            payload["payments"] = _query_payments(conn) or payload["payments"]
     except Exception as exc:  # noqa: BLE001
         log.warning("dashboard summary: DB connection failed: %s", exc)
     return payload
@@ -544,6 +546,127 @@ def _query_stale_engagements(conn) -> dict[str, Any]:
         log.info("stale_engagements summary: engagement_* columns not present")
     except Exception as exc:  # noqa: BLE001
         log.warning("stale_engagements summary: %s", exc)
+    return out
+
+
+# ----- Payments query (Stripe webhook audit) ----- #
+#
+# Operator visibility on payment-event flow. Surfaces 24h + 7d
+# counts + totals so the homepage can answer "did money move
+# yesterday?" without a CLI roundtrip. The list-payments CLI
+# command covers the per-row drilldown; this widget is the
+# aggregated overview.
+
+
+def _empty_payments() -> dict[str, Any]:
+    """Default shape for the payments section. Comes back zero-
+    filled on DBs without the public.payments table (pre-v0.6.0
+    deployments) so the response always parses cleanly.
+
+    Schema is locked by the UI; adding a key is intentional, removing
+    one is a breaking change."""
+    return {
+        # Last 24h rollup
+        "count_24h": 0,
+        "paid_count_24h": 0,
+        "amount_paid_cents_24h": 0,
+        "refunded_count_24h": 0,
+        # Last 7d rollup
+        "count_7d": 0,
+        "paid_count_7d": 0,
+        "amount_paid_cents_7d": 0,
+        # Pending operator triage — payments with status='paid'
+        # AND a notes column flagged for triage (the dispatcher
+        # writes 'audit_only' notes when metadata is missing or
+        # malformed; these are the rows that need operator action).
+        "needs_triage_count": 0,
+    }
+
+
+def _query_payments(conn) -> dict[str, Any]:
+    """Aggregated payment counters from public.payments.
+
+    Resilient to the table not existing (UndefinedTable) — pre-
+    v0.6.0 deployments and freshly-cloned dev DBs return the
+    empty shape rather than erroring.
+    """
+    out = _empty_payments()
+    try:
+        with conn.cursor() as cur:
+            # 24h + 7d rollups in one query for efficiency. Stripe
+            # webhook traffic is low enough that no index is strictly
+            # required, but payments_received_at_idx (DESC) makes
+            # the COUNT predicates index-only.
+            cur.execute(
+                """
+                SELECT
+                  COUNT(*) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '24 hours'
+                  ) AS count_24h,
+                  COUNT(*) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '24 hours'
+                      AND status = 'paid'
+                  ) AS paid_count_24h,
+                  COALESCE(SUM(amount_cents) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '24 hours'
+                      AND status = 'paid'
+                  ), 0) AS amount_paid_cents_24h,
+                  COUNT(*) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '24 hours'
+                      AND status = 'refunded'
+                  ) AS refunded_count_24h,
+                  COUNT(*) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '7 days'
+                  ) AS count_7d,
+                  COUNT(*) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '7 days'
+                      AND status = 'paid'
+                  ) AS paid_count_7d,
+                  COALESCE(SUM(amount_cents) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '7 days'
+                      AND status = 'paid'
+                  ), 0) AS amount_paid_cents_7d
+                  FROM public.payments
+                """,
+            )
+            row = cur.fetchone()
+            if row:
+                for k in (
+                    "count_24h", "paid_count_24h", "amount_paid_cents_24h",
+                    "refunded_count_24h", "count_7d", "paid_count_7d",
+                    "amount_paid_cents_7d",
+                ):
+                    out[k] = int(row.get(k, 0) or 0)
+
+            # Triage queue: paid events where the dispatcher wrote
+            # an audit_only outcome (typically due to missing
+            # metadata.case_id or unknown amount_type). Operators
+            # need to manually link these to the right workflow row.
+            cur.execute(
+                """
+                SELECT COUNT(*) AS n
+                  FROM public.payments
+                 WHERE status = 'paid'
+                   AND processed_at IS NOT NULL
+                   AND notes IS NOT NULL
+                   AND (
+                     notes ILIKE '%audit_only%' OR
+                     notes ILIKE '%operator triage%' OR
+                     notes ILIKE '%missing%case_id%' OR
+                     notes ILIKE '%missing%investigation_id%' OR
+                     notes ILIKE '%seed_address%'
+                   )
+                """,
+            )
+            triage_row = cur.fetchone()
+            if triage_row:
+                out["needs_triage_count"] = int(triage_row.get("n", 0) or 0)
+    except psycopg.errors.UndefinedTable:
+        # public.payments doesn't exist yet (pre-v0.6.0 deployment
+        # or freshly-cloned dev DB). Return the empty shape.
+        log.info("payments summary: public.payments not present")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("payments summary: %s", exc)
     return out
 
 

@@ -1110,6 +1110,7 @@ def emit_brief(
         # counts. The compounding-moat capability behind TRM /
         # Chainalysis.
         "CROSS_CASE_CORRELATION": cross_case_correlation,
+
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 
@@ -1147,6 +1148,16 @@ def emit_brief(
         "INVESTIGATOR_WEB": editorial["INVESTIGATOR_WEB"],
         "TEMPLATE_VERSION": editorial["TEMPLATE_VERSION"],
     }
+
+    # v0.14.1: Recovery probability scoring + cost model. Computed
+    # AFTER the brief dict is otherwise complete (reads FREEZABLE,
+    # UNRECOVERABLE, etc.). Wrapped in try/except so a scoring
+    # failure can't break the brief.
+    try:
+        from recupero.recovery.scorer import score_recovery
+        brief["RECOVERY_ESTIMATE"] = score_recovery(brief).to_json_safe()
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        brief["RECOVERY_ESTIMATE"] = None
     return brief
 
 

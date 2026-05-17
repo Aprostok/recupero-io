@@ -1,0 +1,172 @@
+{# MLAT (Mutual Legal Assistance Treaty) request boilerplate.
+
+   Used when the perpetrator's funds have landed at an exchange in a
+   country with which the United States has an MLAT. Drafted as a
+   STARTING POINT for the AUSA / DOJ Office of International Affairs —
+   the operator MUST review jurisdictional specifics + cite the
+   relevant treaty article before sending.
+
+   Required Jinja context:
+     - case_id, generated_at (UTC ISO)
+     - victim: dict with name, jurisdiction
+     - perpetrator: dict with destination_country (free-form),
+       exchange_name, deposit_address, total_received_usd
+     - investigator: dict with name, organization, email
+     - tx_evidence: list of {tx_hash, block_time, amount_usd,
+       explorer_url}
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>MLAT Request Draft — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">DRAFT — For AUSA / DOJ-OIA Review</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Mutual Legal Assistance Treaty Request — Draft</div>
+    <h1>MLAT Request<br/>Boilerplate</h1>
+    <p class="cover-subtitle">
+      Draft starting point for a request directed to the central
+      authority of {{ perpetrator.destination_country }}. This document
+      is for INVESTIGATOR USE — DOJ Office of International Affairs
+      (OIA) is the issuing authority and must be the sender on the
+      final transmission.
+    </p>
+  </div>
+</section>
+
+<section class="content">
+
+<h2>1. Identification of the Requesting Authority</h2>
+<p>
+This request is submitted on behalf of investigative counsel
+for {{ victim.name }}, a {{ victim.jurisdiction }} resident, in
+connection with an ongoing on-chain investigation into the theft
+of digital assets. The final request shall be issued by the
+Office of International Affairs, U.S. Department of Justice,
+to the central authority of {{ perpetrator.destination_country }}.
+</p>
+
+<h2>2. Statement of the Offence Being Investigated</h2>
+<p>
+On {{ incident_date }}, {{ victim.name }} was the victim of
+{{ incident_type }}, in which approximately
+{{ total_loss_usd }} in digital assets were misappropriated from
+the victim's wallet. The underlying criminal conduct is
+prosecutable in the United States under one or more of the
+following statutes:
+</p>
+<ul>
+  <li>18 U.S.C. § 1343 — Wire Fraud</li>
+  <li>18 U.S.C. § 1957 — Engaging in Monetary Transactions in Property Derived from Specified Unlawful Activity</li>
+  <li>18 U.S.C. § 1956 — Laundering of Monetary Instruments</li>
+  <li>18 U.S.C. § 1030 — Computer Fraud and Abuse (where unauthorized access is alleged)</li>
+</ul>
+<p><strong>[OPERATOR ACTION: confirm which statutes apply and remove the others.]</strong></p>
+
+<h2>3. Nexus to the Requested Jurisdiction</h2>
+<p>
+Tracing of the misappropriated funds, conducted using
+chain-of-custody-preserved on-chain analysis, established
+that a portion of the stolen proceeds were deposited at
+<strong>{{ perpetrator.exchange_name }}</strong>, a virtual
+asset service provider headquartered in
+{{ perpetrator.destination_country }}, in the amount of
+<strong>{{ perpetrator.total_received_usd }} USD-equivalent</strong>.
+The specific receiving address is:
+</p>
+<p class="mono">{{ perpetrator.deposit_address }}</p>
+
+<h2>4. Investigative Assistance Requested</h2>
+<p>Pursuant to the applicable treaty between the United States and
+{{ perpetrator.destination_country }} for mutual assistance in
+criminal matters, we respectfully request the following:</p>
+<ol>
+  <li>
+    <strong>Account identification:</strong> the identity of the
+    {{ perpetrator.exchange_name }} customer associated with the
+    receiving address above, including all Know-Your-Customer
+    documentation on file (full legal name, date of birth, residence
+    address, government-issued identification copies, source-of-funds
+    declarations).
+  </li>
+  <li>
+    <strong>Transaction history:</strong> the complete on-platform
+    transaction history for the identified account from the date of
+    first deposit through the date of receipt of this request,
+    including all deposits, withdrawals (specifying any subsequent
+    on-chain transfers and their destination addresses), and internal
+    transfers between {{ perpetrator.exchange_name }}-controlled
+    accounts.
+  </li>
+  <li>
+    <strong>Asset freeze:</strong> to the extent permitted under
+    {{ perpetrator.destination_country }} law, immediate placement
+    of an administrative freeze on any remaining balance held in
+    the identified customer account, with notification provided to
+    the requesting authority within {{ freeze_window_days|default(7) }}
+    business days.
+  </li>
+  <li>
+    <strong>IP and login records:</strong> all logged IP addresses
+    used to access the account, all device fingerprints recorded by
+    {{ perpetrator.exchange_name }}'s anti-fraud systems, and any
+    timestamps thereof.
+  </li>
+</ol>
+
+<h2>5. Evidence Supplied with This Request</h2>
+<p>
+The following on-chain transaction records, each independently
+verifiable on the public blockchain, constitute the evidentiary
+basis for the funds-flow tracing summarized above:
+</p>
+<table>
+  <thead>
+    <tr><th>Tx Hash</th><th>Block Time (UTC)</th><th>USD Amount</th><th>Explorer URL</th></tr>
+  </thead>
+  <tbody>
+  {% for tx in tx_evidence %}
+    <tr>
+      <td class="mono">{{ tx.tx_hash }}</td>
+      <td>{{ tx.block_time }}</td>
+      <td>{{ tx.amount_usd }}</td>
+      <td><a href="{{ tx.explorer_url }}">{{ tx.explorer_url }}</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>6. Confidentiality</h2>
+<p>
+This request is submitted on a confidential basis. Disclosure to
+the customer account holder identified herein prior to U.S.
+authorities completing follow-on investigative steps may
+significantly compromise the integrity of the underlying
+investigation and is therefore respectfully prohibited.
+</p>
+
+<h2>7. Point of Contact</h2>
+<p>
+{{ investigator.name }}<br/>
+{{ investigator.organization }}<br/>
+{{ investigator.email }}
+</p>
+<p><em>For routing through DOJ-OIA. The final request shall be
+signed and transmitted by the U.S. Department of Justice.</em></p>
+
+</section>
+</body>
+</html>

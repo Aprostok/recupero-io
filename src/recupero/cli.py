@@ -1077,6 +1077,86 @@ def screen_cmd(
     console.print()
 
 
+@app.command("legal-requests")
+def legal_requests_cmd(
+    case_id: str = typer.Argument(..., help="Case ID (folder name under cases/)."),
+    request_type: str = typer.Option(
+        "subpoena",
+        "--type",
+        help="Legal-request type: mlat | 314b | subpoena.",
+    ),
+    exchange: str | None = typer.Option(
+        None, "--exchange",
+        help="Filter to a specific exchange (substring, case-insensitive). "
+             "If omitted, generates one document per exchange in the brief.",
+    ),
+) -> None:
+    """Render MLAT / FinCEN 314(b) / grand jury subpoena boilerplate
+    from an existing freeze_brief.json.
+
+    DRAFTS ONLY — these are starting points for an AUSA / DOJ-OIA /
+    compliance officer. Recupero has no subpoena authority. The
+    final document must be reviewed and re-issued on the appropriate
+    party's letterhead.
+
+    Output: HTML files at cases/<case_id>/legal_requests/<type>_<exchange>.html
+    """
+    from recupero.reports.legal_requests import (
+        LEGAL_REQUEST_TYPES,
+        load_brief,
+        render_legal_request,
+    )
+
+    if request_type not in LEGAL_REQUEST_TYPES:
+        console.print(
+            f"[bold red]Unknown --type {request_type!r}.[/] "
+            f"Must be one of: {', '.join(LEGAL_REQUEST_TYPES)}."
+        )
+        raise typer.Exit(code=2)
+
+    cfg, _env = load_config()
+    store = CaseStore(cfg)
+    case_dir = store.case_dir(case_id)
+
+    try:
+        brief = load_brief(case_dir)
+    except FileNotFoundError as e:
+        console.print(f"[bold red]{e}[/]")
+        raise typer.Exit(code=2) from None
+
+    output_dir = case_dir / "legal_requests"
+    renders = render_legal_request(
+        brief,
+        request_type=request_type,
+        output_dir=output_dir,
+        exchange_filter=exchange,
+    )
+
+    if not renders:
+        console.print(
+            "[bold yellow]No legal-request documents were generated[/] "
+            "(no matching exchanges in the brief)."
+        )
+        raise typer.Exit(code=1)
+
+    console.print()
+    console.print(
+        f"[bold green]Generated {len(renders)} draft "
+        f"{request_type.upper()} request(s):[/]"
+    )
+    for r in renders:
+        console.print(f"  • {r.exchange_name} → [cyan]{r.output_path}[/]")
+    console.print()
+    console.print(
+        "[bold yellow]⚠ DRAFT ONLY:[/] These documents are starting points. "
+        "Recupero has no legal authority to issue any of them.\n"
+        "  • MLAT requests must be issued by DOJ-OIA.\n"
+        "  • 314(b) requests must come from a 314(b)-registered institution.\n"
+        "  • Grand jury subpoenas must be issued under AUSA letterhead.\n"
+        "Always review every line before transmission."
+    )
+
+
 def main() -> None:  # pragma: no cover
     app()
 

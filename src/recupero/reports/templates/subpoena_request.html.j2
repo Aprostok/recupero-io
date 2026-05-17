@@ -1,0 +1,200 @@
+{# Grand jury subpoena boilerplate (federal).
+
+   Drafted as STARTING POINT for the AUSA. Recupero does not have
+   subpoena authority — this is the document the AUSA will edit and
+   place under their own letterhead before serving on the VASP /
+   exchange.
+
+   Required Jinja context:
+     - case_id, generated_at
+     - victim: name
+     - perpetrator: exchange_name, exchange_legal_name, exchange_address,
+       deposit_address, total_received_usd
+     - investigator: name, organization, email (carrying counsel — for
+       AUSA contact only)
+     - tx_evidence: list of {tx_hash, block_time, amount_usd, explorer_url}
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Grand Jury Subpoena — Draft for AUSA Review — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">DRAFT — For AUSA Review &amp; Issuance Only</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Grand Jury Subpoena (Duces Tecum) — Draft</div>
+    <h1>Subpoena to<br/>{{ perpetrator.exchange_name }}</h1>
+    <p class="cover-subtitle">
+      Boilerplate document compendium to expedite a grand jury
+      subpoena duces tecum, pursuant to Rule 17(c) of the Federal
+      Rules of Criminal Procedure, addressed to
+      {{ perpetrator.exchange_legal_name|default(perpetrator.exchange_name) }}.
+      Recupero has no subpoena authority — this document is provided to
+      assist the AUSA's drafting process. The Assistant United States
+      Attorney must issue the final subpoena on government letterhead.
+    </p>
+  </div>
+</section>
+
+<section class="content">
+
+<h2>1. Subpoena Recipient</h2>
+<p>
+{{ perpetrator.exchange_legal_name|default(perpetrator.exchange_name) }}<br/>
+Registered Agent for Service of Process:
+{{ perpetrator.registered_agent|default("[TODO: look up registered agent / general counsel address]") }}<br/>
+{{ perpetrator.exchange_address|default("[TODO: company address]") }}
+</p>
+
+<h2>2. Subject of the Subpoena</h2>
+<p>
+The recipient is hereby commanded, pursuant to Rule 17(c) of the
+Federal Rules of Criminal Procedure, to produce the records
+described below to the grand jury of the
+{{ jurisdiction|default("[TODO: judicial district]") }} sitting at
+{{ courthouse|default("[TODO: courthouse address]") }} on or before
+{{ response_date|default("[TODO: 30-day return date]") }}.
+</p>
+
+<h2>3. Records Demanded</h2>
+<p>For the period commencing {{ records_start_date|default("[TODO: first deposit date]") }}
+through the date of service of this subpoena, the recipient is
+commanded to produce the following:</p>
+
+<ol>
+  <li>
+    <strong>Customer account identification</strong> for the customer
+    account or accounts associated with the following digital-asset
+    deposit address:
+    <p class="mono">{{ perpetrator.deposit_address }}</p>
+    including the customer's full legal name, all known aliases,
+    date of birth, taxpayer identification number (where collected),
+    primary and secondary residence and mailing addresses, primary
+    and secondary email addresses, primary and secondary phone
+    numbers, and the full set of government-issued identification
+    documents collected during the recipient's Customer Identification
+    Program / Know Your Customer process, including front and reverse
+    of each identification document.
+  </li>
+  <li>
+    <strong>Account history and balance records:</strong> all account
+    opening documents (including any source-of-funds attestations,
+    self-certification forms, and risk-rating worksheets); all
+    statements of account; any compliance-team annotations, internal
+    memoranda, or escalation tickets referencing this account or any
+    address associated with it; and any current and historical account
+    balances by asset.
+  </li>
+  <li>
+    <strong>Transaction records:</strong> all on-chain deposits and
+    withdrawals against the account (including transaction hash,
+    counterparty address, asset, amount, and timestamp); all
+    off-platform transfers and internal transfers between the account
+    and other recipient-controlled accounts; and all fiat on-ramp and
+    off-ramp transactions associated with the account, including
+    bank wires (originating institution, account number, ABA / SWIFT
+    routing, amount, and date).
+  </li>
+  <li>
+    <strong>Access and device records:</strong> all IP addresses
+    logged for sessions accessing the account, with full timestamps;
+    all device fingerprints, user-agent strings, and other
+    device-level identifiers recorded by the recipient's anti-fraud
+    systems; and all multi-factor authentication device records and
+    enrollment events.
+  </li>
+  <li>
+    <strong>Communications:</strong> all communications between the
+    recipient's customer-support, compliance, or fraud teams and the
+    account holder, including chat transcripts, email correspondence,
+    support tickets, and recorded telephone calls. To the extent that
+    the recipient retains a record of any internal escalation,
+    review, or hold placed on the account, those records are also
+    demanded.
+  </li>
+  <li>
+    <strong>Subsequent disposition:</strong> for any digital assets
+    withdrawn from the account to an on-chain destination, the
+    destination address and transaction hash. For any digital assets
+    transferred internally to another recipient-controlled account,
+    the receiving account identifier and all paragraph (1) records
+    for that receiving account.
+  </li>
+</ol>
+
+<h2>4. Predicate On-Chain Evidence</h2>
+<p>
+The following on-chain transaction records constitute the
+investigation's evidentiary basis for connecting the deposit
+address to the criminal conduct under investigation:
+</p>
+<table>
+  <thead>
+    <tr><th>Tx Hash</th><th>Block Time (UTC)</th><th>USD Amount</th></tr>
+  </thead>
+  <tbody>
+  {% for tx in tx_evidence %}
+    <tr>
+      <td class="mono">{{ tx.tx_hash }}</td>
+      <td>{{ tx.block_time }}</td>
+      <td>{{ tx.amount_usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>5. Mode of Production</h2>
+<p>
+Records produced in response to this subpoena shall be transmitted
+in their native electronic format where reasonably available;
+PDF reproductions are acceptable where native format is impractical.
+Production shall be made directly to the AUSA listed in Section 7,
+not to the grand jury reporter, and shall include a certification
+of authenticity under Federal Rule of Evidence 902(11).
+</p>
+
+<h2>6. Confidentiality Direction</h2>
+<p>
+Pursuant to 18 U.S.C. § 2705(b), and on a separate motion or order
+to be obtained by the AUSA, the recipient is requested NOT to
+notify the affected customer of the existence of this subpoena
+or of the substance of its compliance, for a period of
+{{ secrecy_period_days|default(90) }} days from service or until
+further order of the court. The recipient is reminded that, absent
+such order, the customer may be entitled to notice.
+</p>
+
+<h2>7. Issuing Authority and Point of Contact</h2>
+<p>
+<strong>[TO BE COMPLETED BY AUSA]</strong>
+</p>
+<p>
+Name of Assistant United States Attorney:<br/>
+Office:<br/>
+Address:<br/>
+Telephone:<br/>
+Email:<br/>
+</p>
+
+<p><em>Investigation contact (non-government, for AUSA's reference only):</em></p>
+<p>
+{{ investigator.name }}<br/>
+{{ investigator.organization }}<br/>
+{{ investigator.email }}
+</p>
+
+</section>
+</body>
+</html>

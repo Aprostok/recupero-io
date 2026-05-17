@@ -1,0 +1,159 @@
+{# FinCEN 314(b) request boilerplate.
+
+   Section 314(b) of the USA PATRIOT Act allows financial institutions
+   (including VASPs registered as MSBs) to share information with each
+   other for purposes of identifying and reporting on suspected money
+   laundering or terrorist financing. The institutions must each be
+   314(b)-registered with FinCEN.
+
+   Required Jinja context:
+     - case_id, generated_at
+     - victim: name, jurisdiction
+     - perpetrator: exchange_name, deposit_address, total_received_usd
+     - investigator (carrying institution): name, organization,
+       fincen_314b_id (the org's 314(b) registration number)
+     - tx_evidence: list of {tx_hash, block_time, amount_usd, explorer_url}
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>FinCEN 314(b) Information Sharing Request — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">31 USC 5311 — 314(b) Sharing</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">USA PATRIOT Act § 314(b) Information Sharing Request</div>
+    <h1>314(b) Request<br/>to {{ perpetrator.exchange_name }}</h1>
+    <p class="cover-subtitle">
+      Information-sharing request submitted pursuant to Section 314(b)
+      of the USA PATRIOT Act (31 USC § 5311 et seq.) and 31 CFR
+      § 1010.540. This request is between 314(b)-registered financial
+      institutions for AML / CTF purposes only.
+    </p>
+  </div>
+</section>
+
+<section class="content">
+
+<h2>1. Identification of Requesting Institution</h2>
+<p>
+{{ investigator.organization }}<br/>
+FinCEN 314(b) Registration Number:
+<strong>{{ investigator.fincen_314b_id|default("[TODO: insert 314(b) ID]", true) }}</strong><br/>
+Point of contact: {{ investigator.name }}, {{ investigator.email }}
+</p>
+<p>
+The requesting institution certifies that this request is made in
+good faith for purposes of identifying and reporting activity that
+the institution suspects may involve the proceeds of one or more
+specified unlawful activities ("SUAs") under 18 USC § 1956, or
+terrorist activity, in accordance with 31 CFR § 1010.540.
+</p>
+
+<h2>2. Basis for Suspicion</h2>
+<p>
+On {{ incident_date }}, customer {{ victim.name }} ({{ victim.jurisdiction }}
+resident) reported the misappropriation of digital assets totaling
+approximately {{ total_loss_usd }} in U.S. dollar equivalent. Tracing
+of the misappropriated funds, conducted using on-chain analysis
+methods producing chain-of-custody-preserved evidence, established
+that <strong>{{ perpetrator.total_received_usd }}</strong> of the
+stolen proceeds were deposited at {{ perpetrator.exchange_name }}
+at the following address:
+</p>
+<p class="mono">{{ perpetrator.deposit_address }}</p>
+
+<p>
+The transfers giving rise to this request are summarized below.
+Each transaction is independently verifiable on the public blockchain:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Tx Hash</th><th>Block Time (UTC)</th><th>USD Amount</th></tr>
+  </thead>
+  <tbody>
+  {% for tx in tx_evidence %}
+    <tr>
+      <td class="mono">{{ tx.tx_hash }}</td>
+      <td>{{ tx.block_time }}</td>
+      <td>{{ tx.amount_usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>3. Information Requested</h2>
+<p>Solely for AML / CTF analytical purposes, the requesting
+institution respectfully asks that {{ perpetrator.exchange_name }}
+identify whether:</p>
+<ol>
+  <li>
+    The deposit address shown above is associated with one of your
+    customer accounts. (Yes / No, with no further detail required if
+    the answer is No.)
+  </li>
+  <li>
+    If yes, the customer's account remains active and what category
+    of risk classification, if any, your compliance team has assigned
+    to the account at the time of this request.
+  </li>
+  <li>
+    Whether you have filed, or are in the process of filing, a
+    Suspicious Activity Report (SAR) relating to this account or to
+    inflows from the chain-of-custody-evidenced source transactions.
+  </li>
+  <li>
+    Whether other transactions from related addresses or counterparties
+    have produced activity your institution has independently flagged
+    under your Bank Secrecy Act program.
+  </li>
+</ol>
+
+<h2>4. Use and Confidentiality of Response</h2>
+<p>
+Any information provided by {{ perpetrator.exchange_name }} in
+response to this request will be used exclusively for the purpose
+of identifying and reporting on the activity described above. The
+response will not be disclosed to any third party except (i) law
+enforcement, in connection with a SAR or other reporting obligation,
+or (ii) as may be required by applicable law. Both institutions
+acknowledge the safe-harbor protections at 31 USC § 5318(g)(3) for
+disclosures made in good faith pursuant to Section 314(b).
+</p>
+
+<h2>5. Verification of 314(b) Status</h2>
+<p>
+Receiving institution may verify the requesting institution's
+314(b) registration via FinCEN's secure portal. If the receiving
+institution is not currently 314(b)-registered, this request shall
+be deemed withdrawn upon written notice to the contact below.
+</p>
+
+<h2>6. Response</h2>
+<p>
+The requesting institution respectfully requests a response within
+ten (10) business days of receipt of this letter. Responses should
+be directed to:
+</p>
+<p>
+{{ investigator.name }}<br/>
+{{ investigator.organization }}<br/>
+{{ investigator.email }}<br/>
+</p>
+
+</section>
+</body>
+</html>

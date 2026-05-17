@@ -83,13 +83,26 @@ def build_findings(brief: dict[str, Any]) -> list[InvestigatorFinding]:
     from it (not from the underlying case.json), we ensure
     the CSV reflects exactly what's in the customer-facing
     PDF. No skew between the two.
+
+    Sections covered (v0.10.x):
+      * RISK_ASSESSMENT             — direct counterparty exposure
+      * INDIRECT_EXPOSURE           — N-hop graph exposure (v0.10.0)
+      * CROSS_CHAIN_HANDOFFS        — bridge-out events (v0.8.1)
+      * FREEZABLE                   — issuer freeze targets
+      * ENTITY_CLUSTERS             — same-actor groupings (v0.9.0)
+      * INCIDENT_CLASSIFICATION     — drainer pattern (v0.10.1)
+      * DEX_SWAPS                   — DEX router involvement (v0.10.2)
+      * DESTINATIONS                — info-level (every dest)
     """
     findings: list[InvestigatorFinding] = []
 
     findings.extend(_findings_from_risk(brief))
+    findings.extend(_findings_from_indirect_exposure(brief))
     findings.extend(_findings_from_cross_chain(brief))
     findings.extend(_findings_from_freezable(brief))
     findings.extend(_findings_from_clusters(brief))
+    findings.extend(_findings_from_drainer(brief))
+    findings.extend(_findings_from_dex_swaps(brief))
     findings.extend(_findings_from_destinations(brief))
 
     # Sort: SANCTIONED first, then by severity desc.
@@ -278,6 +291,153 @@ def _findings_from_clusters(brief: dict[str, Any]) -> list[InvestigatorFinding]:
                 + (f" (+{len(addresses)-5} more)" if len(addresses) > 5 else "")
                 + f". Heuristics: {evidence_summary}"
             ),
+        ))
+    return out
+
+
+def _findings_from_indirect_exposure(brief: dict[str, Any]) -> list[InvestigatorFinding]:
+    """INDIRECT_EXPOSURE → one finding per (address, top-path) pair.
+
+    v0.10.0 adds N-hop exposure attribution. Each address may have
+    many upstream paths; we emit one finding per address using the
+    highest-weight path (so investigators see the most-material
+    exposure first, with the multi-hop nature explicit in the
+    finding's notes).
+    """
+    out: list[InvestigatorFinding] = []
+    section = brief.get("INDIRECT_EXPOSURE") or {}
+    addresses = section.get("addresses") or {}
+    for addr, payload in addresses.items():
+        paths = payload.get("paths") or []
+        if not paths:
+            continue
+        top_path = paths[0]
+        sev_int = int(top_path.get("severity", 3))
+        # Indirect OFAC is high-severity but not always
+        # critical (multi-hop dilutes). Map sev=4 hop=1
+        # to 'critical', sev=4 hop=2+ to 'high', etc.
+        hop_count = int(top_path.get("hop_count", 1))
+        risk_cat = top_path.get("risk_category", "")
+        if risk_cat.startswith("ofac") and hop_count == 1:
+            severity = "critical"
+        elif risk_cat.startswith("ofac"):
+            severity = "high"
+        else:
+            severity = _severity_int_to_str(sev_int)
+        amount = payload.get("total_indirect_usd", "")
+        source_name = top_path.get("source_name", "(unknown)")
+        out.append(InvestigatorFinding(
+            finding_type="indirect_exposure",
+            address=addr,
+            chain=brief.get("PRIMARY_CHAIN", "").lower() or "ethereum",
+            severity=severity,
+            headline=(
+                f"Indirect exposure {amount} to {source_name} "
+                f"({hop_count}-hop)"
+            ),
+            counterparty=top_path.get("source_address", ""),
+            counterparty_name=source_name,
+            risk_category=risk_cat,
+            amount_usd=str(top_path.get("weighted_amount_usd", "")),
+            tx_hash="",
+            explorer_url="",
+            timestamp_iso="",
+            follow_up_url="",
+            notes=(
+                f"hop_count={hop_count}; "
+                f"path: source → "
+                + " → ".join(
+                    a[:10] + "..."
+                    for a in (top_path.get("path_addresses") or [])
+                )
+                + (
+                    f"; {len(paths) - 1} additional path(s) "
+                    f"to other sources"
+                    if len(paths) > 1 else ""
+                )
+            ),
+        ))
+    return out
+
+
+def _findings_from_drainer(brief: dict[str, Any]) -> list[InvestigatorFinding]:
+    """INCIDENT_CLASSIFICATION → one finding when the case is
+    classified as a drainer case + per-signal findings."""
+    out: list[InvestigatorFinding] = []
+    section = brief.get("INCIDENT_CLASSIFICATION") or {}
+    if not section.get("is_drainer_case"):
+        return out
+    attribution = section.get("drainer_attribution") or "(unknown drainer)"
+    confidence = section.get("classification_confidence", "low")
+    out.append(InvestigatorFinding(
+        finding_type="drainer_classification",
+        address="(victim)",
+        chain=brief.get("PRIMARY_CHAIN", "").lower() or "ethereum",
+        severity="critical" if confidence == "high" else "high",
+        headline=f"Case classified as wallet-drainer theft (operator: {attribution})",
+        counterparty="",
+        counterparty_name=attribution,
+        risk_category="scam_drainer",
+        amount_usd="",
+        tx_hash="",
+        explorer_url="",
+        timestamp_iso="",
+        follow_up_url="",
+        notes=(
+            f"Classification confidence: {confidence}. "
+            f"{len(section.get('signals') or [])} signal(s) detected."
+        ),
+    ))
+    # Also surface each signal individually
+    for s in section.get("signals") or []:
+        sev = s.get("severity", "medium")
+        out.append(InvestigatorFinding(
+            finding_type="drainer_signal",
+            address=s.get("address", ""),
+            chain=brief.get("PRIMARY_CHAIN", "").lower() or "ethereum",
+            severity=sev,
+            headline=s.get("description", "Drainer signal detected"),
+            counterparty=s.get("counterparty", ""),
+            counterparty_name=s.get("counterparty_name", ""),
+            risk_category="scam_drainer",
+            amount_usd="",
+            tx_hash="",
+            explorer_url="",
+            timestamp_iso="",
+            follow_up_url="",
+            notes=f"Signal type: {s.get('type')}. Confidence: {s.get('confidence')}",
+        ))
+    return out
+
+
+def _findings_from_dex_swaps(brief: dict[str, Any]) -> list[InvestigatorFinding]:
+    """DEX_SWAPS → one finding per swap event. Severity='high'
+    because each swap is a continuation point for the trace."""
+    out: list[InvestigatorFinding] = []
+    for swap in brief.get("DEX_SWAPS") or []:
+        out.append(InvestigatorFinding(
+            finding_type="dex_swap",
+            address=swap.get("swapper", ""),
+            chain=brief.get("PRIMARY_CHAIN", "").lower() or "ethereum",
+            severity="high",
+            headline=(
+                f"Swap via {swap.get('router_name')}: "
+                f"{swap.get('input_amount_usd') or swap.get('input_amount', '')} → "
+                f"{swap.get('output_amount_usd') or swap.get('output_amount', '')}"
+            ),
+            counterparty=swap.get("output_recipient", "") or "",
+            counterparty_name=swap.get("router_name", ""),
+            risk_category="dex_swap",
+            amount_usd=str(
+                swap.get("output_amount_usd")
+                or swap.get("input_amount_usd")
+                or ""
+            ),
+            tx_hash=swap.get("tx_hash", ""),
+            explorer_url=swap.get("explorer_url", ""),
+            timestamp_iso=swap.get("block_time", ""),
+            follow_up_url="",
+            notes=swap.get("investigator_note", ""),
         ))
     return out
 

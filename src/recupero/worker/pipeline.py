@@ -338,6 +338,30 @@ def run_one(
             # not a deliverable.
             _populate_watchlist(inv, local_store, case_dir, db)
 
+            # Pass-2 perpetrator-forward trace (v0.8.0) ----------------------
+            # Runs from the consolidation hub(s) identified during
+            # pass-1, surfacing downstream destinations that
+            # victim-forward attribution-share filtering would
+            # otherwise hide. See trace/perpetrator_trace.py for
+            # the architecture + heuristic thresholds.
+            #
+            # Best-effort: failures log a warning + the
+            # investigation proceeds with pass-1 only. Skipped
+            # entirely on:
+            #   * wallet traces (skip_freeze_briefs=True)
+            #   * RECUPERO_DISABLE_PASS2=1 in env
+            #   * when no candidates qualify (the heuristic
+            #     correctly says "no hub worth re-tracing")
+            if not inv.skip_freeze_briefs and not has_freeze:
+                # Only run on fresh investigations — skip on
+                # re-runs that already had freeze_asks.json
+                # hydrated, since the pass-2 case.json is now
+                # in storage from the prior run.
+                _maybe_run_pass2(
+                    inv=inv, case_id_str=case_id_str, cfg=cfg, env=env,
+                    local_store=local_store, case_dir=case_dir, bucket=store,
+                )
+
             # Editorial stage ----------------------------------------------
             # Skipped when the row has skip_editorial=True (wallet
             # traces, internal R&D — no real victim to write prose
@@ -814,6 +838,136 @@ def _stage_build_package(
 
 
 # ----- Helpers ----- #
+
+
+def _maybe_run_pass2(
+    *,
+    inv: Investigation,
+    case_id_str: str,
+    cfg: RecuperoConfig,
+    env: RecuperoEnv,
+    local_store: CaseStore,
+    case_dir: Path,
+    bucket: SupabaseCaseStore,
+) -> None:
+    """Pass-2 perpetrator-forward trace orchestration (v0.8.0).
+
+    Runs after the pass-1 trace + freeze-target enumeration
+    completes. Reads freeze_brief.json + case.json, identifies
+    hub candidates via the heuristic in
+    recupero.trace.perpetrator_trace, runs one pass-2 trace per
+    candidate (capped at 3), then merges the results back into
+    case.json so emit_brief sees the expanded destination set.
+
+    Best-effort: any failure logs a warning + the investigation
+    proceeds with pass-1 only. The phase=1 trace is the
+    durable artifact; pass-2 augments it.
+    """
+    from recupero.trace.perpetrator_trace import (
+        identify_pass2_candidates,
+        is_pass2_enabled,
+        merge_perpetrator_findings,
+        run_perpetrator_trace,
+    )
+    if not is_pass2_enabled():
+        log.info("pass2 skipped: RECUPERO_DISABLE_PASS2=1")
+        return
+
+    # Need both case.json + freeze_brief.json to identify candidates.
+    case_path = case_dir / "case.json"
+    freeze_brief_path = case_dir / "freeze_brief.json"
+    if not case_path.exists():
+        log.info("pass2 skipped: case.json missing (pass-1 didn't run)")
+        return
+
+    # freeze_brief.json doesn't exist YET at this point in the
+    # pipeline — it's produced by the emitting stage which runs
+    # AFTER editorial. What we actually have is freeze_asks.json
+    # (produced by the freeze-listing stage that just ran).
+    # Use that as the candidate source. freeze_asks has the
+    # FREEZABLE entries already populated with holdings.
+    freeze_asks_path = case_dir / "freeze_asks.json"
+    if not freeze_asks_path.exists():
+        log.info("pass2 skipped: freeze_asks.json missing")
+        return
+
+    try:
+        case = local_store.read_case(case_id_str)
+        freeze_asks = json.loads(
+            freeze_asks_path.read_text(encoding="utf-8-sig"),
+        )
+        candidates = identify_pass2_candidates(case, freeze_asks)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pass2 candidate identification failed: %s", exc)
+        return
+
+    if not candidates:
+        log.info("pass2: no qualifying candidates (no hub > "
+                 "ratio + balance thresholds)")
+        return
+
+    log.info(
+        "pass2: %d candidate(s) identified — running pass-2 traces",
+        len(candidates),
+    )
+
+    pass2_cases: list[Case] = []
+    for cand in candidates:
+        try:
+            pass2_case = run_perpetrator_trace(
+                chain=cand.chain,
+                hub_address=cand.address,
+                incident_time=inv.incident_time,
+                parent_case_id=case_id_str,
+                config=cfg,
+                env=env,
+                case_dir=case_dir,
+            )
+            pass2_cases.append(pass2_case)
+            log.info(
+                "pass2: trace from hub=%s yielded %d transfers, %d "
+                "distinct destinations",
+                cand.address, len(pass2_case.transfers),
+                len({t.to_address.lower() for t in pass2_case.transfers}),
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "pass2 trace from %s failed: %s — continuing with "
+                "remaining candidates", cand.address, exc,
+            )
+
+    if not pass2_cases:
+        log.info("pass2: all candidate traces failed; pass-1 result preserved")
+        return
+
+    # Merge findings + overwrite case.json with the expanded view.
+    try:
+        merged = merge_perpetrator_findings(case, pass2_cases)
+        local_store.write_case(merged)
+        log.info(
+            "pass2: merged %d pass-2 trace(s) into case.json — "
+            "transfer count %d → %d",
+            len(pass2_cases), len(case.transfers), len(merged.transfers),
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pass2 merge failed: %s — pass-1 result preserved", exc)
+        return
+
+    # Re-run freeze-target enumeration on the merged case so the
+    # new pass-2 destinations get classified + their freezable
+    # holdings populated in freeze_asks.json before editorial
+    # drafting sees them.
+    try:
+        _stage_list_freeze_targets(
+            inv, case_id_str, cfg, env, local_store, case_dir, bucket,
+        )
+        log.info("pass2: freeze-target re-enumeration complete")
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "pass2: freeze re-enum failed (%s); pass-2 destinations "
+            "in case.json but not classified — editorial will still "
+            "see them via case.json", exc,
+        )
 
 
 def _populate_watchlist(

@@ -46,12 +46,17 @@ class TestLoadIssuerDB:
         assert db[usdc_eth].freeze_capability == "yes"
         assert db[usdc_eth].primary_contact == "compliance@circle.com"
 
-    def test_dai_loaded_with_limited_freeze(self):
+    def test_dai_loaded_with_no_freeze(self):
+        """v0.7.5 corrected DAI from 'limited' to 'no'. The prior
+        'limited' tag overstated reality — DAI is permissionless
+        at the contract level and Sky governance has no individual-
+        address freeze. Recovery path for DAI is perpetrator
+        identification + court order, not issuer freeze."""
         db = load_issuer_db()
         dai = (Chain.ethereum, "0x6b175474e89094c44da98b954eedeac495271d0f")
         assert dai in db
         assert db[dai].issuer.startswith("Sky")
-        assert db[dai].freeze_capability == "limited"
+        assert db[dai].freeze_capability == "no"
 
     def test_midas_msyrupusdp_loaded(self):
         db = load_issuer_db()

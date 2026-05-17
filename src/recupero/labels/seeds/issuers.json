@@ -1,7 +1,10 @@
 {
   "_meta": {
     "description": "Maps freezable-token contracts to the issuer that controls them. When a freeze target's holdings include one of these tokens, the brief generator knows who to address. All addresses lowercased.",
-    "schema_version": 1,
+    "schema_version": 2,
+    "schema_changes": {
+      "v2": "Added `delegates_to` field for wrapper tokens (Aave aTokens) whose freeze action chains through to an underlying issuer."
+    },
     "source_caveat": "These contact emails and freeze powers are based on public knowledge as of 2025-2026. Verify before sending. Issuer policies change."
   },
   "tokens": [
@@ -10,8 +13,8 @@
       "contract": "0x6b175474e89094c44da98b954eedeac495271d0f",
       "symbol": "DAI",
       "issuer": "Sky Protocol (formerly MakerDAO)",
-      "freeze_capability": "limited",
-      "freeze_notes": "DAI is permissionless; Sky/MKR governance can pause specific functions but cannot freeze individual addresses. Reach out for visibility and possible governance action.",
+      "freeze_capability": "no",
+      "freeze_notes": "DAI is permissionless at the contract level — there is no individual-address freeze function in the DAI ERC-20 contract. Sky governance can pause specific protocol functions (e.g., Spark lending) but cannot blacklist holders. Practical recovery path for DAI seizure: identify the perpetrator and pursue via court order, NOT via issuer freeze. Surface Sky governance as a courtesy contact for visibility only.",
       "primary_contact": "security@makerdao.com",
       "secondary_contact": "https://forum.sky.money",
       "jurisdiction": "Cayman Islands (Sky Foundation)"
@@ -149,6 +152,155 @@
       "freeze_notes": "Solana USDT issued by Tether.",
       "primary_contact": "compliance@tether.to",
       "jurisdiction": "British Virgin Islands"
+    },
+
+    {
+      "_section": "v0.7.5 additions — Maple companion products, Frax, Aave aTokens, BTC wrappers, additional regulated stables"
+    },
+
+    {
+      "chain": "ethereum",
+      "contract": "0x80ac24aa929eaf5013f6436cda2a7ba190f5cc0b",
+      "symbol": "syrupUSDC",
+      "issuer": "Maple Finance",
+      "freeze_capability": "yes",
+      "freeze_notes": "Maple's syrupUSDC vault token. Maple's permissioned-pool design and KYC/AML compliance allows them to restrict redemptions for specific holders. Submit freeze requests via their compliance contact with the wallet address and case context.",
+      "primary_contact": "compliance@maple.finance",
+      "secondary_contact": "support@maple.finance",
+      "jurisdiction": "United States / Cayman Islands"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xeaa7d2128b2cad8e57e8b53eb1ec19f2c2db1bf6",
+      "symbol": "syrupUSDT",
+      "issuer": "Maple Finance",
+      "freeze_capability": "yes",
+      "freeze_notes": "Maple's syrupUSDT vault token. Same compliance channel as syrupUSDC.",
+      "primary_contact": "compliance@maple.finance",
+      "secondary_contact": "support@maple.finance",
+      "jurisdiction": "United States / Cayman Islands"
+    },
+
+    {
+      "chain": "ethereum",
+      "contract": "0x853d955acef822db058eb8505911ed77f175b99e",
+      "symbol": "FRAX",
+      "issuer": "Frax Finance",
+      "freeze_capability": "limited",
+      "freeze_notes": "FRAX is partially algorithmic with a governance-controlled component. Frax governance can blacklist specific addresses via a vote, but the process is slow and requires demonstrated cause. Worth contacting on substantial cases; not a fast freeze action.",
+      "primary_contact": "team@frax.finance",
+      "secondary_contact": "https://gov.frax.finance",
+      "jurisdiction": "decentralized / governance"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xa663b02cf0a4b149d2ad41910cb81e23e1c41c32",
+      "symbol": "sFRAX",
+      "issuer": "Frax Finance",
+      "freeze_capability": "limited",
+      "freeze_notes": "Staked FRAX vault token. Same governance constraints as FRAX itself.",
+      "primary_contact": "team@frax.finance",
+      "secondary_contact": "https://gov.frax.finance",
+      "jurisdiction": "decentralized / governance"
+    },
+
+    {
+      "_section": "Aave aTokens — delegate freeze to underlying issuer. When a perpetrator holds an aToken, the freeze action against the UNDERLYING is what actually constrains the position; on aToken redemption the user receives the (now-frozen) underlying token."
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x98c23e9d8f34fefb1b7bd6a91b7ff122f4e16f5c",
+      "symbol": "aUSDC",
+      "issuer": "Aave",
+      "freeze_capability": "no",
+      "freeze_notes": "aUSDC is an Aave receipt token; Aave protocol has no individual freeze capability at the token level. However, the underlying USDC IS freezable through Circle (see delegates_to). The recommended freeze action chains through to the underlying — when Circle freezes USDC at the aToken contract address, redemptions return frozen USDC.",
+      "primary_contact": null,
+      "secondary_contact": "https://discord.gg/aave",
+      "jurisdiction": "decentralized",
+      "delegates_to": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x23878914efe38d27c4d67ab83ed1b93a74d4086a",
+      "symbol": "aUSDT",
+      "issuer": "Aave",
+      "freeze_capability": "no",
+      "freeze_notes": "aUSDT receipt token. Delegates to USDT issuer (Tether) for freeze action.",
+      "primary_contact": null,
+      "secondary_contact": "https://discord.gg/aave",
+      "jurisdiction": "decentralized",
+      "delegates_to": "0xdac17f958d2ee523a2206206994597c13d831ec7"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x018008bfb33d285247a21d44e50697654f754e63",
+      "symbol": "aDAI",
+      "issuer": "Aave",
+      "freeze_capability": "no",
+      "freeze_notes": "aDAI receipt token. DAI itself is permissionless so the underlying delegate has no freeze either — recovery for aDAI requires perpetrator identification + court order, like raw DAI. Surfaced for completeness.",
+      "primary_contact": null,
+      "secondary_contact": "https://discord.gg/aave",
+      "jurisdiction": "decentralized",
+      "delegates_to": "0x6b175474e89094c44da98b954eedeac495271d0f"
+    },
+
+    {
+      "_section": "BTC wrappers + ETH wrapper"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
+      "symbol": "WBTC",
+      "issuer": "BitGo",
+      "freeze_capability": "yes",
+      "freeze_notes": "BitGo custodies the underlying BTC backing WBTC. While the WBTC ERC-20 contract is permissionless, BitGo can refuse redemptions and (in coordination with merchants) blacklist addresses. Practical recovery path: contact BitGo + the merchant network with a court order.",
+      "primary_contact": "compliance@bitgo.com",
+      "secondary_contact": "https://www.bitgo.com/legal",
+      "jurisdiction": "United States (Delaware)"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+      "symbol": "WETH",
+      "issuer": "(none — canonical wrapper)",
+      "freeze_capability": "no",
+      "freeze_notes": "WETH is a canonical wrapper contract for ETH (deposit ETH, mint WETH 1:1; redeem WETH for ETH 1:1). No individual freeze capability. Holdings reported as WETH should be treated as raw ETH for seizure purposes — perpetrator-identification + court order is the path.",
+      "primary_contact": null,
+      "jurisdiction": "decentralized"
+    },
+
+    {
+      "_section": "Additional regulated stablecoins"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x8e870d67f660d95d5be530380d0ec0bd388289e1",
+      "symbol": "USDP",
+      "issuer": "Paxos",
+      "freeze_capability": "yes",
+      "freeze_notes": "Pax Dollar (formerly PAX). Paxos retains freeze capability under their NYDFS license. Submit through their compliance channel.",
+      "primary_contact": "compliance@paxos.com",
+      "jurisdiction": "United States (New York)"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0x0000000000085d4780b73119b644ae5ecd22b376",
+      "symbol": "TUSD",
+      "issuer": "Techteryx (TUSD)",
+      "freeze_capability": "yes",
+      "freeze_notes": "TrueUSD; ownership transferred from TrustToken to Techteryx in 2020. Freeze capability via the contract's blacklist function. Note: TUSD has had documented reserve transparency issues; freezes may be slower than Circle/Tether.",
+      "primary_contact": "compliance@trueusd.com",
+      "jurisdiction": "Hong Kong"
+    },
+    {
+      "chain": "ethereum",
+      "contract": "0xc5f0f7b66764f6ec8c8dff7ba683102295e16409",
+      "symbol": "FDUSD",
+      "issuer": "First Digital Trust",
+      "freeze_capability": "yes",
+      "freeze_notes": "First Digital USD; issued by First Digital Trust under a Hong Kong trust company license. Freeze capability via blacklist; compliance generally responsive to court-order-backed requests.",
+      "primary_contact": "compliance@firstdigitalgroup.com",
+      "jurisdiction": "Hong Kong"
     }
   ]
 }

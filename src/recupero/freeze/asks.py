@@ -48,7 +48,30 @@ _ISSUER_DB_PATH = Path(__file__).parent.parent / "labels" / "seeds" / "issuers.j
 
 @dataclass
 class IssuerEntry:
-    """One row from the issuer database."""
+    """One row from the issuer database.
+
+    ``delegates_to`` is the v0.7.5 addition. When set, this token's
+    freeze action delegates to another token's issuer (the underlying).
+    Example: Aave aUSDC delegates_to USDC's contract on the same chain
+    — Circle freezing the underlying USDC effectively freezes the
+    aUSDC position (the aToken is just a receipt for the underlying
+    USDC deposit in Aave; on redeem, the user receives whatever the
+    aToken contract holds, which is the underlying USDC, which is
+    frozen).
+
+    The downstream effect: when match_freeze_asks encounters a
+    holding whose IssuerEntry has delegates_to set, it produces TWO
+    actionable freeze targets — one against the wrapper's nominal
+    issuer (often "no" freeze capability for protocols like Aave),
+    and one against the underlying's issuer (the actual freeze
+    point). The brief surfaces both so the operator can decide
+    which letter to send.
+
+    Format: lowercased contract address of the underlying token on
+    the same chain. The loader resolves this at db-load time into
+    a reference to the delegated IssuerEntry; consumers see a
+    populated ``delegates_to_entry`` attribute on the wrapper.
+    """
     chain: Chain
     contract: str           # always lowercased
     symbol: str
@@ -58,6 +81,9 @@ class IssuerEntry:
     primary_contact: str | None
     secondary_contact: str | None
     jurisdiction: str
+    # v0.7.5 — see class docstring.
+    delegates_to: str | None = None              # underlying contract
+    delegates_to_entry: "IssuerEntry | None" = None  # resolved at load
 
 
 @dataclass
@@ -114,10 +140,24 @@ class ExchangeDeposit:
 
 
 def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEntry]:
-    """Load issuers.json into a dict keyed by (chain, contract_lower)."""
+    """Load issuers.json into a dict keyed by (chain, contract_lower).
+
+    Two-pass loader:
+      1. Pass 1 — instantiate every IssuerEntry with raw
+         delegates_to contract string.
+      2. Pass 2 — resolve delegates_to into a reference to the
+         actual target IssuerEntry. Logs a warning + leaves the
+         reference None if the target isn't in the same load
+         (typo in delegates_to, target on a different chain,
+         target not yet added).
+
+    Two-pass shape is required because A.delegates_to may
+    reference B which loads later in the JSON array.
+    """
     src = path or _ISSUER_DB_PATH
     raw = json.loads(src.read_text(encoding="utf-8-sig"))
     out: dict[tuple[Chain, str], IssuerEntry] = {}
+    # Pass 1: populate every entry.
     for tok in raw.get("tokens", []):
         try:
             chain = Chain(tok["chain"])
@@ -127,6 +167,12 @@ def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEn
         contract = (tok.get("contract") or "").lower()
         if not contract:
             continue
+        delegates_to_raw = tok.get("delegates_to")
+        delegates_to = (
+            delegates_to_raw.lower()
+            if isinstance(delegates_to_raw, str) and delegates_to_raw.strip()
+            else None
+        )
         out[(chain, contract)] = IssuerEntry(
             chain=chain,
             contract=contract,
@@ -137,7 +183,23 @@ def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEn
             primary_contact=tok.get("primary_contact"),
             secondary_contact=tok.get("secondary_contact"),
             jurisdiction=tok.get("jurisdiction", "unknown"),
+            delegates_to=delegates_to,
         )
+    # Pass 2: resolve cross-references.
+    for entry in out.values():
+        if entry.delegates_to is None:
+            continue
+        target = out.get((entry.chain, entry.delegates_to))
+        if target is None:
+            log.warning(
+                "issuer %s/%s declares delegates_to=%s on chain %s, "
+                "but no matching IssuerEntry was loaded; freeze action "
+                "will fall back to wrapper's nominal issuer",
+                entry.issuer, entry.symbol, entry.delegates_to,
+                entry.chain.value,
+            )
+            continue
+        entry.delegates_to_entry = target
     return out
 
 

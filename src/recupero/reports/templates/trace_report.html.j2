@@ -221,7 +221,170 @@ recovery path (subpoena, mixer report, bridge operator
 notification).</p>
 {% endif %}
 
-<h2>4. Flow Visualization</h2>
+{# v0.9.x sections — cross-chain handoffs, entity clusters,
+   risk assessment. Always rendered with section headers
+   (even when empty) because "no findings detected" is a useful
+   confirmation for a government / law-enforcement reader that
+   the analysis was performed. #}
+
+<h2>4. Cross-Chain Handoffs</h2>
+{% if cross_chain_handoffs %}
+<p class="small">
+  Funds bridged off the source chain via a known cross-chain
+  bridge. The trace cannot follow money past a bridge contract
+  (different chain, different state machine), but each handoff
+  is recorded with the destination-chain candidates and a
+  follow-up URL so a downstream investigator can continue the
+  trace on the destination chain.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>Bridge</th>
+      <th>Source address</th>
+      <th>Amount</th>
+      <th>Token</th>
+      <th>Destination candidates</th>
+      <th>Follow-up</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in cross_chain_handoffs %}
+    <tr>
+      <td class="small">{{ h.block_time }}</td>
+      <td>{{ h.bridge_name }}<br/><span class="small secondary">{{ h.bridge_protocol }}</span></td>
+      <td class="mono"><a href="{{ h.tx_explorer_url }}">{{ h.source_address[:10] }}…</a></td>
+      <td class="amount">{{ h.amount_usd or h.amount_decimal }}</td>
+      <td>{{ h.token_symbol }}</td>
+      <td class="small">{{ h.destination_chain_candidates | join(', ') if h.destination_chain_candidates else '(see bridge explorer)' }}</td>
+      <td class="small">
+        {% if h.follow_up_url %}<a href="{{ h.follow_up_url }}">{{ h.follow_up_url }}</a>{% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="small">
+  <strong>Investigator note format:</strong> each entry contains
+  a one-line investigator action item embedded in the brief's
+  JSON (see <span class="mono">cross_chain_handoffs[].investigator_note</span>
+  in the corresponding <span class="mono">freeze_brief.json</span>).
+</p>
+{% else %}
+<p>No cross-chain handoffs detected. The trace did not observe
+   transfers to any known bridge contract.</p>
+{% endif %}
+
+<h2>5. Entity Clusters</h2>
+{% if entity_clusters and entity_clusters.clusters %}
+<p class="small">
+  Addresses that appear to belong to the same actor, grouped via
+  on-chain behavioral signals: shared funding source (H1),
+  shared withdrawal target (H2), and round-number self-funding
+  (H3). Each cluster carries evidence so the investigator can
+  verify the heuristic fired correctly.
+</p>
+{% for cluster in entity_clusters.clusters %}
+<div class="cluster-card">
+  <h3 style="margin-top:1.2em;">{{ cluster.cluster_id }} — {{ cluster.size }} addresses
+    {% if cluster.total_balance_usd %}({{ cluster.total_balance_usd }} total){% endif %}</h3>
+  <p class="small"><strong>Addresses:</strong></p>
+  <ul class="address-list">
+    {% for addr in cluster.addresses %}
+    <li class="mono">{{ addr }}</li>
+    {% endfor %}
+  </ul>
+  <p class="small"><strong>Clustering evidence:</strong></p>
+  <ul class="evidence-list">
+    {% for ev in cluster.evidence %}
+    <li>
+      <strong>{{ ev.heuristic }}</strong>
+      ({{ ev.confidence }} confidence):
+      {{ ev.details }}
+      {% if ev.related_address %}— via <span class="mono">{{ ev.related_address[:14] }}…</span>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+{% endfor %}
+{% else %}
+<p>No entity clusters detected. The trace's addresses either
+   lacked behavioral signals (shared funding source within 24h,
+   shared withdrawal target within 12h) or each address operated
+   independently in this case.</p>
+{% endif %}
+
+<h2>6. Risk Assessment</h2>
+{% if risk_assessment and risk_assessment.summary.addresses_assessed > 0 %}
+<div class="risk-summary">
+  <div class="risk-summary-stat">
+    <div class="risk-summary-label">Addresses assessed</div>
+    <div class="risk-summary-value">{{ risk_assessment.summary.addresses_assessed }}</div>
+  </div>
+  <div class="risk-summary-stat">
+    <div class="risk-summary-label">OFAC-exposed</div>
+    <div class="risk-summary-value">{{ risk_assessment.summary.ofac_exposed_count }}</div>
+  </div>
+  <div class="risk-summary-stat">
+    <div class="risk-summary-label">Mixer-exposed</div>
+    <div class="risk-summary-value">{{ risk_assessment.summary.mixer_exposed_count }}</div>
+  </div>
+  <div class="risk-summary-stat">
+    <div class="risk-summary-label">Highest score</div>
+    <div class="risk-summary-value">{{ risk_assessment.summary.highest_score }}</div>
+  </div>
+</div>
+{% if risk_assessment.summary.ofac_exposed_count > 0 %}
+<p class="risk-warning">
+  <strong>SANCTIONED EXPOSURE DETECTED.</strong> One or more
+  addresses in this case had direct transactions with OFAC SDN
+  List entries. For U.S. persons this elevates the case to
+  federal jurisdiction (Treasury / OFAC reporting obligations
+  may apply). See per-address detail below.
+</p>
+{% endif %}
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Address</th>
+      <th>Score</th>
+      <th>Verdict</th>
+      <th>Exposures</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for addr, data in risk_assessment.addresses.items() %}
+    <tr>
+      <td class="mono">{{ addr[:14] }}…</td>
+      <td class="amount">{{ data.score }}</td>
+      <td>{{ data.verdict }}</td>
+      <td class="small">
+        {% for exp in data.exposures %}
+        <div>
+          {{ exp.direction }} {{ exp.total_usd }} —
+          {{ exp.counterparty_name }}
+          ({{ exp.risk_category }}, sev {{ exp.severity }})
+        </div>
+        {% endfor %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p>No high-risk exposures detected. The trace's addresses had
+   no direct transactions with OFAC SDN List entries, sanctioned
+   mixers, known darknet markets, or documented scam/drainer
+   services.</p>
+<p class="small"><em>This is a positive finding for the case — the
+   perpetrator's operational footprint avoided
+   immediately-flagged infrastructure. Investigators should still
+   look for indirect / multi-hop exposure beyond what's surfaced
+   here (this v0.9.x assessment is direct-counterparty only).</em></p>
+{% endif %}
+
+<h2>7. Flow Visualization</h2>
 {% if flow_filename %}
 <p class="attachment-note">
   The complete fund-flow diagram is provided as a separate SVG

@@ -636,4 +636,78 @@
     line-height: 1.5;
     max-width: 56em;
   }
+
+  /* v0.9.x — Entity-cluster cards + risk-summary grid +
+     OFAC warning banner. Designed for the government /
+     law-enforcement reader: prioritize information density +
+     sanctions-finding prominence over visual polish. */
+
+  .cluster-card {
+    background: var(--paper-tint);
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px;
+    padding: var(--space-sm) var(--space-md);
+    margin: var(--space-sm) 0;
+  }
+  .cluster-card h3 {
+    font-size: 12pt;
+    color: var(--gold-accent);
+    margin: 0 0 0.6em;
+  }
+  .address-list, .evidence-list {
+    margin: 0.4em 0 0.8em;
+    padding-left: var(--space-md);
+  }
+  .address-list li {
+    font-size: 9pt;
+    color: var(--ink-soft);
+    line-height: 1.6;
+  }
+  .evidence-list li {
+    font-size: 9.5pt;
+    color: var(--ink-muted);
+    line-height: 1.55;
+    margin-bottom: 0.3em;
+  }
+
+  .risk-summary {
+    display: flex;
+    gap: var(--space-md);
+    margin: var(--space-md) 0;
+    flex-wrap: wrap;
+  }
+  .risk-summary-stat {
+    flex: 1 1 11em;
+    padding: var(--space-sm);
+    background: var(--paper-tint);
+    border: 1px solid var(--rule-soft);
+    border-radius: 4px;
+    text-align: center;
+  }
+  .risk-summary-label {
+    font-size: 8.5pt;
+    color: var(--ink-quiet);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 600;
+    margin-bottom: 0.3em;
+  }
+  .risk-summary-value {
+    font-size: 18pt;
+    color: var(--ink);
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+  .risk-warning {
+    background: #fef3c7;
+    border-left: 4px solid #b45309;
+    padding: var(--space-sm) var(--space-md);
+    margin: var(--space-md) 0;
+    font-size: 11pt;
+    color: var(--ink-soft);
+    border-radius: 4px;
+  }
+  .risk-warning strong {
+    color: #92400e;
+  }
 </style>

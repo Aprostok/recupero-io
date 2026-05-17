@@ -124,6 +124,14 @@ def _build_context(
     destinations = _build_destinations_table(case)
     freezable_rows = _build_freezable_table(freeze_brief, chain_str)
 
+    # v0.8.1 / 0.9.x — surface the new sections into the trace
+    # report template so the rendered PDF / HTML carries them.
+    # Pass through verbatim from freeze_brief; the template
+    # renders empty-state messages when sections are empty.
+    cross_chain_handoffs = freeze_brief.get("CROSS_CHAIN_HANDOFFS") or []
+    entity_clusters = freeze_brief.get("ENTITY_CLUSTERS") or None
+    risk_assessment = freeze_brief.get("RISK_ASSESSMENT") or None
+
     return {
         "investigation_id": str(investigation_id),
         "label": label,
@@ -135,6 +143,10 @@ def _build_context(
         "stats": stats,
         "destinations": destinations,
         "freezable_rows": freezable_rows,
+        # v0.8.1 / v0.9.x sections
+        "cross_chain_handoffs": cross_chain_handoffs,
+        "entity_clusters": entity_clusters,
+        "risk_assessment": risk_assessment,
         "flow_filename": flow_filename,
     }
 

@@ -209,6 +209,28 @@ def build_all_deliverables(
     except Exception as e:  # noqa: BLE001
         log.warning("trace_report generation failed (continuing): %s", e)
 
+    # v0.9.2 — investigator-facing CSV + JSON exports. Government /
+    # law-enforcement analysts (FBI, IRS-CI, OFAC) parse these
+    # directly into their case-management tools; the customer-facing
+    # PDF is for the victim but the CSV is for the analyst.
+    try:
+        from recupero.reports.investigator_export import (
+            build_findings, write_csv, write_json,
+        )
+        briefs_dir = case_dir / "briefs"
+        briefs_dir.mkdir(parents=True, exist_ok=True)
+        findings = build_findings(freeze_brief)
+        csv_path = write_csv(findings, briefs_dir / "investigator_findings.csv")
+        json_path = write_json(findings, briefs_dir / "investigator_findings.json")
+        written.append(csv_path)
+        written.append(json_path)
+        log.info(
+            "wrote investigator exports: %s + %s (%d findings)",
+            csv_path.name, json_path.name, len(findings),
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("investigator export failed (continuing): %s", e)
+
     # Victim-facing summary letter. Skipped on wallet traces
     # (skip_freeze_briefs=True / case_id=NULL) — those rows don't
     # have a real victim to address the letter to. Only ships on

@@ -25,8 +25,10 @@ product the price is fine; if usage scales, swap the MODEL constant for Sonnet.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from collections import defaultdict
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -35,8 +37,23 @@ from typing import Any
 
 # anthropic is loaded lazily so module import doesn't fail without the package.
 
+log = logging.getLogger(__name__)
+
 MODEL = "claude-opus-4-7"
 MAX_TOKENS = 4096
+
+# Retry policy for transient Anthropic failures (529 overloaded, 5xx,
+# timeouts, connection errors). 10s / 30s / 60s matches the spec
+# Jacob sent in the reliability ask. Tenacity is already a project
+# dep, and the Anthropic SDK itself does one retry by default but
+# with much shorter backoff; we override here to absorb sustained
+# capacity blips (529s often clear within 30–60s).
+#
+# The retry decorator is applied via tenacity.Retrying inside
+# call_anthropic_for_editorial so we can capture the bound
+# ``client`` from the outer scope cleanly.
+_ANTHROPIC_RETRY_WAITS_SEC = (10, 30, 60)
+_ANTHROPIC_RETRY_MAX_ATTEMPTS = len(_ANTHROPIC_RETRY_WAITS_SEC) + 1  # 4 total
 
 # USD pricing per million tokens. Update when Anthropic adjusts list prices.
 # Source: https://www.anthropic.com/pricing  (Opus 4.7, Jan 2026)
@@ -450,6 +467,69 @@ def _strip_json_fences(text: str) -> str:
     return text.strip()
 
 
+def _call_messages_with_retry(
+    *,
+    client: Any,
+    system_blocks: list[dict[str, Any]],
+    user_content_blocks: list[dict[str, Any]],
+    transient_excs: tuple[type[BaseException], ...],
+    wait_seq_sec: tuple[int, ...] = _ANTHROPIC_RETRY_WAITS_SEC,
+) -> Any:
+    """Call ``client.messages.create`` with explicit retry on transient
+    failures (Anthropic 529 / 5xx / timeouts / connection errors).
+
+    The Anthropic SDK has a built-in retry but defaults to 2 attempts
+    with sub-second initial backoff — not enough for sustained
+    capacity events. We force the SDK to do zero retries (set
+    ``max_retries=0`` on the Anthropic client) and run our own loop
+    here with the spec'd 10s/30s/60s waits.
+
+    On 4xx errors that aren't 429 (validation, auth, bad request),
+    we don't retry — those are caller bugs that won't fix themselves
+    by waiting. We classify by exception type: anthropic.RateLimitError
+    is 429 (retry), anthropic.BadRequestError is 400 (don't retry —
+    but we have to defer the discriminator to runtime because the
+    exception classes are only available after `import anthropic`).
+
+    Returns the SDK response object on success. Raises the original
+    exception after all retries are exhausted.
+    """
+    last_exc: BaseException | None = None
+    total_attempts = len(wait_seq_sec) + 1
+    for attempt_idx in range(total_attempts):
+        try:
+            return client.messages.create(
+                model=MODEL,
+                max_tokens=MAX_TOKENS,
+                system=system_blocks,
+                messages=[{"role": "user", "content": user_content_blocks}],
+            )
+        except transient_excs as exc:  # noqa: PERF203 — explicit per-attempt control
+            last_exc = exc
+            # Try to extract HTTP status for the log line. APIStatusError
+            # exposes ``status_code``; for httpx errors there's no status.
+            status = getattr(exc, "status_code", None) or getattr(
+                getattr(exc, "response", None), "status_code", None,
+            )
+            if attempt_idx >= len(wait_seq_sec):
+                log.warning(
+                    "anthropic call failed after %d attempts (status=%s): %s",
+                    total_attempts, status, exc,
+                )
+                raise
+            wait_sec = wait_seq_sec[attempt_idx]
+            log.warning(
+                "anthropic transient failure (status=%s) on attempt %d/%d — "
+                "retrying in %ds: %s",
+                status, attempt_idx + 1, total_attempts, wait_sec, exc,
+            )
+            time.sleep(wait_sec)
+    # Defensive — shouldn't reach here because the loop either returns
+    # or raises, but mypy can't see that.
+    assert last_exc is not None
+    raise last_exc
+
+
 def call_anthropic_for_editorial(
     case_summary: dict[str, Any],
     api_key: str | None = None,
@@ -486,7 +566,32 @@ def call_anthropic_for_editorial(
             "ANTHROPIC_API_KEY not set. Add it to recupero-io/.env or your shell environment."
         )
 
-    client = anthropic.Anthropic(api_key=api_key)
+    # The Anthropic SDK ships with a built-in `max_retries` config
+    # but defaults to 2 retries with short backoff — not enough for
+    # the sustained 529 overloaded_error capacity events Jacob
+    # reported. We disable the SDK-level retry (max_retries=0) and
+    # do our own loop below with explicit 10s/30s/60s waits.
+    client = anthropic.Anthropic(api_key=api_key, max_retries=0)
+
+    # Identify the transient-failure exception types once, here, so
+    # the inner retry loop stays readable. Imports are local so this
+    # module still imports cleanly when anthropic isn't installed.
+    try:
+        import httpx
+        _transient_excs: tuple[type[BaseException], ...] = (
+            anthropic.APIStatusError,        # HTTP errors incl. 529
+            anthropic.APITimeoutError,
+            anthropic.APIConnectionError,
+            anthropic.RateLimitError,        # 429
+            httpx.TimeoutException,
+            httpx.ConnectError,
+            httpx.RemoteProtocolError,
+        )
+    except Exception:  # noqa: BLE001
+        # Conservative fallback if the SDK changes its exception
+        # hierarchy — catch the broad APIError parent so we don't
+        # silently drop retries.
+        _transient_excs = (anthropic.APIError,)
 
     # Split the prompt into:
     #   1. system prompt (static across all calls) — cached
@@ -512,29 +617,24 @@ def call_anthropic_for_editorial(
     cache_read_total = 0
     for attempt in range(2):  # one retry on bad JSON
         try:
-            resp = client.messages.create(
-                model=MODEL,
-                max_tokens=MAX_TOKENS,
-                system=[
+            resp = _call_messages_with_retry(
+                client=client,
+                system_blocks=[
                     {
                         "type": "text",
                         "text": SYSTEM_PROMPT,
                         "cache_control": {"type": "ephemeral"},
                     },
                 ],
-                messages=[
+                user_content_blocks=[
                     {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": few_shot_block,
-                                "cache_control": {"type": "ephemeral"},
-                            },
-                            {"type": "text", "text": case_block_text},
-                        ],
-                    }
+                        "type": "text",
+                        "text": few_shot_block,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {"type": "text", "text": case_block_text},
                 ],
+                transient_excs=_transient_excs,
             )
 
             # Tally tokens even on retries — they all cost money. Track

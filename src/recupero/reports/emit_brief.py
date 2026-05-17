@@ -792,6 +792,37 @@ def emit_brief(
             },
         }
 
+    # --- Drainer / approval signature detection (v0.10.1) ---
+    try:
+        from recupero.trace.drainer_detection import (
+            detect_drainer_pattern,
+            drainer_findings_to_brief_section,
+        )
+        drainer_findings = detect_drainer_pattern(case, high_risk_db=high_risk_db)
+        incident_classification = drainer_findings_to_brief_section(drainer_findings)
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        incident_classification = {
+            "is_drainer_case": False,
+            "drainer_attribution": None,
+            "classification_confidence": "low",
+            "signals": [],
+        }
+
+    # --- DEX swap unwrapping (v0.10.2) ---
+    # When perpetrator funds pass through a DEX router, surfaces
+    # the input/output so the investigator can continue tracing
+    # from the output address rather than dead-ending at the
+    # router.
+    try:
+        from recupero.trace.dex_swaps import (
+            detect_dex_swaps,
+            dex_swaps_to_brief_section,
+        )
+        dex_swap_records = detect_dex_swaps(case)
+        dex_swaps = dex_swaps_to_brief_section(dex_swap_records)
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        dex_swaps = []
+
     # --- Final assembly ---
     brief = {
         "CASE_ID": editorial["CASE_ID"],
@@ -839,6 +870,17 @@ def emit_brief(
         # shape as RISK_ASSESSMENT but with hop_count + path on
         # each entry.
         "INDIRECT_EXPOSURE": indirect_exposure,
+        # v0.10.1: incident classification (drainer vs other).
+        # Surfaces whether this looks like a wallet-drainer scam
+        # (approval exploit pattern) vs an address-typo / social
+        # engineering / custodial-mistake shape, with attribution
+        # to known drainer brands when overlap is detected.
+        "INCIDENT_CLASSIFICATION": incident_classification,
+        # v0.10.2: DEX swap unwrapping. Each entry describes one
+        # swap-through-DEX event with the output recipient + an
+        # investigator action note. Lets the trace continue
+        # past 1inch/Uniswap/CoW routers.
+        "DEX_SWAPS": dex_swaps,
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 

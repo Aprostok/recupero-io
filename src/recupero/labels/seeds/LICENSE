@@ -1,0 +1,39 @@
+CC0 1.0 Universal — Public Domain Dedication
+===========================================
+
+The label data in this directory (high_risk.json, mixers.json,
+ransomware.json, defi_protocols.json, cex_deposits.json,
+issuers.json, bridges.json, and any future *.json files) is
+released under Creative Commons CC0 1.0 — public domain, no
+rights reserved.
+
+You may copy, modify, distribute, and use the data, even for
+commercial purposes, without asking permission. Attribution is
+appreciated but not required.
+
+Why public domain
+-----------------
+
+TRM Labs and Chainalysis treat their address-label databases as
+proprietary trade secrets. The result is that every forensic
+investigator, every recovery firm, every state AG's office, every
+class-action attorney pays for access to the same fundamental
+facts: "0x47CE0C6... is Tornado Cash 0.1 ETH."
+
+Those facts are not creative works. They're observations of
+public-blockchain reality. Recupero releases its curated label
+data into the public domain so:
+
+  - Other recovery operators, even competitors, can use it.
+  - Independent researchers can build on it.
+  - Victims of crypto theft don't need a $100k/year enterprise
+    license to identify the addresses that took their money.
+  - The community can contribute new labels back, raising the
+    quality floor for everyone.
+
+CC0 1.0 Universal full text: https://creativecommons.org/publicdomain/zero/1.0/
+
+The CODE that consumes this data (everything outside this
+seeds/ directory) is licensed separately per the repo root's
+LICENSE. Public-domain release applies ONLY to the .json data
+files in this directory.

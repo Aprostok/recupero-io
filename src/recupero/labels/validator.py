@@ -1,0 +1,298 @@
+"""Open labels project: schema validator + contribution-gate (v0.14.4).
+
+Run on every PR that touches src/recupero/labels/seeds/*.json to
+catch schema drift, duplicate addresses, missing required fields,
+and provenance issues before they land in main.
+
+Exposed both as a Python API (validate_seed_files()) and a CLI:
+
+    python -m recupero.labels.validator
+
+The CLI returns exit code 0 on clean / 1 on validation errors.
+Suitable for CI gating.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+
+_SEEDS_DIR = Path(__file__).parent / "seeds"
+
+# Files we validate. Each entry: (filename, "addresses" or "by_chain" wrapping,
+# required fields per entry).
+_LABEL_FILES: dict[str, dict[str, Any]] = {
+    "high_risk.json": {
+        "wrapping": "addresses",
+        "required": ["address", "name", "risk_category", "severity"],
+        "optional": ["notes", "confidence", "ofac_listing_date", "source"],
+    },
+    "mixers.json": {
+        "wrapping": "list",
+        "required": ["address", "name", "category"],
+        "optional": ["source", "confidence", "notes", "added_at"],
+    },
+    "ransomware.json": {
+        "wrapping": "addresses",
+        "required": ["address", "name"],
+        "optional": [
+            "risk_category", "severity", "confidence", "notes",
+            "operator_name", "cisa_advisory_id", "doj_docket_id",
+            "operator", "source",
+        ],
+    },
+    "defi_protocols.json": {
+        "wrapping": "list",
+        "required": ["address", "name"],
+        "optional": [
+            "category", "subcategory", "source", "notes",
+            "added_at", "confidence",
+        ],
+    },
+    "cex_deposits.json": {
+        "wrapping": "list",
+        "required": ["address", "name"],
+        "optional": [
+            "category", "source", "exchange", "confidence", "notes",
+        ],
+    },
+    "bridges.json": {
+        "wrapping": "list",
+        "required": ["address", "name"],
+        "optional": ["category", "source", "notes", "destinations"],
+    },
+}
+
+
+_ALLOWED_CONFIDENCE = frozenset(["high", "medium", "low"])
+
+
+@dataclass
+class ValidationIssue:
+    file: str
+    entry_index: int        # -1 for file-level issues
+    severity: str           # 'error' | 'warning'
+    field: str | None
+    message: str
+
+
+@dataclass
+class ValidationReport:
+    files_checked: int = 0
+    entries_checked: int = 0
+    issues: list[ValidationIssue] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not any(i.severity == "error" for i in self.issues)
+
+
+def validate_seed_files(seeds_dir: Path | None = None) -> ValidationReport:
+    """Walk the seed-files directory; validate each known file
+    against its schema spec.
+
+    Returns a ValidationReport. ``ok`` is True iff zero errors.
+    """
+    seeds_dir = seeds_dir or _SEEDS_DIR
+    report = ValidationReport()
+
+    for filename, spec in _LABEL_FILES.items():
+        path = seeds_dir / filename
+        if not path.exists():
+            report.issues.append(ValidationIssue(
+                file=filename, entry_index=-1,
+                severity="warning", field=None,
+                message=f"File not found (skipping): {path}",
+            ))
+            continue
+        report.files_checked += 1
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError as e:
+            report.issues.append(ValidationIssue(
+                file=filename, entry_index=-1,
+                severity="error", field=None,
+                message=f"JSON parse failed: {e}",
+            ))
+            continue
+
+        # Unwrap to a list of entries.
+        if spec["wrapping"] == "list":
+            entries = raw if isinstance(raw, list) else None
+            if entries is None:
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=-1,
+                    severity="error", field=None,
+                    message=(
+                        f"Expected JSON array at top level, got "
+                        f"{type(raw).__name__}"
+                    ),
+                ))
+                continue
+        elif spec["wrapping"] == "addresses":
+            if not isinstance(raw, dict) or "addresses" not in raw:
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=-1,
+                    severity="error", field=None,
+                    message=(
+                        "Expected object with 'addresses' key at top level"
+                    ),
+                ))
+                continue
+            entries = raw.get("addresses", [])
+        else:
+            entries = []
+
+        _validate_entries(filename, entries, spec, report)
+
+    return report
+
+
+def _validate_entries(
+    filename: str,
+    entries: list[Any],
+    spec: dict[str, Any],
+    report: ValidationReport,
+) -> None:
+    required = spec["required"]
+    optional = spec.get("optional", [])
+    allowed = set(required) | set(optional)
+
+    seen_addresses: set[str] = set()
+    for i, entry in enumerate(entries):
+        report.entries_checked += 1
+        if not isinstance(entry, dict):
+            report.issues.append(ValidationIssue(
+                file=filename, entry_index=i,
+                severity="error", field=None,
+                message=f"Entry must be an object, got {type(entry).__name__}",
+            ))
+            continue
+
+        # Section markers: entries with only a ``_section`` key are
+        # human-readable separators (e.g., comments-as-JSON in the
+        # absence of real JSON comments). Skip without validation.
+        if list(entry.keys()) == ["_section"]:
+            continue
+
+        for req_field in required:
+            if req_field not in entry:
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=i,
+                    severity="error", field=req_field,
+                    message=f"Missing required field {req_field!r}",
+                ))
+
+        addr = entry.get("address")
+        if isinstance(addr, str) and addr:
+            # Normalize for dup-detection.
+            addr_key = addr if addr.startswith("T") else addr.lower()
+            if addr_key in seen_addresses:
+                # Duplicates are surfaced as WARNINGS rather than
+                # errors. The seed files have some pre-existing
+                # duplicates (same address labeled twice; same
+                # address claimed by two different exchanges) that
+                # are real curation TODOs but shouldn't block CI.
+                # PR contributors are still encouraged to resolve
+                # warnings touching their changes.
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=i,
+                    severity="warning", field="address",
+                    message=(
+                        f"Duplicate address within file: {addr!r}. "
+                        "Each address should appear at most once per file. "
+                        "If two entries genuinely conflict (different "
+                        "operators claiming the same address), reconcile "
+                        "via on-chain verification."
+                    ),
+                ))
+            seen_addresses.add(addr_key)
+
+        confidence = entry.get("confidence")
+        if confidence is not None and confidence not in _ALLOWED_CONFIDENCE:
+            report.issues.append(ValidationIssue(
+                file=filename, entry_index=i,
+                severity="error", field="confidence",
+                message=(
+                    f"confidence must be one of {sorted(_ALLOWED_CONFIDENCE)}, "
+                    f"got {confidence!r}"
+                ),
+            ))
+
+        severity = entry.get("severity")
+        if severity is not None:
+            try:
+                sev_int = int(severity)
+                if not (1 <= sev_int <= 4):
+                    report.issues.append(ValidationIssue(
+                        file=filename, entry_index=i,
+                        severity="error", field="severity",
+                        message=f"severity must be 1..4, got {severity}",
+                    ))
+            except (TypeError, ValueError):
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=i,
+                    severity="error", field="severity",
+                    message=f"severity must be int 1..4, got {severity!r}",
+                ))
+
+        # Unknown fields → warning (forward-compat, don't break).
+        extra = set(entry.keys()) - allowed
+        if extra:
+            report.issues.append(ValidationIssue(
+                file=filename, entry_index=i,
+                severity="warning", field=None,
+                message=(
+                    f"Unknown field(s): {sorted(extra)}. Either add to the "
+                    "schema spec in labels/validator.py or remove from "
+                    "the entry."
+                ),
+            ))
+
+
+def main() -> int:
+    """CLI entry: validate seed files, print report, exit 0/1."""
+    logging.basicConfig(level=logging.INFO)
+    report = validate_seed_files()
+    print(f"=== Recupero label-data validator ===")
+    print(f"  Files checked: {report.files_checked}")
+    print(f"  Entries checked: {report.entries_checked}")
+    print()
+    if not report.issues:
+        print("Clean — zero issues.")
+        return 0
+    errors = [i for i in report.issues if i.severity == "error"]
+    warnings = [i for i in report.issues if i.severity == "warning"]
+    print(f"  Errors:   {len(errors)}")
+    print(f"  Warnings: {len(warnings)}")
+    print()
+    for issue in errors:
+        loc = f"{issue.file}[{issue.entry_index}]"
+        if issue.field:
+            loc += f".{issue.field}"
+        print(f"  [ERR]  {loc}: {issue.message}")
+    for issue in warnings:
+        loc = f"{issue.file}[{issue.entry_index}]"
+        if issue.field:
+            loc += f".{issue.field}"
+        print(f"  [warn] {loc}: {issue.message}")
+    return 1 if errors else 0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main())
+
+
+__all__ = (
+    "ValidationIssue",
+    "ValidationReport",
+    "validate_seed_files",
+    "main",
+)

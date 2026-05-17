@@ -23,8 +23,29 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class TraceParams(BaseModel):
-    max_depth: int = 1
-    dust_threshold_usd: float = 50.0
+    # max_depth=2 (bumped from 1 in v0.7.4): walk one hop past the
+    # immediate destination. The Zigha-shape pattern is
+    # victim → consolidation hub → final destinations; depth=1
+    # stops at the hub and never enumerates the addresses where
+    # perpetrator funds actually rest. The cost increase is ~2x
+    # explorer API calls per trace, still well under $0.50/case.
+    #
+    # Operators can override per-case via the investigation row's
+    # max_depth column when a complex multi-hop case warrants
+    # depth=3 or 4. Pass-2 perpetrator-forward tracing (v0.8.0+)
+    # is the architectural fix for arbitrarily-deep cases; this
+    # default change is the immediate-relief patch.
+    max_depth: int = 2
+    # dust_threshold_usd=10 (lowered from 50 in v0.7.4): with
+    # depth=2 traversal, downstream destinations receive
+    # proportional shares of the hub's outflows. A $50 floor
+    # dust-filtered legitimately material destinations in the
+    # V-CFI01 Zigha-pattern test (CFI report's $3.27M Maple
+    # destination, three DAI dormant addresses). $10 is the new
+    # conservative balance — still filters the random
+    # service-wallet noise without losing seven-figure
+    # destinations that proportionally split below $50.
+    dust_threshold_usd: float = 10.0
     stop_at_exchange: bool = True
     stop_at_contract: bool = True  # stop traversal at contract destinations (DeFi pools/routers)
     stop_at_bridge: bool = True    # stop traversal at labeled bridges (can't follow cross-chain)

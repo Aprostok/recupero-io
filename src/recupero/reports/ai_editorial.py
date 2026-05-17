@@ -250,6 +250,21 @@ CRITICAL RULES for using `is_contract` and `balance_to_inflow_ratio`:
   - If `balance_to_inflow_ratio` is large (e.g., 100x or more), the wallet is consolidating from many sources beyond this victim. Most of that balance is unrelated to this case. Use 🟧 INVESTIGATE rather than 🟩 FREEZABLE — a freeze request that overstates the recoverable amount looks uninformed to the issuer's compliance team.
   - Treat 🟩 FREEZABLE as a high-confidence claim. Only use it when (a) the address is an EOA (`is_contract` false), (b) the inflow from this case is a meaningful fraction of the current balance, and (c) the token is one with a documented issuer freeze pathway.
 
+HEADLINE FRAMING (v0.7.4 — IMPORTANT):
+
+The INCIDENT_NARRATIVE_RECUPERO section should lead with the GROSS perpetrator-controlled position, not the attributable inflow. Most cases we triage involve a perpetrator who pooled funds from multiple victims; the right scoping number for a downstream lawyer or law-enforcement analyst is "how much is currently sitting at perpetrator-controlled addresses," not "how much of this specific victim's $X traced through."
+
+Good lead phrasing:
+  - "The trace identifies $X+ in perpetrator-controlled holdings across the consolidation hub and downstream destinations, of which approximately $Y is currently freezable through issuer action and the remainder is subject to seizure if the perpetrator is identified."
+
+Avoid leading with:
+  - "$153.79 in 426 attributable transfers" (this minimizes the case)
+  - "the perpetrator received $X from the victim" (attribution-only framing)
+
+The attributable-inflow figure still appears, but as a SCOPING note further into the narrative — "the directly-traceable amount from the victim wallet was $Z; the broader perpetrator footprint at the destinations identified above includes funds plausibly pooled from other victims of the same operation." This framing is honest (it doesn't claim those funds belong to this victim) but accurate about the scale of the recovery opportunity.
+
+If the perpetrator hub holds >$500K, OR if the sum of downstream destinations exceeds $1M, lead with the gross figure. Below those thresholds the attribution number is more meaningful (single-victim cases) and the narrative can lead with it.
+
 For UNRECOVERABLE_ITEMS, include any portion of the stolen funds that the chain data shows are practically unrecoverable to this victim. Be honest with the customer — it helps them set expectations even when the news is bad. The following patterns are practically unrecoverable even if technically traceable:
 
   - Funds sent to mixers (Tornado Cash, Sinbad, Wasabi CoinJoin, etc.) — clearly unrecoverable

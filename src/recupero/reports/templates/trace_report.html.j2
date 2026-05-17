@@ -108,10 +108,34 @@
 </section>
 
 <h2>1. Trace Summary</h2>
+{# v0.7.4: lead with gross perpetrator-controlled holdings as the
+   headline number when present. This is the scoping figure a
+   downstream lawyer / law-enforcement analyst needs first —
+   "what's the actionable footprint at perpetrator-controlled
+   addresses," not "what's the attribution share of victim funds."
+   Falls back to the attribution-only view when the brief didn't
+   compute the field (older briefs, wallet-trace runs without an
+   emit_brief stage). #}
+{% if stats.total_perpetrator_holdings_usd %}
+<div class="headline-figure">
+  <div class="headline-figure-label">Perpetrator-controlled holdings</div>
+  <div class="headline-figure-value">{{ stats.total_perpetrator_holdings_usd }}</div>
+  <div class="headline-figure-note">
+    Gross current balance across all identified perpetrator-controlled
+    destinations (the consolidation hub and downstream addresses).
+    This is the scoping number for seizure / freeze action — distinct
+    from the attribution-share figure below, which is what was provably
+    traced from the victim's wallet.
+  </div>
+</div>
+{% endif %}
 <dl class="stat-grid">
   <div><dt>Total transfers analyzed</dt><dd>{{ stats.total_transfers }}</dd></div>
   <div><dt>Max depth reached</dt><dd>{{ stats.max_depth_reached }}</dd></div>
-  <div><dt>Total flow value (USD)</dt><dd>{{ stats.total_flow_usd }}</dd></div>
+  <div>
+    <dt>Attributable flow value (USD)</dt>
+    <dd>{{ stats.total_flow_usd }}</dd>
+  </div>
   <div><dt>Destinations identified</dt><dd>{{ stats.destinations_count }}</dd></div>
   <div><dt>Trace started</dt><dd class="mono">{{ stats.trace_started_at }}</dd></div>
   <div><dt>Trace completed</dt><dd class="mono">{{ stats.trace_completed_at }}</dd></div>

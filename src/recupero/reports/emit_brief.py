@@ -400,6 +400,65 @@ def _compute_total_drained(case: Case) -> Decimal:
     return total
 
 
+def _compute_perpetrator_holdings(
+    freezable: list[dict[str, Any]],
+    unrecoverable: list[dict[str, Any]],
+) -> Decimal:
+    """Sum the **current balances** at every identified perpetrator-
+    controlled destination — across FREEZABLE + UNRECOVERABLE
+    statuses.
+
+    This is the v0.7.4 framing number: the gross dollar amount
+    of funds sitting at addresses the trace identified as
+    perpetrator-controlled, regardless of attribution share.
+    For Zigha-shape cases (victim trace finds $153 attributable,
+    but the perpetrator hub holds $655K and downstream
+    destinations hold $3M+ in freezable Maple assets and $18M+
+    in dormant DAI), this is the number a lawyer needs to see
+    on page 1.
+
+    Distinct from MAX_RECOVERABLE_USD (which is capped by
+    TOTAL_LOSS_USD because a victim can't recover more than
+    they lost) — this is the headline scoping number, not the
+    customer-facing recovery ceiling.
+
+    Excludes EXCLUDED-status holdings (CEX deposits, transit
+    addresses) because those aren't perpetrator-controlled in
+    any actionable sense.
+    """
+    total = Decimal("0")
+    # FREEZABLE current balances
+    for f in freezable:
+        total += _parse_usd_string(f.get("total_usd", "0"))
+        total += _parse_usd_string(f.get("total_suspected_usd", "0"))
+    # Subtract double-counting: total_suspected_usd is the GROSS
+    # at the address (including the freezable subset). The
+    # freezable list reports both; we want the gross perpetrator
+    # exposure, so use total_suspected and skip total_usd.
+    # Re-do without double-counting:
+    total = Decimal("0")
+    for f in freezable:
+        # total_suspected_usd is the GROSS at the address;
+        # fall back to total_usd if suspected is 0/missing.
+        suspected = _parse_usd_string(f.get("total_suspected_usd", "0"))
+        freezable_amt = _parse_usd_string(f.get("total_usd", "0"))
+        total += max(suspected, freezable_amt)
+    # Add UNRECOVERABLE addresses: dormant addresses holding
+    # non-issuer-freezable assets (DAI, native ETH, etc.) are
+    # still perpetrator-controlled. They're "unrecoverable
+    # via issuer freeze" but recoverable via seizure if the
+    # perpetrator is identified.
+    for u in unrecoverable:
+        asset = u.get("asset", "")
+        m = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
+        if m:
+            try:
+                total += Decimal(m.group(1).replace(",", ""))
+            except Exception:
+                pass
+    return total
+
+
 def _compute_totals(case: Case, freezable: list[dict[str, Any]], unrecoverable: list[dict[str, Any]]) -> dict[str, str]:
     """Compute headline totals for the brief.
 
@@ -455,8 +514,21 @@ def _compute_totals(case: Case, freezable: list[dict[str, Any]], unrecoverable: 
         pct = (max_recoverable / total_loss) * 100
         recoverable_pct = f"{int(pct)}%"
 
+    # Gross perpetrator-controlled holdings — the v0.7.4 headline
+    # number. Larger than TOTAL_LOSS_USD on Zigha-shape cases
+    # where the perpetrator pooled funds from multiple victims;
+    # this is the scoping number a downstream lawyer needs to
+    # see leading the brief.
+    total_perpetrator_holdings = _compute_perpetrator_holdings(
+        freezable, unrecoverable,
+    )
+
     return {
         "TOTAL_LOSS_USD": usd(total_loss),
+        # New in v0.7.4. The brief headline. See
+        # _compute_perpetrator_holdings docstring for the
+        # commercial framing: lawyers' engagement thresholds.
+        "TOTAL_PERPETRATOR_HOLDINGS_USD": usd(total_perpetrator_holdings),
         "TOTAL_FREEZABLE_USD": usd(total_freezable),
         "TOTAL_SUSPECTED_USD": usd(total_suspected),
         "TOTAL_EXCLUDED_USD": usd(total_excluded),
@@ -653,6 +725,10 @@ def emit_brief(
         "PRIMARY_CHAIN": primary_chain,
 
         "TOTAL_LOSS_USD": totals["TOTAL_LOSS_USD"],
+        # v0.7.4 headline: gross perpetrator-controlled holdings.
+        # Brief templates lead with this; TOTAL_LOSS_USD is now
+        # surfaced as the secondary "attribution scope" figure.
+        "TOTAL_PERPETRATOR_HOLDINGS_USD": totals["TOTAL_PERPETRATOR_HOLDINGS_USD"],
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 

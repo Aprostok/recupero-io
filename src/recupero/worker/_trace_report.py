@@ -113,6 +113,14 @@ def _build_context(
     wallet_addr = case.seed_address
 
     stats = _compute_stats(case)
+    # v0.7.4: lift the gross-perpetrator-holdings figure from
+    # the freeze_brief onto the stats dict so the trace_report
+    # template can lead with it. Falls back to None when
+    # freeze_brief is missing the field (older briefs, or
+    # cases that didn't run through emit_brief).
+    stats["total_perpetrator_holdings_usd"] = (
+        freeze_brief.get("TOTAL_PERPETRATOR_HOLDINGS_USD") or None
+    )
     destinations = _build_destinations_table(case)
     freezable_rows = _build_freezable_table(freeze_brief, chain_str)
 

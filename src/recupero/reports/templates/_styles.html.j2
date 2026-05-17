@@ -599,4 +599,41 @@
     /* New page after the cover so the first body section starts clean */
     .cover + h2 { page-break-before: always; }
   }
+
+  /* v0.7.4 — headline figure block for the brief's lead number
+     (gross perpetrator-controlled holdings). Sits above the
+     existing stat-grid; high visual prominence because this is
+     the figure that determines whether a downstream lawyer engages
+     on the case at all. */
+  .headline-figure {
+    margin: var(--space-md) 0 var(--space-lg);
+    padding: var(--space-md) var(--space-lg);
+    border: 1px solid var(--rule-soft);
+    border-left: 4px solid var(--gold-accent);
+    background: var(--paper-tint);
+    border-radius: 4px;
+  }
+  .headline-figure-label {
+    font-size: 11pt;
+    font-weight: 600;
+    color: var(--ink-quiet);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 0.3em;
+  }
+  .headline-figure-value {
+    font-size: 28pt;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+    line-height: 1.0;
+    margin-bottom: 0.6em;
+    font-variant-numeric: tabular-nums;
+  }
+  .headline-figure-note {
+    font-size: 10.5pt;
+    color: var(--ink-muted);
+    line-height: 1.5;
+    max-width: 56em;
+  }
 </style>

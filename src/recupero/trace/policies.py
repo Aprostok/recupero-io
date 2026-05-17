@@ -26,10 +26,16 @@ from recupero.models import LabelCategory, Transfer
 
 @dataclass
 class TracePolicy:
-    """Default policy."""
+    """Default policy.
 
-    max_depth: int = 1
-    dust_threshold_usd: Decimal = Decimal("50")
+    v0.7.4 bumped ``max_depth`` from 1 → 2 and lowered
+    ``dust_threshold_usd`` from 50 → 10 in response to the
+    V-CFI01 Zigha-pattern validation. See the same defaults
+    in ``config.TraceParams`` for the operational reasoning.
+    """
+
+    max_depth: int = 2
+    dust_threshold_usd: Decimal = Decimal("10")
     stop_at_exchange: bool = True
     stop_at_mixer: bool = True
     stop_at_bridge: bool = True

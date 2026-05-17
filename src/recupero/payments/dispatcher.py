@@ -353,13 +353,24 @@ def _apply_workflow(
     ``(action_name, investigation_uuid, notes)`` so the caller can
     finalize the payments row and produce a DispatchResult.
 
-    Only processes 'paid' events — refunds and disputes log to
-    the payments table but don't reverse workflow state (that's
-    operator-supervised triage). Future versions can hook a
-    refund event into recupero-ops mark-refunded once we have a
-    concrete workflow for it.
+    Refunds + disputes don't auto-reverse workflow state — that's
+    operator-supervised triage — but they DO trigger an alert
+    email so the operator can react in minutes rather than
+    minutes-after-checking-the-dashboard. The alert is best-
+    effort: if email fails the dispatcher proceeds and the
+    payments row still records the refund.
     """
     status = _resolve_payment_status(event_type, obj)
+    if status == "refunded":
+        return _handle_refund(
+            cur=cur, case_uuid=case_uuid, inv_uuid=inv_uuid,
+            amount_cents=amount_cents, event_type=event_type, obj=obj,
+        )
+    if status == "disputed":
+        return _handle_dispute(
+            cur=cur, case_uuid=case_uuid, inv_uuid=inv_uuid,
+            amount_cents=amount_cents, event_type=event_type, obj=obj,
+        )
     if status != "paid":
         return "audit_only", inv_uuid, (
             f"non-paid event ({event_type}, status={status}) — audit only"
@@ -486,6 +497,269 @@ def _handle_engagement(
         f"engagement fee ${amount_usd:.2f} recorded; follow-up cron "
         "will pick up on next run"
     )
+
+
+def _handle_refund(
+    *,
+    cur: Any,
+    case_uuid: UUID | None,
+    inv_uuid: UUID | None,
+    amount_cents: int,
+    event_type: str,
+    obj: dict[str, Any],
+) -> tuple[str, UUID | None, str | None]:
+    """charge.refunded → record + alert operator.
+
+    We deliberately do NOT auto-reverse engagement state (clearing
+    engagement_started_at, etc.) because:
+      * The refund may be partial (Stripe lets you refund $1 of
+        a $10,000 charge), and the engagement-state model is
+        binary, not partial.
+      * Refunds sometimes happen post-recovery as a goodwill
+        gesture; auto-reversing would also undo the
+        recovered-funds attribution.
+
+    Instead the operator gets an alert email + the payments row
+    records status='refunded', and they decide whether to run
+    `recupero-ops mark-closed` on the engagement.
+    """
+    amount_usd = round(amount_cents / 100.0, 2)
+    case_label = _case_label_for_alert(cur, case_uuid)
+    _send_refund_alert(
+        case_label=case_label,
+        amount_usd=amount_usd,
+        event_type=event_type,
+        case_uuid=case_uuid,
+        inv_uuid=inv_uuid,
+        obj=obj,
+    )
+    return "refund_received", inv_uuid, (
+        f"REFUND ${amount_usd:.2f} for case {case_label or '(no case linked)'}; "
+        f"operator alert sent. Run mark-closed if the engagement "
+        "should end as a result."
+    )
+
+
+def _handle_dispute(
+    *,
+    cur: Any,
+    case_uuid: UUID | None,
+    inv_uuid: UUID | None,
+    amount_cents: int,
+    event_type: str,
+    obj: dict[str, Any],
+) -> tuple[str, UUID | None, str | None]:
+    """charge.dispute.created → record + alert operator.
+
+    Disputes are time-sensitive (Stripe gives the merchant a
+    window to submit evidence) so the alert is urgent. We
+    surface the dispute reason in the alert if Stripe provided it.
+    """
+    amount_usd = round(amount_cents / 100.0, 2)
+    case_label = _case_label_for_alert(cur, case_uuid)
+    dispute_reason = (obj.get("reason") or "(no reason given)")
+    _send_dispute_alert(
+        case_label=case_label,
+        amount_usd=amount_usd,
+        reason=dispute_reason,
+        event_type=event_type,
+        case_uuid=case_uuid,
+        inv_uuid=inv_uuid,
+        obj=obj,
+    )
+    return "dispute_received", inv_uuid, (
+        f"DISPUTE ${amount_usd:.2f} ({dispute_reason}) for case "
+        f"{case_label or '(no case linked)'}; operator alert sent. "
+        "Respond in the Stripe Dashboard within the evidence window."
+    )
+
+
+def _case_label_for_alert(cur: Any, case_uuid: UUID | None) -> str | None:
+    """Resolve a human-readable case label (V-12345 — Client Name)
+    for the alert email. Returns None when no case_uuid is set
+    (which is the case for many refund events — Stripe doesn't
+    re-include the original metadata)."""
+    if case_uuid is None:
+        return None
+    try:
+        cur.execute(
+            "SELECT case_number, client_name FROM public.cases WHERE id = %s",
+            (str(case_uuid),),
+        )
+        row = cur.fetchone()
+        if not row:
+            return f"case_id={case_uuid}"
+        return f"{row.get('case_number') or '?'} — {row.get('client_name') or '?'}"
+    except Exception as exc:  # noqa: BLE001
+        log.warning("case label lookup failed: %s", exc)
+        return f"case_id={case_uuid}"
+
+
+def _send_refund_alert(
+    *,
+    case_label: str | None,
+    amount_usd: float,
+    event_type: str,
+    case_uuid: UUID | None,
+    inv_uuid: UUID | None,
+    obj: dict[str, Any],
+) -> None:
+    """Best-effort operator alert email. Failures log + return,
+    never raise — the audit log entry has already been recorded
+    by the time we get here, so the operator can still find the
+    refund via list-payments + dashboard."""
+    subject = (
+        f"[RECUPERO] Refund received — ${amount_usd:,.2f}"
+        + (f" — {case_label}" if case_label else "")
+    )
+    body = _build_alert_body_html(
+        title="Refund received",
+        amount_usd=amount_usd,
+        event_type=event_type,
+        case_label=case_label,
+        case_uuid=case_uuid,
+        inv_uuid=inv_uuid,
+        next_steps=(
+            "Refund was processed by Stripe automatically. "
+            "If the engagement should end as a result, run:\n\n"
+            f"    recupero-ops mark-closed {inv_uuid or '<inv-id>'} "
+            "--reason 'refunded'\n\n"
+            "If this was a partial refund or a chargeback-style "
+            "operator-initiated refund, no further action is required."
+        ),
+        extras=obj,
+    )
+    _try_send_alert(subject=subject, body_html=body)
+
+
+def _send_dispute_alert(
+    *,
+    case_label: str | None,
+    amount_usd: float,
+    reason: str,
+    event_type: str,
+    case_uuid: UUID | None,
+    inv_uuid: UUID | None,
+    obj: dict[str, Any],
+) -> None:
+    """Best-effort operator alert email for a dispute (chargeback).
+    Same shape as the refund alert but with the dispute reason
+    + a stronger call-to-action since Stripe's evidence window
+    is time-limited."""
+    subject = (
+        f"[RECUPERO] DISPUTE — ${amount_usd:,.2f} — {reason}"
+        + (f" — {case_label}" if case_label else "")
+    )
+    body = _build_alert_body_html(
+        title="Dispute received (action required)",
+        amount_usd=amount_usd,
+        event_type=event_type,
+        case_label=case_label,
+        case_uuid=case_uuid,
+        inv_uuid=inv_uuid,
+        next_steps=(
+            f"Dispute reason: {reason}\n\n"
+            "ACTION REQUIRED. Stripe gives a limited window to "
+            "submit evidence. Log in to the Stripe Dashboard, find "
+            "the dispute under Payments → Disputes, and respond "
+            "with the engagement letter + transcripts of customer "
+            "communication. Failure to respond is treated as "
+            "conceding the dispute and the funds (plus the "
+            "chargeback fee) come out of your Stripe balance."
+        ),
+        extras=obj,
+    )
+    _try_send_alert(subject=subject, body_html=body)
+
+
+def _build_alert_body_html(
+    *,
+    title: str,
+    amount_usd: float,
+    event_type: str,
+    case_label: str | None,
+    case_uuid: UUID | None,
+    inv_uuid: UUID | None,
+    next_steps: str,
+    extras: dict[str, Any],
+) -> str:
+    """Inline-styled HTML body. Mirrors the portal banner style
+    (inline CSS, no external assets) so Gmail / Outlook render
+    consistently."""
+    import html as _html
+    rows: list[tuple[str, str]] = [
+        ("Amount", f"${amount_usd:,.2f}"),
+        ("Stripe event", event_type),
+    ]
+    if case_label:
+        rows.append(("Case", case_label))
+    if case_uuid:
+        rows.append(("case_id", str(case_uuid)))
+    if inv_uuid:
+        rows.append(("investigation_id", str(inv_uuid)))
+    charge_id = extras.get("charge") or extras.get("id")
+    if charge_id:
+        rows.append(("Stripe charge", str(charge_id)))
+
+    rows_html = "".join(
+        f'<tr><td style="padding:6px 12px;color:#555;'
+        f'font-size:13px;font-weight:600;">{_html.escape(k)}</td>'
+        f'<td style="padding:6px 12px;font-family:monospace;'
+        f'font-size:13px;">{_html.escape(v)}</td></tr>'
+        for k, v in rows
+    )
+    return (
+        '<div style="font-family:-apple-system,BlinkMacSystemFont,'
+        '\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;'
+        'color:#1a1a1a;max-width:640px;margin:0 auto;padding:24px;">'
+        f'<h2 style="margin:0 0 16px;font-size:20px;">'
+        f'{_html.escape(title)}</h2>'
+        '<table style="border-collapse:collapse;border:1px solid #e3e1da;'
+        'border-radius:4px;margin-bottom:18px;">'
+        f'{rows_html}'
+        '</table>'
+        '<h3 style="font-size:15px;margin:18px 0 8px;">Next steps</h3>'
+        '<pre style="background:#f7f5ed;border-left:3px solid #9a5c00;'
+        'padding:14px 16px;font-size:13px;line-height:1.55;'
+        f'white-space:pre-wrap;">{_html.escape(next_steps)}</pre>'
+        '<p style="font-size:12px;color:#888;margin-top:18px;">'
+        'Sent by the Recupero worker via the /webhooks/stripe '
+        'dispatcher. See public.payments for the full audit row.'
+        '</p>'
+        '</div>'
+    )
+
+
+def _try_send_alert(*, subject: str, body_html: str) -> None:
+    """Send the alert via Resend, addressed to the operator's
+    alert email. Configurable via RECUPERO_OPS_ALERT_EMAIL;
+    falls back to the From-Address env (the operator's own
+    mailbox) so a fresh deploy still gets alerts without a
+    second env var.
+
+    Best-effort. Errors log + return; never raise from the
+    dispatcher's hot path.
+    """
+    import os
+    to = (
+        os.environ.get("RECUPERO_OPS_ALERT_EMAIL", "").strip()
+        or os.environ.get("RECUPERO_EMAIL_FROM", "").strip()
+        or "alec@recupero.io"  # final fallback — the From default
+    )
+    try:
+        from recupero.worker._email import send_email
+        result = send_email(
+            to=to, subject=subject, html=body_html,
+            email_type="ops_alert",
+            preview_text=subject,  # subject re-used for the inbox preview
+        )
+        if result.skipped:
+            log.info("ops alert skipped (RECUPERO_DISABLE_EMAIL=1): %s",
+                     subject)
+        elif not result.success:
+            log.warning("ops alert send failed: %s", result.error)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ops alert send raised: %s", exc)
 
 
 __all__ = ("DispatchResult", "dispatch")

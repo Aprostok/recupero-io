@@ -248,32 +248,112 @@ def test_engagement_payment_without_investigation_id_is_audit_only() -> None:
     assert result.notes and "investigation_id" in result.notes
 
 
-def test_refund_event_is_audit_only() -> None:
-    """charge.refunded → record the refund + status='refunded' but
-    don't auto-reverse engagement state. Refund handling is
-    operator-supervised triage today; the test locks the behavior
-    so a future 'auto-reverse on refund' change has to update it."""
+def test_refund_event_triggers_alert_no_state_reversal() -> None:
+    """charge.refunded → record the refund + status='refunded',
+    fire an operator alert email, but don't auto-reverse engagement
+    state. Refund handling is operator-supervised triage today;
+    the test locks the behavior so a future 'auto-reverse on
+    refund' change has to update it.
+
+    v0.7.2: the action label is 'refund_received' (was
+    'audit_only' pre-v0.7.2 — the alert workflow is the
+    differentiator).
+    """
+    inv_uuid = uuid4()
+    case_uuid = uuid4()
     event = _mk_event(
         event_type="charge.refunded",
-        payment_status="paid",  # the original payment status; refund is the new state
-        metadata={"type": "engagement", "investigation_id": str(uuid4())},
+        payment_status="paid",
+        metadata={
+            "type": "engagement", "investigation_id": str(inv_uuid),
+            "case_id": str(case_uuid),
+        },
     )
-    # Refund / non-paid path → no workflow lookup runs; only the
-    # payments INSERT.
+    # Sequence: payments INSERT → case lookup for alert label → no inv lookup.
+    mock_conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.side_effect = [
+        {"id": str(uuid4())},
+        {"case_number": "V-99999", "client_name": "Refund Test Victim"},
+    ]
+    mock_conn.cursor.return_value.__enter__.return_value = cur
+    with patch("recupero.payments.dispatcher.psycopg.connect") as connect, \
+         patch("recupero.payments.dispatcher._try_send_alert") as send_alert:
+        connect.return_value.__enter__.return_value = mock_conn
+        result = dispatch(event=event, dsn="fake")
+
+    assert result.action == "refund_received"
+    assert result.notes and "REFUND" in result.notes
+    # Alert was sent.
+    send_alert.assert_called_once()
+    alert_subject = send_alert.call_args.kwargs["subject"]
+    assert "Refund received" in alert_subject
+    assert "V-99999" in alert_subject  # case label in subject
+    # No workflow reversal — the engagement stays active.
+    sql_calls = [c.args[0] for c in cur.execute.call_args_list]
+    inv_updates = [s for s in sql_calls if "UPDATE public.investigations" in s]
+    assert inv_updates == []
+
+
+def test_refund_alert_failure_does_not_break_dispatch() -> None:
+    """If the inner send_email path raises (Resend down, no API
+    key, etc.), _try_send_alert catches and the dispatcher still
+    records the payments row and returns success.
+
+    The payments table is the durable audit trail; the email is a
+    notification layer on top. Test the layering by patching at
+    the send_email layer rather than _try_send_alert itself."""
+    inv_uuid = uuid4()
+    event = _mk_event(
+        event_type="charge.refunded",
+        metadata={"type": "engagement", "investigation_id": str(inv_uuid)},
+    )
+    mock_conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.side_effect = [
+        {"id": str(uuid4())},  # payments INSERT
+    ]
+    mock_conn.cursor.return_value.__enter__.return_value = cur
+    # Patch the inner send_email to raise. _try_send_alert's
+    # try/except should swallow it so dispatch still completes.
+    with patch("recupero.payments.dispatcher.psycopg.connect") as connect, \
+         patch("recupero.worker._email.send_email",
+               side_effect=RuntimeError("Resend down")):
+        connect.return_value.__enter__.return_value = mock_conn
+        # No pytest.raises — dispatch should return cleanly.
+        result = dispatch(event=event, dsn="fake")
+    assert result.action == "refund_received"
+    assert result.duplicate is False
+
+
+def test_dispute_event_triggers_urgent_alert() -> None:
+    """charge.dispute.created → record + send an URGENT alert
+    with the dispute reason. Action label is 'dispute_received'."""
+    inv_uuid = uuid4()
+    event = _mk_event(
+        event_type="charge.dispute.created",
+        payment_status="paid",
+        metadata={"type": "engagement", "investigation_id": str(inv_uuid)},
+    )
+    # Stripe disputes include a `reason` field on the dispute object.
+    event.payload["data"]["object"]["reason"] = "fraudulent"
+
     mock_conn = MagicMock()
     cur = MagicMock()
     cur.fetchone.side_effect = [{"id": str(uuid4())}]
     mock_conn.cursor.return_value.__enter__.return_value = cur
-    with patch("recupero.payments.dispatcher.psycopg.connect") as connect:
+    with patch("recupero.payments.dispatcher.psycopg.connect") as connect, \
+         patch("recupero.payments.dispatcher._try_send_alert") as send_alert:
         connect.return_value.__enter__.return_value = mock_conn
         result = dispatch(event=event, dsn="fake")
 
-    assert result.action == "audit_only"
-    assert result.notes and "non-paid" in result.notes
-    sql_calls = [c.args[0] for c in cur.execute.call_args_list]
-    inv_updates = [s for s in sql_calls if "UPDATE public.investigations" in s]
-    # No workflow reversal — the engagement stays active.
-    assert inv_updates == []
+    assert result.action == "dispute_received"
+    assert result.notes and "DISPUTE" in result.notes
+    assert "fraudulent" in result.notes
+    send_alert.assert_called_once()
+    alert_subject = send_alert.call_args.kwargs["subject"]
+    assert "DISPUTE" in alert_subject
+    assert "fraudulent" in alert_subject
 
 
 def test_malformed_uuid_in_metadata_is_audit_only() -> None:

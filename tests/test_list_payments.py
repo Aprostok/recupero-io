@@ -120,14 +120,25 @@ def test_empty_payments_shape_locked() -> None:
         "paid_count_24h",
         "amount_paid_cents_24h",
         "refunded_count_24h",
+        "disputed_count_24h",
         "count_7d",
         "paid_count_7d",
         "amount_paid_cents_7d",
         "needs_triage_count",
+        "recent_refunds",
+        "recent_disputes",
     }
-    # All counters start at 0 (not None — UI shouldn't have to
-    # handle nullable integers).
-    assert all(v == 0 for v in out.values())
+    # Numeric counters start at 0; list fields start as empty lists.
+    assert out["recent_refunds"] == []
+    assert out["recent_disputes"] == []
+    int_keys = (
+        "count_24h", "paid_count_24h", "amount_paid_cents_24h",
+        "refunded_count_24h", "disputed_count_24h",
+        "count_7d", "paid_count_7d", "amount_paid_cents_7d",
+        "needs_triage_count",
+    )
+    for k in int_keys:
+        assert out[k] == 0, f"counter {k} should default to 0"
 
 
 # ---- list-payments run() ---- #

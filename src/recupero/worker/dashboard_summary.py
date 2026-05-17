@@ -571,6 +571,7 @@ def _empty_payments() -> dict[str, Any]:
         "paid_count_24h": 0,
         "amount_paid_cents_24h": 0,
         "refunded_count_24h": 0,
+        "disputed_count_24h": 0,
         # Last 7d rollup
         "count_7d": 0,
         "paid_count_7d": 0,
@@ -580,6 +581,13 @@ def _empty_payments() -> dict[str, Any]:
         # writes 'audit_only' notes when metadata is missing or
         # malformed; these are the rows that need operator action).
         "needs_triage_count": 0,
+        # Recent refunds + disputes that need operator attention.
+        # Surface the actual row IDs so the UI can deep-link to
+        # `list-payments --case-id <uuid>` or the Stripe Dashboard.
+        # Limited to 5 most-recent per category — the rollup
+        # counts above carry the totals.
+        "recent_refunds": [],
+        "recent_disputes": [],
     }
 
 
@@ -616,6 +624,10 @@ def _query_payments(conn) -> dict[str, Any]:
                       AND status = 'refunded'
                   ) AS refunded_count_24h,
                   COUNT(*) FILTER (
+                    WHERE received_at > NOW() - INTERVAL '24 hours'
+                      AND status = 'disputed'
+                  ) AS disputed_count_24h,
+                  COUNT(*) FILTER (
                     WHERE received_at > NOW() - INTERVAL '7 days'
                   ) AS count_7d,
                   COUNT(*) FILTER (
@@ -633,10 +645,55 @@ def _query_payments(conn) -> dict[str, Any]:
             if row:
                 for k in (
                     "count_24h", "paid_count_24h", "amount_paid_cents_24h",
-                    "refunded_count_24h", "count_7d", "paid_count_7d",
+                    "refunded_count_24h", "disputed_count_24h",
+                    "count_7d", "paid_count_7d",
                     "amount_paid_cents_7d",
                 ):
                     out[k] = int(row.get(k, 0) or 0)
+
+            # Recent refunds + disputes for the homepage widget. Cap
+            # at 5 per category; the rollup counts above carry the
+            # totals so the UI can show "+N more" when truncated.
+            for status_value, target_key in (
+                ("refunded", "recent_refunds"),
+                ("disputed", "recent_disputes"),
+            ):
+                cur.execute(
+                    """
+                    SELECT p.id, p.received_at, p.amount_cents,
+                           p.amount_type, p.case_id, p.investigation_id,
+                           p.notes, c.case_number, c.client_name
+                      FROM public.payments p
+                      LEFT JOIN public.cases c ON c.id = p.case_id
+                     WHERE p.status = %s
+                       AND p.received_at > NOW() - INTERVAL '30 days'
+                     ORDER BY p.received_at DESC
+                     LIMIT 5
+                    """,
+                    (status_value,),
+                )
+                out[target_key] = [
+                    {
+                        "payment_id": str(r["id"]),
+                        "received_at": (
+                            r["received_at"].isoformat()
+                            if r["received_at"] else None
+                        ),
+                        "amount_cents": int(r["amount_cents"] or 0),
+                        "amount_type": r.get("amount_type"),
+                        "case_id": (
+                            str(r["case_id"]) if r["case_id"] else None
+                        ),
+                        "case_number": r.get("case_number"),
+                        "client_name": r.get("client_name"),
+                        "investigation_id": (
+                            str(r["investigation_id"])
+                            if r["investigation_id"] else None
+                        ),
+                        "notes": r.get("notes"),
+                    }
+                    for r in cur.fetchall()
+                ]
 
             # Triage queue: paid events where the dispatcher wrote
             # an audit_only outcome (typically due to missing

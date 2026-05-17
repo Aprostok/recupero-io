@@ -103,6 +103,7 @@ def build_findings(brief: dict[str, Any]) -> list[InvestigatorFinding]:
     findings.extend(_findings_from_clusters(brief))
     findings.extend(_findings_from_drainer(brief))
     findings.extend(_findings_from_dex_swaps(brief))
+    findings.extend(_findings_from_cross_case_correlation(brief))
     findings.extend(_findings_from_destinations(brief))
 
     # Sort: SANCTIONED first, then by severity desc.
@@ -438,6 +439,96 @@ def _findings_from_dex_swaps(brief: dict[str, Any]) -> list[InvestigatorFinding]
             timestamp_iso=swap.get("block_time", ""),
             follow_up_url="",
             notes=swap.get("investigator_note", ""),
+        ))
+    return out
+
+
+def _findings_from_cross_case_correlation(
+    brief: dict[str, Any],
+) -> list[InvestigatorFinding]:
+    """CROSS_CASE_CORRELATION → one finding per recidivist address.
+
+    Severity calibration:
+      * OFAC-exposed in any prior case → critical
+      * Drainer-attributed in any prior case → critical
+      * Appeared in 3+ prior cases → high (repeat offender pattern)
+      * Mixer-exposed in any prior case → high
+      * Otherwise (single prior appearance, clean) → medium
+        (still actionable: this address recycled across cases,
+        worth subpoenaing the prior-case file)
+    """
+    out: list[InvestigatorFinding] = []
+    section = brief.get("CROSS_CASE_CORRELATION") or {}
+    addresses = section.get("addresses") or {}
+    for addr, payload in addresses.items():
+        prior_count = int(payload.get("total_prior_cases", 0))
+        if prior_count <= 0:
+            continue
+
+        ofac_count = int(payload.get("prior_ofac_exposed_count", 0))
+        drainer_count = int(payload.get("prior_drainer_attributed_count", 0))
+        mixer_count = int(payload.get("prior_mixer_exposed_count", 0))
+
+        if ofac_count > 0 or drainer_count > 0:
+            sev = "critical"
+        elif prior_count >= 3 or mixer_count > 0:
+            sev = "high"
+        else:
+            sev = "medium"
+
+        # Headline: lead with the worst flag.
+        if ofac_count > 0:
+            headline = (
+                f"Recidivist address — OFAC-exposed in {ofac_count} of "
+                f"{prior_count} prior cases"
+            )
+        elif drainer_count > 0:
+            headline = (
+                f"Recidivist address — drainer-attributed in "
+                f"{drainer_count} of {prior_count} prior cases"
+            )
+        elif mixer_count > 0:
+            headline = (
+                f"Recidivist address — mixer-exposed in {mixer_count} of "
+                f"{prior_count} prior cases"
+            )
+        else:
+            headline = (
+                f"Recidivist address — appeared in {prior_count} prior "
+                f"{'case' if prior_count == 1 else 'cases'}"
+            )
+
+        # Notes: pack the prior-case IDs + roles + USD into a
+        # single readable string so the analyst can subpoena
+        # the prior cases.
+        appearances = payload.get("prior_case_appearances") or []
+        sample = "; ".join(
+            f"case={a.get('case_id', '')} role={a.get('role', '')} "
+            f"usd={a.get('usd_flowed', '')}"
+            for a in appearances[:5]
+        )
+        notes_parts = [payload.get("investigator_note", "")]
+        if sample:
+            notes_parts.append(f"PRIOR_CASES: {sample}")
+        notes = " — ".join(p for p in notes_parts if p)
+
+        out.append(InvestigatorFinding(
+            finding_type="cross_case_correlation",
+            address=addr,
+            chain=payload.get("chain", "") or (
+                brief.get("PRIMARY_CHAIN", "").lower() or "ethereum"
+            ),
+            severity=sev,
+            headline=headline,
+            counterparty="",
+            counterparty_name="",
+            risk_category="recidivist",
+            amount_usd=payload.get("prior_total_usd_flowed", ""),
+            tx_hash="",
+            explorer_url="",
+            timestamp_iso="",
+            follow_up_url="",
+            notes=notes,
         ))
     return out
 

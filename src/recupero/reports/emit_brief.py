@@ -793,6 +793,7 @@ def emit_brief(
         }
 
     # --- Drainer / approval signature detection (v0.10.1) ---
+    drainer_findings = None  # exposed to cross-case correlation below
     try:
         from recupero.trace.drainer_detection import (
             detect_drainer_pattern,
@@ -822,6 +823,55 @@ def emit_brief(
         dex_swaps = dex_swaps_to_brief_section(dex_swap_records)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
         dex_swaps = []
+
+    # --- Cross-case correlation (v0.11.0) ---
+    # Look up every address in THIS case against the cumulative
+    # public.address_observations index. Addresses that appeared in
+    # prior cases get a recidivist flag with the prior case IDs,
+    # prior roles, and prior OFAC/mixer/drainer exposure counts.
+    # This is the compounding-moat capability — every case the
+    # worker traces adds to the index, so the Nth case automatically
+    # benefits from sightings in cases 1..N-1.
+    #
+    # DB-unavailable → empty section (best-effort). Doesn't break
+    # CLI users running emit_brief without Supabase.
+    try:
+        from recupero.trace.correlation import run_correlation_pass
+        # Try to pull a case_id / investigation_id from the case
+        # so observations get tagged with the right FK. Pre-Phase-2
+        # cases (CLI-only) may not have these — that's fine, the
+        # recorder accepts NULL case_id.
+        _case_uuid = None
+        _inv_uuid = None
+        try:
+            from uuid import UUID as _UUID
+            cid_raw = getattr(case, "case_id", None) or editorial.get("CASE_ID")
+            if cid_raw and isinstance(cid_raw, str):
+                try:
+                    _case_uuid = _UUID(cid_raw)
+                except (ValueError, TypeError):
+                    _case_uuid = None
+        except Exception:  # noqa: BLE001
+            pass
+        cross_case_correlation = run_correlation_pass(
+            case,
+            case_id=_case_uuid,
+            investigation_id=_inv_uuid,
+            risk_assessment=risk_assessment,
+            drainer_findings=drainer_findings,
+            freeze_targets_by_addr=freeze_targets_by_addr,
+        )
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        cross_case_correlation = {
+            "addresses": {},
+            "summary": {
+                "recidivist_address_count": 0,
+                "ofac_recidivist_count": 0,
+                "drainer_recidivist_count": 0,
+                "highest_prior_case_count": 0,
+                "highest_prior_case_address": None,
+            },
+        }
 
     # --- Final assembly ---
     brief = {
@@ -881,6 +931,15 @@ def emit_brief(
         # investigator action note. Lets the trace continue
         # past 1inch/Uniswap/CoW routers.
         "DEX_SWAPS": dex_swaps,
+        # v0.11.0: cross-case correlation. For every address in
+        # this case, this section reports prior appearances across
+        # ALL previously-traced cases (read from the cumulative
+        # public.address_observations index). Recidivist addresses
+        # — perpetrator wallets that recycle across victims — are
+        # auto-flagged with prior OFAC / mixer / drainer exposure
+        # counts. The compounding-moat capability behind TRM /
+        # Chainalysis.
+        "CROSS_CASE_CORRELATION": cross_case_correlation,
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 

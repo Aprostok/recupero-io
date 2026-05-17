@@ -181,6 +181,14 @@ def cli() -> None:
              "risk-scoring. Recommended cadence: weekly via cron.",
     )
 
+    # ----- correlation-stats ----- #
+    sub.add_parser(
+        "correlation-stats",
+        help="Report summary stats from the cross-case correlation "
+             "index (public.address_observations). Recommended "
+             "cadence: monthly review.",
+    )
+
     # ----- list-payments ----- #
     p_lpay = sub.add_parser(
         "list-payments",
@@ -346,6 +354,10 @@ def cli() -> None:
     if args.command == "ofac-sync":
         from recupero.ops.commands import ofac_sync_cmd as cmd
         sys.exit(cmd.run())
+
+    if args.command == "correlation-stats":
+        from recupero.ops.commands import correlation_stats as cmd
+        sys.exit(cmd.run(dsn=_require_dsn()))
 
     if args.command == "list-payments":
         from recupero.ops.commands import list_payments as cmd

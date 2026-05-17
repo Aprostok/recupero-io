@@ -54,5 +54,233 @@
     "source": "uniswap_docs",
     "confidence": "high",
     "added_at": "2025-01-01T00:00:00Z"
+  },
+
+  {
+    "address": "0x9008d19f58aabd9ed0d60971565aa8510560ab41",
+    "name": "CoW Protocol: GPv2Settlement",
+    "category": "defi_protocol",
+    "subcategory": "dex_aggregator",
+    "source": "cow_protocol_docs",
+    "confidence": "high",
+    "notes": "CoW Protocol settlement contract. All CoW swaps settle here. Treat funds passing through as unrecoverable via direct trace — recovery requires identifying counterparties via off-chain solver data.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x216b4b4ba9f3e719726886d34a177484278bfcae",
+    "name": "ParaSwap v5: Augustus Swapper",
+    "category": "defi_protocol",
+    "subcategory": "dex_aggregator",
+    "source": "paraswap_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x6131b5fae19ea4f9d964eac0408e4408b66337b5",
+    "name": "Kyber: MetaAggregationRouter",
+    "category": "defi_protocol",
+    "subcategory": "dex_aggregator",
+    "source": "kyber_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "name": "Uniswap V3: SwapRouter02",
+    "category": "defi_protocol",
+    "subcategory": "dex",
+    "source": "uniswap_docs",
+    "confidence": "high",
+    "notes": "Uniswap V3 SwapRouter02 — primary V3 swap entry point.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xba12222222228d8ba445958a75a0704d566bf2c8",
+    "name": "Balancer V2: Vault",
+    "category": "defi_protocol",
+    "subcategory": "dex",
+    "source": "balancer_docs",
+    "confidence": "high",
+    "notes": "Balancer V2 single-vault architecture — all pools settle through this contract.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xd9e1ce17f2641f24ae83637ab66a2cca9c378b9f",
+    "name": "Sushiswap: Router",
+    "category": "defi_protocol",
+    "subcategory": "dex",
+    "source": "sushi_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x99a58482bd75cbab83b27ec03ca68ff489b5788f",
+    "name": "Curve: Registry Exchange",
+    "category": "defi_protocol",
+    "subcategory": "dex",
+    "source": "curve_docs",
+    "confidence": "high",
+    "notes": "Curve registry-routed exchanges. Many sub-pool contracts not listed individually.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xbebc44782c7db0a1a60cb6fe97d0b483032ff1c7",
+    "name": "Curve: 3pool (USDC/USDT/DAI)",
+    "category": "defi_protocol",
+    "subcategory": "dex_pool",
+    "source": "curve_docs",
+    "confidence": "high",
+    "notes": "Curve's flagship stablecoin pool. Funds routed here typically split across DAI/USDC/USDT — none individually recoverable without identifying the LP owners.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+    "name": "Aave v3: Pool",
+    "category": "defi_protocol",
+    "subcategory": "lending",
+    "source": "aave_docs",
+    "confidence": "high",
+    "notes": "Aave v3 main lending pool. Deposit/withdraw entry point.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9",
+    "name": "Aave v2: LendingPool",
+    "category": "defi_protocol",
+    "subcategory": "lending",
+    "source": "aave_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",
+    "name": "WETH9 (canonical wrapper)",
+    "category": "defi_protocol",
+    "subcategory": "wrapper",
+    "source": "consensus",
+    "confidence": "high",
+    "notes": "Canonical ETH wrapper. Funds deposited here become WETH; not recoverable except via the depositor's own withdrawal.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x7fc66500c84a76ad7e9c93437bfc5ac33e2ddae9",
+    "name": "MakerDAO / Sky: PSM-USDC",
+    "category": "defi_protocol",
+    "subcategory": "stablecoin_swap",
+    "source": "makerdao_docs",
+    "confidence": "high",
+    "notes": "Maker DAI<>USDC peg-stability module. Funds swapped here move 1:1 between stables.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xc36442b4a4522e871399cd717abdd847ab11fe88",
+    "name": "Uniswap V3: NonfungiblePositionManager",
+    "category": "defi_protocol",
+    "subcategory": "lp",
+    "source": "uniswap_docs",
+    "confidence": "high",
+    "notes": "Uniswap V3 liquidity-position NFT manager. Funds 'locked' here are LP positions; recoverable only by the position owner.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x32400084c286cf3e17e7b677ea9583e60a000324",
+    "name": "Pendle: Router",
+    "category": "defi_protocol",
+    "subcategory": "yield",
+    "source": "pendle_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x4ddc2d193948926d02f9b1fe9e1daa0718270ed5",
+    "name": "Compound: cETH",
+    "category": "defi_protocol",
+    "subcategory": "lending",
+    "source": "compound_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x5d3a536e4d6dbd6114cc1ead35777bab948e3643",
+    "name": "Compound: cDAI",
+    "category": "defi_protocol",
+    "subcategory": "lending",
+    "source": "compound_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x39aa39c021dfbae8fac545936693ac917d5e7563",
+    "name": "Compound: cUSDC",
+    "category": "defi_protocol",
+    "subcategory": "lending",
+    "source": "compound_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xae7ab96520de3a18e5e111b5eaab095312d7fe84",
+    "name": "Lido: stETH",
+    "category": "defi_protocol",
+    "subcategory": "staking",
+    "source": "lido_docs",
+    "confidence": "high",
+    "notes": "Lido liquid staking. ETH deposits become stETH; not recoverable except via withdrawal queue.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xae78736cd615f374d3085123a210448e74fc6393",
+    "name": "Rocket Pool: rETH",
+    "category": "defi_protocol",
+    "subcategory": "staking",
+    "source": "rocketpool_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x881d40237659c251811cec9c364ef91dc08d300c",
+    "name": "Metamask: Swap Router",
+    "category": "defi_protocol",
+    "subcategory": "aggregator_proxy",
+    "source": "metamask_docs",
+    "confidence": "high",
+    "notes": "Metamask in-wallet swap router. Drainer scams sometimes use this address as a routing waypoint to obscure the perpetrator's actual destination.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xdef171fe48cf0115b1d80b88dc8eab59176fee57",
+    "name": "ParaSwap: Augustus v6",
+    "category": "defi_protocol",
+    "subcategory": "dex_aggregator",
+    "source": "paraswap_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x00000000219ab540356cbb839cbe05303d7705fa",
+    "name": "Ethereum 2.0 Deposit Contract (canonical)",
+    "category": "defi_protocol",
+    "subcategory": "consensus_layer",
+    "source": "ethereum_foundation",
+    "confidence": "high",
+    "notes": "Canonical ETH 2.0 deposit contract. 32 ETH stakes get locked here. Withdrawal requires validator credentials — not recoverable except by depositor.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
+    "name": "Uniswap V3: Router 2 (alt)",
+    "category": "defi_protocol",
+    "subcategory": "dex",
+    "source": "uniswap_docs",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
   }
 ]

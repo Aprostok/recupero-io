@@ -217,5 +217,315 @@
     "confidence": "medium",
     "notes": "Instant-swap service frequently used by perpetrators per Zigha report",
     "added_at": "2025-01-01T00:00:00Z"
+  },
+
+  {
+    "address": "0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be",
+    "name": "Binance 1 (cold)",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x564286362092d8e7936f0549571a803b203aaced",
+    "name": "Binance 7",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x0681d8db095565fe8a346fa0277bffde9c0edbbf",
+    "name": "Binance 4",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x4fabb145d64652a948d72533023f6e7a623c7c53",
+    "name": "Binance 8",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x46340b20830761efd32832a74d7169b29feb9758",
+    "name": "Crypto.com 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Crypto.com",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xb739d0895772dbb71a89a3754a160269068f0d45",
+    "name": "Crypto.com 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Crypto.com",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x6262998ced04146fa42253a5c0af90ca02dfd2a3",
+    "name": "Crypto.com 3 (hot)",
+    "category": "exchange_hot_wallet",
+    "exchange": "Crypto.com",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x7891ebee8b59d1c69ef6f0d4b41f5d12d4a3fe8c",
+    "name": "Bybit Hot Wallet",
+    "category": "exchange_hot_wallet",
+    "exchange": "Bybit",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xa7efae728d2936e78bda97dc267687568dd593f3",
+    "name": "Bybit 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Bybit",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x47ac0fb4f2d84898e4d9e7b4dab3c24507a6d503",
+    "name": "Binance 14",
+    "category": "exchange_hot_wallet",
+    "exchange": "Binance",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x71660c4005ba85c37ccec55d0c4493e66fe775d3",
+    "name": "Coinbase 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x503828976d22510aad0201ac7ec88293211d23da",
+    "name": "Coinbase 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xddfabcdc4d8ffc6d5beaf154f18b778f892a0740",
+    "name": "Coinbase 3",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xa910f92acdaf488fa6ef02174fb86208ad7722ba",
+    "name": "Coinbase 4",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x3cd751e6b0078be393132286c442345e5dc49699",
+    "name": "Coinbase 5",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xb5d85cbf7cb3ee0d56b3bb207d5fc4b82f43f511",
+    "name": "Coinbase 6",
+    "category": "exchange_hot_wallet",
+    "exchange": "Coinbase",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x66f820a414680b5bcda5eeca5dea238543f42054",
+    "name": "Kraken 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Kraken",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xae2d4617c862309a3d75a0ffb358c7a5009c673f",
+    "name": "Kraken 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Kraken",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x267be1c1d684f78cb4f6a176c4911b741e4ffdc0",
+    "name": "Kraken 3",
+    "category": "exchange_hot_wallet",
+    "exchange": "Kraken",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xfe9e8709d3215310075d67e3ed32a380ccf451c8",
+    "name": "OKX 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "OKX",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x236f9f97e0e62388479bf9e5ba4889e46b0273c3",
+    "name": "OKX 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "OKX",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xa7efae728d2936e78bda97dc267687568dd593f3",
+    "name": "OKX 3",
+    "category": "exchange_hot_wallet",
+    "exchange": "OKX",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x73f8fc2e74302eb2efda125a326655acf0dc2d1b",
+    "name": "Gemini 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Gemini",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xb8c77482e45f1f44de1745f52c74426c631bdd52",
+    "name": "Gemini 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Gemini",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xfdb16996831753d5331ff813c29a93c76834a0ad",
+    "name": "Huobi Hot",
+    "category": "exchange_hot_wallet",
+    "exchange": "Huobi",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xeee28d484628d41a82d01e21d12e2e78d69920da",
+    "name": "Huobi 1",
+    "category": "exchange_hot_wallet",
+    "exchange": "Huobi",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0x564286362092d8e7936f0549571a803b203aaced",
+    "name": "Bitfinex 6",
+    "category": "exchange_hot_wallet",
+    "exchange": "Bitfinex",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xc9a2c4868f0f96faaa739b59934dc9cb304112ec",
+    "name": "Gate.io Hot",
+    "category": "exchange_hot_wallet",
+    "exchange": "Gate.io",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x0d0707963952f2fba59dd06f2b425ace40b492fe",
+    "name": "Gate.io 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "Gate.io",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xa910f92acdaf488fa6ef02174fb86208ad7722ba",
+    "name": "KuCoin 2",
+    "category": "exchange_hot_wallet",
+    "exchange": "KuCoin",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x2b5634c42055806a59e9107ed44d43c426e58258",
+    "name": "KuCoin 3",
+    "category": "exchange_hot_wallet",
+    "exchange": "KuCoin",
+    "source": "etherscan_public_tag",
+    "confidence": "high",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x88ad09518695c6c3712ac10a214be5109a655671",
+    "name": "ChangeNOW (non-KYC instant swap)",
+    "category": "exchange_deposit",
+    "exchange": "ChangeNOW",
+    "source": "scam_db",
+    "confidence": "medium",
+    "notes": "Non-KYC instant-swap service used by drainers + scammers to obfuscate destinations. Compliance team responsive but limited records.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "name": "SimpleSwap",
+    "category": "exchange_deposit",
+    "exchange": "SimpleSwap",
+    "source": "scam_db",
+    "confidence": "medium",
+    "notes": "Non-KYC instant-swap service. Frequently appears in drainer laundering chains.",
+    "added_at": "2026-05-17T00:00:00Z"
   }
 ]

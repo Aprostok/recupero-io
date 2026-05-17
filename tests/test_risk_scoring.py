@@ -109,10 +109,11 @@ def test_load_high_risk_promotes_mixers_to_sanctioned() -> None:
 
 
 def test_load_high_risk_missing_file_returns_empty() -> None:
-    """Both files missing → empty dict, never raises."""
+    """All seed files missing → empty dict, never raises."""
     db = load_high_risk_db(
         high_risk_path=Path("/does/not/exist.json"),
         mixers_path=Path("/does/not/exist2.json"),
+        ransomware_path=Path("/does/not/exist3.json"),
     )
     assert db == {}
 
@@ -132,6 +133,7 @@ def test_load_high_risk_with_custom_paths(tmp_path) -> None:
     db = load_high_risk_db(
         high_risk_path=custom,
         mixers_path=Path("/nope.json"),
+        ransomware_path=Path("/nope2.json"),
     )
     assert len(db) == 1
     entry = next(iter(db.values()))

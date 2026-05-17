@@ -91,6 +91,9 @@ _HIGH_RISK_SEED_PATH = (
 _MIXERS_SEED_PATH = (
     Path(__file__).parent.parent / "labels" / "seeds" / "mixers.json"
 )
+_RANSOMWARE_SEED_PATH = (
+    Path(__file__).parent.parent / "labels" / "seeds" / "ransomware.json"
+)
 
 
 @dataclass(frozen=True)
@@ -131,15 +134,18 @@ class AddressRiskScore:
 def load_high_risk_db(
     high_risk_path: Path | None = None,
     mixers_path: Path | None = None,
+    ransomware_path: Path | None = None,
 ) -> dict[str, HighRiskEntry]:
-    """Load high-risk address labels from both seed files.
+    """Load high-risk address labels from THREE seed files.
 
-    The seed file shapes differ:
-      * high_risk.json — v0.9.1 format, structured with
-        risk_category + severity + ofac_listing_date.
-      * mixers.json — legacy flat array, no severity. We
-        promote each entry to severity=4 (mixer = sanctioned
-        equivalent for risk-scoring purposes) and category
+    Sources (in priority order — more specific overrides less):
+      * high_risk.json — v0.9.1 format with risk_category + severity
+        + ofac_listing_date.
+      * ransomware.json — v0.9.3 format. Same shape as high_risk
+        but operator-tagged.
+      * mixers.json — legacy flat array, no severity. We promote
+        each entry to severity=4 (mixer = sanctioned equivalent
+        for risk-scoring purposes) and category
         "mixer_sanctioned".
 
     Returns ``{lowercased_address: HighRiskEntry}``.
@@ -173,6 +179,37 @@ def load_high_risk_db(
         log.info("high_risk seed not found at %s — risk scoring degraded", hr_path)
     except Exception as exc:  # noqa: BLE001
         log.warning("high_risk seed load failed: %s", exc)
+
+    # ransomware.json — v0.9.3 schema
+    rw_path = ransomware_path or _RANSOMWARE_SEED_PATH
+    try:
+        raw = json.loads(rw_path.read_text(encoding="utf-8-sig"))
+        for entry in raw.get("addresses", []):
+            if not isinstance(entry, dict):
+                continue
+            addr = entry.get("address")
+            if not isinstance(addr, str) or not addr.strip():
+                continue
+            addr_lower = addr.lower()
+            # high_risk.json entries take precedence (more curated).
+            if addr_lower in out:
+                continue
+            try:
+                severity = int(entry.get("severity", 4))
+            except (TypeError, ValueError):
+                severity = 4
+            out[addr_lower] = HighRiskEntry(
+                address=addr_lower,
+                name=entry.get("name", "(ransomware)"),
+                risk_category=entry.get("risk_category", "ransomware"),
+                severity=severity,
+                notes=entry.get("notes"),
+                confidence=entry.get("confidence", "medium"),
+            )
+    except FileNotFoundError:
+        log.debug("ransomware seed not found at %s", rw_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ransomware seed load failed: %s", exc)
 
     # mixers.json — legacy schema (treat all entries as
     # mixer_sanctioned severity=4)

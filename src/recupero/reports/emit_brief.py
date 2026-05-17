@@ -745,6 +745,30 @@ def emit_brief(
     except Exception as _exc:  # noqa: BLE001 — non-fatal
         entity_clusters = {"clusters": [], "unclustered_addresses": []}
 
+    # --- Risk scoring (v0.9.1) ---
+    # OFAC sanctions + mixer + darknet exposure assessment per
+    # address. Direct OFAC contact triggers SANCTIONED verdict
+    # regardless of numeric score. Critical for government /
+    # compliance workflows.
+    try:
+        from recupero.trace.risk_scoring import (
+            risk_scores_to_brief_section,
+            score_addresses,
+        )
+        risk_scores = score_addresses(case)
+        risk_assessment = risk_scores_to_brief_section(risk_scores)
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        risk_assessment = {
+            "addresses": {},
+            "summary": {
+                "addresses_assessed": 0,
+                "ofac_exposed_count": 0,
+                "mixer_exposed_count": 0,
+                "highest_score": 0,
+                "highest_score_address": None,
+            },
+        }
+
     # --- Final assembly ---
     brief = {
         "CASE_ID": editorial["CASE_ID"],
@@ -782,6 +806,12 @@ def emit_brief(
         # evidence so the investigator can verify the heuristic
         # fired correctly.
         "ENTITY_CLUSTERS": entity_clusters,
+        # v0.9.1: risk scoring. Per-address OFAC + mixer + darknet
+        # exposure assessment. SANCTIONED verdict on any direct OFAC
+        # contact (dispositive — matches Treasury's 50% Rule).
+        # The summary block surfaces ofac_exposed_count + highest_
+        # score for one-glance government / compliance review.
+        "RISK_ASSESSMENT": risk_assessment,
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 

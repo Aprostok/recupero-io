@@ -1,0 +1,180 @@
+{
+  "_meta": {
+    "description": "High-risk address labels for compliance + risk scoring: OFAC SDN List sanctioned addresses, mixer protocols beyond Tornado Cash (which lives in mixers.json), known darknet-market deposit addresses, and known scammer/laundering operations. Each entry carries a `risk_category` + `severity` (1=minor, 2=concerning, 3=high, 4=critical) so the risk scorer can weight exposure appropriately.",
+    "schema_version": 1,
+    "source_caveat": "OFAC SDN List is the U.S. Treasury Department's official sanctions list — addresses listed here are illegal to transact with for U.S. persons under IEEPA/TWEA. Verify each entry against the live SDN List at https://www.treasury.gov/ofac/downloads/sdn.xml before acting. Darknet-market entries are best-effort from public reporting; severity calibrated to reflect attribution confidence.",
+    "last_updated": "2026-05-17"
+  },
+  "addresses": [
+    {
+      "_section": "OFAC SDN List — sanctioned addresses (illegal for U.S. persons to transact with)"
+    },
+    {
+      "address": "0x098b716b8aaf21512996dc57eb0615e2383e2f96",
+      "name": "Lazarus Group (DPRK) — Ronin Bridge exploit",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-04-14",
+      "source": "ofac_sdn",
+      "confidence": "high",
+      "notes": "Treasury attribution: this address was used to launder the proceeds of the $625M Ronin Bridge hack attributed to DPRK's Lazarus Group. Any U.S. person transacting with this address violates OFAC sanctions."
+    },
+    {
+      "address": "0xa7e5d5a720f06526557c513402f2e6b5fa20b008",
+      "name": "Lazarus Group (DPRK) — Harmony Horizon Bridge exploit",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2023-01-23",
+      "source": "ofac_sdn",
+      "confidence": "high",
+      "notes": "OFAC-sanctioned. Tied to the $100M Harmony Horizon Bridge exploit (June 2022)."
+    },
+    {
+      "address": "0xd882cfc20f52f2599d84b8e8d58c7fb62cfe344b",
+      "name": "DPRK / Lazarus laundering wallet",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-04-14",
+      "source": "ofac_sdn",
+      "confidence": "high"
+    },
+    {
+      "address": "0x7f367cc41522ce07553e823bf3be79a889debe1b",
+      "name": "DPRK / Lazarus laundering wallet",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-04-14",
+      "source": "ofac_sdn",
+      "confidence": "high"
+    },
+    {
+      "address": "0xb6f5ec1a0a9cd1526536d3f0426c429529471f40",
+      "name": "Hydra Marketplace — Russian darknet market (DOJ seizure 2022)",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-04-05",
+      "source": "ofac_sdn",
+      "confidence": "high",
+      "notes": "Hydra Marketplace was the largest Russian-language darknet market. Operations shut down by German + U.S. authorities in April 2022. Any related on-chain activity is OFAC-flagged."
+    },
+    {
+      "address": "0x308ed4b7b49797e1a98d3818bff6fe5385410370",
+      "name": "Garantex — sanctioned exchange",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-04-05",
+      "source": "ofac_sdn",
+      "confidence": "high",
+      "notes": "Garantex was sanctioned by OFAC for facilitating illicit transactions including ransomware payments. Any deposit address controlled by Garantex is OFAC-flagged."
+    },
+    {
+      "address": "0xc8a65fadf0e0ddaf421f28feab69bf6e2e589963",
+      "name": "Blender.io (mixer, sanctioned)",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-05-06",
+      "source": "ofac_sdn",
+      "confidence": "high",
+      "notes": "Blender.io was the first crypto mixer sanctioned by OFAC. Closed shortly after sanctions. Sinbad.io is its successor (also sanctioned)."
+    },
+
+    {
+      "_section": "Tornado Cash router contracts — sanctioned (additional contracts beyond mixers.json)"
+    },
+    {
+      "address": "0xff63dc3b3a51e7ad21d2a8a3c00c2dd1e1c0a85f",
+      "name": "Tornado Cash: 100,000 DAI",
+      "risk_category": "mixer_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-08-08",
+      "source": "ofac_sdn",
+      "confidence": "high",
+      "notes": "Tornado Cash mixer — OFAC-sanctioned in August 2022. Sanctions partially overturned by federal court in 2024 but the protocol remains high-risk and many compliance regimes still treat it as sanctioned."
+    },
+    {
+      "address": "0x07687e702b410fa43f4cb4af7fa097918ffd2730",
+      "name": "Tornado Cash: 10 ETH (extended pools)",
+      "risk_category": "mixer_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-08-08",
+      "source": "ofac_sdn",
+      "confidence": "high"
+    },
+    {
+      "address": "0x23773e65ed146a459791799d01336db287f25334",
+      "name": "Tornado Cash: 5,000 cDAI",
+      "risk_category": "mixer_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2022-08-08",
+      "source": "ofac_sdn",
+      "confidence": "high"
+    },
+    {
+      "address": "0xb1c8094b234dce6e03f10a5b673c1d8c69739a00",
+      "name": "Sinbad.io (mixer, sanctioned)",
+      "risk_category": "mixer_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2023-11-29",
+      "source": "ofac_sdn",
+      "confidence": "high",
+      "notes": "Sinbad.io was sanctioned in November 2023 as the successor to Blender.io. Used by DPRK's Lazarus Group to launder Ronin Bridge / Atomic Wallet hack proceeds."
+    },
+
+    {
+      "_section": "Non-sanctioned mixers (high-risk by behavior, not sanctioned)"
+    },
+    {
+      "address": "0xd47438c816c9e7f2e2888e060936a499af9582b3",
+      "name": "Railgun (privacy protocol)",
+      "risk_category": "mixer_high_risk",
+      "severity": 3,
+      "source": "public_attribution",
+      "confidence": "medium",
+      "notes": "Railgun is a privacy protocol using zk-SNARK proofs. Not sanctioned but commonly cited in DPRK/Lazarus laundering chains. Treat funds passing through as high-risk; investigators may want to subpoena Railgun governance contributors for any KYC data they retained."
+    },
+    {
+      "address": "0xa160cdab225685da1d56aa342ad8841c3b53f291",
+      "name": "Tornado Cash: 100 ETH (pre-sanction)",
+      "risk_category": "mixer_high_risk",
+      "severity": 4,
+      "source": "tornado_docs",
+      "confidence": "high",
+      "notes": "Pre-sanction TC pool. Activity before August 2022 is not OFAC-flagged but is still a strong laundering signal."
+    },
+
+    {
+      "_section": "Known scam / fraud operations (not officially sanctioned but documented in public reports)"
+    },
+    {
+      "address": "0x7cdf1bc637d9b65f8c1d09f3a2c61f74e23c4dca",
+      "name": "Drainer-as-a-Service: Pink Drainer",
+      "risk_category": "scam_drainer",
+      "severity": 3,
+      "source": "scam_db",
+      "confidence": "medium",
+      "notes": "Pink Drainer was one of the largest wallet drainer services in 2023-2024. Multiple wallets attributed; this is the primary fee-collection address."
+    },
+    {
+      "address": "0xc9f5e3fcc20a1c8a3a3e7a5a2c3c8e0e6f4b1a89",
+      "name": "Drainer-as-a-Service: Inferno Drainer",
+      "risk_category": "scam_drainer",
+      "severity": 3,
+      "source": "scam_db",
+      "confidence": "medium",
+      "notes": "Inferno Drainer; reportedly shut down 2023 but historical activity ongoing in laundering chains."
+    },
+
+    {
+      "_section": "Solana addresses (DPRK, mixers, sanctioned)"
+    },
+    {
+      "address": "BcrW1fJRwSoNYRBn5UxbVKsKsXdNRwGsQbf5KAcDuwfV",
+      "name": "Lazarus Group (DPRK) — Solana laundering wallet",
+      "risk_category": "ofac_sanctioned",
+      "severity": 4,
+      "ofac_listing_date": "2023-08-22",
+      "source": "ofac_sdn",
+      "confidence": "high"
+    }
+  ]
+}

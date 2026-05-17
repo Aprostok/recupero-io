@@ -36,6 +36,12 @@ from typing import Any
 
 import httpx
 import orjson
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from recupero import __version__
 from recupero.config import RecuperoConfig
@@ -44,6 +50,42 @@ from recupero.models import Case
 log = logging.getLogger(__name__)
 
 _BOM = b"\xef\xbb\xbf"
+
+
+class _StorageTransient(RuntimeError):
+    """Marker exception raised internally to signal a retriable
+    transport-or-5xx failure. The retry decorator catches this;
+    callers continue to see RuntimeError for terminal errors.
+
+    Keeps the existing public exception contract (RuntimeError on
+    non-200) intact while allowing tenacity to discriminate.
+    """
+
+
+def _is_storage_transient(exc: BaseException) -> bool:
+    """Retriable iff httpx transport failure (DNS / connect /
+    read timeout) or our internal 5xx marker.
+
+    Deliberately NOT retried:
+      - FileNotFoundError (4xx-equivalent for downloads)
+      - PayloadTooLargeError (413: no amount of waiting fixes it)
+      - RuntimeError for 4xx (caller bug)
+    """
+    return isinstance(exc, (httpx.TransportError, _StorageTransient))
+
+
+# Retry policy for transient Storage failures (5xx, transport
+# timeouts, connection resets). Mirrors the other clients in the
+# codebase: 4 attempts, 2s/4s/8s exponential waits capped at 30s.
+# The Supabase Storage edge is generally reliable; this exists
+# for the once-a-week brief blip rather than for sustained
+# capacity events.
+_storage_retry = retry(
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception(_is_storage_transient),
+    reraise=True,
+)
 
 
 class PayloadTooLargeError(RuntimeError):
@@ -304,6 +346,15 @@ class SupabaseCaseStore:
         whole stage.
         """
         url = f"{self._storage_root}/object/{self._bucket}/{path}"
+        return self._upload_with_retry(url, body, content_type, path)
+
+    @_storage_retry
+    def _upload_with_retry(
+        self, url: str, body: bytes, content_type: str, path: str
+    ) -> None:
+        """Inner retry-wrapped PUT. 5xx + transport errors retry on
+        the 2s/4s/8s schedule; 4xx (incl. 413/oversize) bubbles up
+        immediately."""
         resp = self._client.put(
             url,
             content=body,
@@ -318,15 +369,26 @@ class SupabaseCaseStore:
         )
         if is_oversize:
             raise PayloadTooLargeError(path, len(body), resp.status_code)
+        if 500 <= resp.status_code < 600:
+            raise _StorageTransient(
+                f"upload to {path} failed (5xx, will retry): "
+                f"{resp.status_code} {resp.text[:200]}"
+            )
         raise RuntimeError(
             f"upload to {path} failed: {resp.status_code} {resp.text[:200]}"
         )
 
+    @_storage_retry
     def _download(self, path: str) -> bytes:
         url = f"{self._storage_root}/object/{self._bucket}/{path}"
         resp = self._client.get(url)
         if resp.status_code in (400, 404):
             raise FileNotFoundError(f"Not found in Supabase Storage: {path}")
+        if 500 <= resp.status_code < 600:
+            raise _StorageTransient(
+                f"download {path} failed (5xx, will retry): "
+                f"{resp.status_code} {resp.text[:200]}"
+            )
         if resp.status_code != 200:
             raise RuntimeError(
                 f"download {path} failed: {resp.status_code} {resp.text[:200]}"
@@ -338,21 +400,7 @@ class SupabaseCaseStore:
         offset = 0
         out: list[dict[str, Any]] = []
         while True:
-            resp = self._client.post(
-                url,
-                json={
-                    "prefix": prefix,
-                    "limit": limit,
-                    "offset": offset,
-                    "sortBy": {"column": "name", "order": "asc"},
-                },
-                headers={"Content-Type": "application/json"},
-            )
-            if resp.status_code != 200:
-                raise RuntimeError(
-                    f"list {prefix} failed: {resp.status_code} {resp.text[:200]}"
-                )
-            page = resp.json()
+            page = self._list_page(url, prefix, limit, offset)
             if not page:
                 break
             out.extend(page)
@@ -360,6 +408,34 @@ class SupabaseCaseStore:
                 break
             offset += limit
         return out
+
+    @_storage_retry
+    def _list_page(
+        self, url: str, prefix: str, limit: int, offset: int,
+    ) -> list[dict[str, Any]]:
+        """One paginated list call, retry-wrapped at the page level
+        so a transient mid-pagination failure only redoes the
+        offending page, not the whole walk."""
+        resp = self._client.post(
+            url,
+            json={
+                "prefix": prefix,
+                "limit": limit,
+                "offset": offset,
+                "sortBy": {"column": "name", "order": "asc"},
+            },
+            headers={"Content-Type": "application/json"},
+        )
+        if 500 <= resp.status_code < 600:
+            raise _StorageTransient(
+                f"list {prefix} failed (5xx, will retry): "
+                f"{resp.status_code} {resp.text[:200]}"
+            )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"list {prefix} failed: {resp.status_code} {resp.text[:200]}"
+            )
+        return resp.json()
 
     def _walk_all_files(self, prefix: str) -> list[str]:
         """Recursively collect every file path under ``prefix``."""

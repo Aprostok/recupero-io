@@ -54,6 +54,7 @@ import json
 import logging
 import mimetypes
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -69,6 +70,56 @@ log = logging.getLogger(__name__)
 _RESEND_API_BASE = "https://api.resend.com"
 _DEFAULT_FROM_ADDR = "alec@recupero.io"
 _DEFAULT_FROM_NAME = "Recupero Investigation Services"
+
+# Retry sequence (seconds) for transient Resend failures. Mirrors
+# the ai_editorial retry budget so worker logs read consistently
+# across email + AI transients. 4 total attempts (initial + 3
+# retries) with 5s / 15s / 30s waits; tighter than the AI retry
+# because we don't expect Resend to need a full minute to recover
+# from a brief 5xx (their SLOs are tighter than the Anthropic
+# capacity-overload events the AI retry was designed for).
+_RESEND_RETRY_WAITS_SEC = (5, 15, 30)
+
+
+def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
+    """Send a Resend API request with retry-on-transient logic.
+
+    Retriable: 5xx HTTP responses, urllib URLError (DNS/connect/
+    timeout), socket timeout. Non-retriable: 4xx (caller bug: bad
+    address, invalid template, auth) — re-raised immediately so
+    the audit log captures the real error message instead of
+    burning 50s on retries that will all fail the same way.
+
+    Returns the parsed JSON response on success. Raises the
+    LAST exception on exhaustion (HTTPError or URLError) so the
+    existing handler in send_email can format it for the audit
+    row without changes.
+    """
+    import socket
+    last_exc: BaseException | None = None
+    total_attempts = len(_RESEND_RETRY_WAITS_SEC) + 1
+    for attempt_idx in range(total_attempts):
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # 4xx → caller bug. Don't retry — re-raise so the
+            # audit row captures the right error.
+            if 400 <= exc.code < 500 and exc.code != 429:
+                raise
+            last_exc = exc
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+            last_exc = exc
+        if attempt_idx >= len(_RESEND_RETRY_WAITS_SEC):
+            break
+        wait_sec = _RESEND_RETRY_WAITS_SEC[attempt_idx]
+        log.warning(
+            "resend transient failure on attempt %d/%d — retrying in %ds: %s",
+            attempt_idx + 1, total_attempts, wait_sec, last_exc,
+        )
+        time.sleep(wait_sec)
+    assert last_exc is not None
+    raise last_exc
 
 
 @dataclass(frozen=True)
@@ -182,13 +233,12 @@ def send_email(
     message_id = None
     error_message = None
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            resp_body = json.loads(resp.read().decode("utf-8"))
-            message_id = resp_body.get("id")
-            log.info(
-                "sent email to=%s type=%s subject=%r message_id=%s",
-                to, email_type, subject[:50], message_id,
-            )
+        resp_body = _resend_send_with_retry(req)
+        message_id = resp_body.get("id")
+        log.info(
+            "sent email to=%s type=%s subject=%r message_id=%s",
+            to, email_type, subject[:50], message_id,
+        )
     except urllib.error.HTTPError as exc:
         try:
             err_body = exc.read().decode("utf-8")

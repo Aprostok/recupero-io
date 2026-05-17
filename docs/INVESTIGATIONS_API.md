@@ -6,7 +6,7 @@ the existing health-server pod (same process as the `/healthz` and
 `/dashboard.json` endpoints), so they share Railway's healthcheck
 routing and never require an extra deploy target.
 
-**Base URL:** `https://recupero-worker-production.up.railway.app`
+**Base URL:** `https://recupero-io-production.up.railway.app`
 (Railway public domain for the `recupero-worker` service)
 
 **Auth:** none — the endpoints read from the same connection-pooled
@@ -92,7 +92,7 @@ case-driven tab, etc.).
 ### Example
 
 ```bash
-curl 'https://recupero-worker-production.up.railway.app/investigations?type=wallet_trace&status=complete&limit=10'
+curl 'https://recupero-io-production.up.railway.app/investigations?type=wallet_trace&status=complete&limit=10'
 ```
 
 ---
@@ -290,7 +290,7 @@ and raw-case downloads).
 ### Example
 
 ```bash
-curl 'https://recupero-worker-production.up.railway.app/investigations/849062ab-6a82-4af2-bfd9-d7092a2701c5'
+curl 'https://recupero-io-production.up.railway.app/investigations/849062ab-6a82-4af2-bfd9-d7092a2701c5'
 ```
 
 ---

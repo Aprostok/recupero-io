@@ -113,8 +113,20 @@ class HeliusClient:
         data = self._rpc_call("getSlot")
         return int(data.get("result", 0))
 
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        retry=retry_if_exception_type((HeliusRateLimitError, httpx.TransportError)),
+        reraise=True,
+    )
     def get_parsed_transaction(self, signature: str) -> dict[str, Any] | None:
-        """Fetch a single parsed transaction by its signature."""
+        """Fetch a single parsed transaction by its signature.
+
+        Wrapped with the same retry decorator as the sister methods
+        (_fetch_page, _rpc_call) — this was the one chain-call path
+        Jacob's ReadTimeout in the freeze-target stage could have
+        hit without an absorbing layer. Closed in v0.5.3.
+        """
         self.limiter.wait()
         url = f"{self.BASE}/v0/transactions"
         params = {"api-key": self.api_key}

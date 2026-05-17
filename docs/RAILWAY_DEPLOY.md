@@ -164,7 +164,7 @@ your project. An external HTTP probe catches that.
    covers 50 monitors at 5-minute resolution — fine for one service).
 2. **Add New Monitor** → Type: `HTTP(s)`.
 3. **URL**: paste the public URL of the Railway service +`/healthz`,
-   e.g. `https://recupero-worker-production.up.railway.app/healthz`.
+   e.g. `https://recupero-io-production.up.railway.app/healthz`.
    Find the URL in the Railway service → **Settings → Networking →
    Public Networking**. Generate a domain if none exists.
 4. **Monitoring Interval**: 5 minutes.

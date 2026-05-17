@@ -1157,6 +1157,72 @@ def legal_requests_cmd(
     )
 
 
+@app.command("token-risk")
+def token_risk_cmd(
+    contract: str = typer.Argument(..., help="Token contract address."),
+    chain: str = typer.Option("ethereum", help="Chain: ethereum, bsc, polygon, etc."),
+    bytecode_file: Path | None = typer.Option(
+        None, "--bytecode-file",
+        help="Path to a file containing the contract's runtime bytecode "
+             "(hex). If provided, bytecode pattern matching contributes "
+             "signals.",
+    ),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    """Score a token contract for honeypot / rug-pull risk.
+
+    Inputs are caller-supplied — this command does no on-chain
+    fetches. Suitable for scoring tokens whose bytecode the
+    operator already has (e.g. from etherscan source-code download).
+
+    Example::
+
+      recupero token-risk 0xrugtoken --bytecode-file rug.bin
+    """
+    from recupero.token_risk.scorer import score_token
+
+    bytecode: str | None = None
+    if bytecode_file is not None:
+        if not bytecode_file.exists():
+            console.print(f"[bold red]Bytecode file not found:[/] {bytecode_file}")
+            raise typer.Exit(code=2)
+        bytecode = bytecode_file.read_text(encoding="utf-8").strip()
+
+    result = score_token(contract, chain=chain, bytecode=bytecode)
+
+    if json_output:
+        console.print(json.dumps(result.to_json_safe(), indent=2))
+        return
+
+    verdict_color = {
+        "honeypot": "red",
+        "high_risk_rug": "red",
+        "medium_risk": "yellow",
+        "low_risk": "yellow",
+        "clean": "green",
+    }.get(result.verdict, "white")
+    console.print()
+    console.print(f"[bold cyan]Token risk:[/] {result.contract_address}  ([dim]{result.chain}[/])")
+    console.print(f"  Verdict:        [bold {verdict_color}]"
+                  f"{result.verdict.upper()}[/]  (score {result.risk_score}/10)")
+    console.print()
+    if result.signals:
+        console.print("[bold]Signals:[/]")
+        for sig in result.signals:
+            console.print(
+                f"  • [yellow]{sig.kind}[/] (sev={sig.severity}): "
+                f"{sig.description}"
+            )
+            if sig.evidence:
+                console.print(f"      [dim]evidence: {sig.evidence}[/]")
+    else:
+        console.print("[dim]No signals detected.[/]")
+    console.print()
+    console.print(f"[bold]Note:[/] {result.investigator_note}")
+    console.print(f"[dim]Sources: {', '.join(result.data_sources_used) or 'none'}[/]")
+    console.print()
+
+
 def main() -> None:  # pragma: no cover
     app()
 

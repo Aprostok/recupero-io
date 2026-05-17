@@ -145,6 +145,44 @@ def cli() -> None:
     )
     p_followup.add_argument("investigation_id", help="UUID of the investigation")
 
+    # ----- generate-customer-link ----- #
+    p_link = sub.add_parser(
+        "generate-customer-link",
+        help="Mint a token-gated portal URL for a case so the victim "
+             "can view status, download artifacts, and e-sign the "
+             "engagement letter.",
+    )
+    p_link.add_argument("case_id", help="UUID of the case (NOT the investigation)")
+    p_link.add_argument(
+        "--ttl-days", type=int, default=90,
+        help="Token TTL in days (default 90). Pass 0 for a never-"
+             "expiring token (special-case workflows only).",
+    )
+    p_link.add_argument(
+        "--label", type=str, default=None,
+        help="Free-form label shown on the operator status page "
+             "(e.g., 'victim', 'attorney', 'family-member').",
+    )
+
+    # ----- promote-freezable ----- #
+    p_promote = sub.add_parser(
+        "promote-freezable",
+        help="Promote an INVESTIGATE watchlist row to FREEZABLE after "
+             "issuer compliance confirms KYC. Requires confirmation.",
+    )
+    p_promote.add_argument("watchlist_id", help="UUID of the watchlist row")
+    p_promote.add_argument(
+        "--reason", required=True,
+        help="Required: free-form reason for the promotion. Include "
+             "the issuer ticket number or email thread so the audit "
+             "trail can be re-verified later.",
+    )
+    p_promote.add_argument(
+        "--force", action="store_true",
+        help="Overwrite kyc_* columns if the row is already FREEZABLE. "
+             "Use sparingly — this destroys the original audit trail.",
+    )
+
     args = parser.parse_args()
     load_dotenv()
     setup_logging(args.log_level.upper())
@@ -199,6 +237,28 @@ def cli() -> None:
         from recupero.ops.commands import followup_now as cmd
         sys.exit(cmd.run(
             investigation_id=_parse_uuid(args.investigation_id),
+            dsn=_require_dsn(),
+            confirm=_confirm,
+        ))
+
+    if args.command == "generate-customer-link":
+        from recupero.ops.commands import generate_customer_link as cmd
+        ttl: int | None = args.ttl_days
+        if ttl is not None and ttl <= 0:
+            ttl = None  # 0 → never expires
+        sys.exit(cmd.run(
+            case_id=_parse_uuid(args.case_id, field_name="case_id"),
+            ttl_days=ttl,
+            label=args.label,
+            dsn=_require_dsn(),
+        ))
+
+    if args.command == "promote-freezable":
+        from recupero.ops.commands import promote_freezable as cmd
+        sys.exit(cmd.run(
+            watchlist_id=_parse_uuid(args.watchlist_id, field_name="watchlist_id"),
+            reason=args.reason,
+            force=args.force,
             dsn=_require_dsn(),
             confirm=_confirm,
         ))

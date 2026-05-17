@@ -1,0 +1,79 @@
+{% extends "_base.html.j2" %}
+{% block title %}Sign engagement — {{ case.case_number }}{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h1>Engagement letter</h1>
+    <p class="case-meta">
+        Case <code>{{ case.case_number }}</code> · {{ case.client_name }}
+    </p>
+</div>
+
+<h2>What you are agreeing to</h2>
+<div class="card" style="font-size: 14px; line-height: 1.65;">
+    <p><strong>Engagement fee:</strong>
+        ${{ "{:,.0f}".format(case.quoted_fee_usd) }} (non-refundable on commencement).</p>
+    <p><strong>Contingent recovery fee:</strong>
+        15% of any funds recovered to your control (paid only on success).</p>
+    <p><strong>Commitment from us:</strong></p>
+    <ul style="padding-left: 20px;">
+        <li>Send compliance freeze requests to every issuer holding
+            your funds at a KYC-confirmed address.</li>
+        <li>Prepare a law-enforcement handoff package on request,
+            ready to attach to an IC3 or local PD filing.</li>
+        <li>Email weekly status updates for 30 days from this signature.</li>
+        <li>Make best-effort attempts to coordinate with issuers
+            and law enforcement — but we cannot guarantee recovery.
+            Crypto recovery has structural limits; partial or no
+            recovery is the typical outcome.</li>
+    </ul>
+    <p><strong>What we don't do:</strong></p>
+    <ul style="padding-left: 20px;">
+        <li>Take custody of funds. Any recovery is returned directly
+            to a wallet or bank account you control.</li>
+        <li>Charge any fee not disclosed on this page.</li>
+        <li>Share your case details outside the recovery workflow
+            (issuer compliance teams, law enforcement) without your
+            written authorization.</li>
+    </ul>
+    <p style="margin-top: 22px; color: #555;">
+        The full engagement letter PDF is on your case page under
+        "Your artifacts." This summary captures the operative terms.
+    </p>
+</div>
+
+<h2>Sign</h2>
+<div class="card">
+    <form class="sign-form" method="POST" action="/portal/{{ token }}/sign">
+        <label for="signature_name">Your full legal name</label>
+        <input type="text" id="signature_name" name="signature_name"
+               required minlength="3" maxlength="200"
+               autocomplete="name"
+               placeholder="e.g., Alex Q. Smith">
+
+        <div class="agreement">
+            <input type="checkbox" id="agree" name="agree" required>
+            <label for="agree" style="font-weight: normal;">
+                By typing my full legal name above and submitting this
+                form, I agree to engage Recupero on the terms above and
+                authorize the
+                ${{ "{:,.0f}".format(case.quoted_fee_usd) }} engagement
+                fee. I understand that recovery is not guaranteed.
+            </label>
+        </div>
+
+        <button type="submit" class="btn">Sign and engage Recupero</button>
+        <a href="/portal/{{ token }}" style="margin-left: 14px; color: #555;">Cancel</a>
+
+        {% if error %}
+            <p style="color: #9a2a2a; margin-top: 14px;">{{ error }}</p>
+        {% endif %}
+    </form>
+</div>
+
+<p style="font-size: 13px; color: #777;">
+    Your IP address and browser will be recorded with your signature
+    for audit purposes.
+</p>
+
+{% endblock %}

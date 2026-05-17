@@ -53,6 +53,14 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
             # healthy. Same status code logic as GET, no response body.
             self._serve(write_body=False)
 
+        def do_POST(self) -> None:  # noqa: N802
+            # Only the portal accepts POSTs (engagement signature).
+            # Everything else stays GET-only.
+            if self.path.startswith("/portal"):
+                self._handle_portal(method="POST")
+            else:
+                self._respond(405, {"error": "method not allowed"})
+
         def _serve(self, *, write_body: bool) -> None:
             if self.path == "/healthz":
                 self._respond(200, {"alive": True}, write_body=write_body)
@@ -93,6 +101,13 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                 #                       &label_prefix=...&limit=N&offset=N
                 #   GET /investigations/<uuid>
                 self._handle_investigations(write_body=write_body)
+            elif self.path.startswith("/portal"):
+                # Token-gated customer portal — token in URL grants
+                # read access to case state + artifact downloads and
+                # write access to the engagement-signature form.
+                # Delegates to recupero.portal.server.handle_portal,
+                # which returns the full (code, body, headers) tuple.
+                self._handle_portal(method="GET", write_body=write_body)
             else:
                 self._respond(404, {"error": "not found"}, write_body=write_body)
 
@@ -169,6 +184,68 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
             except Exception as e:  # noqa: BLE001
                 self._respond(500, {"error": str(e)},
                               write_body=write_body)
+
+        def _handle_portal(self, *, method: str, write_body: bool = True) -> None:
+            """Delegate ``/portal/...`` requests to recupero.portal.server.
+
+            For GETs the dispatcher returns ``(code, body, headers)`` and
+            we mirror them onto the response. For POSTs we read the
+            request body up to a small cap (the form payload is tiny —
+            just a name + checkbox).
+            """
+            try:
+                from recupero.portal.server import handle_portal
+            except Exception as e:  # noqa: BLE001
+                self._respond(500, {"error": f"portal import failed: {e}"},
+                              write_body=write_body)
+                return
+
+            body_bytes = b""
+            if method == "POST":
+                # Cap the body at 64KB — the signature form is < 1KB.
+                # Anything bigger is an abuse attempt; reject loudly.
+                try:
+                    content_length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    content_length = 0
+                if content_length > 65536:
+                    self._respond(413, {"error": "request too large"},
+                                  write_body=write_body)
+                    return
+                if content_length > 0:
+                    body_bytes = self.rfile.read(content_length)
+
+            # Lowercase header keys for the portal handler — it uses
+            # ``headers.get("x-forwarded-for", ...)`` etc.
+            hdrs = {k.lower(): v for k, v in self.headers.items()}
+
+            try:
+                code, resp_body, extra = handle_portal(
+                    method=method,
+                    path=self.path,
+                    body_bytes=body_bytes,
+                    headers=hdrs,
+                )
+            except Exception as e:  # noqa: BLE001
+                # Last-resort guard so a portal bug can't take the
+                # whole health server down with an uncaught.
+                log.exception("portal handler crashed: %s", e)
+                self._respond(500, {"error": "portal error"},
+                              write_body=write_body)
+                return
+
+            # Stream back the response. The portal returns text/html
+            # most of the time; for redirects (artifact downloads) we
+            # set Location and send a zero-length body.
+            self.send_response(code)
+            ctype = extra.pop("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(resp_body)))
+            for hk, hv in extra.items():
+                self.send_header(hk, hv)
+            self.end_headers()
+            if write_body and resp_body:
+                self.wfile.write(resp_body)
 
         def _respond(self, code: int, body: dict, *, write_body: bool = True) -> None:
             payload = json.dumps(body).encode("utf-8")

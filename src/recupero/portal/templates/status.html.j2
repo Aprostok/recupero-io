@@ -1,0 +1,96 @@
+{% extends "_base.html.j2" %}
+{% block title %}Case {{ case.case_number }}{% endblock %}
+{% block content %}
+
+<div class="card">
+    <h1>Hello, {{ case.client_name }}</h1>
+    <p class="case-meta">
+        Case <code>{{ case.case_number }}</code>
+        {% if case.estimated_value_usd %}
+            · reported loss ${{ "{:,.0f}".format(case.estimated_value_usd) }}
+        {% endif %}
+    </p>
+
+    <div style="margin-top: 16px;">
+        {% if engagement.status == 'not_engaged' %}
+            <span class="pill warn">Diagnostic complete — engagement required</span>
+        {% elif engagement.status == 'active' %}
+            <span class="pill ok">Tier-2 engagement active</span>
+            {% if engagement.days_remaining is not none %}
+                <span class="pill muted">{{ engagement.days_remaining }} days remaining</span>
+            {% endif %}
+        {% elif engagement.status == 'closed' %}
+            <span class="pill muted">Engagement closed</span>
+        {% elif engagement.status == 'expired' %}
+            <span class="pill warn">Engagement window ended — contact support</span>
+        {% endif %}
+    </div>
+</div>
+
+<h2>Where things stand</h2>
+<div class="card">
+    {% if engagement.status == 'not_engaged' %}
+        <p>Your diagnostic is complete. We've identified where your funds
+        moved and prepared the case for the next stage:
+        <strong>active recovery</strong>.</p>
+        <p>To proceed, sign the engagement letter and pay the
+        <strong>${{ "{:,.0f}".format(case.quoted_fee_usd) }}</strong>
+        engagement fee. We then send compliance freeze requests to
+        every applicable issuer, coordinate with law enforcement on
+        your behalf, and provide weekly status updates for 30 days.</p>
+        <p style="margin-top: 22px;">
+            <a class="btn" href="/portal/{{ token }}/sign">Sign engagement letter →</a>
+        </p>
+    {% elif engagement.status == 'active' %}
+        <p>You're in the active-recovery phase. Here is what's happening:</p>
+        <ul style="margin: 12px 0 0 18px; padding: 0;">
+            <li>Compliance freeze requests sent to relevant issuers</li>
+            <li>Law-enforcement handoff package available on request</li>
+            <li>Weekly status emails sent to {{ case.client_email or 'your contact email' }}</li>
+        </ul>
+        <p style="margin-top: 18px;">Engagement started
+            {{ engagement.started_at }} ·
+            Fee paid: ${{ "{:,.0f}".format(engagement.fee_paid_usd or 0) }}</p>
+    {% elif engagement.status == 'closed' %}
+        <p>Your engagement closed on {{ engagement.closed_at }}.
+        Your artifacts remain available for download below.</p>
+        <p>If you'd like to re-open or extend the engagement,
+        reply to your most recent status email or contact
+        <a href="mailto:support@recupero.io">support@recupero.io</a>.</p>
+    {% elif engagement.status == 'expired' %}
+        <p>The 30-day engagement window has ended without an explicit
+        close. Please reach out to
+        <a href="mailto:support@recupero.io">support@recupero.io</a>
+        — we'll bring this to a clean conclusion (renewal or formal close)
+        within 1 business day.</p>
+    {% endif %}
+</div>
+
+<h2>Your artifacts</h2>
+<div class="card">
+    {% if artifacts %}
+        <ul class="artifacts">
+        {% for a in artifacts %}
+            <li>
+                <div>
+                    <div class="name">{{ a.label }}</div>
+                    <div class="meta">{{ a.kind }}{% if a.size %} · {{ a.size }}{% endif %}</div>
+                </div>
+                <a class="btn secondary" href="/portal/{{ token }}/artifact/{{ a.key }}">Download</a>
+            </li>
+        {% endfor %}
+        </ul>
+    {% else %}
+        <p class="empty">No artifacts available yet. They appear here once
+        your diagnostic finishes processing — usually within a few hours
+        of intake.</p>
+    {% endif %}
+</div>
+
+<p style="font-size: 13px; color: #777; margin-top: 30px;">
+    This page is private to your case. The link is time-limited
+    {% if expires_at %}(expires {{ expires_at }}){% endif %}.
+    Please do not share it.
+</p>
+
+{% endblock %}

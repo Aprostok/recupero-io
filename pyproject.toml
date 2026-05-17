@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recupero"
-version = "0.4.3"
+version = "0.5.0"
 description = "Trace stolen crypto from a victim wallet to law-enforcement-actionable endpoints"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -104,6 +104,8 @@ where = ["src"]
 "recupero.labels.seeds" = ["*.json"]
 # Jinja2 templates loaded by reports/brief.py via Path(__file__).
 "recupero.reports.templates" = ["*.j2", "*.html.j2"]
+# Customer-portal templates loaded by portal/server.py via FileSystemLoader.
+"recupero.portal.templates" = ["*.j2", "*.html.j2"]
 
 [tool.ruff]
 line-length = 100

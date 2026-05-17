@@ -137,11 +137,27 @@ def run(
         fmt_usd_short(DIAGNOSTIC_FEE_USD) if link_type == "diagnostic"
         else fmt_usd_short(ENGAGEMENT_FEE_USD)
     )
+
+    # Detect test/live mode mismatch BEFORE printing the URL.
+    # The most expensive operator mistake is "paste a URL into a
+    # customer email that will fail webhook verification when the
+    # customer pays." Printing the mismatch warning before the
+    # URL makes it impossible to miss — the warning shows up
+    # immediately above the success line they were going to copy.
+    from recupero.payments.stripe_mode import (
+        detect_mode_from_env, format_mismatch_warning,
+    )
+    mode_report = detect_mode_from_env()
+    if mode_report.mismatch:
+        import sys
+        print(format_mismatch_warning(mode_report), file=sys.stderr)
+        print(file=sys.stderr)  # blank line separator
+
     print(
         f"OK — {link_type} payment link for case "
         f"{case_row['case_number']} ({case_row['client_name']}):\n\n"
         f"    {url}\n\n"
-        f"Amount: {amount}\n"
+        f"Amount: {amount}  ({mode_report.consensus} mode)\n"
     )
     if link_type == "diagnostic":
         print(

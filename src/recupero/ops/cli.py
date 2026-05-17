@@ -165,6 +165,14 @@ def cli() -> None:
              "(e.g., 'victim', 'attorney', 'family-member').",
     )
 
+    # ----- stripe-mode ----- #
+    sub.add_parser(
+        "stripe-mode",
+        help="Report the current Stripe configuration mode "
+             "(test vs live). Exits non-zero on mismatch — "
+             "useful in deployment CI checks.",
+    )
+
     # ----- list-payments ----- #
     p_lpay = sub.add_parser(
         "list-payments",
@@ -322,6 +330,10 @@ def cli() -> None:
             dsn=_require_dsn(),
             confirm=_confirm,
         ))
+
+    if args.command == "stripe-mode":
+        from recupero.ops.commands import stripe_mode_cmd as cmd
+        sys.exit(cmd.run())
 
     if args.command == "list-payments":
         from recupero.ops.commands import list_payments as cmd

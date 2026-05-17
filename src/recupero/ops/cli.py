@@ -164,6 +164,39 @@ def cli() -> None:
              "(e.g., 'victim', 'attorney', 'family-member').",
     )
 
+    # ----- generate-payment-link ----- #
+    p_paylink = sub.add_parser(
+        "generate-payment-link",
+        help="Mint a Stripe Payment Link URL for the $499 diagnostic "
+             "or $1,500 engagement payment, with case-specific "
+             "metadata baked into client_reference_id.",
+    )
+    p_paylink.add_argument("case_id", help="UUID of the case")
+    p_paylink.add_argument(
+        "--type", required=True, dest="link_type",
+        choices=("diagnostic", "engagement"),
+        help="Which payment this link is for.",
+    )
+    p_paylink.add_argument(
+        "--chain", default="ethereum",
+        help="Chain for diagnostic links (default: ethereum). Ignored "
+             "for engagement.",
+    )
+    p_paylink.add_argument(
+        "--seed-address", dest="seed_address", default=None,
+        help="The wallet to trace (required for --type diagnostic).",
+    )
+    p_paylink.add_argument(
+        "--investigation-id", dest="investigation_id", default=None,
+        help="Investigation UUID for --type engagement. If omitted, "
+             "uses the latest investigation for the case.",
+    )
+    p_paylink.add_argument(
+        "--prefilled-email", dest="prefilled_email", default=None,
+        help="Override the case's contact email for the Stripe "
+             "checkout 'Email' field pre-fill.",
+    )
+
     # ----- promote-freezable ----- #
     p_promote = sub.add_parser(
         "promote-freezable",
@@ -261,6 +294,23 @@ def cli() -> None:
             force=args.force,
             dsn=_require_dsn(),
             confirm=_confirm,
+        ))
+
+    if args.command == "generate-payment-link":
+        from recupero.ops.commands import generate_payment_link as cmd
+        investigation_uuid: UUID | None = None
+        if args.investigation_id:
+            investigation_uuid = _parse_uuid(
+                args.investigation_id, field_name="investigation_id",
+            )
+        sys.exit(cmd.run(
+            case_id=_parse_uuid(args.case_id, field_name="case_id"),
+            link_type=args.link_type,
+            chain=args.chain,
+            seed_address=args.seed_address,
+            investigation_id=investigation_uuid,
+            prefilled_email=args.prefilled_email,
+            dsn=_require_dsn(),
         ))
 
     print(f"ERROR: unknown command {args.command!r}", file=sys.stderr)

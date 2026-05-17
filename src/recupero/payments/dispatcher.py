@@ -75,7 +75,21 @@ def dispatch(*, event: StripeEvent, dsn: str) -> DispatchResult:
     # Most-common shape: checkout.session.completed carries the
     # session object as event.data.object.
     obj = (event.payload.get("data") or {}).get("object") or {}
-    metadata = obj.get("metadata") or {}
+
+    # Workflow metadata can come from two places:
+    #   * `metadata.*` dict — set by the Stripe Dashboard's Payment
+    #     Link config OR by a Checkout Session created via API.
+    #   * `client_reference_id` — a free-form string parameterizable
+    #     on Payment Link URLs (?client_reference_id=...). This is
+    #     the path the CLI uses when generating per-customer URLs.
+    #
+    # metadata wins when both are set (Dashboard-baked types are the
+    # most authoritative); client_reference_id fills in for variables
+    # that can't be baked (the specific case_id / investigation_id).
+    metadata = _merge_metadata_sources(
+        metadata_dict=obj.get("metadata") or {},
+        client_reference_id=obj.get("client_reference_id") or "",
+    )
 
     amount_type = (metadata.get("type") or "").strip() or "unknown"
     case_id_raw = (metadata.get("case_id") or "").strip() or None
@@ -204,6 +218,84 @@ def dispatch(*, event: StripeEvent, dsn: str) -> DispatchResult:
 # ----- Helpers ----- #
 
 
+# Parse convention for ``client_reference_id`` on Stripe Payment Links.
+# Two formats today, both colon-separated:
+#
+#   diag:<case_uuid>:<chain>:<seed_address>
+#   eng:<investigation_uuid>
+#
+# Why this format?
+# Payment Link URLs accept ``?client_reference_id=...`` as a single
+# free-form string. The metadata dict is NOT URL-parametrizable on
+# Payment Links — only on API-created Checkout Sessions. So we encode
+# the dynamic parts (case_id, seed_address) into client_reference_id
+# and rely on the Stripe Dashboard's Payment Link config to bake in
+# the static parts (e.g., the product → amount mapping).
+#
+# UUIDs, chain names ('ethereum', 'arbitrum', etc.), and 0x-prefixed
+# addresses don't contain `:`, so the separator is safe.
+_CRI_PREFIX_DIAG = "diag"
+_CRI_PREFIX_ENG = "eng"
+
+
+def _merge_metadata_sources(
+    *,
+    metadata_dict: dict[str, Any],
+    client_reference_id: str,
+) -> dict[str, Any]:
+    """Build a unified metadata dict from both possible sources.
+
+    Resolution order (`metadata_dict` wins on conflict):
+      1. Start with the parsed client_reference_id (Payment Link path).
+      2. Overlay any keys from metadata_dict (API-Checkout path or
+         Dashboard-baked Payment Link metadata).
+
+    The result is a flat dict the dispatcher's existing code path
+    can read without needing to know which source it came from.
+    """
+    out = _parse_client_reference_id(client_reference_id.strip())
+    for k, v in metadata_dict.items():
+        if v not in (None, ""):
+            out[k] = v
+    return out
+
+
+def _parse_client_reference_id(cri: str) -> dict[str, str]:
+    """Parse our Payment Link convention into the same shape as
+    metadata.*. Returns an empty dict if unparseable — the
+    dispatcher then degrades to audit-only and the operator sees
+    a clear note on the payments row.
+
+    Schema:
+      ``diag:<case_uuid>:<chain>:<seed_address>``
+      ``eng:<investigation_uuid>``
+    """
+    if not cri:
+        return {}
+    parts = cri.split(":")
+    if not parts:
+        return {}
+    prefix = parts[0].lower()
+    if prefix == _CRI_PREFIX_DIAG and len(parts) >= 4:
+        # All four trailing fields must be non-empty — defensive
+        # against tokens like 'diag:abc::seed' that would otherwise
+        # produce a half-populated metadata dict.
+        if all(p.strip() for p in parts[1:4]):
+            return {
+                "type": "diagnostic",
+                "case_id": parts[1],
+                "chain": parts[2],
+                "seed_address": parts[3],
+            }
+        return {}
+    if prefix == _CRI_PREFIX_ENG and len(parts) >= 2 and parts[1].strip():
+        return {
+            "type": "engagement",
+            "investigation_id": parts[1],
+        }
+    return {}
+
+
 def _resolve_amount_cents(obj: dict[str, Any], amount_type: str) -> int:
     """Extract the payment amount from the Stripe object.
 
@@ -310,12 +402,14 @@ def _handle_diagnostic(
             "operator triage required"
         )
 
-    # Read seed_address from Checkout Session metadata if provided.
-    # Required for the worker to start tracing — the operator-side
-    # checkout flow should populate this. If missing, we still
-    # insert a placeholder pending row but mark it with a clear
-    # notes string so the operator can fix it.
-    metadata = obj.get("metadata") or {}
+    # Read seed_address from the merged metadata source. With
+    # Payment Links these arrive via client_reference_id; with
+    # API-created Checkout Sessions they arrive via metadata.*.
+    # The merged dict captures both paths uniformly.
+    metadata = _merge_metadata_sources(
+        metadata_dict=obj.get("metadata") or {},
+        client_reference_id=obj.get("client_reference_id") or "",
+    )
     seed_address = (metadata.get("seed_address") or "").strip()
     chain = (metadata.get("chain") or "ethereum").strip().lower()
 

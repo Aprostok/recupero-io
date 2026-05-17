@@ -109,7 +109,11 @@ class RecoveryEstimate:
         return d
 
 
-def score_recovery(brief: dict[str, Any]) -> RecoveryEstimate:
+def score_recovery(
+    brief: dict[str, Any],
+    *,
+    learned_priors: dict[str, Any] | None = None,
+) -> RecoveryEstimate:
     """Score a freeze_brief.json structure into a RecoveryEstimate.
 
     Inputs (read from the brief):
@@ -152,7 +156,14 @@ def score_recovery(brief: dict[str, Any]) -> RecoveryEstimate:
             continue
         if issuer_usd <= 0:
             continue
-        prior = _ISSUER_FREEZE_PRIOR.get(issuer, _UNKNOWN_ISSUER_PRIOR)
+        # v0.14.2: Use learned prior from freeze_outcomes if available
+        # for this issuer; else fall back to heuristic prior.
+        prior = None
+        if learned_priors and issuer in learned_priors:
+            lp = learned_priors[issuer]
+            prior = float(getattr(lp, "p_any_freeze", lp))
+        if prior is None:
+            prior = _ISSUER_FREEZE_PRIOR.get(issuer, _UNKNOWN_ISSUER_PRIOR)
         # Freeze capability override. The brief produces both forms
         # depending on which layer: emit_brief maps yes/limited/no →
         # HIGH/MEDIUM/LOW for display, but the raw freeze_asks.json

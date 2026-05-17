@@ -30,6 +30,9 @@ class Chain(str, Enum):
     ethereum = "ethereum"
     # Phase 3+
     solana = "solana"
+    # v0.12.0: Tron mainnet (TRX + TRC-20). Critical for USDT
+    # laundering cases — ~half of all USDT volume lives on Tron.
+    tron = "tron"
     # Later
     bitcoin = "bitcoin"
     arbitrum = "arbitrum"

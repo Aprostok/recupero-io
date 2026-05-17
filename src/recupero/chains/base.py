@@ -35,6 +35,13 @@ class ChainAdapter(ABC):
         if chain == Chain.solana:
             from recupero.chains.solana.adapter import SolanaAdapter
             return SolanaAdapter(config)
+        if chain == Chain.tron:
+            # Tron uses a separate REST gateway (TronGrid). Its config
+            # surface is small — just an optional API key from env —
+            # so the adapter resolves that itself rather than threading
+            # through RecuperoConfig.
+            from recupero.chains.tron.adapter import TronAdapter
+            return TronAdapter()
         raise NotImplementedError(f"No adapter for chain {chain}")
 
     # --- block / time ---

@@ -1,19 +1,26 @@
-"""Tests for the portal-link banner injected into the auto-sent
-victim-summary email.
+"""Tests for the banners injected into the auto-sent victim-summary
+email: the portal-link banner (v0.5.4) and the engagement Pay-Now
+banner (v0.6.2).
 
-The banner is built by recupero.worker._deliverables._build_portal_banner_html
+Both banners are built by recupero.worker._deliverables helpers
 and prepended to the email body before the Resend send. Failures
-to mint a token must NOT block the send — they degrade gracefully
-to "send without banner" so the customer still gets their PDFs.
+in EITHER helper must NOT block the send — they degrade gracefully
+to "send with the surviving banner(s)" so the customer always
+gets their PDFs and at least one CTA.
 
 Contracts under test:
-  * Returns "" when case_id is None (wallet trace path).
-  * Returns "" when SUPABASE_DB_URL is unset (no DB reachable).
-  * Returns "" when generate_token raises (DB error, FK miss).
-  * Returns HTML with the portal URL when the happy path works.
-  * The injected HTML uses inline styles only (Gmail strips
-    <style> blocks; we lock the requirement against future
-    "let's add a stylesheet" temptations).
+  * Portal banner:
+    - Returns "" when case_id is None (wallet trace path).
+    - Returns "" when SUPABASE_DB_URL is unset.
+    - Returns "" when generate_token raises.
+    - Returns HTML with the portal URL on happy path.
+    - Inline styles only (Gmail strips <style> blocks).
+  * Pay-Now banner:
+    - Returns "" when RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK
+      is unset (dev / pre-Stripe deployments degrade cleanly).
+    - Returns HTML with the engagement Payment Link URL on happy
+      path, with investigation_id encoded as client_reference_id.
+    - Inline styles only.
 """
 
 from __future__ import annotations
@@ -21,7 +28,10 @@ from __future__ import annotations
 from unittest.mock import patch
 from uuid import uuid4
 
-from recupero.worker._deliverables import _build_portal_banner_html
+from recupero.worker._deliverables import (
+    _build_pay_engagement_banner_html,
+    _build_portal_banner_html,
+)
 
 
 def test_banner_empty_when_case_id_none() -> None:
@@ -90,3 +100,84 @@ def test_banner_uses_inline_styles_only(monkeypatch) -> None:
         out = _build_portal_banner_html(case_id=str(uuid4()))
     assert "<style" not in out.lower()
     assert "style=" in out  # inline styles are present
+
+
+# ---- _build_pay_engagement_banner_html (v0.6.2) ---- #
+
+
+def test_pay_banner_empty_when_env_unset(monkeypatch) -> None:
+    """No RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK → return "" so
+    the auto-send still goes out with just the portal banner.
+    Dev / pre-Stripe deployments degrade cleanly."""
+    monkeypatch.delenv("RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK", raising=False)
+    out = _build_pay_engagement_banner_html(
+        investigation_id=str(uuid4()), victim_email="x@y.com",
+    )
+    assert out == ""
+
+
+def test_pay_banner_happy_path(monkeypatch) -> None:
+    """With the env var set + valid investigation_id → HTML with
+    the Stripe Payment Link URL (containing the eng:<inv_id>
+    client_reference_id) and the Pay-Now CTA text."""
+    monkeypatch.setenv(
+        "RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK",
+        "https://buy.stripe.com/test_eng",
+    )
+    inv_id = uuid4()
+    out = _build_pay_engagement_banner_html(
+        investigation_id=str(inv_id), victim_email="victim@example.com",
+    )
+    assert out, "banner should be non-empty on the happy path"
+    # The URL is encoded — assert on substrings that survive encoding
+    assert "buy.stripe.com/test_eng" in out
+    assert "client_reference_id" in out
+    # The investigation_id appears as the second colon-separated
+    # segment of the encoded CRI. Stripe encodes colons as %3A.
+    assert f"eng%3A{inv_id}" in out
+    assert "Begin recovery" in out  # CTA text
+    assert "$1,500" in out
+
+
+def test_pay_banner_returns_empty_on_invalid_investigation_id(monkeypatch) -> None:
+    """Garbage investigation_id (not a UUID) → build_engagement_link
+    raises ValueError on UUID() construction → banner returns ""
+    instead of crashing the auto-send."""
+    monkeypatch.setenv(
+        "RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK",
+        "https://buy.stripe.com/test_eng",
+    )
+    out = _build_pay_engagement_banner_html(
+        investigation_id="not-a-uuid", victim_email=None,
+    )
+    assert out == ""
+
+
+def test_pay_banner_uses_inline_styles_only(monkeypatch) -> None:
+    """Same Gmail-survival requirement as the portal banner."""
+    monkeypatch.setenv(
+        "RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK",
+        "https://buy.stripe.com/test_eng",
+    )
+    out = _build_pay_engagement_banner_html(
+        investigation_id=str(uuid4()), victim_email=None,
+    )
+    assert "<style" not in out.lower()
+    assert "style=" in out
+
+
+def test_pay_banner_email_optional(monkeypatch) -> None:
+    """victim.email is None (rare but possible — intake form
+    allowed empty email at some point) → banner still builds.
+    Stripe's checkout page asks for email; the customer just
+    types it manually."""
+    monkeypatch.setenv(
+        "RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK",
+        "https://buy.stripe.com/test_eng",
+    )
+    out = _build_pay_engagement_banner_html(
+        investigation_id=str(uuid4()), victim_email=None,
+    )
+    assert out
+    # Without prefilled_email the URL doesn't include that param.
+    assert "prefilled_email" not in out

@@ -453,8 +453,25 @@ def _maybe_auto_send_victim_summary(
     # without the banner. The operator can re-issue manually via
     # `recupero-ops generate-customer-link`.
     portal_banner = _build_portal_banner_html(case_id=case_id)
-    if portal_banner:
-        html_body = portal_banner + html_body
+
+    # On recoverable cases, ALSO inject a Pay-Now button for the
+    # $1,500 engagement fee, so the customer can convert directly
+    # from the inbox. We detect recoverable from the rendered
+    # template filename (set at render time by
+    # _victim_summary.render_victim_summary based on
+    # classify_recovery_prospects).
+    is_recoverable = summary_html_path.name.startswith(
+        "victim_summary_recoverable_"
+    )
+    pay_banner = ""
+    if is_recoverable and investigation_id:
+        pay_banner = _build_pay_engagement_banner_html(
+            investigation_id=investigation_id,
+            victim_email=victim.email,
+        )
+
+    if portal_banner or pay_banner:
+        html_body = portal_banner + pay_banner + html_body
 
     try:
         result = send_email(
@@ -544,6 +561,78 @@ def _build_portal_banner_html(*, case_id: str | None) -> str:
         '<div style="font-size:12px;color:#888;margin-top:14px;">'
         'This link is private to your case and expires in 90 days. '
         'If you ever lose it, reply to this email and we will reissue.'
+        '</div>'
+        '</div>'
+    )
+
+
+def _build_pay_engagement_banner_html(
+    *,
+    investigation_id: str,
+    victim_email: str | None,
+) -> str:
+    """Build the inline-styled Pay-Now banner for the $1,500
+    engagement fee. Mints a Stripe Payment Link URL with the
+    investigation_id encoded in client_reference_id so the
+    dispatcher can correlate the payment back when the webhook
+    fires.
+
+    Returns an empty string (no-op prepend) when:
+      * RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK is unset
+      * URL build raises for any reason
+
+    The banner sits BELOW the portal banner in the email — portal
+    first because customers will check status more often than they
+    convert, and visual hierarchy matters. Different accent color
+    (warm amber vs the portal's deep green) so the two banners
+    read as distinct CTAs.
+    """
+    try:
+        from uuid import UUID as _UUID
+        from recupero.payments.payment_links import (
+            PaymentLinkConfigError, build_engagement_link,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pay banner: import failed (%s) — skipping", exc)
+        return ""
+    try:
+        url = build_engagement_link(
+            investigation_id=_UUID(investigation_id),
+            prefilled_email=victim_email,
+        )
+    except PaymentLinkConfigError as exc:
+        # Env var unset — expected on dev / pre-Stripe deployments.
+        # Log at INFO level so it doesn't show up as a warning.
+        log.info("pay banner skipped: %s", exc)
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        log.warning("pay banner: URL build failed (%s) — skipping", exc)
+        return ""
+
+    # Same inline-style discipline as the portal banner: Gmail
+    # strips <style> blocks, so every visual property is inline.
+    return (
+        '<div style="margin:0 0 24px;padding:20px 24px;'
+        'background:#fff7e6;border-left:4px solid #c47a00;'
+        'border-radius:4px;font-family:-apple-system,BlinkMacSystemFont,'
+        '\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">'
+        '<div style="font-size:13px;color:#7a4d00;'
+        'text-transform:uppercase;letter-spacing:0.05em;'
+        'font-weight:600;margin-bottom:8px;">Ready to begin recovery?</div>'
+        '<div style="font-size:15px;color:#1a1a1a;line-height:1.5;'
+        'margin-bottom:14px;">'
+        'Your case is recoverable. The next step is the $1,500 '
+        'engagement that activates 30 days of compliance freeze '
+        'requests, law-enforcement coordination, and weekly status '
+        'updates.'
+        '</div>'
+        f'<a href="{url}" '
+        'style="display:inline-block;background:#c47a00;color:#ffffff;'
+        'text-decoration:none;padding:10px 18px;border-radius:5px;'
+        'font-weight:600;font-size:14px;">Begin recovery — $1,500 →</a>'
+        '<div style="font-size:12px;color:#888;margin-top:14px;">'
+        'Payment processed by Stripe. Recovery is not guaranteed; '
+        'see the attached engagement letter PDF for full terms.'
         '</div>'
         '</div>'
     )

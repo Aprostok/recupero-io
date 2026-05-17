@@ -209,7 +209,8 @@ def _route_sign_submit(
     try:
         fee = Decimal(str(verified.quoted_fee_usd))
     except (InvalidOperation, TypeError):
-        fee = Decimal("1500")
+        from recupero._pricing import ENGAGEMENT_FEE_USD
+        fee = ENGAGEMENT_FEE_USD
 
     ip = (headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
     if not ip:
@@ -421,7 +422,7 @@ def _case_dict(v: VerifiedToken) -> dict[str, Any]:
         "case_status": v.case_status,
         "case_state": v.case_state,
         "estimated_value_usd": v.estimated_value_usd,
-        "quoted_fee_usd": v.quoted_fee_usd or Decimal("1500"),
+        "quoted_fee_usd": v.quoted_fee_usd or _engagement_fee_default(),
     }
 
 
@@ -457,6 +458,15 @@ def _engagement_dict(v: VerifiedToken) -> dict[str, Any]:
         "days_since_start": days_since,
         "days_remaining": days_remaining,
     }
+
+
+def _engagement_fee_default() -> Decimal:
+    """Default engagement fee for portal-page rendering when the
+    case row doesn't carry an explicit quoted_fee_usd. Centralized
+    in recupero._pricing so a price change updates without manual
+    sync across every fallback point."""
+    from recupero._pricing import ENGAGEMENT_FEE_USD
+    return ENGAGEMENT_FEE_USD
 
 
 def _coerce_utc(dt: datetime | None) -> datetime | None:

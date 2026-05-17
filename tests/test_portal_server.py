@@ -40,7 +40,7 @@ def _mk_verified(**overrides) -> VerifiedToken:
         "case_status": "complete",
         "case_state": None,
         "estimated_value_usd": Decimal("50000"),
-        "quoted_fee_usd": Decimal("1500"),
+        "quoted_fee_usd": Decimal("10000"),
         "investigation_id": uuid4(),
         "engagement_started_at": None,
         "engagement_closed_at": None,
@@ -306,7 +306,9 @@ def test_handle_portal_sign_submit_happy_path() -> None:
     persist.assert_called_once()
     kwargs = persist.call_args.kwargs
     assert kwargs["signature_name"] == "Alex Q. Smith"
-    assert kwargs["fee_usd"] == Decimal("1500")
+    # Fee comes from the fixture's quoted_fee_usd; the signature
+    # form passes it through verbatim.
+    assert kwargs["fee_usd"] == Decimal("10000")
     # Only the first IP from X-Forwarded-For is recorded.
     assert kwargs["ip_address"] == "203.0.113.5"
     assert kwargs["user_agent"] == "Mozilla/5.0"

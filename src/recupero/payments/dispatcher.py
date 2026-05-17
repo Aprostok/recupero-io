@@ -55,14 +55,18 @@ class DispatchResult:
     notes: str | None
 
 
-# Default amounts (USD) by type. Used as fallbacks if the event
+# Default amounts (CENTS) by type. Used as fallbacks if the event
 # payload doesn't carry an amount (rare; checkout.session events
-# always do, but defensive). The fallbacks match the published
-# Tier-2 pricing.
-_DEFAULT_AMOUNTS_CENTS = {
-    "diagnostic":  49900,    # $499.00
-    "engagement": 150000,    # $1,500.00
-}
+# always do, but defensive). Sourced from the centralized pricing
+# module so a price change updates this without manual sync.
+def _default_amounts_cents() -> dict[str, int]:
+    from recupero._pricing import (
+        DIAGNOSTIC_FEE_CENTS, ENGAGEMENT_FEE_CENTS,
+    )
+    return {
+        "diagnostic": DIAGNOSTIC_FEE_CENTS,
+        "engagement": ENGAGEMENT_FEE_CENTS,
+    }
 
 
 def dispatch(*, event: StripeEvent, dsn: str) -> DispatchResult:
@@ -310,7 +314,7 @@ def _resolve_amount_cents(obj: dict[str, Any], amount_type: str) -> int:
         val = obj.get(key)
         if isinstance(val, int) and val > 0:
             return val
-    return _DEFAULT_AMOUNTS_CENTS.get(amount_type, 0)
+    return _default_amounts_cents().get(amount_type, 0)
 
 
 def _resolve_payment_status(event_type: str, obj: dict[str, Any]) -> str:

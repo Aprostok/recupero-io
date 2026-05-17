@@ -197,11 +197,11 @@ def test_diagnostic_payment_with_unknown_case_id_is_audit_only() -> None:
 
 
 def test_engagement_payment_activates_engagement() -> None:
-    """Happy path for the $1,500 engagement fee: UPDATE the
+    """Happy path for the $10,000 engagement fee: UPDATE the
     investigation's engagement_started_at + fee."""
     inv_uuid = uuid4()
     event = _mk_event(
-        amount_total=150000,
+        amount_total=1000000,  # $10,000.00 in cents
         metadata={
             "type": "engagement",
             "investigation_id": str(inv_uuid),
@@ -235,7 +235,7 @@ def test_engagement_payment_without_investigation_id_is_audit_only() -> None:
     """Operator-side mistake: Checkout Session for engagement fee
     is missing metadata.investigation_id. Log + flag.
     No investigation lookup at all since inv_uuid is None."""
-    event = _mk_event(amount_total=150000, metadata={"type": "engagement"})
+    event = _mk_event(amount_total=1000000, metadata={"type": "engagement"})
     mock_conn = MagicMock()
     cur = MagicMock()
     cur.fetchone.side_effect = [{"id": str(uuid4())}]  # only payments INSERT

@@ -1,4 +1,4 @@
-"""recupero-ops mark-engaged <inv_id> [--fee 1500] — activate Tier-2.
+"""recupero-ops mark-engaged <inv_id> [--fee 10000] — activate Tier-2.
 
 Operator runs this when a victim signs the engagement letter and
 pays the incremental engagement fee. Sets engagement_started_at

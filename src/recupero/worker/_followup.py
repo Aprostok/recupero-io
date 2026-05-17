@@ -35,7 +35,7 @@ operator:
 
     UPDATE investigations
        SET engagement_started_at = NOW(),
-           engagement_fee_paid_usd = 1500
+           engagement_fee_paid_usd = 10000
      WHERE id = '<inv_id>';
 
 Once Jacob's admin UI surfaces this control, the workflow becomes

@@ -23,7 +23,7 @@ Dashboard, copied here):
       e.g., https://buy.stripe.com/test_499_diag
 
   RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK
-      e.g., https://buy.stripe.com/test_1500_eng
+      e.g., https://buy.stripe.com/test_10000_eng
 
 Both should have ``metadata.type`` baked into the Dashboard
 config (`diagnostic` / `engagement` respectively) so the
@@ -93,7 +93,7 @@ def build_engagement_link(
     prefilled_email: str | None = None,
     base_url: str | None = None,
 ) -> str:
-    """Build the customer-facing $1,500 engagement Payment Link URL.
+    """Build the customer-facing $10,000 engagement Payment Link URL.
 
     ``client_reference_id`` is encoded as
     ``eng:<investigation_uuid>`` — the dispatcher parses this back
@@ -108,7 +108,7 @@ def build_engagement_link(
         raise PaymentLinkConfigError(
             f"{ENV_ENGAGEMENT_LINK} is not set. Configure it in Railway "
             "with the Payment Link URL from your Stripe Dashboard "
-            "(the $1,500 engagement product)."
+            "(the $10,000 engagement product)."
         )
     cri = f"eng:{investigation_id}"
     return _attach_params(base, client_reference_id=cri,

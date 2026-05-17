@@ -65,11 +65,13 @@ _TEMPLATES_DIR = (
 )
 
 # Recoverable-floor: if confirmed FREEZABLE total is below this, we
-# default to the unrecoverable variant. Sub-$500 recoverable amounts
-# don't justify the $1,500+ engagement fee — recommending Tier 2 in
-# that range would be predatory, and the trace_report alone is more
-# useful to the victim for an LE filing.
-_RECOVERABLE_FLOOR_USD = Decimal("500")
+# default to the unrecoverable variant. At a $10,000 engagement fee
+# (v0.7.0), recommending Tier 2 on cases where the recoverable
+# amount is comparable or smaller would be predatory — the trace
+# report alone is more useful to the victim for an LE filing in
+# that range. Floor is centralized in recupero._pricing and
+# defaults to 4× the engagement fee.
+from recupero._pricing import RECOVERABLE_FLOOR_USD as _RECOVERABLE_FLOOR_USD
 
 
 def classify_recovery_prospects(
@@ -113,8 +115,8 @@ def render_victim_summary(
     freeze_brief: dict[str, Any],
     briefs_dir: Path,
     flow_filename: str | None = None,
-    engagement_fee_text: str = "$1,500 (incremental on top of the $499 already paid)",
-    contingency_pct: int = 15,
+    engagement_fee_text: str | None = None,
+    contingency_pct: int | None = None,
     refund_amount_text: str = "$99",
     unrecoverable_reason_short: str | None = None,
     unrecoverable_explanation: str | None = None,
@@ -130,7 +132,20 @@ def render_victim_summary(
     let the operator inject case-specific prose for why the funds
     can't be recovered (mixer / cashed out / self-custody / etc.).
     When None, the template falls back to generic copy.
+
+    ``engagement_fee_text`` and ``contingency_pct`` default to the
+    published values in recupero._pricing. v0.7.0 decoupled the
+    diagnostic from the engagement (no credit applied) — the
+    engagement_fee_text is now a clean dollar amount rather than
+    the "incremental over $499" phrasing.
     """
+    from recupero._pricing import (
+        CONTINGENCY_PCT, ENGAGEMENT_FEE_USD, fmt_usd_short,
+    )
+    if engagement_fee_text is None:
+        engagement_fee_text = fmt_usd_short(ENGAGEMENT_FEE_USD)
+    if contingency_pct is None:
+        contingency_pct = CONTINGENCY_PCT
     try:
         is_recoverable, total_freezable_usd, total_suspected_usd = (
             classify_recovery_prospects(freeze_brief)

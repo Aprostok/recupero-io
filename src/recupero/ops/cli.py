@@ -95,8 +95,9 @@ def cli() -> None:
     )
     p_engage.add_argument("investigation_id", help="UUID of the investigation")
     p_engage.add_argument(
-        "--fee", type=str, default="1500",
-        help="Engagement fee paid (USD, default 1500). The first "
+        "--fee", type=str, default=None,
+        help="Engagement fee paid (USD). Defaults to the value in "
+             "recupero._pricing (currently $10,000). The first "
              "follow-up email will be sent on the next "
              "--send-followups cron run.",
     )
@@ -168,7 +169,7 @@ def cli() -> None:
     p_paylink = sub.add_parser(
         "generate-payment-link",
         help="Mint a Stripe Payment Link URL for the $499 diagnostic "
-             "or $1,500 engagement payment, with case-specific "
+             "or $10,000 engagement payment, with case-specific "
              "metadata baked into client_reference_id.",
     )
     p_paylink.add_argument("case_id", help="UUID of the case")
@@ -229,13 +230,19 @@ def cli() -> None:
         ))
 
     if args.command == "mark-engaged":
+        from recupero._pricing import ENGAGEMENT_FEE_USD
         from recupero.ops.commands import mark_engaged as cmd
-        try:
-            fee = Decimal(args.fee)
-        except Exception:
-            print(f"ERROR: --fee must be a decimal number (got: {args.fee!r})",
-                  file=sys.stderr)
-            sys.exit(2)
+        if args.fee is None:
+            fee = ENGAGEMENT_FEE_USD
+        else:
+            try:
+                fee = Decimal(args.fee)
+            except Exception:
+                print(
+                    f"ERROR: --fee must be a decimal number (got: {args.fee!r})",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
         sys.exit(cmd.run(
             investigation_id=_parse_uuid(args.investigation_id),
             fee_usd=fee, dsn=_require_dsn(),

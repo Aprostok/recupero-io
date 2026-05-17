@@ -455,8 +455,8 @@ def _maybe_auto_send_victim_summary(
     portal_banner = _build_portal_banner_html(case_id=case_id)
 
     # On recoverable cases, ALSO inject a Pay-Now button for the
-    # $1,500 engagement fee, so the customer can convert directly
-    # from the inbox. We detect recoverable from the rendered
+    # engagement fee, so the customer can convert directly from
+    # the inbox. We detect recoverable from the rendered
     # template filename (set at render time by
     # _victim_summary.render_victim_summary based on
     # classify_recovery_prospects).
@@ -571,8 +571,8 @@ def _build_pay_engagement_banner_html(
     investigation_id: str,
     victim_email: str | None,
 ) -> str:
-    """Build the inline-styled Pay-Now banner for the $1,500
-    engagement fee. Mints a Stripe Payment Link URL with the
+    """Build the inline-styled Pay-Now banner for the engagement
+    fee. Mints a Stripe Payment Link URL with the
     investigation_id encoded in client_reference_id so the
     dispatcher can correlate the payment back when the webhook
     fires.
@@ -589,6 +589,7 @@ def _build_pay_engagement_banner_html(
     """
     try:
         from uuid import UUID as _UUID
+        from recupero._pricing import ENGAGEMENT_FEE_USD, fmt_usd_short
         from recupero.payments.payment_links import (
             PaymentLinkConfigError, build_engagement_link,
         )
@@ -609,6 +610,8 @@ def _build_pay_engagement_banner_html(
         log.warning("pay banner: URL build failed (%s) — skipping", exc)
         return ""
 
+    fee_short = fmt_usd_short(ENGAGEMENT_FEE_USD)
+
     # Same inline-style discipline as the portal banner: Gmail
     # strips <style> blocks, so every visual property is inline.
     return (
@@ -621,7 +624,7 @@ def _build_pay_engagement_banner_html(
         'font-weight:600;margin-bottom:8px;">Ready to begin recovery?</div>'
         '<div style="font-size:15px;color:#1a1a1a;line-height:1.5;'
         'margin-bottom:14px;">'
-        'Your case is recoverable. The next step is the $1,500 '
+        f'Your case is recoverable. The next step is the {fee_short} '
         'engagement that activates 30 days of compliance freeze '
         'requests, law-enforcement coordination, and weekly status '
         'updates.'
@@ -629,7 +632,7 @@ def _build_pay_engagement_banner_html(
         f'<a href="{url}" '
         'style="display:inline-block;background:#c47a00;color:#ffffff;'
         'text-decoration:none;padding:10px 18px;border-radius:5px;'
-        'font-weight:600;font-size:14px;">Begin recovery — $1,500 →</a>'
+        f'font-weight:600;font-size:14px;">Begin recovery — {fee_short} →</a>'
         '<div style="font-size:12px;color:#888;margin-top:14px;">'
         'Payment processed by Stripe. Recovery is not guaranteed; '
         'see the attached engagement letter PDF for full terms.'

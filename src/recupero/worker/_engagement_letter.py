@@ -82,9 +82,9 @@ def render_engagement_letter(
     briefs_dir: Path,
     total_freezable_usd: Decimal,
     total_suspected_usd: Decimal,
-    initial_fee_usd: Decimal = Decimal("499"),
-    total_engagement_fee_usd: Decimal = Decimal("2000"),
-    contingency_pct: int = 15,
+    initial_fee_usd: Decimal | None = None,
+    engagement_fee_usd: Decimal | None = None,
+    contingency_pct: int | None = None,
     investigator_jurisdiction: str | None = None,
 ) -> Path | None:
     """Render the Tier-2 engagement letter to ``briefs_dir`` and
@@ -95,15 +95,26 @@ def render_engagement_letter(
     eligible (recoverable funds above floor) before invoking. The
     renderer doesn't gate on that — it assumes the decision is
     made upstream so the same template can be reused for any
-    case that wants an engagement letter (e.g., manual case-by-
-    case overrides from the operator).
+    case that wants an engagement letter.
 
-    ``total_engagement_fee_usd`` defaults to $2,000 (which covers
-    the $499 already paid + $1,500 incremental for the active
-    recovery work). Override per-case if the case complexity
-    justifies a different fee (see the tier table in
-    docs/pricing or the operator runbook).
+    ``initial_fee_usd``, ``engagement_fee_usd``, and
+    ``contingency_pct`` default to the published values in
+    recupero._pricing — the diagnostic and engagement are
+    decoupled (no credit applied), so the engagement fee in the
+    letter equals the amount the customer pays through the
+    Stripe engagement Payment Link. Overrides exist for unit
+    tests + the rare per-case adjustment.
     """
+    from recupero._pricing import (
+        CONTINGENCY_PCT, DIAGNOSTIC_FEE_USD, ENGAGEMENT_FEE_USD,
+    )
+    if initial_fee_usd is None:
+        initial_fee_usd = DIAGNOSTIC_FEE_USD
+    if engagement_fee_usd is None:
+        engagement_fee_usd = ENGAGEMENT_FEE_USD
+    if contingency_pct is None:
+        contingency_pct = CONTINGENCY_PCT
+
     try:
         ctx = _build_context(
             case=case,
@@ -113,7 +124,7 @@ def render_engagement_letter(
             total_freezable_usd=total_freezable_usd,
             total_suspected_usd=total_suspected_usd,
             initial_fee_usd=initial_fee_usd,
-            total_engagement_fee_usd=total_engagement_fee_usd,
+            engagement_fee_usd=engagement_fee_usd,
             contingency_pct=contingency_pct,
             investigator_jurisdiction=investigator_jurisdiction,
         )
@@ -145,7 +156,7 @@ def _build_context(
     total_freezable_usd: Decimal,
     total_suspected_usd: Decimal,
     initial_fee_usd: Decimal,
-    total_engagement_fee_usd: Decimal,
+    engagement_fee_usd: Decimal,
     contingency_pct: int,
     investigator_jurisdiction: str | None,
 ) -> dict[str, Any]:
@@ -156,14 +167,6 @@ def _build_context(
 
     freezable_entries = freeze_brief.get("FREEZABLE") or []
     freezable_issuer_count = len(freezable_entries)
-
-    incremental_fee = total_engagement_fee_usd - initial_fee_usd
-    if incremental_fee < 0:
-        # Defensive: if total_engagement < initial_fee (someone passed
-        # a smaller total by accident), don't render a negative
-        # incremental fee. Treat the engagement as covered by the
-        # initial fee alone.
-        incremental_fee = Decimal(0)
 
     return {
         "case_id": case.case_id,
@@ -177,10 +180,11 @@ def _build_context(
         "total_under_investigation_usd": _fmt_usd(
             total_suspected_usd - total_freezable_usd
         ),
-        # Fee text rendered to dollar form for the template
+        # Fee text rendered to dollar form for the template.
+        # Decoupled model (v0.7.0): diagnostic + engagement are
+        # separate prices, NOT credited against each other.
         "initial_fee_text": _fmt_usd(initial_fee_usd),
-        "total_engagement_fee_text": _fmt_usd(total_engagement_fee_usd),
-        "incremental_engagement_fee_text": _fmt_usd(incremental_fee),
+        "engagement_fee_text": _fmt_usd(engagement_fee_usd),
         "contingency_pct": contingency_pct,
         # Timestamps
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),

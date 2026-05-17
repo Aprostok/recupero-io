@@ -152,9 +152,12 @@ def test_letter_includes_required_sections() -> None:
         assert section in html, f"missing section: {section}"
 
 
-def test_fee_math_with_default_2000_engagement() -> None:
-    """Default total engagement = $2,000, initial = $499, so
-    incremental = $1,501. Verify the rendered amounts match."""
+def test_fee_math_with_default_engagement() -> None:
+    """v0.7.0 decoupled the diagnostic from the engagement: the
+    engagement fee is the published amount ($10,000) and the
+    $499 diagnostic is a separate, already-paid charge that does
+    NOT get credited. The letter shows both amounts as standalone
+    fees."""
     with TemporaryDirectory() as tmp:
         path = render_engagement_letter(
             case=_make_case(), victim=_victim(),
@@ -166,13 +169,22 @@ def test_fee_math_with_default_2000_engagement() -> None:
         )
         html = path.read_text(encoding="utf-8")
 
-    assert "$2,000.00" in html  # total engagement
-    assert "$1,501.00" in html  # incremental ($2000 - $499)
+    assert "$10,000.00" in html  # engagement fee
+    assert "$499.00" in html      # diagnostic fee (referenced as
+                                  # separately earned)
+    # v0.7.0 decoupling: the template explicitly clarifies the
+    # engagement is "not credited against" the diagnostic. The
+    # negation phrase is intentional — but the old "incremental
+    # amount due upon signing" language is gone.
+    assert "not credited against" in html
+    assert "incremental amount" not in html
+    assert "incremental engagement" not in html
 
 
 def test_fee_math_with_custom_engagement_amount() -> None:
-    """Operator overrides total to $5,000 (Tier-3 case). Incremental
-    = $5,000 - $499 = $4,501."""
+    """Operator overrides to a custom engagement fee (e.g., for a
+    bespoke premium-case quote). The letter renders the override
+    cleanly with no credit math."""
     with TemporaryDirectory() as tmp:
         path = render_engagement_letter(
             case=_make_case(), victim=_victim(),
@@ -181,32 +193,13 @@ def test_fee_math_with_custom_engagement_amount() -> None:
             briefs_dir=Path(tmp),
             total_freezable_usd=Decimal("7097.58"),
             total_suspected_usd=Decimal("50000.00"),
-            total_engagement_fee_usd=Decimal("5000"),
+            engagement_fee_usd=Decimal("25000"),
         )
         html = path.read_text(encoding="utf-8")
 
-    assert "$5,000.00" in html
-    assert "$4,501.00" in html
-
-
-def test_fee_math_protects_against_negative_incremental() -> None:
-    """Defensive: if operator passes total_engagement < initial_fee
-    (e.g., $300 total when initial is $499), incremental should
-    render as $0.00, not as a negative number."""
-    with TemporaryDirectory() as tmp:
-        path = render_engagement_letter(
-            case=_make_case(), victim=_victim(),
-            investigator=_investigator(),
-            freeze_brief=_freeze_brief(),
-            briefs_dir=Path(tmp),
-            total_freezable_usd=Decimal("7097.58"),
-            total_suspected_usd=Decimal("50000.00"),
-            total_engagement_fee_usd=Decimal("300"),
-        )
-        html = path.read_text(encoding="utf-8")
-
-    assert "$0.00" in html
-    assert "-$" not in html  # no negative dollar amounts rendered
+    assert "$25,000.00" in html
+    # No "incremental" math — the override is the standalone fee.
+    assert "incremental amount" not in html
 
 
 def test_contingency_pct_renders() -> None:

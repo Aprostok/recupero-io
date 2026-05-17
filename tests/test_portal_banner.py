@@ -136,7 +136,11 @@ def test_pay_banner_happy_path(monkeypatch) -> None:
     # segment of the encoded CRI. Stripe encodes colons as %3A.
     assert f"eng%3A{inv_id}" in out
     assert "Begin recovery" in out  # CTA text
-    assert "$1,500" in out
+    # The amount comes from recupero._pricing.ENGAGEMENT_FEE_USD;
+    # any future price change updates the banner without touching
+    # this test.
+    from recupero._pricing import ENGAGEMENT_FEE_USD, fmt_usd_short
+    assert fmt_usd_short(ENGAGEMENT_FEE_USD) in out
 
 
 def test_pay_banner_returns_empty_on_invalid_investigation_id(monkeypatch) -> None:

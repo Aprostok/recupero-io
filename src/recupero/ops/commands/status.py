@@ -86,7 +86,7 @@ def _print_engagement_section(inv: dict) -> None:
     print("=" * 72)
     if not inv.get("engagement_started_at"):
         print("  Status:           NOT ENGAGED (diagnostic only)")
-        print("  To activate Tier 2: `recupero-ops mark-engaged <id> [--fee 1500]`")
+        print("  To activate Tier 2: `recupero-ops mark-engaged <id> [--fee 10000]`")
         return
 
     print(f"  Status:           {'CLOSED' if inv.get('engagement_closed_at') else 'ACTIVE'}")

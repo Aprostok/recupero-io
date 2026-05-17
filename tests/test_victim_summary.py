@@ -9,7 +9,10 @@ their inbox after their $499 diagnostic completes. Two variants:
     next steps (IC3, FBI, state AG, tax-loss deduction)
 
 The dispatch logic (``classify_recovery_prospects``) decides
-between variants based on whether confirmed FREEZABLE total >= $500.
+between variants based on whether confirmed FREEZABLE total >=
+the floor in recupero._pricing.RECOVERABLE_FLOOR_USD (v0.7.0:
+4× engagement fee = $40,000). Below the floor, recommending
+Tier 2 would be predatory.
 
 Tests run in <200ms with no network / no DB. The end-to-end
 render tests use the live freeze_brief.json shape from real cases
@@ -65,18 +68,20 @@ def test_classify_empty_freeze_brief_is_unrecoverable() -> None:
 
 
 def test_classify_recoverable_above_floor() -> None:
-    """Confirmed FREEZABLE totals >= $500 → recoverable."""
-    fb = {"FREEZABLE": [_circle_freezable_entry("$7,097.58")]}
+    """Confirmed FREEZABLE totals above the floor → recoverable.
+    Pick an amount comfortably above the v0.7.0 floor of $40,000."""
+    fb = {"FREEZABLE": [_circle_freezable_entry("$70,975.80")]}
     is_rec, freezable, suspected = classify_recovery_prospects(fb)
     assert is_rec is True
-    assert freezable == Decimal("7097.58")
+    assert freezable == Decimal("70975.80")
     # Suspected includes INVESTIGATE so it's larger than just freezable
     assert suspected == Decimal("1037451.35")
 
 
 def test_classify_below_floor_is_unrecoverable() -> None:
-    """$200 total freezable → unrecoverable. The engagement fee
-    would exceed the recovery, so recommending Tier 2 would be
+    """$200 total freezable → unrecoverable. At any engagement
+    fee, a recoverable amount this small means the engagement
+    would exceed the recovery — recommending Tier 2 would be
     predatory."""
     fb = {"FREEZABLE": [_circle_freezable_entry("$200.00")]}
     is_rec, _f, _s = classify_recovery_prospects(fb)
@@ -84,26 +89,36 @@ def test_classify_below_floor_is_unrecoverable() -> None:
 
 
 def test_classify_at_floor_exactly_is_recoverable() -> None:
-    """Exactly $500 confirmed freezable → recoverable (the floor is
-    inclusive). Edge case to lock the boundary."""
-    fb = {"FREEZABLE": [_circle_freezable_entry("$500.00")]}
-    is_rec, _f, _s = classify_recovery_prospects(fb)
+    """A confirmed freezable amount exactly equal to the floor →
+    recoverable (the floor is inclusive). Tied to the live
+    pricing constant so a floor change doesn't break this test;
+    the boundary semantics are what matter."""
+    from recupero._pricing import RECOVERABLE_FLOOR_USD
+    fb = {"FREEZABLE": [
+        _circle_freezable_entry(f"${RECOVERABLE_FLOOR_USD:,.2f}"),
+    ]}
+    is_rec, freezable, _s = classify_recovery_prospects(fb)
     assert is_rec is True
+    assert freezable == RECOVERABLE_FLOOR_USD
 
 
 def test_classify_multiple_issuers_summed() -> None:
-    """Multi-issuer cases sum across all issuers when checking the
-    floor. $300 from Circle + $400 from Tether = $700 total →
-    recoverable."""
+    """Multi-issuer cases sum across all issuers when checking
+    the floor. Two issuer entries each just under the floor sum
+    to comfortably above it → recoverable."""
+    from recupero._pricing import RECOVERABLE_FLOOR_USD
+    # Two equal entries; combined = 1.4x floor.
+    each = (RECOVERABLE_FLOOR_USD * Decimal("0.7")).quantize(Decimal("0.01"))
     fb = {"FREEZABLE": [
-        _circle_freezable_entry("$300.00"),
+        _circle_freezable_entry(f"${each:,.2f}"),
         {"issuer": "Tether", "token": "USDT",
-         "total_usd": "$400.00", "total_suspected_usd": "$400.00",
+         "total_usd": f"${each:,.2f}",
+         "total_suspected_usd": f"${each:,.2f}",
          "freeze_capability": "HIGH"},
     ]}
     is_rec, freezable, _s = classify_recovery_prospects(fb)
     assert is_rec is True
-    assert freezable == Decimal("700.00")
+    assert freezable == each * 2
 
 
 def test_classify_custom_floor() -> None:
@@ -196,7 +211,9 @@ def test_render_recoverable_variant() -> None:
         name="Alec Prostok", organization="Recupero LLC",
         email="alec@recupero.io",
     )
-    fb = {"FREEZABLE": [_circle_freezable_entry()]}
+    # Use an amount well above the v0.7.0 floor ($40,000) so this
+    # test stays robust to floor adjustments.
+    fb = {"FREEZABLE": [_circle_freezable_entry("$70,975.80")]}
 
     with TemporaryDirectory() as tmp:
         briefs_dir = Path(tmp)
@@ -214,7 +231,7 @@ def test_render_recoverable_variant() -> None:
     assert "Findings &amp; Next Steps" in html or "Findings &amp;<br/>Next Steps" in html
     assert "Engage Recupero for active recovery" in html
     assert "Use the artifacts yourself" in html
-    assert "$7,097.58" in html  # the freezable total
+    assert "$70,975.80" in html  # the freezable total (above floor)
     assert "Jane Doe" in html
     assert "USDC" in html  # the recovered stablecoin
 

@@ -208,10 +208,12 @@ def verify_token(*, token: str, dsn: str) -> VerifiedToken | None:
         eng_closed = inv_row["engagement_closed_at"]
         eng_fee = inv_row["engagement_fee_paid_usd"]
 
-    # Quoted engagement fee: default to $1,500 (Tier-2 standard) if
-    # the case hasn't already paid one. Surfaced on the sign-engagement
+    # Quoted engagement fee: default to the published Tier-2
+    # engagement fee (recupero._pricing.ENGAGEMENT_FEE_USD) if the
+    # case hasn't already paid one. Surfaced on the sign-engagement
     # form so the victim sees the exact amount they're agreeing to.
-    quoted_fee = eng_fee if eng_fee is not None else 1500
+    from recupero._pricing import ENGAGEMENT_FEE_USD
+    quoted_fee = eng_fee if eng_fee is not None else ENGAGEMENT_FEE_USD
 
     return VerifiedToken(
         token_id=UUID(str(row["token_id"])),

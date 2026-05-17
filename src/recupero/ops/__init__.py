@@ -15,7 +15,7 @@ Available commands:
       inventory. The single command the operator runs to see
       everything about a case.
 
-  recupero-ops mark-engaged <inv_id> [--fee 1500]
+  recupero-ops mark-engaged <inv_id> [--fee 10000]
       Start a Tier-2 engagement. Sets engagement_started_at=NOW()
       and engagement_fee_paid_usd=<fee>. Activates the follow-up
       cron for this case. Idempotent — running twice is a no-op.

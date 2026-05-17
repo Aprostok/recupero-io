@@ -297,8 +297,10 @@ def test_verify_token_returns_full_shape_on_match() -> None:
     assert isinstance(out, VerifiedToken)
     assert out.case_number == "V-99999"
     assert out.client_name == "Alex Victim"
-    # No prior engagement → quoted_fee defaults to $1,500 (Tier-2 standard)
-    assert out.quoted_fee_usd == 1500
+    # No prior engagement → quoted_fee defaults to the published
+    # ENGAGEMENT_FEE_USD from recupero._pricing (currently $10,000).
+    from recupero._pricing import ENGAGEMENT_FEE_USD
+    assert out.quoted_fee_usd == ENGAGEMENT_FEE_USD
 
 
 def test_verify_token_handles_case_with_no_investigations() -> None:

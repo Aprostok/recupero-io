@@ -10,7 +10,7 @@ Two flavors:
     right case and trigger the investigation.
 
   --type engagement
-    Builds the $1,500 engagement Payment Link with the
+    Builds the $10,000 engagement Payment Link with the
     investigation_id encoded. The webhook fires
     engagement_started_at when the payment lands.
 
@@ -130,7 +130,13 @@ def run(
         print(f"ERROR: {exc}")
         return 1
 
-    amount = "$499" if link_type == "diagnostic" else "$1,500"
+    from recupero._pricing import (
+        DIAGNOSTIC_FEE_USD, ENGAGEMENT_FEE_USD, fmt_usd_short,
+    )
+    amount = (
+        fmt_usd_short(DIAGNOSTIC_FEE_USD) if link_type == "diagnostic"
+        else fmt_usd_short(ENGAGEMENT_FEE_USD)
+    )
     print(
         f"OK — {link_type} payment link for case "
         f"{case_row['case_number']} ({case_row['client_name']}):\n\n"

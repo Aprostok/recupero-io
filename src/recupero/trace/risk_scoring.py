@@ -211,6 +211,34 @@ def load_high_risk_db(
     except Exception as exc:  # noqa: BLE001
         log.warning("ransomware seed load failed: %s", exc)
 
+    # OFAC live-sync CSV (v0.9.4). When the operator has run
+    # `recupero-ops ofac-sync` the latest Treasury feed lives
+    # at labels/seeds/ofac_crypto_live.csv. We load it last
+    # so the curated high_risk.json + ransomware.json entries
+    # remain authoritative on dupes, but new OFAC additions
+    # land without a code deploy.
+    try:
+        from recupero.trace.ofac_sync import load_ofac_csv
+        for entry in load_ofac_csv():
+            if entry.address in out:
+                continue  # curated entry wins
+            out[entry.address] = HighRiskEntry(
+                address=entry.address,
+                name=entry.sdn_entry_name or "(OFAC SDN)",
+                risk_category="ofac_sanctioned",
+                severity=4,
+                notes=(
+                    f"OFAC SDN List entry; UID {entry.sdn_entry_id}. "
+                    f"Listed {entry.listing_date or '(date unknown)'}. "
+                    "Sourced from live sync — refresh via "
+                    "`recupero-ops ofac-sync`."
+                ),
+                confidence="high",
+                ofac_listing_date=entry.listing_date or None,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("ofac live-sync data unavailable: %s", exc)
+
     # mixers.json — legacy schema (treat all entries as
     # mixer_sanctioned severity=4)
     mx_path = mixers_path or _MIXERS_SEED_PATH

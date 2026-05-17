@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recupero"
-version = "0.9.3"
+version = "0.9.4"
 description = "Trace stolen crypto from a victim wallet to law-enforcement-actionable endpoints"
 readme = "README.md"
 requires-python = ">=3.11"

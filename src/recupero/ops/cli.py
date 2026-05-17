@@ -173,6 +173,14 @@ def cli() -> None:
              "useful in deployment CI checks.",
     )
 
+    # ----- ofac-sync ----- #
+    sub.add_parser(
+        "ofac-sync",
+        help="Download the latest OFAC SDN List from treasury.gov "
+             "and update the local crypto-address CSV used by "
+             "risk-scoring. Recommended cadence: weekly via cron.",
+    )
+
     # ----- list-payments ----- #
     p_lpay = sub.add_parser(
         "list-payments",
@@ -333,6 +341,10 @@ def cli() -> None:
 
     if args.command == "stripe-mode":
         from recupero.ops.commands import stripe_mode_cmd as cmd
+        sys.exit(cmd.run())
+
+    if args.command == "ofac-sync":
+        from recupero.ops.commands import ofac_sync_cmd as cmd
         sys.exit(cmd.run())
 
     if args.command == "list-payments":

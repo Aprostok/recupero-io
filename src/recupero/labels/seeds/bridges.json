@@ -5,7 +5,9 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "notes": "Main entry point for deBridge cross-chain transfers",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "solana"],
+    "follow_up_url": "https://app.debridge.finance/orders",
+    "notes": "Main entry point for deBridge cross-chain transfers. Order hash extractable from the createOrder event.",
     "added_at": "2025-01-01T00:00:00Z"
   },
   {
@@ -78,6 +80,177 @@
     "category": "bridge",
     "source": "hop_docs",
     "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "base", "gnosis"],
+    "follow_up_url": "https://explorer.hop.exchange",
     "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xb12bfca5a55806aaf64e99521918a4bf0fc40802",
+    "name": "Hop Protocol: L1 Bridge",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "base"],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": "Hop L1 bridge entrypoint — locks tokens for L2 mint",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x5427fefa711eff984124bfbb1ab6fbf5e3da1820",
+    "name": "Celer cBridge v2",
+    "category": "bridge",
+    "source": "celer_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "fantom"],
+    "follow_up_url": "https://cbridge-v2.celer.network/refund",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xb8901acb165ed027e32754e0ffe830802919727f",
+    "name": "Synapse: Bridge",
+    "category": "bridge",
+    "source": "synapse_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "fantom"],
+    "follow_up_url": "https://explorer.synapseprotocol.com",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xc30141b657f4216252dc59af2e7cdb9d8792e1b0",
+    "name": "Socket / Bungee Gateway",
+    "category": "bridge",
+    "source": "socket_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "base", "avalanche"],
+    "follow_up_url": "https://socketscan.io",
+    "notes": "Aggregator — routes through underlying bridges. Check the inner transactions for actual bridge used.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xa8cba66ef4ad65b7f6c97e6d5e58f9b9bfe9ab40",
+    "name": "Allbridge Core",
+    "category": "bridge",
+    "source": "allbridge_docs",
+    "confidence": "high",
+    "supports_to_chains": ["solana", "polygon", "bsc", "avalanche", "tron"],
+    "follow_up_url": "https://app.allbridge.io",
+    "notes": "Stablecoin-focused bridge with Solana + Tron support",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x88ad09518695c6c3712ac10a214be5109a655671",
+    "name": "Gnosis Chain: Omnibridge",
+    "category": "bridge",
+    "source": "gnosis_docs",
+    "confidence": "high",
+    "supports_to_chains": ["gnosis"],
+    "follow_up_url": "https://omni.gnosischain.com",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xa0c68c638235ee32657e8f720a23cec1bfc77c77",
+    "name": "Polygon: RootChainManager",
+    "category": "bridge",
+    "source": "polygon_docs",
+    "confidence": "high",
+    "supports_to_chains": ["polygon"],
+    "follow_up_url": "https://polygonscan.com",
+    "notes": "Canonical Polygon PoS bridge",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x40ec5b33f54e0e8a33a975908c5ba1c14e5bbbdf",
+    "name": "Polygon: ERC20Predicate",
+    "category": "bridge",
+    "source": "polygon_docs",
+    "confidence": "high",
+    "supports_to_chains": ["polygon"],
+    "follow_up_url": "https://polygonscan.com",
+    "notes": "Polygon canonical ERC-20 deposit gate (lockTokens)",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x4dbd4fc535ac27206064b68ffcf827b0a60bab3f",
+    "name": "Arbitrum: Inbox",
+    "category": "bridge",
+    "source": "arbitrum_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum"],
+    "follow_up_url": "https://arbiscan.io",
+    "notes": "Arbitrum One canonical Inbox — ETH deposits + L1→L2 messages",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xa3a7b6f88361f48403514059f1f16c8e78d60eec",
+    "name": "Arbitrum: L1ERC20Gateway",
+    "category": "bridge",
+    "source": "arbitrum_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum"],
+    "follow_up_url": "https://arbiscan.io",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x99c9fc46f92e8a1c0dec1b1747d010903e884be1",
+    "name": "Optimism: L1 Standard Bridge",
+    "category": "bridge",
+    "source": "optimism_docs",
+    "confidence": "high",
+    "supports_to_chains": ["optimism"],
+    "follow_up_url": "https://optimistic.etherscan.io",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x3154cf16ccdb4c6d922629664174b904d80f2c35",
+    "name": "Base: L1 Standard Bridge",
+    "category": "bridge",
+    "source": "base_docs",
+    "confidence": "high",
+    "supports_to_chains": ["base"],
+    "follow_up_url": "https://basescan.org",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x32400084c286cf3e17e7b677ea9583e60a000324",
+    "name": "zkSync Era: Bridge",
+    "category": "bridge",
+    "source": "zksync_docs",
+    "confidence": "high",
+    "supports_to_chains": ["zksync"],
+    "follow_up_url": "https://explorer.zksync.io",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x8eb8a3b98659cce290402893d0123abb75e3ab28",
+    "name": "Avalanche Bridge",
+    "category": "bridge",
+    "source": "avalanche_docs",
+    "confidence": "high",
+    "supports_to_chains": ["avalanche"],
+    "follow_up_url": "https://snowtrace.io",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+
+  {
+    "address": "0xe8a36e62a2d50dd2e3b18a3a86b94b2feab02da7",
+    "name": "Multichain / Anyswap (defunct)",
+    "category": "bridge",
+    "source": "historical",
+    "confidence": "high",
+    "supports_to_chains": ["bsc", "polygon", "avalanche", "fantom", "harmony"],
+    "follow_up_url": null,
+    "notes": "Multichain ceased operations July 2023 after the founder's arrest in China. Historical contracts retained for legacy investigations — funds bridged via Multichain after the shutdown are likely unrecoverable.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x77b2043768d28e9c9ab44e1abfc95944bce57931",
+    "name": "Stargate v2: USDC Pool",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "added_at": "2026-05-17T00:00:00Z"
   }
 ]

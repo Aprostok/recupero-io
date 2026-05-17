@@ -704,6 +704,21 @@ def emit_brief(
     # contracts caught in the trace expansion — e.g. the Lido stETH contract).
     totals = _compute_totals(case, freezable, unrecoverable)
 
+    # --- Cross-chain handoffs (v0.8.1) ---
+    # Scan the case for transfers landing at known bridge contracts.
+    # Surfaced as a structured CROSS_CHAIN_HANDOFFS section so a
+    # downstream investigator can follow the money to other chains
+    # without having to manually identify the bridge each time.
+    try:
+        from recupero.trace.cross_chain import (
+            handoffs_to_brief_section,
+            identify_cross_chain_handoffs,
+        )
+        handoffs = identify_cross_chain_handoffs(case)
+        cross_chain_handoffs = handoffs_to_brief_section(handoffs)
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        cross_chain_handoffs = []
+
     # --- Final assembly ---
     brief = {
         "CASE_ID": editorial["CASE_ID"],
@@ -729,6 +744,11 @@ def emit_brief(
         # Brief templates lead with this; TOTAL_LOSS_USD is now
         # surfaced as the secondary "attribution scope" figure.
         "TOTAL_PERPETRATOR_HOLDINGS_USD": totals["TOTAL_PERPETRATOR_HOLDINGS_USD"],
+        # v0.8.1: cross-chain handoffs (Wormhole, Stargate, etc.).
+        # One entry per detected bridge-out transfer with the
+        # destination-chain candidates and an investigator-actionable
+        # follow-up note.
+        "CROSS_CHAIN_HANDOFFS": cross_chain_handoffs,
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 

@@ -719,6 +719,32 @@ def emit_brief(
     except Exception as _exc:  # noqa: BLE001 — non-fatal
         cross_chain_handoffs = []
 
+    # --- Entity clustering (v0.9.0) ---
+    # Group addresses that appear to belong to the same actor.
+    # Helps the investigator subpoena the full set, not just the
+    # one address the victim's funds touched.
+    try:
+        from recupero.trace.clustering import (
+            cluster_addresses,
+            clusters_to_brief_section,
+        )
+        # Build address-balance lookup from the freezable list
+        # so clusters can report their total exposure.
+        address_balances: dict[str, Decimal] = {}
+        for entry in freezable:
+            for holding in entry.get("holdings") or []:
+                addr = (holding.get("address") or "").lower()
+                if not addr:
+                    continue
+                bal = _parse_usd_string(holding.get("usd"))
+                address_balances[addr] = (
+                    address_balances.get(addr, Decimal("0")) + bal
+                )
+        clusters, unclustered = cluster_addresses(case, address_balances)
+        entity_clusters = clusters_to_brief_section(clusters, unclustered)
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        entity_clusters = {"clusters": [], "unclustered_addresses": []}
+
     # --- Final assembly ---
     brief = {
         "CASE_ID": editorial["CASE_ID"],
@@ -749,6 +775,13 @@ def emit_brief(
         # destination-chain candidates and an investigator-actionable
         # follow-up note.
         "CROSS_CHAIN_HANDOFFS": cross_chain_handoffs,
+        # v0.9.0: entity clustering. Groups addresses that appear
+        # to belong to the same actor based on H1 (common funding
+        # source), H2 (common withdrawal target), H3 (direct
+        # transfer with round-number amount). Each cluster carries
+        # evidence so the investigator can verify the heuristic
+        # fired correctly.
+        "ENTITY_CLUSTERS": entity_clusters,
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
 

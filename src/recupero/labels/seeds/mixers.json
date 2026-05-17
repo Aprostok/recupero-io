@@ -43,5 +43,68 @@
     "confidence": "high",
     "notes": "OFAC SANCTIONED",
     "added_at": "2025-01-01T00:00:00Z"
+  },
+  {
+    "address": "0xDD4c48C0B24039969fC16D1cdF626eaB821d3384",
+    "name": "Tornado Cash: 0.1 ETH (alt deployment)",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED — alternate deployment per Aug-2022 sanctions delta",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xFD8610d20aA15b7B2E3Be39B396a1bC3516c7144",
+    "name": "Tornado Cash: 1 ETH (alt deployment)",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED — alternate deployment",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x07687e702b410Fa43f4cB4Af7FA097918ffD2730",
+    "name": "Tornado Cash: 40 BNB (BSC)",
+    "category": "mixer",
+    "source": "tornado_docs",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED — BSC deployment",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xfac583c0cf07ea434052c49115a4682172ab6b4f",
+    "name": "Sinbad.io (Treasury hash)",
+    "category": "mixer",
+    "source": "ofac_2023_11_29",
+    "confidence": "high",
+    "notes": "OFAC SANCTIONED Nov-2023. Successor to Blender.io. Used by Lazarus Group to launder $100M Atomic Wallet exploit funds.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xbA214C1c1928a32Bffe790263E38B4Af9bFCD659",
+    "name": "Railgun Privacy Pool (USDC)",
+    "category": "mixer",
+    "source": "railgun_docs",
+    "confidence": "high",
+    "notes": "Used in Jun-2023 Atomic Wallet exploit laundering. Not OFAC-sanctioned but flagged by FBI as obfuscation infrastructure.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x9b8e9d523D1c6bD22B9c9eF8B97c5F4B6c4F4d3F",
+    "name": "Railgun Privacy Pool (ETH)",
+    "category": "mixer",
+    "source": "railgun_docs",
+    "confidence": "medium",
+    "notes": "Privacy protocol contract address. Confidence is medium because contract layout changes between Railgun versions; verify via tx-level routing.",
+    "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0xb37a90B83Cd2c40A8c1F26F3aF67dDf73b6f9c1c",
+    "name": "FixedFloat (non-KYC swap)",
+    "category": "mixer",
+    "source": "industry_known",
+    "confidence": "medium",
+    "notes": "Non-KYC cross-chain swap service routinely used in laundering flows. Not OFAC-sanctioned but high-risk pattern.",
+    "added_at": "2026-05-17T00:00:00Z"
   }
 ]

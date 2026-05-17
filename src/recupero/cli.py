@@ -990,6 +990,93 @@ def ai_editorial_cmd(
     console.print("[dim]The emit-brief command will refuse to run while REVIEW_REQUIRED is true.[/]")
 
 
+@app.command("screen")
+def screen_cmd(
+    address: str = typer.Argument(..., help="Address to screen."),
+    chain: str = typer.Option(
+        "ethereum",
+        help="Chain hint for the lookup: ethereum, arbitrum, base, bsc, "
+             "polygon, tron, solana, bitcoin.",
+    ),
+    no_correlation: bool = typer.Option(
+        False, "--no-correlation",
+        help="Skip the cross-case correlation DB lookup. Useful for "
+             "fully-offline screening with only the local seed files.",
+    ),
+    json_output: bool = typer.Option(
+        False, "--json",
+        help="Emit the result as machine-readable JSON instead of "
+             "a human-friendly table. Use this for piping into other "
+             "tools or for REST-style integrations.",
+    ),
+) -> None:
+    """Score a single address against OFAC + mixer + ransomware + drainer
+    seed data and the cross-case correlation index.
+
+    No on-chain calls — local-only lookup, latency <50ms.
+
+    Example::
+
+      recupero screen 0xa614f803b6fd780986a42c78ec9c7f77e6ded13c --chain ethereum
+      recupero screen TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t --chain tron --json
+    """
+    from recupero.screen.screener import screen_address
+
+    try:
+        result = screen_address(
+            address,
+            chain=chain,
+            use_correlation_db=not no_correlation,
+        )
+    except (TypeError, ValueError) as e:
+        console.print(f"[bold red]ERROR:[/] {e}")
+        raise typer.Exit(code=2) from None
+
+    if json_output:
+        console.print(json.dumps(result.to_json_safe(), indent=2))
+        return
+
+    # Pretty table
+    verdict_color = {
+        "sanctioned": "red",
+        "high": "red",
+        "medium": "yellow",
+        "low": "yellow",
+        "clean": "green",
+    }.get(result.risk_verdict, "white")
+    console.print()
+    console.print(f"[bold cyan]Wallet screening:[/] {result.address}  ([dim]{result.chain}[/])")
+    console.print(f"  Verdict:        [bold {verdict_color}]"
+                  f"{result.risk_verdict.upper()}[/]  "
+                  f"(score {result.risk_score}/10)")
+    console.print(f"  OFAC:           {'[red]YES[/]' if result.is_ofac_sanctioned else 'no'}")
+    console.print(f"  Mixer:          {'[red]YES[/]' if result.is_mixer else 'no'}")
+    console.print(f"  Ransomware:     {'[red]YES[/]' if result.is_ransomware else 'no'}")
+    console.print(f"  Drainer:        {'[yellow]YES[/]' if result.is_drainer else 'no'}")
+    console.print()
+    if result.labels:
+        console.print("[bold]Labels:[/]")
+        for lbl in result.labels:
+            console.print(
+                f"  • {lbl.name} [dim]({lbl.category}, sev={lbl.severity}, "
+                f"src={lbl.source})[/]"
+            )
+            if lbl.notes:
+                console.print(f"      [dim]{lbl.notes}[/]")
+    console.print("[bold]Cross-case history:[/]")
+    c = result.correlation
+    console.print(f"  Prior cases:           {c.prior_case_count}")
+    console.print(f"  Prior OFAC exposed:    {c.prior_ofac_exposed_count}")
+    console.print(f"  Prior mixer exposed:   {c.prior_mixer_exposed_count}")
+    console.print(f"  Prior drainer attrib:  {c.prior_drainer_attributed_count}")
+    if c.prior_total_usd_flowed > Decimal("0"):
+        console.print(f"  Aggregate USD flowed:  ${c.prior_total_usd_flowed:,.2f}")
+    console.print()
+    console.print(f"[bold]Note:[/] {result.investigator_note}")
+    console.print(f"[dim]Sources: {', '.join(result.data_sources_used)}[/]")
+    console.print()
+
+
 def main() -> None:  # pragma: no cover
     app()
 

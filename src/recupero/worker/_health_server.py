@@ -54,10 +54,12 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
             self._serve(write_body=False)
 
         def do_POST(self) -> None:  # noqa: N802
-            # Only the portal accepts POSTs (engagement signature).
+            # Two POST routes today: portal sign + Stripe webhook.
             # Everything else stays GET-only.
             if self.path.startswith("/portal"):
                 self._handle_portal(method="POST")
+            elif self.path == "/webhooks/stripe":
+                self._handle_stripe_webhook()
             else:
                 self._respond(405, {"error": "method not allowed"})
 
@@ -246,6 +248,89 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
             self.end_headers()
             if write_body and resp_body:
                 self.wfile.write(resp_body)
+
+        def _handle_stripe_webhook(self) -> None:
+            """POST /webhooks/stripe — Stripe payment events.
+
+            Flow:
+              1. Read the raw body (capped at 256KB; real events
+                 are ~5-15KB).
+              2. Verify HMAC signature against STRIPE_WEBHOOK_SECRET.
+                 Bad signature → 400 (Stripe will NOT retry these).
+              3. Hand the parsed event to the dispatcher, which
+                 inserts into public.payments + applies workflow
+                 side effects.
+              4. Return 200 with a JSON body describing what
+                 happened (operator visibility from the Stripe
+                 dashboard's webhook log).
+
+            Errors:
+              * 400 — signature failure (don't retry; caller fixes)
+              * 500 — dispatcher exception (DO retry; transient)
+              * 503 — STRIPE_WEBHOOK_SECRET unset (config error)
+            """
+            try:
+                from recupero.payments.webhook import (
+                    WebhookVerifyError, get_webhook_secret, verify_and_parse,
+                )
+                from recupero.payments.dispatcher import dispatch
+            except Exception as e:  # noqa: BLE001
+                self._respond(500, {"error": f"payments import failed: {e}"})
+                return
+
+            secret = get_webhook_secret()
+            if not secret:
+                log.warning("/webhooks/stripe hit but STRIPE_WEBHOOK_SECRET unset")
+                self._respond(503, {"error": "webhook secret not configured"})
+                return
+
+            # Body cap. Stripe events are tiny; anything larger is
+            # an abuse attempt + bypasses signature verification.
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                content_length = 0
+            if content_length > 262144:  # 256KB
+                self._respond(413, {"error": "request too large"})
+                return
+            body_bytes = self.rfile.read(content_length) if content_length > 0 else b""
+
+            sig_header = self.headers.get("Stripe-Signature")
+            try:
+                event = verify_and_parse(
+                    body_bytes=body_bytes,
+                    signature_header=sig_header,
+                    webhook_secret=secret,
+                )
+            except WebhookVerifyError as exc:
+                log.warning("stripe webhook verify failed: %s", exc)
+                self._respond(400, {"error": f"verify failed: {exc}"})
+                return
+
+            import os as _os
+            dsn = _os.environ.get("SUPABASE_DB_URL", "").strip()
+            if not dsn:
+                self._respond(503, {"error": "DB not configured"})
+                return
+
+            try:
+                result = dispatch(event=event, dsn=dsn)
+            except Exception as exc:  # noqa: BLE001
+                # Return 500 so Stripe retries — this is almost
+                # certainly a transient DB blip given the dispatcher
+                # is pure SQL.
+                log.exception("stripe webhook dispatch failed: %s", exc)
+                self._respond(500, {"error": f"dispatch failed: {exc}"})
+                return
+
+            self._respond(200, {
+                "duplicate": result.duplicate,
+                "action": result.action,
+                "payment_id": result.payment_id,
+                "case_id": result.case_id,
+                "investigation_id": result.investigation_id,
+                "notes": result.notes,
+            })
 
         def _respond(self, code: int, body: dict, *, write_body: bool = True) -> None:
             payload = json.dumps(body).encode("utf-8")

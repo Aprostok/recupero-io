@@ -42,6 +42,13 @@ class ChainAdapter(ABC):
             # through RecuperoConfig.
             from recupero.chains.tron.adapter import TronAdapter
             return TronAdapter()
+        if chain == Chain.bitcoin:
+            # Bitcoin uses Esplora (mempool.space / blockstream.info)
+            # which requires no auth on the free tier. Like Tron, the
+            # adapter resolves its own config — no RecuperoConfig
+            # threading needed yet.
+            from recupero.chains.bitcoin.adapter import BitcoinAdapter
+            return BitcoinAdapter()
         raise NotImplementedError(f"No adapter for chain {chain}")
 
     # --- block / time ---

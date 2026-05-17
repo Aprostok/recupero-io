@@ -141,19 +141,21 @@ def test_for_chain_ethereum_uses_dedicated_adapter() -> None:
     assert isinstance(adapter, EthereumAdapter)
 
 
-def test_for_chain_unknown_chain_raises() -> None:
-    """Unknown chains raise NotImplementedError so the worker fails
-    fast with a clear message rather than building a broken adapter.
+def test_for_chain_bitcoin_returns_adapter() -> None:
+    """Bitcoin is now wired up (v0.13.0). The factory returns a
+    real BitcoinAdapter rather than raising NotImplementedError.
 
-    Bitcoin is in the Chain enum but has no adapter — used here
-    as the canary for "valid enum value, no adapter". Hyperliquid
-    is NOT in the Chain enum at all (it's handled by string match
-    before any enum construction in pipeline.py), so it never
-    reaches ChainAdapter.for_chain in the first place.
+    This test replaces the prior canary that used Bitcoin as the
+    "valid enum, no adapter" case — that canary is now obsolete.
+    There is no longer a Chain enum member without an adapter.
+    Adding a NEW chain enum value without an adapter would
+    legitimately fail this regression test if someone copies the
+    canary pattern in the future.
     """
+    from recupero.chains.bitcoin.adapter import BitcoinAdapter
     bundle = _bundle()
-    with pytest.raises(NotImplementedError, match="bitcoin"):
-        ChainAdapter.for_chain(Chain.bitcoin, bundle)
+    adapter = ChainAdapter.for_chain(Chain.bitcoin, bundle)
+    assert isinstance(adapter, BitcoinAdapter)
 
 
 def test_polygon_profile_loaded_from_config() -> None:

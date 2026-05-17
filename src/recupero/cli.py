@@ -1223,6 +1223,46 @@ def token_risk_cmd(
     console.print()
 
 
+@app.command("graph-ui")
+def graph_ui_cmd(
+    case_id: str = typer.Argument(..., help="Case ID (folder name under cases/)."),
+    title: str | None = typer.Option(
+        None, "--title",
+        help="Optional document title for the rendered HTML.",
+    ),
+) -> None:
+    """Render an interactive D3.js fund-flow graph for an existing case.
+
+    Writes ``cases/<id>/graph_ui.html`` — a single self-contained HTML
+    file with pan/zoom/click-to-explore on the trace graph. Pulls D3
+    from a CDN; no other network calls.
+
+    Operators can email this file, attach it to a brief, or host it
+    on the customer portal. Customers see the same view as the
+    investigator without needing to install anything.
+    """
+    from recupero.reports.graph_ui import render_case_graph
+
+    cfg, _env = load_config()
+    store = CaseStore(cfg)
+    case_dir = store.case_dir(case_id)
+
+    try:
+        case = store.read_case(case_id)
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Case not found:[/] {case_id} — {e}")
+        raise typer.Exit(code=2) from None
+
+    out_path = render_case_graph(case, case_dir, title=title)
+    console.print()
+    console.print(f"[bold green]Rendered interactive graph:[/] [cyan]{out_path}[/]")
+    console.print(
+        f"  Open in a browser to explore (pan/zoom/click). The file "
+        "is self-contained — D3.js loads from CDN on first open."
+    )
+    console.print()
+
+
 def main() -> None:  # pragma: no cover
     app()
 

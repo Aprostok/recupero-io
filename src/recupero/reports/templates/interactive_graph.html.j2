@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ title }}</title>
+<style>
+  body {
+    margin: 0;
+    font-family: -apple-system, "Inter", "Segoe UI", sans-serif;
+    background: #0f1014;
+    color: #e6e7eb;
+  }
+  header {
+    padding: 14px 24px;
+    border-bottom: 1px solid #1f2127;
+    display: flex;
+    align-items: baseline;
+    gap: 24px;
+    flex-wrap: wrap;
+  }
+  header h1 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+  header .case-meta {
+    color: #8a8f9a;
+    font-size: 13px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+  }
+  header .stats {
+    color: #b8bcc4;
+    font-size: 13px;
+    margin-left: auto;
+  }
+  header .stats span {
+    margin-right: 14px;
+  }
+  header .stats b {
+    color: #fff;
+    font-weight: 600;
+  }
+  #controls {
+    padding: 8px 24px;
+    border-bottom: 1px solid #1f2127;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    font-size: 13px;
+  }
+  #controls input[type=text] {
+    background: #1a1c22;
+    color: #e6e7eb;
+    border: 1px solid #2a2d36;
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 13px;
+    width: 280px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+  }
+  #controls button {
+    background: #1a1c22;
+    color: #e6e7eb;
+    border: 1px solid #2a2d36;
+    padding: 6px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #controls button:hover { background: #24272f; }
+  #controls .legend {
+    margin-left: auto;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    color: #8a8f9a;
+  }
+  #controls .legend-item {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  #controls .legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    border: 2px solid;
+  }
+  #graph {
+    width: 100vw;
+    height: calc(100vh - 110px);
+    cursor: grab;
+  }
+  #graph:active { cursor: grabbing; }
+  .node circle {
+    stroke-width: 2.5;
+    cursor: pointer;
+    transition: r 0.15s ease;
+  }
+  .node:hover circle { stroke-width: 4; }
+  .node.victim circle { stroke: #00d97e; fill: #003c22; }
+  .node text {
+    fill: #e6e7eb;
+    font-size: 11px;
+    font-weight: 500;
+    pointer-events: none;
+    text-anchor: middle;
+  }
+  .node.dimmed { opacity: 0.18; }
+  .edge {
+    fill: none;
+    stroke-opacity: 0.55;
+    pointer-events: stroke;
+    cursor: pointer;
+  }
+  .edge.dimmed { opacity: 0.08; }
+  .edge.highlighted { stroke-opacity: 0.95; }
+  .edge.cross-chain { stroke-dasharray: 6 4; }
+  .edge-label {
+    fill: #b8bcc4;
+    font-size: 10px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    pointer-events: none;
+  }
+  #tooltip {
+    position: absolute;
+    background: #1a1c22;
+    border: 1px solid #2a2d36;
+    border-radius: 6px;
+    padding: 12px 14px;
+    color: #e6e7eb;
+    font-size: 12px;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+    max-width: 340px;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.55);
+    line-height: 1.4;
+    z-index: 100;
+  }
+  #tooltip .tt-title {
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 6px;
+  }
+  #tooltip .tt-addr {
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+    color: #8a8f9a;
+    font-size: 11px;
+    margin-bottom: 8px;
+    word-break: break-all;
+  }
+  #tooltip .tt-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 2px 0;
+  }
+  #tooltip .tt-row b { color: #fff; font-weight: 600; }
+  #tooltip a {
+    color: #5B6CFF;
+    text-decoration: none;
+  }
+  #tooltip a:hover { text-decoration: underline; }
+  .chain-pill {
+    display: inline-block;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 9px;
+    background: rgba(255,255,255,0.08);
+    margin-left: 4px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Fund-flow graph</h1>
+  <div class="case-meta">{{ meta.case_id }}</div>
+  <div class="stats">
+    <span><b>{{ meta.node_count }}</b> nodes</span>
+    <span><b>{{ meta.edge_count }}</b> edges</span>
+    <span>Traced: <b>{{ meta.total_usd_traced }}</b></span>
+    <span>Chain: <b>{{ meta.chain }}</b></span>
+  </div>
+</header>
+
+<div id="controls">
+  <input type="text" id="search" placeholder="Search address (full or partial)…" />
+  <button id="btn-reset">Reset view</button>
+  <button id="btn-fit">Fit to screen</button>
+  <div class="legend">
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#5B6CFF"></div>
+      Ethereum
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#F7931A"></div>
+      Bitcoin
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#FF060A"></div>
+      Tron
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#9945FF"></div>
+      Solana
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#00d97e"></div>
+      Victim
+    </div>
+  </div>
+</div>
+
+<svg id="graph"></svg>
+<div id="tooltip"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>
+// Embedded case data — no external API calls beyond the D3 library
+// load above. This file is fully self-contained and safe to email,
+// attach, or open offline (after D3 caches).
+const graphData = {{ graph_data_json|safe }};
+
+const svg = d3.select("#graph");
+const tooltip = d3.select("#tooltip");
+
+let width = window.innerWidth;
+let height = window.innerHeight - 110;
+
+svg.attr("width", width).attr("height", height);
+
+// Root <g> that pans + zooms.
+const root = svg.append("g");
+
+// Zoom / pan behavior.
+const zoom = d3.zoom()
+  .scaleExtent([0.1, 8])
+  .on("zoom", (event) => root.attr("transform", event.transform));
+svg.call(zoom);
+
+// Reset / fit-to-screen helpers.
+function resetView() {
+  svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity);
+}
+function fitToScreen() {
+  // Bounding box of all rendered nodes.
+  const bbox = root.node().getBBox();
+  if (!bbox.width || !bbox.height) return;
+  const padding = 40;
+  const scale = Math.min(
+    (width - 2 * padding) / bbox.width,
+    (height - 2 * padding) / bbox.height,
+    1.5
+  );
+  const tx = -bbox.x * scale + (width - bbox.width * scale) / 2;
+  const ty = -bbox.y * scale + (height - bbox.height * scale) / 2;
+  svg.transition().duration(500).call(
+    zoom.transform,
+    d3.zoomIdentity.translate(tx, ty).scale(scale)
+  );
+}
+document.getElementById("btn-reset").onclick = resetView;
+document.getElementById("btn-fit").onclick = fitToScreen;
+
+// Edge thickness: log10(USD) with sane bounds.
+function edgeWidth(usd) {
+  if (!usd || usd <= 0) return 1.2;
+  return Math.min(8, Math.max(1.2, Math.log10(usd) * 0.8));
+}
+
+// Node radius by total USD flow (in + out).
+function nodeRadius(d) {
+  const total = parseFloat(
+    (d.inboundUsd || "$0").replace(/[$,]/g, "")
+  ) + parseFloat((d.outboundUsd || "$0").replace(/[$,]/g, ""));
+  if (!total || total <= 0) return 7;
+  return Math.min(28, Math.max(7, 7 + Math.log10(total + 1) * 1.6));
+}
+
+// Index for fast neighbor lookups (used to dim non-neighbors on click).
+const neighborIndex = new Map();
+graphData.nodes.forEach(n => neighborIndex.set(n.id, new Set()));
+graphData.edges.forEach(e => {
+  neighborIndex.get(e.source)?.add(e.target);
+  neighborIndex.get(e.target)?.add(e.source);
+});
+
+// Force layout. The link force pulls connected nodes together; the
+// charge pushes everything apart so the graph doesn't collapse.
+// Collision force keeps node circles from overlapping.
+const simulation = d3.forceSimulation(graphData.nodes)
+  .force("link", d3.forceLink(graphData.edges)
+    .id(d => d.id)
+    .distance(d => 70 + Math.log10(d.totalUsdNumeric + 1) * 8))
+  .force("charge", d3.forceManyBody().strength(-380))
+  .force("center", d3.forceCenter(width / 2, height / 2))
+  .force("collide", d3.forceCollide().radius(d => nodeRadius(d) + 6))
+  .force("x", d3.forceX(width / 2).strength(0.04))
+  .force("y", d3.forceY(height / 2).strength(0.04));
+
+// Edges layer (rendered first so it sits behind nodes).
+const edgeSel = root.append("g")
+  .attr("class", "edges")
+  .selectAll("line")
+  .data(graphData.edges)
+  .enter().append("line")
+  .attr("class", d => "edge" + (d.isCrossChain ? " cross-chain" : ""))
+  .attr("stroke", d => d.isCrossChain ? "#FFA500" : "#7a8090")
+  .attr("stroke-width", d => edgeWidth(d.totalUsdNumeric))
+  .on("mouseover", (event, d) => showEdgeTooltip(event, d))
+  .on("mouseout", hideTooltip);
+
+// Edge labels: USD on the larger edges only (skip the noise).
+const edgeLabelSel = root.append("g")
+  .attr("class", "edge-labels")
+  .selectAll("text")
+  .data(graphData.edges.filter(e => e.totalUsdNumeric > 1000))
+  .enter().append("text")
+  .attr("class", "edge-label")
+  .attr("text-anchor", "middle")
+  .text(d => d.totalUsd);
+
+// Nodes layer.
+const nodeSel = root.append("g")
+  .attr("class", "nodes")
+  .selectAll("g")
+  .data(graphData.nodes)
+  .enter().append("g")
+  .attr("class", d => "node" + (d.isVictim ? " victim" : ""))
+  .call(d3.drag()
+    .on("start", dragStart)
+    .on("drag", dragMove)
+    .on("end", dragEnd))
+  .on("click", onNodeClick)
+  .on("mouseover", (event, d) => showNodeTooltip(event, d))
+  .on("mouseout", hideTooltip);
+
+nodeSel.append("circle")
+  .attr("r", nodeRadius)
+  .attr("stroke", d => d.chainColor)
+  .attr("fill", d => d.isVictim ? "#003c22" : "#1a1c22");
+
+nodeSel.append("text")
+  .attr("dy", d => nodeRadius(d) + 14)
+  .text(d => d.label || d.short);
+
+simulation.on("tick", () => {
+  edgeSel
+    .attr("x1", d => d.source.x)
+    .attr("y1", d => d.source.y)
+    .attr("x2", d => d.target.x)
+    .attr("y2", d => d.target.y);
+  edgeLabelSel
+    .attr("x", d => (d.source.x + d.target.x) / 2)
+    .attr("y", d => (d.source.y + d.target.y) / 2);
+  nodeSel
+    .attr("transform", d => `translate(${d.x},${d.y})`);
+});
+
+// Drag handlers — pin the node while dragging, release on dragEnd.
+function dragStart(event, d) {
+  if (!event.active) simulation.alphaTarget(0.3).restart();
+  d.fx = d.x; d.fy = d.y;
+}
+function dragMove(event, d) {
+  d.fx = event.x; d.fy = event.y;
+}
+function dragEnd(event, d) {
+  if (!event.active) simulation.alphaTarget(0);
+  d.fx = null; d.fy = null;
+}
+
+// Click a node → dim everything not connected to it.
+let selectedNodeId = null;
+function onNodeClick(event, d) {
+  event.stopPropagation();
+  if (selectedNodeId === d.id) {
+    // Click again to unselect.
+    nodeSel.classed("dimmed", false);
+    edgeSel.classed("dimmed", false).classed("highlighted", false);
+    selectedNodeId = null;
+    return;
+  }
+  selectedNodeId = d.id;
+  const neighbors = neighborIndex.get(d.id) || new Set();
+  neighbors.add(d.id);
+  nodeSel.classed("dimmed", n => !neighbors.has(n.id));
+  edgeSel
+    .classed("dimmed", e => e.source.id !== d.id && e.target.id !== d.id)
+    .classed("highlighted", e => e.source.id === d.id || e.target.id === d.id);
+}
+// Click empty space → clear selection.
+svg.on("click", () => {
+  if (selectedNodeId) {
+    nodeSel.classed("dimmed", false);
+    edgeSel.classed("dimmed", false).classed("highlighted", false);
+    selectedNodeId = null;
+  }
+});
+
+// Search box — substring-match address. Match → pulse + center.
+document.getElementById("search").addEventListener("input", (e) => {
+  const q = e.target.value.trim().toLowerCase();
+  if (!q) {
+    nodeSel.classed("dimmed", false);
+    return;
+  }
+  let matchCount = 0;
+  let firstMatch = null;
+  nodeSel.classed("dimmed", n => {
+    const isMatch = n.id.toLowerCase().includes(q) ||
+                    (n.label || "").toLowerCase().includes(q);
+    if (isMatch) {
+      matchCount += 1;
+      if (!firstMatch) firstMatch = n;
+    }
+    return !isMatch;
+  });
+  if (firstMatch && matchCount === 1) {
+    // Pan to the match.
+    const scale = 2;
+    const tx = width / 2 - firstMatch.x * scale;
+    const ty = height / 2 - firstMatch.y * scale;
+    svg.transition().duration(500).call(
+      zoom.transform,
+      d3.zoomIdentity.translate(tx, ty).scale(scale)
+    );
+  }
+});
+
+// Tooltips.
+function showNodeTooltip(event, d) {
+  const html = `
+    <div class="tt-title">${d.label || d.short}
+      <span class="chain-pill">${d.chain}</span>
+    </div>
+    <div class="tt-addr">${d.id}</div>
+    ${d.category && d.category !== "wallet" ?
+      `<div class="tt-row"><span>Category:</span><b>${d.category}</b></div>` : ""}
+    ${d.identity ?
+      `<div class="tt-row"><span>Identity:</span><b>${d.identity}</b></div>` : ""}
+    <div class="tt-row"><span>Inbound:</span><b>${d.inboundUsd}</b></div>
+    <div class="tt-row"><span>Outbound:</span><b>${d.outboundUsd}</b></div>
+    ${d.issuer ?
+      `<div class="tt-row"><span>Issuer:</span><b>${d.issuer}</b></div>` : ""}
+    ${d.explorerUrl ?
+      `<div style="margin-top:8px"><a href="${d.explorerUrl}" target="_blank">View on explorer →</a></div>` : ""}
+  `;
+  tooltip.html(html)
+    .style("left", (event.pageX + 14) + "px")
+    .style("top", (event.pageY + 14) + "px")
+    .style("opacity", 1);
+}
+
+function showEdgeTooltip(event, d) {
+  const fromId = typeof d.source === "object" ? d.source.id : d.source;
+  const toId = typeof d.target === "object" ? d.target.id : d.target;
+  const html = `
+    <div class="tt-title">${d.totalUsd}
+      ${d.isCrossChain ? '<span class="chain-pill">cross-chain</span>' : ""}
+    </div>
+    <div class="tt-addr">${fromId.slice(0,10)}…${fromId.slice(-6)} →
+       ${toId.slice(0,10)}…${toId.slice(-6)}</div>
+    <div class="tt-row"><span>Transfers:</span><b>${d.transferCount}</b></div>
+    ${d.dominantSymbol ?
+      `<div class="tt-row"><span>Dominant token:</span><b>${d.dominantSymbol}</b></div>` : ""}
+    ${d.firstTime ?
+      `<div class="tt-row"><span>First:</span><b>${d.firstTime.slice(0,10)}</b></div>` : ""}
+    ${d.lastTime ?
+      `<div class="tt-row"><span>Last:</span><b>${d.lastTime.slice(0,10)}</b></div>` : ""}
+  `;
+  tooltip.html(html)
+    .style("left", (event.pageX + 14) + "px")
+    .style("top", (event.pageY + 14) + "px")
+    .style("opacity", 1);
+}
+
+function hideTooltip() {
+  tooltip.style("opacity", 0);
+}
+
+// Resize handler — keep the SVG full-bleed.
+window.addEventListener("resize", () => {
+  width = window.innerWidth;
+  height = window.innerHeight - 110;
+  svg.attr("width", width).attr("height", height);
+  simulation.force("center", d3.forceCenter(width / 2, height / 2));
+  simulation.alpha(0.3).restart();
+});
+
+// Initial fit-to-screen after simulation warms up.
+setTimeout(fitToScreen, 1500);
+</script>
+</body>
+</html>

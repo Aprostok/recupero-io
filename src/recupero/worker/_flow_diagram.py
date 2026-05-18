@@ -417,12 +417,28 @@ def _promote_freezable_holdings(
     """
     holdings = freeze_brief.get("FREEZABLE") or []
     promoted = 0
+    skipped_non_freezable = 0
     addr_lower_to_node: dict[str, _NodeAttrs] = {
         a.lower(): n for a, n in nodes.items()
     }
     for entry in holdings:
         issuer = entry.get("issuer") or "Issuer"
         token = entry.get("token") or ""
+        capability = (entry.get("freeze_capability") or "").lower()
+        # v0.16.0 fix (Jacob V-CFI01 bug 5): if the issuer cannot
+        # actually freeze the token (capability='no'), do NOT relabel
+        # the holding wallet as "<issuer> holding". The EOA is a
+        # perpetrator-controlled wallet that happens to hold a token
+        # whose issuer has no freeze authority — putting an issuer
+        # badge on it visually conflates the EOA with legitimate
+        # issuer custody, which misleads anyone reading the diagram
+        # (and was Jacob's specific complaint re: DAI / Sky Protocol).
+        # The wallet stays a plain Wallet node; the token holding is
+        # still surfaced via the freeze_asks.json table in the
+        # accompanying brief.
+        if capability == "no":
+            skipped_non_freezable += len(entry.get("holdings") or [])
+            continue
         identity = f"{issuer}\nholding ({token})" if token else f"{issuer} holding"
         for h in entry.get("holdings") or []:
             addr = h.get("address")
@@ -449,6 +465,13 @@ def _promote_freezable_holdings(
         log.info(
             "flow diagram: promoted %d node(s) to freezable_holding "
             "from freeze_brief cross-ref", promoted,
+        )
+    if skipped_non_freezable:
+        log.info(
+            "flow diagram: skipped %d holding(s) with freeze_capability='no' "
+            "(stayed as plain Wallet nodes — issuer can't freeze, so the "
+            "issuer label would mislead diagram readers)",
+            skipped_non_freezable,
         )
 
 

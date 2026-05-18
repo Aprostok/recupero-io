@@ -221,32 +221,65 @@ def _findings_from_cross_chain(brief: dict[str, Any]) -> list[InvestigatorFindin
 
 
 def _findings_from_freezable(brief: dict[str, Any]) -> list[InvestigatorFinding]:
-    """FREEZABLE → one finding per (issuer, address) holding."""
+    """FREEZABLE → one finding per (issuer, address) holding.
+
+    v0.16.0 fix (Jacob V-CFI01 bug 8): the freezable→finding mapping
+    used to hardcode ``risk_category="freezable"`` regardless of the
+    issuer's actual freeze_capability. For tokens like DAI where Sky
+    Protocol has ``freeze_capability="no"``, that produced a finding
+    that contradicted every other artifact (which correctly
+    categorized the DAI as unrecoverable). The severity downgrade to
+    "low" partially masked the bug but didn't fix the category.
+
+    Now the risk_category honors the issuer capability:
+      * capability == "yes"      → "freezable"           (severity high)
+      * capability == "limited"  → "freezable_limited"  (severity medium)
+      * capability == "no"       → "unrecoverable"      (severity low)
+      * capability == "" / other → "freezable" + low    (back-compat)
+
+    The headline also reflects the capability so the operator reading
+    the JSON gets a consistent story across files.
+    """
     out: list[InvestigatorFinding] = []
     for entry in brief.get("FREEZABLE") or []:
         issuer = entry.get("issuer", "?")
         token = entry.get("token", "?")
         capability = entry.get("freeze_capability", "")
+        cap_upper = capability.upper()
+        if cap_upper == "HIGH" or cap_upper == "YES":
+            sev = "high"
+            risk_category = "freezable"
+            headline_verb = "Freezable"
+        elif cap_upper == "MEDIUM" or cap_upper == "LIMITED":
+            sev = "medium"
+            risk_category = "freezable_limited"
+            headline_verb = "Freezable (limited capability)"
+        elif cap_upper == "NO":
+            sev = "low"
+            # v0.16.0 bug 8: DAI / similar non-freezable tokens must
+            # not be categorized as freezable in the structured export.
+            risk_category = "unrecoverable"
+            headline_verb = "Held but unrecoverable"
+        else:
+            # Empty / unknown capability — be conservative.
+            sev = "low"
+            risk_category = "freezable"
+            headline_verb = "Freezable"
         for holding in entry.get("holdings") or []:
             addr = (holding.get("address") or "").lower()
             usd_amt = holding.get("usd", "")
-            sev = (
-                "high" if capability.upper() == "HIGH"
-                else "medium" if capability.upper() == "MEDIUM"
-                else "low"
-            )
             out.append(InvestigatorFinding(
-                finding_type="freezable",
+                finding_type=risk_category,
                 address=addr,
                 chain=brief.get("PRIMARY_CHAIN", "").lower() or "ethereum",
                 severity=sev,
                 headline=(
-                    f"Freezable {usd_amt} {token} at {addr[:10]}... "
-                    f"via {issuer} ({capability})"
+                    f"{headline_verb} {usd_amt} {token} at {addr[:10]}... "
+                    f"via {issuer} (capability: {capability or 'unknown'})"
                 ),
                 counterparty=issuer.lower().replace(" ", "_"),
                 counterparty_name=issuer,
-                risk_category="freezable",
+                risk_category=risk_category,
                 amount_usd=str(usd_amt),
                 tx_hash="",
                 explorer_url=holding.get("explorer_url", ""),
@@ -535,25 +568,86 @@ def _findings_from_cross_case_correlation(
 
 def _findings_from_destinations(brief: dict[str, Any]) -> list[InvestigatorFinding]:
     """DESTINATIONS → one finding per destination address (general
-    visibility — most are info-level, not high-action)."""
+    visibility — most are info-level, not high-action).
+
+    v0.16.0 fix (Jacob V-CFI01 bug 4): previously this read
+    ``dest.get('total_usd', '')`` which silently returned "" because
+    the DESTINATIONS dict produced by emit_brief._extract_destinations
+    uses ``usd_received_in_trace`` (and ``usd_holding_now``), not
+    ``total_usd``. The trailing-space tell-tale ("Destination 0xXXXX...
+    received ") was the symptom — empty amount_usd, empty headline
+    tail, empty counterparty across 12 of 13 findings was the impact.
+
+    Now we read the actual keys, populate counterparty + role from
+    the dest's ``role`` field (which encodes whether this is a
+    freezable / mixer / labeled / intermediate destination), and
+    raise severity above "info" for non-intermediate destinations so
+    investigators get a useful triage view.
+    """
     out: list[InvestigatorFinding] = []
     for dest in brief.get("DESTINATIONS") or []:
         addr = (dest.get("address") or "").lower()
+        # The destinations dict carries usd_received_in_trace + usd_holding_now.
+        # The headline + amount come from received-in-trace, since this is the
+        # "destination" finding (what flowed in via the trace); the held-now
+        # number is supplementary and goes in notes.
+        usd_received = dest.get("usd_received_in_trace") or "$0"
+        usd_holding_now = dest.get("usd_holding_now") or ""
+        role = dest.get("role") or "Intermediate wallet"
+        status = dest.get("status") or ""
+        # status is one of: 🟩 FREEZABLE / 🟧 INVESTIGATE / 🟦 EXCHANGE /
+        # ⬛ UNRECOVERABLE — extract for severity assignment.
+        if "FREEZABLE" in status:
+            severity = "high"
+            risk_category = "freezable_destination"
+        elif "UNRECOVERABLE" in status or "mixer" in role.lower():
+            severity = "medium"
+            risk_category = "unrecoverable_destination"
+        elif "EXCHANGE" in status or "exchange" in role.lower():
+            severity = "medium"
+            risk_category = "exchange_destination"
+        elif "INVESTIGATE" in status:
+            severity = "low"
+            risk_category = "investigate_destination"
+        else:
+            severity = "info"
+            risk_category = "destination"
+        # The counterparty/counterparty_name carries the role string
+        # so downstream tooling can group by destination type. When
+        # the trace identified a specific label (Binance, Tornado, etc.)
+        # the role contains that name.
+        counterparty_slug = role.lower().replace(" ", "_").replace("/", "_")[:64]
+        # Trim trailing punctuation / extra whitespace; keep the
+        # human-readable form in counterparty_name.
+        headline = (
+            f"Destination {addr[:10]}... received {usd_received} ({role})"
+        )
+        # Notes carry the supplementary held-now number + any
+        # AI editorial / mechanical note so the operator has full
+        # context per finding.
+        existing_notes = (dest.get("notes") or dest.get("note") or "").strip()
+        notes_parts: list[str] = []
+        if usd_holding_now and usd_holding_now not in ("$0", "$0.00", "unknown (see explorer)"):
+            notes_parts.append(f"Currently holds {usd_holding_now}.")
+        if existing_notes:
+            notes_parts.append(existing_notes)
+        notes = " ".join(notes_parts)
+
         out.append(InvestigatorFinding(
             finding_type="destination",
             address=addr,
             chain=brief.get("PRIMARY_CHAIN", "").lower() or "ethereum",
-            severity="info",
-            headline=f"Destination {addr[:10]}... received {dest.get('total_usd', '')}",
-            counterparty="",
-            counterparty_name="",
-            risk_category="destination",
-            amount_usd=str(dest.get("total_usd", "")),
+            severity=severity,
+            headline=headline,
+            counterparty=counterparty_slug,
+            counterparty_name=role,
+            risk_category=risk_category,
+            amount_usd=str(usd_received),
             tx_hash="",
             explorer_url=dest.get("explorer_url", ""),
             timestamp_iso="",
             follow_up_url="",
-            notes=dest.get("note", ""),
+            notes=notes,
         ))
     return out
 

@@ -545,19 +545,60 @@ def _stage_list_freeze_targets(
     """
     from recupero.dormant import find_dormant_in_case
     from recupero.freeze import group_by_issuer, match_freeze_asks
-    from recupero.freeze.asks import detect_exchange_deposits
+    from recupero.freeze.asks import (
+        detect_exchange_deposits,
+        synthesize_historical_freeze_asks,
+    )
     from recupero.labels.store import LabelStore
 
     case = local_store.read_case(case_id_str)
 
     min_usd = Decimal("10000")
     min_holding_usd = Decimal("1000")
+    # v0.16.0: historical-inflow threshold. Set lower than current-balance
+    # threshold so addresses that received freezable tokens but currently
+    # show $0 still surface — this is the worker-pipeline parity fix for
+    # the V-CFI01 regression where addresses with confirmed downstream
+    # freezable balances were absent from freeze_asks.json because the
+    # worker only ever called match_freeze_asks (current-balance path).
+    historical_min_inflow_usd = Decimal("1000")
 
     candidates = find_dormant_in_case(
         case=case, config=config, env=env, min_usd=min_usd,
     )
     matched, _unmatched = match_freeze_asks(
         candidates, min_holding_usd=min_holding_usd,
+    )
+
+    # v0.16.0: ALSO run the historical-inflow synthesizer. The CLI's
+    # `recupero list-freeze-targets` has done this since v0.14.8, but
+    # the worker pipeline (which is the path real investigations take)
+    # was never updated. Result: cases where the perp had moved funds
+    # off the seed wallet between incident and Recupero engagement
+    # produced freeze_asks.json with only the current-balance dormants
+    # — a structurally incomplete set that routes the classifier into
+    # the unrecoverable variant even when freezable history exists.
+    #
+    # Merge logic mirrors cli.py:594-618: exclude addresses already in
+    # the current-balance matched list (avoid duplicates), append the
+    # historical asks, re-sort by USD descending so the highest-value
+    # asks come first in by_issuer enumeration.
+    exclude_addrs = {a.candidate_address.lower() for a in matched}
+    historical_asks = synthesize_historical_freeze_asks(
+        case,
+        min_inflow_usd=historical_min_inflow_usd,
+        exclude_addresses=exclude_addrs,
+    )
+    if historical_asks:
+        log.info(
+            "freeze_asks: +%d historical-inflow ask(s) from %d transfer(s) "
+            "(merging with %d current-balance ask(s))",
+            len(historical_asks), len(case.transfers), len(matched),
+        )
+    matched = matched + historical_asks
+    matched.sort(
+        key=lambda a: a.holding_usd_value or Decimal("0"),
+        reverse=True,
     )
     grouped = group_by_issuer(matched) if matched else {}
 
@@ -567,6 +608,30 @@ def _stage_list_freeze_targets(
         label_store=label_store,
         min_deposit_usd=min_holding_usd,
     )
+
+    # v0.16.0: ALSO synthesize onward-CEX flows in the worker. The CLI
+    # has done this since v0.14.10, but the worker (production path)
+    # never wrote `onward_cex_flows` to freeze_asks.json, which means
+    # the v0.14.11 exchange-subpoena renderer had no input data when
+    # invoked from worker-built cases. Result: an operator running
+    # `recupero legal-requests <case> --type exchange-subpoena` on a
+    # worker-built case got "No documents generated" even when the
+    # trace clearly contained freezable-target → CEX flows.
+    onward_flows: list = []
+    if matched:
+        from recupero.freeze.asks import synthesize_onward_cex_subpoenas
+        upstream_addrs = {a.candidate_address for a in matched}
+        onward_flows = synthesize_onward_cex_subpoenas(
+            case,
+            upstream_freeze_target_addresses=upstream_addrs,
+            label_store=label_store,
+            min_flow_usd=min_holding_usd,
+        )
+        if onward_flows:
+            log.info(
+                "freeze_asks: +%d onward-CEX flow(s) from freeze-target "
+                "addresses to CEX deposits", len(onward_flows),
+            )
 
     payload = {
         "case_id": case_id_str,
@@ -582,6 +647,17 @@ def _stage_list_freeze_targets(
                     "primary_contact": a.issuer.primary_contact,
                     "freeze_capability": a.issuer.freeze_capability,
                     "explorer_url": a.explorer_url,
+                    # v0.16.0: propagate evidence_type + observed-at +
+                    # observed-transfer-count from the FreezeAsk record. The
+                    # AI editorial + freeze-letter templates branch on
+                    # evidence_type ("current_balance" vs "historical_inflow"),
+                    # and emit_brief uses observed_transfer_count to set the
+                    # FREEZABLE-vs-INVESTIGATE status. Without these fields the
+                    # downstream consumers default to "current_balance" for
+                    # everything, which loses the historical-inflow signal.
+                    "evidence_type": a.evidence_type,
+                    "observed_at": a.observed_at_iso,
+                    "observed_transfer_count": a.observed_transfer_count,
                 }
                 for a in asks
             ]
@@ -602,6 +678,29 @@ def _stage_list_freeze_targets(
                 "explorer_url": d.explorer_url,
             }
             for d in exchange_deposits
+        ],
+        # v0.16.0: onward_cex_flows. Mirrors the CLI's freeze_asks.json
+        # schema. Required input for v0.14.11 exchange-subpoena
+        # rendering via `recupero legal-requests --type exchange-subpoena`.
+        "onward_cex_flows": [
+            {
+                "upstream_address": f.upstream_address,
+                "cex_address": f.cex_address,
+                "chain": f.chain.value,
+                "exchange": f.exchange,
+                "label_name": f.label_name,
+                "label_category": f.label_category,
+                "token_symbol": f.token_symbol,
+                "flow_usd_value": str(f.flow_usd_value),
+                "flow_amount_decimal": str(f.flow_amount_decimal),
+                "transfer_count": f.transfer_count,
+                "first_flow_at": f.first_flow_at.isoformat(),
+                "last_flow_at": f.last_flow_at.isoformat(),
+                "upstream_explorer_url": f.upstream_explorer_url,
+                "cex_explorer_url": f.cex_explorer_url,
+                "tx_hashes": f.tx_hashes,
+            }
+            for f in onward_flows
         ],
     }
     out_path = case_dir / "freeze_asks.json"

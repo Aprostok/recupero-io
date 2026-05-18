@@ -326,6 +326,19 @@ If the perpetrator hub holds >$500K, OR if the sum of downstream destinations ex
 
 EVIDENCE-TYPE NOTE (v0.14.9): each entry in `current_freezable_holdings` may carry `evidence_type='historical_inflow'`, meaning the address received the freezable token at some point even if the current balance is zero. These addresses are STILL freezable from a process standpoint — the issuer can investigate and freeze if balances remain, or help trace forward. Do NOT downgrade them to 🟧 INVESTIGATE solely because of `evidence_type='historical_inflow'`; the operator will still send a freeze letter and the issuer compliance team will handle the disposition. Mark them 🟩 FREEZABLE if the issuer has documented freeze authority for the token.
 
+BALANCE-VERIFICATION RULE (v0.16.0 — Jacob V-CFI01 bug 2): each entry in `current_freezable_holdings` carries a `balance_verified_on_chain` boolean.
+
+  - When `balance_verified_on_chain` is TRUE, the address's holdings were queried on-chain during this pipeline run (the `usd` figure is fresh, not stale receipt history). For DESTINATION_NOTES on these addresses you MUST write definitive language:
+      ✓ "🟩 FREEZABLE — currently holds $8,881.31 USDC at this address; Circle freeze authority applies."
+      ✗ "🟧 INVESTIGATE — If the USDC balance remains on-chain, a Circle freeze request may be viable."
+    The hedging phrasing ("if the balance remains", "should be confirmed before issuer outreach", "may be viable") is FORBIDDEN when `balance_verified_on_chain` is true. The balance HAS been confirmed; do not punt the verification work to the operator.
+
+  - When `balance_verified_on_chain` is FALSE and `evidence_type` is `historical_inflow`, the address received the token historically but current balance is unknown / zero. Use received-language: "received approximately $X in USDC during the trace; Circle compliance team can investigate current disposition." Still mark 🟩 FREEZABLE per the rule above — issuer process applies regardless.
+
+  - When `balance_verified_on_chain` is FALSE and `evidence_type` is `current_balance` (the unusual case — usually means the balance query returned zero), use cautious language: "appears to hold dust / no balance currently; trace evidence persists for the freeze record."
+
+This rule applies per-address — do not generalize "balance verified" across a list. Apply the test on each entry's flag.
+
 For UNRECOVERABLE_ITEMS, include any portion of the stolen funds that the chain data shows are practically unrecoverable to this victim. Be honest with the customer — it helps them set expectations even when the news is bad. The following patterns are practically unrecoverable even if technically traceable:
 
   - Funds sent to mixers (Tornado Cash, Sinbad, Wasabi CoinJoin, etc.) — clearly unrecoverable
@@ -457,6 +470,19 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
             if inflow > 0 and balance_usd > 0:
                 r = balance_usd / inflow
                 ratio = f"{r:.1f}x" if r < 1000 else f"{r:.0f}x"
+            # v0.16.0 (Jacob V-CFI01 bug 2): explicit verification flag.
+            # When evidence_type='current_balance' AND we have a non-zero
+            # usd_value, this address's holdings were queried on-chain
+            # during the dormant-detection stage of this same pipeline
+            # run. The AI was previously seeing the balance number but
+            # hedging with "if the balance remains on-chain" because
+            # there was no positive signal that the number is fresh.
+            # The flag makes that confirmation explicit so DESTINATION_
+            # NOTES can read "currently holds $X" definitively.
+            evidence_type = a.get("evidence_type", "current_balance")
+            balance_verified_on_chain = (
+                evidence_type == "current_balance" and balance_usd > 0
+            )
             freezable_summary.append({
                 "address": addr,
                 "address_short": _short_addr(addr),
@@ -474,7 +500,8 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
                 # the balance remains). Per the SYSTEM_PROMPT,
                 # historical_inflow does NOT downgrade the
                 # classification.
-                "evidence_type": a.get("evidence_type", "current_balance"),
+                "evidence_type": evidence_type,
+                "balance_verified_on_chain": balance_verified_on_chain,
                 "observed_at": a.get("observed_at"),
                 "observed_transfer_count": a.get("observed_transfer_count", 1),
             })

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recupero"
-version = "0.15.0"
+version = "0.15.1"
 description = "Trace stolen crypto from a victim wallet to law-enforcement-actionable endpoints"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -82,6 +82,14 @@ dependencies = [
     # over OpenSSL; standard for any prod app needing real
     # asymmetric signatures.
     "cryptography>=42,<45",
+
+    # FastAPI service surface (v0.15.1). The REST endpoints for
+    # wallet screening / token-risk / monitoring are exposed via
+    # FastAPI so exchanges + compliance teams can integrate against
+    # an OpenAPI-described API. Pinned to >=0.110 for current Python
+    # 3.11+ support; <1.0 to avoid pre-1.0 API churn.
+    "fastapi>=0.110,<1.0",
+    "uvicorn[standard]>=0.27,<1.0",
 ]
 
 [project.optional-dependencies]
@@ -100,6 +108,7 @@ dev = [
 recupero = "recupero.cli:app"
 recupero-worker = "recupero.worker.main:cli"
 recupero-ops = "recupero.ops.cli:cli"
+recupero-api = "recupero.api.app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -53,9 +53,23 @@ from recupero.storage.case_store import CaseStore
 # emit_brief writes the EDITORIAL_TEMPLATE that ships when AI editorial
 # is skipped, and ai_editorial bakes the same defaults into its prompt.
 def _investigator_defaults() -> dict[str, str]:
+    """Resolve investigator identity from env. Read at call-time
+    (no module-load caching) so multi-tenant deploys can set env
+    per-request without restarting the worker.
+
+    v0.16.9 (round-9 output-artifacts LOW): the prior module-load
+    `_INV` cache was evaluated ONCE at import. Operators rotating
+    `RECUPERO_INVESTIGATOR_NAME` after the worker started saw stale
+    values in every brief. Plus the hardcoded fallback "Alec Prostok"
+    / "alec@recupero.io" silently shipped on every brief whenever
+    the env var was unset, signing legal documents in the wrong
+    operator's name.
+    """
     return {
-        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "Alec Prostok"),
-        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "alec@recupero.io"),
+        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "").strip()
+            or "(operator name not configured)",
+        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "").strip()
+            or "compliance@recupero.io",
         "INVESTIGATOR_ENTITY": os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
         "INVESTIGATOR_ENTITY_FULL": os.environ.get(
             "RECUPERO_INVESTIGATOR_ENTITY_FULL",
@@ -65,6 +79,9 @@ def _investigator_defaults() -> dict[str, str]:
     }
 
 
+# Module-load cache kept for back-compat with code that imports _INV
+# directly. Prefer calling _investigator_defaults() at use-time so
+# env changes take effect without a worker restart.
 _INV = _investigator_defaults()
 
 

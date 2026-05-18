@@ -244,7 +244,7 @@ def run_trace(
     case.trace_completed_at = utcnow()
 
     log.info(
-        "trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs",
+        "primary trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs",
         case_id,
         addresses_processed,
         len(case.transfers),
@@ -253,9 +253,190 @@ def run_trace(
         (case.trace_completed_at - started).total_seconds(),
     )
 
+    # v0.16.9 (round-9 forensic CRIT): BFS continuation past DEX routers
+    # and same-chain bridge destinations.
+    #
+    # Pre-v0.16.9 the primary BFS halted at every contract (DEX routers
+    # are contracts) and every bridge label, even when `detect_dex_swaps`
+    # and `identify_cross_chain_handoffs` could resolve the next-hop
+    # recipient at high confidence. Operators saw "trace terminated at
+    # 1inch router" without any continuation to where the swapped output
+    # actually went — the exact gap TRM Labs / Chainalysis don't have.
+    #
+    # The continuation runs a SHALLOW (depth=1) BFS pass from each
+    # high-confidence post-trace recipient that isn't already in the
+    # visited set. Same-chain only; cross-chain bridge destinations
+    # are still surfaced via the post-trace report (multi-chain BFS
+    # state is a larger refactor for v0.16.10).
+    _continue_past_dex_and_bridges(
+        case=case,
+        chain=chain,
+        adapter=adapter,
+        label_store=label_store,
+        price_client=price_client,
+        policy=policy,
+        incident_time=incident_time,
+        config=config,
+        evidence_dir=case_dir / "tx_evidence",
+        visited=visited,
+        is_contract_cache=is_contract_cache,
+        trace_concurrency=trace_concurrency,
+    )
+
     # Cleanup
     price_client.close()
     return case
+
+
+def _continue_past_dex_and_bridges(
+    *,
+    case: Case,
+    chain: Chain,
+    adapter: ChainAdapter,
+    label_store: LabelStore,
+    price_client: CoinGeckoClient,
+    policy: TracePolicy,
+    incident_time: datetime,
+    config: RecuperoConfig,
+    evidence_dir: Path,
+    visited: set[str],
+    is_contract_cache: dict[str, bool],
+    trace_concurrency: int,
+) -> None:
+    """Inject DEX-swap output recipients and same-chain bridge
+    destinations into a follow-up shallow BFS pass. Mutates ``case``
+    in place to extend ``transfers`` with anything the continuation
+    finds.
+
+    Safety:
+      * Only fires when the original max_depth left room for one more
+        hop (i.e., max_depth >= 2). For depth-1 traces the caller
+        explicitly asked for a single hop; we honor that.
+      * Skips destinations that are already visited (no work duplicated).
+      * Caps the number of continuation seeds at 25 per pass so a
+        whale wallet with many swaps doesn't explode the trace budget.
+    """
+    if policy.max_depth < 2:
+        return
+
+    # Lazy imports — these modules pull large label DBs that take
+    # tens of ms to load; only pay that cost when continuation is
+    # actually possible.
+    from recupero.trace.cross_chain import identify_cross_chain_handoffs
+    from recupero.trace.dex_swaps import detect_dex_swaps
+
+    continuation_seeds: list[tuple[Address, int, str]] = []
+    # (address, depth_hint, provenance_tag)
+
+    # --- DEX swap output recipients ---
+    try:
+        swaps = detect_dex_swaps(case)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("dex-swap detection failed; skipping continuation: %s", exc)
+        swaps = []
+    for swap in swaps:
+        if swap.confidence != "high":
+            continue
+        if not swap.output_recipient:
+            continue
+        # The output recipient on a DEX swap is on the SAME chain as
+        # the swap itself. Safe to queue without multi-chain state.
+        recipient = swap.output_recipient
+        recipient_key = _address_visited_key(chain, recipient)
+        if recipient_key in visited:
+            continue
+        # Don't continue if the recipient is itself a router (swap
+        # output going back into another aggregator). The next pass
+        # will re-detect and we'd loop forever otherwise.
+        # depth_hint=1 puts the continuation at depth 1 from the
+        # original swap — under max_depth=2 that's the last hop.
+        continuation_seeds.append((recipient, 1, "dex_swap_output"))
+        visited.add(recipient_key)
+
+    # --- Same-chain bridge destinations ---
+    try:
+        handoffs = identify_cross_chain_handoffs(case)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bridge-handoff detection failed; skipping: %s", exc)
+        handoffs = []
+    for handoff in handoffs:
+        dest_addr = getattr(handoff, "destination_address", None)
+        dest_chain = getattr(handoff, "destination_chain", None)
+        confidence = getattr(handoff, "confidence", "low")
+        if confidence != "high" or not dest_addr:
+            continue
+        # ONLY continue when destination is the same chain. Cross-
+        # chain hops need a separate adapter and multi-chain trace
+        # state — surface them in the handoffs report but don't
+        # mid-trace BFS across chains.
+        if dest_chain and dest_chain != chain.value:
+            log.info(
+                "cross-chain bridge handoff dest=%s on %s (current %s); "
+                "surfacing in handoffs report — multi-chain BFS deferred",
+                dest_addr, dest_chain, chain.value,
+            )
+            continue
+        dest_key = _address_visited_key(chain, dest_addr)
+        if dest_key in visited:
+            continue
+        continuation_seeds.append((dest_addr, 1, "bridge_handoff"))
+        visited.add(dest_key)
+
+    if not continuation_seeds:
+        return
+
+    # Cap to bound the additional fetch budget. Real cases rarely
+    # produce more than ~10 continuation seeds; the cap exists to
+    # protect against a pathological tx-fan-out that detect_dex_swaps
+    # over-reports.
+    max_continuation = int(os.environ.get(
+        "RECUPERO_MAX_CONTINUATION_SEEDS", "25",
+    ))
+    if len(continuation_seeds) > max_continuation:
+        log.warning(
+            "continuation seeds capped at %d (had %d) — "
+            "RECUPERO_MAX_CONTINUATION_SEEDS to raise",
+            max_continuation, len(continuation_seeds),
+        )
+        continuation_seeds = continuation_seeds[:max_continuation]
+
+    log.info(
+        "BFS continuation: %d additional seeds (DEX outputs + same-chain "
+        "bridge destinations) at depth 1",
+        len(continuation_seeds),
+    )
+
+    # Run a single wave of `_process_wave` from the continuation seeds.
+    # depth_hint=1 means the resulting transfers carry hop_depth=1,
+    # consistent with how the primary BFS would have labeled them.
+    cont_wave: list[tuple[Address, int]] = [
+        (addr, depth) for (addr, depth, _provenance) in continuation_seeds
+    ]
+    cont_results = _process_wave(
+        cont_wave,
+        adapter=adapter,
+        label_store=label_store,
+        price_client=price_client,
+        policy=policy,
+        incident_time=incident_time,
+        config=config,
+        evidence_dir=evidence_dir,
+        concurrency=trace_concurrency,
+    )
+
+    new_transfers: list[Transfer] = []
+    for _from_addr, _depth, hop_transfers, _is_service in cont_results:
+        new_transfers.extend(hop_transfers)
+
+    if new_transfers:
+        case.transfers = list(case.transfers) + new_transfers
+        case.exchange_endpoints = _compute_exchange_endpoints(case.transfers)
+        case.unlabeled_counterparties = _collect_unlabeled(case.transfers)
+        case.total_usd_out = _sum_usd(case.transfers)
+        log.info(
+            "BFS continuation added %d transfers from %d new seeds",
+            len(new_transfers), len(continuation_seeds),
+        )
 
 
 def _process_wave(

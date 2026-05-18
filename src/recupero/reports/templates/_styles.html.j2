@@ -75,7 +75,27 @@
      =================================================================== */
   @page {
     size: letter;
-    margin: 0.6in 0.65in 0.7in 0.65in;
+    margin: 0.6in 0.65in 0.85in 0.65in;
+    /* v0.16.9 (round-9 output-artifacts HIGH): "Page X of Y" footer.
+       Multi-page LE handoffs / freeze briefs used to print with no
+       pagination — if pages separated, recipients couldn't reassemble.
+       Standard professional-services deliverable failure; banks and LE
+       both expect page numbers on evidence packages. WeasyPrint
+       supports both `counter(page)` and `counter(pages)` natively. */
+    @bottom-right {
+      content: "Page " counter(page) " of " counter(pages);
+      font-family: var(--font-body, sans-serif);
+      font-size: 8pt;
+      color: #555;
+      padding-top: 0.25in;
+    }
+    @bottom-left {
+      content: "Recupero — CONFIDENTIAL";
+      font-family: var(--font-body, sans-serif);
+      font-size: 8pt;
+      color: #555;
+      padding-top: 0.25in;
+    }
   }
   *, *::before, *::after { box-sizing: border-box; }
   html { -webkit-font-smoothing: antialiased; }

@@ -21,6 +21,10 @@ from datetime import UTC, datetime
 from typing import Any
 
 from recupero.chains.base import ChainAdapter
+from recupero.chains.solana.address import (
+    SolanaAddressError,
+    normalize_solana_address,
+)
 from recupero.chains.solana.helius import HeliusClient
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
@@ -94,13 +98,27 @@ class SolanaAdapter(ChainAdapter):
         self, from_address: Address, start_block: int
     ) -> list[dict[str, Any]]:
         """Fetch SOL outflows since ``start_block`` (interpreted as unix ts)."""
-        raw = self._fetch_all(str(from_address), start_block)
+        # v0.16.9 (round-9 forensic CRIT): normalize at the boundary so
+        # the case-sensitive base58 comparison below is reliable. Solana
+        # addresses are case-sensitive on-chain — comparing operator-
+        # pasted strings to Helius response fields without normalization
+        # silently dropped outflows when the seed was typed in a
+        # different case than the canonical form.
+        try:
+            from_address = normalize_solana_address(str(from_address))
+        except SolanaAddressError:
+            log.warning(
+                "solana fetch_native_outflows: invalid address %r; returning empty",
+                from_address,
+            )
+            return []
+        raw = self._fetch_all(from_address, start_block)
         out: list[dict[str, Any]] = []
         for tx in raw:
             if tx.get("timestamp", 0) < start_block:
                 continue
             for nt in tx.get("nativeTransfers", []) or []:
-                if (nt.get("fromUserAccount") or "") != str(from_address):
+                if (nt.get("fromUserAccount") or "") != from_address:
                     continue
                 amount_lamports = int(nt.get("amount", 0))
                 if amount_lamports == 0:
@@ -116,13 +134,23 @@ class SolanaAdapter(ChainAdapter):
         (Method is named ``erc20`` for interface compatibility with EVM chains;
         on Solana these are SPL tokens.)
         """
-        raw = self._fetch_all(str(from_address), start_block)
+        # v0.16.9: see fetch_native_outflows comment — same normalize-
+        # at-boundary fix for case-sensitive base58.
+        try:
+            from_address = normalize_solana_address(str(from_address))
+        except SolanaAddressError:
+            log.warning(
+                "solana fetch_erc20_outflows: invalid address %r; returning empty",
+                from_address,
+            )
+            return []
+        raw = self._fetch_all(from_address, start_block)
         out: list[dict[str, Any]] = []
         for tx in raw:
             if tx.get("timestamp", 0) < start_block:
                 continue
             for tt in tx.get("tokenTransfers", []) or []:
-                if (tt.get("fromUserAccount") or "") != str(from_address):
+                if (tt.get("fromUserAccount") or "") != from_address:
                     continue
                 raw_amount = tt.get("rawTokenAmount") or {}
                 amount_raw_str = str(raw_amount.get("tokenAmount") or tt.get("tokenAmount") or "0")

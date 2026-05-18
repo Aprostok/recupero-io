@@ -187,10 +187,21 @@ def write_csv(
     findings: list[InvestigatorFinding],
     out_path: Path,
 ) -> Path:
-    """Write the findings CSV. Returns the path written."""
+    """Write the findings CSV. Returns the path written.
+
+    v0.16.9 (round-9 output-artifacts LOW): explicit `lineterminator="\\n"`.
+    csv.DictWriter's default uses `\\r\\n` on Windows which embedded
+    a stray `\\r` inside multi-line cells when government tools
+    (which key on LF-only) ingested the file — pandas read_csv on
+    Linux interpreted the `\\r` as a column separator on certain
+    cells. Fixed encoding to be cross-platform consistent.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
+        writer = csv.DictWriter(
+            f, fieldnames=_CSV_COLUMNS, extrasaction="ignore",
+            lineterminator="\n",
+        )
         writer.writeheader()
         for fnd in findings:
             writer.writerow({c: getattr(fnd, c, "") for c in _CSV_COLUMNS})

@@ -627,9 +627,15 @@ def _snapshot_evm_one(
 
     snap = _Snapshot(native_balance_raw=None, tx_count=None, total_usd=None)
 
+    # v0.16.9 (round-9 worker-resilience HIGH): see eth_getTransactionCount
+    # block-tag comment below — `finalized` avoids reorg-driven phantom
+    # alerts. Apply to balance queries too so the whole snapshot is at
+    # the same confirmation depth.
+    block_tag = os.environ.get("RECUPERO_BLOCK_TAG", "finalized").strip() or "finalized"
+
     # Native balance.
     try:
-        eth_raw = client.get_eth_balance(addr)
+        eth_raw = client.get_eth_balance(addr, tag=block_tag)
         snap.native_balance_raw = int(eth_raw)
     except Exception as exc:  # noqa: BLE001
         snap.error = f"native balance: {exc}"
@@ -637,10 +643,12 @@ def _snapshot_evm_one(
 
     # Tx count (lifetime). Etherscan v2 exposes this via the proxy
     # module — same JSON-RPC shape as `eth_getTransactionCount`.
+    # block_tag is set above; `finalized` defaults avoid reorg-driven
+    # phantom alerts. See the comment near the balance fetch.
     try:
         data = client._call(  # noqa: SLF001
             module="proxy", action="eth_getTransactionCount",
-            address=addr, tag="latest",
+            address=addr, tag=block_tag,
         )
         # Result is hex string like "0x1f7"
         snap.tx_count = int(data.get("result", "0x0"), 16)
@@ -657,7 +665,7 @@ def _snapshot_evm_one(
     symbol = row.get("asset_symbol") or "TOKEN"
     if contract:
         try:
-            token_raw = client.get_token_balance(contract, addr)
+            token_raw = client.get_token_balance(contract, addr, tag=block_tag)
             if token_raw and int(token_raw) > 0:
                 decimals = 6 if symbol.upper() in {"USDC", "USDT"} else 18
                 decimal_amount = Decimal(int(token_raw)) / Decimal(10 ** decimals)

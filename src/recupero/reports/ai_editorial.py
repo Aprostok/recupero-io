@@ -1280,8 +1280,21 @@ def run_ai_editorial(
     )
 
     # 7. Write
+    #
+    # v0.16.9 (round-9 output-artifacts MEDIUM): ensure_ascii=True so
+    # non-ASCII content survives every downstream consumer regardless
+    # of OS encoding. The emoji status prefixes (🟩 🟧 ⬛ 🟦) used to
+    # ship native — readable on Linux/macOS but rendered as mojibake
+    # when Windows operators opened the file in cp1252-defaulting
+    # tools, breaking _classify_address_status (which expects clean
+    # UTF-8 to detect the prefix). \u-escapes are universal.
     out_path = case_dir / "brief_editorial.json"
-    out_path.write_text(json.dumps(editorial, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Atomic write — same rationale as other artifact writes in v0.16.8.
+    from recupero._common import atomic_write_text
+    atomic_write_text(
+        out_path,
+        json.dumps(editorial, indent=2, ensure_ascii=True),
+    )
 
     return out_path, editorial, usage_info
 

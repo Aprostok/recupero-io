@@ -1,0 +1,243 @@
+{# Exchange compliance records request (v0.14.11).
+
+   Sent directly from the operator's compliance team to the CEX's
+   compliance team — NOT a court-issued subpoena. This is the
+   "Exhibit C" pattern: operator-direct records request citing
+   documented theft evidence, requesting (1) KYC on the user who
+   controlled the deposit address, (2) onward transfer / off-ramp
+   records, (3) hold on remaining funds if applicable.
+
+   Exchanges respond to these directly when accompanied by
+   appropriate evidence + LE coordination. For cases that need
+   formal compelled disclosure, the AUSA grand-jury subpoena
+   template (subpoena_request.html.j2) is the right path.
+
+   Required Jinja context:
+     - case_id, generated_at (UTC ISO)
+     - victim: dict with name, jurisdiction
+     - exchange: dict with name, legal_name, compliance_email,
+       address, registered_agent (optional)
+     - flows: list of OnwardCEXFlow-shaped dicts:
+       - upstream_address, cex_address, token_symbol,
+         flow_usd_value (formatted "$X,XXX.XX"), transfer_count,
+         first_flow_at, last_flow_at, tx_hashes (list),
+         upstream_explorer_url, cex_explorer_url
+     - investigator: dict with name, organization, email
+     - le_engaged: bool (was law enforcement engaged for this case?)
+     - le_reference: optional IC3 / FBI case ID
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Exchange Records Request — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Strictly Private &amp; Confidential</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Exchange Compliance Records Request</div>
+    <h1>{{ exchange.name }}<br/>Records Request</h1>
+    <p class="cover-subtitle">
+      On-chain tracing establishes that funds stolen from {{ victim.name }}
+      were forwarded from identified upstream addresses to
+      {{ flows|length }} deposit address(es) under
+      {{ exchange.name }}'s custody. We respectfully request your
+      compliance team's cooperation in identifying the controlling
+      customer(s) and producing the records described below.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Addressed To</dt>
+      <dd>{{ exchange.legal_name or exchange.name }}<span class="secondary">Compliance &amp; AML Team<br/>{{ exchange.compliance_email }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Prepared By</dt>
+      <dd>{{ investigator.name }}<span class="secondary">{{ investigator.organization }}<br/>on behalf of {{ victim.name }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Case Number</dt>
+      <dd>{{ case_id }}</dd>
+    </div>
+    {% if le_reference %}
+    <div class="cover-meta-item">
+      <dt>LE Reference</dt>
+      <dd class="mono">{{ le_reference }}</dd>
+    </div>
+    {% endif %}
+    <div class="cover-meta-item">
+      <dt>Total Flow Value</dt>
+      <dd>{{ total_flow_usd }}<span class="secondary">across {{ flows|length }} flow(s)</span></dd>
+    </div>
+  </dl>
+</section>
+
+<section class="content">
+
+<h2>1. Nature of the Underlying Matter</h2>
+<p>
+On {{ incident_date }}, {{ victim.name }} ({{ victim.jurisdiction }})
+reported the unauthorized appropriation of digital assets from
+{{ victim.name|default("a Recupero client") }}'s self-custodied
+wallet. The reported loss is approximately {{ total_loss_usd }}.
+{% if le_engaged %}
+Law enforcement has been engaged in this matter
+{% if le_reference %}
+under reference {{ le_reference }}.
+{% else %}
+and is actively investigating.
+{% endif %}
+{% else %}
+Engagement with law enforcement is pending the outcome of the
+investigative steps described in this request.
+{% endif %}
+</p>
+
+<h2>2. On-Chain Evidence of {{ exchange.name }} Receipt</h2>
+<p>
+Independent on-chain analysis of the stolen-fund flow identified
+that the upstream addresses listed below — themselves identified
+as recipients of the misappropriated assets — subsequently
+forwarded {{ token_summary }} to deposit addresses under
+{{ exchange.name }}'s custody. The flows are summarized in the
+table that follows; each transaction is independently verifiable
+on the public blockchain.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Upstream (sender)</th>
+      <th>{{ exchange.name }} deposit (receiver)</th>
+      <th>Token</th>
+      <th class="amount">Total USD</th>
+      <th>Transfers</th>
+      <th>Period</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for flow in flows %}
+    <tr>
+      <td class="mono"><a href="{{ flow.upstream_explorer_url }}">{{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }}</a></td>
+      <td class="mono"><a href="{{ flow.cex_explorer_url }}">{{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }}</a></td>
+      <td>{{ flow.token_symbol }}</td>
+      <td class="amount mono">{{ flow.flow_usd_value }}</td>
+      <td class="amount mono">{{ flow.transfer_count }}</td>
+      <td>{{ flow.first_flow_at[:10] }}{% if flow.last_flow_at[:10] != flow.first_flow_at[:10] %} – {{ flow.last_flow_at[:10] }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>3. Transaction Hashes (for Verification)</h2>
+<p>The flows above comprise the following on-chain transactions. Each
+hash is reproducible against any Ethereum mainnet node or block
+explorer:</p>
+<ul style="font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 0.85em;">
+{% for flow in flows %}
+{% for tx in flow.tx_hashes %}
+  <li>{{ tx }}<span class="secondary"> · {{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }} → {{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }} · {{ flow.token_symbol }}</span></li>
+{% endfor %}
+{% endfor %}
+</ul>
+
+<h2>4. Records Requested</h2>
+<p>
+For each {{ exchange.name }}-controlled deposit address listed in
+section 2, we respectfully request that your compliance team
+produce the following records:
+</p>
+<ol>
+  <li>
+    <strong>Customer identification.</strong> The identity of the
+    customer associated with the deposit address (full legal name,
+    date of birth, residence and mailing address, and government-
+    issued identification on file). This may be produced under
+    your internal compliance-cooperation framework or, where
+    required, under formal compelled-disclosure process via the
+    contact listed in section 6.
+  </li>
+  <li>
+    <strong>Deposit confirmation.</strong> Confirmation that the
+    {{ token_summary }} flow into the deposit address was credited
+    to the associated customer account, the value as recorded on
+    your platform, and the post-deposit balance available for
+    redemption or onward transfer.
+  </li>
+  <li>
+    <strong>Onward activity.</strong> All on-platform transfers,
+    conversions, and withdrawal events involving the deposited
+    {{ token_summary }} or its converted form, with the
+    destination address(es) for any on-chain withdrawal.
+  </li>
+  <li>
+    <strong>Hold action.</strong> To the extent the funds remain
+    on the platform under the associated customer account, please
+    place a precautionary hold pending engagement with law
+    enforcement representatives identified in section 6.
+  </li>
+  <li>
+    <strong>Compliance flags.</strong> Any internal risk-rating,
+    KYT, or fraud-monitoring annotations your team has placed on
+    the addresses or associated customer accounts.
+  </li>
+</ol>
+
+<h2>5. Use and Confidentiality of Response</h2>
+<p>
+Any information produced in response to this request will be used
+exclusively for the purpose of investigating and remediating the
+underlying theft. Distribution of customer-identifying records
+will be limited to Recupero's investigative counsel and engaged
+law enforcement agencies. Where {{ exchange.name }}'s policy
+requires formal compelled disclosure (subpoena, court order,
+MLAT), please notify the contact in section 6 and we will
+coordinate the appropriate process via the engaged AUSA's office.
+</p>
+
+<h2>6. Point of Contact</h2>
+<p>
+<strong>Investigative counsel:</strong><br/>
+{{ investigator.name }}<br/>
+{{ investigator.organization }}<br/>
+{{ investigator.email }}
+</p>
+{% if le_engaged %}
+<p>
+<strong>Engaged law enforcement:</strong><br/>
+{% if le_reference %}
+Reference {{ le_reference }} (point of contact available upon request
+via the investigative counsel above)
+{% else %}
+[LE coordinator available upon request via the investigative
+counsel above]
+{% endif %}
+</p>
+{% endif %}
+
+<h2>7. Response Window</h2>
+<p>
+We respectfully request acknowledgement of receipt within five (5)
+business days, and production of the records described above
+within fifteen (15) business days where compliance-cooperation
+process applies, or notice of the formal-process requirement
+within the same window.
+</p>
+
+</section>
+
+</body>
+</html>

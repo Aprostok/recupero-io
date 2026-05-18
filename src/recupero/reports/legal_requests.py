@@ -55,7 +55,7 @@ log = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-LEGAL_REQUEST_TYPES = ("mlat", "314b", "subpoena")
+LEGAL_REQUEST_TYPES = ("mlat", "314b", "subpoena", "exchange-subpoena")
 
 
 @dataclass(frozen=True)
@@ -92,6 +92,16 @@ def render_legal_request(
             f"got {request_type!r}"
         )
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    # v0.14.11: exchange-subpoena requests come from freeze_asks'
+    # onward_cex_flows, not from brief.EXCHANGES. They're per-exchange
+    # consolidated records requests citing the documented theft trail
+    # from freeze-target → CEX deposit address. Different rendering
+    # path entirely.
+    if request_type == "exchange-subpoena":
+        return _render_exchange_subpoena_requests(
+            brief, output_dir=output_dir, exchange_filter=exchange_filter,
+        )
 
     template_file = {
         "mlat": "mlat_request.html.j2",
@@ -155,6 +165,9 @@ def _build_base_context(brief: dict[str, Any]) -> dict[str, Any]:
         # record carries tx_hash + amount). DESTINATIONS in v0.10+
         # includes every destination address with totals.
         "tx_evidence": _build_tx_evidence_list(brief),
+        # v0.14.11: IC3 case ID surfaces in the exchange-subpoena
+        # template as the LE reference. Pre-filled from intake.
+        "ic3_case_id": brief.get("IC3_CASE_ID") or None,
     }
 
 
@@ -251,9 +264,187 @@ def load_brief(case_dir: Path) -> dict[str, Any]:
     return json.loads(brief_path.read_text(encoding="utf-8-sig"))
 
 
+def load_freeze_asks(case_dir: Path) -> dict[str, Any]:
+    """Load freeze_asks.json from a case directory.
+
+    Used by the exchange-subpoena renderer to access
+    ``onward_cex_flows`` (v0.14.10 field). Returns empty-shape dict
+    if the file doesn't exist.
+    """
+    p = case_dir / "freeze_asks.json"
+    if not p.exists():
+        return {"by_issuer": {}, "exchange_deposits": [], "onward_cex_flows": []}
+    return json.loads(p.read_text(encoding="utf-8-sig"))
+
+
+# ---- Exchange-subpoena rendering (v0.14.11) ---- #
+
+
+# Per-exchange compliance contact lookup. Used when the
+# onward_cex_flows don't carry a compliance email directly.
+_EXCHANGE_COMPLIANCE_CONTACTS: dict[str, dict[str, str]] = {
+    "Binance": {
+        "legal_name": "Binance Holdings Ltd.",
+        "compliance_email": "compliance@binance.com",
+    },
+    "Coinbase": {
+        "legal_name": "Coinbase, Inc.",
+        "compliance_email": "compliance@coinbase.com",
+    },
+    "Kraken": {
+        "legal_name": "Payward, Inc. (d/b/a Kraken)",
+        "compliance_email": "compliance@kraken.com",
+    },
+    "Bybit": {
+        "legal_name": "Bybit Fintech Ltd.",
+        "compliance_email": "compliance@bybit.com",
+    },
+    "OKX": {
+        "legal_name": "OKX (Aux Cayes FinTech Co., Ltd.)",
+        "compliance_email": "compliance@okx.com",
+    },
+    "Crypto.com": {
+        "legal_name": "Foris DAX MT Limited (Crypto.com)",
+        "compliance_email": "compliance@crypto.com",
+    },
+    "Gemini": {
+        "legal_name": "Gemini Trust Company, LLC",
+        "compliance_email": "compliance@gemini.com",
+    },
+    "Bitfinex": {
+        "legal_name": "iFinex Inc. (Bitfinex)",
+        "compliance_email": "compliance@bitfinex.com",
+    },
+    "KuCoin": {
+        "legal_name": "KuCoin (Mek Global Limited)",
+        "compliance_email": "compliance@kucoin.com",
+    },
+    "Gate.io": {
+        "legal_name": "Gate Technology Inc.",
+        "compliance_email": "compliance@gate.io",
+    },
+    "Huobi": {
+        "legal_name": "Huobi Global (HTX)",
+        "compliance_email": "compliance@htx.com",
+    },
+}
+
+
+def _resolve_exchange_metadata(exchange_name: str) -> dict[str, str]:
+    """Look up exchange compliance contact info. Falls back to
+    placeholder values that the operator can edit before sending."""
+    meta = _EXCHANGE_COMPLIANCE_CONTACTS.get(exchange_name, {})
+    return {
+        "name": exchange_name,
+        "legal_name": meta.get("legal_name", exchange_name),
+        "compliance_email": meta.get(
+            "compliance_email",
+            f"[TODO: compliance email for {exchange_name}]",
+        ),
+    }
+
+
+def _render_exchange_subpoena_requests(
+    brief: dict[str, Any],
+    *,
+    output_dir: Path,
+    exchange_filter: str | None = None,
+) -> list[LegalRequestRender]:
+    """Render one consolidated exchange-subpoena request per CEX
+    that received funds from a freeze-target address.
+
+    Reads onward_cex_flows from the case's freeze_asks.json (v0.14.10
+    schema). If freeze_asks.json isn't co-located with the brief
+    (atypical), surfaces an empty list — the operator should run
+    list-freeze-targets first.
+    """
+    # The freeze_asks live next to the brief in the case dir. The
+    # caller passes the brief dict but we need the freeze_asks. The
+    # convention is to invoke this from a known case_dir; in the
+    # CLI path that's preserved. For the pure-function entry, we
+    # accept freeze_asks directly through brief['_freeze_asks'] as
+    # an injection seam used by tests.
+    freeze_asks = brief.get("_freeze_asks")
+    if freeze_asks is None:
+        case_dir = brief.get("_case_dir")
+        if case_dir is not None:
+            freeze_asks = load_freeze_asks(Path(case_dir))
+        else:
+            freeze_asks = {}
+
+    flows = freeze_asks.get("onward_cex_flows", []) or []
+    if exchange_filter:
+        flows = [
+            f for f in flows
+            if exchange_filter.lower() in (f.get("exchange") or "").lower()
+        ]
+    if not flows:
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Group flows by exchange so each CEX gets one consolidated
+    # request (vs one letter per deposit address).
+    by_exchange: dict[str, list[dict]] = {}
+    for f in flows:
+        ex = f.get("exchange") or "(unknown exchange)"
+        by_exchange.setdefault(ex, []).append(f)
+
+    env = Environment(
+        loader=FileSystemLoader(_TEMPLATES_DIR),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    template = env.get_template("exchange_subpoena_request.html.j2")
+
+    base_ctx = _build_base_context(brief)
+    renders: list[LegalRequestRender] = []
+
+    for exchange_name, exchange_flows in by_exchange.items():
+        # Sum total flow USD for the cover-page banner.
+        total_usd = sum(
+            float(str(f.get("flow_usd_value", "0")).replace("$", "").replace(",", ""))
+            for f in exchange_flows
+        )
+        total_usd_str = f"${total_usd:,.2f}"
+
+        # Distinct token symbols touched, for narrative.
+        symbols = sorted({f.get("token_symbol", "") for f in exchange_flows if f.get("token_symbol")})
+        if not symbols:
+            token_summary = "the relevant token"
+        elif len(symbols) == 1:
+            token_summary = symbols[0]
+        else:
+            token_summary = ", ".join(symbols[:-1]) + " and " + symbols[-1]
+
+        exchange_meta = _resolve_exchange_metadata(exchange_name)
+
+        ctx = {
+            **base_ctx,
+            "exchange": exchange_meta,
+            "flows": exchange_flows,
+            "total_flow_usd": total_usd_str,
+            "token_summary": token_summary,
+            "le_engaged": bool(base_ctx.get("ic3_case_id")),
+            "le_reference": base_ctx.get("ic3_case_id"),
+        }
+
+        html = template.render(**ctx)
+        safe_exchange = exchange_name.lower().replace(" ", "_").replace(".", "")
+        out_path = output_dir / f"exchange_subpoena_{safe_exchange}.html"
+        out_path.write_text(html, encoding="utf-8")
+        renders.append(LegalRequestRender(
+            request_type="exchange-subpoena",
+            exchange_name=exchange_name,
+            output_path=out_path,
+            html_size_bytes=out_path.stat().st_size,
+        ))
+    return renders
+
+
 __all__ = (
     "LegalRequestRender",
     "LEGAL_REQUEST_TYPES",
     "render_legal_request",
     "load_brief",
+    "load_freeze_asks",
 )

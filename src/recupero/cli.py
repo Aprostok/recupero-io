@@ -1204,7 +1204,11 @@ def legal_requests_cmd(
     request_type: str = typer.Option(
         "subpoena",
         "--type",
-        help="Legal-request type: mlat | 314b | subpoena.",
+        help="Legal-request type: mlat | 314b | subpoena | exchange-subpoena. "
+             "exchange-subpoena (v0.14.11) reads onward_cex_flows from "
+             "freeze_asks.json and produces per-exchange consolidated "
+             "records requests for the operator's direct submission to "
+             "CEX compliance teams.",
     ),
     exchange: str | None = typer.Option(
         None, "--exchange",
@@ -1244,6 +1248,12 @@ def legal_requests_cmd(
     except FileNotFoundError as e:
         console.print(f"[bold red]{e}[/]")
         raise typer.Exit(code=2) from None
+
+    # v0.14.11: exchange-subpoena needs the case_dir so the renderer
+    # can load freeze_asks.json::onward_cex_flows. Inject via a
+    # reserved key on the brief dict (keeps render_legal_request
+    # signature stable).
+    brief = {**brief, "_case_dir": str(case_dir)}
 
     output_dir = case_dir / "legal_requests"
     renders = render_legal_request(

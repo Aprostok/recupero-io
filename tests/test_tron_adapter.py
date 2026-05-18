@@ -210,12 +210,22 @@ def test_is_contract_treats_upstream_error_as_eoa() -> None:
 # ---- block_at_or_before ---- #
 
 
-def test_block_at_or_before_raises_not_implemented() -> None:
-    """v0.12.0 doesn't implement this. Callers get a clear
-    failure mode rather than a silent zero."""
+def test_block_at_or_before_returns_unix_timestamp() -> None:
+    """v0.16.7 (round-9 audit fix): Tron returns the unix timestamp opaquely.
+
+    Pre-v0.16.7 this raised NotImplementedError, which was a CRITICAL
+    bug — the tracer's per-address try/except caught the exception and
+    silently returned 0 outflows for every Tron seed address. Every Tron
+    trace (USDT-TRC20 is the largest stablecoin laundering rail in crypto)
+    appeared to have zero activity. The new behavior matches Solana's
+    pattern: return the timestamp as an opaque cutoff that the TRC-20
+    fetch path can use directly.
+    """
     adapter = _mk_adapter()
-    with pytest.raises(NotImplementedError, match="block_at_or_before"):
-        adapter.block_at_or_before(datetime.now(timezone.utc))
+    ts = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    result = adapter.block_at_or_before(ts)
+    assert isinstance(result, int)
+    assert result == int(ts.timestamp())
 
 
 # ---- fetch_native_outflows ---- #

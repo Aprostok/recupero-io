@@ -41,6 +41,9 @@ _CHAIN_TO_CG_PLATFORM: dict[Chain, str] = {
     Chain.solana: "solana",
     Chain.base: "base",
     Chain.polygon: "polygon-pos",
+    # Tron — CoinGecko platform id is "tron"; required for contract→id
+    # resolution on TRC-20 tokens (added in v0.16.7).
+    Chain.tron: "tron",
 }
 
 
@@ -80,6 +83,18 @@ _CANONICAL_STABLECOIN_CONTRACTS: dict[tuple[Chain, str], str] = {
     # Solana (base58, not hex; lower-cased for lookup consistency)
     (Chain.solana, "USDC"):    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
     (Chain.solana, "USDT"):    "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",
+    # Tron — CRITICAL: USDT-TRC20 is the largest stablecoin deployment in
+    # crypto (~$60B circulating, the single biggest USDT chain). Pre-v0.16.7
+    # the absence of this entry meant a legit USDT-TRC20 transfer fell
+    # through to the API contract-lookup path and, if CoinGecko was momentarily
+    # unreachable, ended up flagged as `spoofed_canonical_symbol` —
+    # the exact OPPOSITE failure mode of the Ethereum spoof-protection.
+    # Tron base58 is case-sensitive on-chain but stored lower-case here for
+    # lookup consistency with `token_contract_lower` comparison at the call
+    # site (Solana follows the same pattern above).
+    (Chain.tron, "USDT"):      "tr7nhqjekqxgtci8q8zy4pl8otszgjlj6t",
+    (Chain.tron, "USDC"):      "tekxitehnzsmse2xqrbj4w32run966rdz8",
+    (Chain.tron, "USDD"):      "tnuc9qb1rrps5cbwlmnmxxbjyfoydxjwfr",
     # Base
     (Chain.base, "USDC"):      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     # Polygon
@@ -88,11 +103,19 @@ _CANONICAL_STABLECOIN_CONTRACTS: dict[tuple[Chain, str], str] = {
     (Chain.polygon, "DAI"):    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
 }
 
-# Hard sanity ceiling on per-transfer USD. Any single transfer claiming more than
-# this is treated as a pricing error and excluded from totals. The largest known
-# legitimate single tx in DeFi history is ~$1B (institutional treasury moves);
-# $100M ceiling catches obvious bugs without false-positiving real activity.
-_PER_TRANSFER_USD_SANITY_CEILING = Decimal("100_000_000")
+# Hard sanity ceiling on per-transfer USD. Any single transfer claiming more
+# than this is treated as a pricing error and excluded from totals.
+#
+# v0.16.7 (round-9 forensic audit HIGH): raised from $100M to $2B. The prior
+# ceiling rejected legitimate institutional/treasury moves and — more
+# critically — the largest theft events (Ronin Bridge ~$625M, Poly Network
+# ~$611M, BNB Bridge ~$570M). The headline-impact cases were precisely the
+# ones whose USD would be silently nulled. The accompanying code comment
+# already stated the largest legit single tx is "~$1B", so $100M never made
+# sense as a ceiling. $2B leaves headroom while still rejecting obvious
+# bugs (a 6-decimal-token amount misread as 18-decimal would land in the
+# 10^12-X range, well above any ceiling).
+_PER_TRANSFER_USD_SANITY_CEILING = Decimal("2_000_000_000")
 
 # --- Static contract → CoinGecko ID map for the most common ERC-20s ---
 # Chain-scoped. Address → coingecko_id, lowercased addresses for lookup convenience.

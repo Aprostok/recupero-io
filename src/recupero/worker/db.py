@@ -174,6 +174,22 @@ class CaseData(BaseModel):
 class WorkerDB:
     """Thin psycopg wrapper. One instance per worker process."""
 
+    # v0.16.7 (round-9 worker-resilience HIGH): standard psycopg.connect kwargs
+    # for every call site. The two flags matter:
+    #
+    #   * prepare_threshold=None — Supabase's transaction-mode pooler
+    #     (port 6543) does NOT support prepared statements. psycopg auto-
+    #     prepares after 5 executions of the same SQL, then the pooler
+    #     errors `DuplicatePreparedStatement`. The other Recupero modules
+    #     already pass this; worker/db.py was the inconsistent odd one out.
+    #
+    #   * connect_timeout=10 — default is OS-level TCP timeout (minutes).
+    #     A 3-minute Supabase outage would otherwise hang the worker's
+    #     heartbeat + claim threads for the full outage; the reaper can't
+    #     recover what it can't see. Fail-fast lets the supervisor restart
+    #     us cleanly.
+    _PSYCOPG_KW = {"prepare_threshold": None, "connect_timeout": 10}
+
     def __init__(self, dsn: str, worker_id: str) -> None:
         if not dsn:
             raise ValueError("dsn (SUPABASE_DB_URL) is required")
@@ -244,7 +260,7 @@ class WorkerDB:
                   )
             RETURNING *;
         """
-        with psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row) as conn:
+        with psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row, **self._PSYCOPG_KW) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     sql,
@@ -333,7 +349,7 @@ class WorkerDB:
              WHERE i.{COL_ID} = stale.{COL_ID}
             RETURNING i.{COL_ID}, stale.{COL_STATUS};
         """
-        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+        with psycopg.connect(self._dsn, autocommit=True, **self._PSYCOPG_KW) as conn, conn.cursor() as cur:
             cur.execute(
                 sql,
                 {
@@ -385,7 +401,7 @@ class WorkerDB:
              WHERE i.{COL_ID} = stale.{COL_ID}
             RETURNING i.{COL_ID}, stale.{COL_STATUS};
         """
-        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+        with psycopg.connect(self._dsn, autocommit=True, **self._PSYCOPG_KW) as conn, conn.cursor() as cur:
             cur.execute(
                 sql,
                 {
@@ -411,7 +427,7 @@ class WorkerDB:
             COL_IC3_CASE_ID,
         ]
         sql = f"SELECT {', '.join(cols)} FROM {T_CASES} WHERE {COL_ID} = %s;"
-        with psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row) as conn:
+        with psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row, **self._PSYCOPG_KW) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, (case_id,))
                 row = cur.fetchone()
@@ -591,5 +607,5 @@ class WorkerDB:
     # ----- internals ----- #
 
     def _exec(self, sql: str, params: dict[str, Any]) -> None:
-        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+        with psycopg.connect(self._dsn, autocommit=True, **self._PSYCOPG_KW) as conn, conn.cursor() as cur:
             cur.execute(sql, params)

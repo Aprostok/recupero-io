@@ -164,19 +164,28 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                     write_body=write_body,
                 )
                 return
+            # v0.16.7 (round-9 worker-resilience CRIT): admin key is HEADER ONLY.
+            # Pre-v0.16.7 accepted `?admin_key=...` as a fallback "for curl
+            # convenience" — but query strings are routinely logged by Railway's
+            # edge, intermediate proxies, and downstream services, and they
+            # leak via browser Referer headers. A single Railway log dump
+            # exposed for support would expose the long-lived admin secret.
+            # Header-only forces operators to use proper request tooling and
+            # keeps the secret out of every URL-aware log line.
             header_key = self.headers.get(
                 "X-Recupero-Admin-Key", ""
             ).strip()
             parsed = urlsplit(self.path)
             qs_pre = parse_qs(parsed.query)
-            query_key = (qs_pre.get("admin_key") or [""])[0].strip()
-            supplied = header_key or query_key
-            if not supplied or not hmac.compare_digest(
-                supplied, expected_admin_key,
+            if not header_key or not hmac.compare_digest(
+                header_key, expected_admin_key,
             ):
                 self._respond(
                     401,
-                    {"error": "missing or invalid X-Recupero-Admin-Key"},
+                    {"error": (
+                        "missing or invalid X-Recupero-Admin-Key header "
+                        "(query-param auth removed in v0.16.7)"
+                    )},
                     write_body=write_body,
                 )
                 return

@@ -221,8 +221,14 @@ def test_contingency_pct_renders() -> None:
 
 def test_recovered_total_appears_in_background() -> None:
     """The diagnostic finding (freezable + suspected) appears in
-    section 1 so the client sees what they're engaging us to
-    recover."""
+    section 1 so the client sees what they're engaging us to recover.
+
+    v0.16.7 semantic clarification: `total_suspected_usd` from the brief
+    is INVESTIGATE-only — NOT FREEZABLE+INVESTIGATE gross. The template
+    now renders it directly as "under investigation" rather than doing
+    a `suspected - freezable` subtraction that was silently producing
+    $0/negative on every real case.
+    """
     with TemporaryDirectory() as tmp:
         path = render_engagement_letter(
             case=_make_case(), victim=_victim(),
@@ -230,13 +236,12 @@ def test_recovered_total_appears_in_background() -> None:
             freeze_brief=_freeze_brief(),
             briefs_dir=Path(tmp),
             total_freezable_usd=Decimal("7097.58"),
-            total_suspected_usd=Decimal("50000.00"),
+            total_suspected_usd=Decimal("42902.42"),  # INVESTIGATE-only
         )
         html = path.read_text(encoding="utf-8")
 
     assert "$7,097.58" in html  # confirmed-recoverable
-    # under_investigation = suspected - freezable = $42,902.42
-    assert "$42,902.42" in html
+    assert "$42,902.42" in html  # under-investigation (now passed in directly)
 
 
 def test_jurisdiction_override() -> None:

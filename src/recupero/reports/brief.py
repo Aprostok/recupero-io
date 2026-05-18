@@ -235,15 +235,46 @@ def generate_briefs(
     # Identify wallets across all cases for the LE summary table
     identified_wallets = _build_identified_wallets(primary_case, linked_cases, victim, current_holder_addr)
 
-    # Common context
-    now = datetime.now(UTC)
-    brief_id = f"BRIEF-{now.strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
+    # Common context.
+    #
+    # v0.16.7 (round-9 output-artifacts CRIT): the prior code generated
+    # brief_id as `f"BRIEF-{wall_clock}-{uuid4().hex[:6]}"`, which made
+    # PDFs and HTML artifacts non-reproducible — re-running the same case
+    # produced different bytes (different filename, different cover-page
+    # text, different footer code). Chain-of-custody hash verification
+    # was therefore impossible; the artifact stage was effectively
+    # "trust us we re-ran it."
+    #
+    # The fix: derive brief_id deterministically from the case content
+    # (case_id + earliest theft_transfer hash). Two renders of the same
+    # case → same brief_id → byte-reproducible artifacts. `generated_at`
+    # remains wall-clock (it's documenting WHEN this render happened),
+    # but it's now also overridable via the SOURCE_DATE_EPOCH env var so
+    # reproducible-builds workflows can pin the entire render.
+    import hashlib
+    import os
+    src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    if src_epoch:
+        try:
+            now = datetime.fromtimestamp(int(src_epoch), tz=UTC)
+        except (ValueError, TypeError):
+            now = datetime.now(UTC)
+    else:
+        now = datetime.now(UTC)
+    # Stable suffix: case_id + the theft-transfer tx_hash gives a unique
+    # 6-hex suffix that's deterministic across re-renders without
+    # leaking sensitive content into the filename.
+    _brief_seed = f"{primary_case.case_id}|{theft_transfer.tx_hash}"
+    brief_id = (
+        f"BRIEF-{primary_case.case_id[:8]}-"
+        f"{hashlib.sha256(_brief_seed.encode('utf-8')).hexdigest()[:6]}"
+    )
 
     ctx: dict[str, Any] = {
         "case_id": primary_case.case_id,
         "brief_id": brief_id,
-        "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
-        "verified_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),  # explicit UTC suffix
+        "verified_at": now.strftime("%Y-%m-%d"),
         "trace_started_at": (
             primary_case.trace_started_at.strftime("%Y-%m-%d %H:%M:%S")
             if primary_case.trace_started_at else "—"
@@ -561,6 +592,26 @@ def _find_theft_events(
     return [primary] + cluster
 
 
+_BASE58_CHAINS: frozenset[Chain] = frozenset({
+    Chain.solana,
+    Chain.tron,
+    Chain.bitcoin,
+})
+
+
+def _hop_addr_key(chain: Chain, address: str) -> str:
+    """Chain-aware key for the hop-builder visited set + index.
+
+    EVM hex addresses are lowercased (case-insensitive). Base58 addresses
+    (Solana/Tron/Bitcoin) preserve case — lowercasing them produced invalid
+    keys and let `_build_hops` infinite-loop on a case mismatch in v0.16.6.
+    Token contracts always lowercased (EVM-only namespace).
+    """
+    if chain in _BASE58_CHAINS:
+        return address
+    return address.lower()
+
+
 def _build_hops(theft: Transfer, linked_cases: list[Case]) -> list[Transfer]:
     """Find subsequent transfers of the stolen asset across linked cases.
 
@@ -569,18 +620,20 @@ def _build_hops(theft: Transfer, linked_cases: list[Case]) -> list[Transfer]:
     any linked case. If found, the chain continues — the new transfer's
     destination becomes the next 'from', and so on.
     """
-    chain: list[Transfer] = []
-    current = theft.to_address.lower()
-    target_token_contract = (theft.token.contract or "").lower()
+    chain_obj: list[Transfer] = []
     target_chain = theft.token.chain
+    current = _hop_addr_key(target_chain, theft.to_address)
+    target_token_contract = (theft.token.contract or "").lower()
 
-    # Build a quick index: {(from_addr_lower, token_contract_lower) -> list[Transfer]}
+    # Build a quick index: {(from_addr_key, token_contract_lower) -> list[Transfer]}
+    # from_addr_key uses chain-aware normalization (base58 preserves case).
     index: dict[tuple[str, str], list[Transfer]] = {}
     for c in linked_cases:
         for t in c.transfers:
             if t.token.chain != target_chain:
                 continue
-            key = (t.from_address.lower(), (t.token.contract or "").lower())
+            key = (_hop_addr_key(target_chain, t.from_address),
+                   (t.token.contract or "").lower())
             index.setdefault(key, []).append(t)
 
     visited: set[str] = {current}
@@ -591,15 +644,15 @@ def _build_hops(theft: Transfer, linked_cases: list[Case]) -> list[Transfer]:
         # Pick the earliest forwarding tx (by block) — that's the natural chain
         candidates.sort(key=lambda t: t.block_number)
         next_hop = candidates[0]
-        chain.append(next_hop)
-        next_addr = next_hop.to_address.lower()
+        chain_obj.append(next_hop)
+        next_addr = _hop_addr_key(target_chain, next_hop.to_address)
         if next_addr in visited:
             log.warning("hop chain loop detected at %s — breaking", next_addr)
             break
         visited.add(next_addr)
         current = next_addr
 
-    return chain
+    return chain_obj
 
 
 def _build_identified_wallets(

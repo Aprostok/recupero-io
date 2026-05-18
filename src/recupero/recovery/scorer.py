@@ -10,16 +10,24 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import asdict, dataclass, field
-from decimal import Decimal
+from decimal import ROUND_HALF_EVEN, Decimal
 from typing import Any
 
 log = logging.getLogger(__name__)
 
 
-# Pricing constants — match recupero._pricing.
-_DIAGNOSTIC_FEE_USD = Decimal("499")
-_ENGAGEMENT_FEE_USD = Decimal("10000")
-_CONTINGENCY_PCT = Decimal("15")  # of recovered amount
+# Pricing constants — imported (not duplicated) from recupero._pricing.
+# v0.16.7 (round-9 audit): the prior code redeclared these as local
+# literals "to match", which silently diverged from the canonical
+# engagement-letter math whenever someone updated _pricing.py without
+# also editing this file. Importing keeps the legal documents and the
+# scoring math in lockstep.
+from recupero._pricing import (  # noqa: E402  (logical placement, after stdlib imports)
+    CONTINGENCY_PCT as _CONTINGENCY_PCT_INT,
+    DIAGNOSTIC_FEE_USD as _DIAGNOSTIC_FEE_USD,
+    ENGAGEMENT_FEE_USD as _ENGAGEMENT_FEE_USD,
+)
+_CONTINGENCY_PCT = Decimal(_CONTINGENCY_PCT_INT)
 
 
 # Recommendation thresholds (USD).
@@ -43,6 +51,38 @@ _ISSUER_FREEZE_PRIOR: dict[str, float] = {
 
 # Default for unknown issuers — conservative.
 _UNKNOWN_ISSUER_PRIOR = 0.30
+
+
+def _lookup_issuer_prior(raw_issuer: str) -> float:
+    """Map an issuer string to a base freeze prior, tolerating real-world
+    issuer-name variants.
+
+    Pre-v0.16.7 this was a plain `_ISSUER_FREEZE_PRIOR.get(issuer, default)`
+    exact-match lookup. Real issuer strings carry parenthetical
+    annotations (e.g. ``"Paxos (BUSD discontinued by NYDFS Feb 2023)"``)
+    or vendor-name suffixes (``"Tether Limited"``), and the exact-match
+    dropped EVERY BUSD/PYUSD/USDP case onto the 0.30 unknown-issuer
+    floor — silently understating expected recovery on Paxos-issued
+    stablecoins by 55 percentage points. Round-9 scoring audit HIGH.
+
+    Strategy: try the exact key, then a normalized prefix-match, then
+    fall back to the unknown floor.
+    """
+    if not raw_issuer:
+        return _UNKNOWN_ISSUER_PRIOR
+    if raw_issuer in _ISSUER_FREEZE_PRIOR:
+        return _ISSUER_FREEZE_PRIOR[raw_issuer]
+    # Normalized prefix match: strip trailing annotations like
+    # " (foo)", " - foo", " Limited", " Inc.", "(formerly Maker)" so the
+    # canonical issuer-name key wins.
+    base = re.split(r"\s*[\(\-,]", raw_issuer, maxsplit=1)[0].strip()
+    if base in _ISSUER_FREEZE_PRIOR:
+        return _ISSUER_FREEZE_PRIOR[base]
+    # Try first-word match (Tether/Circle/Paxos/etc are single-word issuers)
+    first_word = base.split(" ", 1)[0]
+    if first_word in _ISSUER_FREEZE_PRIOR:
+        return _ISSUER_FREEZE_PRIOR[first_word]
+    return _UNKNOWN_ISSUER_PRIOR
 
 
 # Per-jurisdiction multipliers. USA/EU/UK = baseline 1.0;
@@ -200,7 +240,7 @@ def score_recovery(
             lp = learned_priors[issuer]
             prior = float(getattr(lp, "p_any_freeze", lp))
         if prior is None:
-            prior = _ISSUER_FREEZE_PRIOR.get(issuer, _UNKNOWN_ISSUER_PRIOR)
+            prior = _lookup_issuer_prior(issuer)
         # Freeze capability override. The brief produces both forms
         # depending on which layer: emit_brief maps yes/limited/no →
         # HIGH/MEDIUM/LOW for display, but the raw freeze_asks.json
@@ -219,14 +259,35 @@ def score_recovery(
         #   historical_only      → 0.50x
         #   mixed                → 0.75x
         #   current_balance_only → 1.00x (unchanged)
-        ev_mode = (entry.get("evidence_mode") or "current_balance_only").lower()
+        #
+        # v0.16.7 (round-9 scoring HIGH): accept BOTH `evidence_mode` (the
+        # per-issuer aggregate emitted by emit_brief) AND `evidence_type`
+        # (the per-ask field emitted by freeze.asks). Pre-v0.16.7 the
+        # scorer ONLY read `evidence_mode`; when fed a raw freeze-asks
+        # entry it defaulted to "current_balance_only" → discount 1.00,
+        # so the historical-inflow discount silently never fired,
+        # overstating expected recovery on stale cases by 2x.
+        raw_mode = (entry.get("evidence_mode")
+                    or entry.get("evidence_type")
+                    or "current_balance_only")
+        ev_mode = raw_mode.lower()
+        # Translate per-ask names → per-issuer-aggregate names so the
+        # downstream comparisons are uniform.
+        if ev_mode == "historical_inflow":
+            ev_mode = "historical_only"
+        elif ev_mode == "current_balance":
+            ev_mode = "current_balance_only"
         if ev_mode == "historical_only":
             evidence_discount = Decimal("0.50")
         elif ev_mode == "mixed":
             evidence_discount = Decimal("0.75")
         else:
             evidence_discount = Decimal("1.00")
-        expected_freezable += issuer_usd * Decimal(prior) * evidence_discount
+        # `Decimal(str(prior))` — going through `str()` avoids binary-float
+        # noise that `Decimal(prior_float)` injects (e.g., 0.73 → Decimal(
+        # '0.7300000000000000266...')). Threshold comparisons downstream
+        # are otherwise vulnerable to flipping on sub-cent margins.
+        expected_freezable += issuer_usd * Decimal(str(prior)) * evidence_discount
         # Track base_prior + evidence_discount separately so the driver
         # narrative + headline summary can decompose them for the
         # operator (vs. collapsing to a single misleading "P(freeze)").
@@ -257,14 +318,14 @@ def score_recovery(
         drivers.append(RecoveryDriver(
             factor="primary_issuer",
             direction="positive",
-            weight=float(top_usd * Decimal(effective_prior) / max(total_loss, Decimal("1"))),
+            weight=float(top_usd * Decimal(str(effective_prior)) / max(total_loss, Decimal("1"))),
             description=description,
         ))
 
     # --- Jurisdiction adjustment ---
     jurisdiction_raw = (brief.get("VICTIM_JURISDICTION") or "").strip()
     jur_mult = _resolve_jurisdiction_multiplier(jurisdiction_raw)
-    expected_recovered = expected_freezable * Decimal(jur_mult)
+    expected_recovered = expected_freezable * Decimal(str(jur_mult))
     if jur_mult < 0.9:
         drivers.append(RecoveryDriver(
             factor="jurisdiction",
@@ -320,7 +381,7 @@ def score_recovery(
     dex_count = len(brief.get("DEX_SWAPS") or [])
     if cross_chain_count >= 2 or dex_count >= 3:
         friction = min(0.3, 0.05 * (cross_chain_count + dex_count))
-        expected_recovered *= Decimal(1.0 - friction)
+        expected_recovered *= Decimal(str(1.0 - friction))
         drivers.append(RecoveryDriver(
             factor="trace_complexity",
             direction="negative",
@@ -351,15 +412,31 @@ def score_recovery(
     ))
 
     # --- Our revenue + victim net ---
+    #
+    # v0.16.7 (round-9 audit CRIT): engagement fee is charged
+    # UNCONDITIONALLY at signing per the engagement letter — it is NOT
+    # conditional on recovery outcome. The prior formula weighted
+    # _ENGAGEMENT_FEE_USD by `p_payback`, which understated total revenue
+    # by $10K * (1 - p_payback) and overstated victim-net by the same
+    # amount. For a marginal case with p_payback=0.3, this overstated
+    # net by $7,000 — flipping `caveat` cases into `recommend` and
+    # systematically biasing engagement decisions toward engaging
+    # cases that shouldn't be engaged.
+    #
+    # Also: contingency scales with actual recovered amount, so it must
+    # be recomputed PER CI BAND POINT. Holding `expected_revenue`
+    # constant across the band overstated `expected_net_high_usd` by
+    # 15% * (high - expected_recovered) — wrong number in legal docs.
     contingency_factor = _CONTINGENCY_PCT / Decimal("100")
-    expected_revenue = (
-        _DIAGNOSTIC_FEE_USD
-        + _ENGAGEMENT_FEE_USD * Decimal(p_payback)
-        + expected_recovered * contingency_factor
-    )
+    fixed_fees = _DIAGNOSTIC_FEE_USD + _ENGAGEMENT_FEE_USD
+    expected_revenue = fixed_fees + expected_recovered * contingency_factor
     expected_net = expected_recovered - expected_revenue
-    net_low = low - expected_revenue
-    net_high = high - expected_revenue
+    # Recompute contingency for the CI bounds so the band reflects the
+    # actual fee schedule at each tail outcome.
+    revenue_at_low = fixed_fees + low * contingency_factor
+    revenue_at_high = fixed_fees + high * contingency_factor
+    net_low = low - revenue_at_low
+    net_high = high - revenue_at_high
 
     # --- Recommendation ---
     rec = _recommendation_from_net(expected_net)
@@ -403,7 +480,13 @@ def _parse_usd(s: Any) -> Decimal:
 
 
 def _round_money(d: Decimal) -> Decimal:
-    return d.quantize(Decimal("0.01"))
+    # Explicit ROUND_HALF_EVEN (banker's rounding) so the rounding mode
+    # doesn't depend on global decimal-context state. Python's default
+    # IS HALF_EVEN, but if anything upstream sets
+    # `decimal.getcontext().rounding = ROUND_HALF_UP` (which some
+    # financial libraries do), our 2dp money output would silently
+    # change behavior. Pinning it here removes that variable.
+    return d.quantize(Decimal("0.01"), rounding=ROUND_HALF_EVEN)
 
 
 def _resolve_jurisdiction_multiplier(jur: str) -> float:

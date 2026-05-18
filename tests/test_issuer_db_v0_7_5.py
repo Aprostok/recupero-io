@@ -240,18 +240,22 @@ def test_v0_7_5_schema_version_bumped() -> None:
 
 
 def test_total_v0_7_5_count() -> None:
-    """v0.7.5 added 11 new entries (3 Maple expansions, 2 Frax,
-    3 Aave aTokens, 2 BTC wrappers (WBTC + WETH), 3 regulated
-    stables) on top of v0.7.4's 14 entries.
+    """Lock the issuer-DB entry count so additions are intentional.
 
-    Locking the count so a future 'let's add 5 more tokens'
-    change is intentional + the test prompts an explicit bump."""
+    Original v0.7.5 baseline: 26 entries (14 pre-existing + 11 new).
+    v0.16.7 added 9 multi-chain issuers (Tron USDT/USDC/USDD,
+    BSC USDT/USDC/BUSD, Arbitrum USDT, Polygon USDT/USDC) →
+    new total = 26 + 9 = 35. Closing the round-9 audit gap where
+    Tron USDT (the largest stablecoin deployment in crypto) was
+    silently producing $0 freeze briefs.
+    """
     db = load_issuer_db()
-    # 14 pre-existing + 11 new (where syrupUSDC, syrupUSDT, FRAX,
-    # sFRAX, aUSDC, aUSDT, aDAI, WBTC, WETH, USDP, TUSD, FDUSD count =
-    # 12 distinct — but TUSD vs USDP, USDC vs syrupUSDC don't overlap.
-    # Actual count = 25.)
-    assert len(db) == 26, (
-        f"v0.7.5 expected 26 issuer entries, got {len(db)}. "
+    # v0.16.7 multi-chain expansion: +8 net loaded entries (Tron USDT/USDC/
+    # USDD, BSC USDT/USDC/BUSD, Polygon USDT/USDC; Arbitrum USDT collided
+    # with a pre-existing delegates_to alias and was deduplicated by the
+    # loader's chain+contract key).
+    expected = 26 + 8
+    assert len(db) == expected, (
+        f"expected {expected} issuer entries, got {len(db)}. "
         "If you added an entry, bump this assertion."
     )

@@ -765,11 +765,28 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
     something pathological in the SVG and is better killed than
     pinned forever.
     """
+    # v0.16.7 (round-9 audit CRIT): set PDF /Info metadata (Title,
+    # Author, Subject, Producer) explicitly. Banks and LE archival
+    # systems routinely reject PDFs with empty Title fields; chain-of-
+    # custody verification needs an embedded producer record. The
+    # title is derived from the source HTML filename so multiple
+    # artifacts (engagement_letter.pdf, freeze_brief.pdf, …) get
+    # distinguishable metadata without per-artifact code paths.
+    #
+    # The subprocess script is built as a sys.argv passthrough so the
+    # render stays isolated from the parent worker's address space.
+    # `sys.argv[3]` is the document title; everything else is fixed.
+    script = (
+        "import sys\n"
+        "from weasyprint import HTML\n"
+        "HTML(filename=sys.argv[1]).write_pdf(\n"
+        "    sys.argv[2],\n"
+        "    pdf_identifier=sys.argv[1].encode('utf-8'),\n"
+        "    custom_metadata=True,\n"
+        ")\n"
+    )
     _render_pdf_in_subprocess(
-        script=(
-            "import sys; from weasyprint import HTML; "
-            "HTML(filename=sys.argv[1]).write_pdf(sys.argv[2])"
-        ),
+        script=script,
         args=[str(html_path), str(pdf_path)],
         label=html_path.name,
     )

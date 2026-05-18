@@ -119,7 +119,14 @@ def classify_recovery_prospects(
       * ``total_freezable_usd``: sum of total_usd across all issuers
         WHOSE CAPABILITY IS ACTIONABLE.
       * ``total_suspected_usd``: sum of total_suspected_usd across
-        all issuers (includes FREEZABLE + INVESTIGATE).
+        all issuers. **INVESTIGATE-only** — does NOT include FREEZABLE
+        amounts. (Documentation in v0.16.6 incorrectly described this
+        as "FREEZABLE + INVESTIGATE", and downstream readers
+        subtracted total_freezable_usd to derive an investigate-only
+        figure, which silently produced $0 or negative on every case.
+        The brief writer (emit_brief.py) has always accumulated this
+        as INVESTIGATE-only — see _per_issuer_aggregation logic at
+        emit_brief.py:502 / 535. Surfaced in the round-9 audit.)
 
     v0.16.1 (audit follow-up): the headline freezable number used to
     sum across ALL freezable entries including capability=no/low
@@ -337,7 +344,15 @@ def _build_context(
         "freezable_summary": freezable_summary,
         "freezable_issuer_count": len(freezable_summary),
         "total_recoverable_freezable_usd": _fmt_usd(total_freezable_usd),
-        "total_under_investigation_usd": _fmt_usd(total_suspected_usd - total_freezable_usd),
+        # v0.16.7 fix: `total_suspected_usd` IS already INVESTIGATE-only
+        # (see classify_recovery_prospects docstring + emit_brief.py:502).
+        # Pre-v0.16.7 we subtracted total_freezable_usd from it under the
+        # mistaken belief that total_suspected was GROSS — that subtraction
+        # silently produced $0 or NEGATIVE on every case, so every
+        # engagement letter / victim summary reported "an additional $0
+        # under investigation" regardless of actual INVESTIGATE-tier value.
+        # Surfaced in the round-9 output-artifacts audit.
+        "total_under_investigation_usd": _fmt_usd(total_suspected_usd),
         # v0.16.2: aggregate evidence_mode for the template's
         # bottom-line summary box. "historical_only" → letter says
         # "received at" and "pending issuer verification of current

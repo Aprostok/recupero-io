@@ -42,11 +42,45 @@ def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+_EVM_CHAINS: frozenset[Chain] = frozenset({
+    Chain.ethereum,
+    Chain.arbitrum,
+    Chain.bsc,
+    Chain.base,
+    Chain.polygon,
+})
+
+
+def _is_evm_chain(chain: Chain) -> bool:
+    """True if the chain uses EVM hex addresses (case-insensitive)."""
+    return chain in _EVM_CHAINS
+
+
 def _normalize_address(chain: Chain, address: Address) -> Address:
-    """Normalize per-chain. EVM chains use checksum; Solana/others pass through."""
-    if chain in (Chain.ethereum, Chain.arbitrum, Chain.bsc, Chain.base, Chain.polygon):
+    """Normalize per-chain. EVM chains use checksum; Solana/Tron/Bitcoin pass through."""
+    if _is_evm_chain(chain):
         return to_checksum_address(address)
     return address
+
+
+def _address_visited_key(chain: Chain, address: Address) -> str:
+    """Stable key for the BFS `visited` set and per-address caches.
+
+    EVM addresses are case-insensitive — lowercased for dedup. Solana,
+    Tron, and Bitcoin are base58/base58check, which IS case-sensitive;
+    lowercasing those mangles the address (e.g. two distinct Solana
+    mints whose lowercase forms collide get merged, and a mixed-case
+    address pasted by an operator never matches the canonical form
+    returned by Helius/TronGrid).
+
+    v0.16.6 and earlier used `address.lower()` everywhere — this was
+    the CRITICAL forensic-correctness bug surfaced in the round-9
+    audit: every non-EVM trace silently de-duped against the wrong
+    keys, occasionally dropping legitimate destinations.
+    """
+    if _is_evm_chain(chain):
+        return address.lower()
+    return address  # preserve case for base58 chains
 
 
 def run_trace(
@@ -123,7 +157,9 @@ def run_trace(
     trace_concurrency = max(1, int(os.environ.get("RECUPERO_TRACE_CONCURRENCY", "5")))
 
     all_transfers: list[Transfer] = []
-    visited: set[str] = {seed_address.lower()}  # includes queued-but-not-yet-processed
+    # Chain-aware key: EVM lowercases, base58 (Solana/Tron/Bitcoin) preserves
+    # case. See _address_visited_key for why this matters.
+    visited: set[str] = {_address_visited_key(chain, seed_address)}  # includes queued-but-not-yet-processed
     is_contract_cache: dict[str, bool] = {}
     current_wave: list[tuple[Address, int]] = [(seed_address, 0)]
     addresses_processed = 0
@@ -178,7 +214,7 @@ def run_trace(
                 if not policy.should_traverse(transfer):
                     continue
                 dest = transfer.to_address
-                dest_key = dest.lower()
+                dest_key = _address_visited_key(chain, dest)
                 if dest_key in visited:
                     continue
 

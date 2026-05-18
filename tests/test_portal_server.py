@@ -219,6 +219,15 @@ def test_handle_portal_status_renders_html() -> None:
     assert b"Test Person" in body
 
 
+# Same-origin headers that satisfy the v0.16.7 CSRF / Origin guard.
+# Every POST /sign in production carries these because the form is
+# rendered AND submitted from the same host.
+_SAME_ORIGIN_HEADERS = {
+    "host": "portal.example.com",
+    "origin": "https://portal.example.com",
+}
+
+
 def test_handle_portal_sign_form_rejects_short_name() -> None:
     """POST /portal/<token>/sign with name='Al' → re-renders the
     sign form with an error message, not a signature row."""
@@ -231,7 +240,7 @@ def test_handle_portal_sign_form_rejects_short_name() -> None:
             method="POST",
             path="/portal/some-43-char-valid-token-for-this-test/sign",
             body_bytes=form.encode("utf-8"),
-            headers={"user-agent": "test"},
+            headers={**_SAME_ORIGIN_HEADERS, "user-agent": "test"},
         )
     assert code == 200  # re-renders form, not 4xx
     assert b"full legal name" in body
@@ -249,7 +258,7 @@ def test_handle_portal_sign_form_rejects_missing_checkbox() -> None:
             method="POST",
             path="/portal/some-43-char-valid-token-for-this-test/sign",
             body_bytes=form.encode("utf-8"),
-            headers={},
+            headers=dict(_SAME_ORIGIN_HEADERS),
         )
     assert code == 200
     persist.assert_not_called()
@@ -273,11 +282,129 @@ def test_handle_portal_sign_submit_redirects_if_already_engaged() -> None:
             method="POST",
             path="/portal/some-43-char-valid-token-for-this-test/sign",
             body_bytes=form.encode("utf-8"),
-            headers={},
+            headers=dict(_SAME_ORIGIN_HEADERS),
         )
     assert code == 303
     assert "Location" in headers
     persist.assert_not_called()
+
+
+def test_handle_portal_sign_submit_rejects_cross_origin_post() -> None:
+    """v0.16.7 (round-9 security CRIT): CSRF guard.
+
+    A POST with no Origin or with an Origin pointing at a third-party
+    host must be rejected. Without this, any third-party page that
+    learns a portal URL could auto-POST a $10K engagement on the
+    victim's behalf.
+    """
+    verified = _mk_verified()
+    form = urllib.parse.urlencode({
+        "signature_name": "Alex Smith", "agree": "on",
+    })
+    with patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature") as persist:
+        # Origin points at an attacker site
+        code_attacker, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={
+                "host": "portal.example.com",
+                "origin": "https://attacker.example",
+            },
+        )
+        # Origin missing entirely (most browsers strip on cross-origin POST)
+        code_missing, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={"host": "portal.example.com"},
+        )
+    assert code_attacker == 403
+    assert code_missing == 403
+    persist.assert_not_called()
+
+
+def test_handle_portal_sign_submit_rejects_closed_engagement() -> None:
+    """v0.16.7 (round-9 security HIGH): closed engagements can't be
+    re-signed via the same portal token."""
+    verified = _mk_verified(
+        engagement_started_at=datetime.now(timezone.utc) - timedelta(days=60),
+        engagement_closed_at=datetime.now(timezone.utc) - timedelta(days=5),
+    )
+    form = urllib.parse.urlencode({
+        "signature_name": "Alex Smith", "agree": "on",
+    })
+    with patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature") as persist:
+        code, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers=dict(_SAME_ORIGIN_HEADERS),
+        )
+    assert code == 403
+    persist.assert_not_called()
+
+
+def test_handle_portal_sign_submit_strips_ua_crlf() -> None:
+    """v0.16.7 (round-9 security HIGH): CRLF / control-char in User-Agent
+    must be stripped before storage so the audit log can't be forged
+    with injected fake-looking lines."""
+    verified = _mk_verified()
+    form = urllib.parse.urlencode({
+        "signature_name": "Alex Smith", "agree": "on",
+    })
+    signed_at = datetime.now(timezone.utc)
+    with patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature",
+               return_value=signed_at) as persist:
+        code, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={
+                **_SAME_ORIGIN_HEADERS,
+                "user-agent": "chrome\r\nFAKE-AUDIT-LINE: forged",
+            },
+        )
+    assert code == 200
+    kwargs = persist.call_args.kwargs
+    assert "\r" not in kwargs["user_agent"]
+    assert "\n" not in kwargs["user_agent"]
+    assert "FAKE-AUDIT-LINE" in kwargs["user_agent"]  # text survives, just no CRLF
+
+
+def test_handle_portal_sign_submit_rejects_garbage_ip() -> None:
+    """v0.16.7 (round-9 security HIGH): X-Real-IP that's not a valid
+    IP address must NOT land in the engagement_signatures.ip_address
+    column. Pre-v0.16.7 we stored arbitrary header strings, including
+    log-injection payloads."""
+    verified = _mk_verified()
+    form = urllib.parse.urlencode({
+        "signature_name": "Alex Smith", "agree": "on",
+    })
+    signed_at = datetime.now(timezone.utc)
+    with patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature",
+               return_value=signed_at) as persist:
+        code, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={
+                **_SAME_ORIGIN_HEADERS,
+                "x-real-ip": "127.0.0.1\r\nFAKE-LINE",
+            },
+        )
+    assert code == 200
+    kwargs = persist.call_args.kwargs
+    # Garbage value → empty rather than the forged string.
+    assert kwargs["ip_address"] == ""
 
 
 def test_handle_portal_sign_submit_happy_path() -> None:
@@ -304,6 +431,7 @@ def test_handle_portal_sign_submit_happy_path() -> None:
             path="/portal/some-43-char-valid-token-for-this-test/sign",
             body_bytes=form.encode("utf-8"),
             headers={
+                **_SAME_ORIGIN_HEADERS,
                 # x-real-ip is set by the trusted load balancer after it
                 # strips the upstream XFF — that's what we record now.
                 "x-real-ip": "203.0.113.5",
@@ -347,6 +475,7 @@ def test_handle_portal_sign_submit_xff_with_trusted_hops() -> None:
             path="/portal/some-43-char-valid-token-for-this-test/sign",
             body_bytes=form.encode("utf-8"),
             headers={
+                **_SAME_ORIGIN_HEADERS,
                 # Two-hop chain. With 1 trusted hop, we take the
                 # right-most (which is what our LB inserted).
                 "x-forwarded-for": "203.0.113.5, 198.51.100.42",
@@ -384,6 +513,7 @@ def test_handle_portal_sign_submit_xff_ignored_without_trusted_hops() -> None:
             path="/portal/some-43-char-valid-token-for-this-test/sign",
             body_bytes=form.encode("utf-8"),
             headers={
+                **_SAME_ORIGIN_HEADERS,
                 "x-forwarded-for": "1.2.3.4",
                 "user-agent": "Mozilla/5.0",
             },

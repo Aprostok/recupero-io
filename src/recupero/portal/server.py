@@ -40,13 +40,16 @@ swap in Starlette/uvicorn as part of a separate-deploy refactor.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
+import re
 import urllib.parse
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 import psycopg
@@ -88,6 +91,7 @@ def _extract_client_ip(headers: dict[str, str]) -> str:
         trusted_hops = int(os.environ.get("RECUPERO_TRUSTED_PROXY_HOPS", "0"))
     except (TypeError, ValueError):
         trusted_hops = 0
+    candidate: str | None = None
     if trusted_hops > 0 and xff_chain:
         # The right-most entry was added by the load balancer closest
         # to us; walk N hops back from the tail. If the chain is shorter
@@ -95,13 +99,117 @@ def _extract_client_ip(headers: dict[str, str]) -> str:
         # left-most entry (still inside the trusted segment) rather
         # than fabricate trust.
         idx = max(0, len(xff_chain) - trusted_hops)
-        return xff_chain[idx]
-    real_ip = (headers.get("x-real-ip", "") or "").strip()
-    if real_ip:
-        return real_ip
-    # No trusted source available. Return empty so persistence layer can
-    # store NULL rather than a header-injected forgery.
-    return ""
+        candidate = xff_chain[idx]
+    if candidate is None:
+        # x-real-ip is set by Railway/Fly's edge AFTER stripping the
+        # client-supplied XFF, so it's somewhat more trustworthy — but
+        # it's still a raw HTTP header value. v0.16.7 (round-9 security
+        # audit HIGH): validate as a real IP address before storing.
+        # Pre-v0.16.7 we accepted arbitrary strings, enabling
+        # log-injection (`X-Real-IP: 127.0.0.1\r\nfake-line`) into the
+        # engagement_signatures table.
+        real_ip = (headers.get("x-real-ip", "") or "").strip()
+        if real_ip:
+            candidate = real_ip
+    if candidate is None:
+        return ""
+    # Validate. ipaddress.ip_address accepts v4 and v6 and rejects
+    # garbage; trim to 45 chars (max length of an IPv6 string with
+    # zone-id). Anything that doesn't parse → store empty rather than
+    # let a forged value into the audit log.
+    try:
+        return str(ipaddress.ip_address(candidate))[:45]
+    except (ValueError, TypeError):
+        log.warning("portal: rejecting non-IP client-address header value")
+        return ""
+
+
+# Headers that protect against UA-string log injection and clickjacking.
+# Returned on every portal response (HTML + redirects + errors). v0.16.7
+# (round-9 security audit MEDIUM/HIGH).
+_PORTAL_SECURITY_HEADERS: dict[str, str] = {
+    # The bearer token is in the URL path → without no-referrer, every
+    # outbound click leaks the token via Referer. This is the single
+    # most impactful header for the portal.
+    "Referrer-Policy": "no-referrer",
+    # Clickjacking defense — the /sign form must not be iframed.
+    "X-Frame-Options": "DENY",
+    # MIME sniffing defense.
+    "X-Content-Type-Options": "nosniff",
+    # Defense-in-depth CSP. Portal pages use only inline CSS and no
+    # external resources; the strict policy here blocks any future
+    # accidental introduction of third-party JS.
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "script-src 'none'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    ),
+    # HSTS — assume HTTPS in front of the worker (Railway always is).
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+}
+
+
+def _strip_control_chars(s: str, *, max_len: int) -> str:
+    """Strip CR/LF/control chars and truncate. Used for user-agent
+    storage before it lands in engagement_signatures.
+
+    Pre-v0.16.7 the raw UA was stored after a length truncation only —
+    a User-Agent like `chrome\\r\\nFAKE-AUDIT-LINE: case approved`
+    would survive into operator views and forge a legitimate-looking
+    audit entry. Round-9 security audit HIGH.
+    """
+    cleaned = re.sub(r"[\x00-\x1f\x7f]", "", s or "")
+    return cleaned[:max_len]
+
+
+def _origin_matches_self(headers: dict[str, str]) -> bool:
+    """Return True if the request's Origin (or Referer) is our own host.
+
+    Standard CSRF defense for state-changing POSTs in cookieless apps:
+    a cross-origin attacker page can submit a form to our URL, but the
+    browser will tag it with an Origin header pointing at the attacker.
+    We accept the request only when Origin (or Referer if Origin is
+    absent) matches the portal's own scheme://host.
+
+    The expected origin is `RECUPERO_PORTAL_PUBLIC_ORIGIN` (e.g.
+    `https://app.recupero.io`). When unset, we fall back to accepting
+    only same-host requests inferred from the inbound `Host` header —
+    less strict but better than nothing for local-dev.
+    """
+    configured = os.environ.get("RECUPERO_PORTAL_PUBLIC_ORIGIN", "").strip().rstrip("/")
+    expected_origins: list[str] = []
+    if configured:
+        expected_origins.append(configured)
+    host = (headers.get("host", "") or "").strip()
+    if host:
+        # Accept either scheme for the same host so local-dev works.
+        expected_origins.extend([f"https://{host}", f"http://{host}"])
+    if not expected_origins:
+        # No way to know what to compare against. Fail open here would
+        # be terrible; fail closed.
+        return False
+
+    origin_header = (headers.get("origin", "") or "").strip()
+    if origin_header:
+        return any(origin_header.rstrip("/") == e for e in expected_origins)
+
+    # Fall back to Referer (some clients omit Origin on same-origin POSTs).
+    referer = (headers.get("referer", "") or "").strip()
+    if referer:
+        try:
+            parsed = urlparse(referer)
+            base = f"{parsed.scheme}://{parsed.netloc}"
+            return any(base == e for e in expected_origins)
+        except Exception:  # noqa: BLE001
+            return False
+
+    # Neither header present → reject (same as a cross-origin POST in
+    # a browser, which is browser-stripped to "null").
+    return False
 
 
 # Jinja env is lazy-built on first request — avoids the import cost
@@ -237,6 +345,26 @@ def _route_sign_submit(
     headers: dict[str, str],
     dsn: str,
 ) -> tuple[int, bytes, dict[str, str]]:
+    # CSRF / cross-origin guard. State-changing POST without cookies →
+    # the standard defense is verifying Origin/Referer. Pre-v0.16.7 this
+    # check did not exist, so any third-party page that learned a portal
+    # URL (shoulder-surf, Discord paste, browser history on a shared
+    # device, operator email forwarded) could auto-POST a $10K
+    # engagement on the victim's behalf. Round-9 security audit CRIT.
+    if not _origin_matches_self(headers):
+        log.warning(
+            "portal: rejecting POST /sign with bad/missing Origin "
+            "(token=%s..., origin=%r, referer=%r)",
+            token[:8], headers.get("origin"), headers.get("referer"),
+        )
+        return _render_error(
+            status=403,
+            message=(
+                "This form must be submitted from the Recupero portal. "
+                "Please open the engagement link directly and try again."
+            ),
+        )
+
     # Already-engaged short-circuit. Same reasoning as the GET handler.
     if (
         verified.engagement_started_at is not None
@@ -244,10 +372,40 @@ def _route_sign_submit(
     ):
         return _redirect(f"/portal/{token}")
 
+    # v0.16.7 (round-9 security HIGH): block re-engagement on a CLOSED
+    # case. Pre-v0.16.7 a portal token whose engagement had been
+    # closed by an operator could be re-used to silently re-open the
+    # case (no payment, no operator confirmation, just a fresh 30-day
+    # service window). Operators rotating tokens at close time is the
+    # complete fix; this guard stops the same-token replay attack
+    # while that rotation is being adopted.
+    if verified.engagement_closed_at is not None:
+        log.info(
+            "portal: rejecting POST /sign on CLOSED engagement (token=%s...)",
+            token[:8],
+        )
+        return _render_error(
+            status=403,
+            message=(
+                "This engagement was closed. If you believe it should "
+                "remain active, please email support@recupero.io for a "
+                "fresh engagement link."
+            ),
+        )
+
     fields = urllib.parse.parse_qs(body_bytes.decode("utf-8", errors="replace"))
     name = (fields.get("signature_name") or [""])[0].strip()
     agreed = (fields.get("agree") or [""])[0] == "on"
 
+    # Cap signature_name length defensively. Pre-v0.16.7 we accepted
+    # arbitrary-length names; a 1MB POST burned DB row space and was
+    # a cheap DoS vector. Real legal names exceed 200 chars only in
+    # ceremonial / multi-generational contexts; we accept up to 200.
+    if len(name) > 200:
+        return _route_sign_form(
+            token=token, verified=verified,
+            error="Please enter a legal name under 200 characters.",
+        )
     if len(name) < 3 or not agreed:
         return _route_sign_form(
             token=token, verified=verified,
@@ -261,7 +419,9 @@ def _route_sign_submit(
         fee = ENGAGEMENT_FEE_USD
 
     ip = _extract_client_ip(headers)
-    user_agent = headers.get("user-agent", "")[:500]
+    # Strip CR/LF/control chars before storage to block UA log-injection.
+    # See _strip_control_chars docstring for the attack scenario.
+    user_agent = _strip_control_chars(headers.get("user-agent", ""), max_len=500)
 
     # The agreement text the victim agreed to — keep this verbatim
     # so future template edits don't retroactively change history.
@@ -595,24 +755,49 @@ def _persist_signature(
 # ----- Response helpers ----- #
 
 
+def _with_security_headers(extra: dict[str, str]) -> dict[str, str]:
+    """Merge response headers with the portal's standard security headers.
+
+    Token-in-URL bearer auth means `Referrer-Policy: no-referrer` is
+    SAFETY-CRITICAL: every outbound click without it leaks the token.
+    Plus CSP / X-Frame-Options / X-Content-Type-Options for defense-
+    in-depth. v0.16.7 (round-9 security audit HIGH).
+    """
+    merged = dict(_PORTAL_SECURITY_HEADERS)
+    merged.update(extra)
+    return merged
+
+
 def _ok_html(html: str) -> tuple[int, bytes, dict[str, str]]:
     body = html.encode("utf-8")
-    return 200, body, {"Content-Type": "text/html; charset=utf-8"}
+    return 200, body, _with_security_headers({"Content-Type": "text/html; charset=utf-8"})
 
 
 def _redirect(location: str, code: int = 303) -> tuple[int, bytes, dict[str, str]]:
     # 303 forces a GET on the redirect target — matches the
     # POST-redirect-GET pattern used by the sign form.
-    return code, b"", {"Location": location}
+    return code, b"", _with_security_headers({"Location": location})
 
 
-def _render_error(code: int, message: str) -> tuple[int, bytes, dict[str, str]]:
+def _render_error(code: int = 500, message: str = "", *, status: int | None = None) -> tuple[int, bytes, dict[str, str]]:
+    """Render the portal error page.
+
+    Accepts either positional `code` (legacy) or keyword `status=` so
+    new call sites can be more readable. Both forms supported during
+    the transition.
+    """
+    if status is not None:
+        code = status
     try:
         html = _get_jinja_env().get_template("error.html.j2").render(message=message)
     except Exception:  # noqa: BLE001
         # Last-resort fallback if the template itself failed to render.
-        html = f"<h1>Error</h1><p>{message}</p>"
-    return code, html.encode("utf-8"), {"Content-Type": "text/html; charset=utf-8"}
+        # HTML-escape `message` even though it's internally-sourced — keeps
+        # the fallback safe if a future caller passes user input.
+        import html as _html_lib
+        safe = _html_lib.escape(message or "")
+        html = f"<h1>Error</h1><p>{safe}</p>"
+    return code, html.encode("utf-8"), _with_security_headers({"Content-Type": "text/html; charset=utf-8"})
 
 
 def _get_dsn() -> str:

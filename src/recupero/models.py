@@ -139,9 +139,19 @@ class Transfer(BaseModel):
     @field_validator("amount_raw")
     @classmethod
     def _amount_raw_is_int_string(cls, v: str) -> str:
-        # Must parse as a non-negative integer
-        if not v.lstrip("-").isdigit():
-            raise ValueError(f"amount_raw must be an integer string, got {v!r}")
+        """`amount_raw` must be a NON-NEGATIVE integer string.
+
+        Pre-v0.16.7 the check was `v.lstrip("-").isdigit()`, which accepted
+        strings like "-1234" — there is no on-chain native negative transfer,
+        and a leading `-` is a smoking-gun for a parser bug (signed-int
+        overflow misread, off-by-one in raw-bytes decoding). Permitting it
+        meant downstream Decimal math silently SUBTRACTED from totals.
+        Surfaced in the round-9 forensic audit.
+        """
+        if not v.isdigit():
+            raise ValueError(
+                f"amount_raw must be a non-negative integer string, got {v!r}"
+            )
         return v
 
 

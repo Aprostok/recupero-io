@@ -187,9 +187,11 @@ def _build_context(
         "chain_display": case.chain.value.capitalize(),
         "freezable_issuer_count": freezable_issuer_count,
         "total_freezable_usd": _fmt_usd(total_freezable_usd),
-        "total_under_investigation_usd": _fmt_usd(
-            total_suspected_usd - total_freezable_usd
-        ),
+        # v0.16.7 fix: `total_suspected_usd` is INVESTIGATE-only (see
+        # classify_recovery_prospects + emit_brief.py:502). Pre-v0.16.7
+        # we subtracted total_freezable_usd, which yielded $0/negative
+        # on every engagement letter. Round-9 output-artifacts audit.
+        "total_under_investigation_usd": _fmt_usd(total_suspected_usd),
         "aggregate_evidence_mode": aggregate_evidence_mode,
         # Fee text rendered to dollar form for the template.
         # Decoupled model (v0.7.0): diagnostic + engagement are

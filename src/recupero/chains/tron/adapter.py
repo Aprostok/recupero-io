@@ -86,23 +86,27 @@ class TronAdapter(ChainAdapter):
     # ---------- Required interface ---------- #
 
     def block_at_or_before(self, ts: datetime) -> int:
-        """Not yet implemented for Tron.
+        """Return the unix timestamp of ``ts``, opaque to the tracer.
 
-        Tron's REST API has no native timestamp→block endpoint, and
-        the binary-search workaround is expensive (millions of
-        blocks at ~3-second intervals). Most Tron cases trace by
-        full address history (via the TRC-20 min/max_timestamp
-        filter), which doesn't need this hook.
+        Tron's TRC-20 endpoint filters by min_timestamp/max_timestamp,
+        not by block number — there is no native "block at timestamp"
+        REST endpoint, and the binary-search workaround would cost
+        ~24 RPC calls per trace. The tracer treats the return value
+        opaquely as ``start_block`` and passes it through to
+        ``fetch_erc20_outflows`` (which currently ignores it and
+        returns full history; future versions will honor it via
+        min_timestamp).
 
-        Raising NotImplementedError explicitly so callers that DO
-        need block-windowed Tron traces get a clear failure mode
-        rather than a silent zero.
+        v0.16.6 and earlier raised NotImplementedError here, which
+        was a CRITICAL bug: the tracer's per-address try/except
+        caught the exception and silently returned 0 outflows for
+        every Tron seed, making all Tron traces (the largest
+        USDT-laundering surface in crypto) appear to have no
+        activity. Returning the timestamp matches Solana's pattern.
         """
-        raise NotImplementedError(
-            "block_at_or_before not implemented for Tron yet. "
-            "Use the TRC-20 endpoint's min_timestamp/max_timestamp "
-            "filtering for time-windowed traces instead."
-        )
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        return int(ts.timestamp())
 
     def is_contract(self, address: Address) -> bool:
         """True if address is a smart-contract account.

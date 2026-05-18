@@ -138,19 +138,51 @@ class EvmAdapter(ChainAdapter):
     def _needs_client_side_start_block_filter(self) -> bool:
         return self.profile.chain_id in self._CLIENT_SIDE_STARTBLOCK_FILTER_CHAIN_IDS
 
+    @staticmethod
+    def _is_failed_tx(tx: dict[str, Any]) -> bool:
+        """True if Etherscan signals this row was a reverted transaction.
+
+        Etherscan reports two independent fields, both must be honored:
+          * `isError == "1"`   — txlist/internal/tokentx surface this
+          * `txreceipt_status == "0"` — canonical receipt revert flag,
+            set independently when the parent tx ran out of gas mid-call
+
+        Pre-v0.16.7 we checked `isError` ONLY on the native-outflow path
+        (and not on the ERC-20 / tokentx path at all). Etherscan's
+        `tokentx` does emit rows from reverted parent txs in rare cases
+        when the trace recorded a Transfer event before the revert —
+        those polluted USD totals as fake outflows. Surfaced in the
+        round-9 forensic audit.
+        """
+        if str(tx.get("isError", "")).strip() == "1":
+            return True
+        if str(tx.get("txreceipt_status", "")).strip() == "0":
+            return True
+        return False
+
     def fetch_native_outflows(
         self, from_address: Address, start_block: int
     ) -> list[dict[str, Any]]:
         addr = to_checksum_address(from_address)
+        addr_l = addr.lower()
         client_side_filter = self._needs_client_side_start_block_filter()
         api_start = 0 if client_side_filter else start_block
         normal = self.client.get_normal_transactions(addr, start_block=api_start)
         internal = self.client.get_internal_transactions(addr, start_block=api_start)
 
         def _keep(tx: dict[str, Any]) -> bool:
-            if tx.get("from", "").lower() != addr.lower():
+            from_l = tx.get("from", "").lower()
+            to_l = tx.get("to", "").lower()
+            if from_l != addr_l:
                 return False
-            if int(tx.get("value", "0")) == 0 or tx.get("isError") == "1":
+            # Drop self-transfers: from == to is a no-op for laundering analysis
+            # (wallet reshuffles, gas top-ups inside a smart-account). Including
+            # them inflates USD totals with zero-economic-value transfers.
+            if from_l and to_l and from_l == to_l:
+                return False
+            if int(tx.get("value", "0")) == 0:
+                return False
+            if self._is_failed_tx(tx):
                 return False
             if client_side_filter and int(tx.get("blockNumber", "0")) < start_block:
                 return False
@@ -169,16 +201,36 @@ class EvmAdapter(ChainAdapter):
         self, from_address: Address, start_block: int
     ) -> list[dict[str, Any]]:
         addr = to_checksum_address(from_address)
+        addr_l = addr.lower()
         client_side_filter = self._needs_client_side_start_block_filter()
         api_start = 0 if client_side_filter else start_block
         rows = self.client.get_erc20_transfers(addr, start_block=api_start)
         out: list[dict[str, Any]] = []
         for tx in rows:
-            if tx.get("from", "").lower() != addr.lower():
+            from_l = tx.get("from", "").lower()
+            to_l = tx.get("to", "").lower()
+            if from_l != addr_l:
+                continue
+            # Self-transfer filter (same rationale as native path).
+            if from_l and to_l and from_l == to_l:
+                continue
+            # Reverted-tx filter — see _is_failed_tx docstring for why this
+            # check was missing from the ERC-20 path pre-v0.16.7.
+            if self._is_failed_tx(tx):
                 continue
             if client_side_filter and int(tx.get("blockNumber", "0")) < start_block:
                 continue
-            out.append(self._normalize_erc20(tx))
+            try:
+                out.append(self._normalize_erc20(tx))
+            except ValueError as e:
+                # Token row that we can't normalize (missing/invalid decimals,
+                # malformed contract). Log + skip rather than killing the
+                # whole outflow fetch for this address.
+                log.warning(
+                    "skipping ERC-20 row from %s tx=%s: %s",
+                    from_l, tx.get("hash"), e,
+                )
+                continue
         return out
 
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
@@ -230,11 +282,34 @@ class EvmAdapter(ChainAdapter):
     def _normalize_erc20(self, tx: dict[str, Any]) -> dict[str, Any]:
         block_number = int(tx["blockNumber"])
         block_time = datetime.fromtimestamp(int(tx["timeStamp"]), tz=UTC)
+        # tokenDecimal: refuse to guess. Etherscan returns "" on rare tokens it
+        # hasn't enriched; pre-v0.16.7 we defaulted to 18 which silently
+        # divides a 6-decimal token (USDC/USDT) by 10^12 — the amount_decimal
+        # column would be wrong by 12 orders of magnitude. The downstream USD
+        # sanity ceiling occasionally catches this, but the underlying case
+        # data still ships the wrong amount.
+        decimals_raw = tx.get("tokenDecimal")
+        if decimals_raw in (None, "", b""):
+            # Mark the transfer with a sentinel so the tracer can either skip
+            # or surface as a pricing/decimal error rather than guess. Using
+            # 18 as a placeholder here would propagate silently downstream.
+            raise ValueError(
+                f"etherscan_erc20: missing tokenDecimal for contract "
+                f"{tx.get('contractAddress')!r} (tx {tx.get('hash')!r}); "
+                "refusing to assume 18-decimal default"
+            )
+        try:
+            decimals = int(decimals_raw)
+        except (TypeError, ValueError) as e:
+            raise ValueError(
+                f"etherscan_erc20: invalid tokenDecimal {decimals_raw!r} for "
+                f"contract {tx.get('contractAddress')!r}"
+            ) from e
         token = TokenRef(
             chain=self.chain,
             contract=to_checksum_address(tx["contractAddress"]),
             symbol=tx.get("tokenSymbol", "?") or "?",
-            decimals=int(tx.get("tokenDecimal", "18") or 18),
+            decimals=decimals,
             coingecko_id=None,
         )
         log_index = None

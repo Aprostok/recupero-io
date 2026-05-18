@@ -682,6 +682,45 @@ def list_freeze_targets_cmd(
     else:
         console.print("  [dim]No exchange deposits detected.[/]\n")
 
+    # v0.14.10: Onward-CEX subpoena synthesis. When a freezable-token
+    # destination forwards to a CEX address, surface the linkage so
+    # the operator can send a subpoena letter that cites the
+    # documented theft trail from upstream → CEX.
+    onward_flows: list = []
+    if matched:
+        from recupero.freeze.asks import (
+            group_onward_cex_flows_by_exchange,
+            synthesize_onward_cex_subpoenas,
+        )
+        upstream_addrs = {a.candidate_address for a in matched}
+        onward_flows = synthesize_onward_cex_subpoenas(
+            case,
+            upstream_freeze_target_addresses=upstream_addrs,
+            label_store=label_store,
+            min_flow_usd=Decimal(str(min_holding_usd)),
+        )
+        if onward_flows:
+            console.print(
+                f"[bold magenta]Onward-CEX flows[/] ({len(onward_flows)} "
+                "flow(s) from freezable destinations to CEX addresses):\n"
+            )
+            grouped_flows = group_onward_cex_flows_by_exchange(onward_flows)
+            for exchange_name, flows in grouped_flows.items():
+                total = sum(
+                    (f.flow_usd_value for f in flows), start=Decimal("0"),
+                )
+                console.print(
+                    f"[bold magenta]» {exchange_name}[/]  "
+                    f"(subpoena candidate)"
+                )
+                console.print(
+                    f"  Total flow: [bold green]${total:,.2f}[/] "
+                    f"across {len(flows)} flow(s)"
+                )
+                for f in flows:
+                    console.print(f"    • {f.short_summary()}")
+                console.print()
+
     out_path = store.case_dir(case_id) / "freeze_asks.json"
     out_path.write_text(
         json.dumps({
@@ -726,6 +765,30 @@ def list_freeze_targets_cmd(
                     "explorer_url": d.explorer_url,
                 }
                 for d in exchange_deposits
+            ],
+            # v0.14.10: onward-CEX flows. Each entry pairs an upstream
+            # freeze-target address with the CEX address it forwarded
+            # to. Downstream subpoena-letter generator emits a per-CEX
+            # subpoena citing the flow as evidence.
+            "onward_cex_flows": [
+                {
+                    "upstream_address": f.upstream_address,
+                    "cex_address": f.cex_address,
+                    "chain": f.chain.value,
+                    "exchange": f.exchange,
+                    "label_name": f.label_name,
+                    "label_category": f.label_category,
+                    "token_symbol": f.token_symbol,
+                    "flow_usd_value": str(f.flow_usd_value),
+                    "flow_amount_decimal": str(f.flow_amount_decimal),
+                    "transfer_count": f.transfer_count,
+                    "first_flow_at": f.first_flow_at.isoformat(),
+                    "last_flow_at": f.last_flow_at.isoformat(),
+                    "upstream_explorer_url": f.upstream_explorer_url,
+                    "cex_explorer_url": f.cex_explorer_url,
+                    "tx_hashes": f.tx_hashes,
+                }
+                for f in onward_flows
             ],
         }, indent=2),
         encoding="utf-8",

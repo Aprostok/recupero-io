@@ -164,6 +164,203 @@ class ExchangeDeposit:
         )
 
 
+# ---------- Onward-CEX flow models (v0.14.10) ---------- #
+
+
+@dataclass
+class OnwardCEXFlow:
+    """One detected flow where stolen funds passed FROM a freezable-
+    token holding address TO a CEX deposit address.
+
+    Pattern Jacob flagged: when address A (freeze-target, e.g. holds
+    USDT) forwards to address B (CEX-labeled, e.g. Binance hot
+    wallet), the recovery workflow needs BOTH:
+
+      1. Freeze letter to Tether about address A (handled by the
+         FreezeAsk pipeline — current_balance OR historical_inflow).
+      2. Subpoena letter to the CEX about address B citing the
+         documented theft trail from A → B (handled here).
+
+    The subpoena letter to the CEX can demand:
+      - KYC records on the customer who controlled B
+      - Internal account activity post-deposit
+      - On-platform onward routing / off-ramp records
+
+    Without this linkage, the brief lists CEX deposits as a flat
+    list. With it, each CEX deposit carries upstream context that
+    makes the subpoena letter materially stronger.
+    """
+    upstream_address: str            # the freezable-token holder (address A)
+    cex_address: str                 # the CEX deposit address (address B)
+    chain: Chain
+    exchange: str                    # "Binance", "Coinbase", etc.
+    label_name: str
+    label_category: str              # "exchange_deposit" | "exchange_hot_wallet"
+    token_symbol: str                # what token flowed A→B (e.g., "USDT")
+    flow_usd_value: Decimal
+    flow_amount_decimal: Decimal
+    transfer_count: int              # ≥1 transfers A→B
+    first_flow_at: datetime
+    last_flow_at: datetime
+    upstream_explorer_url: str       # link to address A on the chain explorer
+    cex_explorer_url: str            # link to address B
+    tx_hashes: list[str]             # per-transfer evidence
+
+    def short_summary(self) -> str:
+        usd = f"${self.flow_usd_value:,.2f}"
+        return (
+            f"{usd} {self.token_symbol} flowed "
+            f"{self.upstream_address[:10]}…{self.upstream_address[-6:]} "
+            f"→ {self.exchange} ({self.cex_address[:10]}…{self.cex_address[-6:]}) "
+            f"in {self.transfer_count} transfer(s)"
+        )
+
+
+def synthesize_onward_cex_subpoenas(
+    case: Case,
+    *,
+    upstream_freeze_target_addresses: set[str],
+    label_store: "LabelStore | None" = None,
+    min_flow_usd: Decimal = Decimal("1000"),
+) -> list[OnwardCEXFlow]:
+    """Detect flows from freeze-target addresses to CEX deposit
+    addresses, emit OnwardCEXFlow records for subpoena-letter
+    generation (v0.14.10).
+
+    Args:
+      case: the trace.
+      upstream_freeze_target_addresses: addresses already identified
+        as freeze targets (from match_freeze_asks +
+        synthesize_historical_freeze_asks). The synthesizer looks
+        for transfers FROM these.
+      label_store: optional preloaded LabelStore. If None, loads
+        the default config-bound one.
+      min_flow_usd: aggregate threshold for surfacing a flow.
+
+    Returns: list of OnwardCEXFlow records sorted by USD desc.
+
+    Returns [] when no upstream freeze-target addresses are supplied
+    (which is the common case for early-pipeline runs — the
+    operator runs list-freeze-targets which produces this set,
+    then this function uses it).
+    """
+    upstream_lower = {a.lower() for a in upstream_freeze_target_addresses}
+    if not upstream_lower:
+        return []
+
+    # Resolve label store. The function is callable without a config
+    # bundle so tests can pass a dict-shaped stub.
+    if label_store is None:
+        try:
+            from recupero.config import load_config as _load_config
+            from recupero.labels.store import LabelStore as _LabelStore
+            cfg, _env = _load_config()
+            label_store = _LabelStore.load(cfg)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "synthesize_onward_cex_subpoenas: label_store load failed: %s",
+                exc,
+            )
+            return []
+
+    # Aggregate per (upstream_address, cex_address, token_symbol).
+    agg: dict[tuple[str, str, str], dict] = {}
+    for t in case.transfers:
+        from_lower = (t.from_address or "").lower()
+        if from_lower not in upstream_lower:
+            continue
+        to_addr = t.to_address or ""
+        if not to_addr:
+            continue
+        # Check if the to_address has a CEX label.
+        label = label_store.lookup(to_addr)
+        if label is None:
+            continue
+        cat = (
+            label.category.value if hasattr(label.category, "value")
+            else str(label.category)
+        )
+        if cat not in ("exchange_deposit", "exchange_hot_wallet"):
+            continue
+        # Pull exchange name. Label.exchange is preferred; otherwise
+        # parse from name (e.g. "Binance: Hot Wallet 14" → "Binance").
+        exchange_name = getattr(label, "exchange", None)
+        if not exchange_name:
+            name = label.name or ""
+            exchange_name = name.split(":")[0].strip() or "(unknown exchange)"
+
+        key = (from_lower, to_addr.lower(), t.token.symbol)
+        bucket = agg.setdefault(key, {
+            "upstream_address": from_lower,
+            "cex_address": to_addr.lower(),
+            "chain": t.chain,
+            "exchange": exchange_name,
+            "label_name": label.name,
+            "label_category": cat,
+            "token_symbol": t.token.symbol,
+            "flow_usd_value": Decimal("0"),
+            "flow_amount_decimal": Decimal("0"),
+            "transfer_count": 0,
+            "first_flow_at": t.block_time,
+            "last_flow_at": t.block_time,
+            "tx_hashes": [],
+        })
+        if t.usd_value_at_tx is not None:
+            bucket["flow_usd_value"] += t.usd_value_at_tx
+        bucket["flow_amount_decimal"] += t.amount_decimal
+        bucket["transfer_count"] += 1
+        bucket["tx_hashes"].append(t.tx_hash)
+        if t.block_time < bucket["first_flow_at"]:
+            bucket["first_flow_at"] = t.block_time
+        if t.block_time > bucket["last_flow_at"]:
+            bucket["last_flow_at"] = t.block_time
+
+    out: list[OnwardCEXFlow] = []
+    for bucket in agg.values():
+        if bucket["flow_usd_value"] < min_flow_usd:
+            continue
+        out.append(OnwardCEXFlow(
+            upstream_address=bucket["upstream_address"],
+            cex_address=bucket["cex_address"],
+            chain=bucket["chain"],
+            exchange=bucket["exchange"],
+            label_name=bucket["label_name"],
+            label_category=bucket["label_category"],
+            token_symbol=bucket["token_symbol"],
+            flow_usd_value=bucket["flow_usd_value"],
+            flow_amount_decimal=bucket["flow_amount_decimal"],
+            transfer_count=bucket["transfer_count"],
+            first_flow_at=bucket["first_flow_at"],
+            last_flow_at=bucket["last_flow_at"],
+            upstream_explorer_url=_explorer_address_url(
+                bucket["chain"], bucket["upstream_address"],
+            ),
+            cex_explorer_url=_explorer_address_url(
+                bucket["chain"], bucket["cex_address"],
+            ),
+            tx_hashes=bucket["tx_hashes"],
+        ))
+
+    out.sort(key=lambda f: f.flow_usd_value, reverse=True)
+    log.info(
+        "synthesize_onward_cex_subpoenas: emitted %d flow(s) above $%.2f "
+        "threshold from %d upstream freeze target(s)",
+        len(out), float(min_flow_usd), len(upstream_lower),
+    )
+    return out
+
+
+def group_onward_cex_flows_by_exchange(
+    flows: list[OnwardCEXFlow],
+) -> dict[str, list[OnwardCEXFlow]]:
+    """Group onward-CEX flows by exchange name — operator sends ONE
+    consolidated subpoena per exchange, not one per CEX address."""
+    out: dict[str, list[OnwardCEXFlow]] = {}
+    for f in flows:
+        out.setdefault(f.exchange, []).append(f)
+    return out
+
+
 # ---------- Issuer loading & matching ---------- #
 
 

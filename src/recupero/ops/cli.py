@@ -263,6 +263,25 @@ def cli() -> None:
              "PRs that touch label data.",
     )
 
+    # ----- diagnose-case (v0.14.10) ----- #
+    p_diag = sub.add_parser(
+        "diagnose-case",
+        help="Pre-flight diagnostic for a case. Walks the existing "
+             "artifacts on disk, identifies why the brief looks the "
+             "way it does, and recommends the next command to run. "
+             "Useful when freeze_asks is empty / brief has no "
+             "FREEZABLE entries / freeze letters aren't being generated.",
+    )
+    p_diag.add_argument(
+        "case_id",
+        help="Case ID (folder name under data/cases/).",
+    )
+    p_diag.add_argument(
+        "--case-dir", type=str, default=None,
+        help="Override the case directory path. Default: "
+             "data/cases/<case_id>/ relative to repo root.",
+    )
+
     # ----- list-payments ----- #
     p_lpay = sub.add_parser(
         "list-payments",
@@ -478,6 +497,20 @@ def cli() -> None:
     if args.command == "validate-labels":
         from recupero.labels.validator import main as _validator_main
         sys.exit(_validator_main())
+
+    if args.command == "diagnose-case":
+        from pathlib import Path as _Path
+
+        from recupero.config import load_config
+        from recupero.ops.commands import diagnose_case as cmd
+        from recupero.storage.case_store import CaseStore
+        if args.case_dir:
+            case_dir = _Path(args.case_dir)
+        else:
+            cfg, _env = load_config()
+            store = CaseStore(cfg)
+            case_dir = store.case_dir(args.case_id)
+        sys.exit(cmd.run(case_id=args.case_id, case_dir=case_dir))
 
     if args.command == "list-payments":
         from recupero.ops.commands import list_payments as cmd

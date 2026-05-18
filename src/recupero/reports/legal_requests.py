@@ -254,14 +254,30 @@ def _enumerate_exchange_targets(
 
 
 def load_brief(case_dir: Path) -> dict[str, Any]:
-    """Load freeze_brief.json from a case directory."""
+    """Load freeze_brief.json from a case directory.
+
+    v0.16.3 (audit round-4 fix #B): check SCHEMA_VERSION and log a
+    warning when stale. legal_request rendering consumes brief.FREEZABLE
+    and the per-issuer freezable_ctx; stale briefs without evidence_mode
+    fields cause the template's evidence_mode branches to fall through
+    to the "currently held" {% else %} clause — false-claim risk on
+    historical-receipt cases.
+    """
     brief_path = case_dir / "freeze_brief.json"
     if not brief_path.exists():
         raise FileNotFoundError(
             f"freeze_brief.json not found at {brief_path}. Run "
             f"`recupero emit-brief CASE_ID` first."
         )
-    return json.loads(brief_path.read_text(encoding="utf-8-sig"))
+    brief = json.loads(brief_path.read_text(encoding="utf-8-sig"))
+    from recupero.reports.brief import check_brief_schema_version
+    warning = check_brief_schema_version(brief)
+    if warning:
+        log.warning(
+            "freeze_brief.json at %s is stale: %s",
+            brief_path, warning,
+        )
+    return brief
 
 
 def load_freeze_asks(case_dir: Path) -> dict[str, Any]:
@@ -269,12 +285,26 @@ def load_freeze_asks(case_dir: Path) -> dict[str, Any]:
 
     Used by the exchange-subpoena renderer to access
     ``onward_cex_flows`` (v0.14.10 field). Returns empty-shape dict
-    if the file doesn't exist.
+    if the file doesn't exist OR is malformed.
+
+    v0.16.3 (audit fix #B8): wrap json.loads in try/except. A partial
+    write or corrupt file pre-fix raised JSONDecodeError and crashed
+    the entire exchange-subpoena rendering with a cryptic error.
     """
+    empty = {"by_issuer": {}, "exchange_deposits": [], "onward_cex_flows": []}
     p = case_dir / "freeze_asks.json"
     if not p.exists():
-        return {"by_issuer": {}, "exchange_deposits": [], "onward_cex_flows": []}
-    return json.loads(p.read_text(encoding="utf-8-sig"))
+        return empty
+    try:
+        return json.loads(p.read_text(encoding="utf-8-sig"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "freeze_asks.json at %s is malformed (%s) — returning "
+            "empty shape; downstream consumers should treat the "
+            "case as having no onward CEX flows.",
+            p, exc,
+        )
+        return empty
 
 
 # ---- Exchange-subpoena rendering (v0.14.11) ---- #
@@ -332,8 +362,27 @@ _EXCHANGE_COMPLIANCE_CONTACTS: dict[str, dict[str, str]] = {
 
 def _resolve_exchange_metadata(exchange_name: str) -> dict[str, str]:
     """Look up exchange compliance contact info. Falls back to
-    placeholder values that the operator can edit before sending."""
-    meta = _EXCHANGE_COMPLIANCE_CONTACTS.get(exchange_name, {})
+    placeholder values that the operator can edit before sending.
+
+    v0.16.3 (audit fix #B7): case-insensitive + space-insensitive
+    lookup. Pre-fix, `"crypto.com"` (lowercase) or `"BINANCE"`
+    (uppercase) missed the lookup and produced a TODO placeholder
+    even though we have contact info for those exchanges. Now
+    normalizes for the lookup but preserves the original casing
+    for display.
+    """
+    # Try exact match first (preserves expected behavior).
+    meta = _EXCHANGE_COMPLIANCE_CONTACTS.get(exchange_name)
+    if meta is None:
+        # Build a normalized lookup map: lowercased, stripped.
+        # Cached at module load would be nicer but this dict is
+        # small (~11 entries) so the cost is negligible.
+        target = exchange_name.strip().lower()
+        for known_name, known_meta in _EXCHANGE_COMPLIANCE_CONTACTS.items():
+            if known_name.strip().lower() == target:
+                meta = known_meta
+                break
+    meta = meta or {}
     return {
         "name": exchange_name,
         "legal_name": meta.get("legal_name", exchange_name),

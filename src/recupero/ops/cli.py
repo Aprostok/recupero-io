@@ -503,13 +503,17 @@ def cli() -> None:
 
         from recupero.config import load_config
         from recupero.ops.commands import diagnose_case as cmd
-        from recupero.storage.case_store import CaseStore
         if args.case_dir:
             case_dir = _Path(args.case_dir)
         else:
+            # v0.16.3 (audit fix #B5): use raw Path resolution, not
+            # CaseStore.case_dir(), because the latter MUTATES the
+            # filesystem (mkdir + tx_evidence/logs subdirs). For a
+            # READ-ONLY diagnostic this is wrong — running
+            # `diagnose-case V-DOESNT-EXIST` would create a stub dir
+            # then misleadingly report "EXISTS / case.json MISSING".
             cfg, _env = load_config()
-            store = CaseStore(cfg)
-            case_dir = store.case_dir(args.case_id)
+            case_dir = _Path(cfg.storage.data_dir) / "cases" / args.case_id
         sys.exit(cmd.run(case_id=args.case_id, case_dir=case_dir))
 
     if args.command == "list-payments":

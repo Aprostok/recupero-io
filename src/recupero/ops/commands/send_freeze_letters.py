@@ -65,6 +65,19 @@ def run(
         print(f"ERROR: could not load freeze_brief.json from bucket for "
               f"investigation {investigation_id}")
         return 1
+    # v0.16.3 (audit round-4 fix #B): check schema version. Stale briefs
+    # without evidence_mode fields cause the freeze-letter templates to
+    # fall through to "currently held" language even for historical-
+    # receipt cases. Operator dispatch is the LAST chance to catch this
+    # before the letter goes out.
+    from recupero.reports.brief import check_brief_schema_version
+    schema_warning = check_brief_schema_version(freeze_brief)
+    if schema_warning:
+        print(f"WARNING: freeze_brief is stale — {schema_warning}")
+        print(
+            "Recommend re-emitting the brief with "
+            "`recupero emit-brief <case_id>` before dispatching letters."
+        )
     freezable = freeze_brief.get("FREEZABLE") or []
     if not freezable:
         print(f"NOTE: freeze_brief has no FREEZABLE entries for "

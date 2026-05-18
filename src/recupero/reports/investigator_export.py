@@ -106,12 +106,95 @@ def build_findings(brief: dict[str, Any]) -> list[InvestigatorFinding]:
     findings.extend(_findings_from_cross_case_correlation(brief))
     findings.extend(_findings_from_destinations(brief))
 
+    # v0.16.3 (audit fix #A18): dedupe — when the same address
+    # appears in both FREEZABLE (issuer-targetable) and DESTINATIONS
+    # (general visibility), prefer the FREEZABLE finding (it has
+    # higher severity + issuer attribution). Pre-fix the CSV showed
+    # two contradictory rows for the same address: one "freezable"
+    # high severity, one "destination" info severity (or worse, one
+    # "freezable" + one "INVESTIGATE-destination" if the AI
+    # editorial disagreed with the freeze_asks evidence).
+    findings = _dedupe_findings_by_address(findings)
+
     # Sort: SANCTIONED first, then by severity desc.
     _sev_rank = {
         "critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4,
     }
     findings.sort(key=lambda f: _sev_rank.get(f.severity, 5))
     return findings
+
+
+def _dedupe_findings_by_address(
+    findings: list[InvestigatorFinding],
+) -> list[InvestigatorFinding]:
+    """Dedupe DESTINATION-tier findings against more-specific ones at
+    the same address. Narrow scope to avoid collapsing legitimate
+    multi-exposure findings (e.g., one address with multiple
+    counterparties from RISK_ASSESSMENT).
+
+    Specifically: a `destination` / `freezable_destination` /
+    `investigate_destination` / `exchange_destination` / `unrecoverable
+    _destination` finding is dropped if a non-destination finding at
+    the same (address, chain) already exists (freezable / unrecoverable
+    / risk-exposure / etc.). All other dedup happens between the
+    destination-tier findings themselves (one destination per address).
+
+    Pre-fix, dedup happened on (address, chain) across ALL findings —
+    a RISK_ASSESSMENT block with two exposures on the same address
+    would collapse to one finding, losing severity diversity.
+    """
+    _DESTINATION_TIER = {
+        "destination",
+        "freezable_destination",
+        "investigate_destination",
+        "exchange_destination",
+        "unrecoverable_destination",
+    }
+    # Step 1: find addresses with non-destination-tier findings.
+    addresses_with_specific: set[tuple[str, str]] = set()
+    for f in findings:
+        if not f.address:
+            continue
+        if f.risk_category not in _DESTINATION_TIER:
+            addresses_with_specific.add(
+                (f.address.lower(), f.chain.lower())
+            )
+    # Step 2: drop destination-tier findings if a specific one
+    # already covers the same address. Also dedup destination-tier
+    # findings against each other (one per address, preferring
+    # higher-severity).
+    # v0.16.3 (post-audit-4): freezable_destination ranks HIGHEST
+    # within the destination tier. Pre-fix, exchange_destination beat
+    # freezable_destination on the same address — but freezable is
+    # the more actionable signal (operator should send a freeze letter),
+    # exchange is informational (CEX-deposit pattern, separate workflow).
+    _dest_priority = {
+        "freezable_destination": 0,
+        "unrecoverable_destination": 1,
+        "exchange_destination": 2,
+        "investigate_destination": 3,
+        "destination": 4,
+    }
+    kept_destinations: dict[tuple[str, str], InvestigatorFinding] = {}
+    passthrough: list[InvestigatorFinding] = []
+    for f in findings:
+        if not f.address or f.risk_category not in _DESTINATION_TIER:
+            passthrough.append(f)
+            continue
+        key = (f.address.lower(), f.chain.lower())
+        if key in addresses_with_specific:
+            # A specific finding already covers this address; drop
+            # the destination-tier duplicate.
+            continue
+        prev = kept_destinations.get(key)
+        if prev is None:
+            kept_destinations[key] = f
+            continue
+        prev_prio = _dest_priority.get(prev.risk_category, 4)
+        f_prio = _dest_priority.get(f.risk_category, 4)
+        if f_prio < prev_prio:
+            kept_destinations[key] = f
+    return passthrough + list(kept_destinations.values())
 
 
 def write_csv(

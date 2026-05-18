@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Any
 
 from recupero.models import Case, LabelCategory
+from recupero.reports.brief import BRIEF_SCHEMA_VERSION as _BRIEF_SCHEMA_VERSION
 from recupero.reports.victim import VictimInfo, load_victim
 from recupero.storage.case_store import CaseStore
 
@@ -458,7 +459,12 @@ def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:
     note = editorial_notes.get(addr, "")
     if not isinstance(note, str):
         return "UNKNOWN"
-    note = note.lstrip()  # tolerate whitespace before emoji
+    # v0.16.3 (audit fix #A19): strip BOM + zero-width whitespace
+    # before the emoji. LLMs occasionally emit `﻿🟩` or
+    # `​🟩` (zero-width-space-prefixed) which fell through the
+    # plain .lstrip() — every "freezable" note got classified
+    # UNKNOWN and the freezable total under-counted.
+    note = note.lstrip().lstrip("﻿​‌‍⁠")
     if note.startswith("🟩"):
         return "FREEZABLE"
     if note.startswith("🟧"):
@@ -1262,6 +1268,12 @@ def emit_brief(
         "INVESTIGATOR_ENTITY_FULL": editorial["INVESTIGATOR_ENTITY_FULL"],
         "INVESTIGATOR_WEB": editorial["INVESTIGATOR_WEB"],
         "TEMPLATE_VERSION": editorial["TEMPLATE_VERSION"],
+        # v0.16.3 (audit fix #C2 + round-4 #D): schema_version stamp,
+        # sourced from brief.BRIEF_SCHEMA_VERSION so the next version
+        # bump only happens in one place. Readers use this to detect
+        # stale briefs from older releases that lack evidence_type /
+        # evidence_mode fields.
+        "SCHEMA_VERSION": _BRIEF_SCHEMA_VERSION,
     }
 
     # v0.14.1: Recovery probability scoring + cost model. Computed

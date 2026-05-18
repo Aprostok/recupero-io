@@ -447,7 +447,25 @@ def _promote_freezable_holdings(
         if capability in ("no", "low"):
             skipped_non_freezable += len(entry.get("holdings") or [])
             continue
-        identity = f"{issuer}\nholding ({token})" if token else f"{issuer} holding"
+        # v0.16.3 (audit fix #A13): differentiate the node identity
+        # based on whether the address currently holds the token
+        # (verified balance) or merely received it during the trace
+        # (historical inflow). Pre-fix every freezable_holding node
+        # said "<issuer>\nholding (<token>)" regardless — visually
+        # conflating an EOA still holding $X USDC with an EOA that
+        # passed $X USDC through historically. Now historical_only
+        # entries render as "received".
+        entry_evidence_mode = (entry.get("evidence_mode") or "").lower()
+        if entry_evidence_mode == "historical_only":
+            identity = (
+                f"{issuer}\nreceived ({token})"
+                if token else f"{issuer} received"
+            )
+        else:
+            identity = (
+                f"{issuer}\nholding ({token})"
+                if token else f"{issuer} holding"
+            )
         for h in entry.get("holdings") or []:
             addr = h.get("address")
             if not addr:

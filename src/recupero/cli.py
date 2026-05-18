@@ -770,6 +770,13 @@ def list_freeze_targets_cmd(
             # freeze-target address with the CEX address it forwarded
             # to. Downstream subpoena-letter generator emits a per-CEX
             # subpoena citing the flow as evidence.
+            # v0.16.3 (audit fix #B2): guard datetime .isoformat()
+            # against None — mirrors the worker-path guard at
+            # pipeline.py. OnwardCEXFlow types first_flow_at as
+            # non-Optional datetime but the synthesizer sources it
+            # from Transfer.block_time which can be None in degraded
+            # data paths. A None here used to crash the entire CLI
+            # `recupero list-freeze-targets` command.
             "onward_cex_flows": [
                 {
                     "upstream_address": f.upstream_address,
@@ -782,8 +789,12 @@ def list_freeze_targets_cmd(
                     "flow_usd_value": str(f.flow_usd_value),
                     "flow_amount_decimal": str(f.flow_amount_decimal),
                     "transfer_count": f.transfer_count,
-                    "first_flow_at": f.first_flow_at.isoformat(),
-                    "last_flow_at": f.last_flow_at.isoformat(),
+                    "first_flow_at": (
+                        f.first_flow_at.isoformat() if f.first_flow_at else None
+                    ),
+                    "last_flow_at": (
+                        f.last_flow_at.isoformat() if f.last_flow_at else None
+                    ),
                     "upstream_explorer_url": f.upstream_explorer_url,
                     "cex_explorer_url": f.cex_explorer_url,
                     "tx_hashes": f.tx_hashes,

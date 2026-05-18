@@ -43,6 +43,11 @@ _TEMPLATES_DIR = Path(__file__).parent.parent / "reports" / "templates"
 
 
 # Chain explorer prefixes (mirrors brief.py + _flow_diagram.py).
+# v0.16.3 (audit fix #C4): added bitcoin + tron. Pre-fix non-EVM /
+# non-Solana cases rendered Etherscan links for everything — wrong
+# explorer for Bitcoin (mempool.space / blockchair) and Tron
+# (tronscan.org). Each address-page hyperlink in the report would
+# 404 for those chains.
 _ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "ethereum":    "https://etherscan.io/address/",
     "arbitrum":    "https://arbiscan.io/address/",
@@ -51,6 +56,8 @@ _ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "bsc":         "https://bscscan.com/address/",
     "solana":      "https://solscan.io/account/",
     "hyperliquid": "https://app.hyperliquid.xyz/explorer/address/",
+    "bitcoin":     "https://mempool.space/address/",
+    "tron":        "https://tronscan.org/#/address/",
 }
 
 

@@ -55,9 +55,15 @@
       <dd>{{ issuer.name }}{% if issuer.jurisdiction %}<span class="secondary">{{ issuer.jurisdiction }}</span>{% endif %}</dd>
     </div>
     {% if issuer_freezable %}
+    {# v0.16.3 (audit fix #B1): cover-meta label is evidence-aware. #}
     <div class="cover-meta-item">
+      {% if issuer_freezable.evidence_mode == "historical_only" %}
+      <dt>Documented Position</dt>
+      <dd>{{ issuer_freezable.total_usd_freezable }}<span class="secondary">{{ issuer_freezable.token }} received at {{ issuer_freezable.historical_count }} {{ "wallet" if issuer_freezable.historical_count == 1 else "wallets" }} ({{ issuer_freezable.freeze_capability }} freeze capability, historical receipt)</span></dd>
+      {% else %}
       <dt>Recoverable Position</dt>
-      <dd>{{ issuer_freezable.total_usd_freezable }}<span class="secondary">{{ issuer_freezable.token }} at {{ issuer_freezable.freezable_count }} {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }} ({{ issuer_freezable.freeze_capability }} freeze capability)</span></dd>
+      <dd>{{ issuer_freezable.total_usd_freezable }}<span class="secondary">{{ issuer_freezable.token }} at {{ issuer_freezable.freezable_count }} {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }} ({{ issuer_freezable.freeze_capability }} freeze capability{% if issuer_freezable.evidence_mode == "mixed" %}, mixed evidence{% endif %})</span></dd>
+      {% endif %}
     </div>
     {% if issuer_freezable.has_investigate %}
     <div class="cover-meta-item">
@@ -85,6 +91,76 @@
     {% endif %}
   </p>
   {% if issuer_freezable %}
+  {# v0.16.3 (audit fix #B1): LE handoff template now branches on
+     evidence_mode for legal accuracy. Pre-fix the executive summary
+     asserted "stolen funds is held in USDC at N wallets" verbatim
+     even for historical_only mode — an LE-targeted document making
+     a factual claim of current custody when the underlying evidence
+     is historical receipt. False statement to a federal agent. #}
+  {% if issuer_freezable.evidence_mode == "historical_only" %}
+  <p style="margin:0 0 0.7em 0;">
+    The position was forwarded by the perpetrator through a chain of
+    intermediate wallets and converted into
+    <strong>{{ issuer_freezable.token }}</strong>, the stablecoin
+    issued by {{ issuer.name }}. On-chain tracing documents that
+    <strong>{{ issuer_freezable.total_usd_freezable }}</strong> in
+    {{ issuer_freezable.token }} was received at
+    {{ issuer_freezable.historical_count }}
+    {{ "wallet" if issuer_freezable.historical_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority during the
+    documented theft trail{% if issuer_freezable.earliest_observed %} (earliest observation {{ issuer_freezable.earliest_observed[:10] }}){% endif %}.
+    Current balances at those addresses are pending issuer
+    verification — these positions are flagged in section 4.1 with
+    per-address evidence-type provenance.
+    {% if issuer_freezable.has_investigate %}
+    An additional
+    {{ issuer_freezable.investigate_count }}
+    {{ "wallet" if issuer_freezable.investigate_count == 1 else "wallets" }}
+    are flagged INVESTIGATE, representing
+    {{ issuer_freezable.total_usd_suspected }} in further funds
+    pending verification.
+    {% endif %}
+  </p>
+  <p style="margin:0;">
+    {{ issuer.short_name }}'s protocol-level controls over
+    {{ issuer_freezable.token }} provide the mechanism for
+    investigating current disposition of the documented receipts
+    and pausing redemption of any balances that remain. We recommend
+    that a preservation request be issued to {{ issuer.short_name }}
+    as a matter of priority, citing the addresses listed in section 5.
+  </p>
+  {% elif issuer_freezable.evidence_mode == "mixed" %}
+  <p style="margin:0 0 0.7em 0;">
+    The position was forwarded by the perpetrator through a chain of
+    intermediate wallets and converted into
+    <strong>{{ issuer_freezable.token }}</strong>, the stablecoin
+    issued by {{ issuer.name }}. As of {{ verified_at }} UTC,
+    <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
+    of stolen funds is associated with
+    {{ issuer_freezable.freezable_count }}
+    {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority — a mix of
+    {{ issuer_freezable.current_balance_count }} confirmed current-
+    balance positions and {{ issuer_freezable.historical_count }}
+    documented historical receipts (section 4.1 details per-address
+    evidence type).
+    {% if issuer_freezable.has_investigate %}
+    An additional
+    {{ issuer_freezable.investigate_count }}
+    {{ "wallet" if issuer_freezable.investigate_count == 1 else "wallets" }}
+    are flagged INVESTIGATE, representing
+    {{ issuer_freezable.total_usd_suspected }} pending verification.
+    {% endif %}
+  </p>
+  <p style="margin:0;">
+    {{ issuer.short_name }}'s protocol-level controls over
+    {{ issuer_freezable.token }} are the available mechanism for
+    pausing redemption of the confirmed positions and investigating
+    the historical-receipt addresses. We recommend that a preservation
+    request be issued to {{ issuer.short_name }} as a matter of
+    priority, citing the addresses listed in section 5.
+  </p>
+  {% else %}
   <p style="margin:0 0 0.7em 0;">
     The position was forwarded by the perpetrator through a chain of
     intermediate wallets and converted into
@@ -114,6 +190,7 @@
     as a matter of priority, citing the addresses listed in
     section 5 of this package.
   </p>
+  {% endif %}
   {% else %}
   <p style="margin:0 0 0.7em 0;">
     The position was promptly forwarded by the perpetrator to a secondary
@@ -195,6 +272,29 @@
   <div class="timeline-event current">
     <time>{{ verified_at }}</time> &nbsp;—&nbsp;
     {% if issuer_freezable %}
+    {# v0.16.3 (audit fix #B1): timeline "Current state" branch on
+       evidence_mode. historical_only → frame as documented receipts,
+       not current custody. #}
+    {% if issuer_freezable.evidence_mode == "historical_only" %}
+    <strong>Documented receipts.</strong>
+    {{ issuer_freezable.total_usd_freezable }} in
+    {{ issuer_freezable.token }} received at
+    {{ issuer_freezable.historical_count }}
+    {{ "wallet" if issuer_freezable.historical_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority during the
+    documented theft trail; current balances pending issuer
+    verification. Specific addresses enumerated in section 5.
+    {% elif issuer_freezable.evidence_mode == "mixed" %}
+    <strong>Current state.</strong>
+    {{ issuer_freezable.total_usd_freezable }} in
+    {{ issuer_freezable.token }} associated with
+    {{ issuer_freezable.freezable_count }} addresses
+    ({{ issuer_freezable.current_balance_count }} confirmed current
+    balances + {{ issuer_freezable.historical_count }} historical
+    receipts) under {{ issuer.short_name }}'s issuance authority.
+    Specific addresses + per-address evidence type enumerated in
+    section 5.
+    {% else %}
     <strong>Current state.</strong> Recoverable funds totaling
     {{ issuer_freezable.total_usd_freezable }} held as
     {{ issuer_freezable.token }} across
@@ -206,6 +306,7 @@
     {{ issuer_freezable.token }} positions under KYC verification).
     {% else %}.{% endif %}
     Specific addresses enumerated in section 5.
+    {% endif %}
     {% else %}
     <strong>Current state.</strong> Position remains in
     <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>.

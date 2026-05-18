@@ -143,12 +143,39 @@ FEW_SHOT_EXAMPLE = {
             "Within minutes my wallet was empty."
         ),
         "transfer_summary": {
-            "total_usd_drained": "47840",
+            # v0.16.3 (audit fix #5): drained = sum of all destinations:
+            # $28,420 USDC + $12,640 USDT (current) + $8,200 USDT
+            # (historical) + $6,780 ETH = $56,040. Pre-fix this was
+            # $47,840 — example arithmetic was inconsistent, teaching
+            # the model "recoverable can exceed drained" was OK.
+            "total_usd_drained": "56040",
             "first_hop_address": "0x7B2e9A4c8F3d5E1a6C4b9D8e2F5a3C6b1D4e8F2a",
             "first_hop_role": "Drainer consolidation wallet — received and immediately distributed",
             "current_freezable_holdings": [
-                {"address": "0x3C8f5A2b4D7e9C1a3E6b8D2F4A5c7B9D1E3f5A7c", "token": "USDC", "issuer": "Circle", "usd": "28420"},
-                {"address": "0x5D9e4A3c7B2f8D6a1E5c4B9D2F3a7c5B1E4d6F8a", "token": "USDT", "issuer": "Tether", "usd": "12640"},
+                # Confirmed on-chain balance, queried this session.
+                {"address": "0x3C8f5A2b4D7e9C1a3E6b8D2F4A5c7B9D1E3f5A7c",
+                 "token": "USDC", "issuer": "Circle", "usd": "28420",
+                 "freeze_capability": "yes",
+                 "evidence_type": "current_balance",
+                 "balance_verified_on_chain": True},
+                # Confirmed on-chain balance.
+                {"address": "0x5D9e4A3c7B2f8D6a1E5c4B9D2F3a7c5B1E4d6F8a",
+                 "token": "USDT", "issuer": "Tether", "usd": "12640",
+                 "freeze_capability": "yes",
+                 "evidence_type": "current_balance",
+                 "balance_verified_on_chain": True},
+                # v0.16.3: example of a historical_inflow entry — the
+                # address received the token in the trace but current
+                # balance is uncertain (couldn't be queried, or
+                # genuinely zero post-perpetrator-movement). The AI
+                # MUST use "received approximately $X" language here,
+                # NOT "currently holds $X".
+                {"address": "0x9F2c8B4d6A1e5C7b3D9a4F2e6c5B8d1A3f7E2c9b",
+                 "token": "USDT", "issuer": "Tether", "usd": "8200",
+                 "freeze_capability": "yes",
+                 "evidence_type": "historical_inflow",
+                 "balance_verified_on_chain": False,
+                 "observed_at": "2026-04-19T14:25:00Z"},
             ],
             "non_freezable_destinations": [
                 {"address": "0x2A6b4D8c1F3e5A7b9C2d6E4a5B3c7D9E1f4A8B2c", "asset": "ETH", "usd": "6780", "label": "Tornado Cash"},
@@ -160,29 +187,39 @@ FEW_SHOT_EXAMPLE = {
         "INCIDENT_TYPE_AI_CONFIDENCE": "high",
         "INCIDENT_NARRATIVE_RECUPERO": (
             "On April 19, 2026, the victim's Ethereum wallet 0x8A3c…4C5A was drained of approximately "
-            "$47,840 in USDC, USDT, and ETH. On-chain trace data is consistent with a malicious token "
+            "$56,040 in USDC, USDT, and ETH. On-chain trace data is consistent with a malicious token "
             "approval signed on a phishing site presenting itself as a Uniswap governance token claim "
             "page. Funds moved through a drainer consolidation wallet (0x7B2e…8F2a) and were "
-            "redistributed within minutes. Approximately $41,060 of the proceeds remain dormant in "
-            "USDC and USDT at addresses that may be subject to issuer-level freeze action by Circle "
-            "and Tether. The remainder (~$6,780 in ETH) was deposited to Tornado Cash and is not "
-            "recoverable through current techniques."
+            "redistributed within minutes. Approximately $41,060 currently sits at addresses subject "
+            "to issuer-level freeze action by Circle and Tether (confirmed on-chain balances). An "
+            "additional $8,200 in USDT is documented as received at a third Tether-controlled "
+            "address during the trace; current balance pending issuer verification. The remainder "
+            "(~$6,780 in ETH) was deposited to Tornado Cash and is not recoverable through current "
+            "techniques."
         ),
         "INCIDENT_NARRATIVE_RECUPERO_AI_CONFIDENCE": "medium",
         "INCIDENT_NARRATIVE_FIRST_PERSON": (
             "On April 19, 2026, at approximately 14:22 UTC, I signed a transaction on a website that "
             "appeared to be a Uniswap governance token claim page. The transaction was a malicious "
             "token approval, and within minutes my wallet was drained of all of its USDC, USDT, and a "
-            "small ETH balance. The total loss was approximately $47,840. I did not authorize the "
+            "small ETH balance. The total loss was approximately $56,040. I did not authorize the "
             "transfers that followed, and I am the sole signer of the wallet."
         ),
         "INCIDENT_NARRATIVE_FIRST_PERSON_AI_CONFIDENCE": "medium",
         "VICTIM_JURISDICTION": "TODO: confirm victim's state/country (e.g. 'USA (California)')",
         "VICTIM_JURISDICTION_AI_CONFIDENCE": "low",
         "DESTINATION_NOTES": {
-            "0x7B2e9A4c8F3d5E1a6C4b9D8e2F5a3C6b1D4e8F2a": "Drainer consolidation wallet — received the full $47,840 and immediately redistributed within minutes. Currently holds nothing.",
-            "0x3C8f5A2b4D7e9C1a3E6b8D2F4A5c7B9D1E3f5A7c": "🟩 FREEZABLE — Circle-issued USDC. Holds $28,420. Dormant since drain. Subject of Exhibit B.1 freeze request.",
-            "0x5D9e4A3c7B2f8D6a1E5c4B9D2F3a7c5B1E4d6F8a": "🟩 FREEZABLE — Tether-issued USDT. Holds $12,640. Dormant since drain. Subject of Exhibit B.2 freeze request.",
+            "0x7B2e9A4c8F3d5E1a6C4b9D8e2F5a3C6b1D4e8F2a": "Drainer consolidation wallet — received the full $56,040 and immediately redistributed within minutes. Currently holds nothing.",
+            # balance_verified_on_chain=True + evidence_type=current_balance:
+            # use definitive "currently holds $X" language.
+            "0x3C8f5A2b4D7e9C1a3E6b8D2F4A5c7B9D1E3f5A7c": "🟩 FREEZABLE — Circle-issued USDC. Currently holds $28,420. Dormant since drain. Subject of Exhibit B.1 freeze request.",
+            "0x5D9e4A3c7B2f8D6a1E5c4B9D2F3a7c5B1E4d6F8a": "🟩 FREEZABLE — Tether-issued USDT. Currently holds $12,640. Dormant since drain. Subject of Exhibit B.2 freeze request.",
+            # v0.16.3: historical_inflow + balance_verified=False example.
+            # The note uses "received approximately" language and frames
+            # the freeze ask as an issuer investigation, not a freeze
+            # of a confirmed current balance. NEVER hedge with "if the
+            # balance remains" — frame the issuer action correctly.
+            "0x9F2c8B4d6A1e5C7b3D9a4F2e6c5B8d1A3f7E2c9b": "🟩 FREEZABLE — Tether-issued USDT. Received approximately $8,200 during the documented theft trail; Tether compliance team can investigate present-day disposition and apply a precautionary hold on any remaining balance. Subject of Exhibit B.3 freeze request.",
             "0x2A6b4D8c1F3e5A7b9C2d6E4a5B3c7D9E1f4A8B2c": "⬛ UNRECOVERABLE — Tornado Cash deposit address. 3.2 ETH (~$6,780) deposited and mixed.",
         },
         "DESTINATION_NOTES_AI_CONFIDENCE": "high",
@@ -199,15 +236,17 @@ FEW_SHOT_EXAMPLE = {
             "Uniswap site — a wallet-drainer scam. The chain trace identifies "
             "where every dollar went: approximately $41,060 of your loss "
             "(in USDC and USDT) currently sits at addresses that Circle and "
-            "Tether — the companies that issue those stablecoins — can "
-            "potentially freeze. The remaining $6,780 (in ETH) was sent to "
-            "Tornado Cash and is not recoverable through current methods. "
-            "Recupero has drafted compliance freeze letters for Circle and "
-            "Tether for your review; once you approve, they go to those "
-            "issuers' compliance teams. Expect a 1-4 week response window. "
-            "Honest expectation: issuer freezes are voluntary and not "
-            "guaranteed, but the dollar amounts and the documented theft "
-            "trail give us a strong basis for the requests."
+            "Tether can potentially freeze, plus an additional $8,200 in USDT "
+            "documented as received at a third Tether-controlled address "
+            "during the trace (current balance pending Tether's verification). "
+            "The remaining $6,780 (in ETH) was sent to Tornado Cash and is "
+            "not recoverable through current methods. Recupero has drafted "
+            "compliance letters for Circle and Tether for your review; once "
+            "you approve, they go to those issuers' compliance teams. Expect "
+            "a 1-4 week response window. Honest expectation: issuer freezes "
+            "are voluntary and not guaranteed, but the dollar amounts and "
+            "the documented theft trail give us a strong basis for the "
+            "requests."
         ),
         "VICTIM_SUMMARY_AI_CONFIDENCE": "high",
     },
@@ -680,17 +719,35 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
                 if "asset" not in item or "reason" not in item:
                     problems.append(f"UNRECOVERABLE_ITEMS[{i}] missing 'asset' or 'reason'")
 
-    # v0.16.2 (audit fix #10): scan DESTINATION_NOTES for hedging
-    # phrases the SYSTEM_PROMPT forbids when the address has a
-    # confirmed on-chain balance. The retry loop in run_ai_editorial
-    # picks up problems and re-prompts the model. Without this, an
-    # LLM that ignores the prompt rule ships hedged language straight
-    # to the customer letter — recreating Jacob's Bug-2 complaint.
+    # v0.16.2 (audit fix #10) + v0.16.3 (audit fix #A4): scan
+    # DESTINATION_NOTES + the narrative fields for hedging phrases the
+    # SYSTEM_PROMPT forbids. The retry loop in run_ai_editorial picks
+    # up problems and re-prompts the model. Without this, an LLM that
+    # ignores the prompt rule ships hedged language straight to the
+    # customer letter — recreating Jacob's Bug-2 complaint.
+    #
+    # v0.16.3 expanded the phrase list with common LLM evasion forms
+    # ("if balances are still", "subject to confirmation", etc.) and
+    # extended the scan to VICTIM_SUMMARY + INCIDENT_NARRATIVE_RECUPERO
+    # which the prompt's HEADLINE FRAMING rule (line ~321) also
+    # forbids hedging in.
+    # v0.16.3: forbidden hedging phrases. Each one is something the
+    # SYSTEM_PROMPT explicitly bans on FREEZABLE-tagged addresses
+    # where the underlying ask has a freezable issuer + a documented
+    # USD amount. "may be viable" is the worst — punts an assertion
+    # back to the operator the system should already have made.
     _FORBIDDEN_PHRASES_NEAR_FREEZABLE = (
         "if the balance remains",
         "if balances remain",
+        "if balances are still",
+        "if the funds remain",
+        "if funds remain at",
+        "should the balance persist",
         "should be confirmed before issuer outreach",
         "current balance should be confirmed",
+        "subject to confirmation",
+        "pending verification of the balance",
+        "pending balance verification",
         "may be viable",
     )
     notes = ai_obj.get("DESTINATION_NOTES")
@@ -710,9 +767,73 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
                         f"hedging phrase {phrase!r} on a FREEZABLE-tagged "
                         f"address. Per SYSTEM_PROMPT (v0.16.0 rule), "
                         f"write definitive 'currently holds $X' language "
-                        f"when balance_verified_on_chain is True."
+                        f"when balance_verified_on_chain is True, OR "
+                        f"'received approximately $X during the trace' "
+                        f"when evidence_type is historical_inflow."
                     )
                     break  # one problem per note is enough
+
+    # v0.16.3: scan VICTIM_SUMMARY + INCIDENT_NARRATIVE_RECUPERO for
+    # the same hedging phrases. The HEADLINE FRAMING rule in the
+    # SYSTEM_PROMPT also forbids hedging in these narrative fields.
+    for narrative_key in ("VICTIM_SUMMARY", "INCIDENT_NARRATIVE_RECUPERO"):
+        narrative = ai_obj.get(narrative_key)
+        if not isinstance(narrative, str):
+            continue
+        narrative_lower = narrative.lower()
+        for phrase in _FORBIDDEN_PHRASES_NEAR_FREEZABLE:
+            if phrase in narrative_lower:
+                problems.append(
+                    f"{narrative_key} contains forbidden hedging phrase "
+                    f"{phrase!r}. Use definitive language for confirmed "
+                    f"balances; 'received approximately $X' for "
+                    f"historical-inflow asks."
+                )
+                break  # one problem per field is enough
+
+    # v0.16.3 (audit fix #A6): VICTIM_SUMMARY structural checks.
+    # The SYSTEM_PROMPT specifies 4-6 sentences, no legal jargon
+    # (subpoena/MLAT/compelled disclosure), no hex addresses, no
+    # guaranteed-recovery claims. Validator now enforces.
+    vs = ai_obj.get("VICTIM_SUMMARY")
+    if isinstance(vs, str) and vs.strip():
+        # Sentence count — rough approximation via "." count.
+        sentence_count = sum(
+            1 for ch in vs if ch in ".!?"
+        )
+        if sentence_count < 3:
+            problems.append(
+                f"VICTIM_SUMMARY has only ~{sentence_count} sentence(s); "
+                f"SYSTEM_PROMPT requires 4-6 for the customer-facing "
+                f"paragraph."
+            )
+        elif sentence_count > 10:
+            problems.append(
+                f"VICTIM_SUMMARY has ~{sentence_count} sentences; "
+                f"too long. Cap at 6-8 sentences max."
+            )
+        vs_lower = vs.lower()
+        forbidden_in_victim_summary = (
+            "subpoena", "mlat", "compelled disclosure",
+            "guaranteed recovery", "we guarantee",
+        )
+        for word in forbidden_in_victim_summary:
+            if word in vs_lower:
+                problems.append(
+                    f"VICTIM_SUMMARY contains forbidden term {word!r}; "
+                    f"the customer-facing paragraph must not use legal "
+                    f"jargon or guaranteed-recovery language."
+                )
+        # No hex addresses in the customer paragraph.
+        if "0x" in vs and any(c in vs for c in "0123456789abcdef"):
+            # Crude — but the prompt forbids hex addresses entirely.
+            import re as _re
+            if _re.search(r"0x[0-9a-fA-F]{8,}", vs):
+                problems.append(
+                    "VICTIM_SUMMARY contains a hex address (0x…) — the "
+                    "customer paragraph must use plain language only, "
+                    "not on-chain identifiers."
+                )
 
     return problems
 
@@ -873,7 +994,26 @@ def call_anthropic_for_editorial(
     out_total = 0
     cache_creation_total = 0
     cache_read_total = 0
+    # v0.16.3 (audit fix #A7): hard cost ceiling. If the cumulative
+    # USD cost across retries exceeds this, abort with a structured
+    # error rather than letting a misbehaving model burn through the
+    # budget. $2/case is generous — typical cost is $0.05-0.15.
+    _MAX_USD_PER_CALL = Decimal("2.00")
     for attempt in range(2):  # one retry on bad JSON
+        # Pre-flight cost-ceiling check (skip on first attempt — we
+        # haven't billed anything yet).
+        if attempt > 0:
+            current_cost = _compute_usd_cost(
+                in_total, out_total,
+                cache_creation=cache_creation_total,
+                cache_read=cache_read_total,
+            )
+            if current_cost > _MAX_USD_PER_CALL:
+                raise RuntimeError(
+                    f"ai_editorial: cumulative cost ${current_cost} "
+                    f"exceeded ceiling ${_MAX_USD_PER_CALL}. Aborting "
+                    f"retry. Last error: {last_error!r}"
+                )
         try:
             resp = _call_messages_with_retry(
                 client=client,

@@ -67,6 +67,13 @@ from uuid import UUID
 # The fallback (used if a chain isn't in the map or fails to parse) is
 # the Ethereum block 1 timestamp — earliest known good value across
 # any supported chain.
+# v0.16.3 (audit fix #C2 + round-4 #D): freeze_brief.json schema
+# version. Re-exported here for callers that import from the worker
+# module, but the canonical definition lives in reports.brief.
+# Centralized so the next bump only happens in one place.
+from recupero.reports.brief import BRIEF_SCHEMA_VERSION  # noqa: F401
+
+
 _CHAIN_GENESIS_TIMESTAMPS: dict[str, datetime] = {
     "ethereum":    datetime(2015, 7, 30, 15, 26, 13, tzinfo=UTC),
     "polygon":     datetime(2020, 5, 30,  6, 23, 35, tzinfo=UTC),
@@ -851,7 +858,27 @@ def _synthesize_freeze_brief_from_asks(
         upload_case_dir(case_dir, bucket)
         return
 
-    asks = json.loads(freeze_asks_path.read_text(encoding="utf-8-sig"))
+    # v0.16.3 (audit fix #C1 / catastrophic): wrap json.loads in
+    # try/except so a malformed freeze_asks.json doesn't take out
+    # the whole skip_editorial path with a cryptic JSONDecodeError.
+    # If it's broken we emit the stub-shape brief and log.
+    try:
+        asks = json.loads(freeze_asks_path.read_text(encoding="utf-8-sig"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "freeze_asks.json unreadable (%s) — emitting stub freeze_brief",
+            exc,
+        )
+        out_path.write_text(
+            json.dumps({"FREEZABLE": [], "DESTINATIONS": [],
+                        "TOTAL_LOSS_USD": "$0", "MAX_RECOVERABLE_USD": "$0",
+                        "SOURCE": "stub (freeze_asks.json unreadable)",
+                        "SCHEMA_VERSION": BRIEF_SCHEMA_VERSION},
+                       indent=2),
+            encoding="utf-8",
+        )
+        upload_case_dir(case_dir, bucket)
+        return
     by_issuer = asks.get("by_issuer") or {}
 
     freezable: list[dict[str, Any]] = []
@@ -871,6 +898,18 @@ def _synthesize_freeze_brief_from_asks(
         # Group holdings under one entry per issuer/token pair so the
         # trace_report's table groups cleanly.
         by_token: dict[str, dict[str, Any]] = {}
+        # v0.16.3 (audit fix #C1): collect contact_email + primary_contact
+        # at the per-issuer level so downstream send-freeze-letters can
+        # actually dispatch. Pre-fix this synthesizer wrote no contact
+        # info, so any operator hitting `recupero-ops send-freeze-letters`
+        # on a skip_editorial-produced brief got "SKIP ... missing
+        # contact_email" for every entry — zero letters dispatched.
+        issuer_primary_contact: str | None = None
+        for e in entries:
+            pc = e.get("primary_contact")
+            if pc and issuer_primary_contact is None:
+                issuer_primary_contact = pc
+                break
         for e in entries:
             symbol = e.get("symbol") or "TOKEN"
             usd_str = e.get("usd_value")
@@ -878,8 +917,14 @@ def _synthesize_freeze_brief_from_asks(
                 usd = Decimal(usd_str) if usd_str else Decimal(0)
             except (TypeError, ValueError):
                 usd = Decimal(0)
-            if usd > 0:
-                total_recoverable += usd
+            # v0.16.3 (audit fix #7a — post-fix re-audit): only count
+            # toward total_recoverable AFTER classifying status —
+            # UNRECOVERABLE rows must NOT be counted. Pre-fix DAI /
+            # other cap=no entries with usd>0 incremented this
+            # counter, inflating MAX_RECOVERABLE_USD to include
+            # genuinely-unrecoverable dollars. total_suspected
+            # (broad attribution number, used for INVESTIGATE-level
+            # gates) still includes UNRECOVERABLE.
             total_suspected += usd
             # Read the actual capability from the ask, mapping to the
             # display form for parity with emit_brief.py's main path.
@@ -891,6 +936,13 @@ def _synthesize_freeze_brief_from_asks(
                 "freeze_capability": cap_display,
                 "holdings": [],
                 "total_usd": Decimal(0),
+                # v0.16.3: provide contact info so send-freeze-letters
+                # can dispatch from a skip_editorial brief.
+                "contact_email": issuer_primary_contact or "",
+                "primary_contact": issuer_primary_contact or "",
+                "portal_url": "",
+                "typical_response_time": "Variable",
+                "freeze_note": "",
             })
             # v0.16.2 (audit fix #2): same policy as emit_brief.py:
             #   * capability=no/low → UNRECOVERABLE
@@ -912,6 +964,12 @@ def _synthesize_freeze_brief_from_asks(
                 status = "FREEZABLE"
             else:
                 status = "INVESTIGATE"
+            # v0.16.3 (audit fix #7a): increment total_recoverable
+            # ONLY for FREEZABLE-status rows. Pre-fix every usd>0
+            # row contributed, inflating MAX_RECOVERABLE_USD with
+            # UNRECOVERABLE dollars (e.g., DAI).
+            if status == "FREEZABLE" and usd > 0:
+                total_recoverable += usd
             token_entry["holdings"].append({
                 "address": e.get("address"),
                 "amount": (
@@ -961,14 +1019,49 @@ def _synthesize_freeze_brief_from_asks(
                 if earliest is None or obs < earliest:
                     earliest = obs
             token_entry["earliest_observed"] = earliest
-            # Per-issuer total_suspected_usd mirrors emit_brief.py
-            # (FREEZABLE + INVESTIGATE), used by classify_recovery_prospects.
-            token_entry["total_suspected_usd"] = token_entry["total_usd"]
+            # v0.16.3 (audit fix #C1): total_suspected_usd is the sum
+            # across FREEZABLE + INVESTIGATE statuses (excluding
+            # UNRECOVERABLE / EXCHANGE / TRANSIT). Pre-fix this was
+            # set to total_usd verbatim — wrong, because emit_brief.py
+            # writes a different value (sum of FREEZABLE only into
+            # total_usd, with total_suspected_usd being FREEZABLE +
+            # INVESTIGATE). The classifier and recovery scorer read
+            # both fields; setting them equal here biased the scorer.
+            #
+            # Also: total_usd should be FREEZABLE-status-only after
+            # this fix. The dollar-string above already wraps the
+            # accumulated sum, so we recompute from holdings.
+            freezable_only = Decimal(0)
+            suspected_only = Decimal(0)
+            for h in token_entry["holdings"]:
+                try:
+                    h_usd = Decimal(
+                        str(h.get("usd", "0"))
+                        .replace("$", "").replace(",", "") or "0"
+                    )
+                except Exception:  # noqa: BLE001
+                    h_usd = Decimal(0)
+                if h.get("status") == "FREEZABLE":
+                    freezable_only += h_usd
+                if h.get("status") in ("FREEZABLE", "INVESTIGATE"):
+                    suspected_only += h_usd
+            token_entry["total_usd"] = f"${freezable_only:,.2f}"
+            token_entry["total_suspected_usd"] = f"${suspected_only:,.2f}"
             freezable.append(token_entry)
 
+    # v0.16.3 (audit fix #C1): pre-fix this wrote `exchange_deposits`
+    # records into the DESTINATIONS slot — schema-incompatible with
+    # what investigator_export._findings_from_destinations expects
+    # (it reads usd_received_in_trace / status / role from each
+    # entry, which exchange_deposits don't carry). Result: every
+    # destination finding had empty headline/amount/counterparty.
+    # Write an empty DESTINATIONS list; the skip_editorial path
+    # genuinely doesn't have rich destination data — that comes
+    # from emit_brief._extract_destinations which needs the trace.
     out = {
+        "SCHEMA_VERSION": BRIEF_SCHEMA_VERSION,
         "FREEZABLE": freezable,
-        "DESTINATIONS": asks.get("exchange_deposits") or [],
+        "DESTINATIONS": [],
         "TOTAL_LOSS_USD": f"${total_suspected:,.2f}",
         "MAX_RECOVERABLE_USD": f"${total_recoverable:,.2f}",
         "SOURCE": "synthesized from freeze_asks.json (skip_editorial path)",
@@ -1023,6 +1116,19 @@ def _stage_build_package(
     freeze_brief_path = case_dir / "freeze_brief.json"
     if freeze_brief_path.exists():
         freeze_brief = json.loads(freeze_brief_path.read_text(encoding="utf-8-sig"))
+        # v0.16.3 (audit fix #3): stale-brief detection. If the
+        # brief was emitted by a pre-v0.16.x pipeline it lacks the
+        # evidence_type / evidence_mode fields the current templates
+        # branch on. Log a warning so the operator knows the rendering
+        # may use "currently held" language even for historical-
+        # receipt cases.
+        from recupero.reports.brief import check_brief_schema_version
+        stale_warning = check_brief_schema_version(freeze_brief)
+        if stale_warning:
+            log.warning(
+                "freeze_brief.json at %s is stale: %s",
+                freeze_brief_path, stale_warning,
+            )
     else:
         freeze_brief = {"FREEZABLE": [], "TOTAL_LOSS_USD": "$0",
                         "MAX_RECOVERABLE_USD": "$0", "DESTINATIONS": []}

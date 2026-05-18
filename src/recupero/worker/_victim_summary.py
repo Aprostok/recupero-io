@@ -143,7 +143,6 @@ def classify_recovery_prospects(
     total_suspected = Decimal(0)
     for entry in freezable:
         cap = (entry.get("freeze_capability") or "").lower()
-        entry_total = _parse_usd_string(entry.get("total_usd"))
         # Suspected always includes — it's the broad attribution
         # number, not the actionable one.
         total_suspected += _parse_usd_string(entry.get("total_suspected_usd"))
@@ -153,6 +152,18 @@ def classify_recovery_prospects(
             # brief as informational, but the customer letter must
             # not claim these dollars as recoverable.
             continue
+        # v0.16.3 (audit fix #C3): if the per-issuer total_usd is
+        # missing (skip_editorial or legacy briefs), fall back to
+        # summing per-holding `usd` for status==FREEZABLE rows. This
+        # excludes UNRECOVERABLE-status holdings even if they happen
+        # to be aggregated into a per-issuer total_usd by an older
+        # writer. The emit_brief main path already excludes them, so
+        # this is defense-in-depth.
+        entry_total = _parse_usd_string(entry.get("total_usd"))
+        if entry_total == Decimal(0):
+            for h in entry.get("holdings") or []:
+                if h.get("status") == "FREEZABLE":
+                    entry_total += _parse_usd_string(h.get("usd"))
         total_freezable += entry_total
 
     return (total_freezable >= floor_usd, total_freezable, total_suspected)

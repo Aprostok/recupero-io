@@ -28,7 +28,12 @@ from recupero.reports.ai_editorial import (
 
 
 def _valid_ai_output() -> dict:
-    """Minimum-viable AI output covering every required key."""
+    """Minimum-viable AI output covering every required key.
+
+    v0.16.3 (audit fix #A6): VICTIM_SUMMARY now requires 3+ sentences
+    per the validator's structural check, so use a realistic 4-sentence
+    paragraph here. The single-sentence stub used pre-v0.16.3 hit the
+    new sentence-count rule."""
     return {
         "INCIDENT_TYPE": "test",
         "INCIDENT_TYPE_AI_CONFIDENCE": "high",
@@ -42,7 +47,12 @@ def _valid_ai_output() -> dict:
         "DESTINATION_NOTES_AI_CONFIDENCE": "high",
         "UNRECOVERABLE_ITEMS": [],
         "UNRECOVERABLE_ITEMS_AI_CONFIDENCE": "high",
-        "VICTIM_SUMMARY": "Plain English summary.",
+        "VICTIM_SUMMARY": (
+            "Here is what happened in plain language. Your wallet was "
+            "drained on the date noted above. Recupero has prepared "
+            "compliance letters for review. Expect a 1-4 week response "
+            "window from each issuer."
+        ),
         "VICTIM_SUMMARY_AI_CONFIDENCE": "high",
     }
 

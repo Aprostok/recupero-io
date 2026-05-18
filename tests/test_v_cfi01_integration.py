@@ -1503,6 +1503,329 @@ def test_v_cfi01_end_to_end_mixed_evidence_renders_mixed_language() -> None:
     assert actual == expected
 
 
+# ---- v0.16.3 audit-round-3 pin tests ---- #
+
+
+def test_v_cfi01_le_template_branches_on_evidence_mode() -> None:
+    """v0.16.3 audit fix #B1: the LE handoff template must use
+    evidence_mode-aware language. Pre-fix the cover-meta,
+    executive summary, and timeline-current section all hardcoded
+    'currently held' / 'is held in' — false statements when the
+    evidence is historical_only. LE-targeted document.
+    """
+    from pathlib import Path
+    template = Path(
+        "src/recupero/reports/templates/le.html.j2"
+    ).read_text(encoding="utf-8")
+    # Cover-meta label branches on evidence_mode.
+    assert 'evidence_mode == "historical_only"' in template
+    assert "Documented Position" in template
+    # Executive summary historical_only branch.
+    assert "documented theft trail" in template
+    # Timeline-current historical_only branch.
+    assert "Documented receipts" in template
+    # Verify the "is held in" claim is now gated.
+    assert template.count('evidence_mode == "historical_only"') >= 3, (
+        "LE template must branch on evidence_mode in at least 3 places: "
+        "cover-meta, exec summary, timeline."
+    )
+
+
+def test_v_cfi01_brief_carries_schema_version() -> None:
+    """v0.16.3 audit fix #C2: freeze_brief.json must carry a
+    SCHEMA_VERSION stamp so readers can detect stale briefs and
+    fall back to safe defaults rather than silently rendering
+    wrong language for pre-evidence_mode brief shapes."""
+    import json
+    from pathlib import Path as _Path
+    from unittest.mock import MagicMock
+    from recupero.worker.pipeline import (
+        BRIEF_SCHEMA_VERSION,
+        _synthesize_freeze_brief_from_asks,
+    )
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        case_dir = _Path(tmp) / "case_X"
+        case_dir.mkdir()
+        (case_dir / "freeze_asks.json").write_text(json.dumps({
+            "case_id": "X", "total_asks": 0,
+            "by_issuer": {}, "exchange_deposits": [],
+        }), encoding="utf-8")
+        _synthesize_freeze_brief_from_asks(case_dir, MagicMock())
+        brief = json.loads(
+            (case_dir / "freeze_brief.json").read_text(encoding="utf-8"),
+        )
+        assert brief.get("SCHEMA_VERSION") == BRIEF_SCHEMA_VERSION
+
+
+def test_v_cfi01_skip_editorial_synthesizer_includes_contact_email() -> None:
+    """v0.16.3 audit fix #C1: skip_editorial synthesizer must include
+    contact_email per issuer. Pre-fix the synthesizer wrote no contact
+    info, so send-freeze-letters silently SKIPPED every issuer entry
+    on any worker case that hit the skip_editorial path."""
+    import json
+    from pathlib import Path as _Path
+    from unittest.mock import MagicMock
+    from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        case_dir = _Path(tmp) / "case_X"
+        case_dir.mkdir()
+        (case_dir / "freeze_asks.json").write_text(json.dumps({
+            "case_id": "X", "total_asks": 1,
+            "by_issuer": {
+                "Tether": [{
+                    "address": USDT_DEST_1, "chain": "ethereum",
+                    "symbol": "USDT", "amount": "97535",
+                    "usd_value": "97535.58",
+                    "freeze_capability": "yes",
+                    "primary_contact": "compliance@tether.to",
+                    "evidence_type": "current_balance",
+                }],
+            },
+            "exchange_deposits": [],
+        }), encoding="utf-8")
+        _synthesize_freeze_brief_from_asks(case_dir, MagicMock())
+        brief = json.loads(
+            (case_dir / "freeze_brief.json").read_text(encoding="utf-8"),
+        )
+        tether = brief["FREEZABLE"][0]
+        assert tether["contact_email"] == "compliance@tether.to"
+        assert tether["primary_contact"] == "compliance@tether.to"
+
+
+def test_v_cfi01_validator_flags_hedging_in_freezable_notes() -> None:
+    """v0.16.3 audit fix #A4: validator must catch hedging phrases in
+    DESTINATION_NOTES of FREEZABLE-tagged addresses. The retry loop
+    re-prompts the model when this fires."""
+    from recupero.reports.ai_editorial import _validate_ai_output
+    ai_out = {
+        "INCIDENT_TYPE": "x", "INCIDENT_TYPE_AI_CONFIDENCE": "high",
+        "INCIDENT_NARRATIVE_RECUPERO": "x", "INCIDENT_NARRATIVE_RECUPERO_AI_CONFIDENCE": "high",
+        "INCIDENT_NARRATIVE_FIRST_PERSON": "x", "INCIDENT_NARRATIVE_FIRST_PERSON_AI_CONFIDENCE": "high",
+        "VICTIM_JURISDICTION": "USA", "VICTIM_JURISDICTION_AI_CONFIDENCE": "high",
+        "DESTINATION_NOTES": {
+            "0xabc": "🟩 FREEZABLE — USDC. If the balance remains on-chain, a freeze may be viable.",
+        },
+        "DESTINATION_NOTES_AI_CONFIDENCE": "high",
+        "UNRECOVERABLE_ITEMS": [], "UNRECOVERABLE_ITEMS_AI_CONFIDENCE": "high",
+        "VICTIM_SUMMARY": (
+            "Here is what happened. Your wallet was drained. Letters "
+            "are prepared. Expect 1-4 weeks."
+        ),
+        "VICTIM_SUMMARY_AI_CONFIDENCE": "high",
+    }
+    problems = _validate_ai_output(ai_out)
+    # Must catch the "if the balance remains" hedging.
+    assert any("if the balance remains" in p for p in problems), (
+        f"Validator must flag 'if the balance remains' in FREEZABLE "
+        f"note. Got problems: {problems}"
+    )
+
+
+def test_v_cfi01_validator_flags_jargon_in_victim_summary() -> None:
+    """v0.16.3 audit fix #A6: VICTIM_SUMMARY must not contain legal
+    jargon (subpoena/MLAT) — the prompt forbids it, the validator
+    enforces it."""
+    from recupero.reports.ai_editorial import _validate_ai_output
+    ai_out = {
+        "INCIDENT_TYPE": "x", "INCIDENT_TYPE_AI_CONFIDENCE": "high",
+        "INCIDENT_NARRATIVE_RECUPERO": "x", "INCIDENT_NARRATIVE_RECUPERO_AI_CONFIDENCE": "high",
+        "INCIDENT_NARRATIVE_FIRST_PERSON": "x", "INCIDENT_NARRATIVE_FIRST_PERSON_AI_CONFIDENCE": "high",
+        "VICTIM_JURISDICTION": "USA", "VICTIM_JURISDICTION_AI_CONFIDENCE": "high",
+        "DESTINATION_NOTES": {}, "DESTINATION_NOTES_AI_CONFIDENCE": "high",
+        "UNRECOVERABLE_ITEMS": [], "UNRECOVERABLE_ITEMS_AI_CONFIDENCE": "high",
+        "VICTIM_SUMMARY": (
+            "Here is the summary. Recupero will file a subpoena. "
+            "Expect 1-4 weeks. We guarantee recovery."
+        ),
+        "VICTIM_SUMMARY_AI_CONFIDENCE": "high",
+    }
+    problems = _validate_ai_output(ai_out)
+    assert any("subpoena" in p for p in problems)
+
+
+def test_v_cfi01_few_shot_models_historical_inflow_correctly() -> None:
+    """v0.16.3 audit fix #A2/#A5: the FEW_SHOT_EXAMPLE must model the
+    historical_inflow case so the AI knows to use "received approximately"
+    language. Pre-fix the example only showed current_balance cases —
+    the model defaulted to "holds $X" phrasing for everything."""
+    from recupero.reports.ai_editorial import FEW_SHOT_EXAMPLE
+    # Input must include at least one historical_inflow holding.
+    holdings = FEW_SHOT_EXAMPLE["input_summary"]["transfer_summary"]["current_freezable_holdings"]
+    assert any(
+        h.get("evidence_type") == "historical_inflow" for h in holdings
+    ), "FEW_SHOT_EXAMPLE must include a historical_inflow holding."
+    # Input must include balance_verified_on_chain.
+    assert any(
+        "balance_verified_on_chain" in h for h in holdings
+    ), "FEW_SHOT_EXAMPLE must include balance_verified_on_chain."
+    # Output's DESTINATION_NOTES must include a "received approximately"
+    # example so the AI sees the pattern.
+    notes = FEW_SHOT_EXAMPLE["output"]["DESTINATION_NOTES"]
+    assert any(
+        "received approximately" in note.lower() for note in notes.values()
+    ), (
+        "FEW_SHOT_EXAMPLE DESTINATION_NOTES must demonstrate "
+        "'received approximately' language for historical_inflow case."
+    )
+
+
+# ---- v0.16.3 round-4 audit-fix pins ---- #
+
+
+def test_v_cfi01_check_brief_schema_version_detects_stale_brief() -> None:
+    """v0.16.3 audit fix #3: stale-brief detection returns a warning
+    string for missing or pre-v0.14.8 SCHEMA_VERSION."""
+    from recupero.reports.brief import check_brief_schema_version
+    # Missing SCHEMA_VERSION → warning.
+    assert check_brief_schema_version({}) is not None
+    # Old version → warning.
+    assert check_brief_schema_version({"SCHEMA_VERSION": "0.13.4"}) is not None
+    # Current version → None.
+    assert check_brief_schema_version({"SCHEMA_VERSION": "0.16.3"}) is None
+    # Future version → None (forward-compatible).
+    assert check_brief_schema_version({"SCHEMA_VERSION": "0.17.0"}) is None
+
+
+def test_v_cfi01_synthesizer_excludes_unrecoverable_from_max_recoverable() -> None:
+    """v0.16.3 audit fix #7a: skip_editorial synthesizer must NOT
+    count UNRECOVERABLE-status holdings toward MAX_RECOVERABLE_USD.
+    Pre-fix the synthesizer's `total_recoverable` incremented for
+    every usd>0 entry regardless of capability, so a DAI-only brief
+    reported MAX_RECOVERABLE_USD=$655K even though Sky Protocol
+    can't freeze."""
+    import json
+    from pathlib import Path as _Path
+    from unittest.mock import MagicMock
+    from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        case_dir = _Path(tmp) / "case_X"
+        case_dir.mkdir()
+        (case_dir / "freeze_asks.json").write_text(json.dumps({
+            "case_id": "X", "total_asks": 2,
+            "by_issuer": {
+                "Tether": [{
+                    "address": USDT_DEST_1, "chain": "ethereum",
+                    "symbol": "USDT", "amount": "97535",
+                    "usd_value": "97535.58",
+                    "freeze_capability": "yes",
+                    "primary_contact": "compliance@tether.to",
+                    "evidence_type": "current_balance",
+                }],
+                "Sky Protocol": [{
+                    "address": PERP_HUB, "chain": "ethereum",
+                    "symbol": "DAI", "amount": "655751",
+                    "usd_value": "655751.45",
+                    "freeze_capability": "no",
+                    "primary_contact": "security@makerdao.com",
+                    "evidence_type": "current_balance",
+                }],
+            },
+            "exchange_deposits": [],
+        }), encoding="utf-8")
+        _synthesize_freeze_brief_from_asks(case_dir, MagicMock())
+        brief = json.loads(
+            (case_dir / "freeze_brief.json").read_text(encoding="utf-8"),
+        )
+        # MAX_RECOVERABLE_USD must NOT include the $655K DAI.
+        max_recoverable_str = brief["MAX_RECOVERABLE_USD"]
+        max_recoverable = Decimal(
+            max_recoverable_str.replace("$", "").replace(",", "")
+        )
+        # Should reflect only the $97K freezable Tether.
+        assert max_recoverable < Decimal("100000"), (
+            f"MAX_RECOVERABLE_USD must exclude UNRECOVERABLE rows. "
+            f"Got ${max_recoverable} — DAI was wrongly included."
+        )
+        # TOTAL_LOSS_USD (suspected sum) still includes everything.
+        total_loss = Decimal(
+            brief["TOTAL_LOSS_USD"].replace("$", "").replace(",", "")
+        )
+        assert total_loss >= Decimal("700000")
+
+
+def test_v_cfi01_few_shot_math_consistent() -> None:
+    """v0.16.3 audit fix #5: FEW_SHOT_EXAMPLE total_usd_drained must
+    equal the sum of all destinations in the output. Pre-fix, drained
+    was $47,840 but the sum was $56,040 — teaching the AI inconsistent
+    arithmetic."""
+    from recupero.reports.ai_editorial import FEW_SHOT_EXAMPLE
+    drained = Decimal(
+        FEW_SHOT_EXAMPLE["input_summary"]["transfer_summary"]["total_usd_drained"]
+    )
+    # Sum freezable USD + non-freezable USD from the input.
+    sum_freezable = sum(
+        Decimal(h["usd"]) for h in
+        FEW_SHOT_EXAMPLE["input_summary"]["transfer_summary"]["current_freezable_holdings"]
+    )
+    sum_unrecoverable = sum(
+        Decimal(d["usd"]) for d in
+        FEW_SHOT_EXAMPLE["input_summary"]["transfer_summary"]["non_freezable_destinations"]
+    )
+    assert drained == sum_freezable + sum_unrecoverable, (
+        f"FEW_SHOT_EXAMPLE arithmetic must be consistent. "
+        f"drained=${drained}, freezable=${sum_freezable}, "
+        f"unrecoverable=${sum_unrecoverable}, sum={sum_freezable + sum_unrecoverable}"
+    )
+
+
+def test_v_cfi01_dedup_prefers_freezable_over_exchange() -> None:
+    """v0.16.3 audit fix #4: when the same address has both
+    freezable_destination AND exchange_destination findings, the
+    freezable one wins (more actionable for the operator)."""
+    from recupero.reports.investigator_export import (
+        InvestigatorFinding,
+        _dedupe_findings_by_address,
+    )
+    findings = [
+        InvestigatorFinding(
+            finding_type="destination", address="0xabc",
+            chain="ethereum", severity="high",
+            headline="Freezable USDC at 0xabc — Circle",
+            counterparty="circle", counterparty_name="Circle",
+            risk_category="freezable_destination",
+            amount_usd="$10,000",
+            tx_hash="", explorer_url="", timestamp_iso="",
+            follow_up_url="", notes="",
+        ),
+        InvestigatorFinding(
+            finding_type="destination", address="0xabc",
+            chain="ethereum", severity="medium",
+            headline="Exchange deposit at 0xabc — Binance",
+            counterparty="binance", counterparty_name="Binance",
+            risk_category="exchange_destination",
+            amount_usd="$10,000",
+            tx_hash="", explorer_url="", timestamp_iso="",
+            follow_up_url="", notes="",
+        ),
+    ]
+    out = _dedupe_findings_by_address(findings)
+    assert len(out) == 1
+    assert out[0].risk_category == "freezable_destination", (
+        f"freezable_destination must win the dedup. "
+        f"Got: {out[0].risk_category}"
+    )
+
+
+def test_v_cfi01_brief_render_refuses_maple_fallback() -> None:
+    """v0.16.3 audit fix #1 (post-round-4): generate_briefs must NOT
+    fall back to maple.html.j2 when issuer_freeze_request is missing.
+    Pre-fix, the fallback rendered the legacy "is currently held in"
+    language for historical-only cases — exactly the false-claim
+    bug we'd just fixed in the modern template. Refusing the fallback
+    surfaces the missing-template error so the operator can fix the
+    deploy config instead of silently shipping wrong language."""
+    import inspect
+    from recupero.reports.brief import generate_briefs
+    src = inspect.getsource(generate_briefs)
+    # The function source must contain a RuntimeError raise on missing
+    # template — the post-round-4 fix.
+    assert "refusing" in src.lower()
+    assert "maple.html.j2" in src
+
+
 def test_v_cfi01_findings_csv_round_trip_has_amounts(tmp_path) -> None:
     """End-to-end smoke: run build_findings + write_csv against a
     V-CFI01-shaped brief and verify the rendered CSV has non-empty

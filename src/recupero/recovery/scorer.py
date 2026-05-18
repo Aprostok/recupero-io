@@ -212,23 +212,43 @@ def score_recovery(
         else:
             evidence_discount = Decimal("1.00")
         expected_freezable += issuer_usd * Decimal(prior) * evidence_discount
-        # Track the effective prior in the breakdown so the driver
-        # narrative below reports an honest number.
-        effective_prior = prior * float(evidence_discount)
-        issuer_breakdown.append((issuer, issuer_usd, effective_prior))
+        # v0.16.3 (audit fix #B3): track BOTH base_prior and the
+        # evidence discount separately so the driver narrative can
+        # report them honestly. Pre-fix the breakdown stored only
+        # the product (effective_prior) and labeled it "P(freeze)"
+        # — which conflated two different quantities and made it
+        # impossible for an operator to tell whether a low score
+        # came from issuer reluctance vs. historical-evidence
+        # uncertainty.
+        issuer_breakdown.append(
+            (issuer, issuer_usd, prior, float(evidence_discount), ev_mode)
+        )
 
     if issuer_breakdown:
-        top_issuer, top_usd, top_prior = max(
-            issuer_breakdown, key=lambda x: x[1] * Decimal(x[2]),
+        top_issuer, top_usd, top_prior, top_discount, top_mode = max(
+            issuer_breakdown,
+            key=lambda x: x[1] * Decimal(x[2]) * Decimal(str(x[3])),
         )
+        effective_prior = top_prior * top_discount
+        # Honest narrative — decompose for the operator.
+        if top_discount < 1.0:
+            description = (
+                f"Primary freeze target: ${top_usd:,.2f} at {top_issuer} "
+                f"(issuer prior ≈ {top_prior:.0%}; evidence_mode={top_mode}, "
+                f"discounted by {(1.0 - top_discount):.0%} for historical "
+                f"receipt vs. confirmed current balance; effective "
+                f"P(freeze) ≈ {effective_prior:.0%})"
+            )
+        else:
+            description = (
+                f"Primary freeze target: ${top_usd:,.2f} at {top_issuer} "
+                f"(P(freeze) ≈ {effective_prior:.0%})"
+            )
         drivers.append(RecoveryDriver(
             factor="primary_issuer",
             direction="positive",
-            weight=float(top_usd * Decimal(top_prior) / max(total_loss, Decimal("1"))),
-            description=(
-                f"Primary freeze target: ${top_usd:,.2f} at {top_issuer} "
-                f"(P(freeze)≈{top_prior:.0%})"
-            ),
+            weight=float(top_usd * Decimal(effective_prior) / max(total_loss, Decimal("1"))),
+            description=description,
         ))
 
     # --- Jurisdiction adjustment ---

@@ -88,7 +88,24 @@ class IssuerEntry:
 
 @dataclass
 class FreezeAsk:
-    """One actionable freeze request to a single issuer about a single holding."""
+    """One actionable freeze request to a single issuer about a single holding.
+
+    Two evidence types coexist (v0.14.8):
+
+      * ``'current_balance'`` — the address currently holds the
+        described tokens. Highest-urgency: act fast, funds may still
+        be there. Produced by ``match_freeze_asks(dormant_candidates)``.
+
+      * ``'historical_inflow'`` — the trace shows this address
+        RECEIVED stolen tokens at one point. Current balance may be
+        zero. The letter to the issuer reads as an investigative
+        request rather than a freeze-now-before-they-move-it
+        urgency. Produced by ``synthesize_historical_freeze_asks(case)``.
+        Critical for cases that hit Recupero weeks/months after the
+        incident — the original funds have moved, but the trace
+        evidence is still actionable for issuer outreach (and the
+        next-hop subpoena workflow).
+    """
     candidate_address: str          # the wallet holding the funds
     chain: Chain
     holding_symbol: str
@@ -96,12 +113,23 @@ class FreezeAsk:
     holding_usd_value: Decimal | None
     issuer: IssuerEntry             # who to contact
     explorer_url: str
+    evidence_type: str = "current_balance"
+    # When evidence_type='historical_inflow', this is the date the
+    # inflow was observed in the trace. Used by the letter template.
+    observed_at_iso: str | None = None
+    # Number of distinct inbound transfers observed (for
+    # historical_inflow). >1 indicates repeated dispersal pattern.
+    observed_transfer_count: int = 1
 
     def short_summary(self) -> str:
         usd = f"${self.holding_usd_value:,.2f}" if self.holding_usd_value else "?"
+        suffix = (
+            f" [HISTORICAL — observed in trace]"
+            if self.evidence_type == "historical_inflow" else ""
+        )
         return (
             f"{self.holding_decimal_amount:,.2f} {self.holding_symbol} ({usd}) "
-            f"at {self.candidate_address} → {self.issuer.issuer}"
+            f"at {self.candidate_address} → {self.issuer.issuer}{suffix}"
         )
 
 
@@ -263,6 +291,160 @@ def group_by_issuer(asks: list[FreezeAsk]) -> dict[str, list[FreezeAsk]]:
     for ask in asks:
         out.setdefault(ask.issuer.issuer, []).append(ask)
     return out
+
+
+def synthesize_historical_freeze_asks(
+    case: Case,
+    *,
+    issuer_db: dict[tuple[Chain, str], IssuerEntry] | None = None,
+    min_inflow_usd: Decimal = Decimal("1000"),
+    exclude_addresses: set[str] | None = None,
+) -> list[FreezeAsk]:
+    """Generate FreezeAsk records from HISTORICAL trace evidence (v0.14.8).
+
+    The dormant detector (`find_dormant_in_case`) only catches addresses
+    that CURRENTLY hold balances. For cases that reach Recupero weeks or
+    months after the incident, the perpetrator has typically moved the
+    funds on — current balances are zero, and no freeze letters get
+    generated.
+
+    This function walks `case.transfers` directly and emits FreezeAsk
+    records for any (address, token_contract) pair where:
+
+      1. The token has an issuer entry in the issuer DB
+         (USDT/USDC/cbBTC/PYUSD/etc. — the freezable set).
+      2. The total observed inflow to the address is >= min_inflow_usd.
+
+    Emitted asks carry `evidence_type='historical_inflow'`. The
+    freeze-letter template uses this to switch language from
+    "freeze NOW" → "investigative request: these tokens passed
+    through this address as part of a documented theft on [date]".
+
+    Args:
+      case: the trace case.
+      issuer_db: optional preloaded issuer DB (else loaded via
+        load_issuer_db).
+      min_inflow_usd: aggregate inflow threshold. Below this we skip
+        — operator time outweighs sub-$1K investigative letters.
+      exclude_addresses: addresses to skip (e.g. the victim's own
+        seed wallet, or addresses already covered by
+        current-balance freeze asks).
+
+    Returns:
+      List of FreezeAsk records sorted by holding_usd_value descending.
+    """
+    db = issuer_db if issuer_db is not None else load_issuer_db()
+    exclude = {a.lower() for a in (exclude_addresses or set())}
+    if case.seed_address:
+        exclude.add(case.seed_address.lower())
+
+    # Aggregate per (to_address, token_contract): sum USD, sum decimal
+    # amount, count transfers, earliest observation timestamp.
+    agg: dict[tuple[str, str], dict] = {}
+    for t in case.transfers:
+        to_addr = (t.to_address or "").lower()
+        if not to_addr or to_addr in exclude:
+            continue
+        # Skip transfers FROM the to_addr to itself (rare but observed).
+        if to_addr == (t.from_address or "").lower():
+            continue
+        # Need a contract to match issuer DB (native ETH doesn't have
+        # an issuer freeze pathway anyway).
+        contract = (t.token.contract or "").lower()
+        if not contract:
+            continue
+        key = (to_addr, contract)
+        bucket = agg.setdefault(key, {
+            "to_address": to_addr,
+            "chain": t.chain,
+            "token": t.token,
+            "total_usd": Decimal("0"),
+            "total_amount_decimal": Decimal("0"),
+            "transfer_count": 0,
+            "earliest_block_time": t.block_time,
+            "explorer_url": t.explorer_url,
+        })
+        if t.usd_value_at_tx is not None:
+            bucket["total_usd"] += t.usd_value_at_tx
+        bucket["total_amount_decimal"] += t.amount_decimal
+        bucket["transfer_count"] += 1
+        if t.block_time < bucket["earliest_block_time"]:
+            bucket["earliest_block_time"] = t.block_time
+            # Store the FIRST observation's explorer URL as
+            # representative for the letter.
+            bucket["explorer_url"] = t.explorer_url
+
+    out: list[FreezeAsk] = []
+    for bucket in agg.values():
+        if bucket["total_usd"] < min_inflow_usd:
+            continue
+        chain = bucket["chain"]
+        contract_lower = (bucket["token"].contract or "").lower()
+        issuer_entry = db.get((chain, contract_lower))
+        if issuer_entry is None:
+            # No issuer to contact — skip (these become
+            # 'unmatched' equivalents handled by the operator review
+            # flow, but historical-inflow asks intentionally only
+            # surface addresses where issuer freeze is plausible).
+            continue
+        # Skip non-freezable issuer entries (e.g., Sky Protocol /
+        # MakerDAO has freeze_capability='no'). A freeze letter to
+        # them wastes everyone's time.
+        if (issuer_entry.freeze_capability or "").lower() == "no":
+            continue
+
+        # Get the address-specific explorer URL via the chain
+        # convention. Fall back to the tx URL if needed.
+        addr_url = _explorer_address_url(chain, bucket["to_address"])
+        observed_iso = bucket["earliest_block_time"].isoformat().replace("+00:00", "Z")
+
+        out.append(FreezeAsk(
+            candidate_address=bucket["to_address"],
+            chain=chain,
+            holding_symbol=bucket["token"].symbol,
+            holding_decimal_amount=bucket["total_amount_decimal"],
+            holding_usd_value=bucket["total_usd"],
+            issuer=issuer_entry,
+            explorer_url=addr_url or bucket["explorer_url"],
+            evidence_type="historical_inflow",
+            observed_at_iso=observed_iso,
+            observed_transfer_count=bucket["transfer_count"],
+        ))
+
+    out.sort(
+        key=lambda a: a.holding_usd_value or Decimal("0"),
+        reverse=True,
+    )
+    log.info(
+        "synthesize_historical_freeze_asks: emitted %d ask(s) above "
+        "$%.2f threshold from %d transfer(s)",
+        len(out), float(min_inflow_usd), len(case.transfers),
+    )
+    return out
+
+
+def _explorer_address_url(chain: Chain, address: str) -> str:
+    """Best-effort address-page URL per chain. Used when synthesizing
+    historical freeze asks where we don't have a single representative
+    tx URL handy."""
+    chain_value = chain.value if hasattr(chain, "value") else str(chain)
+    if chain_value == "ethereum":
+        return f"https://etherscan.io/address/{address}"
+    if chain_value == "arbitrum":
+        return f"https://arbiscan.io/address/{address}"
+    if chain_value == "base":
+        return f"https://basescan.org/address/{address}"
+    if chain_value == "bsc":
+        return f"https://bscscan.com/address/{address}"
+    if chain_value == "polygon":
+        return f"https://polygonscan.com/address/{address}"
+    if chain_value == "solana":
+        return f"https://solscan.io/account/{address}"
+    if chain_value == "tron":
+        return f"https://tronscan.org/#/address/{address}"
+    if chain_value == "bitcoin":
+        return f"https://mempool.space/address/{address}"
+    return ""
 
 
 # ---------- Exchange deposit detection ---------- #

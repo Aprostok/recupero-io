@@ -5,6 +5,7 @@ from recupero.freeze.asks import (
     group_by_issuer,
     load_issuer_db,
     match_freeze_asks,
+    synthesize_historical_freeze_asks,
 )
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "group_by_issuer",
     "load_issuer_db",
     "match_freeze_asks",
+    "synthesize_historical_freeze_asks",
 ]

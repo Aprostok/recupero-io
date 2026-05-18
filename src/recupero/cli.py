@@ -528,6 +528,19 @@ def list_freeze_targets_cmd(
         help="Optional UUID of a public.investigations row. If set, freeze_asks.json "
              "is mirrored to investigations/<id>/ in the bucket alongside the local write.",
     ),
+    include_historical: bool = typer.Option(
+        True, "--include-historical/--no-include-historical",
+        help="(v0.14.8) Also generate freeze asks from HISTORICAL trace "
+             "evidence — addresses that received freezable tokens at some "
+             "point, even when current balance is zero. Critical for cases "
+             "that reach Recupero weeks/months after the incident, where the "
+             "perpetrator has already moved funds onward. Default: ON.",
+    ),
+    historical_min_inflow_usd: float = typer.Option(
+        1000.0, "--historical-min-inflow-usd",
+        help="(v0.14.8) Min aggregate inflow USD for historical-inflow "
+             "freeze asks (default $1K).",
+    ),
 ) -> None:
     """End-to-end freeze-target identification: find dormant wallets, match to
     issuers, and print a ranked action list of who to email and what to ask for.
@@ -556,26 +569,59 @@ def list_freeze_targets_cmd(
 
     setup_logging(cfg.logging.level, store.case_dir(case_id))
 
-    console.print(f"\n[bold]Step 1/2:[/] Finding dormant addresses in {case_id}...")
+    console.print(f"\n[bold]Step 1/3:[/] Finding dormant addresses in {case_id}...")
     candidates = find_dormant_in_case(
         case=case, config=cfg, env=env, min_usd=Decimal(str(min_usd)),
     )
-    if not candidates:
-        console.print("[yellow]No dormant addresses found at the given threshold.[/]")
-        return
+    if candidates:
+        console.print(f"  Found {len(candidates)} dormant candidate(s).\n")
+    else:
+        console.print(
+            "  No dormant addresses found at the given threshold "
+            "(funds likely moved on after the incident).\n"
+        )
 
-    console.print(f"  Found {len(candidates)} dormant candidate(s).\n")
-    console.print("[bold]Step 2/2:[/] Matching token holdings to known issuers...\n")
+    console.print("[bold]Step 2/3:[/] Matching token holdings to known issuers...\n")
 
     matched, unmatched = match_freeze_asks(
         candidates, min_holding_usd=Decimal(str(min_holding_usd)),
     )
 
+    # v0.14.8: Historical-inflow freeze asks. Walk the trace
+    # directly for addresses that RECEIVED freezable tokens, even
+    # if current balance is zero. This is the path that makes
+    # 7-months-after-the-fact cases produce freeze letters at all.
+    historical_asks: list = []
+    if include_historical:
+        from recupero.freeze.asks import synthesize_historical_freeze_asks
+        # Exclude addresses already covered by current-balance asks to
+        # avoid duplicates.
+        exclude = {a.candidate_address for a in matched}
+        historical_asks = synthesize_historical_freeze_asks(
+            case,
+            min_inflow_usd=Decimal(str(historical_min_inflow_usd)),
+            exclude_addresses=exclude,
+        )
+        if historical_asks:
+            console.print(
+                f"  [bold green]+ {len(historical_asks)} historical-inflow "
+                "freeze ask(s)[/] from addresses that received freezable "
+                "tokens (current balance may be zero)."
+            )
+        # Merge into the main asks list — emit_brief.py + the freeze-letter
+        # template treat them uniformly by evidence_type.
+        matched = matched + historical_asks
+        # Re-sort by USD.
+        matched.sort(
+            key=lambda a: a.holding_usd_value or Decimal("0"),
+            reverse=True,
+        )
+
     if not matched:
         console.print(
-            "[yellow]No matched freeze asks found.[/] The dormant wallets hold "
-            "tokens we don't have issuer info for. Add them to "
-            "src/recupero/labels/seeds/issuers.json if they're worth chasing."
+            "[yellow]No freeze asks found (neither current-balance nor "
+            "historical-inflow).[/] The case may not contain any "
+            "freezable-token movements above the threshold."
         )
         if unmatched:
             console.print("\n[dim]Unmatched holdings worth investigating:[/]")
@@ -652,6 +698,14 @@ def list_freeze_targets_cmd(
                         "primary_contact": a.issuer.primary_contact,
                         "freeze_capability": a.issuer.freeze_capability,
                         "explorer_url": a.explorer_url,
+                        # v0.14.8: evidence_type + provenance fields.
+                        # Downstream consumers (AI editorial prompt,
+                        # freeze-letter templates, emit_brief) use
+                        # evidence_type to switch language between
+                        # "freeze NOW" and "investigative request".
+                        "evidence_type": a.evidence_type,
+                        "observed_at": a.observed_at_iso,
+                        "observed_transfer_count": a.observed_transfer_count,
                     }
                     for a in asks
                 ]

@@ -13,7 +13,9 @@ happen in one place.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 from typing import Any
 
 
@@ -156,6 +158,33 @@ def aggregate_evidence_mode_from_entries(
     return "current_balance_only"
 
 
+# ---- Atomic file writes ---- #
+
+
+def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    """Write `content` to `path` atomically.
+
+    Writes to a sibling `.tmp` then `os.replace`s into place — atomic on
+    POSIX and on Windows (Python 3.3+). Important for JSON files that a
+    separate process / thread may read concurrently (the bucket uploader
+    reads files after the worker writes them; without atomicity it can
+    pick up a half-written truncated JSON).
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp_path.write_text(content, encoding=encoding)
+        os.replace(tmp_path, path)
+    except Exception:
+        # Best-effort cleanup of the tempfile if write succeeded but
+        # rename failed.
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        raise
+
+
 __all__ = (
     "CAPABILITY_DISPLAY",
     "ADDRESS_EXPLORER_BY_CHAIN",
@@ -164,4 +193,5 @@ __all__ = (
     "capability_is_freezable",
     "aggregate_evidence_mode_from_holdings",
     "aggregate_evidence_mode_from_entries",
+    "atomic_write_text",
 )

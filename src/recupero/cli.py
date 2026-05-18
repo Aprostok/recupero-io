@@ -722,7 +722,10 @@ def list_freeze_targets_cmd(
                 console.print()
 
     out_path = store.case_dir(case_id) / "freeze_asks.json"
-    out_path.write_text(
+    # Atomic write so a concurrent reader can't see a half-written file.
+    from recupero._common import atomic_write_text
+    atomic_write_text(
+        out_path,
         json.dumps({
             "case_id": case_id,
             "total_asks": len(matched),
@@ -802,7 +805,6 @@ def list_freeze_targets_cmd(
                 for f in onward_flows
             ],
         }, indent=2),
-        encoding="utf-8",
     )
     console.print(f"[bold]Wrote[/] {out_path}")
 

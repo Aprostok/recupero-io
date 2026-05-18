@@ -785,10 +785,11 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
     # this is the customer-facing paragraph, plain English only.
     vs = ai_obj.get("VICTIM_SUMMARY")
     if isinstance(vs, str) and vs.strip():
-        # Sentence count — rough approximation via "." count.
-        sentence_count = sum(
-            1 for ch in vs if ch in ".!?"
-        )
+        # Sentence count via regex so runs of punctuation (".." in
+        # ellipses, "?!" emphasis) collapse to one sentence boundary
+        # each. A naive `.!?` counter false-triggered the ceiling on
+        # legitimate prose using ellipses.
+        sentence_count = len(re.findall(r"[.!?]+", vs))
         if sentence_count < 3:
             problems.append(
                 f"VICTIM_SUMMARY has only ~{sentence_count} sentence(s); "

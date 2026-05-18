@@ -148,27 +148,14 @@ def _short_addr(addr: str) -> str:
 
 
 def _explorer_url(chain: str, address: str) -> str:
-    """Best-effort chain → explorer URL mapping."""
+    """Best-effort chain → explorer URL mapping. Sources the prefix
+    table from `recupero._common` so adding a chain happens in one
+    place."""
     if not address:
         return ""
-    chain_lower = (chain or "").lower()
-    if chain_lower == "ethereum":
-        return f"https://etherscan.io/address/{address}"
-    if chain_lower == "arbitrum":
-        return f"https://arbiscan.io/address/{address}"
-    if chain_lower == "base":
-        return f"https://basescan.org/address/{address}"
-    if chain_lower == "bsc":
-        return f"https://bscscan.com/address/{address}"
-    if chain_lower == "polygon":
-        return f"https://polygonscan.com/address/{address}"
-    if chain_lower == "solana":
-        return f"https://solscan.io/account/{address}"
-    if chain_lower == "tron":
-        return f"https://tronscan.org/#/address/{address}"
-    if chain_lower == "bitcoin":
-        return f"https://mempool.space/address/{address}"
-    return ""
+    from recupero._common import ADDRESS_EXPLORER_BY_CHAIN
+    prefix = ADDRESS_EXPLORER_BY_CHAIN.get((chain or "").lower())
+    return f"{prefix}{address}" if prefix else ""
 
 
 def build_graph_data(case: Case) -> dict[str, Any]:

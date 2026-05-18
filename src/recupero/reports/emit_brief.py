@@ -519,10 +519,14 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             #   UNKNOWN status + freezable cap     → rescue to
             #     FREEZABLE so AI-editorial-failure / cost-limit cases
             #     don't silently route to unrecoverable
-            ask_capability = (a.get("freeze_capability") or "").lower()
-            if status == "FREEZABLE" and ask_capability in ("no", "low"):
+            from recupero._common import (
+                capability_blocks_freeze,
+                capability_is_freezable,
+            )
+            ask_capability = a.get("freeze_capability")
+            if status == "FREEZABLE" and capability_blocks_freeze(ask_capability):
                 status = "UNRECOVERABLE"
-            if status == "UNKNOWN" and ask_capability in ("yes", "limited", "high", "medium"):
+            if status == "UNKNOWN" and capability_is_freezable(ask_capability):
                 status = "FREEZABLE"
 
             if status == "FREEZABLE":
@@ -593,10 +597,15 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             "freeze_capability": cap_display,
             "holdings": holdings,
             "contact_email": meta.get("contact_email") or primary_contact or "",
+            # primary_contact is the raw issuer-DB field; emit both so
+            # downstream consumers that fall back from contact_email to
+            # primary_contact get the same value via either key.
+            # (Synthesizer path writes both; main path now does too.)
+            "primary_contact": primary_contact or "",
             "portal_url": meta.get("portal_url", ""),
             "typical_response_time": meta.get("typical_response_time", "Variable"),
             "freeze_note": meta.get("freeze_note", ""),
-            # v0.14.9 evidence-mode summary for the letter template.
+            # Aggregate evidence_mode for the letter template.
             "evidence_mode": evidence_mode,
             "historical_count": n_historical,
             "current_balance_count": n_current,
@@ -1273,5 +1282,8 @@ def run_emit_brief(case_id: str, case_store: CaseStore) -> tuple[Path, dict[str,
 
     # 6. Write
     out_path = case_dir / "freeze_brief.json"
-    out_path.write_text(json.dumps(brief, indent=2), encoding="utf-8")
+    # Atomic write so a concurrent reader (bucket uploader, portal) can't
+    # pick up a half-written JSON.
+    from recupero._common import atomic_write_text
+    atomic_write_text(out_path, json.dumps(brief, indent=2))
     return out_path, brief

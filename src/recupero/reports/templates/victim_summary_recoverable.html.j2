@@ -82,17 +82,23 @@
     {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
     authority — a mix of confirmed current balances and
     documented historical receipts (the per-issuer table below
-    shows which is which). Plus an additional
+    shows which is which).
+    {% if total_under_investigation_usd and total_under_investigation_usd not in ("$0.00", "$0") %}
+    Plus an additional
     <strong>{{ total_under_investigation_usd }}</strong>
     in positions pending issuer verification.
+    {% endif %}
     {% else %}
     We identified recoverable stolen funds totaling
     <strong>{{ total_recoverable_freezable_usd }}</strong>
     currently held under {{ freezable_issuer_count }}
     {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
-    authority, plus an additional
+    authority.
+    {% if total_under_investigation_usd and total_under_investigation_usd not in ("$0.00", "$0") %}
+    Plus an additional
     <strong>{{ total_under_investigation_usd }}</strong>
     in positions pending issuer verification.
+    {% endif %}
     {% endif %}
     Your options for pursuing recovery are explained in Section 3 below.
   </p>

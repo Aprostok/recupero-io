@@ -733,7 +733,10 @@ def _stage_list_freeze_targets(
         ],
     }
     out_path = case_dir / "freeze_asks.json"
-    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # Atomic write — bucket uploader runs from a different thread/path
+    # and must not pick up a half-written JSON.
+    from recupero._common import atomic_write_text
+    atomic_write_text(out_path, json.dumps(payload, indent=2))
     upload_case_dir(case_dir, bucket)
 
 
@@ -805,16 +808,24 @@ def _synthesize_freeze_brief_from_asks(
     No narrative prose; no TOTAL_LOSS_USD / MAX_RECOVERABLE_USD
     aggregates beyond what's directly computable from the asks.
     """
+    from recupero._common import atomic_write_text
     freeze_asks_path = case_dir / "freeze_asks.json"
     out_path = case_dir / "freeze_brief.json"
     if not freeze_asks_path.exists():
         # No freeze asks emitted (the freeze stage produced nothing).
-        # Still write a stub so downstream code sees a valid file.
-        out_path.write_text(
-            json.dumps({"FREEZABLE": [], "DESTINATIONS": [],
-                        "TOTAL_LOSS_USD": "$0", "MAX_RECOVERABLE_USD": "$0"},
-                       indent=2),
-            encoding="utf-8",
+        # Write a stub so downstream code sees a valid file — stamped
+        # with SCHEMA_VERSION so check_brief_schema_version doesn't
+        # spuriously flag it as a "pre-v0.16.x" pipeline product.
+        atomic_write_text(
+            out_path,
+            json.dumps({
+                "SCHEMA_VERSION": BRIEF_SCHEMA_VERSION,
+                "FREEZABLE": [],
+                "DESTINATIONS": [],
+                "TOTAL_LOSS_USD": "$0",
+                "MAX_RECOVERABLE_USD": "$0",
+                "SOURCE": "stub (freeze_asks.json missing — freeze stage produced no asks)",
+            }, indent=2),
         )
         upload_case_dir(case_dir, bucket)
         return
@@ -829,13 +840,16 @@ def _synthesize_freeze_brief_from_asks(
             "freeze_asks.json unreadable (%s) — emitting stub freeze_brief",
             exc,
         )
-        out_path.write_text(
-            json.dumps({"FREEZABLE": [], "DESTINATIONS": [],
-                        "TOTAL_LOSS_USD": "$0", "MAX_RECOVERABLE_USD": "$0",
-                        "SOURCE": "stub (freeze_asks.json unreadable)",
-                        "SCHEMA_VERSION": BRIEF_SCHEMA_VERSION},
-                       indent=2),
-            encoding="utf-8",
+        atomic_write_text(
+            out_path,
+            json.dumps({
+                "SCHEMA_VERSION": BRIEF_SCHEMA_VERSION,
+                "FREEZABLE": [],
+                "DESTINATIONS": [],
+                "TOTAL_LOSS_USD": "$0",
+                "MAX_RECOVERABLE_USD": "$0",
+                "SOURCE": "stub (freeze_asks.json unreadable)",
+            }, indent=2),
         )
         upload_case_dir(case_dir, bucket)
         return
@@ -948,6 +962,7 @@ def _synthesize_freeze_brief_from_asks(
             # inputs across both writers.
             freezable_only = Decimal(0)
             suspected_only = Decimal(0)
+            excluded_only = Decimal(0)
             for h in token_entry["holdings"]:
                 try:
                     h_usd = Decimal(
@@ -956,12 +971,18 @@ def _synthesize_freeze_brief_from_asks(
                     )
                 except Exception:  # noqa: BLE001
                     h_usd = Decimal(0)
-                if h.get("status") == "FREEZABLE":
+                h_status = h.get("status")
+                if h_status == "FREEZABLE":
                     freezable_only += h_usd
-                if h.get("status") in ("FREEZABLE", "INVESTIGATE"):
+                if h_status in ("FREEZABLE", "INVESTIGATE"):
                     suspected_only += h_usd
+                else:
+                    excluded_only += h_usd
             token_entry["total_usd"] = f"${freezable_only:,.2f}"
             token_entry["total_suspected_usd"] = f"${suspected_only:,.2f}"
+            # Schema parity with emit_brief: include total_excluded_usd
+            # so consumers reading either writer get the same shape.
+            token_entry["total_excluded_usd"] = f"${excluded_only:,.2f}"
             freezable.append(token_entry)
 
     # Skip_editorial path has no rich destination data (that comes from
@@ -975,8 +996,7 @@ def _synthesize_freeze_brief_from_asks(
         "MAX_RECOVERABLE_USD": f"${total_recoverable:,.2f}",
         "SOURCE": "synthesized from freeze_asks.json (skip_editorial path)",
     }
-    out_path.write_text(json.dumps(out, indent=2, default=str),
-                        encoding="utf-8")
+    atomic_write_text(out_path, json.dumps(out, indent=2, default=str))
     upload_case_dir(case_dir, bucket)
     log.info("synthesized freeze_brief.json for skip_editorial path: "
              "%d freezable issuer(s)", len(freezable))

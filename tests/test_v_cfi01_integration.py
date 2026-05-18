@@ -1826,6 +1826,201 @@ def test_v_cfi01_brief_render_refuses_maple_fallback() -> None:
     assert "maple.html.j2" in src
 
 
+# ---- v0.16.5 round-7 audit-fix pins ---- #
+
+
+def test_v0_16_5_version_reads_from_package_metadata() -> None:
+    """v0.16.5: recupero.__version__ now reads from installed package
+    metadata via importlib.metadata.version() rather than being a
+    hardcoded "0.1.0". The /v1/health endpoint reports this value, so
+    a stale hardcode was confusing operators verifying a release."""
+    import recupero
+    # Either the real installed version (e.g., "0.16.5") OR the
+    # graceful fallback for source-tree-only invocations. Must NOT
+    # be the old stale "0.1.0" literal.
+    assert recupero.__version__ != "0.1.0", (
+        f"recupero.__version__ should resolve dynamically; "
+        f"got hardcoded {recupero.__version__!r}"
+    )
+
+
+def test_v0_16_5_atomic_write_text_works(tmp_path) -> None:
+    """v0.16.5: atomic_write_text writes via tempfile + os.replace so
+    concurrent readers can't pick up half-written JSON."""
+    from recupero._common import atomic_write_text
+    p = tmp_path / "subdir" / "out.json"
+    atomic_write_text(p, '{"hello": "world"}')
+    assert p.read_text(encoding="utf-8") == '{"hello": "world"}'
+    # No leftover .tmp file
+    assert not (tmp_path / "subdir" / "out.json.tmp").exists()
+
+
+def test_v0_16_5_missing_freeze_asks_stub_has_schema_version(tmp_path) -> None:
+    """v0.16.5: when freeze_asks.json is missing entirely, the
+    skip_editorial fallback emits a STUB freeze_brief with the
+    SCHEMA_VERSION stamp so check_brief_schema_version doesn't
+    spuriously warn that the stub came from a pre-v0.16.x pipeline."""
+    import json
+    from pathlib import Path as _Path
+    from unittest.mock import MagicMock
+    from recupero.worker.pipeline import (
+        BRIEF_SCHEMA_VERSION,
+        _synthesize_freeze_brief_from_asks,
+    )
+    case_dir = _Path(tmp_path) / "case_NO_ASKS"
+    case_dir.mkdir()
+    # No freeze_asks.json on disk — exercise the missing-file branch.
+    _synthesize_freeze_brief_from_asks(case_dir, MagicMock())
+    brief = json.loads(
+        (case_dir / "freeze_brief.json").read_text(encoding="utf-8"),
+    )
+    assert brief["SCHEMA_VERSION"] == BRIEF_SCHEMA_VERSION
+    assert brief["FREEZABLE"] == []
+    assert "stub" in brief.get("SOURCE", "")
+
+
+def test_v0_16_5_exchange_deposit_explorer_url_per_chain() -> None:
+    """v0.16.5: ExchangeDeposit.explorer_url now uses the right
+    per-chain prefix instead of a hardcoded etherscan URL. Solana /
+    Bitcoin / Tron CEX deposits previously 404'd on operator
+    click-throughs."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+    from recupero.freeze.asks import detect_exchange_deposits, ExchangeDeposit
+    from recupero.labels.store import LabelStore
+    from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
+    # Build a synthetic Solana case with a Solana CEX deposit.
+    transfers = [
+        Transfer(
+            transfer_id="solana:abc:1",
+            chain=Chain.solana,
+            tx_hash="0xabc",
+            block_number=1,
+            block_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            from_address="solanafrom",
+            to_address="solanaCEXdest",
+            counterparty=Counterparty(
+                address="solanaCEXdest", label=None, is_contract=False,
+            ),
+            token=TokenRef(
+                chain=Chain.solana, contract=None,
+                symbol="SOL", decimals=9, coingecko_id="solana",
+            ),
+            amount_raw="1000000000", amount_decimal=Decimal("1"),
+            usd_value_at_tx=Decimal("5000"),
+            hop_depth=1,
+            fetched_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            explorer_url="https://solscan.io/tx/0xabc",
+        ),
+    ]
+    case = Case(
+        case_id="solana-test", seed_address="solanafrom",
+        chain=Chain.solana,
+        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        transfers=transfers,
+        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        software_version="test", config_used={},
+    )
+    # Inject the CEX label via a MagicMock label_store.
+    from unittest.mock import MagicMock
+    from recupero.models import Label, LabelCategory
+    fake_label = Label(
+        address="solanaCEXdest",
+        name="Solana CEX Hot Wallet",
+        category=LabelCategory.exchange_hot_wallet,
+        exchange="SolanaCEX",
+        source="test",
+        confidence="high",
+        notes="test",
+        added_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    label_store = MagicMock(spec=LabelStore)
+    label_store.lookup = MagicMock(return_value=fake_label)
+    deposits = detect_exchange_deposits(
+        case=case, label_store=label_store,
+        min_deposit_usd=Decimal("1000"),
+    )
+    assert len(deposits) == 1
+    # Must be a Solana explorer URL, not Etherscan.
+    assert "solscan.io" in deposits[0].explorer_url, (
+        f"Solana CEX deposit must use Solana explorer; "
+        f"got {deposits[0].explorer_url}"
+    )
+    assert "etherscan.io" not in deposits[0].explorer_url
+
+
+def test_v0_16_5_freezable_entry_schema_parity() -> None:
+    """v0.16.5: emit_brief writer now includes primary_contact;
+    worker synthesizer includes total_excluded_usd. Both schemas
+    align so downstream readers don't fall through to defaults
+    based on which writer produced the brief."""
+    import json
+    from pathlib import Path as _Path
+    from unittest.mock import MagicMock
+    from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
+    case_dir = _Path("/tmp" if not hasattr(__builtins__, "WindowsPath") else "")
+    # Use the tmp_path-style approach.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        case_dir = _Path(tmp) / "case_X"
+        case_dir.mkdir()
+        (case_dir / "freeze_asks.json").write_text(json.dumps({
+            "case_id": "X", "total_asks": 1,
+            "by_issuer": {
+                "Tether": [{
+                    "address": "0xabc", "chain": "ethereum",
+                    "symbol": "USDT", "amount": "100",
+                    "usd_value": "100000",
+                    "freeze_capability": "yes",
+                    "primary_contact": "compliance@tether.to",
+                    "evidence_type": "current_balance",
+                }],
+            },
+            "exchange_deposits": [],
+        }), encoding="utf-8")
+        _synthesize_freeze_brief_from_asks(case_dir, MagicMock())
+        brief = json.loads(
+            (case_dir / "freeze_brief.json").read_text(encoding="utf-8"),
+        )
+        tether = brief["FREEZABLE"][0]
+        # Worker synthesizer: now writes total_excluded_usd.
+        assert "total_excluded_usd" in tether
+        # Worker synthesizer already wrote primary_contact + contact_email
+        # in v0.16.3; verify here for parity.
+        assert "primary_contact" in tether
+        assert "contact_email" in tether
+
+
+def test_v0_16_5_sentence_counter_handles_ellipses() -> None:
+    """v0.16.5: validator's VICTIM_SUMMARY sentence counter collapses
+    runs of punctuation so '...' doesn't count as 3 sentences and
+    '?!' doesn't count as 2."""
+    from recupero.reports.ai_editorial import _validate_ai_output
+    ai_out = {
+        "INCIDENT_TYPE": "x", "INCIDENT_TYPE_AI_CONFIDENCE": "high",
+        "INCIDENT_NARRATIVE_RECUPERO": "x", "INCIDENT_NARRATIVE_RECUPERO_AI_CONFIDENCE": "high",
+        "INCIDENT_NARRATIVE_FIRST_PERSON": "x", "INCIDENT_NARRATIVE_FIRST_PERSON_AI_CONFIDENCE": "high",
+        "VICTIM_JURISDICTION": "USA", "VICTIM_JURISDICTION_AI_CONFIDENCE": "high",
+        "DESTINATION_NOTES": {}, "DESTINATION_NOTES_AI_CONFIDENCE": "high",
+        "UNRECOVERABLE_ITEMS": [], "UNRECOVERABLE_ITEMS_AI_CONFIDENCE": "high",
+        # 4 sentences, but the third uses an ellipsis and the second
+        # ends with "?!" — pre-fix the counter saw 4+3+2 = 9 separators
+        # not 4.
+        "VICTIM_SUMMARY": (
+            "Here's what happened. Why did this happen?! Your funds "
+            "moved through several wallets... Now we're preparing "
+            "freeze letters."
+        ),
+        "VICTIM_SUMMARY_AI_CONFIDENCE": "high",
+    }
+    problems = _validate_ai_output(ai_out)
+    sentence_count_problems = [p for p in problems if "sentence" in p.lower()]
+    assert sentence_count_problems == [], (
+        f"Sentence counter should treat '...' and '?!' as single "
+        f"boundaries. Got problems: {sentence_count_problems}"
+    )
+
+
 def test_v_cfi01_findings_csv_round_trip_has_amounts(tmp_path) -> None:
     """End-to-end smoke: run build_findings + write_csv against a
     V-CFI01-shaped brief and verify the rendered CSV has non-empty

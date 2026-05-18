@@ -623,25 +623,17 @@ def synthesize_historical_freeze_asks(
 def _explorer_address_url(chain: Chain, address: str) -> str:
     """Best-effort address-page URL per chain. Used when synthesizing
     historical freeze asks where we don't have a single representative
-    tx URL handy."""
+    tx URL handy.
+
+    Sources the prefix from the centralized _common table so adding a
+    new chain only requires one update.
+    """
+    from recupero._common import ADDRESS_EXPLORER_BY_CHAIN
     chain_value = chain.value if hasattr(chain, "value") else str(chain)
-    if chain_value == "ethereum":
-        return f"https://etherscan.io/address/{address}"
-    if chain_value == "arbitrum":
-        return f"https://arbiscan.io/address/{address}"
-    if chain_value == "base":
-        return f"https://basescan.org/address/{address}"
-    if chain_value == "bsc":
-        return f"https://bscscan.com/address/{address}"
-    if chain_value == "polygon":
-        return f"https://polygonscan.com/address/{address}"
-    if chain_value == "solana":
-        return f"https://solscan.io/account/{address}"
-    if chain_value == "tron":
-        return f"https://tronscan.org/#/address/{address}"
-    if chain_value == "bitcoin":
-        return f"https://mempool.space/address/{address}"
-    return ""
+    prefix = ADDRESS_EXPLORER_BY_CHAIN.get(chain_value)
+    if not prefix:
+        return ""
+    return f"{prefix}{address}"
 
 
 # ---------- Exchange deposit detection ---------- #
@@ -694,8 +686,9 @@ def detect_exchange_deposits(
         if total_usd < min_deposit_usd:
             continue
         label = per_addr_label[addr]
-        # TODO: when multi-chain support ships, pick the right explorer base
-        # from config.<chain>.explorer_base instead of hardcoding etherscan.io.
+        # Use the right explorer for the case's chain, not a hardcoded
+        # etherscan URL (was wrong for Solana / Tron / Bitcoin CEX
+        # deposits — addresses 404'd in operator click-throughs).
         out.append(ExchangeDeposit(
             candidate_address=addr,
             chain=case.chain,
@@ -707,7 +700,7 @@ def detect_exchange_deposits(
             deposit_count=per_addr_count[addr],
             first_deposit_at=per_addr_first.get(addr),
             last_deposit_at=per_addr_last.get(addr),
-            explorer_url=f"https://etherscan.io/address/{addr}",
+            explorer_url=_explorer_address_url(case.chain, addr),
         ))
 
     out.sort(key=lambda d: d.total_deposited_usd, reverse=True)

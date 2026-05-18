@@ -158,8 +158,10 @@ def score_recovery(
     freezable_entries = brief.get("FREEZABLE") or []
 
     # --- Per-issuer expected recovery ---
+    # Breakdown tuple: (issuer_name, usd, base_prior,
+    #                   evidence_discount, evidence_mode)
     expected_freezable = Decimal("0")
-    issuer_breakdown: list[tuple[str, Decimal, float]] = []
+    issuer_breakdown: list[tuple[str, Decimal, float, float, str]] = []
     for entry in freezable_entries:
         if not isinstance(entry, dict):
             continue
@@ -193,17 +195,13 @@ def score_recovery(
             prior = min(prior, 0.50)
         elif capability in ("yes", "high"):
             prior = max(prior, 0.85)
-        # v0.16.2 (audit fix #8): discount historical-inflow asks.
-        # Pre-fix the scorer applied the full P(freeze) prior to
-        # historical_inflow USD as if it were a confirmed current
-        # balance. For V-CFI01 that would overstate expected recovery
-        # by a factor that depends on what % of the historical inflow
-        # remains at the address today. Conservative discount:
-        # historical_only → 0.5x, mixed → 0.75x, current_balance_only → 1.0x.
-        # Issuer compliance can still investigate and recover when
-        # balances remain, but the prior on "balance remains 7 months
-        # later" is well below the prior on "freeze a confirmed
-        # current balance."
+        # Discount historical-inflow asks vs. confirmed current balances.
+        # Issuer compliance can still investigate/recover when balances
+        # remain, but the prior on "balance remains 7 months later" is
+        # well below the prior on "freeze a confirmed current balance".
+        #   historical_only      → 0.50x
+        #   mixed                → 0.75x
+        #   current_balance_only → 1.00x (unchanged)
         ev_mode = (entry.get("evidence_mode") or "current_balance_only").lower()
         if ev_mode == "historical_only":
             evidence_discount = Decimal("0.50")
@@ -212,14 +210,9 @@ def score_recovery(
         else:
             evidence_discount = Decimal("1.00")
         expected_freezable += issuer_usd * Decimal(prior) * evidence_discount
-        # v0.16.3 (audit fix #B3): track BOTH base_prior and the
-        # evidence discount separately so the driver narrative can
-        # report them honestly. Pre-fix the breakdown stored only
-        # the product (effective_prior) and labeled it "P(freeze)"
-        # — which conflated two different quantities and made it
-        # impossible for an operator to tell whether a low score
-        # came from issuer reluctance vs. historical-evidence
-        # uncertainty.
+        # Track base_prior + evidence_discount separately so the driver
+        # narrative + headline summary can decompose them for the
+        # operator (vs. collapsing to a single misleading "P(freeze)").
         issuer_breakdown.append(
             (issuer, issuer_usd, prior, float(evidence_discount), ev_mode)
         )
@@ -422,9 +415,19 @@ def _build_headline_summary(
     expected_recovered: Decimal,
     expected_net: Decimal,
     total_loss: Decimal,
-    top_issuer_breakdown: list[tuple[str, Decimal, float]],
+    top_issuer_breakdown: list[tuple[str, Decimal, float, float, str]],
     p_any: float,
 ) -> str:
+    """Build the human-readable summary line that's shipped in the
+    brief's RECOVERY_ESTIMATE.
+
+    The breakdown tuple shape is `(issuer, issuer_usd, base_prior,
+    evidence_discount, evidence_mode)`. The headline reports the
+    EFFECTIVE prior (base × discount) so it matches the driver
+    narrative emitted by `score_recovery` — without this, the headline
+    used to report base_prior while the driver reported effective,
+    producing two contradictory numbers in the same object.
+    """
     rec_phrase = {
         "recommend": "RECOMMEND ENGAGEMENT",
         "caveat": "CAVEAT ENGAGEMENT (small expected net)",
@@ -437,10 +440,19 @@ def _build_headline_summary(
         f"P(any recovery)≈{p_any:.0%}."
     )
     if top_issuer_breakdown:
-        top = max(top_issuer_breakdown, key=lambda x: x[1] * Decimal(x[2]))
+        # Rank by EFFECTIVE expected dollars (USD × base × discount)
+        # so the "primary target" is the actually-most-recoverable
+        # issuer, not the one with the highest gross balance.
+        top = max(
+            top_issuer_breakdown,
+            key=lambda x: x[1] * Decimal(str(x[2])) * Decimal(str(x[3])),
+        )
+        top_issuer = top[0]
+        top_usd = top[1]
+        top_effective = top[2] * top[3]
         base += (
-            f" Primary target: ${top[1]:,.2f} at {top[0]} "
-            f"(P(freeze)≈{top[2]:.0%})."
+            f" Primary target: ${top_usd:,.2f} at {top_issuer} "
+            f"(P(freeze)≈{top_effective:.0%})."
         )
     return base
 

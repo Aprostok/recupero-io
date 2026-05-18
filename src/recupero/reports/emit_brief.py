@@ -459,11 +459,8 @@ def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:
     note = editorial_notes.get(addr, "")
     if not isinstance(note, str):
         return "UNKNOWN"
-    # v0.16.3 (audit fix #A19): strip BOM + zero-width whitespace
-    # before the emoji. LLMs occasionally emit `﻿🟩` or
-    # `​🟩` (zero-width-space-prefixed) which fell through the
-    # plain .lstrip() — every "freezable" note got classified
-    # UNKNOWN and the freezable total under-counted.
+    # Strip BOM + zero-width whitespace before checking for the emoji
+    # prefix — LLMs occasionally emit those invisibly before the badge.
     note = note.lstrip().lstrip("﻿​‌‍⁠")
     if note.startswith("🟩"):
         return "FREEZABLE"
@@ -514,46 +511,17 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             holding_usd = Decimal(str(a.get("usd_value") or "0"))
             status = _classify_address_status(addr, editorial_notes)
 
-            # v0.16.2 (audit fix #2): the v0.16.1 status-downgrade for
-            # historical_inflow over-corrected. Setting status=INVESTIGATE
-            # zeroed the per-issuer total_usd, which caused
-            # classify_recovery_prospects to route the case to
-            # unrecoverable — defeating the recoverable letter path and
-            # silently producing the same end-state as the original bug
-            # (no customer-facing recoverable artifact).
-            #
-            # New policy:
-            #   * capability in (no, low) → UNRECOVERABLE (issuer can't
-            #     freeze regardless of evidence type)
-            #   * historical_inflow + capability in (yes, limited) →
-            #     keep status FREEZABLE. The freeze letter IS the
-            #     recovery mechanism for this case shape; the
-            #     letter template (v0.16.1) branches on evidence_mode
-            #     to use "received at" language instead of "currently
-            #     held". The customer summary template was extended
-            #     to do the same in v0.16.2.
-            #
-            # The earlier concern — that a downstream consumer would
-            # claim "$X currently held" for historical_inflow — is
-            # addressed at the template layer (evidence_mode branch),
-            # not by dropping the USD figure from the aggregate.
+            # Status policy:
+            #   capability=no/low                  → UNRECOVERABLE
+            #   FREEZABLE-tagged + freezable cap   → keep FREEZABLE
+            #     (template differentiates "currently held" vs
+            #      "received at" via per-row evidence_type, NOT status)
+            #   UNKNOWN status + freezable cap     → rescue to
+            #     FREEZABLE so AI-editorial-failure / cost-limit cases
+            #     don't silently route to unrecoverable
             ask_capability = (a.get("freeze_capability") or "").lower()
             if status == "FREEZABLE" and ask_capability in ("no", "low"):
                 status = "UNRECOVERABLE"
-
-            # v0.16.2 (audit fix #2): when AI editorial fails or
-            # cost-limits, editorial_notes is empty for every address,
-            # so _classify_address_status returns "UNKNOWN". The fall-
-            # through bucket at the elif/else below sends UNKNOWN to
-            # total_excluded_usd — zeroing per-issuer total_usd and
-            # routing the case to unrecoverable, recreating Jacob's
-            # original bug through a third side door.
-            #
-            # When the ask is at a freezable issuer (cap=yes/limited),
-            # missing editorial labels should NOT exclude the ask from
-            # the freezable bucket. The freeze_asks evidence is already
-            # there; the AI editorial just didn't get a chance to add
-            # color. Default to FREEZABLE so the case still routes.
             if status == "UNKNOWN" and ask_capability in ("yes", "limited", "high", "medium"):
                 status = "FREEZABLE"
 
@@ -583,34 +551,28 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
                 "observed_transfer_count": a.get("observed_transfer_count", 1),
             })
 
-        # Map CLI's freeze_capability to display capability
-        cap_display = {
-            "yes": "HIGH",
-            "limited": "MEDIUM",
-            "no": "LOW",
-        }.get(capability, "UNKNOWN")
+        # Map raw freeze_capability ("yes"/"limited"/"no") → display
+        # form ("HIGH"/"MEDIUM"/"LOW"). Centralized in _common.
+        from recupero._common import (
+            aggregate_evidence_mode_from_holdings,
+            capability_display,
+        )
+        cap_display = capability_display(capability)
 
         # Look up extras from issuer_metadata if present
         meta = issuer_metadata.get(issuer_name, {})
 
-        # v0.14.9: compute aggregate evidence shape so the letter
-        # template can switch between "freeze NOW" and "investigative
-        # request" preambles. If ALL holdings are historical, the
-        # whole letter takes the investigative framing. If MIXED,
-        # the letter notes both and the request section asks for
-        # action on the current-balance ones AND investigation on
-        # the historical ones.
+        # Aggregate evidence_mode across this issuer's holdings so the
+        # letter template can switch between "freeze NOW" and
+        # "investigative request" preambles per issuer. The aggregate-
+        # across-issuers mode (for the customer letter bottom line) is
+        # computed separately in _victim_summary._build_context.
         n_historical = sum(
             1 for h in holdings
             if h.get("evidence_type") == "historical_inflow"
         )
         n_current = len(holdings) - n_historical
-        if n_historical == 0:
-            evidence_mode = "current_balance_only"
-        elif n_current == 0:
-            evidence_mode = "historical_only"
-        else:
-            evidence_mode = "mixed"
+        evidence_mode = aggregate_evidence_mode_from_holdings(holdings)
 
         # Earliest observation across the historical holdings, for
         # the letter's "incidents observed since" line.
@@ -686,20 +648,12 @@ def _compute_perpetrator_holdings(
     addresses) because those aren't perpetrator-controlled in
     any actionable sense.
     """
-    total = Decimal("0")
-    # FREEZABLE current balances
-    for f in freezable:
-        total += _parse_usd_string(f.get("total_usd", "0"))
-        total += _parse_usd_string(f.get("total_suspected_usd", "0"))
-    # Subtract double-counting: total_suspected_usd is the GROSS
-    # at the address (including the freezable subset). The
-    # freezable list reports both; we want the gross perpetrator
-    # exposure, so use total_suspected and skip total_usd.
-    # Re-do without double-counting:
+    # total_suspected_usd is the GROSS dollars at the address
+    # (FREEZABLE + INVESTIGATE); total_usd is the FREEZABLE subset.
+    # The gross perpetrator-exposure number wants max(suspected,
+    # freezable) per entry to avoid double-counting.
     total = Decimal("0")
     for f in freezable:
-        # total_suspected_usd is the GROSS at the address;
-        # fall back to total_usd if suspected is 0/missing.
         suspected = _parse_usd_string(f.get("total_suspected_usd", "0"))
         freezable_amt = _parse_usd_string(f.get("total_usd", "0"))
         total += max(suspected, freezable_amt)
@@ -1268,11 +1222,8 @@ def emit_brief(
         "INVESTIGATOR_ENTITY_FULL": editorial["INVESTIGATOR_ENTITY_FULL"],
         "INVESTIGATOR_WEB": editorial["INVESTIGATOR_WEB"],
         "TEMPLATE_VERSION": editorial["TEMPLATE_VERSION"],
-        # v0.16.3 (audit fix #C2 + round-4 #D): schema_version stamp,
-        # sourced from brief.BRIEF_SCHEMA_VERSION so the next version
-        # bump only happens in one place. Readers use this to detect
-        # stale briefs from older releases that lack evidence_type /
-        # evidence_mode fields.
+        # Schema version — readers use it to detect stale briefs that
+        # lack evidence_type / evidence_mode fields.
         "SCHEMA_VERSION": _BRIEF_SCHEMA_VERSION,
     }
 

@@ -37,21 +37,16 @@ log = logging.getLogger(__name__)
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
-# v0.16.3 (audit round-4 fix #D): single source of truth for the
-# freeze_brief.json schema version. Imported by emit_brief.py + the
-# worker synthesizer so a future bump only happens here.
-BRIEF_SCHEMA_VERSION = "0.16.3"
+# Single source of truth for the freeze_brief.json schema version.
+# Imported by emit_brief.py + the worker synthesizer so a future bump
+# only happens here.
+BRIEF_SCHEMA_VERSION = "0.16.4"
 
-# v0.16.3 (audit fix #3, schema-version reader): briefs from pre-v0.14.8
-# lack the evidence_type / evidence_mode fields the v0.16.x templates
-# rely on. Without a detection path, a stale brief silently renders
-# the "currently held" language for historical-only cases — the exact
-# bug that started this audit thread.
-#
-# Single floor: the earliest version that wrote ALL the fields the
-# current rendering chain expects. Stale briefs trigger a logged
-# warning + a banner in the rendered output so the operator + customer
-# can both tell that the brief was produced by an older pipeline.
+# Earliest version that wrote ALL the fields the current rendering
+# chain expects (evidence_type, evidence_mode, etc.). Briefs from
+# before this version trigger a stale-brief warning so operators
+# know the rendering may use "currently held" language for what
+# should be historical-receipt cases.
 _MIN_RECOGNIZED_BRIEF_VERSION = "0.14.8"
 
 
@@ -94,24 +89,11 @@ def check_brief_schema_version(brief: dict[str, Any]) -> str | None:
     return None
 
 
-# Chain → address-page explorer URL prefix.
-#
-# We mirror the prefix table that lives in worker/_flow_diagram.py
-# rather than importing it: brief.py runs from the standalone CLI too,
-# which doesn't carry the worker module. Keeping these in sync is
-# manual but stable — block explorers don't rebrand often.
-_ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
-    "ethereum":    "https://etherscan.io/address/",
-    "arbitrum":    "https://arbiscan.io/address/",
-    "polygon":     "https://polygonscan.com/address/",
-    "base":        "https://basescan.org/address/",
-    "bsc":         "https://bscscan.com/address/",
-    "solana":      "https://solscan.io/account/",
-    "hyperliquid": "https://app.hyperliquid.xyz/explorer/address/",
-    # v0.16.3 (audit fix #C4): bitcoin + tron coverage.
-    "bitcoin":     "https://mempool.space/address/",
-    "tron":        "https://tronscan.org/#/address/",
-}
+# Chain → address-page explorer URL prefix — centralized in
+# src/recupero/_common.py.
+from recupero._common import (
+    ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+)
 
 
 def _address_explorer_url(address: str, chain: Chain | str | None) -> str:
@@ -403,18 +385,12 @@ def generate_briefs(
         lstrip_blocks=True,
     )
 
-    # v0.16.3 schema-version check (audit-round-4 fix #C): this
-    # function receives `issuer_freezable` per-issuer slice, not the
-    # full freeze_brief, so the stale-brief warning is logged by the
-    # caller (worker/pipeline.py:_stage_build_package and CLI
-    # legal_requests.load_brief). No-op here.
     issuer_template = "issuer_freeze_request.html.j2"
-    # v0.16.3 (audit fix #1, maple.html.j2 fallback): the legacy
-    # maple.html.j2 template still hardcodes "is currently held in"
-    # language without evidence_mode branching. Falling back to it
-    # would re-introduce the false-claim bug for historical-only
-    # cases. Refuse to fall back; if the modern template is missing,
-    # that's a deploy-config bug, not something to paper over.
+    # The legacy maple.html.j2 hardcodes "is currently held in"
+    # language without evidence_mode branching — falling back to it
+    # would render false claims on historical-receipt cases. Refuse
+    # the fallback; a missing modern template is a deploy-config bug
+    # to surface, not paper over.
     try:
         env.get_template(issuer_template)
     except Exception as _exc:  # noqa: BLE001
@@ -752,12 +728,9 @@ def _build_issuer_freezable_ctx(
     n_current = 0
     for h in holdings_in:
         addr = h.get("address", "")
-        # v0.16.2 (audit fix #1): propagate evidence_type + observed_at
-        # per-row so the issuer freeze letter template's section-4
-        # Evidence column renders the right "current"/"historical" pill.
-        # Pre-fix these were dropped here, making the v0.16.1 template
-        # branches dead code — every letter fell through the {% else %}
-        # clause and said "currently held" regardless of evidence type.
+        # Propagate evidence_type + observed_at per-row so the issuer
+        # freeze letter template's Evidence column renders the right
+        # "current"/"historical" pill per holding.
         ev_type = h.get("evidence_type", "current_balance")
         if ev_type == "historical_inflow":
             n_historical += 1
@@ -777,11 +750,10 @@ def _build_issuer_freezable_ctx(
     freezable = [h for h in holdings_out if h["status"] == "FREEZABLE"]
     investigate = [h for h in holdings_out if h["status"] == "INVESTIGATE"]
 
-    # v0.16.2 (audit fix #1 cont.): aggregate evidence_mode. If raw
-    # carries an explicit evidence_mode (set by emit_brief._extract_
-    # freezable), prefer that; otherwise derive from the per-row counts
-    # so this still works for skip_editorial fallback callers that
-    # didn't populate the aggregate.
+    # Aggregate evidence_mode. Prefer the explicit value set by
+    # emit_brief._extract_freezable; otherwise derive from per-row
+    # counts so skip_editorial callers that didn't populate the
+    # aggregate still get a sane value.
     explicit_mode = raw.get("evidence_mode")
     if explicit_mode in ("current_balance_only", "historical_only", "mixed"):
         evidence_mode = explicit_mode
@@ -805,9 +777,7 @@ def _build_issuer_freezable_ctx(
         "freezable_count": len(freezable),
         "investigate_count": len(investigate),
         "total_count": len(holdings_out),
-        # v0.16.2: drive the issuer-letter evidence_mode branches.
-        # Pre-fix these keys were absent, making the v0.16.1 template
-        # template branches inert.
+        # Drive the issuer-letter template's evidence_mode branches.
         "evidence_mode": evidence_mode,
         "historical_count": n_historical,
         "current_balance_count": n_current,

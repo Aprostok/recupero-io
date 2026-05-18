@@ -205,8 +205,21 @@ def compute_class_action_opportunity(
         # Total prior USD: use the corr's aggregated figure.
         total_loss_estimate += corr.prior_total_usd_flowed or Decimal("0")
 
-        # Take a representative role.
-        rep_role = next(iter(roles), "unlabeled")
+        # Take a representative role. Prefer a qualifying role
+        # (perpetrator_hub > beneficiary > etc.) when present so the
+        # representative reflects the most-actionable signal; fall
+        # back to sorted role name for stable ordering across runs.
+        # Pre-fix this used `next(iter(roles))` which is non-deterministic
+        # for string sets when PYTHONHASHSEED is randomized — same
+        # case re-emitted twice could produce different
+        # `role_in_current_case` values.
+        qualifying_roles = sorted(roles & _CLASS_ACTION_QUALIFYING_ROLES)
+        if qualifying_roles:
+            rep_role = qualifying_roles[0]
+        elif roles:
+            rep_role = sorted(roles)[0]
+        else:
+            rep_role = "unlabeled"
 
         if is_qualifying:
             qualifying_count += 1

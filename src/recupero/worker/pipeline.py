@@ -67,10 +67,8 @@ from uuid import UUID
 # The fallback (used if a chain isn't in the map or fails to parse) is
 # the Ethereum block 1 timestamp — earliest known good value across
 # any supported chain.
-# v0.16.3 (audit fix #C2 + round-4 #D): freeze_brief.json schema
-# version. Re-exported here for callers that import from the worker
-# module, but the canonical definition lives in reports.brief.
-# Centralized so the next bump only happens in one place.
+# Re-export the brief schema version for callers that reach for it
+# via the worker module. Canonical definition lives in reports.brief.
 from recupero.reports.brief import BRIEF_SCHEMA_VERSION  # noqa: F401
 
 
@@ -562,25 +560,18 @@ def _stage_list_freeze_targets(
 
     min_usd = Decimal("10000")
     min_holding_usd = Decimal("1000")
-    # v0.16.0: historical-inflow threshold. Set lower than current-balance
-    # threshold so addresses that received freezable tokens but currently
-    # show $0 still surface — this is the worker-pipeline parity fix for
-    # the V-CFI01 regression where addresses with confirmed downstream
-    # freezable balances were absent from freeze_asks.json because the
-    # worker only ever called match_freeze_asks (current-balance path).
+    # Historical-inflow threshold is lower so addresses that received
+    # freezable tokens but currently show $0 still surface. This is
+    # the path that makes 7-months-after-the-fact cases produce
+    # freeze letters at all.
     historical_min_inflow_usd = Decimal("1000")
 
-    # v0.16.1 (internal audit): defensive wrapping of find_dormant_in_case.
-    # That function makes live Etherscan + CoinGecko calls to query
-    # current balances. If the API key is missing, the call is
-    # rate-limited, or the upstream is down, we lose the current-balance
-    # asks — but historically those failures also prevented the
-    # historical-inflow synthesizer from running, because the exception
-    # bubbled out of the stage. The historical path is pure-function
-    # over case.transfers (no network), so it can and SHOULD run even
-    # when the dormant detector fails. This keeps the V-CFI01-shape
-    # case (7+ months after incident, no current balances) producing
-    # complete freeze_asks output even on a flaky Etherscan day.
+    # Each network/IO call is wrapped so one failure can't take down
+    # the whole stage. The historical-inflow synthesizer in particular
+    # is pure-function over case.transfers (no network) — it should
+    # run even when the dormant detector fails on a flaky Etherscan
+    # day, otherwise V-CFI01-shape cases (no current balances, all
+    # historical evidence) produce empty freeze_asks output.
     candidates: list = []
     try:
         candidates = find_dormant_in_case(
@@ -596,19 +587,9 @@ def _stage_list_freeze_targets(
         candidates, min_holding_usd=min_holding_usd,
     )
 
-    # v0.16.0: ALSO run the historical-inflow synthesizer. The CLI's
-    # `recupero list-freeze-targets` has done this since v0.14.8, but
-    # the worker pipeline (which is the path real investigations take)
-    # was never updated. Result: cases where the perp had moved funds
-    # off the seed wallet between incident and Recupero engagement
-    # produced freeze_asks.json with only the current-balance dormants
-    # — a structurally incomplete set that routes the classifier into
-    # the unrecoverable variant even when freezable history exists.
-    #
-    # Merge logic mirrors cli.py:594-618: exclude addresses already in
-    # the current-balance matched list (avoid duplicates), append the
-    # historical asks, re-sort by USD descending so the highest-value
-    # asks come first in by_issuer enumeration.
+    # Merge historical-inflow asks into the current-balance match list.
+    # Exclude addresses already in matched to avoid duplicates; re-sort
+    # by USD descending so highest-value asks come first.
     exclude_addrs = {a.candidate_address.lower() for a in matched}
     try:
         historical_asks = synthesize_historical_freeze_asks(
@@ -617,10 +598,6 @@ def _stage_list_freeze_targets(
             exclude_addresses=exclude_addrs,
         )
     except Exception as exc:  # noqa: BLE001
-        # The synthesizer is pure-function — a failure here is
-        # genuinely unexpected (logic bug, malformed transfer record).
-        # Log + proceed with empty rather than aborting the whole
-        # freeze_asks emission.
         log.warning(
             "freeze_asks: synthesize_historical_freeze_asks raised (%s) — "
             "proceeding with current-balance asks only", exc,
@@ -640,10 +617,6 @@ def _stage_list_freeze_targets(
     grouped = group_by_issuer(matched) if matched else {}
 
     label_store = LabelStore.load(config)
-    # v0.16.1: same defensive wrapping for the exchange-deposit detector.
-    # Pure-function over case.transfers + label seeds; failure here
-    # would be a logic bug, but log + continue rather than aborting
-    # the freeze_asks emission.
     exchange_deposits: list = []
     try:
         exchange_deposits = detect_exchange_deposits(
@@ -702,14 +675,9 @@ def _stage_list_freeze_targets(
                     "primary_contact": a.issuer.primary_contact,
                     "freeze_capability": a.issuer.freeze_capability,
                     "explorer_url": a.explorer_url,
-                    # v0.16.0: propagate evidence_type + observed-at +
-                    # observed-transfer-count from the FreezeAsk record. The
                     # AI editorial + freeze-letter templates branch on
-                    # evidence_type ("current_balance" vs "historical_inflow"),
-                    # and emit_brief uses observed_transfer_count to set the
-                    # FREEZABLE-vs-INVESTIGATE status. Without these fields the
-                    # downstream consumers default to "current_balance" for
-                    # everything, which loses the historical-inflow signal.
+                    # evidence_type to choose between "freeze NOW" and
+                    # "investigate" framing per-row.
                     "evidence_type": a.evidence_type,
                     "observed_at": a.observed_at_iso,
                     "observed_transfer_count": a.observed_transfer_count,
@@ -734,18 +702,11 @@ def _stage_list_freeze_targets(
             }
             for d in exchange_deposits
         ],
-        # v0.16.0: onward_cex_flows. Mirrors the CLI's freeze_asks.json
-        # schema. Required input for v0.14.11 exchange-subpoena
-        # rendering via `recupero legal-requests --type exchange-subpoena`.
-        #
-        # v0.16.1 (audit): guard datetime .isoformat() calls against
-        # None. The OnwardCEXFlow dataclass types first/last_flow_at
-        # as datetime (non-Optional) but the synthesizer sources them
-        # from Transfer.block_time, which can be None in degraded
-        # data paths. A None here would crash the whole payload write
-        # (the surrounding try/except wraps the synthesizer call, not
-        # the JSON serialization). Better: write null and let the
-        # consumer handle it.
+        # onward_cex_flows is the input the v0.14.11 exchange-subpoena
+        # renderer consumes. Datetime fields are guarded against None
+        # because the underlying Transfer.block_time may be absent in
+        # degraded data paths — emitting null is preferable to crashing
+        # the whole payload write.
         "onward_cex_flows": [
             {
                 "upstream_address": f.upstream_address,
@@ -858,10 +819,9 @@ def _synthesize_freeze_brief_from_asks(
         upload_case_dir(case_dir, bucket)
         return
 
-    # v0.16.3 (audit fix #C1 / catastrophic): wrap json.loads in
-    # try/except so a malformed freeze_asks.json doesn't take out
-    # the whole skip_editorial path with a cryptic JSONDecodeError.
-    # If it's broken we emit the stub-shape brief and log.
+    # Malformed freeze_asks.json must not kill the whole skip_editorial
+    # path with a cryptic JSONDecodeError — emit a stub-shape brief
+    # and log instead.
     try:
         asks = json.loads(freeze_asks_path.read_text(encoding="utf-8-sig"))
     except Exception as exc:  # noqa: BLE001
@@ -879,31 +839,24 @@ def _synthesize_freeze_brief_from_asks(
         )
         upload_case_dir(case_dir, bucket)
         return
+    from recupero._common import (
+        aggregate_evidence_mode_from_holdings,
+        capability_display,
+    )
+
     by_issuer = asks.get("by_issuer") or {}
 
     freezable: list[dict[str, Any]] = []
     total_recoverable = Decimal(0)
     total_suspected = Decimal(0)
-    # v0.16.1 (internal audit): same yes/limited/no → HIGH/MEDIUM/LOW
-    # mapping that emit_brief.py:538 uses for the main path. Previously
-    # this fallback hardcoded "HIGH" for every entry, which silently
-    # tagged DAI / wstETH / other non-freezable tokens as HIGH-freezable
-    # in any skip_editorial run — defeating downstream consumers
-    # (flow_diagram, investigator_findings, recovery scorer) that
-    # branch on the capability value.
-    _CAP_DISPLAY = {"yes": "HIGH", "limited": "MEDIUM", "no": "LOW"}
     for issuer, entries in by_issuer.items():
         if not entries:
             continue
         # Group holdings under one entry per issuer/token pair so the
-        # trace_report's table groups cleanly.
+        # trace_report table groups cleanly. Collect a per-issuer
+        # primary_contact upfront so send-freeze-letters can dispatch
+        # off a skip_editorial brief.
         by_token: dict[str, dict[str, Any]] = {}
-        # v0.16.3 (audit fix #C1): collect contact_email + primary_contact
-        # at the per-issuer level so downstream send-freeze-letters can
-        # actually dispatch. Pre-fix this synthesizer wrote no contact
-        # info, so any operator hitting `recupero-ops send-freeze-letters`
-        # on a skip_editorial-produced brief got "SKIP ... missing
-        # contact_email" for every entry — zero letters dispatched.
         issuer_primary_contact: str | None = None
         for e in entries:
             pc = e.get("primary_contact")
@@ -917,46 +870,30 @@ def _synthesize_freeze_brief_from_asks(
                 usd = Decimal(usd_str) if usd_str else Decimal(0)
             except (TypeError, ValueError):
                 usd = Decimal(0)
-            # v0.16.3 (audit fix #7a — post-fix re-audit): only count
-            # toward total_recoverable AFTER classifying status —
-            # UNRECOVERABLE rows must NOT be counted. Pre-fix DAI /
-            # other cap=no entries with usd>0 incremented this
-            # counter, inflating MAX_RECOVERABLE_USD to include
-            # genuinely-unrecoverable dollars. total_suspected
-            # (broad attribution number, used for INVESTIGATE-level
-            # gates) still includes UNRECOVERABLE.
             total_suspected += usd
-            # Read the actual capability from the ask, mapping to the
-            # display form for parity with emit_brief.py's main path.
             cap_raw = (e.get("freeze_capability") or "").lower()
-            cap_display = _CAP_DISPLAY.get(cap_raw, "UNKNOWN")
+            cap_display = capability_display(cap_raw)
             token_entry = by_token.setdefault(symbol, {
                 "issuer": issuer,
                 "token": symbol,
                 "freeze_capability": cap_display,
                 "holdings": [],
                 "total_usd": Decimal(0),
-                # v0.16.3: provide contact info so send-freeze-letters
-                # can dispatch from a skip_editorial brief.
                 "contact_email": issuer_primary_contact or "",
                 "primary_contact": issuer_primary_contact or "",
                 "portal_url": "",
                 "typical_response_time": "Variable",
                 "freeze_note": "",
             })
-            # v0.16.2 (audit fix #2): same policy as emit_brief.py:
-            #   * capability=no/low → UNRECOVERABLE
-            #   * historical_inflow at a freezable issuer → keep
-            #     FREEZABLE; the freeze letter template renders the
-            #     "received at" / "investigate present-day disposition"
-            #     language based on the per-row evidence_type field.
-            #   * Anything below the $1K dust line → INVESTIGATE
-            #
-            # The v0.16.1 status=INVESTIGATE-for-historical-inflow
-            # downgrade was rolled back because it zeroed per-issuer
-            # total_usd in the brief, causing classify_recovery_prospects
-            # to route V-CFI01 (all historical_inflow) to unrecoverable
-            # — recreating the original bug from a different angle.
+            # Status policy (mirrors emit_brief._extract_freezable):
+            #   * capability=no/low                 → UNRECOVERABLE
+            #   * usd > $1K (dust line)             → FREEZABLE
+            #   * sub-dust                          → INVESTIGATE
+            # historical_inflow at a freezable issuer stays FREEZABLE;
+            # the letter template uses evidence_type per-row to choose
+            # "received at" vs "currently holds" phrasing. Downgrading
+            # historical_inflow to INVESTIGATE zeroes per-issuer
+            # total_usd and breaks the classifier — don't.
             evidence_type = (e.get("evidence_type") or "current_balance").lower()
             if cap_raw in ("no", "low"):
                 status = "UNRECOVERABLE"
@@ -964,10 +901,8 @@ def _synthesize_freeze_brief_from_asks(
                 status = "FREEZABLE"
             else:
                 status = "INVESTIGATE"
-            # v0.16.3 (audit fix #7a): increment total_recoverable
-            # ONLY for FREEZABLE-status rows. Pre-fix every usd>0
-            # row contributed, inflating MAX_RECOVERABLE_USD with
-            # UNRECOVERABLE dollars (e.g., DAI).
+            # total_recoverable only includes FREEZABLE — UNRECOVERABLE
+            # rows (e.g., DAI) must NOT contribute to MAX_RECOVERABLE_USD.
             if status == "FREEZABLE" and usd > 0:
                 total_recoverable += usd
             token_entry["holdings"].append({
@@ -978,35 +913,23 @@ def _synthesize_freeze_brief_from_asks(
                 ),
                 "usd": f"${usd:,.2f}" if usd > 0 else "$0",
                 "status": status,
-                # Propagate evidence-type provenance into the brief
-                # so downstream templates can render the right phrase
-                # ("currently holds" vs "received during the trace").
                 "evidence_type": evidence_type,
                 "observed_at": e.get("observed_at"),
                 "observed_transfer_count": e.get("observed_transfer_count", 1),
             })
             token_entry["total_usd"] += usd
         for token_entry in by_token.values():
-            token_entry["total_usd"] = f"${token_entry['total_usd']:,.2f}"
-            # v0.16.2 (audit fix #3): compute aggregate evidence_mode +
-            # per-mode counts so downstream consumers (issuer letter
-            # template via _build_issuer_freezable_ctx, customer
-            # summary via _victim_summary._build_context) can branch
-            # on the right "currently held" vs "received at" language.
-            # Pre-fix the skip_editorial path silently rendered every
-            # customer artifact with the current_balance_only default.
+            # Aggregate per-issuer evidence_mode so customer / engagement
+            # / issuer letter templates branch on the right "currently
+            # held" vs "received at" phrasing.
             n_historical = sum(
                 1 for h in token_entry["holdings"]
                 if h.get("evidence_type") == "historical_inflow"
             )
             n_current = len(token_entry["holdings"]) - n_historical
-            if n_historical > 0 and n_current == 0:
-                ev_mode = "historical_only"
-            elif n_historical > 0 and n_current > 0:
-                ev_mode = "mixed"
-            else:
-                ev_mode = "current_balance_only"
-            token_entry["evidence_mode"] = ev_mode
+            token_entry["evidence_mode"] = aggregate_evidence_mode_from_holdings(
+                token_entry["holdings"],
+            )
             token_entry["historical_count"] = n_historical
             token_entry["current_balance_count"] = n_current
             # Earliest historical observation across holdings, mirrors
@@ -1019,18 +942,10 @@ def _synthesize_freeze_brief_from_asks(
                 if earliest is None or obs < earliest:
                     earliest = obs
             token_entry["earliest_observed"] = earliest
-            # v0.16.3 (audit fix #C1): total_suspected_usd is the sum
-            # across FREEZABLE + INVESTIGATE statuses (excluding
-            # UNRECOVERABLE / EXCHANGE / TRANSIT). Pre-fix this was
-            # set to total_usd verbatim — wrong, because emit_brief.py
-            # writes a different value (sum of FREEZABLE only into
-            # total_usd, with total_suspected_usd being FREEZABLE +
-            # INVESTIGATE). The classifier and recovery scorer read
-            # both fields; setting them equal here biased the scorer.
-            #
-            # Also: total_usd should be FREEZABLE-status-only after
-            # this fix. The dollar-string above already wraps the
-            # accumulated sum, so we recompute from holdings.
+            # total_usd is the FREEZABLE-status sum; total_suspected_usd
+            # is FREEZABLE + INVESTIGATE. Matches emit_brief.py's main
+            # path so the classifier + recovery scorer see consistent
+            # inputs across both writers.
             freezable_only = Decimal(0)
             suspected_only = Decimal(0)
             for h in token_entry["holdings"]:
@@ -1049,15 +964,9 @@ def _synthesize_freeze_brief_from_asks(
             token_entry["total_suspected_usd"] = f"${suspected_only:,.2f}"
             freezable.append(token_entry)
 
-    # v0.16.3 (audit fix #C1): pre-fix this wrote `exchange_deposits`
-    # records into the DESTINATIONS slot — schema-incompatible with
-    # what investigator_export._findings_from_destinations expects
-    # (it reads usd_received_in_trace / status / role from each
-    # entry, which exchange_deposits don't carry). Result: every
-    # destination finding had empty headline/amount/counterparty.
-    # Write an empty DESTINATIONS list; the skip_editorial path
-    # genuinely doesn't have rich destination data — that comes
-    # from emit_brief._extract_destinations which needs the trace.
+    # Skip_editorial path has no rich destination data (that comes from
+    # emit_brief._extract_destinations which needs the trace). Empty
+    # DESTINATIONS list is the schema-correct value here.
     out = {
         "SCHEMA_VERSION": BRIEF_SCHEMA_VERSION,
         "FREEZABLE": freezable,
@@ -1116,12 +1025,10 @@ def _stage_build_package(
     freeze_brief_path = case_dir / "freeze_brief.json"
     if freeze_brief_path.exists():
         freeze_brief = json.loads(freeze_brief_path.read_text(encoding="utf-8-sig"))
-        # v0.16.3 (audit fix #3): stale-brief detection. If the
-        # brief was emitted by a pre-v0.16.x pipeline it lacks the
-        # evidence_type / evidence_mode fields the current templates
-        # branch on. Log a warning so the operator knows the rendering
-        # may use "currently held" language even for historical-
-        # receipt cases.
+        # Stale-brief detection: pre-v0.14.8 briefs lack evidence_mode
+        # fields the templates branch on. Warning only — rendering
+        # still happens, just with degraded language for historical
+        # cases.
         from recupero.reports.brief import check_brief_schema_version
         stale_warning = check_brief_schema_version(freeze_brief)
         if stale_warning:

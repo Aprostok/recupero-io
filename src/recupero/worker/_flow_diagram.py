@@ -240,21 +240,14 @@ def _entity_badge(identity: str | None) -> tuple[str, str, str] | None:
     return None
 
 
-# Chain → explorer URL prefix. When a node renders, we append the address
-# so each hex in the diagram links to its own Etherscan/Solscan/etc. page.
-# Operators reading the brief can click any node to drill into chain data.
-_EXPLORER_BY_CHAIN: dict[str, str] = {
-    "ethereum":    "https://etherscan.io/address/",
-    "arbitrum":    "https://arbiscan.io/address/",
-    "polygon":     "https://polygonscan.com/address/",
-    "base":        "https://basescan.org/address/",
-    "bsc":         "https://bscscan.com/address/",
-    "solana":      "https://solscan.io/account/",
-    # Hyperliquid has no per-address public explorer comparable to Etherscan.
-    # We point at the official UI's address-search view as the closest
-    # equivalent so the link still goes somewhere meaningful.
-    "hyperliquid": "https://app.hyperliquid.xyz/explorer/address/",
-}
+# Chain → explorer URL prefix — centralized in _common. Each node in
+# the rendered diagram appends its address to the prefix so operators
+# can click straight into chain data.
+# Pre-flatten this was an inline duplicate missing bitcoin + tron;
+# flow diagrams on those chains silently lost link-outs.
+from recupero._common import (
+    ADDRESS_EXPLORER_BY_CHAIN as _EXPLORER_BY_CHAIN,
+)
 
 
 def _explorer_url(chain: str, address: str) -> str | None:
@@ -421,34 +414,21 @@ def _promote_freezable_holdings(
     addr_lower_to_node: dict[str, _NodeAttrs] = {
         a.lower(): n for a, n in nodes.items()
     }
+    from recupero._common import capability_blocks_freeze
     for entry in holdings:
         issuer = entry.get("issuer") or "Issuer"
         token = entry.get("token") or ""
-        capability = (entry.get("freeze_capability") or "").lower()
-        # v0.16.0 fix (Jacob V-CFI01 bug 5): if the issuer cannot
-        # actually freeze the token (capability='no'), do NOT relabel
-        # the holding wallet as "<issuer> holding". The EOA is a
-        # perpetrator-controlled wallet that happens to hold a token
-        # whose issuer has no freeze authority — putting an issuer
-        # badge on it visually conflates the EOA with legitimate
-        # issuer custody, which misleads anyone reading the diagram
-        # (and was Jacob's specific complaint re: DAI / Sky Protocol).
-        # The wallet stays a plain Wallet node; the token holding is
-        # still surfaced via the freeze_asks.json table in the
-        # accompanying brief.
-        #
-        # v0.16.1 (internal audit follow-up): the brief carries either
-        # the raw freeze_asks form ('yes'/'limited'/'no') OR the
-        # display-mapped form ('HIGH'/'MEDIUM'/'LOW') depending on
-        # which path produced it (emit_brief.py:538 maps; the
-        # skip_editorial _synthesize_freeze_brief_from_asks does not).
-        # Recognize both so the gate fires on either schema. Mirrors
-        # the same dual-form acceptance in recovery/scorer.py:190.
-        if capability in ("no", "low"):
+        capability = entry.get("freeze_capability")
+        # Skip promotion when the issuer can't actually freeze
+        # (capability=no/low) — the EOA is perpetrator-controlled and
+        # has no real association with the issuer; labeling it as
+        # "<issuer> holding" would visually mislead readers (DAI/Sky
+        # Protocol is the canonical example).
+        if capability_blocks_freeze(capability):
             skipped_non_freezable += len(entry.get("holdings") or [])
             continue
-        # v0.16.3 (audit fix #A13): differentiate the node identity
-        # based on whether the address currently holds the token
+        # Differentiate the node identity based on whether the address
+        # currently holds the token
         # (verified balance) or merely received it during the trace
         # (historical inflow). Pre-fix every freezable_holding node
         # said "<issuer>\nholding (<token>)" regardless — visually

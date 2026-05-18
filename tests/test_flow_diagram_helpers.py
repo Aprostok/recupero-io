@@ -171,8 +171,11 @@ def test_explorer_url_per_chain(chain: str, host: str) -> None:
 
 def test_explorer_url_unknown_chain() -> None:
     """An unknown chain returns None rather than guessing — better
-    to omit the link than send users to a 404."""
-    assert _explorer_url("bitcoin", "abc123") is None
+    to omit the link than send users to a 404. v0.16.4: bitcoin /
+    tron got added to the central _common map, so use a genuinely
+    unknown chain name here."""
+    assert _explorer_url("monero", "abc123") is None
+    assert _explorer_url("zksync-era-unsupported", "abc") is None
     assert _explorer_url("", "abc") is None
 
 

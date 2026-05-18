@@ -39,19 +39,12 @@ log = logging.getLogger(__name__)
 _TEMPLATES_DIR = Path(__file__).parent.parent / "reports" / "templates"
 
 
-# Chain → address-page explorer URL prefix. Mirrors the table in
-# reports/brief.py — kept inline so the watchlist digest doesn't
-# need to import from there (separation of concerns: brief.py is
-# per-investigation, this module is global watchlist).
-_ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
-    "ethereum":    "https://etherscan.io/address/",
-    "arbitrum":    "https://arbiscan.io/address/",
-    "polygon":     "https://polygonscan.com/address/",
-    "base":        "https://basescan.org/address/",
-    "bsc":         "https://bscscan.com/address/",
-    "solana":      "https://solscan.io/account/",
-    "hyperliquid": "https://app.hyperliquid.xyz/explorer/address/",
-}
+# Chain → address-page explorer URL prefix — centralized in _common.
+# Pre-flatten this was an inline duplicate missing bitcoin + tron;
+# watchlist digests for those chains silently dropped explorer links.
+from recupero._common import (
+    ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+)
 
 
 @dataclass

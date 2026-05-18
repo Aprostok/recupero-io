@@ -256,12 +256,9 @@ def _enumerate_exchange_targets(
 def load_brief(case_dir: Path) -> dict[str, Any]:
     """Load freeze_brief.json from a case directory.
 
-    v0.16.3 (audit round-4 fix #B): check SCHEMA_VERSION and log a
-    warning when stale. legal_request rendering consumes brief.FREEZABLE
-    and the per-issuer freezable_ctx; stale briefs without evidence_mode
-    fields cause the template's evidence_mode branches to fall through
-    to the "currently held" {% else %} clause — false-claim risk on
-    historical-receipt cases.
+    Logs a warning when the brief's SCHEMA_VERSION is stale or
+    missing — stale briefs lack evidence_mode fields and would render
+    incorrect "currently held" language for historical-receipt cases.
     """
     brief_path = case_dir / "freeze_brief.json"
     if not brief_path.exists():
@@ -283,13 +280,10 @@ def load_brief(case_dir: Path) -> dict[str, Any]:
 def load_freeze_asks(case_dir: Path) -> dict[str, Any]:
     """Load freeze_asks.json from a case directory.
 
-    Used by the exchange-subpoena renderer to access
-    ``onward_cex_flows`` (v0.14.10 field). Returns empty-shape dict
-    if the file doesn't exist OR is malformed.
-
-    v0.16.3 (audit fix #B8): wrap json.loads in try/except. A partial
-    write or corrupt file pre-fix raised JSONDecodeError and crashed
-    the entire exchange-subpoena rendering with a cryptic error.
+    Used by the exchange-subpoena renderer to access ``onward_cex_flows``.
+    Returns an empty-shape dict if the file is missing OR malformed —
+    a partial write must not crash the entire rendering path with a
+    cryptic JSONDecodeError.
     """
     empty = {"by_issuer": {}, "exchange_deposits": [], "onward_cex_flows": []}
     p = case_dir / "freeze_asks.json"
@@ -364,19 +358,13 @@ def _resolve_exchange_metadata(exchange_name: str) -> dict[str, str]:
     """Look up exchange compliance contact info. Falls back to
     placeholder values that the operator can edit before sending.
 
-    v0.16.3 (audit fix #B7): case-insensitive + space-insensitive
-    lookup. Pre-fix, `"crypto.com"` (lowercase) or `"BINANCE"`
-    (uppercase) missed the lookup and produced a TODO placeholder
-    even though we have contact info for those exchanges. Now
-    normalizes for the lookup but preserves the original casing
-    for display.
+    Lookup is case-insensitive + space-insensitive: ``"crypto.com"``,
+    ``"BINANCE"``, ``"Binance"`` all resolve to the same entry.
+    Original casing is preserved for display.
     """
-    # Try exact match first (preserves expected behavior).
+    # Exact match first.
     meta = _EXCHANGE_COMPLIANCE_CONTACTS.get(exchange_name)
     if meta is None:
-        # Build a normalized lookup map: lowercased, stripped.
-        # Cached at module load would be nicer but this dict is
-        # small (~11 entries) so the cost is negligible.
         target = exchange_name.strip().lower()
         for known_name, known_meta in _EXCHANGE_COMPLIANCE_CONTACTS.items():
             if known_name.strip().lower() == target:

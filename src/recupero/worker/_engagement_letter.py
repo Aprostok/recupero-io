@@ -167,29 +167,16 @@ def _build_context(
 
     now = datetime.now(UTC)
 
+    from recupero._common import aggregate_evidence_mode_from_entries
     freezable_entries = freeze_brief.get("FREEZABLE") or []
     freezable_issuer_count = len(freezable_entries)
 
-    # v0.16.2 (audit fix #5): compute aggregate evidence_mode so the
-    # engagement letter's "Background" paragraph branches on
-    # "received at" vs "currently held" language. Mirrors the same
-    # aggregation logic in _victim_summary._build_context.
-    n_with_current = 0
-    n_with_historical = 0
-    for entry in freezable_entries:
-        entry_mode = entry.get("evidence_mode")
-        if entry_mode in ("current_balance_only", "mixed"):
-            n_with_current += 1
-        if entry_mode in ("historical_only", "mixed"):
-            n_with_historical += 1
-    if n_with_current > 0 and n_with_historical == 0:
-        aggregate_evidence_mode = "current_balance_only"
-    elif n_with_historical > 0 and n_with_current == 0:
-        aggregate_evidence_mode = "historical_only"
-    elif n_with_current > 0 and n_with_historical > 0:
-        aggregate_evidence_mode = "mixed"
-    else:
-        aggregate_evidence_mode = "current_balance_only"  # default
+    # Aggregate evidence_mode for the engagement letter's Background
+    # paragraph: branches on "received at" (historical_only) vs
+    # "currently held" (current_balance_only) vs mixed language.
+    aggregate_evidence_mode = aggregate_evidence_mode_from_entries(
+        freezable_entries,
+    )
 
     return {
         "case_id": case.case_id,

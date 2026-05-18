@@ -143,11 +143,10 @@ FEW_SHOT_EXAMPLE = {
             "Within minutes my wallet was empty."
         ),
         "transfer_summary": {
-            # v0.16.3 (audit fix #5): drained = sum of all destinations:
+            # drained = sum of destinations:
             # $28,420 USDC + $12,640 USDT (current) + $8,200 USDT
-            # (historical) + $6,780 ETH = $56,040. Pre-fix this was
-            # $47,840 — example arithmetic was inconsistent, teaching
-            # the model "recoverable can exceed drained" was OK.
+            # (historical) + $6,780 ETH = $56,040. Example arithmetic
+            # must be self-consistent or the model learns sloppy math.
             "total_usd_drained": "56040",
             "first_hop_address": "0x7B2e9A4c8F3d5E1a6C4b9D8e2F5a3C6b1D4e8F2a",
             "first_hop_role": "Drainer consolidation wallet — received and immediately distributed",
@@ -719,23 +718,11 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
                 if "asset" not in item or "reason" not in item:
                     problems.append(f"UNRECOVERABLE_ITEMS[{i}] missing 'asset' or 'reason'")
 
-    # v0.16.2 (audit fix #10) + v0.16.3 (audit fix #A4): scan
-    # DESTINATION_NOTES + the narrative fields for hedging phrases the
-    # SYSTEM_PROMPT forbids. The retry loop in run_ai_editorial picks
-    # up problems and re-prompts the model. Without this, an LLM that
-    # ignores the prompt rule ships hedged language straight to the
-    # customer letter — recreating Jacob's Bug-2 complaint.
-    #
-    # v0.16.3 expanded the phrase list with common LLM evasion forms
-    # ("if balances are still", "subject to confirmation", etc.) and
-    # extended the scan to VICTIM_SUMMARY + INCIDENT_NARRATIVE_RECUPERO
-    # which the prompt's HEADLINE FRAMING rule (line ~321) also
-    # forbids hedging in.
-    # v0.16.3: forbidden hedging phrases. Each one is something the
-    # SYSTEM_PROMPT explicitly bans on FREEZABLE-tagged addresses
-    # where the underlying ask has a freezable issuer + a documented
-    # USD amount. "may be viable" is the worst — punts an assertion
-    # back to the operator the system should already have made.
+    # Forbidden hedging phrases. Scan covers DESTINATION_NOTES (only
+    # when the note is tagged FREEZABLE — INVESTIGATE rows can hedge
+    # legitimately) plus the narrative fields (HEADLINE FRAMING rule
+    # also forbids hedging there). On match, the retry loop re-prompts
+    # the model.
     _FORBIDDEN_PHRASES_NEAR_FREEZABLE = (
         "if the balance remains",
         "if balances remain",
@@ -791,10 +778,11 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
                 )
                 break  # one problem per field is enough
 
-    # v0.16.3 (audit fix #A6): VICTIM_SUMMARY structural checks.
-    # The SYSTEM_PROMPT specifies 4-6 sentences, no legal jargon
-    # (subpoena/MLAT/compelled disclosure), no hex addresses, no
-    # guaranteed-recovery claims. Validator now enforces.
+    # VICTIM_SUMMARY structural checks. SYSTEM_PROMPT target is 4-6
+    # sentences; validator floors at 3 / ceilings at 10 to allow some
+    # slack while still catching obvious deviations. Also forbids
+    # legal jargon, guaranteed-recovery claims, and hex addresses —
+    # this is the customer-facing paragraph, plain English only.
     vs = ai_obj.get("VICTIM_SUMMARY")
     if isinstance(vs, str) and vs.strip():
         # Sentence count — rough approximation via "." count.
@@ -804,13 +792,12 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
         if sentence_count < 3:
             problems.append(
                 f"VICTIM_SUMMARY has only ~{sentence_count} sentence(s); "
-                f"SYSTEM_PROMPT requires 4-6 for the customer-facing "
-                f"paragraph."
+                f"validator floor is 3 (SYSTEM_PROMPT target is 4-6)."
             )
         elif sentence_count > 10:
             problems.append(
                 f"VICTIM_SUMMARY has ~{sentence_count} sentences; "
-                f"too long. Cap at 6-8 sentences max."
+                f"validator ceiling is 10 (SYSTEM_PROMPT target is 4-6)."
             )
         vs_lower = vs.lower()
         forbidden_in_victim_summary = (
@@ -994,14 +981,13 @@ def call_anthropic_for_editorial(
     out_total = 0
     cache_creation_total = 0
     cache_read_total = 0
-    # v0.16.3 (audit fix #A7): hard cost ceiling. If the cumulative
-    # USD cost across retries exceeds this, abort with a structured
-    # error rather than letting a misbehaving model burn through the
-    # budget. $2/case is generous — typical cost is $0.05-0.15.
+    # Hard cost ceiling so a misbehaving model can't burn through the
+    # budget on retries. Typical cost is $0.05-0.15; $2 leaves plenty
+    # of headroom while protecting against runaway loops.
     _MAX_USD_PER_CALL = Decimal("2.00")
     for attempt in range(2):  # one retry on bad JSON
-        # Pre-flight cost-ceiling check (skip on first attempt — we
-        # haven't billed anything yet).
+        # Pre-flight cost check on retries only (first attempt hasn't
+        # billed anything yet).
         if attempt > 0:
             current_cost = _compute_usd_cost(
                 in_total, out_total,

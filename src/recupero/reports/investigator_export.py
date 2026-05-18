@@ -106,14 +106,9 @@ def build_findings(brief: dict[str, Any]) -> list[InvestigatorFinding]:
     findings.extend(_findings_from_cross_case_correlation(brief))
     findings.extend(_findings_from_destinations(brief))
 
-    # v0.16.3 (audit fix #A18): dedupe — when the same address
-    # appears in both FREEZABLE (issuer-targetable) and DESTINATIONS
-    # (general visibility), prefer the FREEZABLE finding (it has
-    # higher severity + issuer attribution). Pre-fix the CSV showed
-    # two contradictory rows for the same address: one "freezable"
-    # high severity, one "destination" info severity (or worse, one
-    # "freezable" + one "INVESTIGATE-destination" if the AI
-    # editorial disagreed with the freeze_asks evidence).
+    # Dedupe destination-tier findings against more-specific ones at
+    # the same address — the CSV must not show contradictory rows
+    # (e.g., one "freezable" + one "destination" for the same wallet).
     findings = _dedupe_findings_by_address(findings)
 
     # Sort: SANCTIONED first, then by severity desc.
@@ -128,20 +123,16 @@ def _dedupe_findings_by_address(
     findings: list[InvestigatorFinding],
 ) -> list[InvestigatorFinding]:
     """Dedupe DESTINATION-tier findings against more-specific ones at
-    the same address. Narrow scope to avoid collapsing legitimate
-    multi-exposure findings (e.g., one address with multiple
-    counterparties from RISK_ASSESSMENT).
+    the same address.
 
-    Specifically: a `destination` / `freezable_destination` /
-    `investigate_destination` / `exchange_destination` / `unrecoverable
-    _destination` finding is dropped if a non-destination finding at
-    the same (address, chain) already exists (freezable / unrecoverable
-    / risk-exposure / etc.). All other dedup happens between the
-    destination-tier findings themselves (one destination per address).
-
-    Pre-fix, dedup happened on (address, chain) across ALL findings —
-    a RISK_ASSESSMENT block with two exposures on the same address
-    would collapse to one finding, losing severity diversity.
+    A `destination` / `freezable_destination` / `investigate_destination`
+    / `exchange_destination` / `unrecoverable_destination` finding is
+    dropped when a non-destination finding (freezable / unrecoverable /
+    risk-exposure / etc.) at the same (address, chain) already exists.
+    Destination-tier findings dedupe against each other by priority
+    (one row per address). Non-destination findings pass through
+    untouched — a RISK_ASSESSMENT block with multiple exposures on
+    the same address still produces multiple rows.
     """
     _DESTINATION_TIER = {
         "destination",
@@ -159,15 +150,10 @@ def _dedupe_findings_by_address(
             addresses_with_specific.add(
                 (f.address.lower(), f.chain.lower())
             )
-    # Step 2: drop destination-tier findings if a specific one
-    # already covers the same address. Also dedup destination-tier
-    # findings against each other (one per address, preferring
-    # higher-severity).
-    # v0.16.3 (post-audit-4): freezable_destination ranks HIGHEST
-    # within the destination tier. Pre-fix, exchange_destination beat
-    # freezable_destination on the same address — but freezable is
-    # the more actionable signal (operator should send a freeze letter),
-    # exchange is informational (CEX-deposit pattern, separate workflow).
+    # Step 2: dedupe destination-tier rows by priority. freezable_
+    # destination beats the others because it represents an actionable
+    # freeze letter; exchange is informational (separate CEX-subpoena
+    # workflow).
     _dest_priority = {
         "freezable_destination": 0,
         "unrecoverable_destination": 1,
@@ -306,28 +292,16 @@ def _findings_from_cross_chain(brief: dict[str, Any]) -> list[InvestigatorFindin
 def _findings_from_freezable(brief: dict[str, Any]) -> list[InvestigatorFinding]:
     """FREEZABLE → one finding per (issuer, address) holding.
 
-    v0.16.0 fix (Jacob V-CFI01 bug 8): the freezable→finding mapping
-    used to hardcode ``risk_category="freezable"`` regardless of the
-    issuer's actual freeze_capability. For tokens like DAI where Sky
-    Protocol has ``freeze_capability="no"``, that produced a finding
-    that contradicted every other artifact (which correctly
-    categorized the DAI as unrecoverable). The severity downgrade to
-    "low" partially masked the bug but didn't fix the category.
+    risk_category honors the issuer's freeze_capability:
+      * yes / HIGH       → "freezable"            (severity high)
+      * limited / MEDIUM → "freezable_limited"    (severity medium)
+      * no / LOW         → "unrecoverable"        (severity low)
+      * "" / other       → "freezable" + low      (back-compat)
 
-    Now the risk_category honors the issuer capability:
-      * yes / HIGH      → "freezable"            (severity high)
-      * limited / MEDIUM → "freezable_limited"   (severity medium)
-      * no / LOW         → "unrecoverable"       (severity low)
-      * "" / other       → "freezable" + low     (back-compat)
-
-    The headline also reflects the capability so the operator reading
-    the JSON gets a consistent story across files.
-
-    v0.16.1 (internal audit follow-up): accept BOTH the raw freeze_asks
-    form ('yes'/'limited'/'no') and the display-mapped form
-    ('HIGH'/'MEDIUM'/'LOW') because emit_brief.py:538 maps for display
-    but the skip_editorial fallback path passes through unmapped.
-    Mirrors recovery/scorer.py:190's dual-form acceptance.
+    Accepts both the raw freeze_asks form ('yes'/'limited'/'no') and
+    the display-mapped form ('HIGH'/'MEDIUM'/'LOW') because emit_brief
+    maps for display but the skip_editorial fallback passes through
+    raw values.
     """
     out: list[InvestigatorFinding] = []
     for entry in brief.get("FREEZABLE") or []:
@@ -344,25 +318,24 @@ def _findings_from_freezable(brief: dict[str, Any]) -> list[InvestigatorFinding]
             risk_category = "freezable_limited"
             headline_verb = "Freezable (limited capability)"
         elif cap_lower in ("no", "low"):
+            # DAI / similar non-freezable tokens get the unrecoverable
+            # tag so the structured export agrees with the rest of the
+            # artifacts (which correctly mark these as unrecoverable).
             sev = "low"
-            # v0.16.0 bug 8: DAI / similar non-freezable tokens must
-            # not be categorized as freezable in the structured export.
             risk_category = "unrecoverable"
             headline_verb = "Held but unrecoverable"
         else:
-            # Empty / unknown capability — be conservative.
             sev = "low"
             risk_category = "freezable"
             headline_verb = "Freezable"
         for holding in entry.get("holdings") or []:
             addr = (holding.get("address") or "").lower()
             usd_amt = holding.get("usd", "")
-            # v0.16.2 (audit fix #7): surface evidence_type to the
-            # investigator. Pre-fix the export hid whether the USD
-            # number was a confirmed current balance or a historical-
-            # receipt sum — an analyst reading findings.json saw
-            # "Freezable $170K USDT" and assumed currently held, when
-            # for V-CFI01-shape cases the address received-then-moved-on.
+            # Surface evidence_type in the headline + notes so an
+            # analyst can distinguish "$X currently held" from "$X
+            # received historically at this address" — the trace
+            # USD on a historical_inflow row is the inflow sum, not
+            # a present-day balance.
             ev_type = holding.get("evidence_type") or "current_balance"
             observed_at = holding.get("observed_at")
             evidence_phrase = (

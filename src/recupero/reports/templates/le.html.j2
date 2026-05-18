@@ -55,7 +55,7 @@
       <dd>{{ issuer.name }}{% if issuer.jurisdiction %}<span class="secondary">{{ issuer.jurisdiction }}</span>{% endif %}</dd>
     </div>
     {% if issuer_freezable %}
-    {# v0.16.3 (audit fix #B1): cover-meta label is evidence-aware. #}
+    {# Cover-meta label is evidence-mode aware. #}
     <div class="cover-meta-item">
       {% if issuer_freezable.evidence_mode == "historical_only" %}
       <dt>Documented Position</dt>
@@ -91,12 +91,8 @@
     {% endif %}
   </p>
   {% if issuer_freezable %}
-  {# v0.16.3 (audit fix #B1): LE handoff template now branches on
-     evidence_mode for legal accuracy. Pre-fix the executive summary
-     asserted "stolen funds is held in USDC at N wallets" verbatim
-     even for historical_only mode — an LE-targeted document making
-     a factual claim of current custody when the underlying evidence
-     is historical receipt. False statement to a federal agent. #}
+  {# Executive summary branches on evidence_mode — historical_only
+     must NOT assert current custody (this letter goes to LE). #}
   {% if issuer_freezable.evidence_mode == "historical_only" %}
   <p style="margin:0 0 0.7em 0;">
     The position was forwarded by the perpetrator through a chain of
@@ -272,9 +268,7 @@
   <div class="timeline-event current">
     <time>{{ verified_at }}</time> &nbsp;—&nbsp;
     {% if issuer_freezable %}
-    {# v0.16.3 (audit fix #B1): timeline "Current state" branch on
-       evidence_mode. historical_only → frame as documented receipts,
-       not current custody. #}
+    {# Timeline "Current state" branches on evidence_mode. #}
     {% if issuer_freezable.evidence_mode == "historical_only" %}
     <strong>Documented receipts.</strong>
     {{ issuer_freezable.total_usd_freezable }} in

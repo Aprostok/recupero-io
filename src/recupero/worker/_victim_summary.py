@@ -139,18 +139,16 @@ def classify_recovery_prospects(
     if not freezable:
         return False, Decimal(0), Decimal(0)
 
+    from recupero._common import capability_blocks_freeze
     total_freezable = Decimal(0)
     total_suspected = Decimal(0)
     for entry in freezable:
-        cap = (entry.get("freeze_capability") or "").lower()
         # Suspected always includes — it's the broad attribution
         # number, not the actionable one.
         total_suspected += _parse_usd_string(entry.get("total_suspected_usd"))
-        if cap in ("no", "low"):
-            # Non-freezable issuer: do not count toward the
-            # recoverable headline. The entry still appears in the
-            # brief as informational, but the customer letter must
-            # not claim these dollars as recoverable.
+        if capability_blocks_freeze(entry.get("freeze_capability")):
+            # Non-freezable issuer (DAI / Sky Protocol et al.) — does
+            # not contribute to the recoverable headline.
             continue
         # v0.16.3 (audit fix #C3): if the per-issuer total_usd is
         # missing (skip_editorial or legacy briefs), fall back to
@@ -298,28 +296,18 @@ def _build_context(
 
     now = datetime.now(UTC)
 
-    # Per-issuer summary table data
+    # Per-issuer summary table data + aggregate evidence_mode across
+    # all freezable entries so the customer template can render the
+    # right "currently held" vs "received at" language. A V-CFI01-shape
+    # case (all historical_inflow) must not falsely claim "$3.55M
+    # currently held" — the customer summary branches on the aggregate.
+    from recupero._common import aggregate_evidence_mode_from_entries
     freezable_entries = freeze_brief.get("FREEZABLE") or []
     freezable_summary: list[dict[str, Any]] = []
-    # v0.16.2 (audit fix #3): aggregate evidence_mode across all
-    # freezable entries so the customer-facing template can render
-    # the right "currently held" vs "received at" language. Mirrors
-    # the issuer-freeze-letter template's v0.16.1 evidence-mode
-    # branching. Without this, a V-CFI01-shape case (all
-    # historical_inflow) would have its customer letter falsely
-    # claim "$3.55M currently held" when the addresses received
-    # the tokens historically; current balance may have moved on.
-    n_with_current = 0
-    n_with_historical = 0
     for entry in freezable_entries:
         freezable_usd = _parse_usd_string(entry.get("total_usd"))
         suspected_usd = _parse_usd_string(entry.get("total_suspected_usd"))
         suspected_only = suspected_usd - freezable_usd
-        entry_mode = entry.get("evidence_mode")
-        if entry_mode in ("current_balance_only", "mixed"):
-            n_with_current += 1
-        if entry_mode in ("historical_only", "mixed"):
-            n_with_historical += 1
         freezable_summary.append({
             "issuer": entry.get("issuer", "?"),
             "token": entry.get("token", "?"),
@@ -328,17 +316,12 @@ def _build_context(
             "freeze_capability": entry.get("freeze_capability") or "UNKNOWN",
             # Per-entry mode so the customer-letter template can
             # mark each row in the holdings table appropriately.
-            "evidence_mode": entry_mode or "current_balance_only",
+            "evidence_mode": entry.get("evidence_mode") or "current_balance_only",
         })
 
-    if n_with_current > 0 and n_with_historical == 0:
-        aggregate_evidence_mode = "current_balance_only"
-    elif n_with_historical > 0 and n_with_current == 0:
-        aggregate_evidence_mode = "historical_only"
-    elif n_with_current > 0 and n_with_historical > 0:
-        aggregate_evidence_mode = "mixed"
-    else:
-        aggregate_evidence_mode = "current_balance_only"  # default
+    aggregate_evidence_mode = aggregate_evidence_mode_from_entries(
+        freezable_entries,
+    )
 
     return {
         "case_id": case.case_id,

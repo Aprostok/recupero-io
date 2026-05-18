@@ -223,8 +223,12 @@ def patch_pdf_links(pdf_path: Path, html_path: Path | None = None) -> int:
     try:
         import pypdf
         from pypdf.generic import (
-            ArrayObject, DictionaryObject, FloatObject, NameObject,
-            NumberObject, TextStringObject,
+            ArrayObject,
+            DictionaryObject,
+            FloatObject,
+            NameObject,
+            NumberObject,
+            TextStringObject,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("pdf link patching skipped — pypdf import failed: %s", exc)

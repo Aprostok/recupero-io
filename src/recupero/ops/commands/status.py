@@ -16,7 +16,7 @@ on the cli for the full row + extra detail.
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -100,8 +100,8 @@ def _print_engagement_section(inv: dict) -> None:
     if not inv.get("engagement_closed_at"):
         started = inv["engagement_started_at"]
         if started.tzinfo is None:
-            started = started.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
+            started = started.replace(tzinfo=UTC)
+        now = datetime.now(UTC)
         days_in = (now - started).days
         days_remaining = max(0, 30 - days_in)
         print(f"  Days into engagement: {days_in}")
@@ -134,6 +134,7 @@ def _print_artifacts_section(*, investigation_id: UUID) -> None:
     try:
         # Lazy import + use the existing investigations_api helper
         import os
+
         from recupero.worker.investigations_api import get_investigation_detail
         d = get_investigation_detail(
             dsn=os.environ.get("SUPABASE_DB_URL", ""),
@@ -173,40 +174,37 @@ def _print_artifacts_section(*, investigation_id: UUID) -> None:
 
 def _fetch_investigation(*, investigation_id: UUID, dsn: str) -> dict | None:
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM public.investigations WHERE id = %s",
-                        (str(investigation_id),))
-            return cur.fetchone()
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM public.investigations WHERE id = %s",
+                    (str(investigation_id),))
+        return cur.fetchone()
 
 
 def _fetch_case(*, case_id: UUID, dsn: str) -> dict | None:
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT case_number, client_name, client_email, status, country "
-                "  FROM public.cases WHERE id = %s",
-                (str(case_id),),
-            )
-            return cur.fetchone()
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT case_number, client_name, client_email, status, country "
+            "  FROM public.cases WHERE id = %s",
+            (str(case_id),),
+        )
+        return cur.fetchone()
 
 
 def _fetch_emails(*, investigation_id: UUID, dsn: str) -> list[dict]:
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT sent_at, email_type, to_address, subject,
                        message_id, error_message, attachments
                   FROM public.emails_sent
                  WHERE investigation_id = %s
                  ORDER BY sent_at ASC
                 """,
-                (str(investigation_id),),
-            )
-            return list(cur.fetchall())
+            (str(investigation_id),),
+        )
+        return list(cur.fetchall())
 
 
 def _fmt(dt: Any) -> str:

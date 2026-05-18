@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from eth_utils import to_checksum_address
@@ -33,7 +33,7 @@ class LabelStore:
         self._by_addr_lower: dict[str, Label] = {}
 
     @classmethod
-    def load(cls, config: RecuperoConfig) -> "LabelStore":
+    def load(cls, config: RecuperoConfig) -> LabelStore:
         store = cls()
 
         # 1. Seed lists (shipped with the code)
@@ -108,8 +108,8 @@ class LabelStore:
 
 def _parse_dt(s: str | None) -> datetime:
     if not s:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     try:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)

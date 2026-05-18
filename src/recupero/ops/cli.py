@@ -219,6 +219,50 @@ def cli() -> None:
              "ALWAYS supply this from an independently-trusted source.",
     )
 
+    # ----- v0.14.5 cleanup: previously-orphaned commands ----- #
+
+    # ----- refresh-freeze-priors (v0.14.2) ----- #
+    sub.add_parser(
+        "refresh-freeze-priors",
+        help="Recompute per-issuer freeze-success priors from the "
+             "freeze_outcomes table. Recommended cadence: nightly cron.",
+    )
+
+    # ----- record-freeze-outcome (v0.14.2) ----- #
+    p_outcome = sub.add_parser(
+        "record-freeze-outcome",
+        help="Record an outcome event for a previously-sent freeze "
+             "letter (the operator's view of what happened: "
+             "acknowledged, declined, full_freeze, returned, silence).",
+    )
+    p_outcome.add_argument("letter_id", help="UUID of the freeze_letters_sent row")
+    p_outcome.add_argument(
+        "--outcome", required=True,
+        choices=("acknowledged", "request_more_info", "declined",
+                 "partial_freeze", "full_freeze", "released",
+                 "returned_to_victim", "silence_30d", "silence_90d"),
+    )
+    p_outcome.add_argument(
+        "--frozen-usd", type=str, default=None,
+        help="USD amount frozen (for partial_freeze / full_freeze).",
+    )
+    p_outcome.add_argument(
+        "--returned-usd", type=str, default=None,
+        help="USD amount returned to victim (for returned_to_victim).",
+    )
+    p_outcome.add_argument(
+        "--note", type=str, default=None,
+        help="Free-form operator note for audit.",
+    )
+
+    # ----- validate-labels (v0.14.4) ----- #
+    sub.add_parser(
+        "validate-labels",
+        help="Validate the address-label seed files (high_risk.json, "
+             "mixers.json, etc.) against the schema spec. CI gate for "
+             "PRs that touch label data.",
+    )
+
     # ----- list-payments ----- #
     p_lpay = sub.add_parser(
         "list-payments",
@@ -390,18 +434,50 @@ def cli() -> None:
         sys.exit(cmd.run(dsn=_require_dsn()))
 
     if args.command == "custody-keygen":
-        from recupero.ops.commands import custody_cmd as cmd
         from pathlib import Path as _Path
+
+        from recupero.ops.commands import custody_cmd as cmd
         out = _Path(args.output_path) if args.output_path else None
         sys.exit(cmd.run_keygen(output_path=out))
 
     if args.command == "custody-verify":
-        from recupero.ops.commands import custody_cmd as cmd
         from pathlib import Path as _Path
+
+        from recupero.ops.commands import custody_cmd as cmd
         sys.exit(cmd.run_verify(
             case_dir=_Path(args.case_dir),
             public_key_b64=args.public_key,
         ))
+
+    if args.command == "refresh-freeze-priors":
+        from recupero.freeze_learning.recorder import refresh_priors
+        n = refresh_priors(_require_dsn())
+        print(f"Refreshed {n} per-issuer prior(s) in issuer_freeze_priors.")
+        sys.exit(0)
+
+    if args.command == "record-freeze-outcome":
+        from decimal import Decimal as _Decimal
+
+        from recupero.freeze_learning.recorder import record_outcome
+        frozen = _Decimal(args.frozen_usd) if args.frozen_usd else None
+        returned = _Decimal(args.returned_usd) if args.returned_usd else None
+        out_id = record_outcome(
+            letter_id=_parse_uuid(args.letter_id, field_name="letter_id"),
+            outcome_type=args.outcome,
+            frozen_usd=frozen,
+            returned_usd=returned,
+            operator_notes=args.note,
+            dsn=_require_dsn(),
+        )
+        if out_id is None:
+            print("ERROR: failed to record outcome (see logs).")
+            sys.exit(1)
+        print(f"Recorded outcome {out_id} for letter {args.letter_id}.")
+        sys.exit(0)
+
+    if args.command == "validate-labels":
+        from recupero.labels.validator import main as _validator_main
+        sys.exit(_validator_main())
 
     if args.command == "list-payments":
         from recupero.ops.commands import list_payments as cmd

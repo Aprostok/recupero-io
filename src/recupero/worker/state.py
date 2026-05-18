@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from typing import Final
 
-
 # ----- Statuses ----- #
 # Wire values match the public.investigations.status_check constraint in
 # Jacob's admin UI repo:

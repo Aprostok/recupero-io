@@ -95,7 +95,6 @@ def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
     existing handler in send_email can format it for the audit
     row without changes.
     """
-    import socket
     last_exc: BaseException | None = None
     total_attempts = len(_RESEND_RETRY_WAITS_SEC) + 1
     for attempt_idx in range(total_attempts):
@@ -108,7 +107,7 @@ def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
             if 400 <= exc.code < 500 and exc.code != 429:
                 raise
             last_exc = exc
-        except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+        except (urllib.error.URLError, TimeoutError) as exc:
             last_exc = exc
         if attempt_idx >= len(_RESEND_RETRY_WAITS_SEC):
             break

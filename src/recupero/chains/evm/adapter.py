@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from eth_utils import to_checksum_address
@@ -114,7 +114,7 @@ class EvmAdapter(ChainAdapter):
 
     def block_at_or_before(self, ts: datetime) -> int:
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         unix_ts = int(ts.timestamp())
         return self.client.get_block_number_by_time(unix_ts, closest="before")
 
@@ -187,11 +187,11 @@ class EvmAdapter(ChainAdapter):
         block_hex = raw_tx.get("blockNumber") or raw_receipt.get("blockNumber") or "0x0"
         block_number = int(block_hex, 16)
         raw_block = self.client.get_block_by_number(block_number, full_tx=False)
-        block_time = datetime.fromtimestamp(int(raw_block.get("timestamp", "0x0"), 16), tz=timezone.utc)
+        block_time = datetime.fromtimestamp(int(raw_block.get("timestamp", "0x0"), 16), tz=UTC)
         return EvidenceReceipt(
             chain=self.chain, tx_hash=tx_hash, block_number=block_number, block_time=block_time,
             raw_transaction=raw_tx, raw_receipt=raw_receipt, raw_block_header=raw_block,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             fetched_from=self.profile.api_base,
             explorer_url=self.explorer_tx_url(tx_hash),
         )
@@ -206,7 +206,7 @@ class EvmAdapter(ChainAdapter):
 
     def _normalize_native(self, tx: dict[str, Any], source: str) -> dict[str, Any]:
         block_number = int(tx["blockNumber"])
-        block_time = datetime.fromtimestamp(int(tx["timeStamp"]), tz=timezone.utc)
+        block_time = datetime.fromtimestamp(int(tx["timeStamp"]), tz=UTC)
         token = TokenRef(
             chain=self.chain, contract=None,
             symbol=self.profile.native_symbol,
@@ -229,7 +229,7 @@ class EvmAdapter(ChainAdapter):
 
     def _normalize_erc20(self, tx: dict[str, Any]) -> dict[str, Any]:
         block_number = int(tx["blockNumber"])
-        block_time = datetime.fromtimestamp(int(tx["timeStamp"]), tz=timezone.utc)
+        block_time = datetime.fromtimestamp(int(tx["timeStamp"]), tz=UTC)
         token = TokenRef(
             chain=self.chain,
             contract=to_checksum_address(tx["contractAddress"]),

@@ -20,12 +20,10 @@ monitoring job actually ran and isn't silently failing. The
 
 from __future__ import annotations
 
-import io
-import logging
-import re
 import json
+import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -81,7 +79,7 @@ def generate_daily_digest(
     were skipped and don't appear in ``report.candidates``).
     """
     output_dir.mkdir(parents=True, exist_ok=True)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     tick_date = report.started_at.strftime("%Y-%m-%d")
     digest_id = f"DIGEST-{report.started_at.strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
 

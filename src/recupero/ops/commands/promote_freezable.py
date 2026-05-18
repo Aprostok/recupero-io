@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Callable
+from collections.abc import Callable
 from uuid import UUID
 
 import psycopg
@@ -59,10 +59,9 @@ def run(
         return 1
 
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT id, chain, address, status, is_freezeable,
                        issuer, last_balance_usd,
                        kyc_confirmed_at, kyc_confirmed_by_operator,
@@ -70,42 +69,42 @@ def run(
                   FROM public.watchlist
                  WHERE id = %s
                 """,
-                (str(watchlist_id),),
-            )
-            row = cur.fetchone()
-            if not row:
-                print(f"ERROR: watchlist row {watchlist_id} not found")
-                return 1
+            (str(watchlist_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            print(f"ERROR: watchlist row {watchlist_id} not found")
+            return 1
 
-            if row["is_freezeable"]:
-                if not force:
-                    print(
-                        f"NOTE: watchlist {watchlist_id} is already FREEZABLE.\n"
-                        f"      Original promotion:\n"
-                        f"        at:    {row['kyc_confirmed_at']}\n"
-                        f"        by:    {row['kyc_confirmed_by_operator']}\n"
-                        f"        note:  {row['kyc_confirmation_note']}\n"
-                        "      Pass --force to overwrite the audit columns."
-                    )
-                    return 0
-
-            # Surface what we're about to do.
-            print(
-                f"About to promote watchlist row to FREEZABLE:\n"
-                f"  chain:   {row['chain']}\n"
-                f"  address: {row['address']}\n"
-                f"  status:  {row['status']}\n"
-                f"  issuer:  {row['issuer'] or '(unknown)'}\n"
-                f"  balance: ${row['last_balance_usd'] or 0}\n"
-                f"  reason:  {reason}\n"
-                f"  by:      {operator}"
-            )
-            if not confirm("Promote to FREEZABLE?"):
-                print("Aborted — no changes.")
+        if row["is_freezeable"]:
+            if not force:
+                print(
+                    f"NOTE: watchlist {watchlist_id} is already FREEZABLE.\n"
+                    f"      Original promotion:\n"
+                    f"        at:    {row['kyc_confirmed_at']}\n"
+                    f"        by:    {row['kyc_confirmed_by_operator']}\n"
+                    f"        note:  {row['kyc_confirmation_note']}\n"
+                    "      Pass --force to overwrite the audit columns."
+                )
                 return 0
 
-            cur.execute(
-                """
+        # Surface what we're about to do.
+        print(
+            f"About to promote watchlist row to FREEZABLE:\n"
+            f"  chain:   {row['chain']}\n"
+            f"  address: {row['address']}\n"
+            f"  status:  {row['status']}\n"
+            f"  issuer:  {row['issuer'] or '(unknown)'}\n"
+            f"  balance: ${row['last_balance_usd'] or 0}\n"
+            f"  reason:  {reason}\n"
+            f"  by:      {operator}"
+        )
+        if not confirm("Promote to FREEZABLE?"):
+            print("Aborted — no changes.")
+            return 0
+
+        cur.execute(
+            """
                 UPDATE public.watchlist
                    SET is_freezeable = TRUE,
                        kyc_confirmed_at = NOW(),
@@ -114,9 +113,9 @@ def run(
                  WHERE id = %s
                 RETURNING kyc_confirmed_at
                 """,
-                (operator, reason, str(watchlist_id)),
-            )
-            updated = cur.fetchone()
+            (operator, reason, str(watchlist_id)),
+        )
+        updated = cur.fetchone()
 
     print(
         f"\nOK — watchlist {watchlist_id} promoted to FREEZABLE\n"

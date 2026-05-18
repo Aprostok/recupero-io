@@ -32,12 +32,12 @@ Design notes:
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-import os
 from typing import Any
 
 from recupero.models import Case, LabelCategory
@@ -98,7 +98,7 @@ EDITORIAL_TEMPLATE: dict[str, Any] = {
 
 def _now_utc_iso_seconds() -> str:
     """UTC timestamp, second precision, ISO 8601 with trailing Z."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _parse_usd_string(s: str) -> Decimal:
@@ -1043,6 +1043,27 @@ def emit_brief(
             },
         }
 
+    # --- Class-action / cross-victim correlation (v0.14.3) ---
+    # When the current case's perp infra overlaps with prior cases
+    # in qualifying roles (perpetrator_hub / drainer_contract /
+    # high_risk_destination), surface the combined-loss figure +
+    # multi-victim action recommendation.
+    try:
+        from recupero.trace.class_action import run_class_action_pass
+        class_action_opportunity = run_class_action_pass(
+            case,
+            current_case_id=_case_uuid,
+        )
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        class_action_opportunity = {
+            "triggered": False,
+            "potential_co_victim_case_count": 0,
+            "qualifying_share_count": 0,
+            "estimated_combined_loss": "$0.00",
+            "shared_addresses": [],
+            "investigator_note": "",
+        }
+
     # --- Final assembly ---
     brief = {
         "CASE_ID": editorial["CASE_ID"],
@@ -1110,6 +1131,12 @@ def emit_brief(
         # counts. The compounding-moat capability behind TRM /
         # Chainalysis.
         "CROSS_CASE_CORRELATION": cross_case_correlation,
+        # v0.14.3: class-action / cross-victim correlation. When the
+        # current case's perpetrator infrastructure overlaps with
+        # prior cases (qualifying-role address shared), surface the
+        # combined-loss figure + recommend coordinated multi-victim
+        # action. Empty/untriggered when no qualifying overlap.
+        "CLASS_ACTION_OPPORTUNITY": class_action_opportunity,
 
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],

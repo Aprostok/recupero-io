@@ -137,7 +137,7 @@ class CorrelationResult:
 
 
 def build_observations(
-    case: "Case",
+    case: Case,
     *,
     case_id: UUID | None = None,
     investigation_id: UUID | None = None,
@@ -285,7 +285,7 @@ def build_observations(
     # 5. Backfill: any address that appeared in a transfer but
     # didn't get a role yet → 'hop'. This is the long tail of
     # in-trace addresses we have nothing labeled for.
-    for addr in usd_flow_by_addr.keys():
+    for addr in usd_flow_by_addr:
         # If it already has any role recorded, skip.
         if any(o.address == addr for o in observations):
             continue
@@ -361,25 +361,24 @@ def record_observations(
     """
     written = 0
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                for obs in observations:
-                    cur.execute(sql, {
-                        "address": obs.address,
-                        "chain": obs.chain,
-                        "case_id": obs.case_id,
-                        "investigation_id": obs.investigation_id,
-                        "role": obs.role,
-                        "label_category": obs.label_category,
-                        "label_name": obs.label_name,
-                        "usd_flowed": obs.usd_flowed,
-                        "risk_score": obs.risk_score,
-                        "risk_verdict": obs.risk_verdict,
-                        "is_ofac_exposed": obs.is_ofac_exposed,
-                        "is_mixer_exposed": obs.is_mixer_exposed,
-                        "is_drainer_attributed": obs.is_drainer_attributed,
-                    })
-                    written += 1
+        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+            for obs in observations:
+                cur.execute(sql, {
+                    "address": obs.address,
+                    "chain": obs.chain,
+                    "case_id": obs.case_id,
+                    "investigation_id": obs.investigation_id,
+                    "role": obs.role,
+                    "label_category": obs.label_category,
+                    "label_name": obs.label_name,
+                    "usd_flowed": obs.usd_flowed,
+                    "risk_score": obs.risk_score,
+                    "risk_verdict": obs.risk_verdict,
+                    "is_ofac_exposed": obs.is_ofac_exposed,
+                    "is_mixer_exposed": obs.is_mixer_exposed,
+                    "is_drainer_attributed": obs.is_drainer_attributed,
+                })
+                written += 1
     except Exception as exc:  # noqa: BLE001
         log.warning("correlation recording failed: %s", exc)
         return 0
@@ -626,7 +625,7 @@ def _build_correlation_note(corr: CorrelationResult) -> str:
 
 
 def run_correlation_pass(
-    case: "Case",
+    case: Case,
     *,
     case_id: UUID | None = None,
     investigation_id: UUID | None = None,

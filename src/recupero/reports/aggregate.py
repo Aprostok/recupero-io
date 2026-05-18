@@ -20,13 +20,12 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from recupero.models import Case
-from recupero.storage.case_store import CaseStore
 
 log = logging.getLogger(__name__)
 
@@ -132,7 +131,7 @@ def aggregate_stolen(
 def format_aggregate_markdown(r: AggregateResult) -> str:
     """Render the aggregate as a human-readable markdown summary."""
     lines = []
-    lines.append(f"# Stolen funds aggregate")
+    lines.append("# Stolen funds aggregate")
     lines.append("")
     lines.append(f"- **Cases examined:** {len(r.cases_examined)}")
     lines.append(f"- **Perpetrator addresses:** {len(r.perpetrators)}")
@@ -171,7 +170,7 @@ def format_aggregate_markdown(r: AggregateResult) -> str:
 def write_aggregate_json(r: AggregateResult, out_path: Path) -> None:
     """Write the full aggregate (with all per-transfer detail) to disk."""
     data = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "cases_examined": r.cases_examined,
         "perpetrators": r.perpetrators,
         "total_usd": str(r.total_usd),

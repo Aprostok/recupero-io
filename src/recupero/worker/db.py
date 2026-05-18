@@ -333,21 +333,20 @@ class WorkerDB:
              WHERE i.{COL_ID} = stale.{COL_ID}
             RETURNING i.{COL_ID}, stale.{COL_STATUS};
         """
-        with psycopg.connect(self._dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql,
-                    {
-                        "stale": stale_after_sec,
-                        "self_worker": self.worker_id,
-                        "failed": S.FAILED,
-                        "msg": (
-                            f"post-deploy reaper: heartbeat older than "
-                            f"{stale_after_sec}s — orphaned during deploy/restart"
-                        ),
-                    },
-                )
-                rows = cur.fetchall()
+        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "stale": stale_after_sec,
+                    "self_worker": self.worker_id,
+                    "failed": S.FAILED,
+                    "msg": (
+                        f"post-deploy reaper: heartbeat older than "
+                        f"{stale_after_sec}s — orphaned during deploy/restart"
+                    ),
+                },
+            )
+            rows = cur.fetchall()
         return [(r[0], r[1]) for r in rows]
 
     def reap_stale_claims(self, *, stale_after_sec: int) -> list[tuple[UUID, str]]:
@@ -386,20 +385,19 @@ class WorkerDB:
              WHERE i.{COL_ID} = stale.{COL_ID}
             RETURNING i.{COL_ID}, stale.{COL_STATUS};
         """
-        with psycopg.connect(self._dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    sql,
-                    {
-                        "stale": stale_after_sec,
-                        "failed": S.FAILED,
-                        "msg": (
-                            f"reaper: heartbeat older than {stale_after_sec}s "
-                            "— worker presumed dead"
-                        ),
-                    },
-                )
-                rows = cur.fetchall()
+        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "stale": stale_after_sec,
+                    "failed": S.FAILED,
+                    "msg": (
+                        f"reaper: heartbeat older than {stale_after_sec}s "
+                        "— worker presumed dead"
+                    ),
+                },
+            )
+            rows = cur.fetchall()
         return [(r[0], r[1]) for r in rows]
 
     def fetch_case(self, case_id: UUID) -> CaseData | None:
@@ -593,6 +591,5 @@ class WorkerDB:
     # ----- internals ----- #
 
     def _exec(self, sql: str, params: dict[str, Any]) -> None:
-        with psycopg.connect(self._dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
+        with psycopg.connect(self._dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(sql, params)

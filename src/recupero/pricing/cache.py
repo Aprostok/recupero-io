@@ -111,14 +111,13 @@ class PostgresPriceCache:
         import psycopg
         try:
             with psycopg.connect(self._dsn, autocommit=True, connect_timeout=10,
-                                 prepare_threshold=None) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT usd_price, error_msg FROM public.pricing_cache "
-                        "WHERE cache_key = %s",
-                        (key,),
-                    )
-                    row = cur.fetchone()
+                                 prepare_threshold=None) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT usd_price, error_msg FROM public.pricing_cache "
+                    "WHERE cache_key = %s",
+                    (key,),
+                )
+                row = cur.fetchone()
         except psycopg.errors.UndefinedTable:
             self._warn_table_missing()
             return None
@@ -149,10 +148,9 @@ class PostgresPriceCache:
         error_param = value.get("error")
         try:
             with psycopg.connect(self._dsn, autocommit=True, connect_timeout=10,
-                                 prepare_threshold=None) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
+                                 prepare_threshold=None) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
                         INSERT INTO public.pricing_cache
                             (cache_key, usd_price, error_msg)
                         VALUES (%s, %s::numeric, %s)
@@ -161,8 +159,8 @@ class PostgresPriceCache:
                             error_msg = EXCLUDED.error_msg,
                             cached_at = NOW()
                         """,
-                        (key, usd_param, error_param),
-                    )
+                    (key, usd_param, error_param),
+                )
         except psycopg.errors.UndefinedTable:
             self._warn_table_missing()
         except Exception as e:  # noqa: BLE001

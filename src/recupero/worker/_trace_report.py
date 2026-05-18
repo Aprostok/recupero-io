@@ -25,7 +25,7 @@ customer-facing letters).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -109,7 +109,7 @@ def _build_context(
     label: str | None,
 ) -> dict[str, Any]:
     chain_str = case.chain.value
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     wallet_addr = case.seed_address
 
     stats = _compute_stats(case)

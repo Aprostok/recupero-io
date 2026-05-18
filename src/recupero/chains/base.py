@@ -21,7 +21,7 @@ class ChainAdapter(ABC):
     chain: Chain
 
     @classmethod
-    def for_chain(cls, chain: Chain, config: Any) -> "ChainAdapter":
+    def for_chain(cls, chain: Chain, config: Any) -> ChainAdapter:
         """Factory. Imports done locally to avoid cycles."""
         if chain == Chain.ethereum:
             from recupero.chains.ethereum.adapter import EthereumAdapter

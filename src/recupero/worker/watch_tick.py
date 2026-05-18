@@ -38,7 +38,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -253,7 +253,7 @@ def run_watch_tick(
         limit if limit else "none",
     )
 
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     report = WatchTickReport(
         started_at=started_at,
         finished_at=started_at,  # filled in at end
@@ -267,7 +267,7 @@ def run_watch_tick(
     report.candidates = len(rows)
     if not rows:
         log.info("watch-tick: no eligible watchlist rows")
-        report.finished_at = datetime.now(timezone.utc)
+        report.finished_at = datetime.now(UTC)
         return report
 
     # Group by chain so we instantiate one chain client per chain
@@ -314,7 +314,7 @@ def run_watch_tick(
                 delta_usd_threshold=delta_usd_threshold, report=report,
             )
 
-    report.finished_at = datetime.now(timezone.utc)
+    report.finished_at = datetime.now(UTC)
     log.info(
         "watch-tick done: candidates=%d snapshotted=%d cooldown=%d "
         "unsupported_chain=%d material_changes=%d errors=%d",
@@ -388,29 +388,28 @@ def _fetch_eligible(
     use_limit = limit if (limit is not None and limit > 0) else None
     pooled_dsn = _pooled_dsn(dsn)
     with psycopg.connect(pooled_dsn, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            sql, params = sql_with_priority, (hot_interval_sec, min_interval_sec)
-            try:
+                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        sql, params = sql_with_priority, (hot_interval_sec, min_interval_sec)
+        try:
+            if use_limit is not None:
+                cur.execute(sql + " LIMIT %s", (*params, use_limit))
+            else:
+                cur.execute(sql, params)
+        except psycopg.errors.UndefinedColumn:
+            # Migration 004 not applied — fall back to single-tier.
+            log.warning(
+                "watchlist.priority column missing — fallback to "
+                "single-tier cooldown (apply migration 004 to enable hot tier)"
+            )
+            # Need a fresh transaction since the prior errored.
+            with conn.cursor() as cur2:
                 if use_limit is not None:
-                    cur.execute(sql + " LIMIT %s", (*params, use_limit))
+                    cur2.execute(sql_legacy + " LIMIT %s",
+                                 (min_interval_sec, use_limit))
                 else:
-                    cur.execute(sql, params)
-            except psycopg.errors.UndefinedColumn:
-                # Migration 004 not applied — fall back to single-tier.
-                log.warning(
-                    "watchlist.priority column missing — fallback to "
-                    "single-tier cooldown (apply migration 004 to enable hot tier)"
-                )
-                # Need a fresh transaction since the prior errored.
-                with conn.cursor() as cur2:
-                    if use_limit is not None:
-                        cur2.execute(sql_legacy + " LIMIT %s",
-                                     (min_interval_sec, use_limit))
-                    else:
-                        cur2.execute(sql_legacy, (min_interval_sec,))
-                    return list(cur2.fetchall())
-            return list(cur.fetchall())
+                    cur2.execute(sql_legacy, (min_interval_sec,))
+                return list(cur2.fetchall())
+        return list(cur.fetchall())
 
 
 def _run_evm_chain(
@@ -884,63 +883,62 @@ def _persist_and_diff(
     """
     pooled_dsn = _pooled_dsn(dsn)
     with psycopg.connect(pooled_dsn, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            # Pull the most recent prior snapshot — single ORDER BY +
-            # LIMIT 1 is index-served by watchlist_snapshots_recent_idx.
-            cur.execute(
-                """SELECT taken_at, native_balance, tx_count, usd_value
+                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        # Pull the most recent prior snapshot — single ORDER BY +
+        # LIMIT 1 is index-served by watchlist_snapshots_recent_idx.
+        cur.execute(
+            """SELECT taken_at, native_balance, tx_count, usd_value
                      FROM public.watchlist_snapshots
                     WHERE watchlist_id = %s
                     ORDER BY taken_at DESC LIMIT 1;""",
-                (row["id"],),
-            )
-            prior = cur.fetchone()
+            (row["id"],),
+        )
+        prior = cur.fetchone()
 
-            new_taken_at = datetime.now(timezone.utc)
-            delta_usd: Decimal | None = None
-            if prior is not None and prior.get("usd_value") is not None and snap.total_usd is not None:
-                delta_usd = Decimal(snap.total_usd) - Decimal(prior["usd_value"])
-            tx_count_delta: int | None = None
-            if (prior is not None and prior.get("tx_count") is not None
-                    and snap.tx_count is not None):
-                tx_count_delta = int(snap.tx_count) - int(prior["tx_count"])
+        new_taken_at = datetime.now(UTC)
+        delta_usd: Decimal | None = None
+        if prior is not None and prior.get("usd_value") is not None and snap.total_usd is not None:
+            delta_usd = Decimal(snap.total_usd) - Decimal(prior["usd_value"])
+        tx_count_delta: int | None = None
+        if (prior is not None and prior.get("tx_count") is not None
+                and snap.tx_count is not None):
+            tx_count_delta = int(snap.tx_count) - int(prior["tx_count"])
 
-            # Build the token_balances JSONB payload.
-            import json
-            token_balances_json = json.dumps(snap.token_balances) if snap.token_balances else None
+        # Build the token_balances JSONB payload.
+        import json
+        token_balances_json = json.dumps(snap.token_balances) if snap.token_balances else None
 
-            cur.execute(
-                """INSERT INTO public.watchlist_snapshots (
+        cur.execute(
+            """INSERT INTO public.watchlist_snapshots (
                        watchlist_id, taken_at, native_balance, tx_count,
                        usd_value, delta_usd, token_balances, source, error
                    ) VALUES (
                        %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s
                    );""",
-                (
-                    row["id"], new_taken_at,
-                    snap.native_balance_raw, snap.tx_count,
-                    str(snap.total_usd) if snap.total_usd is not None else None,
-                    str(delta_usd) if delta_usd is not None else None,
-                    token_balances_json, snap.source, snap.error,
-                ),
-            )
+            (
+                row["id"], new_taken_at,
+                snap.native_balance_raw, snap.tx_count,
+                str(snap.total_usd) if snap.total_usd is not None else None,
+                str(delta_usd) if delta_usd is not None else None,
+                token_balances_json, snap.source, snap.error,
+            ),
+        )
 
-            cur.execute(
-                """UPDATE public.watchlist
+        cur.execute(
+            """UPDATE public.watchlist
                       SET last_snapshot_at = %s,
                           last_balance_usd = %s,
                           last_native_balance = %s,
                           last_tx_count = %s
                     WHERE id = %s;""",
-                (
-                    new_taken_at,
-                    str(snap.total_usd) if snap.total_usd is not None else None,
-                    snap.native_balance_raw,
-                    snap.tx_count,
-                    row["id"],
-                ),
-            )
+            (
+                new_taken_at,
+                str(snap.total_usd) if snap.total_usd is not None else None,
+                snap.native_balance_raw,
+                snap.tx_count,
+                row["id"],
+            ),
+        )
 
     # Decide materiality.
     if prior is None:

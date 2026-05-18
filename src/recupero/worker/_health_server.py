@@ -25,8 +25,8 @@ import json
 import logging
 import os
 import threading
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable
 
 log = logging.getLogger(__name__)
 
@@ -84,10 +84,11 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                 # and the UI polls at 60s+, so cache hit rate is
                 # marginal. Add a TTL cache here if traffic warrants.
                 try:
+                    import os as _os
+
                     from recupero.worker.dashboard_summary import (
                         build_dashboard_summary,
                     )
-                    import os as _os
                     dsn = _os.environ.get("SUPABASE_DB_URL", "")
                     payload = build_dashboard_summary(dsn=dsn)
                     self._respond(200, payload, write_body=write_body)
@@ -115,7 +116,7 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
 
         def _handle_investigations(self, *, write_body: bool) -> None:
             import os as _os
-            from urllib.parse import urlsplit, parse_qs
+            from urllib.parse import parse_qs, urlsplit
             from uuid import UUID
 
             parsed = urlsplit(self.path)
@@ -126,7 +127,8 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
             sb_key = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
             try:
                 from recupero.worker.investigations_api import (
-                    list_investigations, get_investigation_detail,
+                    get_investigation_detail,
+                    list_investigations,
                 )
             except Exception as e:  # noqa: BLE001
                 self._respond(500, {"error": f"import failed: {e}"},
@@ -270,10 +272,12 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
               * 503 — STRIPE_WEBHOOK_SECRET unset (config error)
             """
             try:
-                from recupero.payments.webhook import (
-                    WebhookVerifyError, get_webhook_secret, verify_and_parse,
-                )
                 from recupero.payments.dispatcher import dispatch
+                from recupero.payments.webhook import (
+                    WebhookVerifyError,
+                    get_webhook_secret,
+                    verify_and_parse,
+                )
             except Exception as e:  # noqa: BLE001
                 self._respond(500, {"error": f"payments import failed: {e}"})
                 return

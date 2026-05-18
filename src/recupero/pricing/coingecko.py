@@ -27,7 +27,6 @@ from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_ex
 
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Chain, TokenRef
-from recupero.pricing.cache import PriceCache
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +176,7 @@ class CoinGeckoClient:
         should clear ``SUPABASE_DB_URL`` from their environment.
         """
         import os
+
         from recupero.pricing.cache import make_price_cache
 
         effective_dsn = dsn or os.environ.get("SUPABASE_DB_URL")

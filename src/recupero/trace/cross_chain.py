@@ -43,12 +43,12 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from recupero.models import Address, Case, Chain, Transfer
+from recupero.models import Address, Case, Chain
 
 log = logging.getLogger(__name__)
 

@@ -120,7 +120,7 @@ class TronGridClient:
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> "TronGridClient":
+    def __enter__(self) -> TronGridClient:
         return self
 
     def __exit__(self, *exc: Any) -> None:

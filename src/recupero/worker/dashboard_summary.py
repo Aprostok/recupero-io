@@ -93,7 +93,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -110,7 +110,7 @@ def build_dashboard_summary(*, dsn: str) -> dict[str, Any]:
     corresponding section is filled with zeros / nulls so the
     response always parses cleanly on the UI side.
     """
-    generated_at = datetime.now(timezone.utc)
+    generated_at = datetime.now(UTC)
     payload: dict[str, Any] = {
         "generated_at": generated_at.isoformat(),
         "cases": _empty_cases(),

@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -141,7 +141,7 @@ class ClassActionOpportunity:
 
 def compute_class_action_opportunity(
     *,
-    case: "Case",
+    case: Case,
     correlations: dict[str, Any],
     current_case_id: UUID | None = None,
 ) -> ClassActionOpportunity:
@@ -321,7 +321,7 @@ def _build_class_action_note(
 
 
 def run_class_action_pass(
-    case: "Case",
+    case: Case,
     *,
     dsn: str | None = None,
     current_case_id: UUID | None = None,

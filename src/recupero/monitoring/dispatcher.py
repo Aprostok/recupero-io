@@ -20,9 +20,8 @@ import hmac
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
 from uuid import UUID
 
 import httpx
@@ -70,7 +69,7 @@ def build_webhook_body(payload: AlertPayload) -> str:
     without touching httpx.
     """
     fired_at_iso = (
-        datetime.now(timezone.utc).isoformat(timespec="seconds")
+        datetime.now(UTC).isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )
     body = {
@@ -136,7 +135,7 @@ def dispatch_alert(
     }
     if webhook_secret:
         headers["X-Recupero-Signature"] = compute_signature(body, webhook_secret)
-    fired_at = datetime.now(timezone.utc)
+    fired_at = datetime.now(UTC)
     client = http_client or httpx.Client(timeout=timeout_seconds)
     owns_client = http_client is None
     try:
@@ -164,7 +163,7 @@ def dispatch_alert(
             ),
             attempt_number=attempt_number,
             fired_at=fired_at,
-            delivered_at=datetime.now(timezone.utc),
+            delivered_at=datetime.now(UTC),
         )
     finally:
         if owns_client:
@@ -206,26 +205,25 @@ def record_alert_attempt(
         RETURNING id;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, {
-                    "sub": payload.subscription_id,
-                    "trigger": payload.trigger_type,
-                    "tx": payload.tx_hash,
-                    "url": payload.explorer_url,
-                    "usd": payload.amount_usd,
-                    "cp": payload.counterparty,
-                    "cp_label": payload.counterparty_label,
-                    "status": result.status_code,
-                    "body": result.response_body[:_RESPONSE_BODY_MAX_BYTES],
-                    "attempt": result.attempt_number,
-                    "succeeded": result.succeeded,
-                    "err": result.error_message,
-                    "fired": result.fired_at,
-                    "delivered": result.delivered_at,
-                })
-                row = cur.fetchone()
-                return row[0] if row else None
+        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(sql, {
+                "sub": payload.subscription_id,
+                "trigger": payload.trigger_type,
+                "tx": payload.tx_hash,
+                "url": payload.explorer_url,
+                "usd": payload.amount_usd,
+                "cp": payload.counterparty,
+                "cp_label": payload.counterparty_label,
+                "status": result.status_code,
+                "body": result.response_body[:_RESPONSE_BODY_MAX_BYTES],
+                "attempt": result.attempt_number,
+                "succeeded": result.succeeded,
+                "err": result.error_message,
+                "fired": result.fired_at,
+                "delivered": result.delivered_at,
+            })
+            row = cur.fetchone()
+            return row[0] if row else None
     except Exception as exc:  # noqa: BLE001
         log.warning("monitoring_alerts insert failed: %s", exc)
         return None

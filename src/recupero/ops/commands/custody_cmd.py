@@ -37,7 +37,7 @@ def run_keygen(*, output_path: Path | None = None) -> int:
         print(f"ERROR: keygen failed — {exc}")
         return 2
     pub_b64 = pub_path.read_text(encoding="utf-8").strip()
-    print(f"OK — generated Ed25519 chain-of-custody keypair.")
+    print("OK — generated Ed25519 chain-of-custody keypair.")
     print(f"  Private key: {priv_path}  (mode 0600 on POSIX)")
     print(f"  Public key:  {pub_path}")
     print(f"  Public key (base64): {pub_b64}")
@@ -61,7 +61,7 @@ def run_verify(*, case_dir: Path, public_key_b64: str | None = None) -> int:
         return 2
 
     report = verify_chain(case_dir, public_key_b64_str=public_key_b64)
-    print(f"=== Custody chain verification ===")
+    print("=== Custody chain verification ===")
     print(f"  Case dir:        {report.case_dir}")
     print(f"  Chain file:      {report.chain_path}")
     print(f"  Entries checked: {report.entries_checked}")

@@ -43,7 +43,7 @@ from __future__ import annotations
 import logging
 import os
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -431,7 +431,7 @@ def _engagement_dict(v: VerifiedToken) -> dict[str, Any]:
     for the portal's case. Inlined to avoid a coupling that would
     make portal startup pull in the full investigations_api module.
     """
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     started = _coerce_utc(v.engagement_started_at)
     closed = _coerce_utc(v.engagement_closed_at)
     if started is None:
@@ -473,7 +473,7 @@ def _coerce_utc(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
+        return dt.replace(tzinfo=UTC)
     return dt
 
 
@@ -482,7 +482,7 @@ def _fmt_dt(dt: datetime | None) -> str:
     if dt is None:
         return ""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.strftime("%B %d, %Y")
 
 

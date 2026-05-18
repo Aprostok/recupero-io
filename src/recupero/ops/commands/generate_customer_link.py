@@ -50,13 +50,12 @@ def run(
     # the success line — much easier for the operator to confirm "yes
     # this is the right case" than seeing only the UUID.
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT case_number, client_name FROM public.cases WHERE id = %s",
-                (str(case_id),),
-            )
-            case_row = cur.fetchone()
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT case_number, client_name FROM public.cases WHERE id = %s",
+            (str(case_id),),
+        )
+        case_row = cur.fetchone()
     if not case_row:
         print(f"ERROR: case {case_id} not found")
         return 1

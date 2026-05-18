@@ -71,12 +71,12 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from recupero.models import Case, LabelCategory, Transfer
 
@@ -1098,7 +1098,7 @@ def _polish_svg(path: Path) -> None:
     #    entity circles (shape=circle in Graphviz → <ellipse> in SVG).
     #    We add the attribute only if not already present, so a
     #    re-polish on the same SVG doesn't double-decorate.
-    def _add_filter(match: "re.Match[str]") -> str:
+    def _add_filter(match: re.Match[str]) -> str:
         tag = match.group(0)
         if "filter=" in tag:
             return tag
@@ -1185,7 +1185,7 @@ def _inject_letter_mark_badges(svg: str) -> str:
         re.DOTALL,
     )
 
-    def _maybe_inject(match: "re.Match[str]") -> str:
+    def _maybe_inject(match: re.Match[str]) -> str:
         anchor_open = match.group(1)
         title = match.group(2)
         ellipse_tag = match.group(3)
@@ -1263,7 +1263,7 @@ def _wrap_edge_labels_in_pills(svg: str) -> str:
         out.append(svg[pos:em.start()])
         block = em.group(0)
         # For each <text> inside this edge block, prepend a pill.
-        def _pill(match: "re.Match[str]") -> str:
+        def _pill(match: re.Match[str]) -> str:
             x = float(match.group(1))
             y = float(match.group(2))
             fs = float(match.group(3))

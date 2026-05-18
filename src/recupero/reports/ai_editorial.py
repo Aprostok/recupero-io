@@ -30,7 +30,7 @@ import os
 import re
 import time
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -330,7 +330,7 @@ def _short_addr(addr: str) -> str:
 
 def _now_utc_iso_seconds() -> str:
     """UTC timestamp, second precision, ISO 8601 with trailing Z."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], victim_narrative: str | None) -> dict[str, Any]:
@@ -819,7 +819,15 @@ def call_anthropic_for_editorial(
         except json.JSONDecodeError as e:
             last_error = f"AI returned invalid JSON: {e}"
             if attempt == 0:
-                user_prompt = user_prompt + "\n\nYour previous response was not valid JSON. Output ONLY a JSON object, no preamble or markdown fences."
+                # Append the nudge to case_block_text (the dynamic
+                # block) so the cached system + few-shot blocks still
+                # hit the cache on retry. Same pattern as the
+                # validation-failure retry above.
+                case_block_text = (
+                    case_block
+                    + "\n\nYour previous response was not valid JSON. "
+                    "Output ONLY a JSON object, no preamble or markdown fences."
+                )
                 continue
             raise RuntimeError(last_error) from e
 
@@ -842,7 +850,7 @@ def build_editorial_dict(
     as a TODO for the reviewer to assign.
     """
     now_iso = _now_utc_iso_seconds()
-    today_human = datetime.now(timezone.utc).strftime("%B %d, %Y").replace(" 0", " ")
+    today_human = datetime.now(UTC).strftime("%B %d, %Y").replace(" 0", " ")
 
     editorial: dict[str, Any] = {
         # Top-level review gate

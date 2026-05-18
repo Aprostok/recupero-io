@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import os
-from collections import defaultdict, deque
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _normalize_address(chain: Chain, address: Address) -> Address:
@@ -68,7 +68,7 @@ def run_trace(
     re-traced. Cycle detection via a visited-addresses set.
     """
     if incident_time.tzinfo is None:
-        incident_time = incident_time.replace(tzinfo=timezone.utc)
+        incident_time = incident_time.replace(tzinfo=UTC)
     seed_address = _normalize_address(chain, seed_address)
 
     adapter = ChainAdapter.for_chain(chain, (config, env))
@@ -233,7 +233,7 @@ def _process_wave(
     config: RecuperoConfig,
     evidence_dir: Path,
     concurrency: int,
-) -> list[tuple[Address, int, list["Transfer"], bool]]:
+) -> list[tuple[Address, int, list[Transfer], bool]]:
     """Run ``_trace_one_hop`` on every address in the wave, returning the
     aggregated results. Internal errors per-address are caught and
     surfaced as empty transfer lists (so a single bad address doesn't

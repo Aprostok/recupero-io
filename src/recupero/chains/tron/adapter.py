@@ -40,8 +40,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import UTC, datetime
 from typing import Any
 
 from recupero.chains.base import ChainAdapter
@@ -255,7 +254,7 @@ class TronAdapter(ChainAdapter):
         block_ts_ms = event.get("block_timestamp")
         if not isinstance(block_ts_ms, (int, float)):
             return None
-        block_time = datetime.fromtimestamp(block_ts_ms / 1000.0, tz=timezone.utc)
+        block_time = datetime.fromtimestamp(block_ts_ms / 1000.0, tz=UTC)
 
         token_info = event.get("token_info") or {}
         if not isinstance(token_info, dict):

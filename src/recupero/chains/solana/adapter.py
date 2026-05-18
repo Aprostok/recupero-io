@@ -17,7 +17,7 @@ Explorer: solscan.io (public, no auth required).
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from recupero.chains.base import ChainAdapter
@@ -73,7 +73,7 @@ class SolanaAdapter(ChainAdapter):
         treats the returned int opaquely as ``start_block``.
         """
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         return int(ts.timestamp())
 
     def is_contract(self, address: Address) -> bool:
@@ -149,12 +149,12 @@ class SolanaAdapter(ChainAdapter):
         """
         raw = self.client.get_parsed_transaction(tx_hash) or {}
         block_number = int(raw.get("slot", 0))
-        block_time = datetime.fromtimestamp(int(raw.get("timestamp", 0) or 0), tz=timezone.utc)
+        block_time = datetime.fromtimestamp(int(raw.get("timestamp", 0) or 0), tz=UTC)
         return EvidenceReceipt(
             chain=self.chain, tx_hash=tx_hash, block_number=block_number,
             block_time=block_time,
             raw_transaction=raw, raw_receipt={}, raw_block_header={},
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             fetched_from=self.client.BASE,
             explorer_url=self.explorer_tx_url(tx_hash),
         )
@@ -187,7 +187,7 @@ class SolanaAdapter(ChainAdapter):
         self, tx: dict[str, Any], nt: dict[str, Any], amount_lamports: int
     ) -> dict[str, Any]:
         slot = int(tx.get("slot", 0))
-        block_time = datetime.fromtimestamp(int(tx.get("timestamp", 0) or 0), tz=timezone.utc)
+        block_time = datetime.fromtimestamp(int(tx.get("timestamp", 0) or 0), tz=UTC)
         token = TokenRef(
             chain=Chain.solana, contract=None,
             symbol="SOL", decimals=SOLANA_NATIVE_DECIMALS,
@@ -210,7 +210,7 @@ class SolanaAdapter(ChainAdapter):
         self, tx: dict[str, Any], tt: dict[str, Any], amount_raw: int
     ) -> dict[str, Any]:
         slot = int(tx.get("slot", 0))
-        block_time = datetime.fromtimestamp(int(tx.get("timestamp", 0) or 0), tz=timezone.utc)
+        block_time = datetime.fromtimestamp(int(tx.get("timestamp", 0) or 0), tz=UTC)
         mint = tt.get("mint", "")
         raw_amount = tt.get("rawTokenAmount") or {}
         # Decimals: prefer rawTokenAmount.decimals, fall back to a reasonable default

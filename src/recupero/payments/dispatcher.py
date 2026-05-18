@@ -61,7 +61,8 @@ class DispatchResult:
 # module so a price change updates this without manual sync.
 def _default_amounts_cents() -> dict[str, int]:
     from recupero._pricing import (
-        DIAGNOSTIC_FEE_CENTS, ENGAGEMENT_FEE_CENTS,
+        DIAGNOSTIC_FEE_CENTS,
+        ENGAGEMENT_FEE_CENTS,
     )
     return {
         "diagnostic": DIAGNOSTIC_FEE_CENTS,

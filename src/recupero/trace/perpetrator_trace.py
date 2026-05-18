@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any
 
 from recupero.config import RecuperoConfig, RecuperoEnv
-from recupero.models import Address, Case, Chain, Transfer
+from recupero.models import Address, Case, Chain
 
 log = logging.getLogger(__name__)
 

@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -192,7 +192,7 @@ def generate_briefs(
     identified_wallets = _build_identified_wallets(primary_case, linked_cases, victim, current_holder_addr)
 
     # Common context
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     brief_id = f"BRIEF-{now.strftime('%Y%m%dT%H%M%S')}-{uuid4().hex[:6]}"
 
     ctx: dict[str, Any] = {

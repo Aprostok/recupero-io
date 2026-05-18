@@ -18,7 +18,7 @@ on success so the next cadence calculation starts fresh from now.
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 from uuid import UUID
 
 import psycopg
@@ -37,10 +37,9 @@ def run(
     errors / declined-by-operator."""
     # Build a FollowupCandidate from the row
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT i.id            AS investigation_id,
                        i.case_id       AS case_id,
                        i.chain         AS chain,
@@ -54,12 +53,12 @@ def run(
                   LEFT JOIN public.cases c ON c.id = i.case_id
                  WHERE i.id = %s
                 """,
-                (str(investigation_id),),
-            )
-            row = cur.fetchone()
-            if not row:
-                print(f"ERROR: investigation {investigation_id} not found")
-                return 1
+            (str(investigation_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            print(f"ERROR: investigation {investigation_id} not found")
+            return 1
 
     if not row["engagement_started_at"]:
         print(

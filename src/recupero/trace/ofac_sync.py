@@ -68,9 +68,8 @@ import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 from xml.etree import ElementTree as ET
 
 log = logging.getLogger(__name__)
@@ -152,7 +151,7 @@ def sync_ofac_sdn(
           print(f"Wrote {result.entries_written} entries to {result.output_path}")
     """
     out_path = output_path or DEFAULT_OFAC_CSV_PATH
-    fetched_at = datetime.now(timezone.utc).isoformat()
+    fetched_at = datetime.now(UTC).isoformat()
 
     try:
         log.info("ofac sync: fetching %s", url)

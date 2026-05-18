@@ -53,7 +53,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from decimal import Decimal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -106,8 +105,8 @@ class DrainerFindings:
 
 
 def detect_drainer_pattern(
-    case: "Case",
-    high_risk_db: dict[str, "HighRiskEntry"] | None = None,
+    case: Case,
+    high_risk_db: dict[str, HighRiskEntry] | None = None,
 ) -> DrainerFindings:
     """Top-level entry point. Combines all detection heuristics
     and returns a structured DrainerFindings.
@@ -203,7 +202,7 @@ def detect_drainer_pattern(
     return findings
 
 
-def detect_approval_signatures(case: "Case") -> list[DrainerSignal]:
+def detect_approval_signatures(case: Case) -> list[DrainerSignal]:
     """Scan case for ERC-20/721/1155 Approval events. Standalone
     helper — typically called via detect_drainer_pattern.
 
@@ -226,7 +225,7 @@ def detect_approval_signatures(case: "Case") -> list[DrainerSignal]:
 
 def drainer_findings_to_brief_section(
     findings: DrainerFindings,
-) -> dict[str, "any"]:
+) -> dict[str, any]:
     """Serialize for the brief's INCIDENT_CLASSIFICATION section."""
     return {
         "is_drainer_case": findings.is_drainer_case,

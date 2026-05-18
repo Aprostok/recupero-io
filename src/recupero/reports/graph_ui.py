@@ -171,7 +171,7 @@ def _explorer_url(chain: str, address: str) -> str:
     return ""
 
 
-def build_graph_data(case: "Case") -> dict[str, Any]:
+def build_graph_data(case: Case) -> dict[str, Any]:
     """Walk the case via the same aggregation pass the Graphviz
     renderer uses, then return a JSON-serializable graph dict.
 
@@ -298,7 +298,7 @@ def render_graph_html(
     return output_path
 
 
-def render_case_graph(case: "Case", output_dir: Path, title: str | None = None) -> Path:
+def render_case_graph(case: Case, output_dir: Path, title: str | None = None) -> Path:
     """One-call convenience: build graph data from case, render HTML.
 
     Returns the output path (cases/<id>/graph_ui.html).

@@ -135,8 +135,8 @@ class IndirectExposureResult:
 
 
 def compute_indirect_exposure(
-    case: "Case",
-    high_risk_db: dict[str, "HighRiskEntry"],
+    case: Case,
+    high_risk_db: dict[str, HighRiskEntry],
     *,
     max_hops: int | None = None,
     decay_factor: float | None = None,
@@ -267,7 +267,7 @@ def compute_indirect_exposure(
 
 def indirect_exposure_to_brief_section(
     results: dict[str, IndirectExposureResult],
-) -> dict[str, "any"]:
+) -> dict[str, any]:
     """Serialize to the brief JSON shape.
 
     Returns a dict with per-address indirect_exposures + a

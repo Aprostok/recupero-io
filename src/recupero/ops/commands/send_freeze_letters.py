@@ -29,8 +29,9 @@ import json
 import logging
 import os
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 import psycopg
@@ -183,13 +184,12 @@ def run(
 
 def _fetch_investigation(*, investigation_id: UUID, dsn: str) -> dict | None:
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, case_id, status FROM public.investigations WHERE id = %s",
-                (str(investigation_id),),
-            )
-            return cur.fetchone()
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, case_id, status FROM public.investigations WHERE id = %s",
+            (str(investigation_id),),
+        )
+        return cur.fetchone()
 
 
 def _fetch_freeze_brief_from_bucket(*, investigation_id: UUID) -> dict | None:
@@ -225,7 +225,6 @@ def _build_dispatch_plan(
     Per-issuer idempotency: skip issuers where the audit log shows
     a successful freeze_letter send to the issuer's contact_email
     for this investigation."""
-    from recupero.worker._email import has_been_sent
 
     # Find the latest brief filename per issuer in the bucket
     bucket_files = _list_bucket_briefs(investigation_id=investigation_id)

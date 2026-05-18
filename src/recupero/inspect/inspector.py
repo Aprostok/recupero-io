@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -100,9 +100,9 @@ def inspect_address(
     if recent_txs:
         try:
             first_seen_block = int(recent_txs[0]["blockNumber"])
-            first_seen_at = datetime.fromtimestamp(int(recent_txs[0]["timeStamp"]), tz=timezone.utc)
+            first_seen_at = datetime.fromtimestamp(int(recent_txs[0]["timeStamp"]), tz=UTC)
             last_seen_block = int(recent_txs[-1]["blockNumber"])
-            last_seen_at = datetime.fromtimestamp(int(recent_txs[-1]["timeStamp"]), tz=timezone.utc)
+            last_seen_at = datetime.fromtimestamp(int(recent_txs[-1]["timeStamp"]), tz=UTC)
         except (KeyError, ValueError, TypeError) as e:
             log.debug("could not parse tx timestamps: %s", e)
 
@@ -159,7 +159,7 @@ def inspect_address(
         top_counterparties=top_counterparties,
         likely_identity=likely_identity,
         likely_identity_reason=likely_reason,
-        inspected_at=datetime.now(timezone.utc),
+        inspected_at=datetime.now(UTC),
         explorer_url=adapter.explorer_address_url(addr),
         inspection_window_size=window,
     )

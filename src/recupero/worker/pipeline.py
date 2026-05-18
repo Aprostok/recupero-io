@@ -31,11 +31,12 @@ import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 from uuid import UUID
 
 # Per-chain default trace-window start for wallet-trace rows that
@@ -67,13 +68,13 @@ from uuid import UUID
 # the Ethereum block 1 timestamp — earliest known good value across
 # any supported chain.
 _CHAIN_GENESIS_TIMESTAMPS: dict[str, datetime] = {
-    "ethereum":    datetime(2015, 7, 30, 15, 26, 13, tzinfo=timezone.utc),
-    "polygon":     datetime(2020, 5, 30,  6, 23, 35, tzinfo=timezone.utc),
-    "bsc":         datetime(2020, 8, 29,  3, 24, 14, tzinfo=timezone.utc),
-    "arbitrum":    datetime(2021, 8, 31, 22,  9, 39, tzinfo=timezone.utc),
-    "base":        datetime(2023, 6, 15, 17,  0,  0, tzinfo=timezone.utc),
-    "solana":      datetime(2020, 3, 16, 14,  0,  0, tzinfo=timezone.utc),
-    "hyperliquid": datetime(2024, 6,  1,  0,  0,  0, tzinfo=timezone.utc),
+    "ethereum":    datetime(2015, 7, 30, 15, 26, 13, tzinfo=UTC),
+    "polygon":     datetime(2020, 5, 30,  6, 23, 35, tzinfo=UTC),
+    "bsc":         datetime(2020, 8, 29,  3, 24, 14, tzinfo=UTC),
+    "arbitrum":    datetime(2021, 8, 31, 22,  9, 39, tzinfo=UTC),
+    "base":        datetime(2023, 6, 15, 17,  0,  0, tzinfo=UTC),
+    "solana":      datetime(2020, 3, 16, 14,  0,  0, tzinfo=UTC),
+    "hyperliquid": datetime(2024, 6,  1,  0,  0,  0, tzinfo=UTC),
 }
 
 _FALLBACK_GENESIS = _CHAIN_GENESIS_TIMESTAMPS["ethereum"]
@@ -117,7 +118,7 @@ def _default_incident_time_for(chain: str, *, now: datetime | None = None) -> da
     so tests / ops can flip behavior without restarting the worker.
     """
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     try:
         lookback_days = int(
             os.environ.get(
@@ -136,6 +137,7 @@ def _default_incident_time_for(chain: str, *, now: datetime | None = None) -> da
     return max(candidate, genesis)
 
 from recupero.config import RecuperoConfig, RecuperoEnv
+from recupero.models import Case
 from recupero.reports.victim import VictimInfo, write_victim
 from recupero.storage.case_store import CaseStore
 from recupero.storage.supabase_case_store import SupabaseCaseStore
@@ -873,9 +875,10 @@ def _maybe_run_pass2(
         log.info("pass2 skipped: RECUPERO_DISABLE_PASS2=1")
         return
 
-    # Need both case.json + freeze_brief.json to identify candidates.
+    # Need case.json to identify candidates. freeze_brief.json is
+    # additionally required at deeper stages (see worker hooks); the
+    # initial existence check is just on case.json.
     case_path = case_dir / "case.json"
-    freeze_brief_path = case_dir / "freeze_brief.json"
     if not case_path.exists():
         log.info("pass2 skipped: case.json missing (pass-1 didn't run)")
         return

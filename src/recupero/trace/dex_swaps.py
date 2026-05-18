@@ -51,7 +51,7 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -143,7 +143,7 @@ def load_dex_routers(
 
 
 def detect_dex_swaps(
-    case: "Case",
+    case: Case,
     dex_router_db: dict[str, dict] | None = None,
 ) -> list[DEXSwap]:
     """Scan ``case.transfers`` for DEX swap events.
@@ -165,7 +165,7 @@ def detect_dex_swaps(
         return []
 
     # Group transfers by tx_hash for efficient pairing.
-    by_tx: dict[str, list["Transfer"]] = defaultdict(list)
+    by_tx: dict[str, list[Transfer]] = defaultdict(list)
     for t in case.transfers:
         by_tx[t.tx_hash].append(t)
 
@@ -202,7 +202,7 @@ def detect_dex_swaps(
             router_addr = in_t.to_address.lower()
             router_info = routers[router_addr]
             # Pick the largest matching output by USD
-            best_output: "Transfer | None" = None
+            best_output: Transfer | None = None
             best_usd = Decimal("0")
             for out_t in output_transfers:
                 usd = out_t.usd_value_at_tx or Decimal("0")

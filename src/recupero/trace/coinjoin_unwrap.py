@@ -87,9 +87,8 @@ References
 from __future__ import annotations
 
 import logging
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass, field
-from decimal import Decimal
 from itertools import combinations
 from typing import Any
 
@@ -288,7 +287,6 @@ def _score_hypothesis(
 
     input_sum = sum(i.value_sats for i in inputs)
     output_sum = sum(o.value_sats for o in outputs)
-    expected_output_sum = n_out * round_amount_sats
     # Fee share — input MUST be >= output_sum.
     fee_share = input_sum - output_sum
     fee_ratio = fee_share / max(input_sum, 1)

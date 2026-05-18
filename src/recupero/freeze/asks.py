@@ -83,7 +83,7 @@ class IssuerEntry:
     jurisdiction: str
     # v0.7.5 — see class docstring.
     delegates_to: str | None = None              # underlying contract
-    delegates_to_entry: "IssuerEntry | None" = None  # resolved at load
+    delegates_to_entry: IssuerEntry | None = None  # resolved at load
 
 
 @dataclass

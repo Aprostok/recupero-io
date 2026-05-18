@@ -30,7 +30,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -184,7 +184,7 @@ class SupabaseCaseStore:
             "exchange_endpoint_count": len(case.exchange_endpoints),
             "total_usd_out": str(case.total_usd_out) if case.total_usd_out is not None else None,
             "config_used": case.config_used,
-            "written_at": datetime.now(timezone.utc).isoformat(),
+            "written_at": datetime.now(UTC).isoformat(),
         }
         manifest_bytes = orjson.dumps(manifest, option=orjson.OPT_INDENT_2)
         self._upload(self.storage_prefix + "manifest.json", manifest_bytes, "application/json")

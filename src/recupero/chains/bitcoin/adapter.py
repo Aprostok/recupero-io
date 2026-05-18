@@ -51,8 +51,7 @@ know the trace's reliability ceiling for Bitcoin cases.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import UTC, datetime
 from typing import Any
 
 from recupero.chains.base import ChainAdapter
@@ -102,7 +101,7 @@ class BitcoinAdapter(ChainAdapter):
         is amortized.
         """
         if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
+            ts = ts.replace(tzinfo=UTC)
         target_unix = int(ts.timestamp())
         try:
             tip = self.client.get_tip_height()
@@ -228,7 +227,7 @@ class BitcoinAdapter(ChainAdapter):
                 f"tx {tx_hash} not confirmed or has incomplete status; "
                 "chain-of-custody requires a confirmed tx"
             )
-        block_time = datetime.fromtimestamp(block_time_unix, tz=timezone.utc)
+        block_time = datetime.fromtimestamp(block_time_unix, tz=UTC)
         raw_block: dict[str, Any] = {}
         if isinstance(block_hash, str):
             try:
@@ -245,7 +244,7 @@ class BitcoinAdapter(ChainAdapter):
             raw_transaction=raw_tx if isinstance(raw_tx, dict) else {},
             raw_receipt={},  # Bitcoin has no separate receipt; embedded in tx
             raw_block_header=raw_block,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             fetched_from=self.client.base_url,
             explorer_url=self.explorer_tx_url(tx_hash),
         )
@@ -281,7 +280,7 @@ class BitcoinAdapter(ChainAdapter):
         block_time_unix = status.get("block_time")
         if not isinstance(block_height, int) or not isinstance(block_time_unix, int):
             return []
-        block_time = datetime.fromtimestamp(block_time_unix, tz=timezone.utc)
+        block_time = datetime.fromtimestamp(block_time_unix, tz=UTC)
 
         vin = tx.get("vin") if isinstance(tx, dict) else None
         vout = tx.get("vout") if isinstance(tx, dict) else None

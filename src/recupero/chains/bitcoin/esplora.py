@@ -110,7 +110,7 @@ class EsploraClient:
         if self._owns_client:
             self._client.close()
 
-    def __enter__(self) -> "EsploraClient":
+    def __enter__(self) -> EsploraClient:
         return self
 
     def __exit__(self, *exc: Any) -> None:

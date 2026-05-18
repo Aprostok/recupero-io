@@ -27,7 +27,6 @@ import signal
 import socket
 import sys
 import threading
-import time
 from pathlib import Path
 from typing import Final
 
@@ -36,7 +35,6 @@ from dotenv import load_dotenv
 from recupero.config import load_config
 from recupero.logging_setup import setup_logging
 from recupero.storage.supabase_case_store import SupabaseCaseStore
-from recupero.worker import state as S
 from recupero.worker._health_server import start_health_server
 from recupero.worker.db import Investigation, WorkerDB
 from recupero.worker.pipeline import run_one
@@ -440,7 +438,7 @@ def _run_watch_tick_once(*, limit: int | None) -> int:
     digest PDF.
     """
     import tempfile
-    from recupero.storage.supabase_case_store import SupabaseCaseStore
+
     from recupero.worker.mini_freeze import generate_daily_digest
     from recupero.worker.watch_tick import run_watch_tick
 
@@ -533,6 +531,7 @@ def _run_watch_tick_once(*, limit: int | None) -> int:
 def _count_active_watchlist(dsn: str) -> int:
     """Total active rows in public.watchlist (irrespective of cooldown)."""
     import re as _re
+
     import psycopg as _psy
     pooled = dsn
     if "db." in pooled and ".supabase.co" in pooled:
@@ -548,11 +547,10 @@ def _count_active_watchlist(dsn: str) -> int:
             )
     try:
         with _psy.connect(pooled, autocommit=True, prepare_threshold=None,
-                          connect_timeout=10) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*) FROM public.watchlist WHERE status='active';")
-                row = cur.fetchone()
-                return int(row[0]) if row else 0
+                          connect_timeout=10) as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM public.watchlist WHERE status='active';")
+            row = cur.fetchone()
+            return int(row[0]) if row else 0
     except Exception as exc:  # noqa: BLE001
         log.warning("active watchlist count failed: %s", exc)
         return 0
@@ -663,6 +661,7 @@ def cli() -> None:
 
     if args.dashboard_summary:
         import json as _json
+
         from recupero.worker.dashboard_summary import build_dashboard_summary
         dsn = os.environ.get("SUPABASE_DB_URL", "")
         if not dsn:

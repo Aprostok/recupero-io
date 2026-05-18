@@ -31,7 +31,7 @@ import logging
 import re
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -142,15 +142,14 @@ def list_investigations(
     items: list[dict[str, Any]] = []
     total = 0
     with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(count_sql, params)
-            row = cur.fetchone()
-            total = int(row["n"]) if row else 0
+                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(count_sql, params)
+        row = cur.fetchone()
+        total = int(row["n"]) if row else 0
 
-            cur.execute(list_sql, params_list)
-            for r in cur.fetchall():
-                items.append(_render_list_row(r))
+        cur.execute(list_sql, params_list)
+        for r in cur.fetchall():
+            items.append(_render_list_row(r))
 
     return {"items": items, "total": total, "limit": limit, "offset": offset}
 
@@ -188,11 +187,10 @@ def get_investigation_detail(
 
     pooled = _pooled_dsn(dsn)
     with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT * FROM public.investigations WHERE id = %s",
-                        (inv_id_str,))
-            row = cur.fetchone()
+                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM public.investigations WHERE id = %s",
+                    (inv_id_str,))
+        row = cur.fetchone()
     if row is None:
         return None
 
@@ -344,7 +342,7 @@ def _build_engagement_summary(row: dict[str, Any]) -> dict[str, Any]:
       * needs_followup   — True if active engagement + last
                            followup older than 6 days (or NULL)
     """
-    from datetime import datetime, timezone
+    from datetime import datetime
 
     started = row.get("engagement_started_at")
     closed = row.get("engagement_closed_at")
@@ -364,13 +362,13 @@ def _build_engagement_summary(row: dict[str, Any]) -> dict[str, Any]:
 
     # Normalize tzinfo for arithmetic
     if started.tzinfo is None:
-        started = started.replace(tzinfo=timezone.utc)
+        started = started.replace(tzinfo=UTC)
     if closed and closed.tzinfo is None:
-        closed = closed.replace(tzinfo=timezone.utc)
+        closed = closed.replace(tzinfo=UTC)
     if last_followup and last_followup.tzinfo is None:
-        last_followup = last_followup.replace(tzinfo=timezone.utc)
+        last_followup = last_followup.replace(tzinfo=UTC)
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     days_since = (now - started).days
     days_remaining = max(0, 30 - days_since)
 

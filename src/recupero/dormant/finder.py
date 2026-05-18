@@ -32,7 +32,6 @@ from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Case, Chain, LabelCategory, TokenRef
 from recupero.pricing.coingecko import CoinGeckoClient
 
-
 # Per-address dormant checks fan out to N threads concurrently. Each
 # thread does its 7 token-balance Etherscan calls + price lookups
 # serially within itself; parallelism is across addresses. Both
@@ -353,7 +352,7 @@ def _check_one_address(
     min_usd: Decimal,
     inflow_usd: Decimal,
     inflow_count: int,
-) -> "DormantCandidate | None":
+) -> DormantCandidate | None:
     """Per-address worker run by the thread pool: balance sweep + filter.
 
     Returns a DormantCandidate if total holdings ≥ min_usd, else None.

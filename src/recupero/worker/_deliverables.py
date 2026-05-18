@@ -30,7 +30,6 @@ required by the admin UI's wallet-trace view.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from decimal import Decimal
@@ -39,9 +38,9 @@ from typing import Any
 
 from recupero.models import Case
 from recupero.reports.brief import (
+    MIDAS_ISSUER,  # used as the canonical fully-filled IssuerInfo when name matches
     InvestigatorInfo,
     IssuerInfo,
-    MIDAS_ISSUER,  # used as the canonical fully-filled IssuerInfo when name matches
     generate_briefs,
 )
 from recupero.reports.victim import VictimInfo
@@ -163,8 +162,9 @@ def build_all_deliverables(
     flow_filename: str | None = None
     flow_svg_path: Path | None = None
     try:
-        from recupero.worker._flow_diagram import render_flow_diagram
         from uuid import uuid4
+
+        from recupero.worker._flow_diagram import render_flow_diagram
         briefs_dir = case_dir / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
         candidate_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
@@ -215,7 +215,9 @@ def build_all_deliverables(
     # PDF is for the victim but the CSV is for the analyst.
     try:
         from recupero.reports.investigator_export import (
-            build_findings, write_csv, write_json,
+            build_findings,
+            write_csv,
+            write_json,
         )
         briefs_dir = case_dir / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
@@ -611,9 +613,11 @@ def _build_pay_engagement_banner_html(
     """
     try:
         from uuid import UUID as _UUID
+
         from recupero._pricing import ENGAGEMENT_FEE_USD, fmt_usd_short
         from recupero.payments.payment_links import (
-            PaymentLinkConfigError, build_engagement_link,
+            PaymentLinkConfigError,
+            build_engagement_link,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("pay banner: import failed (%s) — skipping", exc)

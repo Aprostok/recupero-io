@@ -45,7 +45,7 @@ concern, not a per-case reports concern.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -140,7 +140,9 @@ def render_victim_summary(
     the "incremental over $499" phrasing.
     """
     from recupero._pricing import (
-        CONTINGENCY_PCT, ENGAGEMENT_FEE_USD, fmt_usd_short,
+        CONTINGENCY_PCT,
+        ENGAGEMENT_FEE_USD,
+        fmt_usd_short,
     )
     if engagement_fee_text is None:
         engagement_fee_text = fmt_usd_short(ENGAGEMENT_FEE_USD)
@@ -215,7 +217,7 @@ def _build_context(
     them)."""
     from recupero import __version__ as software_version
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Per-issuer summary table data
     freezable_entries = freeze_brief.get("FREEZABLE") or []

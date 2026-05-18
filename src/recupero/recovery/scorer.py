@@ -113,6 +113,7 @@ def score_recovery(
     brief: dict[str, Any],
     *,
     learned_priors: dict[str, Any] | None = None,
+    auto_load_priors: bool = True,
 ) -> RecoveryEstimate:
     """Score a freeze_brief.json structure into a RecoveryEstimate.
 
@@ -127,8 +128,26 @@ def score_recovery(
       * DEX_SWAPS — count of swap continuations
       * CROSS_CHAIN_HANDOFFS — count of bridge hops (each adds
         recovery friction)
+
+    v0.14.5: When ``learned_priors`` is None and ``auto_load_priors``
+    is True, attempt to load per-issuer priors from the
+    issuer_freeze_priors table (v0.14.2). If the DB is unavailable
+    or no priors exist yet, falls back to heuristic priors.
     """
     drivers: list[RecoveryDriver] = []
+
+    # Auto-load learned priors from the DB if not explicitly supplied.
+    # This makes the scorer self-tuning over time without callers
+    # needing to know about the freeze_learning module.
+    if learned_priors is None and auto_load_priors:
+        try:
+            import os as _os
+            dsn = _os.environ.get("SUPABASE_DB_URL", "").strip()
+            if dsn:
+                from recupero.freeze_learning.recorder import load_learned_priors
+                learned_priors = load_learned_priors(dsn)
+        except Exception:  # noqa: BLE001 — non-fatal, fall back to heuristic
+            learned_priors = None
 
     # --- Pull inputs ---
     try:
@@ -137,7 +156,6 @@ def score_recovery(
         total_loss = Decimal("0")
 
     freezable_entries = brief.get("FREEZABLE") or []
-    unrecoverable_entries = brief.get("UNRECOVERABLE") or []
 
     # --- Per-issuer expected recovery ---
     expected_freezable = Decimal("0")

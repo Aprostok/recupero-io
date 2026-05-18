@@ -48,8 +48,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -112,25 +111,24 @@ def find_followups_due(*, dsn: str) -> list[FollowupCandidate]:
     """
     out: list[FollowupCandidate] = []
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql,
-                {"window": _ENGAGEMENT_WINDOW_DAYS,
-                 "cadence": _FOLLOWUP_CADENCE_DAYS},
-            )
-            for r in cur.fetchall():
-                out.append(FollowupCandidate(
-                    investigation_id=r["investigation_id"],
-                    case_id=r["case_id"],
-                    victim_email=r["victim_email"] or "",
-                    victim_name=r["victim_name"] or "Client",
-                    engagement_started_at=r["engagement_started_at"],
-                    last_followup_sent_at=r["last_followup_sent_at"],
-                    chain=r["chain"] or "ethereum",
-                    seed_address=r["seed_address"] or "",
-                    freezable_issuers=r["freezable_issuers"],
-                ))
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            sql,
+            {"window": _ENGAGEMENT_WINDOW_DAYS,
+             "cadence": _FOLLOWUP_CADENCE_DAYS},
+        )
+        for r in cur.fetchall():
+            out.append(FollowupCandidate(
+                investigation_id=r["investigation_id"],
+                case_id=r["case_id"],
+                victim_email=r["victim_email"] or "",
+                victim_name=r["victim_name"] or "Client",
+                engagement_started_at=r["engagement_started_at"],
+                last_followup_sent_at=r["last_followup_sent_at"],
+                chain=r["chain"] or "ethereum",
+                seed_address=r["seed_address"] or "",
+                freezable_issuers=r["freezable_issuers"],
+            ))
     return out
 
 
@@ -147,7 +145,7 @@ def send_followup(
     """
     from recupero.worker._email import send_email
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     days_since = (now - candidate.engagement_started_at).days
     days_remaining = max(0, _ENGAGEMENT_WINDOW_DAYS - days_since)
     week_number = max(1, (days_since // 7) + 1)
@@ -225,14 +223,13 @@ def send_followup(
         # Stamp last_followup_sent_at
         try:
             with psycopg.connect(dsn, autocommit=True,
-                                 connect_timeout=10) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE public.investigations "
-                        "   SET last_followup_sent_at = NOW() "
-                        " WHERE id = %s",
-                        (str(candidate.investigation_id),),
-                    )
+                                 connect_timeout=10) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE public.investigations "
+                    "   SET last_followup_sent_at = NOW() "
+                    " WHERE id = %s",
+                    (str(candidate.investigation_id),),
+                )
             log.info(
                 "sent followup-w%d to=%s inv=%s message_id=%s",
                 week_number, candidate.victim_email,
@@ -329,17 +326,16 @@ def _fetch_recent_actions(
     actions: list[dict[str, str]] = []
     try:
         with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                             connect_timeout=10) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, (str(investigation_id),))
-                for r in cur.fetchall():
-                    desc = _describe_email_action(
-                        r["email_type"], r["to_address"], r["subject"],
-                    )
-                    actions.append({
-                        "timestamp": r["sent_at"].strftime("%Y-%m-%d"),
-                        "description": desc,
-                    })
+                             connect_timeout=10) as conn, conn.cursor() as cur:
+            cur.execute(sql, (str(investigation_id),))
+            for r in cur.fetchall():
+                desc = _describe_email_action(
+                    r["email_type"], r["to_address"], r["subject"],
+                )
+                actions.append({
+                    "timestamp": r["sent_at"].strftime("%Y-%m-%d"),
+                    "description": desc,
+                })
     except Exception as e:  # noqa: BLE001
         log.warning("followup actions query failed: %s", e)
     return actions

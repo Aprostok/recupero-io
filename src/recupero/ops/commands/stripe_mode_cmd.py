@@ -28,8 +28,11 @@ from __future__ import annotations
 import sys
 
 from recupero.payments.stripe_mode import (
-    ENV_DIAGNOSTIC_LINK, ENV_ENGAGEMENT_LINK, ENV_WEBHOOK_SECRET,
-    detect_mode_from_env, format_mismatch_warning,
+    ENV_DIAGNOSTIC_LINK,
+    ENV_ENGAGEMENT_LINK,
+    ENV_WEBHOOK_SECRET,
+    detect_mode_from_env,
+    format_mismatch_warning,
 )
 
 

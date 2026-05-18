@@ -18,15 +18,13 @@ patch; this one documents the money flow in/out of Hyperliquid.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
 
 from recupero.chains.hyperliquid.client import HyperliquidClient, HyperliquidLedgerEvent
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import (
-    Address,
     Case,
     Chain,
     Counterparty,
@@ -53,7 +51,7 @@ def scrape_hyperliquid_case(
     """Fetch Hyperliquid ledger for ``user_address`` since ``incident_time``
     (minus the configured buffer), convert to a Case, and return it."""
     if incident_time.tzinfo is None:
-        incident_time = incident_time.replace(tzinfo=timezone.utc)
+        incident_time = incident_time.replace(tzinfo=UTC)
     buffer_minutes = config.trace.incident_buffer_minutes
     start_ms = int((incident_time.timestamp() - buffer_minutes * 60) * 1000)
 
@@ -71,7 +69,7 @@ def scrape_hyperliquid_case(
     log.info("hyperliquid scrape fetched %d events", len(events))
 
     transfers = _events_to_transfers(events, user_address)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     case = Case(
         case_id=case_id,
         seed_address=user_address,
@@ -138,7 +136,7 @@ def _events_to_transfers(
             pricing_source="hyperliquid_native_usdc",
             pricing_error=None,
             hop_depth=0,
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             explorer_url=f"https://app.hyperliquid.xyz/explorer/address/{user_address}",
         )
         transfers.append(transfer)

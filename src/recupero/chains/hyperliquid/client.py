@@ -25,7 +25,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -71,7 +71,7 @@ class HyperliquidLedgerEvent:
 
     @property
     def when(self) -> datetime:
-        return datetime.fromtimestamp(self.time_ms / 1000, tz=timezone.utc)
+        return datetime.fromtimestamp(self.time_ms / 1000, tz=UTC)
 
 
 class HyperliquidClient:

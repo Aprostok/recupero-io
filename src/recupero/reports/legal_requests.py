@@ -44,7 +44,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -132,7 +132,7 @@ def render_legal_request(
 def _build_base_context(brief: dict[str, Any]) -> dict[str, Any]:
     """Pull the shared (non-perpetrator-specific) context out of the
     brief. Used as the base for each template render."""
-    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    now_iso = datetime.now(UTC).isoformat(timespec="seconds")
     incident_date = brief.get("INCIDENT_DATE") or ""
     return {
         "case_id": brief.get("CASE_ID") or "(case-id missing)",

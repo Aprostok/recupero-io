@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -26,10 +26,14 @@ from recupero.inspect.inspector import DEEP_WINDOW, DEFAULT_WINDOW, inspect_addr
 from recupero.labels.store import LabelStore
 from recupero.logging_setup import setup_logging
 from recupero.models import Chain, LabelCategory
-from recupero.reports.aggregate import aggregate_stolen, format_aggregate_markdown, write_aggregate_json
-from recupero.reports.brief import InvestigatorInfo, IssuerInfo, MIDAS_ISSUER, generate_briefs
-from recupero.reports.emit_brief import run_emit_brief, write_editorial_template
+from recupero.reports.aggregate import (
+    aggregate_stolen,
+    format_aggregate_markdown,
+    write_aggregate_json,
+)
 from recupero.reports.ai_editorial import run_ai_editorial
+from recupero.reports.brief import MIDAS_ISSUER, InvestigatorInfo, IssuerInfo, generate_briefs
+from recupero.reports.emit_brief import run_emit_brief, write_editorial_template
 from recupero.reports.victim import VictimInfo, load_victim, write_victim
 from recupero.storage.case_store import CaseStore
 from recupero.trace.tracer import run_trace
@@ -120,7 +124,7 @@ def trace_cmd(
         chain_enum_early = Chain(chain)
     except ValueError:
         console.print(f"[bold red]Unknown chain:[/] {chain}")
-        raise typer.Exit(code=2)
+        raise typer.Exit(code=2) from None
 
     if chain_enum_early == Chain.solana:
         if not env.HELIUS_API_KEY:
@@ -172,8 +176,8 @@ def trace_cmd(
             raise typer.Exit(code=3) from None
         if "invalid api key" in err_msg or "http 401" in err_msg:
             console.print(
-                f"\n[bold red]API key rejected:[/] check ETHERSCAN_API_KEY / "
-                f"HELIUS_API_KEY in .env."
+                "\n[bold red]API key rejected:[/] check ETHERSCAN_API_KEY / "
+                "HELIUS_API_KEY in .env."
             )
             raise typer.Exit(code=3) from None
         raise
@@ -298,10 +302,10 @@ def inspect_cmd(
             "name": save_label_name or profile.likely_identity or "Inspector-saved label",
             "category": cat.value,
             "exchange": save_label_exchange,
-            "source": f"inspector:{datetime.now(timezone.utc).date().isoformat()}",
+            "source": f"inspector:{datetime.now(UTC).date().isoformat()}",
             "confidence": "medium",
             "notes": profile.likely_identity_reason or "Saved from `recupero inspect`",
-            "added_at": datetime.now(timezone.utc).isoformat(),
+            "added_at": datetime.now(UTC).isoformat(),
         }
         existing.append(new_entry)
         out_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
@@ -395,7 +399,7 @@ def aggregate_cmd(
     console.print(md)
 
     out_path = Path(out_json) if out_json else (
-        Path(cfg.storage.data_dir) / "cases" / f"aggregate_{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}.json"
+        Path(cfg.storage.data_dir) / "cases" / f"aggregate_{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.json"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     write_aggregate_json(result, out_path)
@@ -1257,7 +1261,7 @@ def graph_ui_cmd(
     console.print()
     console.print(f"[bold green]Rendered interactive graph:[/] [cyan]{out_path}[/]")
     console.print(
-        f"  Open in a browser to explore (pan/zoom/click). The file "
+        "  Open in a browser to explore (pan/zoom/click). The file "
         "is self-contained — D3.js loads from CDN on first open."
     )
     console.print()

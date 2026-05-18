@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 from uuid import UUID
 
@@ -99,30 +99,29 @@ def generate_token(
     if ttl_days is None:
         expires_at = None
     else:
-        expires_at = datetime.now(timezone.utc) + timedelta(days=ttl_days)
+        expires_at = datetime.now(UTC) + timedelta(days=ttl_days)
 
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            # Verify the case exists first so we don't insert orphan
-            # token rows on operator typos.
-            cur.execute(
-                "SELECT id FROM public.cases WHERE id = %s",
-                (str(case_id),),
-            )
-            if not cur.fetchone():
-                raise ValueError(f"case {case_id} not found")
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        # Verify the case exists first so we don't insert orphan
+        # token rows on operator typos.
+        cur.execute(
+            "SELECT id FROM public.cases WHERE id = %s",
+            (str(case_id),),
+        )
+        if not cur.fetchone():
+            raise ValueError(f"case {case_id} not found")
 
-            cur.execute(
-                """
+        cur.execute(
+            """
                 INSERT INTO public.case_tokens (case_id, token, expires_at, label)
                 VALUES (%s, %s, %s, %s)
                 RETURNING id
                 """,
-                (str(case_id), token, expires_at, label),
-            )
-            row = cur.fetchone()
-            token_id = UUID(str(row["id"]))
+            (str(case_id), token, expires_at, label),
+        )
+        row = cur.fetchone()
+        token_id = UUID(str(row["id"]))
 
     log.info("portal: minted token for case %s (id=%s, ttl_days=%s)",
              case_id, token_id, ttl_days)
@@ -145,12 +144,11 @@ def verify_token(*, token: str, dsn: str) -> VerifiedToken | None:
         # input early so we don't burn a roundtrip.
         return None
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT t.id AS token_id, t.case_id, t.expires_at,
                        t.revoked_at, t.label, t.last_used_at,
                        c.case_number, c.client_name, c.client_email,
@@ -160,34 +158,34 @@ def verify_token(*, token: str, dsn: str) -> VerifiedToken | None:
                   JOIN public.cases c ON c.id = t.case_id
                  WHERE t.token = %s
                 """,
-                (token,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None
-            if row["revoked_at"] is not None:
-                log.info("portal: rejected revoked token %s", row["token_id"])
-                return None
-            if row["expires_at"] is not None and row["expires_at"] < now:
-                log.info("portal: rejected expired token %s", row["token_id"])
-                return None
+            (token,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        if row["revoked_at"] is not None:
+            log.info("portal: rejected revoked token %s", row["token_id"])
+            return None
+        if row["expires_at"] is not None and row["expires_at"] < now:
+            log.info("portal: rejected expired token %s", row["token_id"])
+            return None
 
-            # Bump last_used_at if it's been >= 1 hour since the
-            # previous bump. Reduces write amplification — see the
-            # module docstring.
-            last_used = row["last_used_at"]
-            if last_used is None or (now - last_used) >= _LAST_USED_BUMP_INTERVAL:
-                cur.execute(
-                    "UPDATE public.case_tokens SET last_used_at = NOW() WHERE id = %s",
-                    (str(row["token_id"]),),
-                )
-
-            # Fetch the latest investigation for this case to surface
-            # engagement state on the portal landing page. A case with
-            # zero investigations is rare-but-possible (intake-only)
-            # — handle that without erroring.
+        # Bump last_used_at if it's been >= 1 hour since the
+        # previous bump. Reduces write amplification — see the
+        # module docstring.
+        last_used = row["last_used_at"]
+        if last_used is None or (now - last_used) >= _LAST_USED_BUMP_INTERVAL:
             cur.execute(
-                """
+                "UPDATE public.case_tokens SET last_used_at = NOW() WHERE id = %s",
+                (str(row["token_id"]),),
+            )
+
+        # Fetch the latest investigation for this case to surface
+        # engagement state on the portal landing page. A case with
+        # zero investigations is rare-but-possible (intake-only)
+        # — handle that without erroring.
+        cur.execute(
+            """
                 SELECT id, engagement_started_at, engagement_closed_at,
                        engagement_fee_paid_usd
                   FROM public.investigations
@@ -195,9 +193,9 @@ def verify_token(*, token: str, dsn: str) -> VerifiedToken | None:
                  ORDER BY triggered_at DESC NULLS LAST
                  LIMIT 1
                 """,
-                (str(row["case_id"]),),
-            )
-            inv_row = cur.fetchone()
+            (str(row["case_id"]),),
+        )
+        inv_row = cur.fetchone()
 
     inv_id: UUID | None = None
     eng_started = eng_closed = None
@@ -239,18 +237,17 @@ def revoke_token(*, token_id: UUID, dsn: str) -> bool:
     token is a no-op + returns True so scripts can re-run safely.
     Returns False if the token doesn't exist."""
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 UPDATE public.case_tokens
                    SET revoked_at = COALESCE(revoked_at, NOW())
                  WHERE id = %s
                 RETURNING id
                 """,
-                (str(token_id),),
-            )
-            return cur.fetchone() is not None
+            (str(token_id),),
+        )
+        return cur.fetchone() is not None
 
 
 def public_portal_url(*, token: str, base_url: str | None = None) -> str:

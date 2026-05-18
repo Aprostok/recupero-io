@@ -107,20 +107,19 @@ def record_letter_sent(
         RETURNING id;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, {
-                    "id": letter_id, "case": case_id, "inv": investigation_id,
-                    "issuer": issuer, "target": target_address,
-                    "chain": chain, "asset": asset_symbol,
-                    "usd": requested_freeze_usd,
-                    "subject": letter_subject, "body": body_truncated,
-                    "language": letter_language,
-                    "email": contact_email, "portal": contact_portal_url,
-                    "op": operator, "storage": storage_path,
-                })
-                row = cur.fetchone()
-                return row[0] if row else letter_id
+        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(sql, {
+                "id": letter_id, "case": case_id, "inv": investigation_id,
+                "issuer": issuer, "target": target_address,
+                "chain": chain, "asset": asset_symbol,
+                "usd": requested_freeze_usd,
+                "subject": letter_subject, "body": body_truncated,
+                "language": letter_language,
+                "email": contact_email, "portal": contact_portal_url,
+                "op": operator, "storage": storage_path,
+            })
+            row = cur.fetchone()
+            return row[0] if row else letter_id
     except Exception as exc:  # noqa: BLE001
         log.warning("freeze_letters_sent insert failed: %s", exc)
         return None
@@ -157,15 +156,14 @@ def record_outcome(
         RETURNING id;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, {
-                    "letter": letter_id, "type": outcome_type,
-                    "frozen": frozen_usd, "returned": returned_usd,
-                    "text": response_text, "notes": operator_notes,
-                })
-                row = cur.fetchone()
-                return row[0] if row else None
+        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(sql, {
+                "letter": letter_id, "type": outcome_type,
+                "frozen": frozen_usd, "returned": returned_usd,
+                "text": response_text, "notes": operator_notes,
+            })
+            row = cur.fetchone()
+            return row[0] if row else None
     except Exception as exc:  # noqa: BLE001
         log.warning("freeze_outcomes insert failed: %s", exc)
         return None

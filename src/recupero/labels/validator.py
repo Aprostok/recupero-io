@@ -261,7 +261,7 @@ def main() -> int:
     """CLI entry: validate seed files, print report, exit 0/1."""
     logging.basicConfig(level=logging.INFO)
     report = validate_seed_files()
-    print(f"=== Recupero label-data validator ===")
+    print("=== Recupero label-data validator ===")
     print(f"  Files checked: {report.files_checked}")
     print(f"  Entries checked: {report.entries_checked}")
     print()

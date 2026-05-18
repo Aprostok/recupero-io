@@ -66,39 +66,38 @@ def run(
     # message. Catches operator-typo case_ids before we mint a URL
     # the webhook would later reject as audit_only.
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT case_number, client_name, client_email "
+            "  FROM public.cases WHERE id = %s",
+            (str(case_id),),
+        )
+        case_row = cur.fetchone()
+        if not case_row:
+            print(f"ERROR: case {case_id} not found")
+            return 1
+
+        # For engagement: resolve the latest investigation for
+        # this case if one wasn't supplied. Operator usually
+        # only knows the case_id; they shouldn't have to look
+        # up the investigation_id manually.
+        if link_type == "engagement" and investigation_id is None:
             cur.execute(
-                "SELECT case_number, client_name, client_email "
-                "  FROM public.cases WHERE id = %s",
+                "SELECT id FROM public.investigations "
+                " WHERE case_id = %s "
+                " ORDER BY triggered_at DESC NULLS LAST "
+                " LIMIT 1",
                 (str(case_id),),
             )
-            case_row = cur.fetchone()
-            if not case_row:
-                print(f"ERROR: case {case_id} not found")
-                return 1
-
-            # For engagement: resolve the latest investigation for
-            # this case if one wasn't supplied. Operator usually
-            # only knows the case_id; they shouldn't have to look
-            # up the investigation_id manually.
-            if link_type == "engagement" and investigation_id is None:
-                cur.execute(
-                    "SELECT id FROM public.investigations "
-                    " WHERE case_id = %s "
-                    " ORDER BY triggered_at DESC NULLS LAST "
-                    " LIMIT 1",
-                    (str(case_id),),
+            inv_row = cur.fetchone()
+            if not inv_row:
+                print(
+                    f"ERROR: no investigation found for case "
+                    f"{case_row['case_number']}. Run the diagnostic "
+                    "first, then generate the engagement link."
                 )
-                inv_row = cur.fetchone()
-                if not inv_row:
-                    print(
-                        f"ERROR: no investigation found for case "
-                        f"{case_row['case_number']}. Run the diagnostic "
-                        "first, then generate the engagement link."
-                    )
-                    return 1
-                investigation_id = UUID(str(inv_row["id"]))
+                return 1
+            investigation_id = UUID(str(inv_row["id"]))
 
     # Default prefilled_email to the case's contact email if unset.
     effective_email = prefilled_email or case_row.get("client_email") or None
@@ -106,7 +105,9 @@ def run(
     # Build the URL via the payment_links primitive (raises
     # PaymentLinkConfigError if the base URL env var isn't set).
     from recupero.payments.payment_links import (
-        PaymentLinkConfigError, build_diagnostic_link, build_engagement_link,
+        PaymentLinkConfigError,
+        build_diagnostic_link,
+        build_engagement_link,
     )
     try:
         if link_type == "diagnostic":
@@ -131,7 +132,9 @@ def run(
         return 1
 
     from recupero._pricing import (
-        DIAGNOSTIC_FEE_USD, ENGAGEMENT_FEE_USD, fmt_usd_short,
+        DIAGNOSTIC_FEE_USD,
+        ENGAGEMENT_FEE_USD,
+        fmt_usd_short,
     )
     amount = (
         fmt_usd_short(DIAGNOSTIC_FEE_USD) if link_type == "diagnostic"
@@ -145,7 +148,8 @@ def run(
     # URL makes it impossible to miss — the warning shows up
     # immediately above the success line they were going to copy.
     from recupero.payments.stripe_mode import (
-        detect_mode_from_env, format_mismatch_warning,
+        detect_mode_from_env,
+        format_mismatch_warning,
     )
     mode_report = detect_mode_from_env()
     if mode_report.mismatch:

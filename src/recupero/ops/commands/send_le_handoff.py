@@ -22,8 +22,9 @@ import logging
 import os
 import tempfile
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import UUID
 
 import psycopg
@@ -71,7 +72,7 @@ def run(
     print("=" * 72)
     print(f"  Recipient:     {to_email}")
     print(f"  LE handoff:    {le_html_name}")
-    print(f"  Will attach:   LE handoff PDF, trace_report PDF, flow PDF")
+    print("  Will attach:   LE handoff PDF, trace_report PDF, flow PDF")
     print()
     if not confirm(f"Send LE handoff to {to_email}?", default=False):
         print("Cancelled.")
@@ -92,9 +93,7 @@ def run(
     # Find trace_report + flow PDFs in the bucket
     for f in bucket_files:
         name = f.get("name", "")
-        if name.startswith("trace_report_") and name.endswith(".pdf"):
-            pdf_candidates.append(name)
-        elif name.startswith("flow_") and name.endswith(".pdf"):
+        if name.startswith("trace_report_") and name.endswith(".pdf") or name.startswith("flow_") and name.endswith(".pdf"):
             pdf_candidates.append(name)
     attachments: list[Path] = []
     for pdf_name in pdf_candidates:
@@ -110,8 +109,8 @@ def run(
     )
     preview = (
         "Forensic-trace evidence package for a cryptocurrency theft "
-        f"investigation. Includes addresses, transactions, and "
-        f"recommended filing routes."
+        "investigation. Includes addresses, transactions, and "
+        "recommended filing routes."
     )
 
     from recupero.worker._email import send_email
@@ -154,13 +153,12 @@ def run(
 
 def _fetch_investigation(*, investigation_id: UUID, dsn: str) -> dict | None:
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, case_id, status FROM public.investigations WHERE id = %s",
-                (str(investigation_id),),
-            )
-            return cur.fetchone()
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, case_id, status FROM public.investigations WHERE id = %s",
+            (str(investigation_id),),
+        )
+        return cur.fetchone()
 
 
 def _list_bucket_briefs(*, investigation_id: UUID) -> list[dict[str, Any]]:

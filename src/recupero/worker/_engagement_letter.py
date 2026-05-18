@@ -54,7 +54,7 @@ mechanics under your state's professional-services regulations.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -106,7 +106,9 @@ def render_engagement_letter(
     tests + the rare per-case adjustment.
     """
     from recupero._pricing import (
-        CONTINGENCY_PCT, DIAGNOSTIC_FEE_USD, ENGAGEMENT_FEE_USD,
+        CONTINGENCY_PCT,
+        DIAGNOSTIC_FEE_USD,
+        ENGAGEMENT_FEE_USD,
     )
     if initial_fee_usd is None:
         initial_fee_usd = DIAGNOSTIC_FEE_USD
@@ -163,7 +165,7 @@ def _build_context(
     """Build the Jinja context for the engagement letter."""
     from recupero import __version__ as software_version
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     freezable_entries = freeze_brief.get("FREEZABLE") or []
     freezable_issuer_count = len(freezable_entries)

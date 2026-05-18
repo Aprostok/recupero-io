@@ -23,7 +23,7 @@ import json
 import logging
 import os
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +38,6 @@ from cryptography.hazmat.primitives.serialization import (
     PrivateFormat,
     PublicFormat,
     load_pem_private_key,
-    load_pem_public_key,
 )
 
 log = logging.getLogger(__name__)
@@ -303,7 +302,7 @@ def create_attestation(
         ))
 
     timestamp_iso = (
-        (now or datetime.now(timezone.utc))
+        (now or datetime.now(UTC))
         .isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )

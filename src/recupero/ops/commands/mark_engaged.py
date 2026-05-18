@@ -27,36 +27,35 @@ def run(*, investigation_id: UUID, fee_usd: Decimal, dsn: str) -> int:
     """Mark an investigation as Tier-2 engaged. Returns 0 on success,
     1 on errors (missing investigation, etc.)."""
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, status, engagement_started_at, engagement_closed_at "
-                "  FROM public.investigations WHERE id = %s",
-                (str(investigation_id),),
+                         connect_timeout=10) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, status, engagement_started_at, engagement_closed_at "
+            "  FROM public.investigations WHERE id = %s",
+            (str(investigation_id),),
+        )
+        row = cur.fetchone()
+        if not row:
+            print(f"ERROR: investigation {investigation_id} not found")
+            return 1
+
+        if row["engagement_started_at"] and not row["engagement_closed_at"]:
+            print(
+                f"NOTE: engagement already active "
+                f"(started_at={row['engagement_started_at']}). "
+                f"No change made — idempotent."
             )
-            row = cur.fetchone()
-            if not row:
-                print(f"ERROR: investigation {investigation_id} not found")
-                return 1
+            return 0
 
-            if row["engagement_started_at"] and not row["engagement_closed_at"]:
-                print(
-                    f"NOTE: engagement already active "
-                    f"(started_at={row['engagement_started_at']}). "
-                    f"No change made — idempotent."
-                )
-                return 0
+        if row["engagement_closed_at"]:
+            print(
+                f"NOTE: investigation has a closed engagement "
+                f"(closed_at={row['engagement_closed_at']}). "
+                "Re-opening by clearing engagement_closed_at + "
+                "setting fresh engagement_started_at."
+            )
 
-            if row["engagement_closed_at"]:
-                print(
-                    f"NOTE: investigation has a closed engagement "
-                    f"(closed_at={row['engagement_closed_at']}). "
-                    "Re-opening by clearing engagement_closed_at + "
-                    "setting fresh engagement_started_at."
-                )
-
-            cur.execute(
-                """
+        cur.execute(
+            """
                 UPDATE public.investigations
                    SET engagement_started_at = NOW(),
                        engagement_closed_at = NULL,
@@ -65,9 +64,9 @@ def run(*, investigation_id: UUID, fee_usd: Decimal, dsn: str) -> int:
                  WHERE id = %s
                 RETURNING engagement_started_at, engagement_fee_paid_usd
                 """,
-                (fee_usd, str(investigation_id)),
-            )
-            updated = cur.fetchone()
+            (fee_usd, str(investigation_id)),
+        )
+        updated = cur.fetchone()
 
     print(
         f"OK — engagement activated for {investigation_id}\n"

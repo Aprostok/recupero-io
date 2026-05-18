@@ -96,7 +96,19 @@ class MonitorTickResult:
 
     @property
     def ok(self) -> bool:
-        return self.alerts_fired == self.alerts_succeeded
+        # v0.16.8 (round-9 worker-resilience HIGH): a tick is OK iff
+        # every fired alert succeeded AND no errors were logged.
+        # Pre-v0.16.8 the property was just
+        # `alerts_fired == alerts_succeeded`. When the subscription
+        # fetch itself failed (returned early with an error appended
+        # to `errors`), `alerts_fired == alerts_succeeded == 0` was
+        # True, so the cron exited 0 and the operator saw a healthy
+        # tick when the DB was actually down. Including `errors` in
+        # the predicate makes the failure visible.
+        return (
+            self.alerts_fired == self.alerts_succeeded
+            and not self.errors
+        )
 
 
 def run_monitor_tick(

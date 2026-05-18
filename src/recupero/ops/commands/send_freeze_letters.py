@@ -186,6 +186,20 @@ def run(
                 pass
 
         if result.success:
+            # v0.16.8 (round-9 worker-resilience HIGH): record the send
+            # in freeze_letters_sent so the recovery-learning loop
+            # (refresh_priors, record_outcome) has data to update
+            # issuer priors against. Pre-v0.16.8 the table existed
+            # but was never written to — the entire learned-prior
+            # pipeline ingested zero rows.
+            _record_freeze_letter_sent(
+                dsn=dsn,
+                investigation_id=investigation_id,
+                case_id=inv.get("case_id"),
+                entry=entry,
+                subject=subject,
+                html_excerpt=html[:1000] if html else "",
+            )
             print(f"  OK    {entry['issuer']}: message_id={result.message_id}")
             sent += 1
         elif result.skipped:
@@ -204,6 +218,78 @@ def run(
 
 
 # ----- helpers ----- #
+
+
+def _record_freeze_letter_sent(
+    *,
+    dsn: str,
+    investigation_id: UUID,
+    case_id: Any,
+    entry: dict,
+    subject: str,
+    html_excerpt: str,
+) -> None:
+    """Insert a row into public.freeze_letters_sent.
+
+    Idempotent via the UNIQUE (case_id, issuer, target_address,
+    asset_symbol) constraint — a re-send with the same target is a
+    no-op INSERT (ON CONFLICT DO NOTHING) rather than a duplicate row.
+    Failures are logged but do NOT propagate: a send-recorded-but-
+    audit-failed is preferable to a send-rolled-back-because-audit-
+    failed (the email is already out the door at this point).
+
+    v0.16.8 (round-9 worker-resilience HIGH): this function did not
+    exist pre-v0.16.8 — every successful send was emitted to the
+    issuer but no record appeared in the audit table, so freeze_outcomes
+    + the learned-prior refresh pipeline never had inputs.
+    """
+    operator = (
+        os.environ.get("RECUPERO_OPS_OPERATOR", "").strip()
+        or "recupero-ops:operator"
+    )
+    # The brief carries either total_usd or usd_value; pick whichever is
+    # populated. Strip "$" and "," for the numeric column.
+    raw_usd = str(entry.get("total_usd") or entry.get("usd_value") or "0")
+    cleaned = raw_usd.replace("$", "").replace(",", "").strip()
+    try:
+        requested_usd = float(cleaned) if cleaned else 0.0
+    except (TypeError, ValueError):
+        requested_usd = 0.0
+    try:
+        with psycopg.connect(dsn, autocommit=True,
+                             prepare_threshold=None,
+                             connect_timeout=10) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO public.freeze_letters_sent (
+                    case_id, investigation_id, issuer, target_address,
+                    chain, asset_symbol, requested_freeze_usd,
+                    letter_subject, letter_body_excerpt, contact_email,
+                    operator
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (case_id, issuer, target_address, asset_symbol)
+                DO NOTHING
+                """,
+                (
+                    str(case_id) if case_id else None,
+                    str(investigation_id),
+                    entry.get("issuer") or "(unknown)",
+                    entry.get("target_address") or entry.get("address") or "",
+                    entry.get("chain") or "ethereum",
+                    entry.get("token") or entry.get("symbol") or "?",
+                    requested_usd,
+                    subject[:500],
+                    html_excerpt[:1000],
+                    entry.get("contact_email") or "",
+                    operator,
+                ),
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort: the email is already sent. Log and continue.
+        log.warning(
+            "freeze_letters_sent INSERT failed for issuer=%s addr=%s: %s",
+            entry.get("issuer"), entry.get("target_address"), exc,
+        )
 
 
 def _fetch_investigation(*, investigation_id: UUID, dsn: str) -> dict | None:

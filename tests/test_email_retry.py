@@ -76,13 +76,26 @@ def test_retry_absorbs_one_5xx() -> None:
         ]
         out = _resend_send_with_retry(_mk_req())
     assert out == {"id": "msg_after_retry"}
-    sleep.assert_called_once_with(_RESEND_RETRY_WAITS_SEC[0])
+    # v0.16.8: jitter ±25% on each backoff so concurrent retries
+    # desynchronize. We assert the wait is within the jitter band,
+    # not exactly equal to the base value.
+    assert sleep.call_count == 1
+    actual_wait = sleep.call_args_list[0].args[0]
+    base = _RESEND_RETRY_WAITS_SEC[0]
+    assert base * 0.75 <= actual_wait <= base * 1.25, (
+        f"jittered wait {actual_wait} outside ±25% band of base {base}"
+    )
 
 
 def test_retry_uses_full_wait_sequence_then_raises() -> None:
-    """All 4 attempts fail with 5xx → waits 5/15/30 seconds in
-    order between retries → raises the LAST exception (so the
-    audit row captures the actual final failure)."""
+    """All 4 attempts fail with 5xx → waits 5/15/30 seconds (±25% jitter)
+    in order between retries → raises the LAST exception (so the
+    audit row captures the actual final failure).
+
+    v0.16.8: jitter ±25% added to each backoff. We assert the
+    PROGRESSION (each wait greater than the prior) and bounded
+    spread, not exact values.
+    """
     last = _mk_http_error(503)
     with patch("recupero.worker._email.urllib.request.urlopen") as urlopen, \
          patch("recupero.worker._email.time.sleep") as sleep:
@@ -93,7 +106,11 @@ def test_retry_uses_full_wait_sequence_then_raises() -> None:
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             _resend_send_with_retry(_mk_req())
     waits = [c.args[0] for c in sleep.call_args_list]
-    assert waits == list(_RESEND_RETRY_WAITS_SEC)
+    assert len(waits) == len(_RESEND_RETRY_WAITS_SEC)
+    for actual, base in zip(waits, _RESEND_RETRY_WAITS_SEC):
+        assert base * 0.75 <= actual <= base * 1.25, (
+            f"jittered wait {actual} outside ±25% band of base {base}"
+        )
     assert exc_info.value is last
 
 

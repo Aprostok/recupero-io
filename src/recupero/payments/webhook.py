@@ -117,17 +117,34 @@ def verify_and_parse(
     )
 
 
+# v0.16.8 (round-9 security HIGH): cap the number of v1= signatures we'll
+# accept from the Stripe-Signature header. Stripe rotates the secret
+# during key transitions and may legitimately send 2-3 v1= entries; 5 is
+# a generous ceiling. Pre-fix the parser was unbounded — an attacker
+# could post `t=<now>,v1=AA,v1=AA,...(100k times)` and force the
+# verifier to walk 100k `hmac.compare_digest` calls per request (CPU
+# DoS). Reject the header (fail-closed) when the cap is exceeded.
+_MAX_V1_SIGNATURES = 5
+
+
 def _parse_signature_header(header: str) -> tuple[int, list[str]]:
     """Parse ``t=<unix>,v1=<sig>[,v1=<sig>...]`` into
     ``(timestamp, [signature, ...])``.
 
     Stripe's header format is documented at
-    https://stripe.com/docs/webhooks/signatures. We accept multiple
-    v1= entries (rollover) and ignore unknown scheme prefixes
-    (v0= is the deprecated legacy scheme).
+    https://stripe.com/docs/webhooks/signatures. We accept up to
+    ``_MAX_V1_SIGNATURES`` v1= entries (rollover) and ignore unknown
+    scheme prefixes (v0= is the deprecated legacy scheme).
     """
     timestamp: int | None = None
     sigs: list[str] = []
+    # Also bound the raw header size — Stripe's real headers are
+    # ~150 bytes; rejecting anything over 8KB stops the worker from
+    # processing a 1MB header at all.
+    if len(header) > 8192:
+        raise WebhookVerifyError(
+            f"signature header too large ({len(header)} bytes); rejecting"
+        )
     for part in header.split(","):
         if "=" not in part:
             continue
@@ -138,7 +155,12 @@ def _parse_signature_header(header: str) -> tuple[int, list[str]]:
             except ValueError:
                 raise WebhookVerifyError(f"non-integer timestamp: {value!r}") from None
         elif key == "v1":
-            sigs.append(value)
+            if len(sigs) >= _MAX_V1_SIGNATURES:
+                raise WebhookVerifyError(
+                    f"too many v1= entries in signature header "
+                    f"(>{_MAX_V1_SIGNATURES}); rejecting to avoid CPU DoS"
+                )
+            sigs.append(value.strip())
         # other schemes (v0, etc.) deliberately ignored
     if timestamp is None:
         raise WebhookVerifyError("missing t= component in header")

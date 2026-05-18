@@ -95,19 +95,29 @@ class BscParams(BaseModel):
 
 
 class PolygonParams(BaseModel):
-    """Polygon PoS — Etherscan V2 unified API, chain_id=137. Native
-    gas token is MATIC (now branded POL but the on-chain symbol
-    remains MATIC for chain compatibility; CoinGecko id is
-    ``matic-network``)."""
+    """Polygon PoS — Etherscan V2 unified API, chain_id=137.
+
+    Native-token rebrand (2024-09-04): MATIC was redenominated to POL
+    1:1 via a contract migration. The on-chain contract address for
+    the staking token is now POL; the legacy MATIC contract is still
+    valid but is being phased out. CoinGecko mirrored the rebrand:
+    historical prices before 2024-09-04 live under ``matic-network``,
+    prices on or after that date live under ``polygon-ecosystem-token``.
+
+    v0.16.8 default (round-9 forensic HIGH): point at POL going forward.
+    For incidents BEFORE 2024-09-04 callers should pin
+    ``coingecko_native_id="matic-network"`` via the trace config so
+    historical pricing resolves correctly.
+    """
     api_base: str = "https://api.etherscan.io/v2/api"
     chain_id: int = 137
     requests_per_second: float = 2.5
     block_range_chunk: int = 10_000
-    native_symbol: str = "MATIC"
+    native_symbol: str = "POL"
     native_decimals: int = 18
     explorer_base: str = "https://polygonscan.com"
     coingecko_platform: str = "polygon-pos"
-    coingecko_native_id: str = "matic-network"
+    coingecko_native_id: str = "polygon-ecosystem-token"
 
 
 class BaseParams(BaseModel):

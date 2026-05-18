@@ -21,7 +21,34 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 
-from recupero.models import LabelCategory, Transfer
+from recupero.models import Address, LabelCategory, Transfer
+
+
+# Known burn / null sinks: funds reaching these are economically
+# destroyed. Lowercased EVM form; non-EVM equivalents (Solana
+# 11111111111111111111111111111111 system program, Tron T9yD…) get
+# added as we encounter them in real cases.
+_BURN_OR_ZERO_ADDRESSES: frozenset[str] = frozenset({
+    "0x0000000000000000000000000000000000000000",
+    "0x000000000000000000000000000000000000dead",
+    "0xdead000000000000000042069420694206942069",
+    # Solana system program (often used as a "burn" sink in NFT contexts)
+    "11111111111111111111111111111111",
+})
+
+
+def _is_burn_or_zero_address(address: Address) -> bool:
+    """True if `address` is a well-known burn / zero sink.
+
+    Case-insensitive for the EVM hex set; exact-match for non-EVM
+    entries (base58 IS case-sensitive but the system-program key is
+    all-1s so case is moot).
+    """
+    if not address:
+        return False
+    if address.lower() in _BURN_OR_ZERO_ADDRESSES:
+        return True
+    return address in _BURN_OR_ZERO_ADDRESSES
 
 
 @dataclass
@@ -72,6 +99,12 @@ class TracePolicy:
         destination_is_contract keyword if applicable.
         """
         if transfer.hop_depth + 1 >= self.max_depth:
+            return False
+        # v0.16.8 (round-9 forensic HIGH): zero / burn addresses are TERMINAL.
+        # Funds moved to 0x000…000 or 0x000…dEaD are economically destroyed;
+        # tracing further is wasted budget and the analyst-facing brief
+        # showing "trace continues at 0x0…" reads as a forensic error.
+        if _is_burn_or_zero_address(transfer.to_address):
             return False
         if transfer.counterparty.label is None:
             return True  # unlabeled — still investigate

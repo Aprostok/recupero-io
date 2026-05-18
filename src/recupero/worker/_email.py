@@ -85,35 +85,68 @@ def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
     """Send a Resend API request with retry-on-transient logic.
 
     Retriable: 5xx HTTP responses, urllib URLError (DNS/connect/
-    timeout), socket timeout. Non-retriable: 4xx (caller bug: bad
-    address, invalid template, auth) — re-raised immediately so
-    the audit log captures the real error message instead of
-    burning 50s on retries that will all fail the same way.
+    timeout), socket timeout, 429 rate-limit. Non-retriable: other 4xx
+    (caller bug: bad address, invalid template, auth) — re-raised
+    immediately so the audit log captures the real error message
+    instead of burning 50s on retries that will all fail the same way.
 
-    Returns the parsed JSON response on success. Raises the
-    LAST exception on exhaustion (HTTPError or URLError) so the
-    existing handler in send_email can format it for the audit
-    row without changes.
+    Backoff: per-attempt waits from _RESEND_RETRY_WAITS_SEC with
+    jitter (+/- 25%). 429 responses honor the `Retry-After` header
+    when present (Resend sends it on rate-limit), capped to the
+    largest configured wait to bound worst-case latency.
+
+    v0.16.8 (round-9 worker-resilience HIGH):
+      * Honor Retry-After on 429.
+      * Add per-attempt jitter so concurrent senders don't thundering-
+        herd against Resend after a brief outage.
+
+    Returns the parsed JSON response on success. Raises the LAST
+    exception on exhaustion (HTTPError or URLError) so the existing
+    handler in send_email can format it for the audit row without
+    changes.
     """
+    import random as _random
     last_exc: BaseException | None = None
+    retry_after_override: float | None = None
     total_attempts = len(_RESEND_RETRY_WAITS_SEC) + 1
     for attempt_idx in range(total_attempts):
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
                 return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
-            # 4xx → caller bug. Don't retry — re-raise so the
-            # audit row captures the right error.
+            # Other 4xx → caller bug. Don't retry.
             if 400 <= exc.code < 500 and exc.code != 429:
                 raise
             last_exc = exc
+            # Resend (and most APIs) include Retry-After on 429.
+            # Use it in place of our fixed backoff for the NEXT
+            # retry — bounded so a misbehaving header doesn't hang
+            # the worker.
+            if exc.code == 429 and exc.headers is not None:
+                ra = exc.headers.get("Retry-After")
+                if ra:
+                    try:
+                        retry_after_override = min(
+                            float(ra), float(max(_RESEND_RETRY_WAITS_SEC)) * 2,
+                        )
+                    except (TypeError, ValueError):
+                        retry_after_override = None
         except (urllib.error.URLError, TimeoutError) as exc:
             last_exc = exc
         if attempt_idx >= len(_RESEND_RETRY_WAITS_SEC):
             break
-        wait_sec = _RESEND_RETRY_WAITS_SEC[attempt_idx]
+        base_wait = _RESEND_RETRY_WAITS_SEC[attempt_idx]
+        if retry_after_override is not None:
+            base_wait = max(base_wait, retry_after_override)
+            retry_after_override = None
+        # Jitter ±25% so concurrent senders desynchronize after a
+        # shared transient. Without jitter, 20 workers all retry on
+        # the exact same wall-clock offset and re-hit Resend at the
+        # same instant.
+        jitter = _random.uniform(-0.25, 0.25) * base_wait
+        wait_sec = max(0.1, base_wait + jitter)
         log.warning(
-            "resend transient failure on attempt %d/%d — retrying in %ds: %s",
+            "resend transient failure on attempt %d/%d — retrying in %.1fs: %s",
             attempt_idx + 1, total_attempts, wait_sec, last_exc,
         )
         time.sleep(wait_sec)

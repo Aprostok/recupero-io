@@ -296,7 +296,16 @@ def handle_portal(
             headers=headers, dsn=dsn,
         )
     if sub_path.startswith("artifact/") and method == "GET":
+        # v0.16.8 (round-9 security HIGH): enforce a strict whitelist on
+        # the URL-decoded artifact_key BEFORE we hand it to lookup. The
+        # dispatcher already checks the key against `_PORTAL_ARTIFACTS`,
+        # so an unknown key is harmless — but we also reject control
+        # chars / path separators / overlong values up front so any
+        # mis-routing further down the chain inherits a clean string.
         artifact_key = sub_path[len("artifact/"):]
+        if not artifact_key or "/" in artifact_key or "\\" in artifact_key \
+                or ".." in artifact_key or len(artifact_key) > 64:
+            return _render_error(404, "not found")
         return _route_artifact(verified=verified, artifact_key=artifact_key)
 
     return _render_error(404, "not found")
@@ -551,14 +560,53 @@ def _resolve_portal_artifact(
     except Exception as exc:  # noqa: BLE001
         log.warning("portal artifact resolve: list failed: %s", exc)
         return None
+    # v0.16.8 (round-9 security HIGH): whitelist the filename shape
+    # BEFORE concatenating into a bucket path. Pre-fix the code did
+    # `prefix_path + name` with `name` straight off the vendor list
+    # response — so a malicious object name like `../other-case/secret.pdf`
+    # would land in the signed-URL call and leak across cases. The
+    # blast radius today is small (only the worker writes to the bucket)
+    # but we are NOT going to depend on that staying true; defense-in-
+    # depth costs nothing.
     for f in files:
         name = f.get("name") or ""
+        if not _safe_bucket_filename(name):
+            log.warning(
+                "portal artifact resolve: skipping unsafe filename %r",
+                name,
+            )
+            continue
         if not name.endswith(".pdf"):
             continue
         for p in prefixes:
             if name.startswith(p):
                 return prefix_path + name
     return None
+
+
+# Whitelist for bucket-object filenames. Letters/digits/underscore/
+# dot/hyphen, 1-200 chars. Notable rejections:
+#   * `..` (path traversal)
+#   * `/` and `\` (any path-segment break)
+#   * spaces, quotes, control chars
+#   * empty / overlong names
+_SAFE_BUCKET_FILENAME = re.compile(r"^[A-Za-z0-9_.][A-Za-z0-9_.\-]{0,199}$")
+
+
+def _safe_bucket_filename(name: str) -> bool:
+    """True if `name` is a plain filename safe to concatenate into a
+    bucket prefix-path. See _SAFE_BUCKET_FILENAME for the allowed shape.
+
+    Explicitly rejects `..` substrings as belt-and-suspenders against
+    the regex; the dot-prefix exclusion in the first-char class makes
+    leading `..` impossible, but a mid-string `..` (e.g.
+    `victim_summary_recoverable_..pdf`) is still worth blocking.
+    """
+    if not name or len(name) > 200:
+        return False
+    if ".." in name:
+        return False
+    return bool(_SAFE_BUCKET_FILENAME.match(name))
 
 
 # ----- Helpers ----- #

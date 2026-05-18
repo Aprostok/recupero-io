@@ -80,16 +80,21 @@ def test_profile_for_bsc() -> None:
 
 def test_profile_for_polygon() -> None:
     """Regression: Polygon was missing from _profile_for prior to the
-    multi-chain validation pass. Locks the chain_id (137) and the
-    CoinGecko platform id (``polygon-pos``) — wrong CoinGecko id
-    silently breaks pricing on every Polygon trace."""
+    multi-chain validation pass. Locks chain_id (137) + CoinGecko
+    platform id.
+
+    v0.16.8 (round-9 forensic HIGH): MATIC → POL rebrand 2024-09-04.
+    Default `coingecko_native_id` is now ``polygon-ecosystem-token``
+    (current). Historical-incident callers should override via config
+    to ``matic-network`` for pre-2024-09-04 dates.
+    """
     cfg, _env = _bundle()
     p = _profile_for(Chain.polygon, cfg)
     assert p.chain_id == 137
-    assert p.native_symbol == "MATIC"
+    assert p.native_symbol == "POL"
     assert "polygonscan.com" in p.explorer_base
     assert p.coingecko_platform == "polygon-pos"
-    assert p.coingecko_native_id == "matic-network"
+    assert p.coingecko_native_id == "polygon-ecosystem-token"
 
 
 def test_profile_for_base() -> None:

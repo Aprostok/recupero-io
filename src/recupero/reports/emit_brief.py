@@ -612,7 +612,38 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             "earliest_observed": earliest_observed,
         })
 
-    return freezable
+    # v0.16.8 (round-9 output-artifacts HIGH): drop issuer entries with
+    # zero actionable totals AND zero individual FREEZABLE holdings.
+    # The capability_blocks_freeze demote path (above) could leave an
+    # issuer entry with total_usd=$0 / total_suspected=$0 / holdings
+    # populated but all UNRECOVERABLE — appending that to the freezable
+    # list caused the LE handoff loop and the deliverables stage to
+    # fire freeze letters asking the issuer to freeze $0. Issuer
+    # compliance teams responding to "please freeze $0.00 at this
+    # address" undermines the credibility of every subsequent ask.
+    filtered: list[dict[str, Any]] = []
+    for entry in freezable:
+        total_freezable_d = _parse_usd_string(entry.get("total_usd", "0"))
+        total_suspected_d = _parse_usd_string(entry.get("total_suspected_usd", "0"))
+        # Keep the entry if EITHER there's confirmed freezable value OR
+        # there's investigative value (INVESTIGATE tier still warrants
+        # an outreach letter).
+        if total_freezable_d > 0 or total_suspected_d > 0:
+            filtered.append(entry)
+            continue
+        # Last-resort: count actually-FREEZABLE-status holdings. If even
+        # one is FREEZABLE we keep the entry (defensive — a holding may
+        # have status=FREEZABLE but a $0 parsed value due to upstream
+        # pricing gaps).
+        if any(h.get("status") == "FREEZABLE" for h in entry.get("holdings", [])):
+            filtered.append(entry)
+            continue
+        log.info(
+            "skipping issuer %s — zero actionable + zero investigative value "
+            "(was emitting empty-freeze letters pre-v0.16.8)",
+            entry.get("issuer", "(unknown)"),
+        )
+    return filtered
 
 
 def _compute_total_drained(case: Case) -> Decimal:

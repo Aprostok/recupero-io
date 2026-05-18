@@ -87,16 +87,26 @@ def _lookup_issuer_prior(raw_issuer: str) -> float:
 
 # Per-jurisdiction multipliers. USA/EU/UK = baseline 1.0;
 # non-cooperative jurisdictions reduce expected recovery.
+#
+# v0.16.8 (round-9 scoring HIGH): ORDER MATTERS — longer/more-specific
+# entries first so they match before shorter aliases. The lookup uses
+# word-boundary regex so "UK" doesn't match "Ukraine", "EU" doesn't
+# match "European", etc. Round-9 also added: ISO-format variants
+# ("Russian Federation", "Korea, Republic of"), formal alternative
+# names ("People's Republic of China", "Democratic People's Republic
+# of Korea"), and historically-misnamed entries.
 _JURISDICTION_MULT: dict[str, float] = {
-    # ORDER MATTERS: longer/more-specific entries first so they match before
-    # shorter aliases. "United Kingdom" before "UK"; "United States" before
-    # "USA"; "North Korea" before "Korea". The lookup uses word-boundary
-    # regex so "UK" no longer matches inside "Ukraine" (the prior substring
-    # match returned 1.0 for Ukraine cases — a sanctions-risk jurisdiction
-    # incorrectly scored as fully cooperative). Word boundaries also fix
-    # spurious matches like "EU" inside "European".
+    # Longest/most-specific entries first.
+    "Democratic People's Republic of Korea": 0.05,
+    "Russian Federation": 0.15,
+    "United Arab Emirates": 0.70,
+    "Korea, Republic of": 0.85,
+    "Republic of Korea": 0.85,
+    "People's Republic of China": 0.50,
     "United Kingdom": 1.0,
     "United States": 1.0,
+    "Great Britain": 1.0,
+    "Hong Kong SAR": 0.65,
     "North Korea": 0.05,
     "South Korea": 0.85,
     "USA": 1.0,
@@ -323,17 +333,62 @@ def score_recovery(
         ))
 
     # --- Jurisdiction adjustment ---
+    #
+    # v0.16.8 (round-9 scoring HIGH): multi-jurisdiction resolver +
+    # sanctions overlay.
+    #
+    # Pre-v0.16.8 we only read VICTIM_JURISDICTION. That ignored:
+    #   * Issuer jurisdiction (Tether BVI vs. Circle US — issuer location
+    #     drives compliance team responsiveness independent of victim).
+    #   * Perpetrator jurisdiction (if perp is in Russia, recovery is
+    #     effectively unenforceable post-freeze even when issuer + victim
+    #     are both cooperative).
+    # The combined multiplier is the MIN across all three (worst-case
+    # friction wins) — matches the practical workflow: recovery requires
+    # cooperation from every party in the chain.
+    #
+    # Sanctions overlay: when the case touched an OFAC-sanctioned entity
+    # (Tornado Cash, Garantex, Bitzlato, etc.), apply a 0.30× multiplier
+    # on top of the jurisdiction floor. Recovery is technically possible
+    # but requires OFAC-license-bearing counsel, which slows everything.
     jurisdiction_raw = (brief.get("VICTIM_JURISDICTION") or "").strip()
-    jur_mult = _resolve_jurisdiction_multiplier(jurisdiction_raw)
-    expected_recovered = expected_freezable * Decimal(str(jur_mult))
+    issuer_jur = (brief.get("ISSUER_JURISDICTION") or "").strip()
+    perp_jur = (brief.get("PERPETRATOR_JURISDICTION") or "").strip()
+    victim_mult = _resolve_jurisdiction_multiplier(jurisdiction_raw)
+    multipliers: list[tuple[str, str, float]] = [
+        ("victim", jurisdiction_raw, victim_mult),
+    ]
+    if issuer_jur:
+        multipliers.append(("issuer", issuer_jur,
+                            _resolve_jurisdiction_multiplier(issuer_jur)))
+    if perp_jur:
+        multipliers.append(("perpetrator", perp_jur,
+                            _resolve_jurisdiction_multiplier(perp_jur)))
+    # Combined = MIN of contributors. Worst-case venue wins.
+    role, who, jur_mult = min(multipliers, key=lambda t: t[2])
+
+    # Sanctions overlay. The brief is expected to surface this via
+    # `RISK_ASSESSMENT.ofac_exposure` (bool/str truthy). Conservative
+    # default: no overlay when the field is absent.
+    risk = brief.get("RISK_ASSESSMENT") or {}
+    ofac_exposed = bool(
+        risk.get("ofac_exposure")
+        or risk.get("sanctions_exposure")
+        or risk.get("touched_sanctioned_entity")
+    )
+    sanctions_mult = 0.30 if ofac_exposed else 1.00
+    combined_mult = jur_mult * sanctions_mult
+
+    expected_recovered = expected_freezable * Decimal(str(combined_mult))
+
     if jur_mult < 0.9:
         drivers.append(RecoveryDriver(
             factor="jurisdiction",
             direction="negative",
             weight=1.0 - jur_mult,
             description=(
-                f"Jurisdiction {jurisdiction_raw or '(unknown)'!r} reduces "
-                f"expected recovery by {(1.0-jur_mult)*100:.0f}% "
+                f"{role.capitalize()} jurisdiction {who or '(unknown)'!r} "
+                f"reduces expected recovery by {(1.0-jur_mult)*100:.0f}% "
                 "(cross-border / non-cooperative venue friction)."
             ),
         ))
@@ -345,6 +400,19 @@ def score_recovery(
             description=(
                 f"Jurisdiction {jurisdiction_raw or '(unknown)'!r} is favorable "
                 "(cooperative MLAT venue)."
+            ),
+        ))
+    if ofac_exposed:
+        drivers.append(RecoveryDriver(
+            factor="ofac_sanctions",
+            direction="negative",
+            weight=0.70,
+            description=(
+                "Case funds touched an OFAC-sanctioned entity "
+                "(e.g., Tornado Cash, Garantex). Recovery requires "
+                "specialized counsel licensed to interact with sanctioned "
+                "infrastructure — adds 6-12mo delay and ~70% reduction in "
+                "expected recoverable amount."
             ),
         ))
 
@@ -538,9 +606,21 @@ def _build_headline_summary(
         "discourage": "DISCOURAGE ENGAGEMENT (low expected return)",
         "reject": "REJECT (no recoverable target identified)",
     }[rec]
+    # v0.16.8 (round-9 scoring HIGH): when expected_net is negative
+    # (recovery < our fees), don't render the nonsensical
+    # "expected net recovery $-3,200.00" — switch to a "net cost"
+    # framing that the customer-facing letter can read sensibly.
+    if expected_net < 0:
+        net_phrase = (
+            f"expected net COST to victim ${abs(expected_net):,.2f} "
+            f"(estimated recovery is less than engagement + diagnostic "
+            "fees combined)"
+        )
+    else:
+        net_phrase = f"expected net recovery ${expected_net:,.2f}"
     base = (
-        f"{rec_phrase}: expected net recovery "
-        f"${expected_net:,.2f} from ${total_loss:,.2f} loss; "
+        f"{rec_phrase}: {net_phrase} "
+        f"from ${total_loss:,.2f} loss; "
         f"P(any recovery)≈{p_any:.0%}."
     )
     if top_issuer_breakdown:

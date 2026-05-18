@@ -130,14 +130,23 @@ def test_adai_delegates_to_dai_still_no_freeze() -> None:
 # ---- BTC wrappers ---- #
 
 
-def test_wbtc_yes_via_bitgo() -> None:
-    """WBTC has off-chain seizure via BitGo custodial reserves
-    even though the ERC-20 itself has no blacklist function.
-    Marked 'yes' with notes pointing at BitGo + merchant network."""
+def test_wbtc_limited_via_bitgo_bitglobal() -> None:
+    """WBTC custody migrated from sole-BitGo to a multi-jurisdictional
+    BitGo + BiT Global (HK+Singapore) structure in Aug 2024, prompting
+    Coinbase to delist WBTC.
+
+    v0.16.8 (round-9 audit HIGH): downgraded to `limited` from `yes`.
+    The previous "merchants can blacklist" claim no longer reflects the
+    post-migration control surface. Off-chain seizure path still exists
+    in theory but response posture is opaque. Operator-facing advice
+    has shifted to "use cbBTC (Coinbase) where the wrapped-BTC
+    flexibility is needed and a clean freeze path matters."
+    """
     db = load_issuer_db()
     entry = _by_symbol(db, "WBTC")
-    assert entry.freeze_capability == "yes"
-    assert entry.issuer == "BitGo"
+    assert entry.freeze_capability == "limited"
+    assert "BitGo" in entry.issuer
+    assert "BiT Global" in entry.issuer
     assert entry.primary_contact == "compliance@bitgo.com"
 
 

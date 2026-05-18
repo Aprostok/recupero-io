@@ -251,12 +251,12 @@
       "chain": "ethereum",
       "contract": "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599",
       "symbol": "WBTC",
-      "issuer": "BitGo",
-      "freeze_capability": "yes",
-      "freeze_notes": "BitGo custodies the underlying BTC backing WBTC. While the WBTC ERC-20 contract is permissionless, BitGo can refuse redemptions and (in coordination with merchants) blacklist addresses. Practical recovery path: contact BitGo + the merchant network with a court order.",
+      "issuer": "BitGo / BiT Global",
+      "freeze_capability": "limited",
+      "freeze_notes": "v0.16.8 update (round-9 audit): WBTC custody migrated from sole-BitGo control to a multi-jurisdictional structure with BiT Global (HK + Singapore) in Aug 2024, prompting Coinbase to delist WBTC. The previous 'merchants can blacklist' claim no longer reflects the current control surface — freeze requests now route through the new joint-custody structure and response posture is opaque post-migration. Treat as `limited`: try, document the request, but don't promise speed. Coinbase / Sky-Protocol cbBTC has become the preferred wrapped-BTC for cases that need a clean freeze path; see cbBTC entry above.",
       "primary_contact": "compliance@bitgo.com",
       "secondary_contact": "https://www.bitgo.com/legal",
-      "jurisdiction": "United States (Delaware)"
+      "jurisdiction": "United States (Delaware) / Hong Kong / Singapore"
     },
     {
       "chain": "ethereum",

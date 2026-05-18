@@ -130,7 +130,13 @@ _CONTRACT_TO_CG: dict[tuple[Chain, str], str] = {
     (Chain.ethereum, "0x514910771af9ca656af840dff83e8264ecf986ca"): "chainlink",
     (Chain.ethereum, "0x6982508145454ce325ddbe47a25d4ec3d2311933"): "pepe",
     (Chain.ethereum, "0x95ad61b0a150d79219dcf64e1e6cc01f0b64c4ce"): "shiba-inu",
+    # MATIC token on Ethereum mainnet — historical Polygon staking token.
+    # The 2024-09-04 redenomination migrated this to POL; CoinGecko keyed
+    # historical prices under "matic-network" but current price lives at
+    # "polygon-ecosystem-token". Keep BOTH mapping rows so historical
+    # incidents resolve correctly:
     (Chain.ethereum, "0x7d1afa7b718fb893db30a3abc0cfc608aacfebb0"): "matic-network",
+    (Chain.ethereum, "0x455e53cbb86018ac2b8092fdcd39d8444affc3f6"): "polygon-ecosystem-token",
     (Chain.ethereum, "0x1f9840a85d5af5bf1d1762f925bdaddc4201f984"): "uniswap",
     (Chain.ethereum, "0x6810e776880c02933d47db1b9fc05908e5386b96"): "gnosis",
     (Chain.ethereum, "0xae7ab96520de3a18e5e111b5eaab095312d7fe84"): "staked-ether",

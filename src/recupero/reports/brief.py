@@ -95,6 +95,7 @@ def check_brief_schema_version(brief: dict[str, Any]) -> str | None:
 # src/recupero/_common.py.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+    atomic_write_text,
 )
 
 
@@ -449,8 +450,15 @@ def generate_briefs(
     # silently overwrite the previous LE handoff with the last issuer's
     # version. Per-issuer filename preserves all of them.
     le_path = briefs_dir / f"le_handoff_{issuer_slug}_{brief_id}.html"
-    maple_path.write_text(maple_html, encoding="utf-8")
-    le_path.write_text(le_html, encoding="utf-8")
+    # v0.16.8 (round-9 output-artifacts HIGH): atomic writes via
+    # tempfile+os.replace. Pre-v0.16.8 these were direct `write_text`
+    # calls — a worker crash between writing maple_html and the
+    # manifest left an HTML on disk with no manifest pointer, and a
+    # concurrent bucket sync could pick up a half-written file on
+    # large multi-MB renders. The atomic-write helper guarantees the
+    # bucket either sees the previous version or the new one in full.
+    atomic_write_text(maple_path, maple_html)
+    atomic_write_text(le_path, le_html)
 
     manifest = {
         "brief_id": brief_id,
@@ -469,7 +477,8 @@ def generate_briefs(
         },
     }
     manifest_path = briefs_dir / f"manifest_{brief_id}.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    # Atomic — see comment on maple/le writes above.
+    atomic_write_text(manifest_path, json.dumps(manifest, indent=2))
 
     log.info("wrote issuer freeze request: %s", maple_path)
     log.info("wrote LE handoff: %s", le_path)

@@ -218,6 +218,26 @@ class EvmAdapter(ChainAdapter):
             # check was missing from the ERC-20 path pre-v0.16.7.
             if self._is_failed_tx(tx):
                 continue
+            # v0.16.8 (round-9 forensic HIGH): reject NFT-shaped rows on the
+            # fungible-token path. Etherscan's tokentx endpoint returns
+            # ERC-20 Transfer events, BUT some hybrid tokens (ERC-404,
+            # certain NFT-fractional contracts) emit ERC-20-shaped events
+            # alongside their NFT semantics. A `tokenID` field on the row
+            # is a smoking gun — non-fungible tokens carry an ID, fungible
+            # ones never do. Without this filter the fungible-amount math
+            # would treat a single NFT as N*10^decimals tokens. ERC-721/
+            # ERC-1155 forensic coverage requires the tokennfttx / token1155tx
+            # endpoints (separate work item).
+            if tx.get("tokenID") or tx.get("tokenId"):
+                continue
+            # Also reject rows that look like fee-on-transfer split-events
+            # to the same destination — those carry value=0 most of the
+            # time. value==0 is a no-op transfer either way.
+            try:
+                if int(tx.get("value", "0")) == 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
             if client_side_filter and int(tx.get("blockNumber", "0")) < start_block:
                 continue
             try:

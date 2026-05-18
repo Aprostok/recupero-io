@@ -97,6 +97,9 @@ AI_DRAFTED_KEYS = [
     "VICTIM_JURISDICTION",
     "DESTINATION_NOTES",
     "UNRECOVERABLE_ITEMS",
+    # v0.15.0: plain-English summary for the victim. Separate from
+    # the forensic narrative + legal first-person narrative.
+    "VICTIM_SUMMARY",
 ]
 
 # Fields the AI is given but does NOT draft (it just passes them through or
@@ -190,6 +193,23 @@ FEW_SHOT_EXAMPLE = {
             }
         ],
         "UNRECOVERABLE_ITEMS_AI_CONFIDENCE": "high",
+        "VICTIM_SUMMARY": (
+            "Here's what happened, in plain language. On April 19 your wallet "
+            "was emptied by a malicious token approval you signed on a fake "
+            "Uniswap site — a wallet-drainer scam. The chain trace identifies "
+            "where every dollar went: approximately $41,060 of your loss "
+            "(in USDC and USDT) currently sits at addresses that Circle and "
+            "Tether — the companies that issue those stablecoins — can "
+            "potentially freeze. The remaining $6,780 (in ETH) was sent to "
+            "Tornado Cash and is not recoverable through current methods. "
+            "Recupero has drafted compliance freeze letters for Circle and "
+            "Tether for your review; once you approve, they go to those "
+            "issuers' compliance teams. Expect a 1-4 week response window. "
+            "Honest expectation: issuer freezes are voluntary and not "
+            "guaranteed, but the dollar amounts and the documented theft "
+            "trail give us a strong basis for the requests."
+        ),
+        "VICTIM_SUMMARY_AI_CONFIDENCE": "high",
     },
 }
 
@@ -237,6 +257,29 @@ You must output ONLY a valid JSON object — no preamble, no markdown fences, no
   DESTINATION_NOTES_AI_CONFIDENCE
   UNRECOVERABLE_ITEMS                  (array of objects with `asset` and `reason` keys)
   UNRECOVERABLE_ITEMS_AI_CONFIDENCE
+  VICTIM_SUMMARY                       (string, 4-6 sentences, plain English; v0.15.0)
+  VICTIM_SUMMARY_AI_CONFIDENCE
+
+VICTIM_SUMMARY DRAFTING (v0.15.0 — IMPORTANT):
+
+VICTIM_SUMMARY is the plain-English paragraph the victim reads at the top of their Triage Report. It's NOT the forensic narrative (INCIDENT_NARRATIVE_RECUPERO) and NOT the legal-action first-person narrative (INCIDENT_NARRATIVE_FIRST_PERSON). It's the "here's what happened and what to expect" summary written for a non-technical reader.
+
+Structure (4-6 sentences, in this order):
+
+  1. Lead — what happened, in everyday language. NO jargon ("seed-phrase compromise" → "your wallet's recovery phrase was used to drain your funds"; "approval signature" → "you signed a transaction that gave the attacker permission to move your tokens").
+  2. Where the money went — name the dollar amounts and the categories (freezable / unrecoverable). Use real dollar figures, not percentages.
+  3. What Recupero has identified for action — issuers we can write to (Circle/Tether/Coinbase/Maple/Midas/etc.), per dollar amount. Concrete, not "we'll investigate."
+  4. Expected next steps — Recupero drafts the freeze letters, you approve, they go to the issuer compliance teams; typical response window 1-4 weeks.
+  5. Honest expectation-setting — issuer freezes are VOLUNTARY (not court-ordered). They're more likely with larger amounts + documented theft trail + LE engagement. Don't promise recovery; do say "the documented trail gives us a strong basis."
+  6. (Optional) — if the case has unrecoverable losses (DAI permissionless, mixer-deposited ETH, etc.), explicitly acknowledge them with the dollar amount so the victim isn't surprised later.
+
+Tone: warm but honest. Empathetic, not condescending. The victim has just lost real money; treat them like an adult. Avoid: corporate-speak, hedging that obscures what they need to know, technical terms without explanation.
+
+DO NOT include:
+  - The specific tx hashes or hex addresses (those are in the forensic brief, not the summary)
+  - Legal jargon ("subpoena," "MLAT," "compelled disclosure" — the operator reviews letters; the victim doesn't need to know the procedural terms)
+  - Promises of recovery
+  - Disclaimers that contradict the rest of the brief (e.g., "we may not be able to do anything" when freeze letters ARE being drafted)
 
 DESTINATION_NOTES ENUMERATION (v0.13.4 — IMPORTANT):
 
@@ -580,6 +623,12 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
         "VICTIM_JURISDICTION", "VICTIM_JURISDICTION_AI_CONFIDENCE",
         "DESTINATION_NOTES", "DESTINATION_NOTES_AI_CONFIDENCE",
         "UNRECOVERABLE_ITEMS", "UNRECOVERABLE_ITEMS_AI_CONFIDENCE",
+        # v0.15.0: plain-English summary for the victim's eyes.
+        # Separate from INCIDENT_NARRATIVE_RECUPERO (forensic) and
+        # INCIDENT_NARRATIVE_FIRST_PERSON (legal). VICTIM_SUMMARY is
+        # 4-6 sentences explaining what happened, where the funds are
+        # now, what Recupero is doing, and realistic expectations.
+        "VICTIM_SUMMARY", "VICTIM_SUMMARY_AI_CONFIDENCE",
     ]
     for k in required_keys:
         if k not in ai_obj:

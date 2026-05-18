@@ -75,6 +75,7 @@ EDITORIAL_TEMPLATE: dict[str, Any] = {
     "PRIMARY_CHAIN": "TODO: chain name for display (e.g. 'Ethereum')",
     "INCIDENT_NARRATIVE_RECUPERO": "TODO: Recupero-voice narrative (3-5 sentences, third person, describes what happened and what the trace shows).",
     "INCIDENT_NARRATIVE_FIRST_PERSON": "TODO: Victim-voice narrative (3-5 sentences, first person 'I', for the LE report and letters the victim signs).",
+    "VICTIM_SUMMARY": "TODO: Plain-English summary for the victim (4-6 sentences). Covers what happened, where the money went, what Recupero is doing, expected next steps, and honest expectation-setting. No jargon. v0.15.0+.",
     "VICTIM_ADDRESS_LINE1": "TODO: victim street address (e.g. '1428 Valencia Street, Apt 3B')",
     "VICTIM_ADDRESS_LINE2": "TODO: victim city/state/zip (e.g. 'San Francisco, CA 94110')",
     "VICTIM_JURISDICTION": "TODO: victim jurisdiction for LE report (e.g. 'USA (California)')",
@@ -1180,6 +1181,10 @@ def emit_brief(
 
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],
+        # v0.15.0: plain-English summary for the victim. Surfaces in
+        # the Triage Report front matter. Empty string when the
+        # editorial doesn't carry it (pre-v0.15.0 brief_editorial files).
+        "VICTIM_SUMMARY": editorial.get("VICTIM_SUMMARY", ""),
 
         "PERP_HUB": perp_hub,
         "DESTINATIONS": destinations,

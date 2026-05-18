@@ -52,16 +52,49 @@
 
 <div class="summary-box action">
   <p style="margin:0">
+    {# v0.16.2 (audit fix #3): evidence_mode-aware customer
+       summary. Pre-fix this hardcoded "currently held", which
+       would have been a false statement for V-CFI01 and similar
+       cases where the freezable evidence is historical-inflow
+       (the issuer's authority applies, but current balance is
+       what the freeze letter asks them to verify). #}
     <strong>Bottom line.</strong>
     Your wallet was traced across {{ summary.addresses_traced }} addresses on
-    {{ chain_display }}. We identified recoverable stolen funds totaling
+    {{ chain_display }}.
+    {% if aggregate_evidence_mode == "historical_only" %}
+    We identified stolen funds totaling
+    <strong>{{ total_recoverable_freezable_usd }}</strong>
+    documented as received at addresses under {{ freezable_issuer_count }}
+    {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
+    authority during the on-chain trace. Current balances at those
+    addresses are pending the issuers' verification — the freeze
+    letters we have prepared ask each issuer to confirm present-day
+    disposition and apply a precautionary hold on any remaining
+    balances.
+    {% if total_under_investigation_usd and total_under_investigation_usd != "$0.00" %}
+    An additional <strong>{{ total_under_investigation_usd }}</strong> is
+    identified in positions pending issuer verification.
+    {% endif %}
+    {% elif aggregate_evidence_mode == "mixed" %}
+    We identified recoverable stolen funds totaling
+    <strong>{{ total_recoverable_freezable_usd }}</strong>
+    at addresses under {{ freezable_issuer_count }}
+    {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
+    authority — a mix of confirmed current balances and
+    documented historical receipts (the per-issuer table below
+    shows which is which). Plus an additional
+    <strong>{{ total_under_investigation_usd }}</strong>
+    in positions pending issuer verification.
+    {% else %}
+    We identified recoverable stolen funds totaling
     <strong>{{ total_recoverable_freezable_usd }}</strong>
     currently held under {{ freezable_issuer_count }}
     {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
     authority, plus an additional
     <strong>{{ total_under_investigation_usd }}</strong>
-    in positions pending issuer verification. Your options for
-    pursuing recovery are explained in Section 3 below.
+    in positions pending issuer verification.
+    {% endif %}
+    Your options for pursuing recovery are explained in Section 3 below.
   </p>
 </div>
 
@@ -86,9 +119,27 @@
 
 <h2>2. Where the money went</h2>
 <p>
+  {% if aggregate_evidence_mode == "historical_only" %}
+  The trace documented the following stolen-fund flows into
+  addresses under authorities with technical ability to freeze
+  redemption. The freeze requests we have prepared ask each
+  issuer to verify present-day disposition of these balances and
+  apply a precautionary hold if the funds remain. These are your
+  most-likely recovery targets — even where current balances are
+  uncertain, the documented receipt establishes the basis for the
+  freeze request.
+  {% elif aggregate_evidence_mode == "mixed" %}
+  The trace identified the following stablecoin positions under
+  authorities that have technical ability to freeze redemption.
+  Some addresses carry confirmed current balances; others are
+  documented as historical receipts where the freeze letter asks
+  the issuer to verify current disposition. These are your
+  most-likely recovery targets.
+  {% else %}
   The trace identified the following stablecoin holdings under
   authorities that have technical ability to freeze redemption.
   These are your most-likely recovery targets.
+  {% endif %}
 </p>
 <table class="evidence">
   <thead>

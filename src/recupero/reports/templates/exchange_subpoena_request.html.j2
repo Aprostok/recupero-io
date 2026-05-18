@@ -136,7 +136,18 @@ on the public blockchain.
       <td>{{ flow.token_symbol }}</td>
       <td class="amount mono">{{ flow.flow_usd_value }}</td>
       <td class="amount mono">{{ flow.transfer_count }}</td>
-      <td>{{ flow.first_flow_at[:10] }}{% if flow.last_flow_at[:10] != flow.first_flow_at[:10] %} – {{ flow.last_flow_at[:10] }}{% endif %}</td>
+      <td>
+        {# v0.16.2 (audit fix #4): guard against None — the worker's
+           defensive serializer writes null when Transfer.block_time
+           is missing. Pre-fix the [:10] slice raised AttributeError
+           and crashed the whole render. #}
+        {% if flow.first_flow_at %}
+          {{ flow.first_flow_at[:10] }}
+          {% if flow.last_flow_at and flow.last_flow_at[:10] != flow.first_flow_at[:10] %}
+            – {{ flow.last_flow_at[:10] }}
+          {% endif %}
+        {% else %}—{% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>

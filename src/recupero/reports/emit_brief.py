@@ -508,32 +508,48 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             holding_usd = Decimal(str(a.get("usd_value") or "0"))
             status = _classify_address_status(addr, editorial_notes)
 
-            # v0.16.1 (audit follow-up): defensive downgrades so the
-            # brief never reports "$X currently freezable" against
-            # holdings that aren't actually freezable.
+            # v0.16.2 (audit fix #2): the v0.16.1 status-downgrade for
+            # historical_inflow over-corrected. Setting status=INVESTIGATE
+            # zeroed the per-issuer total_usd, which caused
+            # classify_recovery_prospects to route the case to
+            # unrecoverable — defeating the recoverable letter path and
+            # silently producing the same end-state as the original bug
+            # (no customer-facing recoverable artifact).
             #
-            # 1. If the issuer's capability is no/low (e.g., DAI / Sky
-            #    Protocol), the editorial may have labeled the address
-            #    FREEZABLE based on amounts alone — but the issuer
-            #    cannot actually freeze. Downgrade to UNRECOVERABLE.
+            # New policy:
+            #   * capability in (no, low) → UNRECOVERABLE (issuer can't
+            #     freeze regardless of evidence type)
+            #   * historical_inflow + capability in (yes, limited) →
+            #     keep status FREEZABLE. The freeze letter IS the
+            #     recovery mechanism for this case shape; the
+            #     letter template (v0.16.1) branches on evidence_mode
+            #     to use "received at" language instead of "currently
+            #     held". The customer summary template was extended
+            #     to do the same in v0.16.2.
             #
-            # 2. If the ask is `evidence_type='historical_inflow'`,
-            #    the `usd_value` reflects the trace inflow sum, NOT a
-            #    current balance. Even with a 🟩 FREEZABLE editorial
-            #    note, the customer letter shouldn't claim that USD
-            #    is currently held. Downgrade to INVESTIGATE so the
-            #    letter's preamble reads "issuer to investigate"
-            #    rather than "issuer to freeze the funds currently
-            #    held".
+            # The earlier concern — that a downstream consumer would
+            # claim "$X currently held" for historical_inflow — is
+            # addressed at the template layer (evidence_mode branch),
+            # not by dropping the USD figure from the aggregate.
             ask_capability = (a.get("freeze_capability") or "").lower()
-            ask_evidence_type = (
-                a.get("evidence_type") or "current_balance"
-            ).lower()
-            if status == "FREEZABLE":
-                if ask_capability in ("no", "low"):
-                    status = "UNRECOVERABLE"
-                elif ask_evidence_type == "historical_inflow":
-                    status = "INVESTIGATE"
+            if status == "FREEZABLE" and ask_capability in ("no", "low"):
+                status = "UNRECOVERABLE"
+
+            # v0.16.2 (audit fix #2): when AI editorial fails or
+            # cost-limits, editorial_notes is empty for every address,
+            # so _classify_address_status returns "UNKNOWN". The fall-
+            # through bucket at the elif/else below sends UNKNOWN to
+            # total_excluded_usd — zeroing per-issuer total_usd and
+            # routing the case to unrecoverable, recreating Jacob's
+            # original bug through a third side door.
+            #
+            # When the ask is at a freezable issuer (cap=yes/limited),
+            # missing editorial labels should NOT exclude the ask from
+            # the freezable bucket. The freeze_asks evidence is already
+            # there; the AI editorial just didn't get a chance to add
+            # color. Default to FREEZABLE so the case still routes.
+            if status == "UNKNOWN" and ask_capability in ("yes", "limited", "high", "medium"):
+                status = "FREEZABLE"
 
             if status == "FREEZABLE":
                 total_usd += holding_usd

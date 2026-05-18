@@ -193,8 +193,29 @@ def score_recovery(
             prior = min(prior, 0.50)
         elif capability in ("yes", "high"):
             prior = max(prior, 0.85)
-        expected_freezable += issuer_usd * Decimal(prior)
-        issuer_breakdown.append((issuer, issuer_usd, prior))
+        # v0.16.2 (audit fix #8): discount historical-inflow asks.
+        # Pre-fix the scorer applied the full P(freeze) prior to
+        # historical_inflow USD as if it were a confirmed current
+        # balance. For V-CFI01 that would overstate expected recovery
+        # by a factor that depends on what % of the historical inflow
+        # remains at the address today. Conservative discount:
+        # historical_only → 0.5x, mixed → 0.75x, current_balance_only → 1.0x.
+        # Issuer compliance can still investigate and recover when
+        # balances remain, but the prior on "balance remains 7 months
+        # later" is well below the prior on "freeze a confirmed
+        # current balance."
+        ev_mode = (entry.get("evidence_mode") or "current_balance_only").lower()
+        if ev_mode == "historical_only":
+            evidence_discount = Decimal("0.50")
+        elif ev_mode == "mixed":
+            evidence_discount = Decimal("0.75")
+        else:
+            evidence_discount = Decimal("1.00")
+        expected_freezable += issuer_usd * Decimal(prior) * evidence_discount
+        # Track the effective prior in the breakdown so the driver
+        # narrative below reports an honest number.
+        effective_prior = prior * float(evidence_discount)
+        issuer_breakdown.append((issuer, issuer_usd, effective_prior))
 
     if issuer_breakdown:
         top_issuer, top_usd, top_prior = max(

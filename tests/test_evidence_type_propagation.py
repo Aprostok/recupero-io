@@ -177,27 +177,34 @@ def test_jacobs_v_cfi01_freezable_shape() -> None:
     bundling 3 USDT addresses, Circle letter with 1 USDC address.
     All historical_inflow evidence.
 
-    v0.16.1 (audit follow-up) — corrected semantics:
+    v0.16.2 (corrected semantics after rolling back v0.16.1's
+    over-correction):
 
-    Even when the AI editorial marks a historical-inflow address as
-    🟩 FREEZABLE in the per-address note, `_extract_freezable` now
-    DOWNGRADES that to INVESTIGATE in the per-issuer aggregate. The
-    reason: `usd_value` on a historical_inflow ask represents the
-    trace INFLOW USD (not a current balance), so a per-issuer
-    aggregate of "total_usd" that sums those numbers would let the
-    customer letter claim "$X currently held" — a factually
-    incorrect statement that prompted Jacob's bug report.
+    Historical_inflow at a freezable issuer (cap=yes/limited)
+    STAYS as status=FREEZABLE in the brief — because:
+      1. The freeze letter IS the recovery mechanism for this case
+         shape; the issuer can investigate and freeze if balances
+         remain. From a process standpoint these ARE freezable.
+      2. The customer letter and freeze letter templates branch on
+         evidence_mode (per-issuer) to render the right language
+         ("received at" vs "currently held").
+      3. Downgrading to INVESTIGATE in v0.16.1 zeroed per-issuer
+         total_usd, which routed cases like V-CFI01 to unrecoverable
+         via classify_recovery_prospects — the same end-state as
+         the original Jacob bug, just for a different reason.
 
-    The contract instead:
-      - per-issuer total_usd            → 0 for historical-only mode
-      - per-issuer total_suspected_usd  → sum of historical-inflow $
-      - evidence_mode                   → 'historical_only'
-      - per-holding evidence_type       → 'historical_inflow'
-      - per-holding status              → 'INVESTIGATE' (downgraded)
+    The contract:
+      - per-issuer total_usd      → sums all FREEZABLE-status rows
+                                     including historical_inflow at
+                                     freezable issuers
+      - evidence_mode             → 'historical_only' / 'mixed' /
+                                     'current_balance_only'
+      - per-holding evidence_type → 'historical_inflow' or
+                                     'current_balance'
+      - per-holding status        → 'FREEZABLE' (or UNRECOVERABLE
+                                     if cap=no/low)
 
-    The freeze-letter template branches on evidence_mode to switch
-    language to "received at"/"investigate disposition" so the
-    letter is factually correct for these addresses.
+    Templates branch on evidence_mode for language.
     """
     freeze_asks = {
         "by_issuer": {
@@ -234,55 +241,47 @@ def test_jacobs_v_cfi01_freezable_shape() -> None:
                               editorial_notes=editorial_notes)
     by_issuer = {entry["issuer"]: entry for entry in out}
 
-    # Tether: 3 historical holdings → all downgraded to INVESTIGATE.
+    # Tether: 3 historical holdings, all FREEZABLE status (v0.16.2).
     tether = by_issuer["Tether"]
     assert tether["evidence_mode"] == "historical_only"
     assert tether["historical_count"] == 3
     assert tether["current_balance_count"] == 0
-    # The actionable headline number (currently held) is $0 —
-    # NOTHING is currently held because all evidence is historical.
+    # v0.16.2: total_usd sums historical_inflow at freezable issuers
+    # too — the freeze letter is the recovery mechanism for this
+    # case shape. The template branches on evidence_mode to render
+    # "received at" instead of "currently held". Routing the case
+    # to recoverable depends on this number flowing through.
+    expected_tether = (
+        Decimal("170687.26") + Decimal("82277.60") + Decimal("1597.70")
+    )
     actual_tether = Decimal(
         tether["total_usd"].replace("$", "").replace(",", "")
     )
-    assert actual_tether == Decimal("0"), (
-        f"historical-only evidence must NOT contribute to total_usd "
-        f"(the 'currently held' figure). Got: ${actual_tether}"
-    )
-    # The suspected/investigate number captures the historical receipt
-    # total — the letter still cites this as evidence of theft routing.
-    expected_suspected = (
-        Decimal("170687.26") + Decimal("82277.60") + Decimal("1597.70")
-    )
-    actual_suspected = Decimal(
-        tether["total_suspected_usd"].replace("$", "").replace(",", "")
-    )
-    assert actual_suspected == expected_suspected, (
-        f"total_suspected_usd must sum historical-inflow $. "
-        f"Got ${actual_suspected}, expected ${expected_suspected}"
+    assert actual_tether == expected_tether, (
+        f"total_usd must sum FREEZABLE-status historical_inflow asks "
+        f"at freezable issuers (v0.16.2). Got ${actual_tether}, "
+        f"expected ${expected_tether}"
     )
     # Earliest observation Oct 9.
     assert tether["earliest_observed"] == "2025-10-09T00:29:00Z"
 
-    # Circle: 1 historical holding.
+    # Circle: 1 historical holding, still FREEZABLE.
     circle = by_issuer["Circle"]
     assert circle["evidence_mode"] == "historical_only"
     assert circle["historical_count"] == 1
     assert circle["current_balance_count"] == 0
-    # Same semantics: historical-only contributes to suspected, not total.
     circle_total = Decimal(circle["total_usd"].replace("$", "").replace(",", ""))
-    assert circle_total == Decimal("0")
+    assert circle_total == Decimal("8881.31")
 
-    # And every per-holding entry must carry evidence_type so the
-    # letter template can render the "current" / "historical" pill
-    # per-row, plus the per-row status reflects the v0.16.1 downgrade.
+    # Every per-holding entry carries evidence_type. Per-row status
+    # is FREEZABLE for historical_inflow at freezable issuers
+    # (template uses evidence_type, not status, to render language).
     for entry in out:
         for h in entry["holdings"]:
             assert h["evidence_type"] in ("current_balance", "historical_inflow")
-            if h["evidence_type"] == "historical_inflow":
-                # v0.16.1: AI editorial may say FREEZABLE but the
-                # aggregator downgrades the per-row status too so the
-                # letter's Status column reads INVESTIGATE.
-                assert h["status"] == "INVESTIGATE", (
-                    f"historical-inflow row must be downgraded to "
-                    f"INVESTIGATE. Got status={h['status']!r}"
-                )
+            # All freezable issuer + non-zero historical_inflow rows
+            # in this fixture are FREEZABLE-status post v0.16.2.
+            assert h["status"] == "FREEZABLE", (
+                f"v0.16.2: historical_inflow at freezable issuer must "
+                f"keep status FREEZABLE. Got status={h['status']!r}"
+            )

@@ -96,7 +96,14 @@ def test_ctx_empty_dict_returns_none() -> None:
 
 def test_ctx_basic_shape_locked() -> None:
     """The output shape is the contract the template binds to. Lock
-    every top-level key so accidental edits in brief.py fail loudly."""
+    every top-level key so accidental edits in brief.py fail loudly.
+
+    v0.16.2 (audit fix #1): added evidence_mode, historical_count,
+    current_balance_count, earliest_observed so the issuer-letter
+    template's evidence_mode branches (added in v0.16.1) actually
+    receive the keys they reference. Pre-fix those branches were
+    dead code and every letter fell through to the "currently held"
+    {% else %} clause."""
     out = _build_issuer_freezable_ctx(_circle_freeze_brief_entry(), Chain.ethereum)
     assert out is not None
     assert set(out.keys()) == {
@@ -105,6 +112,9 @@ def test_ctx_basic_shape_locked() -> None:
         "holdings", "freezable_holdings", "investigate_holdings",
         "has_freezable", "has_investigate",
         "freezable_count", "investigate_count", "total_count",
+        # v0.16.2 evidence-mode aggregates
+        "evidence_mode", "historical_count", "current_balance_count",
+        "earliest_observed",
     }
 
 

@@ -673,8 +673,21 @@ def _build_issuer_freezable_ctx(
         return None
     holdings_in = raw.get("holdings") or []
     holdings_out: list[dict] = []
+    n_historical = 0
+    n_current = 0
     for h in holdings_in:
         addr = h.get("address", "")
+        # v0.16.2 (audit fix #1): propagate evidence_type + observed_at
+        # per-row so the issuer freeze letter template's section-4
+        # Evidence column renders the right "current"/"historical" pill.
+        # Pre-fix these were dropped here, making the v0.16.1 template
+        # branches dead code — every letter fell through the {% else %}
+        # clause and said "currently held" regardless of evidence type.
+        ev_type = h.get("evidence_type", "current_balance")
+        if ev_type == "historical_inflow":
+            n_historical += 1
+        else:
+            n_current += 1
         holdings_out.append({
             "address": addr,
             "address_short": _short_addr(addr),
@@ -682,10 +695,27 @@ def _build_issuer_freezable_ctx(
             "amount": h.get("amount", "—"),
             "usd": h.get("usd", "—"),
             "status": h.get("status", "INVESTIGATE"),
+            "evidence_type": ev_type,
+            "observed_at": h.get("observed_at"),
         })
 
     freezable = [h for h in holdings_out if h["status"] == "FREEZABLE"]
     investigate = [h for h in holdings_out if h["status"] == "INVESTIGATE"]
+
+    # v0.16.2 (audit fix #1 cont.): aggregate evidence_mode. If raw
+    # carries an explicit evidence_mode (set by emit_brief._extract_
+    # freezable), prefer that; otherwise derive from the per-row counts
+    # so this still works for skip_editorial fallback callers that
+    # didn't populate the aggregate.
+    explicit_mode = raw.get("evidence_mode")
+    if explicit_mode in ("current_balance_only", "historical_only", "mixed"):
+        evidence_mode = explicit_mode
+    elif n_historical > 0 and n_current > 0:
+        evidence_mode = "mixed"
+    elif n_historical > 0:
+        evidence_mode = "historical_only"
+    else:
+        evidence_mode = "current_balance_only"
 
     return {
         "token": raw.get("token") or "—",
@@ -700,6 +730,13 @@ def _build_issuer_freezable_ctx(
         "freezable_count": len(freezable),
         "investigate_count": len(investigate),
         "total_count": len(holdings_out),
+        # v0.16.2: drive the issuer-letter evidence_mode branches.
+        # Pre-fix these keys were absent, making the v0.16.1 template
+        # template branches inert.
+        "evidence_mode": evidence_mode,
+        "historical_count": n_historical,
+        "current_balance_count": n_current,
+        "earliest_observed": raw.get("earliest_observed"),
     }
 
 

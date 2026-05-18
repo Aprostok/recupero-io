@@ -253,6 +253,13 @@ def _build_freezable_table(
             else:
                 capability = "LOW"
                 cap_class = "low"
+            # v0.16.2 (audit fix #6): thread evidence_type through to
+            # the trace_report so the operator can tell a historical-
+            # inflow row apart from a confirmed current balance. The
+            # USD column on a historical_inflow row is the trace
+            # INFLOW sum, not a present-day balance — operators
+            # reading the report shouldn't conflate the two.
+            ev_type = h.get("evidence_type") or "current_balance"
             rows.append({
                 "address": address,
                 "address_short": _short_addr(address),
@@ -263,6 +270,11 @@ def _build_freezable_table(
                 "issuer": issuer,
                 "capability": capability,
                 "capability_class": cap_class,
+                "evidence_type": ev_type,
+                "evidence_label": (
+                    "historical receipt" if ev_type == "historical_inflow"
+                    else "current balance"
+                ),
             })
     # Sort highest-USD first within the table — operator wants to see
     # the biggest freezable holdings at top.

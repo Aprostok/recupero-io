@@ -680,6 +680,40 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
                 if "asset" not in item or "reason" not in item:
                     problems.append(f"UNRECOVERABLE_ITEMS[{i}] missing 'asset' or 'reason'")
 
+    # v0.16.2 (audit fix #10): scan DESTINATION_NOTES for hedging
+    # phrases the SYSTEM_PROMPT forbids when the address has a
+    # confirmed on-chain balance. The retry loop in run_ai_editorial
+    # picks up problems and re-prompts the model. Without this, an
+    # LLM that ignores the prompt rule ships hedged language straight
+    # to the customer letter — recreating Jacob's Bug-2 complaint.
+    _FORBIDDEN_PHRASES_NEAR_FREEZABLE = (
+        "if the balance remains",
+        "if balances remain",
+        "should be confirmed before issuer outreach",
+        "current balance should be confirmed",
+        "may be viable",
+    )
+    notes = ai_obj.get("DESTINATION_NOTES")
+    if isinstance(notes, dict):
+        for addr, note_text in notes.items():
+            if not isinstance(note_text, str):
+                continue
+            note_lower = note_text.lower()
+            # Only flag if the note ALSO claims FREEZABLE — the model
+            # can legitimately hedge on INVESTIGATE-status addresses.
+            if "freezable" not in note_lower:
+                continue
+            for phrase in _FORBIDDEN_PHRASES_NEAR_FREEZABLE:
+                if phrase in note_lower:
+                    problems.append(
+                        f"DESTINATION_NOTES[{addr}] contains forbidden "
+                        f"hedging phrase {phrase!r} on a FREEZABLE-tagged "
+                        f"address. Per SYSTEM_PROMPT (v0.16.0 rule), "
+                        f"write definitive 'currently holds $X' language "
+                        f"when balance_verified_on_chain is True."
+                    )
+                    break  # one problem per note is enough
+
     return problems
 
 

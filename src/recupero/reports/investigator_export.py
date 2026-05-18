@@ -274,24 +274,55 @@ def _findings_from_freezable(brief: dict[str, Any]) -> list[InvestigatorFinding]
         for holding in entry.get("holdings") or []:
             addr = (holding.get("address") or "").lower()
             usd_amt = holding.get("usd", "")
+            # v0.16.2 (audit fix #7): surface evidence_type to the
+            # investigator. Pre-fix the export hid whether the USD
+            # number was a confirmed current balance or a historical-
+            # receipt sum — an analyst reading findings.json saw
+            # "Freezable $170K USDT" and assumed currently held, when
+            # for V-CFI01-shape cases the address received-then-moved-on.
+            ev_type = holding.get("evidence_type") or "current_balance"
+            observed_at = holding.get("observed_at")
+            evidence_phrase = (
+                "historical receipt"
+                if ev_type == "historical_inflow"
+                else "current balance"
+            )
+            headline = (
+                f"{headline_verb} {usd_amt} {token} at {addr[:10]}... "
+                f"via {issuer} (capability: {capability or 'unknown'}; "
+                f"{evidence_phrase})"
+            )
+            existing_note = entry.get("freeze_note") or ""
+            notes_parts: list[str] = []
+            if ev_type == "historical_inflow":
+                if observed_at:
+                    notes_parts.append(
+                        f"Evidence: historical_inflow observed at "
+                        f"{observed_at}; current balance pending issuer "
+                        f"verification."
+                    )
+                else:
+                    notes_parts.append(
+                        "Evidence: historical_inflow; current balance "
+                        "pending issuer verification."
+                    )
+            if existing_note:
+                notes_parts.append(existing_note)
             out.append(InvestigatorFinding(
                 finding_type=risk_category,
                 address=addr,
                 chain=brief.get("PRIMARY_CHAIN", "").lower() or "ethereum",
                 severity=sev,
-                headline=(
-                    f"{headline_verb} {usd_amt} {token} at {addr[:10]}... "
-                    f"via {issuer} (capability: {capability or 'unknown'})"
-                ),
+                headline=headline,
                 counterparty=issuer.lower().replace(" ", "_"),
                 counterparty_name=issuer,
                 risk_category=risk_category,
                 amount_usd=str(usd_amt),
                 tx_hash="",
                 explorer_url=holding.get("explorer_url", ""),
-                timestamp_iso="",
+                timestamp_iso=observed_at or "",
                 follow_up_url="",
-                notes=entry.get("freeze_note", ""),
+                notes=" ".join(notes_parts),
             ))
     return out
 

@@ -170,6 +170,27 @@ def _build_context(
     freezable_entries = freeze_brief.get("FREEZABLE") or []
     freezable_issuer_count = len(freezable_entries)
 
+    # v0.16.2 (audit fix #5): compute aggregate evidence_mode so the
+    # engagement letter's "Background" paragraph branches on
+    # "received at" vs "currently held" language. Mirrors the same
+    # aggregation logic in _victim_summary._build_context.
+    n_with_current = 0
+    n_with_historical = 0
+    for entry in freezable_entries:
+        entry_mode = entry.get("evidence_mode")
+        if entry_mode in ("current_balance_only", "mixed"):
+            n_with_current += 1
+        if entry_mode in ("historical_only", "mixed"):
+            n_with_historical += 1
+    if n_with_current > 0 and n_with_historical == 0:
+        aggregate_evidence_mode = "current_balance_only"
+    elif n_with_historical > 0 and n_with_current == 0:
+        aggregate_evidence_mode = "historical_only"
+    elif n_with_current > 0 and n_with_historical > 0:
+        aggregate_evidence_mode = "mixed"
+    else:
+        aggregate_evidence_mode = "current_balance_only"  # default
+
     return {
         "case_id": case.case_id,
         "case": case,
@@ -182,6 +203,7 @@ def _build_context(
         "total_under_investigation_usd": _fmt_usd(
             total_suspected_usd - total_freezable_usd
         ),
+        "aggregate_evidence_mode": aggregate_evidence_mode,
         # Fee text rendered to dollar form for the template.
         # Decoupled model (v0.7.0): diagnostic + engagement are
         # separate prices, NOT credited against each other.

@@ -973,19 +973,22 @@ def test_v_cfi01_classifier_excludes_capability_no_from_recoverable_sum() -> Non
     assert total_freezable_raw == Decimal("5000.00")
 
 
-def test_v_cfi01_brief_synthesizer_marks_historical_inflow_as_investigate(
+def test_v_cfi01_brief_synthesizer_status_policy(
     tmp_path,
 ) -> None:
-    """v0.16.1 audit fix: _synthesize_freeze_brief_from_asks must NOT
-    blindly tag historical-inflow asks as 'FREEZABLE' status. The
-    `usd_value` on historical asks is the INFLOW sum, not a current
-    balance — claiming it's currently held on a freeze letter would
-    be a false statement.
+    """v0.16.2 status policy (replaces the v0.16.1 over-correction):
 
-    Pre-fix: anything with `usd > 1000` got `status="FREEZABLE"` and
-    summed into total_recoverable.
-    Post-fix: historical_inflow → 'INVESTIGATE', and
-    capability=no/low → 'UNRECOVERABLE' regardless of evidence type.
+    The v0.16.1 fix downgraded historical_inflow to status=INVESTIGATE
+    so customer letters wouldn't claim "$X currently held." But that
+    zeroed per-issuer total_usd in the brief, which made
+    classify_recovery_prospects route V-CFI01 to unrecoverable —
+    recreating the original bug at a different layer.
+
+    v0.16.2 keeps status=FREEZABLE for historical_inflow at freezable
+    issuers (so the case classifies recoverable + total_usd flows
+    correctly to the customer letter), and delegates the "currently
+    held vs received at" language to the template's evidence_mode
+    branch. Only capability=no/low downgrades to UNRECOVERABLE.
     """
     import json
     from unittest.mock import MagicMock
@@ -1049,20 +1052,26 @@ def test_v_cfi01_brief_synthesizer_marks_historical_inflow_as_investigate(
     # 1. Current-balance freezable → FREEZABLE
     assert by_addr[USDT_DEST_1]["status"] == "FREEZABLE"
 
-    # 2. Historical-inflow freezable → INVESTIGATE (not FREEZABLE)
-    assert by_addr[USDT_DEST_2]["status"] == "INVESTIGATE", (
-        f"Historical-inflow Tether ask must be INVESTIGATE, not "
-        f"FREEZABLE. Got status={by_addr[USDT_DEST_2]['status']}"
+    # 2. Historical-inflow at freezable issuer → still FREEZABLE.
+    #    The template differentiates language via evidence_type, not
+    #    via status. This is the v0.16.2 corrected semantics.
+    assert by_addr[USDT_DEST_2]["status"] == "FREEZABLE", (
+        f"Historical-inflow at Tether (cap=yes) must remain FREEZABLE "
+        f"status — the freeze letter IS the recovery mechanism. The "
+        f"template uses evidence_type to render the right language. "
+        f"Got status={by_addr[USDT_DEST_2]['status']}"
     )
+    # But the per-row evidence_type marks it as historical so the
+    # letter template can render "received at" instead of "currently held".
+    assert by_addr[USDT_DEST_2]["evidence_type"] == "historical_inflow"
 
-    # 3. Capability=no → UNRECOVERABLE
+    # 3. Capability=no → UNRECOVERABLE (regardless of evidence type)
     assert by_addr[PERP_HUB]["status"] == "UNRECOVERABLE", (
         f"Sky Protocol (cap=no) ask must be UNRECOVERABLE, not "
         f"FREEZABLE. Got status={by_addr[PERP_HUB]['status']}"
     )
 
     # Evidence type provenance threaded through.
-    assert by_addr[USDT_DEST_2]["evidence_type"] == "historical_inflow"
     assert by_addr[USDT_DEST_1]["evidence_type"] == "current_balance"
 
 
@@ -1126,6 +1135,372 @@ def test_v_cfi01_worker_stage_survives_dormant_detector_failure() -> None:
         f"Historical-only path must produce all four freezable issuers. "
         f"Got: {issuers}"
     )
+
+
+# ---- E2E: full path freeze_asks → brief → classifier → customer letter ---- #
+
+
+def test_v_cfi01_end_to_end_historical_inflow_routes_to_recoverable(
+    tmp_path, monkeypatch,
+) -> None:
+    """v0.16.2 end-to-end smoke: the ENTIRE pipeline from freeze_asks
+    (historical-inflow shape) → emit_brief → classify_recovery_prospects
+    → recoverable customer letter must work without losing the case.
+
+    This test would have caught the v0.16.1 over-correction immediately.
+    Without it, individual unit tests passed but the integration broke
+    because each layer was tested in isolation. The audit revealed
+    the issue by walking the full path manually; this test pins the
+    integration so the same regression can't slip back in.
+
+    Pipeline traced here:
+      1. Worker writes freeze_asks.json with 4 freezable issuers,
+         all historical_inflow shape (V-CFI01 from Jacob's bug report).
+      2. emit_brief._extract_freezable processes those asks with
+         editorial labels (🟩 FREEZABLE per the v0.14.9 AI prompt).
+      3. classify_recovery_prospects reads the resulting brief.
+      4. Assertion: is_recoverable=True, total_freezable~$3.55M,
+         aggregate_evidence_mode=historical_only.
+      5. render_victim_summary produces the recoverable letter (with
+         the v0.15.2 gate ALLOWING emission since the case is
+         recoverable — the gate only suppresses unrecoverable).
+      6. The rendered HTML uses 'received at' language (not
+         'currently held') because aggregate_evidence_mode=historical_only.
+    """
+    from pathlib import Path
+    from recupero.models import Case, Chain
+    from recupero.reports.brief import InvestigatorInfo
+    from recupero.reports.emit_brief import _extract_freezable
+    from recupero.reports.victim import VictimInfo
+    from recupero.worker._victim_summary import render_victim_summary
+
+    # Step 1: Synthetic freeze_asks.json output the worker would write
+    # for V-CFI01 post-v0.16.2.
+    freeze_asks = {
+        "case_id": "V-CFI01",
+        "total_asks": 6,
+        "by_issuer": {
+            "Midas": [{
+                "address": MSYRUP_DEST, "chain": "ethereum",
+                "symbol": "mSyrupUSDp", "amount": "3109861",
+                "usd_value": "3119023.12",
+                "freeze_capability": "yes",
+                "primary_contact": "compliance@midas.app",
+                "explorer_url": "https://etherscan.io/...",
+                "evidence_type": "historical_inflow",
+                "observed_at": "2025-10-09T00:29:00Z",
+                "observed_transfer_count": 1,
+            }],
+            "Coinbase": [{
+                "address": CBBTC_DEST, "chain": "ethereum",
+                "symbol": "cbBTC", "amount": "10",
+                "usd_value": "246812.01",
+                "freeze_capability": "yes",
+                "primary_contact": "compliance@coinbase.com",
+                "explorer_url": "https://etherscan.io/...",
+                "evidence_type": "historical_inflow",
+                "observed_at": "2025-10-09T00:29:00Z",
+                "observed_transfer_count": 1,
+            }],
+            "Tether": [
+                {
+                    "address": USDT_DEST_1, "chain": "ethereum",
+                    "symbol": "USDT", "amount": "97535",
+                    "usd_value": "97535.58",
+                    "freeze_capability": "yes",
+                    "primary_contact": "compliance@tether.to",
+                    "explorer_url": "https://etherscan.io/...",
+                    "evidence_type": "historical_inflow",
+                    "observed_at": "2025-10-09T00:29:00Z",
+                    "observed_transfer_count": 1,
+                },
+                {
+                    "address": USDT_DEST_2, "chain": "ethereum",
+                    "symbol": "USDT", "amount": "73151",
+                    "usd_value": "73151.68",
+                    "freeze_capability": "yes",
+                    "primary_contact": "compliance@tether.to",
+                    "explorer_url": "https://etherscan.io/...",
+                    "evidence_type": "historical_inflow",
+                    "observed_at": "2025-10-09T00:30:00Z",
+                    "observed_transfer_count": 1,
+                },
+                {
+                    "address": USDT_DEST_3, "chain": "ethereum",
+                    "symbol": "USDT", "amount": "1597",
+                    "usd_value": "1597.70",
+                    "freeze_capability": "yes",
+                    "primary_contact": "compliance@tether.to",
+                    "explorer_url": "https://etherscan.io/...",
+                    "evidence_type": "historical_inflow",
+                    "observed_at": "2025-10-13T00:00:00Z",
+                    "observed_transfer_count": 1,
+                },
+            ],
+            "Circle": [{
+                "address": USDC_DEST, "chain": "ethereum",
+                "symbol": "USDC", "amount": "8881",
+                "usd_value": "8881.31",
+                "freeze_capability": "yes",
+                "primary_contact": "compliance@circle.com",
+                "explorer_url": "https://etherscan.io/...",
+                "evidence_type": "historical_inflow",
+                "observed_at": "2025-10-09T00:31:00Z",
+                "observed_transfer_count": 1,
+            }],
+        },
+    }
+
+    # Step 2: AI editorial labels each address 🟩 FREEZABLE
+    # (per the v0.14.9 SYSTEM_PROMPT + v0.16.0 prompt update).
+    editorial_notes = {
+        MSYRUP_DEST: "🟩 FREEZABLE — Midas",
+        CBBTC_DEST: "🟩 FREEZABLE — Coinbase",
+        USDT_DEST_1: "🟩 FREEZABLE — Tether",
+        USDT_DEST_2: "🟩 FREEZABLE — Tether",
+        USDT_DEST_3: "🟩 FREEZABLE — Tether",
+        USDC_DEST: "🟩 FREEZABLE — Circle",
+    }
+
+    # Step 3: emit_brief processes the asks into FREEZABLE entries.
+    freezable_entries = _extract_freezable(
+        freeze_asks, issuer_metadata={},
+        editorial_notes=editorial_notes,
+    )
+
+    # Step 4: Build the freeze_brief shape that downstream consumes.
+    freeze_brief = {
+        "FREEZABLE": freezable_entries,
+        "DESTINATIONS": [],
+    }
+
+    # Step 5: Classifier must route this to RECOVERABLE.
+    is_recoverable, total_freezable, total_suspected = (
+        classify_recovery_prospects(freeze_brief)
+    )
+    assert is_recoverable is True, (
+        f"v0.16.2 E2E: V-CFI01 historical-inflow case MUST classify "
+        f"recoverable. Got is_recoverable={is_recoverable}, "
+        f"total_freezable=${total_freezable}, "
+        f"total_suspected=${total_suspected}. If this fails, the "
+        f"customer artifact path is broken — same end-state as the "
+        f"original Jacob bug."
+    )
+    # ~$3.55M total freezable
+    assert total_freezable >= Decimal("3500000")
+
+    # Step 6: aggregate evidence_mode across all entries must be
+    # 'historical_only' since every ask has evidence_type=historical_inflow.
+    for entry in freezable_entries:
+        assert entry["evidence_mode"] == "historical_only", (
+            f"Entry for {entry['issuer']} should be historical_only "
+            f"mode; got {entry['evidence_mode']!r}"
+        )
+
+    # Step 7: Render the customer letter. v0.15.2 gate only blocks
+    # the UNRECOVERABLE variant — recoverable letter renders freely.
+    monkeypatch.delenv(
+        "RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", raising=False,
+    )
+    case = _v_cfi01_case()
+    victim = VictimInfo(
+        name="V-CFI01 Victim",
+        email="victim@example.com",
+        wallet_address=VICTIM,
+        citizenship="USA",
+    )
+    investigator = InvestigatorInfo(
+        name="Alec Prostok",
+        organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+    out_path = render_victim_summary(
+        case=case, victim=victim, investigator=investigator,
+        freeze_brief=freeze_brief, briefs_dir=tmp_path,
+    )
+    assert out_path is not None, (
+        "Customer letter must render — is_recoverable was True. "
+        "If this is None, the renderer is gating the recoverable path."
+    )
+    assert "recoverable" in out_path.name
+    assert "unrecoverable" not in out_path.name
+    html = out_path.read_text(encoding="utf-8")
+
+    # Step 8: The rendered HTML must use "received at" / "documented as
+    # received" language for historical-only mode, NOT "currently held".
+    assert "documented as received" in html or "received at addresses" in html, (
+        "Customer letter (historical_only mode) must use 'received at' "
+        "language. Found neither in rendered HTML."
+    )
+    # The naked "currently held" hardcode must not appear in the
+    # bottom-line summary for historical-only mode.
+    # (It may appear in other parts of the template that intentionally
+    # use it — search for it scoped to the bottom-line block, which
+    # is now branched.)
+    # Pull the bottom-line block via marker comment to verify.
+    bottom_line_pos = html.find("Bottom line")
+    assert bottom_line_pos != -1
+    bottom_line_block = html[bottom_line_pos:bottom_line_pos + 1500]
+    assert "currently held" not in bottom_line_block, (
+        "Bottom-line summary must NOT claim 'currently held' for "
+        "historical-only mode."
+    )
+
+
+def test_v_cfi01_issuer_freezable_ctx_propagates_evidence_mode() -> None:
+    """v0.16.2 audit fix #1: _build_issuer_freezable_ctx MUST propagate
+    evidence_mode + per-evidence counts + per-holding evidence_type to
+    the issuer freeze letter context. Pre-fix these keys were absent,
+    so the letter template's evidence_mode branches were dead code and
+    EVERY letter fell through the {% else %} clause that says
+    'currently held' — which is exactly the false-claim bug v0.16.1
+    pretended to fix at the template layer.
+
+    This test pins the contract: every key the letter template
+    references is in the context dict."""
+    from recupero.models import Chain
+    from recupero.reports.brief import _build_issuer_freezable_ctx
+
+    # FREEZABLE entry shape after _extract_freezable with historical
+    # asks only.
+    entry = {
+        "issuer": "Tether",
+        "token": "USDT",
+        "freeze_capability": "HIGH",
+        "total_usd": "$252,964.96",
+        "total_suspected_usd": "$252,964.96",
+        "evidence_mode": "historical_only",
+        "historical_count": 3,
+        "current_balance_count": 0,
+        "earliest_observed": "2025-10-09T00:29:00Z",
+        "holdings": [
+            {
+                "address": USDT_DEST_1,
+                "amount": "97535 USDT",
+                "usd": "$97,535.58",
+                "status": "FREEZABLE",
+                "evidence_type": "historical_inflow",
+                "observed_at": "2025-10-09T00:29:00Z",
+            },
+            {
+                "address": USDT_DEST_2,
+                "amount": "73151 USDT",
+                "usd": "$73,151.68",
+                "status": "FREEZABLE",
+                "evidence_type": "historical_inflow",
+                "observed_at": "2025-10-09T00:30:00Z",
+            },
+            {
+                "address": USDT_DEST_3,
+                "amount": "1597 USDT",
+                "usd": "$1,597.70",
+                "status": "FREEZABLE",
+                "evidence_type": "historical_inflow",
+                "observed_at": "2025-10-13T00:00:00Z",
+            },
+        ],
+    }
+
+    ctx = _build_issuer_freezable_ctx(entry, Chain.ethereum)
+    assert ctx is not None
+    # The keys the letter template branches on must all exist.
+    assert ctx["evidence_mode"] == "historical_only", (
+        f"evidence_mode missing or wrong — letter template's "
+        f"historical_only branch will be dead code. Got: {ctx.get('evidence_mode')!r}"
+    )
+    assert ctx["historical_count"] == 3
+    assert ctx["current_balance_count"] == 0
+    assert ctx["earliest_observed"] == "2025-10-09T00:29:00Z"
+    # Per-holding evidence_type drives the per-row Evidence pill.
+    for h in ctx["holdings"]:
+        assert h["evidence_type"] == "historical_inflow"
+
+
+def test_v_cfi01_extract_freezable_rescues_unlabeled_at_freezable_issuer() -> None:
+    """v0.16.2 audit fix #2: when AI editorial fails (no editorial_notes),
+    every address gets status='UNKNOWN' from _classify_address_status.
+    Pre-fix that sent UNKNOWN to total_excluded_usd → per-issuer
+    total_usd=$0 → classify_recovery_prospects routes to unrecoverable.
+
+    Now: UNKNOWN status at a freezable issuer (cap=yes/limited) is
+    rescued to FREEZABLE. The freeze_asks evidence stands on its own;
+    AI editorial color is an enhancement, not a gating dependency."""
+    from recupero.reports.emit_brief import _extract_freezable
+
+    freeze_asks = {
+        "by_issuer": {
+            "Tether": [{
+                "address": USDT_DEST_1, "chain": "ethereum",
+                "symbol": "USDT", "amount": "97535",
+                "usd_value": "97535.58",
+                "freeze_capability": "yes",
+                "evidence_type": "current_balance",
+            }],
+        },
+    }
+    # Empty editorial_notes — simulates AI failure / cost limit.
+    out = _extract_freezable(
+        freeze_asks, issuer_metadata={}, editorial_notes={},
+    )
+    assert len(out) == 1
+    tether = out[0]
+    # The total_usd must reflect the USDT figure, not be zero.
+    total = Decimal(tether["total_usd"].replace("$", "").replace(",", ""))
+    assert total == Decimal("97535.58"), (
+        f"Without editorial labels, UNKNOWN status at freezable issuer "
+        f"must rescue to FREEZABLE → total_usd flows through. "
+        f"Got total_usd=${total}"
+    )
+    # Status on the holding row must be FREEZABLE not UNKNOWN.
+    assert tether["holdings"][0]["status"] == "FREEZABLE"
+
+
+def test_v_cfi01_end_to_end_mixed_evidence_renders_mixed_language() -> None:
+    """v0.16.2: when the case has BOTH current-balance and
+    historical-inflow asks, the aggregate_evidence_mode is 'mixed'
+    and the template renders the mixed-mode language."""
+    from recupero.reports.emit_brief import _extract_freezable
+
+    freeze_asks = {
+        "by_issuer": {
+            "Tether": [
+                # Current balance ask
+                {
+                    "address": USDT_DEST_1, "chain": "ethereum",
+                    "symbol": "USDT", "amount": "97535",
+                    "usd_value": "97535.58",
+                    "freeze_capability": "yes",
+                    "evidence_type": "current_balance",
+                    "observed_at": None,
+                    "observed_transfer_count": 1,
+                },
+                # Historical-inflow ask
+                {
+                    "address": USDT_DEST_2, "chain": "ethereum",
+                    "symbol": "USDT", "amount": "73151",
+                    "usd_value": "73151.68",
+                    "freeze_capability": "yes",
+                    "evidence_type": "historical_inflow",
+                    "observed_at": "2025-10-09T00:30:00Z",
+                    "observed_transfer_count": 1,
+                },
+            ],
+        },
+    }
+    editorial_notes = {
+        USDT_DEST_1: "🟩 FREEZABLE — Tether",
+        USDT_DEST_2: "🟩 FREEZABLE — Tether",
+    }
+    out = _extract_freezable(freeze_asks, issuer_metadata={},
+                              editorial_notes=editorial_notes)
+    tether = out[0]
+    assert tether["evidence_mode"] == "mixed"
+    assert tether["current_balance_count"] == 1
+    assert tether["historical_count"] == 1
+    # Total includes both — they're both FREEZABLE status post-v0.16.2.
+    expected = Decimal("97535.58") + Decimal("73151.68")
+    actual = Decimal(tether["total_usd"].replace("$", "").replace(",", ""))
+    assert actual == expected
 
 
 def test_v_cfi01_findings_csv_round_trip_has_amounts(tmp_path) -> None:

@@ -53,17 +53,40 @@
 
 <h2>1. Background</h2>
 <p>
+  {# v0.16.2 (audit fix #5): evidence_mode branch parallel to the
+     customer-summary letter. Pre-fix this hardcoded "held under" —
+     a factual misstatement when the freezable evidence is
+     historical-inflow only. #}
   On {{ diagnostic_completed_at }}, Recupero completed a forensic
   trace of the wallet at <span class="mono">{{ victim.wallet_address }}</span>
   on {{ chain_display }} pursuant to your $499 initial-assessment
-  engagement. The trace identified
-  <strong>{{ total_freezable_usd }}</strong>
+  engagement.
+  {% if aggregate_evidence_mode == "historical_only" %}
+  The trace documented <strong>{{ total_freezable_usd }}</strong>
+  in stolen funds received at addresses under
+  {{ freezable_issuer_count }} {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
+  protocol-level authority. The freeze requests we have prepared ask
+  each issuer to verify present-day disposition and apply a
+  precautionary hold on any remaining balances.
+  {% elif aggregate_evidence_mode == "mixed" %}
+  The trace identified <strong>{{ total_freezable_usd }}</strong>
+  in recoverable stolen funds at addresses under
+  {{ freezable_issuer_count }} {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
+  protocol-level authority — a mix of confirmed current balances and
+  documented historical receipts.
+  {% else %}
+  The trace identified <strong>{{ total_freezable_usd }}</strong>
   in confirmed-recoverable stolen funds held under
   {{ freezable_issuer_count }} {{ "issuer's" if freezable_issuer_count == 1 else "issuers'" }}
-  protocol-level authority, plus an additional
+  protocol-level authority.
+  {% endif %}
+  {% if total_under_investigation_usd and total_under_investigation_usd != "$0.00" %}
+  An additional
   <strong>{{ total_under_investigation_usd }}</strong>
-  in positions pending issuer KYC verification. The findings are
-  documented in the diagnostic report previously delivered to you.
+  is identified in positions pending issuer KYC verification.
+  {% endif %}
+  The findings are documented in the diagnostic report previously
+  delivered to you.
 </p>
 <p>
   You have indicated you wish to engage Recupero for active recovery

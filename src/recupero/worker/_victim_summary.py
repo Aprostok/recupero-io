@@ -290,17 +290,44 @@ def _build_context(
     # Per-issuer summary table data
     freezable_entries = freeze_brief.get("FREEZABLE") or []
     freezable_summary: list[dict[str, Any]] = []
+    # v0.16.2 (audit fix #3): aggregate evidence_mode across all
+    # freezable entries so the customer-facing template can render
+    # the right "currently held" vs "received at" language. Mirrors
+    # the issuer-freeze-letter template's v0.16.1 evidence-mode
+    # branching. Without this, a V-CFI01-shape case (all
+    # historical_inflow) would have its customer letter falsely
+    # claim "$3.55M currently held" when the addresses received
+    # the tokens historically; current balance may have moved on.
+    n_with_current = 0
+    n_with_historical = 0
     for entry in freezable_entries:
         freezable_usd = _parse_usd_string(entry.get("total_usd"))
         suspected_usd = _parse_usd_string(entry.get("total_suspected_usd"))
         suspected_only = suspected_usd - freezable_usd
+        entry_mode = entry.get("evidence_mode")
+        if entry_mode in ("current_balance_only", "mixed"):
+            n_with_current += 1
+        if entry_mode in ("historical_only", "mixed"):
+            n_with_historical += 1
         freezable_summary.append({
             "issuer": entry.get("issuer", "?"),
             "token": entry.get("token", "?"),
             "total_usd_freezable": entry.get("total_usd") or "$0",
             "total_usd_suspected_only": _fmt_usd(suspected_only) if suspected_only > 0 else "—",
             "freeze_capability": entry.get("freeze_capability") or "UNKNOWN",
+            # Per-entry mode so the customer-letter template can
+            # mark each row in the holdings table appropriately.
+            "evidence_mode": entry_mode or "current_balance_only",
         })
+
+    if n_with_current > 0 and n_with_historical == 0:
+        aggregate_evidence_mode = "current_balance_only"
+    elif n_with_historical > 0 and n_with_current == 0:
+        aggregate_evidence_mode = "historical_only"
+    elif n_with_current > 0 and n_with_historical > 0:
+        aggregate_evidence_mode = "mixed"
+    else:
+        aggregate_evidence_mode = "current_balance_only"  # default
 
     return {
         "case_id": case.case_id,
@@ -317,6 +344,11 @@ def _build_context(
         "freezable_issuer_count": len(freezable_summary),
         "total_recoverable_freezable_usd": _fmt_usd(total_freezable_usd),
         "total_under_investigation_usd": _fmt_usd(total_suspected_usd - total_freezable_usd),
+        # v0.16.2: aggregate evidence_mode for the template's
+        # bottom-line summary box. "historical_only" → letter says
+        # "received at" and "pending issuer verification of current
+        # balances". "mixed" / "current_balance_only" → unchanged.
+        "aggregate_evidence_mode": aggregate_evidence_mode,
         "flow_filename": flow_filename,
         "engagement_fee_text": engagement_fee_text,
         "contingency_pct": contingency_pct,

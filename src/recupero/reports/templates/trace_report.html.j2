@@ -191,6 +191,7 @@
       <th>Asset</th>
       <th>Balance</th>
       <th>USD Value</th>
+      <th>Evidence</th>
       <th>Issuer</th>
       <th>Freezability</th>
     </tr>
@@ -202,6 +203,18 @@
       <td>{{ f.symbol }}</td>
       <td class="mono">{{ f.amount }}</td>
       <td class="amount">{{ f.usd }}</td>
+      <td>
+        {# v0.16.2 (audit fix #6): evidence column tells the operator
+           whether the USD figure is a confirmed current balance or
+           a historical-receipt sum from the trace. Critical for
+           V-CFI01-shape cases where dormant detection failed and
+           the historical synthesizer fired. #}
+        {% if f.evidence_type == "historical_inflow" %}
+        <span class="evidence-pill historical">historical receipt</span>
+        {% else %}
+        <span class="evidence-pill current">current balance</span>
+        {% endif %}
+      </td>
       <td>{{ f.issuer }}</td>
       <td>
         <span class="freeze-badge {{ f.capability_class }}">

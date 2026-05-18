@@ -892,22 +892,22 @@ def _synthesize_freeze_brief_from_asks(
                 "holdings": [],
                 "total_usd": Decimal(0),
             })
-            # v0.16.1 (audit): status now keys off evidence_type, not
-            # just the USD amount. Historical-inflow asks carry the
-            # INFLOW USD in `usd_value`, which is NOT the current
-            # balance — tagging them as 'FREEZABLE' caused customer
-            # letters to claim "$X currently held" when the funds had
-            # actually moved on. Now historical-inflow → 'INVESTIGATE'
-            # so the letter / brief language reflects "issuer is asked
-            # to investigate and freeze if balances remain" rather
-            # than "freeze the $X currently sitting there".
-            # Also: non-freezable issuers (cap=no/low) get 'UNRECOVERABLE'
-            # rather than 'FREEZABLE' even with current balance.
+            # v0.16.2 (audit fix #2): same policy as emit_brief.py:
+            #   * capability=no/low → UNRECOVERABLE
+            #   * historical_inflow at a freezable issuer → keep
+            #     FREEZABLE; the freeze letter template renders the
+            #     "received at" / "investigate present-day disposition"
+            #     language based on the per-row evidence_type field.
+            #   * Anything below the $1K dust line → INVESTIGATE
+            #
+            # The v0.16.1 status=INVESTIGATE-for-historical-inflow
+            # downgrade was rolled back because it zeroed per-issuer
+            # total_usd in the brief, causing classify_recovery_prospects
+            # to route V-CFI01 (all historical_inflow) to unrecoverable
+            # — recreating the original bug from a different angle.
             evidence_type = (e.get("evidence_type") or "current_balance").lower()
             if cap_raw in ("no", "low"):
                 status = "UNRECOVERABLE"
-            elif evidence_type == "historical_inflow":
-                status = "INVESTIGATE"
             elif usd > 1000:
                 status = "FREEZABLE"
             else:
@@ -930,6 +930,40 @@ def _synthesize_freeze_brief_from_asks(
             token_entry["total_usd"] += usd
         for token_entry in by_token.values():
             token_entry["total_usd"] = f"${token_entry['total_usd']:,.2f}"
+            # v0.16.2 (audit fix #3): compute aggregate evidence_mode +
+            # per-mode counts so downstream consumers (issuer letter
+            # template via _build_issuer_freezable_ctx, customer
+            # summary via _victim_summary._build_context) can branch
+            # on the right "currently held" vs "received at" language.
+            # Pre-fix the skip_editorial path silently rendered every
+            # customer artifact with the current_balance_only default.
+            n_historical = sum(
+                1 for h in token_entry["holdings"]
+                if h.get("evidence_type") == "historical_inflow"
+            )
+            n_current = len(token_entry["holdings"]) - n_historical
+            if n_historical > 0 and n_current == 0:
+                ev_mode = "historical_only"
+            elif n_historical > 0 and n_current > 0:
+                ev_mode = "mixed"
+            else:
+                ev_mode = "current_balance_only"
+            token_entry["evidence_mode"] = ev_mode
+            token_entry["historical_count"] = n_historical
+            token_entry["current_balance_count"] = n_current
+            # Earliest historical observation across holdings, mirrors
+            # emit_brief.py's main path.
+            earliest: str | None = None
+            for h in token_entry["holdings"]:
+                obs = h.get("observed_at")
+                if not obs:
+                    continue
+                if earliest is None or obs < earliest:
+                    earliest = obs
+            token_entry["earliest_observed"] = earliest
+            # Per-issuer total_suspected_usd mirrors emit_brief.py
+            # (FREEZABLE + INVESTIGATE), used by classify_recovery_prospects.
+            token_entry["total_suspected_usd"] = token_entry["total_usd"]
             freezable.append(token_entry)
 
     out = {

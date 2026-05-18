@@ -103,7 +103,11 @@ def _build_context(
     label: str | None,
 ) -> dict[str, Any]:
     chain_str = case.chain.value
-    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
+    # v0.16.10 (round-9 output LOW): include explicit "Z" UTC suffix.
+    # Pre-v0.16.10 the bare "2026-05-18 04:22:17" rendering was
+    # locale-ambiguous on the trace-report cover page; an LE reader
+    # 6 months later couldn't tell whether the time was UTC or local.
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     wallet_addr = case.seed_address
 
     stats = _compute_stats(case)

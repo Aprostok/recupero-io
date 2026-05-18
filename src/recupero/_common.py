@@ -161,6 +161,34 @@ def aggregate_evidence_mode_from_entries(
 # ---- Atomic file writes ---- #
 
 
+# ---- Display helpers ---- #
+
+
+def short_addr(addr: str | None) -> str:
+    """Truncate an address for display: 0xAAAAbb...XXXXyyyy -> 0xAAAAbb…yyyy.
+
+    v0.16.10 (round-9 output-artifacts MEDIUM): canonical implementation.
+    Pre-v0.16.10 every module had its own (slightly different) truncator:
+    reports/brief.py used 0xABCDEFGH…WXYZ (8+ellipsis+4); reports/
+    emit_brief.py used 0xAAAAbb…XXXXyyyy (6+ellipsis+4). The same
+    address rendered differently in different artifacts, breaking
+    operator diffing across the brief and LE handoff.
+
+    Convention: 6 leading + ellipsis + 4 trailing for any address >=
+    12 chars; shorter strings are returned unchanged. Works for EVM
+    hex, Solana/Tron/Bitcoin base58 — all consumers can pass through
+    without per-chain branching.
+    """
+    if not addr:
+        return ""
+    if len(addr) < 12:
+        return addr
+    return f"{addr[:6]}…{addr[-4:]}"
+
+
+# ---- Atomic file writes ---- #
+
+
 def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write `content` to `path` atomically.
 
@@ -188,6 +216,7 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
 __all__ = (
     "CAPABILITY_DISPLAY",
     "ADDRESS_EXPLORER_BY_CHAIN",
+    "short_addr",
     "capability_display",
     "capability_blocks_freeze",
     "capability_is_freezable",

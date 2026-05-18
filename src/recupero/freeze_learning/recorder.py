@@ -374,13 +374,18 @@ def load_learned_priors(dsn: str) -> dict[str, IssuerPrior]:
                     "threshold": _MIN_SAMPLE_SIZE_FOR_LEARNED_PRIOR,
                 })
                 for row in cur.fetchall():
+                    # v0.16.10 (round-9 scoring LOW): clamp probabilities
+                    # to [0, 1] on load. A corrupt DB row carrying p=1.5
+                    # or p=-0.3 (data-import bug, manual SQL accident)
+                    # would otherwise propagate into the scorer and
+                    # produce out-of-bounds confidence intervals.
                     out[row["issuer"]] = IssuerPrior(
                         issuer=row["issuer"],
                         letter_language=row["letter_language"],
                         sample_size=row["sample_size"],
-                        p_any_freeze=float(row["p_any_freeze"] or 0),
-                        p_full_freeze=float(row["p_full_freeze"] or 0),
-                        p_returned_to_victim=float(
+                        p_any_freeze=_clamp01(row["p_any_freeze"] or 0),
+                        p_full_freeze=_clamp01(row["p_full_freeze"] or 0),
+                        p_returned_to_victim=_clamp01(
                             row["p_returned_to_victim"] or 0
                         ),
                         avg_response_hours=float(row["avg_response_hours"])
@@ -392,6 +397,23 @@ def load_learned_priors(dsn: str) -> dict[str, IssuerPrior]:
     except Exception as exc:  # noqa: BLE001
         log.warning("load_learned_priors failed: %s", exc)
     return out
+
+
+def _clamp01(v: Any) -> float:
+    """Coerce a value to a float in [0, 1].
+
+    v0.16.10 (round-9 scoring LOW): defensive bound on DB-sourced
+    probabilities; see load_learned_priors call site for context.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    if f < 0.0:
+        return 0.0
+    if f > 1.0:
+        return 1.0
+    return f
 
 
 __all__ = (

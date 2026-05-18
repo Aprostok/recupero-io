@@ -44,12 +44,32 @@ class TestFileCacheRoundTrip:
         assert result["usd"] == "1234.56"
 
     def test_path_chars_sanitized(self, tmp_path: Path) -> None:
+        """v0.16.10 (round-9 forensic MEDIUM): keys hashed to fixed-
+        length filenames to prevent the `a:b` / `a/b` collision the
+        old replace-chars approach had. The exact filename is opaque
+        SHA1 hex; we just assert one file is created + readable."""
         cache = PriceCache(tmp_path)
-        cache.put("coingecko:simple:ethereum:2026-05-10", {"usd": "1.00"})
-        # Path replaces : with _
+        key = "coingecko:simple:ethereum:2026-05-10"
+        cache.put(key, {"usd": "1.00"})
         files = list(tmp_path.glob("*.json"))
         assert len(files) == 1
-        assert "coingecko_simple_ethereum" in files[0].name
+        # Filename is 16-char hex + .json suffix
+        assert files[0].suffix == ".json"
+        assert len(files[0].stem) == 16
+        # Round-trip via the same key works
+        result = cache.get(key)
+        assert result == {"usd": "1.00"}
+
+    def test_path_keys_with_collision_chars_dont_clash(
+        self, tmp_path: Path,
+    ) -> None:
+        """Different keys → different files (the bug pre-v0.16.10 was
+        `a:b` and `a/b` hashing to the same path)."""
+        cache = PriceCache(tmp_path)
+        cache.put("a:b", {"usd": "1.00"})
+        cache.put("a/b", {"usd": "2.00"})
+        assert cache.get("a:b") == {"usd": "1.00"}
+        assert cache.get("a/b") == {"usd": "2.00"}
 
     def test_corrupted_file_treated_as_miss(self, tmp_path: Path) -> None:
         cache = PriceCache(tmp_path)

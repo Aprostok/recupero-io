@@ -162,13 +162,18 @@ def test_ctx_explorer_url_built() -> None:
 
 
 def test_ctx_short_address_helper() -> None:
-    """``_short_addr`` truncates 40-char hex to 0xABCDEF…1234 for
-    inline display in section 4 of the letter (the full address is
-    also rendered, but the short form is used in tooltips / status
-    badges)."""
+    """``_short_addr`` truncates an address for inline display.
+
+    v0.16.10 (round-9 output-artifacts MEDIUM): both reports/brief.py
+    and reports/emit_brief.py now delegate to the SAME canonical
+    helper in recupero._common. Format is 6 leading + ellipsis +
+    4 trailing for any address >= 12 chars. Previously the two
+    modules used different prefix lengths.
+    """
     out = _build_issuer_freezable_ctx(_circle_freeze_brief_entry(), Chain.ethereum)
     first = out["holdings"][0]
-    assert first["address_short"] == "0x016606…49Ee"
+    # 6 leading hex + ellipsis + 4 trailing.
+    assert first["address_short"] == "0x0166…49Ee"
 
 
 def test_ctx_only_investigate_no_freezable() -> None:
@@ -227,8 +232,9 @@ def test_ctx_missing_holdings_returns_empty_list() -> None:
 
 
 def test_short_addr_normal_hex() -> None:
+    """v0.16.10: canonical format is 6 leading + 4 trailing."""
     out = _short_addr("0x" + "a" * 40)
-    assert out == "0xaaaaaa…aaaa"
+    assert out == "0xaaaa…aaaa"
 
 
 def test_short_addr_short_input_passes_through() -> None:

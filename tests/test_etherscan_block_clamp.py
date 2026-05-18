@@ -74,9 +74,14 @@ def test_pre_genesis_case_insensitive_match(client: EtherscanClient) -> None:
 def test_other_error_strings_still_raise(client: EtherscanClient) -> None:
     """Don't accidentally swallow OTHER errors as "no closest block".
     A genuinely-broken response should still surface so the operator
-    can investigate."""
+    can investigate.
+
+    v0.16.10: non-integer results now raise EtherscanError instead
+    of bare ValueError (carries the original value in the message).
+    """
+    from recupero.chains.ethereum.etherscan import EtherscanError
     with patch.object(client, "_call", return_value={"result": "Rate limit exceeded"}):
-        with pytest.raises(ValueError):
+        with pytest.raises((EtherscanError, ValueError)):
             client.get_block_number_by_time(1700000000)
 
 

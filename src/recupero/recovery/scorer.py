@@ -445,20 +445,36 @@ def score_recovery(
             ))
 
     # --- Bridge / DEX friction ---
+    #
+    # v0.16.10 (round-9 scoring MEDIUM): smooth threshold. Pre-v0.16.10
+    # the friction multiplier only fired at `cross_chain >= 2 OR dex >= 3`,
+    # producing a step discontinuity — a case with 1 bridge + 2 swaps
+    # scored IDENTICALLY to a clean case, then 1 bridge + 3 swaps
+    # jumped to 20% friction. Engagement decisions on boundary cases
+    # flipped on a single hop. Now: per-hop linear contribution,
+    # capped at 30%, with NO threshold gate (any complexity reduces
+    # expected recovery proportionally).
     cross_chain_count = len(brief.get("CROSS_CHAIN_HANDOFFS") or [])
     dex_count = len(brief.get("DEX_SWAPS") or [])
-    if cross_chain_count >= 2 or dex_count >= 3:
-        friction = min(0.3, 0.05 * (cross_chain_count + dex_count))
+    total_hops = cross_chain_count + dex_count
+    if total_hops > 0:
+        # 5% per hop, cap at 30% total. A single hop = 5%, two = 10%,
+        # six+ = 30% (saturation). Matches the prior 0.05 * count math
+        # but starts firing at hop 1 instead of at the old thresholds.
+        friction = min(0.30, 0.05 * total_hops)
         expected_recovered *= Decimal(str(1.0 - friction))
-        drivers.append(RecoveryDriver(
-            factor="trace_complexity",
-            direction="negative",
-            weight=friction,
-            description=(
-                f"{cross_chain_count} bridge hop(s) + {dex_count} DEX swap(s) "
-                f"add trace complexity (~{friction*100:.0f}% recovery friction)."
-            ),
-        ))
+        # Only surface a driver narrative when friction is meaningful
+        # (~10%+). Below that it's signal noise on the brief.
+        if friction >= 0.10:
+            drivers.append(RecoveryDriver(
+                factor="trace_complexity",
+                direction="negative",
+                weight=friction,
+                description=(
+                    f"{cross_chain_count} bridge hop(s) + {dex_count} DEX swap(s) "
+                    f"add trace complexity (~{friction*100:.0f}% recovery friction)."
+                ),
+            ))
 
     # --- Confidence interval ---
     # Heuristic: spread is wider when expected is small (more

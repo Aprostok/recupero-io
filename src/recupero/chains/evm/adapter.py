@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from eth_utils import to_checksum_address
@@ -276,9 +276,35 @@ class EvmAdapter(ChainAdapter):
 
     # ---------- Normalizers ----------
 
+    @staticmethod
+    def _decode_block_time(ts_raw: Any) -> datetime:
+        """Decode an Etherscan-supplied timestamp safely.
+
+        v0.16.10 (round-9 forensic LOW): reject implausible values
+        before they land in case.json. A malformed/forged upstream
+        response with `timeStamp=9999999999` (year 2286) was previously
+        accepted blind, and the bad block_time would silently propagate
+        into evidence and into the brief. Cap at "now + 1 day" to
+        tolerate small clock skew while rejecting obvious garbage.
+        """
+        try:
+            ts_int = int(ts_raw)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"non-integer timeStamp: {ts_raw!r}") from e
+        if ts_int < 0:
+            raise ValueError(f"negative timeStamp: {ts_int}")
+        block_time = datetime.fromtimestamp(ts_int, tz=UTC)
+        # Allow a 24h forward window for clock-skew tolerance.
+        if block_time > datetime.now(UTC) + timedelta(days=1):
+            raise ValueError(
+                f"future timeStamp {block_time.isoformat()} (>{ts_int}) — "
+                "upstream response likely tampered"
+            )
+        return block_time
+
     def _normalize_native(self, tx: dict[str, Any], source: str) -> dict[str, Any]:
         block_number = int(tx["blockNumber"])
-        block_time = datetime.fromtimestamp(int(tx["timeStamp"]), tz=UTC)
+        block_time = self._decode_block_time(tx["timeStamp"])
         token = TokenRef(
             chain=self.chain, contract=None,
             symbol=self.profile.native_symbol,
@@ -301,7 +327,7 @@ class EvmAdapter(ChainAdapter):
 
     def _normalize_erc20(self, tx: dict[str, Any]) -> dict[str, Any]:
         block_number = int(tx["blockNumber"])
-        block_time = datetime.fromtimestamp(int(tx["timeStamp"]), tz=UTC)
+        block_time = self._decode_block_time(tx["timeStamp"])
         # tokenDecimal: refuse to guess. Etherscan returns "" on rare tokens it
         # hasn't enriched; pre-v0.16.7 we defaulted to 18 which silently
         # divides a 6-decimal token (USDC/USDT) by 10^12 — the amount_decimal

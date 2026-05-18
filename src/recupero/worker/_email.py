@@ -81,6 +81,17 @@ _DEFAULT_FROM_NAME = "Recupero Investigation Services"
 _RESEND_RETRY_WAITS_SEC = (5, 15, 30)
 
 
+_TRUTHY_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on", "y", "t"})
+
+
+def _is_truthy(s: str) -> bool:
+    """Return True if `s` looks like a boolean-true env var value.
+
+    Accepts: "1", "true", "yes", "on", "y", "t" (case-insensitive).
+    """
+    return (s or "").strip().lower() in _TRUTHY_VALUES
+
+
 def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
     """Send a Resend API request with retry-on-transient logic.
 
@@ -193,16 +204,20 @@ def send_email(
     intended attachments before calling.
     """
     # Honor the disable switch for local dev / testing.
-    if os.environ.get("RECUPERO_DISABLE_EMAIL", "").strip() == "1":
+    # v0.16.10 (round-9 worker LOW): accept any truthy variant
+    # ("1", "true", "yes", "on", case-insensitive). Pre-v0.16.10 only
+    # the literal "1" worked, so operators who set "true" expected
+    # disabled email but got real sends.
+    if _is_truthy(os.environ.get("RECUPERO_DISABLE_EMAIL", "")):
         log.info(
-            "RECUPERO_DISABLE_EMAIL=1 — skipping send to %s "
+            "RECUPERO_DISABLE_EMAIL set — skipping send to %s "
             "(would have sent: %s, type=%s, attachments=%d)",
             to, subject, email_type,
             len(attachments) if attachments else 0,
         )
         return EmailResult(
             success=False, message_id=None,
-            error="skipped: RECUPERO_DISABLE_EMAIL=1",
+            error="skipped: RECUPERO_DISABLE_EMAIL",
             skipped=True,
         )
 

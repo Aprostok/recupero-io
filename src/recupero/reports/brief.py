@@ -100,13 +100,22 @@ from recupero._common import (
 
 
 def _address_explorer_url(address: str, chain: Chain | str | None) -> str:
-    """Build a click-through URL for ``address`` on the appropriate
-    chain explorer. Falls back to Etherscan when chain is unknown."""
+    """Build a click-through URL for ``address`` on the chain explorer.
+
+    v0.16.10 (round-9 output MEDIUM): for unknown chains return empty
+    string instead of Etherscan-by-default. Pre-v0.16.10 a Solana /
+    Tron / Bitcoin / future-chain address would get an etherscan.io
+    link that 404s on click — compliance reviewers see "view on
+    Etherscan" buttons that don't work, an impression of sloppy work.
+    Templates already wrap explorer URLs in `{% if %}` so empty
+    strings render gracefully (no link instead of broken link).
+    """
     if not address:
         return ""
-    chain_str = chain.value if isinstance(chain, Chain) else (chain or "ethereum")
-    prefix = _ADDRESS_EXPLORER_BY_CHAIN.get(chain_str,
-                                            "https://etherscan.io/address/")
+    chain_str = chain.value if isinstance(chain, Chain) else (chain or "")
+    prefix = _ADDRESS_EXPLORER_BY_CHAIN.get(chain_str)
+    if not prefix:
+        return ""  # unknown chain → no link (template renders the address as text)
     return f"{prefix}{address}"
 
 
@@ -460,6 +469,15 @@ def generate_briefs(
     atomic_write_text(maple_path, maple_html)
     atomic_write_text(le_path, le_html)
 
+    # v0.16.10 (round-9 output-artifacts MEDIUM): SHA256 of each output
+    # in the manifest. Tamper-detection now works WITHOUT re-fetching
+    # the bytes from the bucket — a chain-of-custody verifier can read
+    # manifest.json, hash the local files, and compare. Hex-encoded
+    # SHA256 (64 chars) per file.
+    import hashlib
+    maple_hash = hashlib.sha256(maple_html.encode("utf-8")).hexdigest()
+    le_hash = hashlib.sha256(le_html.encode("utf-8")).hexdigest()
+
     manifest = {
         "brief_id": brief_id,
         "generated_at": now.isoformat(),
@@ -474,6 +492,10 @@ def generate_briefs(
         "outputs": {
             "issuer_freeze_request": str(maple_path),
             "le_handoff": str(le_path),
+        },
+        "output_sha256": {
+            "issuer_freeze_request": maple_hash,
+            "le_handoff": le_hash,
         },
     }
     manifest_path = briefs_dir / f"manifest_{brief_id}.json"
@@ -850,10 +872,15 @@ def _build_issuer_freezable_ctx(
 
 
 def _short_addr(addr: str) -> str:
-    """Truncate hex addresses for inline display: 0xABCDEF…1234."""
-    if not addr or len(addr) < 12:
-        return addr or ""
-    return f"{addr[:8]}…{addr[-4:]}"
+    """Truncate addresses for inline display.
+
+    v0.16.10: delegates to recupero._common.short_addr so the brief
+    and the LE handoff render addresses identically. Previously this
+    used 8-char prefix while emit_brief.py used 6-char prefix; the
+    same address rendered differently across artifacts.
+    """
+    from recupero._common import short_addr as _canonical
+    return _canonical(addr)
 
 
 def _build_le_routing_ctx(

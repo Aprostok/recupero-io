@@ -72,11 +72,24 @@ def build_webhook_body(payload: AlertPayload) -> str:
         datetime.now(UTC).isoformat(timespec="seconds")
         .replace("+00:00", "Z")
     )
+    # v0.16.10 (round-9 worker MEDIUM): idempotency_key. A worker crash
+    # between dispatch and cursor-update could redeliver the same alert
+    # next tick; customers' webhook handlers should dedup on this key.
+    # Stable across retries because it's derived purely from the
+    # alert content (subscription_id + chain + tx_hash). The
+    # `trigger_type` is intentionally NOT in the key because the same
+    # tx could legitimately trigger different alert types on different
+    # subscriptions (those want distinct deliveries).
+    idempotency_key = (
+        f"{payload.subscription_id}:{payload.chain}:{payload.tx_hash}"
+        f":{payload.trigger_type}"
+    )
     body = {
         "subscription_id": str(payload.subscription_id),
         "trigger_type": payload.trigger_type,
         "address": payload.address,
         "chain": payload.chain,
+        "idempotency_key": idempotency_key,
         "alert": {
             "tx_hash": payload.tx_hash,
             "block_time": payload.block_time_iso,

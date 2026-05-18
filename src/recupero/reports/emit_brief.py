@@ -130,10 +130,14 @@ def _parse_usd_string(s: str) -> Decimal:
 
 
 def short_addr(addr: str) -> str:
-    """Shorten an address for display: 0xAAAAbbbb...XXXXyyyy -> 0xAA…yy (ethscan style)."""
-    if len(addr) <= 10:
-        return addr
-    return f"{addr[:6]}…{addr[-4:]}"
+    """Shorten an address for display.
+
+    v0.16.10: delegates to recupero._common.short_addr so the brief
+    and the LE handoff render the same address identically (was
+    diverging — see the comment on _common.short_addr).
+    """
+    from recupero._common import short_addr as _canonical
+    return _canonical(addr)
 
 
 def usd(v: Decimal | float | int | None) -> str:
@@ -459,26 +463,36 @@ def _mechanical_destination_note(
 
 
 def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:
-    """Classify an address based on the AI editorial's emoji-prefixed note.
+    """Classify an address based on the AI editorial's status prefix.
 
     Returns one of:
-      "FREEZABLE"    — 🟩 prefix; address is confirmed in-scope and freezable
-      "INVESTIGATE"  — 🟧 prefix; needs reviewer judgment, do NOT count in headline freezable total
-      "UNRECOVERABLE" — ⬛ prefix; mixer/DEX-aggregator/bystander contract; exclude from freezable total
-      "EXCHANGE"     — 🟦 prefix; CEX deposit address; goes through MLAT/subpoena, not issuer freeze
-      "TRANSIT"      — has a note but no emoji prefix; perpetrator-controlled but no current balance
-      "UNKNOWN"      — no editorial note for this address (default conservative)
+      "FREEZABLE"    — 🟩 or [FREEZABLE] prefix; in-scope and freezable
+      "INVESTIGATE"  — 🟧 or [INVESTIGATE] prefix; needs reviewer judgment
+      "UNRECOVERABLE" — ⬛ or [UNRECOVERABLE] prefix; mixer/bystander/DEX agg
+      "EXCHANGE"     — 🟦 or [EXCHANGE] prefix; CEX deposit (MLAT path)
+      "TRANSIT"      — has a note but no recognized prefix
+      "UNKNOWN"      — no editorial note for this address (conservative default)
 
-    The classification drives whether a holding contributes to TOTAL_FREEZABLE_USD
-    (only "FREEZABLE" status counts). Other statuses are surfaced separately so
-    the JS builder can render them without including them in headline numbers.
+    v0.16.10 (round-9 output-artifacts MEDIUM): ALSO recognize ASCII
+    `[FLAG]` tags in addition to the emoji prefixes. Pre-v0.16.10 the
+    classifier was emoji-only; Windows operators opening
+    brief_editorial.json in cp1252-defaulting tools saw mojibake
+    where the emoji should have been, and `_classify_address_status`
+    dropped every holding to "UNKNOWN" → TOTAL_FREEZABLE_USD = $0
+    on the brief despite real freezable holdings. ASCII tags are the
+    durable canonical form; emojis remain a valid presentation
+    affordance.
+
+    Classification drives whether a holding contributes to
+    TOTAL_FREEZABLE_USD (only "FREEZABLE" status counts).
     """
     note = editorial_notes.get(addr, "")
     if not isinstance(note, str):
         return "UNKNOWN"
-    # Strip BOM + zero-width whitespace before checking for the emoji
-    # prefix — LLMs occasionally emit those invisibly before the badge.
+    # Strip BOM + zero-width whitespace before checking for the prefix —
+    # LLMs occasionally emit those invisibly before the badge.
     note = note.lstrip().lstrip("﻿​‌‍⁠")
+    # Emoji-prefix detection (legacy + AI-native).
     if note.startswith("🟩"):
         return "FREEZABLE"
     if note.startswith("🟧"):
@@ -487,7 +501,17 @@ def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:
         return "UNRECOVERABLE"
     if note.startswith("🟦"):
         return "EXCHANGE"
-    if note:  # has a note but no recognized emoji
+    # ASCII bracket-tag detection (v0.16.10 — encoding-safe).
+    upper = note.upper().lstrip()
+    if upper.startswith("[FREEZABLE]"):
+        return "FREEZABLE"
+    if upper.startswith("[INVESTIGATE]"):
+        return "INVESTIGATE"
+    if upper.startswith("[UNRECOVERABLE]"):
+        return "UNRECOVERABLE"
+    if upper.startswith("[EXCHANGE]"):
+        return "EXCHANGE"
+    if note:  # has a note but no recognized prefix
         return "TRANSIT"
     return "UNKNOWN"
 

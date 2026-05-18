@@ -28,6 +28,7 @@ without requiring a live DB.
 from __future__ import annotations
 
 import json
+import os
 import logging
 from decimal import Decimal
 from pathlib import Path
@@ -56,25 +57,58 @@ class PriceCache:
             return None
         try:
             with path.open() as f:
-                return json.load(f)
+                data = json.load(f)
         except (json.JSONDecodeError, OSError) as e:
             log.warning("price cache miss (corrupted) %s: %s", path, e)
             return None
+        # v0.16.10 (round-9 forensic MEDIUM): negative-price defense.
+        # CoinGecko has been known to return absurd negatives during
+        # outages on obscure tokens; refuse to surface them to the
+        # consumer (they'd pollute USD totals).
+        usd = data.get("usd")
+        if usd is not None:
+            try:
+                if float(usd) < 0:
+                    log.warning(
+                        "price cache returned negative usd=%r for key=%s — discarding",
+                        usd, key,
+                    )
+                    return None
+            except (TypeError, ValueError):
+                pass
+        return data
 
     def put(self, key: str, value: dict) -> None:
         path = self._path_for(key)
         # Convert Decimals to strings for JSON safety
         value = self._json_safe(value)
+        # v0.16.10 (round-9 forensic LOW): atomic write. Concurrent
+        # dormant-detector threads pricing the same key could corrupt
+        # the cache file with overlapping writes; the manifest then
+        # parsed as truncated JSON and we'd refetch unnecessarily.
         try:
-            with path.open("w") as f:
+            tmp = path.with_suffix(path.suffix + ".tmp")
+            with tmp.open("w") as f:
                 json.dump(value, f, indent=2)
+            os.replace(tmp, path)
         except OSError as e:
             log.warning("failed to write price cache %s: %s", path, e)
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _path_for(self, key: str) -> Path:
-        # Replace path-unsafe chars
-        safe = key.replace("/", "_").replace(":", "_")
-        return self.cache_dir / f"{safe}.json"
+        # v0.16.10 (round-9 forensic MEDIUM): hash the key to a fixed
+        # filename. Pre-v0.16.10 we just replaced `/` and `:` with `_`,
+        # which collided when keys like `a:b` and `a/b` mapped to the
+        # same path. SHA1 is fine here — we're not protecting against
+        # collisions adversarially, just keeping distinct cache keys
+        # in distinct files. The first 16 hex chars (64 bits) is more
+        # than enough collision-resistance for our cache size.
+        import hashlib
+        h = hashlib.sha1(key.encode("utf-8")).hexdigest()[:16]
+        return self.cache_dir / f"{h}.json"
 
     @staticmethod
     def _json_safe(value: dict) -> dict:

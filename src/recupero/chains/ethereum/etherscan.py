@@ -117,8 +117,36 @@ class EtherscanClient:
         if isinstance(result, str) and "no closest block" in result.lower():
             # Pre-genesis timestamp. Clamp to block 1 (block 0 has a
             # null timestamp on Ethereum mainnet — not a real block).
+            #
+            # v0.16.10 (round-9 output LOW): log a WARNING so operators
+            # who pass an obviously-misconfigured incident time (e.g.,
+            # a 2009 timestamp on a 2023 chain — usually a bad CSV
+            # import) see a smoking gun rather than "trace returned 0
+            # transfers" with no diagnostic.
+            log.warning(
+                "etherscan getblocknobytime: ts=%d predates chain genesis on "
+                "chain_id=%d — clamping to block 1. If unexpected, check the "
+                "incident_time on the investigation row.",
+                ts_unix, self.chain_id,
+            )
             return 1
-        return int(result)
+        # v0.16.10: future-timestamp guard. A malformed Etherscan response
+        # (or a forged-upstream RPC) returning a wildly future block
+        # number would silently land in the case file. Cap to a sane
+        # bound — anything above 1B is a tampered response (Ethereum is
+        # at ~22M, BSC ~50M as of 2026).
+        try:
+            block_num = int(result)
+        except (TypeError, ValueError) as e:
+            raise EtherscanError(
+                f"getblocknobytime returned non-integer result: {result!r}"
+            ) from e
+        if block_num < 0 or block_num > 1_000_000_000:
+            raise EtherscanError(
+                f"getblocknobytime returned implausible block_num={block_num} "
+                f"for ts={ts_unix} chain_id={self.chain_id}"
+            )
+        return block_num
 
     def get_eth_balance(self, address: str, tag: str = "latest") -> int:
         data = self._call(module="account", action="balance", address=address, tag=tag)

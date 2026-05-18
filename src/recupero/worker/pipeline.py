@@ -1285,14 +1285,46 @@ def _run_stage(
     """Transition DB → stage, run fn(), return whatever fn() returns.
 
     Lets exceptions propagate as _StageFailure tagged with the current stage.
+
+    v0.16.11 (round-9 worker ARCH): structured stage-boundary logging.
+    Pre-v0.16.11 stage transitions logged via plain message strings,
+    so operators had to grep Railway logs by investigation UUID to
+    follow a single case through the pipeline. Now each stage emits
+    START + END (or FAIL) records with `investigation_id` + `stage`
+    + `duration_sec` as logging extras — Railway's filter UI can
+    pivot on them directly.
     """
+    import time as _time
+    extra = {"investigation_id": str(inv_id), "stage": stage}
     db.transition(inv_id, status=stage)
+    log.info("stage start: %s", stage, extra=extra)
+    started = _time.monotonic()
     try:
-        return fn()
-    except _StageFailure:
+        result = fn()
+    except _StageFailure as exc:
+        elapsed = _time.monotonic() - started
+        log.error(
+            "stage fail: %s after %.1fs: %s",
+            stage, elapsed, exc.message,
+            extra={**extra, "duration_sec": round(elapsed, 2), "outcome": "fail"},
+        )
         raise
     except Exception as e:  # noqa: BLE001
+        elapsed = _time.monotonic() - started
+        log.exception(
+            "stage fail: %s after %.1fs: unhandled %s",
+            stage, elapsed, type(e).__name__,
+            extra={**extra, "duration_sec": round(elapsed, 2), "outcome": "fail"},
+        )
         raise _StageFailure(stage, f"{type(e).__name__}: {e}") from e
+    else:
+        elapsed = _time.monotonic() - started
+        log.info(
+            "stage end: %s in %.1fs",
+            stage, elapsed,
+            extra={**extra, "duration_sec": round(elapsed, 2), "outcome": "ok"},
+        )
+        return result
 
 
 @contextmanager

@@ -138,6 +138,50 @@ class EvmAdapter(ChainAdapter):
     def _needs_client_side_start_block_filter(self) -> bool:
         return self.profile.chain_id in self._CLIENT_SIDE_STARTBLOCK_FILTER_CHAIN_IDS
 
+    # v0.16.11 (round-9 forensic ARCH): wrapped-native passthrough.
+    #
+    # Wrapping native ETH/BNB/MATIC/etc. via the canonical wrapper
+    # contract's `deposit()` method is economically a NO-OP from a
+    # laundering perspective: funds stay under the depositor's control,
+    # just now as the wrapped-token IOU instead of native. The
+    # subsequent token transfer (WETH → router, WETH → another wallet)
+    # already shows up in the case via `tokentx`, so the wrap event
+    # contributes nothing useful to a forensic trace.
+    #
+    # Pre-v0.16.11 the wrap-deposit transfer:
+    #   * inflated `total_usd_out` (counted the same dollars twice
+    #     once as native, again as the WETH transfer that followed)
+    #   * showed up in the brief as "perp moved X ETH to WETH
+    #     contract", reading like an outflow when nothing left their
+    #     control
+    #   * dead-ended BFS at the wrap contract (`stop_at_contract`)
+    #
+    # The fix: drop transfers to canonical wrapper contracts at the
+    # adapter level. The subsequent WETH-token activity (which IS a
+    # real laundering move when forwarded to another wallet/router)
+    # captures the trace cleanly.
+    #
+    # Lowercased EVM hex for case-insensitive lookup.
+    _WRAPPED_NATIVE_CONTRACTS: frozenset[str] = frozenset({
+        "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2",  # WETH (Ethereum)
+        "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",  # WETH (Arbitrum)
+        "0x4200000000000000000000000000000000000006",  # WETH (Base / Optimism)
+        "0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270",  # WMATIC (Polygon, legacy)
+        "0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c",  # WBNB (BSC)
+        "0xb31f66aa3c1e785363f0875a1b74e27b85fd66c7",  # WAVAX (Avalanche)
+        "0xfa9343c3897324496a05fc75abed6bac29f8a40f",  # WMATIC (older BSC)
+    })
+
+    @classmethod
+    def _is_wrap_deposit(cls, tx: dict[str, Any]) -> bool:
+        """True if `tx` looks like a native-token wrap-deposit (e.g.,
+        ETH → WETH.deposit()). Filtered as a no-op outflow for
+        laundering-analysis purposes. See _WRAPPED_NATIVE_CONTRACTS
+        docstring for the rationale.
+        """
+        to_addr = (tx.get("to") or "").lower()
+        return to_addr in cls._WRAPPED_NATIVE_CONTRACTS
+
     @staticmethod
     def _is_failed_tx(tx: dict[str, Any]) -> bool:
         """True if Etherscan signals this row was a reverted transaction.
@@ -174,6 +218,11 @@ class EvmAdapter(ChainAdapter):
             from_l = tx.get("from", "").lower()
             to_l = tx.get("to", "").lower()
             if from_l != addr_l:
+                return False
+            # v0.16.11: drop wrap-deposit transfers. ETH → WETH contract
+            # is the depositor wrapping into IOU form; the subsequent
+            # WETH-token outflow already captures the real movement.
+            if self._is_wrap_deposit(tx):
                 return False
             # Drop self-transfers: from == to is a no-op for laundering analysis
             # (wallet reshuffles, gas top-ups inside a smart-account). Including
@@ -213,6 +262,12 @@ class EvmAdapter(ChainAdapter):
                 continue
             # Self-transfer filter (same rationale as native path).
             if from_l and to_l and from_l == to_l:
+                continue
+            # v0.16.11: drop UNWRAP transfers. WETH → WETH.contract is
+            # withdrawing native ETH from the wrap — same depositor
+            # still controls the funds, just in native form now. Same
+            # semantic as wrap-deposit on the native path.
+            if to_l in self._WRAPPED_NATIVE_CONTRACTS:
                 continue
             # Reverted-tx filter — see _is_failed_tx docstring for why this
             # check was missing from the ERC-20 path pre-v0.16.7.

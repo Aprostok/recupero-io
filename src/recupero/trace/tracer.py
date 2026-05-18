@@ -131,6 +131,36 @@ def run_trace(
         case_id, chain.value, seed_address, incident_time.isoformat(), policy.max_depth,
     )
 
+    # v0.16.11 (round-9 worker-resilience ARCH): cooperative-cancel
+    # timeout. Hard ceiling on wall-clock time the BFS can spend.
+    # When the deadline hits between waves, we exit gracefully with
+    # whatever transfers we've collected so far rather than running
+    # past the worker's stale-claim threshold (5 min) and letting
+    # the reaper kill us mid-stage.
+    #
+    # Default 540s (9 min) — comfortably under the 600s reaper window
+    # so the worker has time to write the partial case + emit the
+    # brief before any reaper-induced state churn.
+    try:
+        trace_deadline_sec = int(os.environ.get("RECUPERO_TRACE_TIMEOUT_SEC", "540"))
+    except (TypeError, ValueError):
+        trace_deadline_sec = 540
+    trace_deadline = started + timedelta(seconds=trace_deadline_sec)
+    timeout_hit = False
+
+    # v0.16.11 (round-9 worker ARCH): max-transfers fail-fast gate.
+    # A whale-wallet trace can produce 100k+ transfers and OOM the
+    # worker's 8GB Railway instance because the entire case is held
+    # in memory. We cap total transfers at a configurable ceiling and
+    # exit gracefully (same partial-trace banner as the deadline path)
+    # before OOM hits. Default 50k — comfortably above any real theft
+    # case but well below the OOM boundary.
+    try:
+        max_transfers = int(os.environ.get("RECUPERO_MAX_TRANSFERS_PER_CASE", "50000"))
+    except (TypeError, ValueError):
+        max_transfers = 50000
+    transfer_cap_hit = False
+
     case = Case(
         case_id=case_id,
         seed_address=seed_address,
@@ -166,6 +196,30 @@ def run_trace(
     wave_number = 0
 
     while current_wave:
+        # v0.16.11: cooperative deadline check between waves. We don't
+        # interrupt in-flight wave work (would abandon per-tx evidence
+        # writes mid-flight), but we DO refuse to start a new wave once
+        # the deadline has elapsed. Logs a WARNING so the brief carries
+        # an explicit "partial trace" provenance marker.
+        if utcnow() >= trace_deadline:
+            timeout_hit = True
+            log.warning(
+                "trace deadline hit (%ds) after %d wave(s); "
+                "exiting with %d transfer(s) so far. "
+                "Raise RECUPERO_TRACE_TIMEOUT_SEC for whale-wallet traces.",
+                trace_deadline_sec, wave_number, len(all_transfers),
+            )
+            break
+        # v0.16.11: transfer-cap check. OOM defense.
+        if len(all_transfers) >= max_transfers:
+            transfer_cap_hit = True
+            log.warning(
+                "trace transfer cap hit (%d) after %d wave(s); "
+                "exiting with partial result. "
+                "Raise RECUPERO_MAX_TRANSFERS_PER_CASE for whale-wallet traces.",
+                max_transfers, wave_number,
+            )
+            break
         wave_number += 1
         wave_size = len(current_wave)
         log.info(
@@ -243,14 +297,39 @@ def run_trace(
     case.total_usd_out = _sum_usd(all_transfers)
     case.trace_completed_at = utcnow()
 
+    # v0.16.11: surface the partial-trace marker on the case so the
+    # brief generator can render a "trace incomplete — deadline hit"
+    # banner. Stored under config_used so it persists into case.json
+    # without needing a new Case model field.
+    if timeout_hit:
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "partial_deadline_hit",
+            "trace_deadline_sec": trace_deadline_sec,
+            "trace_waves_completed": wave_number,
+        }
+    elif transfer_cap_hit:
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "partial_transfer_cap_hit",
+            "trace_transfer_cap": max_transfers,
+            "trace_waves_completed": wave_number,
+        }
+    else:
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "complete",
+        }
+
     log.info(
-        "primary trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs",
+        "primary trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs status=%s",
         case_id,
         addresses_processed,
         len(case.transfers),
         case.total_usd_out,
         len(case.exchange_endpoints),
         (case.trace_completed_at - started).total_seconds(),
+        case.config_used.get("trace_status", "complete"),
     )
 
     # v0.16.9 (round-9 forensic CRIT): BFS continuation past DEX routers

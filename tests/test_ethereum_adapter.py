@@ -92,6 +92,47 @@ class TestEthereumAdapter:
         assert all(t["tx_hash"] != "0xddd" for t in out)
 
     @respx.mock
+    def test_native_outflows_filters_weth_deposit(self, adapter: EthereumAdapter) -> None:
+        """v0.16.11 (round-9 forensic ARCH): wrap-deposit transfers
+        (ETH → canonical WETH/WBNB/WMATIC/etc. contract) are
+        economically no-ops — funds stay with depositor as token IOU.
+        Drop them from outflows so they don't inflate USD totals and
+        don't dead-end BFS at the wrap contract.
+        """
+        seed = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
+        target_normal = "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d"
+        weth = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"  # canonical WETH
+        rows = [
+            # Normal outbound to a regular EOA — kept
+            {
+                "blockNumber": "19000001",
+                "timeStamp": "1736942400",
+                "hash": "0xkeep",
+                "from": seed,
+                "to": target_normal,
+                "value": "1000000000000000000",
+                "isError": "0",
+            },
+            # WRAP DEPOSIT — must be filtered out
+            {
+                "blockNumber": "19000002",
+                "timeStamp": "1736942500",
+                "hash": "0xwrap",
+                "from": seed,
+                "to": weth,
+                "value": "5000000000000000000",
+                "isError": "0",
+            },
+        ]
+        respx.get("https://api.etherscan.io/v2/api").mock(
+            return_value=httpx.Response(200, json=_ok(rows))
+        )
+        out = adapter.fetch_native_outflows(seed, start_block=19000000)
+        assert any(t["tx_hash"] == "0xkeep" for t in out)
+        # Wrap deposit must NOT appear — it's not a real outflow.
+        assert all(t["tx_hash"] != "0xwrap" for t in out)
+
+    @respx.mock
     def test_erc20_outflows_normalizes_token_metadata(self, adapter: EthereumAdapter) -> None:
         seed = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
         target = "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d"

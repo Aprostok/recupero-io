@@ -128,6 +128,85 @@ class TestBriefHelpers:
         hops = _build_hops(theft, [])
         assert hops == []
 
+    def test_build_hop_tree_captures_fanout(self):
+        """v0.16.11 (round-9 output-artifacts HIGH): when a perpetrator
+        wallet splits funds to MULTIPLE downstream addresses, the
+        tree-builder must capture every branch — not just the largest
+        one. Pre-v0.16.11 the linear-only `_build_hops` silently
+        dropped every sibling, under-reporting forwarding fan-out
+        on dispersal patterns.
+        """
+        from datetime import UTC, datetime
+        from decimal import Decimal
+        from uuid import uuid4
+        from recupero.reports.brief import _build_hop_tree
+        from recupero.models import (
+            Case, Chain, Counterparty, TokenRef, Transfer,
+        )
+
+        token = TokenRef(
+            chain=Chain.ethereum,
+            contract="0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+            symbol="USDC",
+            decimals=6,
+        )
+        now = datetime.now(UTC)
+
+        def _tx(from_a, to_a, usd, block):
+            return Transfer(
+                transfer_id=str(uuid4()),
+                chain=Chain.ethereum,
+                tx_hash="0x" + "a" * 64,
+                block_number=block,
+                block_time=now,
+                from_address=from_a, to_address=to_a,
+                counterparty=Counterparty(address=to_a),
+                token=token,
+                amount_raw="1000000",
+                amount_decimal=Decimal("1"),
+                usd_value_at_tx=Decimal(str(usd)),
+                fetched_at=now,
+                explorer_url="https://etherscan.io/tx/0x",
+            )
+
+        # Theft: VICTIM → PERP1
+        # PERP1 splits to PERP_A, PERP_B, PERP_C
+        perp1 = "0x1111111111111111111111111111111111111111"
+        perp_a = "0x2222222222222222222222222222222222222222"
+        perp_b = "0x3333333333333333333333333333333333333333"
+        perp_c = "0x4444444444444444444444444444444444444444"
+        victim = "0x5555555555555555555555555555555555555555"
+
+        theft = _tx(victim, perp1, 100000, 100)
+        linked = [Case(
+            case_id="perp",
+            seed_address=perp1,
+            chain=Chain.ethereum,
+            incident_time=now,
+            trace_started_at=now,
+            transfers=[
+                _tx(perp1, perp_a, 60000, 101),
+                _tx(perp1, perp_b, 30000, 102),
+                _tx(perp1, perp_c, 10000, 103),
+            ],
+        )]
+
+        tree = _build_hop_tree(theft, linked)
+        # All three branches captured.
+        destinations = {t.to_address for t in tree}
+        assert destinations == {perp_a, perp_b, perp_c}
+        # USD-ranked: largest first.
+        assert tree[0].to_address == perp_a
+        assert tree[1].to_address == perp_b
+        assert tree[2].to_address == perp_c
+
+        # The legacy `_build_hops` linear path picks the largest
+        # branch as the primary.
+        from recupero.reports.brief import _build_hops
+        primary = _build_hops(theft, linked)
+        assert len(primary) == 1
+        assert primary[0].to_address == perp_a
+
 
 class TestGenerateBriefs:
     def test_renders_both_briefs(self, tmp_path: Path):

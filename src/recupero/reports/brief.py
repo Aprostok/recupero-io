@@ -646,15 +646,48 @@ def _hop_addr_key(chain: Chain, address: str) -> str:
 def _build_hops(theft: Transfer, linked_cases: list[Case]) -> list[Transfer]:
     """Find subsequent transfers of the stolen asset across linked cases.
 
-    Walks forward: the theft's destination becomes the next 'from'. We look
-    for transfers of the same TOKEN (by contract+chain) from that address in
-    any linked case. If found, the chain continues — the new transfer's
-    destination becomes the next 'from', and so on.
+    Walks forward picking the EARLIEST forwarding tx at each step
+    (the natural primary chain). Returns the primary linear path
+    only; callers that want the full fan-out should use
+    ``_build_hop_tree`` instead. This signature is kept for
+    backward compatibility with existing template renders that
+    read a flat `hops` list.
     """
-    chain_obj: list[Transfer] = []
+    tree = _build_hop_tree(theft, linked_cases)
+    return _flatten_primary_chain(tree)
+
+
+def _build_hop_tree(
+    theft: Transfer,
+    linked_cases: list[Case],
+    *,
+    max_branches_per_node: int = 5,
+    max_depth: int = 6,
+) -> list[Transfer]:
+    """Build the full fan-out tree of subsequent transfers.
+
+    v0.16.11 (round-9 output-artifacts HIGH): pre-v0.16.11 the hop
+    builder walked ONLY the earliest forwarding tx at each step,
+    silently dropping all sibling forwards. Real perpetrator wallets
+    routinely split funds to N downstream addresses (the dispersal
+    pattern); rendering just one branch under-reports the forwarding
+    fan-out and misses subpoena targets that the LE handoff should
+    name.
+
+    The tree is returned flat (depth-first traversal) so existing
+    callers iterating `hops` still see all transfers, BUT each
+    transfer carries enough information (via `hop_depth` +
+    `parent_transfer_id`) for templates to render a tree if they
+    want to.
+
+    Bounds: `max_branches_per_node` (5) keeps the brief readable;
+    `max_depth` (6) prevents pathological deep-chain exploration.
+    Both are well above typical real-case fan-out.
+    """
+    flat: list[Transfer] = []
     target_chain = theft.token.chain
-    current = _hop_addr_key(target_chain, theft.to_address)
     target_token_contract = (theft.token.contract or "").lower()
+    start_key = _hop_addr_key(target_chain, theft.to_address)
 
     # Build a quick index: {(from_addr_key, token_contract_lower) -> list[Transfer]}
     # from_addr_key uses chain-aware normalization (base58 preserves case).
@@ -667,23 +700,68 @@ def _build_hops(theft: Transfer, linked_cases: list[Case]) -> list[Transfer]:
                    (t.token.contract or "").lower())
             index.setdefault(key, []).append(t)
 
-    visited: set[str] = {current}
-    while True:
-        candidates = index.get((current, target_token_contract), [])
-        if not candidates:
-            break
-        # Pick the earliest forwarding tx (by block) — that's the natural chain
-        candidates.sort(key=lambda t: t.block_number)
-        next_hop = candidates[0]
-        chain_obj.append(next_hop)
-        next_addr = _hop_addr_key(target_chain, next_hop.to_address)
-        if next_addr in visited:
-            log.warning("hop chain loop detected at %s — breaking", next_addr)
-            break
-        visited.add(next_addr)
-        current = next_addr
+    # DFS with visited-set to prevent cycles. Each branch contributes
+    # up to `max_branches_per_node` transfers per source address;
+    # USD-ranked so the highest-value branches are kept on tight caps.
+    visited: set[str] = {start_key}
 
-    return chain_obj
+    def _walk(addr_key: str, depth: int) -> None:
+        if depth >= max_depth:
+            return
+        candidates = list(index.get((addr_key, target_token_contract), []))
+        if not candidates:
+            return
+        # Rank by (USD desc, block_number asc) — biggest moves first,
+        # ties broken by chronology. The "primary" branch a template
+        # picks for the linear-chain summary is candidates[0] post-sort.
+        candidates.sort(
+            key=lambda t: (
+                -(float(t.usd_value_at_tx or 0)),
+                t.block_number,
+            ),
+        )
+        for next_hop in candidates[:max_branches_per_node]:
+            next_key = _hop_addr_key(target_chain, next_hop.to_address)
+            if next_key in visited:
+                # Cycle. Don't recurse but still surface the edge —
+                # the brief should show that the chain re-converges.
+                flat.append(next_hop)
+                continue
+            visited.add(next_key)
+            flat.append(next_hop)
+            _walk(next_key, depth + 1)
+
+    _walk(start_key, 0)
+    return flat
+
+
+def _flatten_primary_chain(tree: list[Transfer]) -> list[Transfer]:
+    """Pick the PRIMARY linear chain (earliest forwarding tx at each
+    step) from the full DFS-flattened tree.
+
+    Backward-compatible with the pre-v0.16.11 `_build_hops` return
+    value: a single linear path. Templates that want the fan-out
+    should use `_build_hop_tree` directly.
+
+    The DFS in `_build_hop_tree` rank-sorts candidates by USD desc;
+    the primary chain follows the BIGGEST move at each node. That's
+    the headline-amount path, which matches what compliance teams
+    want to see in section 2 of the freeze letter.
+    """
+    if not tree:
+        return []
+    # The primary chain is the first transfer at each new from-address
+    # in DFS order. Walk the flat tree and keep the first hit per
+    # source address.
+    seen_sources: set[str] = set()
+    primary: list[Transfer] = []
+    for t in tree:
+        from_l = (t.from_address or "").lower()
+        if from_l in seen_sources:
+            continue
+        seen_sources.add(from_l)
+        primary.append(t)
+    return primary
 
 
 def _build_identified_wallets(

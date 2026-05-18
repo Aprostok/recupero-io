@@ -645,6 +645,14 @@ def cli() -> None:
              "and updates last_followup_sent_at. Exits after one pass.",
     )
     parser.add_argument(
+        "--monitor-tick", action="store_true",
+        help="Run one monitoring-subscription poll pass (v0.14.6). "
+             "Walks active rows in monitoring_subscriptions, fetches "
+             "recent activity per chain adapter, evaluates against "
+             "triggers, fires webhooks on matches, advances cursors. "
+             "Entry point for the every-5-minutes Railway cron.",
+    )
+    parser.add_argument(
         "--log-level", default=os.environ.get("RECUPERO_LOG_LEVEL", "INFO"),
         help="Python logging level. Default INFO.",
     )
@@ -669,6 +677,10 @@ def cli() -> None:
             sys.exit(2)
         print(_json.dumps(build_dashboard_summary(dsn=dsn), indent=2))
         sys.exit(0)
+
+    if args.monitor_tick:
+        from recupero.worker.monitor_tick import main as _monitor_main
+        sys.exit(_monitor_main())
 
     if args.send_followups:
         from recupero.worker._followup import run_followup_cron

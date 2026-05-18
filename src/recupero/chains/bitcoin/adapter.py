@@ -312,25 +312,37 @@ class BitcoinAdapter(ChainAdapter):
         if not isinstance(tx_id, str):
             return []
 
-        # Classify outputs.
-        # CoinJoin detection (basic): if vin count >= 4 AND most
-        # outputs share the same value, this looks like CoinJoin.
-        # Skip — too noisy to trace through.
+        # CoinJoin detection + probabilistic unwrap (v0.14.6).
+        # Pre-v0.14.6 we dropped CoinJoin txs entirely — the trace
+        # dead-ended at Wasabi / Whirlpool / JoinMarket. Now we:
+        #   1. Detect CoinJoin via the same heuristic (>= 4 inputs +
+        #      3+ equal-value outputs).
+        #   2. Call unwrap_coinjoin() to enumerate participant
+        #      hypotheses with confidence scores.
+        #   3. For HIGH-confidence hypotheses where expected_from
+        #      is in the input set, emit synthetic Transfer records
+        #      to the hypothesis's output addresses — the trace
+        #      CONTINUES past the CoinJoin to the unwrapped
+        #      destination.
+        #   4. Medium/low-confidence hypotheses are logged at INFO
+        #      for the operator to review manually (we don't pollute
+        #      the trace with speculative continuations).
         if len(vin) >= 4:
+            from collections import Counter
             output_values = [
                 o.get("value") for o in vout
                 if isinstance(o, dict) and isinstance(o.get("value"), int)
             ]
             if output_values:
-                from collections import Counter
                 most_common = Counter(output_values).most_common(1)
                 if most_common and most_common[0][1] >= 3:
-                    log.debug(
-                        "tx %s looks like CoinJoin (vin=%d, equal-output "
-                        "cluster=%d); skipping normalization",
-                        tx_id, len(vin), most_common[0][1],
+                    return self._unwrap_coinjoin_to_transfers(
+                        tx=tx,
+                        expected_from=expected_from,
+                        tx_id=tx_id,
+                        block_height=block_height,
+                        block_time=block_time,
                     )
-                    return []
 
         # Peel-chain classification:
         #   send outputs: address NOT in input_set
@@ -373,6 +385,139 @@ class BitcoinAdapter(ChainAdapter):
                 "explorer_url": self.explorer_tx_url(tx_id),
             })
         return out
+
+    def _unwrap_coinjoin_to_transfers(
+        self,
+        *,
+        tx: dict[str, Any],
+        expected_from: str,
+        tx_id: str,
+        block_height: int,
+        block_time: datetime,
+    ) -> list[dict[str, Any]]:
+        """Run unwrap_coinjoin() over a detected-CoinJoin tx and
+        emit synthetic Transfer records for HIGH-confidence
+        hypotheses that include ``expected_from`` in their input
+        addresses.
+
+        Medium/low confidence hypotheses are logged at INFO for
+        operator review but DO NOT enter the trace — too noisy to
+        confidently follow.
+
+        Returns the list of synthetic Transfer dicts (possibly
+        empty if no high-confidence unwrap involved
+        ``expected_from``).
+        """
+        # Local import to avoid loading the unwrap module on
+        # adapters that never see Bitcoin traffic.
+        from recupero.trace.coinjoin_unwrap import (
+            UTXOInput,
+            UTXOOutput,
+            unwrap_coinjoin,
+        )
+
+        # Build UTXOInput / UTXOOutput records from the raw tx.
+        utxo_inputs: list[UTXOInput] = []
+        for inp in tx.get("vin", []):
+            if not isinstance(inp, dict):
+                continue
+            prevout = inp.get("prevout") if isinstance(inp, dict) else None
+            if not isinstance(prevout, dict):
+                continue
+            addr = prevout.get("scriptpubkey_address")
+            value = prevout.get("value")
+            if isinstance(addr, str) and isinstance(value, int) and value > 0:
+                utxo_inputs.append(UTXOInput(address=addr, value_sats=value))
+
+        utxo_outputs: list[UTXOOutput] = []
+        for idx, o in enumerate(tx.get("vout", [])):
+            if not isinstance(o, dict):
+                continue
+            addr = o.get("scriptpubkey_address")
+            value = o.get("value")
+            if isinstance(addr, str) and isinstance(value, int) and value > 0:
+                utxo_outputs.append(UTXOOutput(
+                    address=addr, value_sats=value, output_index=idx,
+                ))
+
+        result = unwrap_coinjoin(
+            tx_id=tx_id, inputs=utxo_inputs, outputs=utxo_outputs,
+        )
+        if result is None:
+            log.debug("tx %s: unwrap returned None (not CoinJoin-shaped)", tx_id)
+            return []
+
+        # Find hypotheses that include our expected_from address
+        # AND are high-confidence. Those become synthetic Transfers.
+        token = TokenRef(
+            chain=Chain.bitcoin,
+            contract=None,
+            symbol=BTC_SYMBOL,
+            decimals=BTC_DECIMALS,
+            coingecko_id=BTC_COINGECKO_ID,
+        )
+        transfers: list[dict[str, Any]] = []
+        actionable_hypotheses = [
+            h for h in result.hypotheses
+            if expected_from in h.input_addresses
+            and h.confidence == "high"
+        ]
+        for hyp in actionable_hypotheses:
+            # Emit one synthetic Transfer per output address in the
+            # hypothesis. Amount split evenly across outputs (we don't
+            # know which specific output each $1 went to — that's
+            # the whole point of CoinJoin obfuscation).
+            for out_addr in hyp.output_addresses:
+                transfers.append({
+                    "chain": Chain.bitcoin,
+                    "tx_hash": tx_id,
+                    "block_number": block_height,
+                    "block_time": block_time,
+                    "log_index": None,
+                    "from": expected_from,
+                    "to": out_addr,
+                    "token": token,
+                    "amount_raw": hyp.total_output_value_sats // len(hyp.output_addresses),
+                    "explorer_url": self.explorer_tx_url(tx_id),
+                    # Mark synthetic so downstream consumers can
+                    # tell it apart from direct on-chain evidence.
+                    # The brief surfaces this as "unwrap-derived".
+                    "_synthetic_coinjoin_unwrap": True,
+                    "_unwrap_confidence_score": hyp.confidence_score,
+                    "_unwrap_rationale": hyp.rationale,
+                })
+
+        # Log non-actionable hypotheses for operator review.
+        non_actionable = [
+            h for h in result.hypotheses
+            if expected_from in h.input_addresses
+            and h.confidence != "high"
+        ]
+        if non_actionable:
+            log.info(
+                "tx %s CoinJoin (%s): %d high-confidence hypothesis(es) "
+                "actioned; %d medium/low not actioned (logged for review).",
+                tx_id, result.detected_pattern,
+                len(actionable_hypotheses), len(non_actionable),
+            )
+            for h in non_actionable:
+                log.info(
+                    "  unwrap %s: %s → %s — %s",
+                    h.confidence, list(h.input_addresses)[:2],
+                    list(h.output_addresses)[:2], h.rationale,
+                )
+        elif actionable_hypotheses:
+            log.info(
+                "tx %s CoinJoin (%s): %d high-confidence hypothesis(es) "
+                "unwrapped into trace.",
+                tx_id, result.detected_pattern, len(actionable_hypotheses),
+            )
+        else:
+            log.debug(
+                "tx %s CoinJoin: no hypotheses involved %s; trace skips tx.",
+                tx_id, expected_from,
+            )
+        return transfers
 
 
 __all__ = (

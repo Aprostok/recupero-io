@@ -287,6 +287,131 @@ def test_explorer_address_url_normalizes_bech32_case() -> None:
     assert url == f"https://mempool.space/address/{upper.lower()}"
 
 
+# ---- CoinJoin unwrap wiring (v0.14.6) ---- #
+
+
+def test_coinjoin_with_high_confidence_hypothesis_emits_synthetic_transfers() -> None:
+    """v0.14.6: when a CoinJoin tx contains a HIGH-confidence
+    hypothesis where the queried address is one of the inputs,
+    the adapter emits synthetic Transfers for the unwrap output
+    addresses. The trace CONTINUES past the CoinJoin instead of
+    dead-ending."""
+    # Whirlpool-shape: 5 inputs each ~10.1M sats, 5 outputs at
+    # exactly 10M sats. Single-input contribution with <2% fee
+    # ratio → high-confidence hypothesis per the unwrap algorithm.
+    cj_tx = {
+        "txid": "whirlpool_tx",
+        "vin": [
+            {"prevout": {"scriptpubkey_address": VICTIM, "value": 10_100_000}},
+            {"prevout": {"scriptpubkey_address": "1A2", "value": 10_100_000}},
+            {"prevout": {"scriptpubkey_address": "1A3", "value": 10_100_000}},
+            {"prevout": {"scriptpubkey_address": "1A4", "value": 10_100_000}},
+            {"prevout": {"scriptpubkey_address": "1A5", "value": 10_100_000}},
+        ],
+        "vout": [
+            {"scriptpubkey_address": "1B1", "value": 10_000_000},
+            {"scriptpubkey_address": "1B2", "value": 10_000_000},
+            {"scriptpubkey_address": "1B3", "value": 10_000_000},
+            {"scriptpubkey_address": "1B4", "value": 10_000_000},
+            {"scriptpubkey_address": "1B5", "value": 10_000_000},
+        ],
+        "status": {
+            "confirmed": True,
+            "block_height": 800_000,
+            "block_time": 1700_000_000,
+            "block_hash": "x" * 64,
+        },
+    }
+    adapter = _mk_adapter([cj_tx])
+    out = adapter.fetch_native_outflows(VICTIM, start_block=0)
+    # We should get at least one synthetic Transfer (high-confidence
+    # 1-output participant hypothesis fires).
+    assert len(out) >= 1
+    rec = out[0]
+    # Synthetic transfer marker present.
+    assert rec.get("_synthetic_coinjoin_unwrap") is True
+    assert rec.get("_unwrap_confidence_score") is not None
+    assert rec["_unwrap_confidence_score"] >= 0.7
+    # From = the queried victim address.
+    assert rec["from"] == VICTIM
+    # Target one of the round-output addresses.
+    assert rec["to"] in {"1B1", "1B2", "1B3", "1B4", "1B5"}
+    assert rec["tx_hash"] == "whirlpool_tx"
+    assert rec["chain"] == Chain.bitcoin
+
+
+def test_coinjoin_with_no_actionable_hypothesis_returns_empty() -> None:
+    """When the queried address doesn't appear in any high-
+    confidence hypothesis (e.g., a CoinJoin victim's address is
+    NOT in the input set), the adapter returns []. Trace skips
+    this tx — same as pre-v0.14.6 behavior."""
+    cj_tx = {
+        "txid": "wasabi_tx",
+        "vin": [
+            # Note: VICTIM is NOT here.
+            {"prevout": {"scriptpubkey_address": "1A1", "value": 10_100_000}},
+            {"prevout": {"scriptpubkey_address": "1A2", "value": 10_100_000}},
+            {"prevout": {"scriptpubkey_address": "1A3", "value": 10_100_000}},
+            {"prevout": {"scriptpubkey_address": "1A4", "value": 10_100_000}},
+        ],
+        "vout": [
+            {"scriptpubkey_address": "1B1", "value": 10_000_000},
+            {"scriptpubkey_address": "1B2", "value": 10_000_000},
+            {"scriptpubkey_address": "1B3", "value": 10_000_000},
+            {"scriptpubkey_address": "1B4", "value": 10_000_000},
+        ],
+        "status": {
+            "confirmed": True,
+            "block_height": 800_000,
+            "block_time": 1700_000_000,
+            "block_hash": "x" * 64,
+        },
+    }
+    adapter = _mk_adapter([cj_tx])
+    # First-pass filter: VICTIM not in inputs → returns [].
+    out = adapter.fetch_native_outflows(VICTIM, start_block=0)
+    assert out == []
+
+
+def test_coinjoin_only_high_confidence_hypotheses_emitted() -> None:
+    """Medium and low confidence unwrap hypotheses must NOT enter
+    the trace — too noisy. Only HIGH confidence."""
+    # Construct a CoinJoin where the only hypothesis involving the
+    # victim is medium (large fee ratio).
+    cj_tx = {
+        "txid": "noisy_cj",
+        "vin": [
+            # Victim contributes 11M sats — outputs are 10M each →
+            # 10% fee → medium confidence at best.
+            {"prevout": {"scriptpubkey_address": VICTIM, "value": 11_000_000}},
+            {"prevout": {"scriptpubkey_address": "1A2", "value": 11_000_000}},
+            {"prevout": {"scriptpubkey_address": "1A3", "value": 11_000_000}},
+            {"prevout": {"scriptpubkey_address": "1A4", "value": 11_000_000}},
+        ],
+        "vout": [
+            {"scriptpubkey_address": "1B1", "value": 10_000_000},
+            {"scriptpubkey_address": "1B2", "value": 10_000_000},
+            {"scriptpubkey_address": "1B3", "value": 10_000_000},
+            {"scriptpubkey_address": "1B4", "value": 10_000_000},
+        ],
+        "status": {
+            "confirmed": True,
+            "block_height": 800_000,
+            "block_time": 1700_000_000,
+            "block_hash": "x" * 64,
+        },
+    }
+    adapter = _mk_adapter([cj_tx])
+    out = adapter.fetch_native_outflows(VICTIM, start_block=0)
+    # No high-confidence hypothesis → no synthetic transfers in trace.
+    # (Medium-confidence is logged at INFO for operator review but
+    # doesn't pollute the trace.)
+    assert all(
+        not rec.get("_synthetic_coinjoin_unwrap")
+        for rec in out
+    )
+
+
 # ---- ChainAdapter factory ---- #
 
 

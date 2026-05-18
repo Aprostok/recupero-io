@@ -20,24 +20,63 @@
   </div>
 
   <div class="cover-title-block">
+    {# v0.14.9: branch the cover framing on the evidence shape. #}
+    {% if issuer_freezable and issuer_freezable.evidence_mode == "historical_only" %}
+    <div class="cover-eyebrow">Investigative Compliance Request</div>
+    <h1>Compliance<br/>Freeze Request</h1>
+    <p class="cover-subtitle">
+      On-chain tracing confirms that {{ issuer_freezable.token }} issued by
+      {{ issuer.short_name }} was received at
+      {{ issuer_freezable.historical_count }}
+      {{ "wallet" if issuer_freezable.historical_count == 1 else "wallets" }}
+      identified below as part of a documented theft. Current balances at
+      those addresses may or may not still hold the funds. We respectfully
+      request that {{ issuer.short_name }} (a) place a precautionary hold
+      on any remaining balance, and (b) provide investigative cooperation
+      regarding the disposition of the {{ issuer_freezable.token }}
+      received — namely, the deposit history at any
+      {{ issuer.short_name }}-controlled account that received funds from
+      these addresses, and any onward transfers your records reflect.
+    </p>
+    <div class="cover-rule"></div>
+    {% elif issuer_freezable and issuer_freezable.evidence_mode == "mixed" %}
     <div class="cover-eyebrow">Time-Sensitive Compliance Matter</div>
     <h1>Compliance<br/>Freeze Request</h1>
     <p class="cover-subtitle">
-      {% if issuer_freezable %}
+      Stolen funds traced from the victim's wallet were received at
+      {{ issuer_freezable.total_count }} {{ "wallet" if issuer_freezable.total_count == 1 else "wallets" }}
+      under {{ issuer.short_name }}'s issuance authority. Of these,
+      {{ issuer_freezable.current_balance_count }} reflect current-balance
+      evidence (precautionary freeze requested) and
+      {{ issuer_freezable.historical_count }} reflect historical-inflow
+      evidence (investigative cooperation requested in addition to any
+      freeze action on remaining balance). Both classes are documented in
+      section 4 below.
+    </p>
+    <div class="cover-rule"></div>
+    {% elif issuer_freezable %}
+    <div class="cover-eyebrow">Time-Sensitive Compliance Matter</div>
+    <h1>Compliance<br/>Freeze Request</h1>
+    <p class="cover-subtitle">
       Stolen funds traced from the victim's wallet have been laundered
       into {{ issuer_freezable.token }} and are currently held at
       {{ issuer_freezable.total_count }} {{ "wallet" if issuer_freezable.total_count == 1 else "wallets" }}
       under {{ issuer.short_name }}'s issuance authority. We respectfully
       request a voluntary precautionary freeze pending law-enforcement
       engagement.
-      {% else %}
+    </p>
+    <div class="cover-rule"></div>
+    {% else %}
+    <div class="cover-eyebrow">Time-Sensitive Compliance Matter</div>
+    <h1>Compliance<br/>Freeze Request</h1>
+    <p class="cover-subtitle">
       A stolen {{ asset.symbol }} position is currently held in an
       identifiable wallet under {{ issuer.short_name }}'s issuance
       authority. We respectfully request a voluntary precautionary
       freeze pending law-enforcement engagement.
-      {% endif %}
     </p>
     <div class="cover-rule"></div>
+    {% endif %}
   </div>
 
   <dl class="cover-meta">
@@ -218,8 +257,9 @@
   <thead>
     <tr>
       <th style="width:5em;">Status</th>
+      <th style="width:6em;">Evidence</th>
       <th>Address</th>
-      <th class="amount" style="width:11em;">Balance</th>
+      <th class="amount" style="width:11em;">Amount</th>
       <th class="amount" style="width:9em;">USD value</th>
     </tr>
   </thead>
@@ -231,6 +271,17 @@
         <span class="label-pill" style="color:#2F6B3E;">FREEZABLE</span>
         {% else %}
         <span class="label-pill" style="color:#7C2D12;">INVESTIGATE</span>
+        {% endif %}
+      </td>
+      <td>
+        {# v0.14.9: surface evidence-type per row so the issuer's
+           compliance team can act differently on each: current-balance
+           rows freeze NOW; historical-inflow rows freeze IF balance
+           remains and otherwise help trace onward. #}
+        {% if h.evidence_type == 'historical_inflow' %}
+        <span class="label-pill" style="color:#92400E;">historical</span>
+        {% else %}
+        <span class="label-pill" style="color:#1E40AF;">current</span>
         {% endif %}
       </td>
       <td class="mono"><a href="{{ h.explorer_url }}">{{ h.address }}</a></td>
@@ -274,7 +325,37 @@
   We ask that {{ issuer.name }}:
 </p>
 <ol>
-  {% if issuer_freezable %}
+  {% if issuer_freezable and issuer_freezable.evidence_mode == "historical_only" %}
+  {# v0.14.9: pure-historical letter — addresses received the token
+     at some point but current balance may be zero. Lead with the
+     investigative cooperation ask, then the contingent freeze ask. #}
+  <li>
+    Review the
+    {{ issuer_freezable.historical_count }} {{ "address" if issuer_freezable.historical_count == 1 else "addresses" }}
+    listed in section 4 against your internal records.
+    {{ issuer_freezable.token }} issued by {{ issuer.short_name }} was
+    documented as received at these addresses
+    {% if issuer_freezable.earliest_observed %}
+    beginning on or about {{ issuer_freezable.earliest_observed[:10] }}
+    {% endif %}
+    as part of the underlying theft.
+  </li>
+  <li>
+    Indicate, in writing and to the extent your records permit, the
+    onward disposition of the {{ issuer_freezable.token }} received at
+    these addresses — in particular whether any portion was redeemed
+    into a {{ issuer.short_name }}-controlled account associated with a
+    KYC'd customer, whether {{ issuer.short_name }} retains
+    custody-equivalent records of subsequent on-chain transfers, and any
+    further compliance flags your team has placed on these addresses.
+  </li>
+  <li>
+    Place a precautionary hold on any {{ issuer_freezable.token }}
+    balance that remains at the addresses listed in section 4, in effect
+    until law enforcement authorities representing the victim have
+    engaged.
+  </li>
+  {% elif issuer_freezable %}
   <li>
     Place a precautionary hold on the
     {{ issuer_freezable.token }} positions listed in section 4
@@ -292,6 +373,14 @@
     marked <strong>INVESTIGATE</strong>, we ask that {{ issuer.short_name }}
     review the corresponding KYC / subscription history and indicate
     whether the position can be added to the hold.
+    {% endif %}
+    {% if issuer_freezable.evidence_mode == "mixed" and issuer_freezable.historical_count > 0 %}
+    For the {{ issuer_freezable.historical_count }}
+    {{ "address" if issuer_freezable.historical_count == 1 else "addresses" }}
+    documented under <strong>historical-inflow</strong> evidence
+    (see section 4), please additionally indicate the onward
+    disposition of {{ issuer_freezable.token }} received at those
+    addresses.
     {% endif %}
   </li>
   {% else %}

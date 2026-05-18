@@ -525,6 +525,12 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
                 "amount": f"{a.get('amount', '?')} {a.get('symbol', '')}",
                 "usd": usd(holding_usd),
                 "status": status,
+                # v0.14.9: evidence-type provenance threads through
+                # so the freeze-letter template can swap language
+                # for historical-inflow asks vs current-balance asks.
+                "evidence_type": a.get("evidence_type", "current_balance"),
+                "observed_at": a.get("observed_at"),
+                "observed_transfer_count": a.get("observed_transfer_count", 1),
             })
 
         # Map CLI's freeze_capability to display capability
@@ -536,6 +542,35 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
 
         # Look up extras from issuer_metadata if present
         meta = issuer_metadata.get(issuer_name, {})
+
+        # v0.14.9: compute aggregate evidence shape so the letter
+        # template can switch between "freeze NOW" and "investigative
+        # request" preambles. If ALL holdings are historical, the
+        # whole letter takes the investigative framing. If MIXED,
+        # the letter notes both and the request section asks for
+        # action on the current-balance ones AND investigation on
+        # the historical ones.
+        n_historical = sum(
+            1 for h in holdings
+            if h.get("evidence_type") == "historical_inflow"
+        )
+        n_current = len(holdings) - n_historical
+        if n_historical == 0:
+            evidence_mode = "current_balance_only"
+        elif n_current == 0:
+            evidence_mode = "historical_only"
+        else:
+            evidence_mode = "mixed"
+
+        # Earliest observation across the historical holdings, for
+        # the letter's "incidents observed since" line.
+        earliest_observed: str | None = None
+        for h in holdings:
+            obs = h.get("observed_at")
+            if not obs:
+                continue
+            if earliest_observed is None or obs < earliest_observed:
+                earliest_observed = obs
 
         freezable.append({
             "issuer": issuer_name,
@@ -549,6 +584,11 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             "portal_url": meta.get("portal_url", ""),
             "typical_response_time": meta.get("typical_response_time", "Variable"),
             "freeze_note": meta.get("freeze_note", ""),
+            # v0.14.9 evidence-mode summary for the letter template.
+            "evidence_mode": evidence_mode,
+            "historical_count": n_historical,
+            "current_balance_count": n_current,
+            "earliest_observed": earliest_observed,
         })
 
     return freezable

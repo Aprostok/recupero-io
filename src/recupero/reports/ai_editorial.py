@@ -262,20 +262,26 @@ CRITICAL RULES for using `is_contract` and `balance_to_inflow_ratio`:
   - If `balance_to_inflow_ratio` is large (e.g., 100x or more), the wallet is consolidating from many sources beyond this victim. Most of that balance is unrelated to this case. Use 🟧 INVESTIGATE rather than 🟩 FREEZABLE — a freeze request that overstates the recoverable amount looks uninformed to the issuer's compliance team.
   - Treat 🟩 FREEZABLE as a high-confidence claim. Only use it when (a) the address is an EOA (`is_contract` false), (b) the inflow from this case is a meaningful fraction of the current balance, and (c) the token is one with a documented issuer freeze pathway.
 
-HEADLINE FRAMING (v0.7.4 — IMPORTANT):
+HEADLINE FRAMING (v0.7.4 / v0.14.9 — IMPORTANT):
 
 The INCIDENT_NARRATIVE_RECUPERO section should lead with the GROSS perpetrator-controlled position, not the attributable inflow. Most cases we triage involve a perpetrator who pooled funds from multiple victims; the right scoping number for a downstream lawyer or law-enforcement analyst is "how much is currently sitting at perpetrator-controlled addresses," not "how much of this specific victim's $X traced through."
 
+v0.14.9 update: when the input's `current_freezable_holdings` list aggregates above $500K across all issuers, the narrative MUST lead with the freezable total and the count of issuer recipients (e.g. "approximately $3.8M in freezable assets identified across 4 issuers — Tether, Circle, Coinbase, and Maple Finance — with letters drafted for each"). This is the number that justifies engagement; the attribution figure is supplementary. The freezable total is the single most action-relevant number in the brief; lead with it.
+
 Good lead phrasing:
-  - "The trace identifies $X+ in perpetrator-controlled holdings across the consolidation hub and downstream destinations, of which approximately $Y is currently freezable through issuer action and the remainder is subject to seizure if the perpetrator is identified."
+  - HIGH-VALUE CASE: "The trace identifies approximately $3.8M in freezable assets across 4 issuers (Tether, Circle, Coinbase, Maple Finance), with compliance freeze letters drafted for each. Additional $X is held in non-freezable positions (DAI, wstETH) subject to seizure if the perpetrator is identified."
+  - GENERAL: "The trace identifies $X+ in perpetrator-controlled holdings across the consolidation hub and downstream destinations, of which approximately $Y is currently freezable through issuer action and the remainder is subject to seizure if the perpetrator is identified."
 
 Avoid leading with:
   - "$153.79 in 426 attributable transfers" (this minimizes the case)
   - "the perpetrator received $X from the victim" (attribution-only framing)
+  - Hedging on confirmed-capability tokens. If a token is in `current_freezable_holdings` with a documented issuer entry, the issuer can be contacted — do NOT hedge with "subject to confirmation". State the freezability directly.
 
 The attributable-inflow figure still appears, but as a SCOPING note further into the narrative — "the directly-traceable amount from the victim wallet was $Z; the broader perpetrator footprint at the destinations identified above includes funds plausibly pooled from other victims of the same operation." This framing is honest (it doesn't claim those funds belong to this victim) but accurate about the scale of the recovery opportunity.
 
-If the perpetrator hub holds >$500K, OR if the sum of downstream destinations exceeds $1M, lead with the gross figure. Below those thresholds the attribution number is more meaningful (single-victim cases) and the narrative can lead with it.
+If the perpetrator hub holds >$500K, OR if the sum of downstream destinations exceeds $1M, OR if `current_freezable_holdings` aggregates above $500K, lead with the gross figure. Below those thresholds the attribution number is more meaningful (single-victim cases) and the narrative can lead with it.
+
+EVIDENCE-TYPE NOTE (v0.14.9): each entry in `current_freezable_holdings` may carry `evidence_type='historical_inflow'`, meaning the address received the freezable token at some point even if the current balance is zero. These addresses are STILL freezable from a process standpoint — the issuer can investigate and freeze if balances remain, or help trace forward. Do NOT downgrade them to 🟧 INVESTIGATE solely because of `evidence_type='historical_inflow'`; the operator will still send a freeze letter and the issuer compliance team will handle the disposition. Mark them 🟩 FREEZABLE if the issuer has documented freeze authority for the token.
 
 For UNRECOVERABLE_ITEMS, include any portion of the stolen funds that the chain data shows are practically unrecoverable to this victim. Be honest with the customer — it helps them set expectations even when the news is bad. The following patterns are practically unrecoverable even if technically traceable:
 
@@ -418,6 +424,16 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
                 "balance_to_inflow_ratio": ratio,
                 "is_contract": address_is_contract.get(addr, False),
                 "freeze_capability": a.get("freeze_capability", "unknown"),
+                # v0.14.9: evidence-type carries through so the AI can
+                # distinguish freeze NOW (current_balance) from
+                # historical-inflow (still freezable from a process
+                # standpoint; the issuer investigates and freezes if
+                # the balance remains). Per the SYSTEM_PROMPT,
+                # historical_inflow does NOT downgrade the
+                # classification.
+                "evidence_type": a.get("evidence_type", "current_balance"),
+                "observed_at": a.get("observed_at"),
+                "observed_transfer_count": a.get("observed_transfer_count", 1),
             })
 
     # Mixer/bridge destinations as candidate UNRECOVERABLE_ITEMS hints

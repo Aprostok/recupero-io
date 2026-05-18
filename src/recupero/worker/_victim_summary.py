@@ -116,9 +116,20 @@ def classify_recovery_prospects(
 
       * ``is_recoverable``: True if any FREEZABLE entry's confirmed
         total_usd (parsed from "$X,XXX.YY" format) is >= floor_usd.
-      * ``total_freezable_usd``: sum of total_usd across all issuers.
+      * ``total_freezable_usd``: sum of total_usd across all issuers
+        WHOSE CAPABILITY IS ACTIONABLE.
       * ``total_suspected_usd``: sum of total_suspected_usd across
         all issuers (includes FREEZABLE + INVESTIGATE).
+
+    v0.16.1 (audit follow-up): the headline freezable number used to
+    sum across ALL freezable entries including capability=no/low
+    issuers (DAI / Sky Protocol etc). That meant a case with $700K of
+    DAI but $0 actually-freezable would classify as recoverable and
+    surface "$700K freezable" on the customer letter — directly
+    contradicting the per-finding 'unrecoverable' tag. Now we skip
+    capability=no/low entries when summing toward the recoverable
+    test. Accepts both raw form ('no') and display form ('LOW')
+    consistent with the rest of the consumers.
 
     Conservatively False when freeze_brief is empty / malformed —
     better to render the unrecoverable variant (which still gives
@@ -131,8 +142,18 @@ def classify_recovery_prospects(
     total_freezable = Decimal(0)
     total_suspected = Decimal(0)
     for entry in freezable:
-        total_freezable += _parse_usd_string(entry.get("total_usd"))
+        cap = (entry.get("freeze_capability") or "").lower()
+        entry_total = _parse_usd_string(entry.get("total_usd"))
+        # Suspected always includes — it's the broad attribution
+        # number, not the actionable one.
         total_suspected += _parse_usd_string(entry.get("total_suspected_usd"))
+        if cap in ("no", "low"):
+            # Non-freezable issuer: do not count toward the
+            # recoverable headline. The entry still appears in the
+            # brief as informational, but the customer letter must
+            # not claim these dollars as recoverable.
+            continue
+        total_freezable += entry_total
 
     return (total_freezable >= floor_usd, total_freezable, total_suspected)
 

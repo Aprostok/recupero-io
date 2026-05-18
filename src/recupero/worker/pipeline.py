@@ -563,9 +563,28 @@ def _stage_list_freeze_targets(
     # worker only ever called match_freeze_asks (current-balance path).
     historical_min_inflow_usd = Decimal("1000")
 
-    candidates = find_dormant_in_case(
-        case=case, config=config, env=env, min_usd=min_usd,
-    )
+    # v0.16.1 (internal audit): defensive wrapping of find_dormant_in_case.
+    # That function makes live Etherscan + CoinGecko calls to query
+    # current balances. If the API key is missing, the call is
+    # rate-limited, or the upstream is down, we lose the current-balance
+    # asks — but historically those failures also prevented the
+    # historical-inflow synthesizer from running, because the exception
+    # bubbled out of the stage. The historical path is pure-function
+    # over case.transfers (no network), so it can and SHOULD run even
+    # when the dormant detector fails. This keeps the V-CFI01-shape
+    # case (7+ months after incident, no current balances) producing
+    # complete freeze_asks output even on a flaky Etherscan day.
+    candidates: list = []
+    try:
+        candidates = find_dormant_in_case(
+            case=case, config=config, env=env, min_usd=min_usd,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "freeze_asks: find_dormant_in_case failed (%s) — proceeding "
+            "with empty current-balance set; historical-inflow path "
+            "will still run", exc,
+        )
     matched, _unmatched = match_freeze_asks(
         candidates, min_holding_usd=min_holding_usd,
     )
@@ -584,11 +603,22 @@ def _stage_list_freeze_targets(
     # historical asks, re-sort by USD descending so the highest-value
     # asks come first in by_issuer enumeration.
     exclude_addrs = {a.candidate_address.lower() for a in matched}
-    historical_asks = synthesize_historical_freeze_asks(
-        case,
-        min_inflow_usd=historical_min_inflow_usd,
-        exclude_addresses=exclude_addrs,
-    )
+    try:
+        historical_asks = synthesize_historical_freeze_asks(
+            case,
+            min_inflow_usd=historical_min_inflow_usd,
+            exclude_addresses=exclude_addrs,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The synthesizer is pure-function — a failure here is
+        # genuinely unexpected (logic bug, malformed transfer record).
+        # Log + proceed with empty rather than aborting the whole
+        # freeze_asks emission.
+        log.warning(
+            "freeze_asks: synthesize_historical_freeze_asks raised (%s) — "
+            "proceeding with current-balance asks only", exc,
+        )
+        historical_asks = []
     if historical_asks:
         log.info(
             "freeze_asks: +%d historical-inflow ask(s) from %d transfer(s) "
@@ -603,11 +633,22 @@ def _stage_list_freeze_targets(
     grouped = group_by_issuer(matched) if matched else {}
 
     label_store = LabelStore.load(config)
-    exchange_deposits = detect_exchange_deposits(
-        case=case,
-        label_store=label_store,
-        min_deposit_usd=min_holding_usd,
-    )
+    # v0.16.1: same defensive wrapping for the exchange-deposit detector.
+    # Pure-function over case.transfers + label seeds; failure here
+    # would be a logic bug, but log + continue rather than aborting
+    # the freeze_asks emission.
+    exchange_deposits: list = []
+    try:
+        exchange_deposits = detect_exchange_deposits(
+            case=case,
+            label_store=label_store,
+            min_deposit_usd=min_holding_usd,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "freeze_asks: detect_exchange_deposits raised (%s) — "
+            "proceeding without exchange-deposit section", exc,
+        )
 
     # v0.16.0: ALSO synthesize onward-CEX flows in the worker. The CLI
     # has done this since v0.14.10, but the worker (production path)
@@ -621,12 +662,19 @@ def _stage_list_freeze_targets(
     if matched:
         from recupero.freeze.asks import synthesize_onward_cex_subpoenas
         upstream_addrs = {a.candidate_address for a in matched}
-        onward_flows = synthesize_onward_cex_subpoenas(
-            case,
-            upstream_freeze_target_addresses=upstream_addrs,
-            label_store=label_store,
-            min_flow_usd=min_holding_usd,
-        )
+        try:
+            onward_flows = synthesize_onward_cex_subpoenas(
+                case,
+                upstream_freeze_target_addresses=upstream_addrs,
+                label_store=label_store,
+                min_flow_usd=min_holding_usd,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "freeze_asks: synthesize_onward_cex_subpoenas raised "
+                "(%s) — exchange-subpoena rendering will have no input",
+                exc,
+            )
         if onward_flows:
             log.info(
                 "freeze_asks: +%d onward-CEX flow(s) from freeze-target "
@@ -682,6 +730,15 @@ def _stage_list_freeze_targets(
         # v0.16.0: onward_cex_flows. Mirrors the CLI's freeze_asks.json
         # schema. Required input for v0.14.11 exchange-subpoena
         # rendering via `recupero legal-requests --type exchange-subpoena`.
+        #
+        # v0.16.1 (audit): guard datetime .isoformat() calls against
+        # None. The OnwardCEXFlow dataclass types first/last_flow_at
+        # as datetime (non-Optional) but the synthesizer sources them
+        # from Transfer.block_time, which can be None in degraded
+        # data paths. A None here would crash the whole payload write
+        # (the surrounding try/except wraps the synthesizer call, not
+        # the JSON serialization). Better: write null and let the
+        # consumer handle it.
         "onward_cex_flows": [
             {
                 "upstream_address": f.upstream_address,
@@ -694,8 +751,12 @@ def _stage_list_freeze_targets(
                 "flow_usd_value": str(f.flow_usd_value),
                 "flow_amount_decimal": str(f.flow_amount_decimal),
                 "transfer_count": f.transfer_count,
-                "first_flow_at": f.first_flow_at.isoformat(),
-                "last_flow_at": f.last_flow_at.isoformat(),
+                "first_flow_at": (
+                    f.first_flow_at.isoformat() if f.first_flow_at else None
+                ),
+                "last_flow_at": (
+                    f.last_flow_at.isoformat() if f.last_flow_at else None
+                ),
                 "upstream_explorer_url": f.upstream_explorer_url,
                 "cex_explorer_url": f.cex_explorer_url,
                 "tx_hashes": f.tx_hashes,
@@ -796,6 +857,14 @@ def _synthesize_freeze_brief_from_asks(
     freezable: list[dict[str, Any]] = []
     total_recoverable = Decimal(0)
     total_suspected = Decimal(0)
+    # v0.16.1 (internal audit): same yes/limited/no → HIGH/MEDIUM/LOW
+    # mapping that emit_brief.py:538 uses for the main path. Previously
+    # this fallback hardcoded "HIGH" for every entry, which silently
+    # tagged DAI / wstETH / other non-freezable tokens as HIGH-freezable
+    # in any skip_editorial run — defeating downstream consumers
+    # (flow_diagram, investigator_findings, recovery scorer) that
+    # branch on the capability value.
+    _CAP_DISPLAY = {"yes": "HIGH", "limited": "MEDIUM", "no": "LOW"}
     for issuer, entries in by_issuer.items():
         if not entries:
             continue
@@ -812,15 +881,37 @@ def _synthesize_freeze_brief_from_asks(
             if usd > 0:
                 total_recoverable += usd
             total_suspected += usd
+            # Read the actual capability from the ask, mapping to the
+            # display form for parity with emit_brief.py's main path.
+            cap_raw = (e.get("freeze_capability") or "").lower()
+            cap_display = _CAP_DISPLAY.get(cap_raw, "UNKNOWN")
             token_entry = by_token.setdefault(symbol, {
                 "issuer": issuer,
                 "token": symbol,
-                "freeze_capability": "HIGH",  # default; trace doesn't
-                                              # know issuer's capability
-                                              # without the cases context
+                "freeze_capability": cap_display,
                 "holdings": [],
                 "total_usd": Decimal(0),
             })
+            # v0.16.1 (audit): status now keys off evidence_type, not
+            # just the USD amount. Historical-inflow asks carry the
+            # INFLOW USD in `usd_value`, which is NOT the current
+            # balance — tagging them as 'FREEZABLE' caused customer
+            # letters to claim "$X currently held" when the funds had
+            # actually moved on. Now historical-inflow → 'INVESTIGATE'
+            # so the letter / brief language reflects "issuer is asked
+            # to investigate and freeze if balances remain" rather
+            # than "freeze the $X currently sitting there".
+            # Also: non-freezable issuers (cap=no/low) get 'UNRECOVERABLE'
+            # rather than 'FREEZABLE' even with current balance.
+            evidence_type = (e.get("evidence_type") or "current_balance").lower()
+            if cap_raw in ("no", "low"):
+                status = "UNRECOVERABLE"
+            elif evidence_type == "historical_inflow":
+                status = "INVESTIGATE"
+            elif usd > 1000:
+                status = "FREEZABLE"
+            else:
+                status = "INVESTIGATE"
             token_entry["holdings"].append({
                 "address": e.get("address"),
                 "amount": (
@@ -828,7 +919,13 @@ def _synthesize_freeze_brief_from_asks(
                     if e.get("amount") else "?"
                 ),
                 "usd": f"${usd:,.2f}" if usd > 0 else "$0",
-                "status": "FREEZABLE" if usd > 1000 else "INVESTIGATE",
+                "status": status,
+                # Propagate evidence-type provenance into the brief
+                # so downstream templates can render the right phrase
+                # ("currently holds" vs "received during the trace").
+                "evidence_type": evidence_type,
+                "observed_at": e.get("observed_at"),
+                "observed_transfer_count": e.get("observed_transfer_count", 1),
             })
             token_entry["total_usd"] += usd
         for token_entry in by_token.values():

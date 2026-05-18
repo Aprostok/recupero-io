@@ -232,29 +232,35 @@ def _findings_from_freezable(brief: dict[str, Any]) -> list[InvestigatorFinding]
     "low" partially masked the bug but didn't fix the category.
 
     Now the risk_category honors the issuer capability:
-      * capability == "yes"      → "freezable"           (severity high)
-      * capability == "limited"  → "freezable_limited"  (severity medium)
-      * capability == "no"       → "unrecoverable"      (severity low)
-      * capability == "" / other → "freezable" + low    (back-compat)
+      * yes / HIGH      → "freezable"            (severity high)
+      * limited / MEDIUM → "freezable_limited"   (severity medium)
+      * no / LOW         → "unrecoverable"       (severity low)
+      * "" / other       → "freezable" + low     (back-compat)
 
     The headline also reflects the capability so the operator reading
     the JSON gets a consistent story across files.
+
+    v0.16.1 (internal audit follow-up): accept BOTH the raw freeze_asks
+    form ('yes'/'limited'/'no') and the display-mapped form
+    ('HIGH'/'MEDIUM'/'LOW') because emit_brief.py:538 maps for display
+    but the skip_editorial fallback path passes through unmapped.
+    Mirrors recovery/scorer.py:190's dual-form acceptance.
     """
     out: list[InvestigatorFinding] = []
     for entry in brief.get("FREEZABLE") or []:
         issuer = entry.get("issuer", "?")
         token = entry.get("token", "?")
         capability = entry.get("freeze_capability", "")
-        cap_upper = capability.upper()
-        if cap_upper == "HIGH" or cap_upper == "YES":
+        cap_lower = capability.lower()
+        if cap_lower in ("yes", "high"):
             sev = "high"
             risk_category = "freezable"
             headline_verb = "Freezable"
-        elif cap_upper == "MEDIUM" or cap_upper == "LIMITED":
+        elif cap_lower in ("limited", "medium"):
             sev = "medium"
             risk_category = "freezable_limited"
             headline_verb = "Freezable (limited capability)"
-        elif cap_upper == "NO":
+        elif cap_lower in ("no", "low"):
             sev = "low"
             # v0.16.0 bug 8: DAI / similar non-freezable tokens must
             # not be categorized as freezable in the structured export.

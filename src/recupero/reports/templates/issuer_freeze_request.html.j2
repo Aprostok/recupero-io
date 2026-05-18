@@ -120,7 +120,52 @@
 
 <div class="summary-box urgent">
   <p style="margin:0">
-    {% if issuer_freezable %}
+    {# v0.16.1 (audit follow-up): the summary box previously claimed
+       "currently held" for ALL freezable modes, including
+       historical_only — which would be a factual error for cases
+       where the issuer's wallet RECEIVED the stolen tokens but no
+       longer holds them. Now branched on evidence_mode parallel to
+       the cover-title block at the top of the document. #}
+    {% if issuer_freezable and issuer_freezable.evidence_mode == "historical_only" %}
+    On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
+    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ victim.name }}'s wallet without authorization. Tracing through
+    on-chain forwarding, a documented total of
+    <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
+    in <strong>{{ issuer_freezable.token }}</strong> was received at
+    {{ issuer_freezable.freezable_count }}
+    {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority during the
+    documented theft trail. Current balances at those wallets may
+    or may not remain — we are writing to request that
+    {{ issuer.short_name }} investigate present-day disposition and
+    apply a precautionary hold on any remaining balances, pending
+    law-enforcement engagement.
+    {% elif issuer_freezable and issuer_freezable.evidence_mode == "mixed" %}
+    On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
+    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ victim.name }}'s wallet without authorization. After tracing
+    through on-chain forwarding, stolen funds totaling
+    <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
+    are currently held or were received as
+    <strong>{{ issuer_freezable.token }}</strong>
+    across {{ issuer_freezable.freezable_count }}
+    {{ "wallet" if issuer_freezable.freezable_count == 1 else "wallets" }}
+    under {{ issuer.short_name }}'s issuance authority — section 4
+    details which addresses carry current-balance evidence vs.
+    historical-receipt evidence.
+    {% if issuer_freezable.has_investigate %}
+    An additional
+    {{ issuer_freezable.investigate_count }}
+    {{ "wallet" if issuer_freezable.investigate_count == 1 else "wallets" }}
+    (suspected, pending verification) are also identified in section 4.
+    {% endif %}
+    We are writing to request that {{ issuer.short_name }} place a
+    precautionary hold on the current-balance
+    {{ issuer_freezable.token }} positions and investigate the
+    historical-receipt addresses listed below, pending
+    law-enforcement engagement.
+    {% elif issuer_freezable %}
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
     {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
     {{ victim.name }}'s wallet without authorization. After tracing through
@@ -245,6 +290,34 @@
 
 <h2>4. Current Location</h2>
 {% if issuer_freezable %}
+{# v0.16.1 (audit): preamble varies by evidence_mode. For
+   historical_only mode "currently held" is a misstatement — the
+   addresses received the funds, current disposition is what we're
+   asking the issuer to determine. #}
+{% if issuer_freezable.evidence_mode == "historical_only" %}
+<p>
+  Stolen funds were received as <strong>{{ issuer_freezable.token }}</strong>
+  at the following {{ issuer_freezable.total_count }}
+  {{ "wallet" if issuer_freezable.total_count == 1 else "wallets" }}
+  under {{ issuer.short_name }}'s issuance authority during the
+  documented theft trail. Current balances may have changed —
+  per-address present-day disposition is what we are asking
+  {{ issuer.short_name }} to verify. Each address links to its
+  on-chain record for independent verification.
+</p>
+{% elif issuer_freezable.evidence_mode == "mixed" %}
+<p>
+  Stolen funds are currently held — or were received during the
+  documented trail — as <strong>{{ issuer_freezable.token }}</strong>
+  at the following {{ issuer_freezable.total_count }}
+  {{ "wallet" if issuer_freezable.total_count == 1 else "wallets" }}
+  under {{ issuer.short_name }}'s issuance authority. The Evidence
+  column distinguishes addresses with confirmed current balances
+  ("current") from addresses observed to receive the token in the
+  trace ("historical"). Each address links to its on-chain record
+  for independent verification.
+</p>
+{% else %}
 <p>
   Stolen funds are currently held as
   <strong>{{ issuer_freezable.token }}</strong> at
@@ -253,6 +326,7 @@
   under {{ issuer.short_name }}'s issuance authority. Each address
   links to its on-chain record for independent verification.
 </p>
+{% endif %}
 <table class="evidence">
   <thead>
     <tr>

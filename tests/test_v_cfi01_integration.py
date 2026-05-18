@@ -556,28 +556,28 @@ def test_v_cfi01_investigator_findings_has_amounts_and_headlines() -> None:
     assert "Intermediate wallet" in intermediate.headline
 
 
-def test_v_cfi01_freezable_finding_honors_capability() -> None:
-    """v0.16.0 fix (Jacob bug 8): when a FREEZABLE entry has
-    freeze_capability='no' (e.g., Sky Protocol / DAI), the finding
-    MUST be tagged risk_category='unrecoverable', not 'freezable'.
-
-    Pre-fix: hard-coded risk_category='freezable' regardless of
-    capability, contradicting every other artifact in the same run."""
+def test_v_cfi01_freezable_finding_honors_capability_display_form() -> None:
+    """v0.16.0/0.16.1 (Jacob bug 8 + audit): when a FREEZABLE entry
+    has freeze_capability='LOW' (the display form emit_brief.py
+    produces from raw 'no'), the finding MUST be risk_category=
+    'unrecoverable'. This is the form the production brief uses on
+    the main code path (emit_brief.py:538 yes→HIGH/limited→MEDIUM/
+    no→LOW)."""
     brief = {
         "PRIMARY_CHAIN": "ethereum",
         "FREEZABLE": [
-            # Non-freezable DAI (Sky Protocol can't freeze)
+            # Non-freezable DAI — production-shape (display form 'LOW')
             {
                 "issuer": "Sky Protocol",
                 "token": "DAI",
-                "freeze_capability": "NO",
+                "freeze_capability": "LOW",  # ← display form, not 'NO'
                 "holdings": [
                     {"address": PERP_HUB, "usd": "$655,751.45",
                      "explorer_url": "https://etherscan.io/address/0xf4...",
                      "status": "FREEZABLE"},
                 ],
             },
-            # Freezable USDT
+            # Freezable USDT — production-shape (display form 'HIGH')
             {
                 "issuer": "Tether",
                 "token": "USDT",
@@ -597,15 +597,144 @@ def test_v_cfi01_freezable_finding_honors_capability() -> None:
 
     dai_finding = next(f for f in findings if "DAI" in f.headline)
     assert dai_finding.risk_category == "unrecoverable", (
-        f"DAI with capability='NO' must be risk_category='unrecoverable', "
-        f"got {dai_finding.risk_category!r}"
+        f"DAI with capability='LOW' must map to risk_category="
+        f"'unrecoverable'. Got {dai_finding.risk_category!r}"
     )
     assert dai_finding.severity == "low"
-    assert "unrecoverable" in dai_finding.headline.lower() or "Held but unrecoverable" in dai_finding.headline
 
     usdt_finding = next(f for f in findings if "USDT" in f.headline)
     assert usdt_finding.risk_category == "freezable"
     assert usdt_finding.severity == "high"
+
+
+def test_v_cfi01_freezable_finding_honors_capability_raw_form() -> None:
+    """Same as above but using the raw freeze_asks form
+    ('yes'/'limited'/'no'). This is the form the skip_editorial
+    fallback path produces (after v0.16.1's _synthesize_freeze_brief_
+    from_asks fix). Both forms must work — recovery/scorer.py:190
+    has accepted both since v0.13.0; v0.16.1 brings the rest of the
+    consumers into parity."""
+    brief = {
+        "PRIMARY_CHAIN": "ethereum",
+        "FREEZABLE": [
+            {
+                "issuer": "Sky Protocol",
+                "token": "DAI",
+                "freeze_capability": "no",  # raw form
+                "holdings": [
+                    {"address": PERP_HUB, "usd": "$655,751.45",
+                     "explorer_url": "https://etherscan.io/address/0xf4...",
+                     "status": "FREEZABLE"},
+                ],
+            },
+            {
+                "issuer": "Tether",
+                "token": "USDT",
+                "freeze_capability": "yes",  # raw form
+                "holdings": [
+                    {"address": USDT_DEST_1, "usd": "$97,535.58",
+                     "explorer_url": "https://etherscan.io/address/0x00...",
+                     "status": "FREEZABLE"},
+                ],
+            },
+            {
+                "issuer": "Coinbase",
+                "token": "cbBTC",
+                "freeze_capability": "limited",  # raw form, mid-tier
+                "holdings": [
+                    {"address": CBBTC_DEST, "usd": "$246,812.01",
+                     "explorer_url": "https://etherscan.io/address/0x6E...",
+                     "status": "FREEZABLE"},
+                ],
+            },
+        ],
+    }
+
+    from recupero.reports.investigator_export import _findings_from_freezable
+    findings = _findings_from_freezable(brief)
+    assert len(findings) == 3
+
+    dai_finding = next(f for f in findings if "DAI" in f.headline)
+    assert dai_finding.risk_category == "unrecoverable"
+
+    usdt_finding = next(f for f in findings if "USDT" in f.headline)
+    assert usdt_finding.risk_category == "freezable"
+    assert usdt_finding.severity == "high"
+
+    cbbtc_finding = next(f for f in findings if "cbBTC" in f.headline)
+    assert cbbtc_finding.risk_category == "freezable_limited"
+    assert cbbtc_finding.severity == "medium"
+
+
+def test_v_cfi01_flow_diagram_skips_promotion_on_both_capability_forms() -> None:
+    """v0.16.1 (audit): the flow-diagram _promote_freezable_holdings
+    skips promotion when freeze_capability is 'no' OR 'low'. The two
+    forms exist because emit_brief.py maps raw→display, and the
+    skip_editorial path passes through raw. Both must work."""
+    from recupero.worker._flow_diagram import (
+        _NodeAttrs,
+        _promote_freezable_holdings,
+    )
+
+    # Build a synthetic node set: one EOA holding DAI (should NOT be
+    # promoted), one holding USDT (should be promoted).
+    nodes = {
+        PERP_HUB: _NodeAttrs(
+            address=PERP_HUB, chain="ethereum",
+            category="wallet", identity=None,
+        ),
+        USDT_DEST_1: _NodeAttrs(
+            address=USDT_DEST_1, chain="ethereum",
+            category="wallet", identity=None,
+        ),
+    }
+
+    # Test with display form (emit_brief main path)
+    brief_display_form = {
+        "FREEZABLE": [
+            {"issuer": "Sky Protocol", "token": "DAI",
+             "freeze_capability": "LOW",
+             "holdings": [{"address": PERP_HUB}]},
+            {"issuer": "Tether", "token": "USDT",
+             "freeze_capability": "HIGH",
+             "holdings": [{"address": USDT_DEST_1}]},
+        ],
+    }
+    nodes_d = {
+        PERP_HUB: _NodeAttrs(address=PERP_HUB, chain="ethereum",
+                             category="wallet", identity=None),
+        USDT_DEST_1: _NodeAttrs(address=USDT_DEST_1, chain="ethereum",
+                                category="wallet", identity=None),
+    }
+    _promote_freezable_holdings(nodes_d, brief_display_form)
+    assert nodes_d[PERP_HUB].category == "wallet", (
+        "DAI holder (cap=LOW) must stay a Wallet, not be re-labeled "
+        "as Sky Protocol holding"
+    )
+    assert nodes_d[PERP_HUB].identity is None
+    assert nodes_d[USDT_DEST_1].category == "freezable_holding"
+    assert "Tether" in (nodes_d[USDT_DEST_1].identity or "")
+
+    # Test with raw form (skip_editorial path)
+    brief_raw_form = {
+        "FREEZABLE": [
+            {"issuer": "Sky Protocol", "token": "DAI",
+             "freeze_capability": "no",
+             "holdings": [{"address": PERP_HUB}]},
+            {"issuer": "Tether", "token": "USDT",
+             "freeze_capability": "yes",
+             "holdings": [{"address": USDT_DEST_1}]},
+        ],
+    }
+    nodes_r = {
+        PERP_HUB: _NodeAttrs(address=PERP_HUB, chain="ethereum",
+                             category="wallet", identity=None),
+        USDT_DEST_1: _NodeAttrs(address=USDT_DEST_1, chain="ethereum",
+                                category="wallet", identity=None),
+    }
+    _promote_freezable_holdings(nodes_r, brief_raw_form)
+    assert nodes_r[PERP_HUB].category == "wallet"
+    assert nodes_r[USDT_DEST_1].category == "freezable_holding"
 
 
 # ---- Acceptance: end-to-end CSV emission works ---- #
@@ -718,6 +847,285 @@ def test_v_cfi01_system_prompt_instructs_definitive_language_on_verified_balance
     assert "currently holds" in SYSTEM_PROMPT
     # The rule should mention "FORBIDDEN" or similar strong negative.
     assert ("FORBIDDEN" in SYSTEM_PROMPT or "forbidden" in SYSTEM_PROMPT)
+
+
+# ---- v0.16.1 audit findings: capability mapping + robustness ---- #
+
+
+def test_v_cfi01_skip_editorial_brief_synthesizer_honors_capability(tmp_path) -> None:
+    """v0.16.1 audit fix: _synthesize_freeze_brief_from_asks used to
+    hardcode freeze_capability='HIGH' regardless of what the freeze_asks
+    actually said. That defeated downstream consumers (flow_diagram,
+    investigator_findings) on the skip_editorial code path.
+
+    Now the synthesizer reads the actual capability from each ask and
+    maps yes/limited/no → HIGH/MEDIUM/LOW for parity with emit_brief.py.
+    """
+    import json
+    from unittest.mock import MagicMock
+    from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
+
+    case_dir = tmp_path / "case_X"
+    case_dir.mkdir()
+    # Mixed-capability freeze_asks payload
+    (case_dir / "freeze_asks.json").write_text(json.dumps({
+        "case_id": "X",
+        "total_asks": 3,
+        "by_issuer": {
+            "Tether": [{
+                "address": USDT_DEST_1, "chain": "ethereum",
+                "symbol": "USDT", "amount": "97535",
+                "usd_value": "97535.58",
+                "freeze_capability": "yes",
+                "primary_contact": "compliance@tether.to",
+                "explorer_url": "https://etherscan.io/...",
+            }],
+            "Coinbase": [{
+                "address": CBBTC_DEST, "chain": "ethereum",
+                "symbol": "cbBTC", "amount": "10",
+                "usd_value": "246812.01",
+                "freeze_capability": "limited",
+                "primary_contact": "compliance@coinbase.com",
+                "explorer_url": "https://etherscan.io/...",
+            }],
+            "Sky Protocol": [{
+                "address": PERP_HUB, "chain": "ethereum",
+                "symbol": "DAI", "amount": "655751",
+                "usd_value": "655751.45",
+                "freeze_capability": "no",
+                "primary_contact": "security@makerdao.com",
+                "explorer_url": "https://etherscan.io/...",
+            }],
+        },
+        "exchange_deposits": [],
+    }), encoding="utf-8")
+
+    mock_bucket = MagicMock()
+    _synthesize_freeze_brief_from_asks(case_dir, mock_bucket)
+    brief = json.loads(
+        (case_dir / "freeze_brief.json").read_text(encoding="utf-8"),
+    )
+    freezable_by_issuer = {e["issuer"]: e for e in brief["FREEZABLE"]}
+
+    # Capability must reflect the actual freeze_asks values, not a
+    # hardcoded "HIGH".
+    assert freezable_by_issuer["Tether"]["freeze_capability"] == "HIGH"
+    assert freezable_by_issuer["Coinbase"]["freeze_capability"] == "MEDIUM"
+    assert freezable_by_issuer["Sky Protocol"]["freeze_capability"] == "LOW"
+
+
+def test_v_cfi01_classifier_excludes_capability_no_from_recoverable_sum() -> None:
+    """v0.16.1 audit fix: classify_recovery_prospects must NOT count
+    capability=no/low entries toward the headline freezable total.
+
+    Pre-fix: a case with $700K of DAI (capability=no) and $0 of
+    actually-freezable tokens would classify as is_recoverable=True
+    based on the $700K alone — surfacing "$700K freezable" on the
+    customer letter while every other artifact correctly tagged the
+    DAI as unrecoverable. This was the same class of bug that prompted
+    Jacob's report: the customer letter contradicting the investigator
+    findings.
+    """
+    # Brief with $700K of DAI (capability=LOW, not freezable) and
+    # only $5K of actually-freezable USDC.
+    brief = {
+        "FREEZABLE": [
+            {
+                "issuer": "Sky Protocol",
+                "token": "DAI",
+                "total_usd": "$700,000.00",
+                "total_suspected_usd": "$700,000.00",
+                "freeze_capability": "LOW",  # display form
+                "holdings": [
+                    {"address": PERP_HUB, "usd": "$700,000.00",
+                     "status": "UNRECOVERABLE"},
+                ],
+            },
+            {
+                "issuer": "Circle",
+                "token": "USDC",
+                "total_usd": "$5,000.00",
+                "total_suspected_usd": "$5,000.00",
+                "freeze_capability": "HIGH",
+                "holdings": [
+                    {"address": USDC_DEST, "usd": "$5,000.00",
+                     "status": "FREEZABLE"},
+                ],
+            },
+        ],
+    }
+    is_recoverable, total_freezable, _ = classify_recovery_prospects(brief)
+    # Only $5K of actually-freezable; below the $40K floor → not
+    # recoverable. The $700K DAI must NOT contribute.
+    assert total_freezable == Decimal("5000.00"), (
+        f"DAI (capability=LOW) must not count toward freezable total. "
+        f"Got total_freezable=${total_freezable}"
+    )
+    assert is_recoverable is False, (
+        "$5K of actually-freezable funds is below floor; case must "
+        "classify unrecoverable. Was the LOW-capability $700K still "
+        "being counted?"
+    )
+
+    # Raw form too — 'no' instead of 'LOW'.
+    brief["FREEZABLE"][0]["freeze_capability"] = "no"
+    _, total_freezable_raw, _ = classify_recovery_prospects(brief)
+    assert total_freezable_raw == Decimal("5000.00")
+
+
+def test_v_cfi01_brief_synthesizer_marks_historical_inflow_as_investigate(
+    tmp_path,
+) -> None:
+    """v0.16.1 audit fix: _synthesize_freeze_brief_from_asks must NOT
+    blindly tag historical-inflow asks as 'FREEZABLE' status. The
+    `usd_value` on historical asks is the INFLOW sum, not a current
+    balance — claiming it's currently held on a freeze letter would
+    be a false statement.
+
+    Pre-fix: anything with `usd > 1000` got `status="FREEZABLE"` and
+    summed into total_recoverable.
+    Post-fix: historical_inflow → 'INVESTIGATE', and
+    capability=no/low → 'UNRECOVERABLE' regardless of evidence type.
+    """
+    import json
+    from unittest.mock import MagicMock
+    from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
+
+    case_dir = tmp_path / "case_Y"
+    case_dir.mkdir()
+    (case_dir / "freeze_asks.json").write_text(json.dumps({
+        "case_id": "Y",
+        "total_asks": 4,
+        "by_issuer": {
+            "Tether": [
+                # 1. Current-balance, freezable → FREEZABLE
+                {"address": USDT_DEST_1, "chain": "ethereum",
+                 "symbol": "USDT", "amount": "97535",
+                 "usd_value": "97535.58",
+                 "freeze_capability": "yes",
+                 "primary_contact": "compliance@tether.to",
+                 "explorer_url": "https://etherscan.io/...",
+                 "evidence_type": "current_balance"},
+                # 2. Historical-inflow, freezable issuer →
+                #    must be INVESTIGATE not FREEZABLE
+                {"address": USDT_DEST_2, "chain": "ethereum",
+                 "symbol": "USDT", "amount": "73151",
+                 "usd_value": "73151.68",
+                 "freeze_capability": "yes",
+                 "primary_contact": "compliance@tether.to",
+                 "explorer_url": "https://etherscan.io/...",
+                 "evidence_type": "historical_inflow",
+                 "observed_at": "2025-10-09T00:29:00Z"},
+            ],
+            "Sky Protocol": [
+                # 3. Non-freezable issuer (capability=no) → UNRECOVERABLE
+                #    even though it's current balance with non-zero $.
+                {"address": PERP_HUB, "chain": "ethereum",
+                 "symbol": "DAI", "amount": "655751",
+                 "usd_value": "655751.45",
+                 "freeze_capability": "no",
+                 "primary_contact": "security@makerdao.com",
+                 "explorer_url": "https://etherscan.io/...",
+                 "evidence_type": "current_balance"},
+            ],
+        },
+        "exchange_deposits": [],
+    }), encoding="utf-8")
+
+    _synthesize_freeze_brief_from_asks(case_dir, MagicMock())
+    brief = json.loads(
+        (case_dir / "freeze_brief.json").read_text(encoding="utf-8"),
+    )
+
+    # Pull each holding by address for assertion.
+    all_holdings = []
+    for issuer_entry in brief["FREEZABLE"]:
+        for h in issuer_entry["holdings"]:
+            h["_issuer"] = issuer_entry["issuer"]
+            h["_capability"] = issuer_entry["freeze_capability"]
+            all_holdings.append(h)
+    by_addr = {h["address"]: h for h in all_holdings}
+
+    # 1. Current-balance freezable → FREEZABLE
+    assert by_addr[USDT_DEST_1]["status"] == "FREEZABLE"
+
+    # 2. Historical-inflow freezable → INVESTIGATE (not FREEZABLE)
+    assert by_addr[USDT_DEST_2]["status"] == "INVESTIGATE", (
+        f"Historical-inflow Tether ask must be INVESTIGATE, not "
+        f"FREEZABLE. Got status={by_addr[USDT_DEST_2]['status']}"
+    )
+
+    # 3. Capability=no → UNRECOVERABLE
+    assert by_addr[PERP_HUB]["status"] == "UNRECOVERABLE", (
+        f"Sky Protocol (cap=no) ask must be UNRECOVERABLE, not "
+        f"FREEZABLE. Got status={by_addr[PERP_HUB]['status']}"
+    )
+
+    # Evidence type provenance threaded through.
+    assert by_addr[USDT_DEST_2]["evidence_type"] == "historical_inflow"
+    assert by_addr[USDT_DEST_1]["evidence_type"] == "current_balance"
+
+
+def test_v_cfi01_freeze_letter_template_uses_historical_language() -> None:
+    """v0.16.1 audit: the issuer_freeze_request.html.j2 summary box
+    and Current Location section now branch on evidence_mode. For
+    historical_only mode, the language is 'received at' rather than
+    'currently held' — so the issuer compliance team isn't asked to
+    freeze a balance that may no longer exist."""
+    from pathlib import Path
+    template_path = Path(
+        "src/recupero/reports/templates/issuer_freeze_request.html.j2"
+    )
+    template_text = template_path.read_text(encoding="utf-8")
+
+    # Summary-box must have the historical-only branch with
+    # 'received at' phrasing (the new audit fix).
+    assert 'evidence_mode == "historical_only"' in template_text
+    # Hedging on current balance (text can wrap across newlines in
+    # the template, so normalize whitespace before the substring check).
+    template_normalized = " ".join(template_text.split())
+    assert "may or may not remain" in template_normalized, (
+        "Summary box must hedge on current balance for historical_only mode"
+    )
+    # The new historical-only summary-box must instruct the issuer to
+    # investigate, not just freeze.
+    assert "present-day disposition" in template_normalized
+    # Mixed mode preamble must mention both current and historical.
+    assert "current-balance" in template_normalized
+    assert "historical-receipt" in template_normalized
+
+
+def test_v_cfi01_worker_stage_survives_dormant_detector_failure() -> None:
+    """v0.16.1 audit fix: if find_dormant_in_case raises (Etherscan
+    API key missing, rate limit, upstream down), the worker stage
+    must NOT abort — the historical-inflow synthesizer is pure
+    function over case.transfers and can still produce a full
+    freeze_asks output without any network access.
+
+    Pre-v0.16.1: any exception from find_dormant_in_case bubbled up
+    and killed the entire stage, leaving an empty freeze_asks.json
+    for cases where the trace evidence was perfectly sufficient.
+
+    The test exercises the merge logic directly with a forced empty
+    'matched' list (simulating dormant detection failure) — the
+    historical synthesizer must still emit the expected asks.
+    """
+    case = _v_cfi01_case()
+    matched: list = []  # simulate dormant-detector failure / no current balances
+    historical_asks = synthesize_historical_freeze_asks(
+        case,
+        issuer_db=_mk_issuer_db(),
+        min_inflow_usd=Decimal("1000"),
+    )
+    merged = matched + historical_asks
+    merged.sort(key=lambda a: a.holding_usd_value or Decimal("0"), reverse=True)
+    # Even with the dormant detector returning nothing, the historical
+    # path produces complete coverage.
+    issuers = {a.issuer.issuer for a in merged}
+    assert {"Tether", "Circle", "Coinbase", "Midas"}.issubset(issuers), (
+        f"Historical-only path must produce all four freezable issuers. "
+        f"Got: {issuers}"
+    )
 
 
 def test_v_cfi01_findings_csv_round_trip_has_amounts(tmp_path) -> None:

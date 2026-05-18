@@ -508,6 +508,33 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             holding_usd = Decimal(str(a.get("usd_value") or "0"))
             status = _classify_address_status(addr, editorial_notes)
 
+            # v0.16.1 (audit follow-up): defensive downgrades so the
+            # brief never reports "$X currently freezable" against
+            # holdings that aren't actually freezable.
+            #
+            # 1. If the issuer's capability is no/low (e.g., DAI / Sky
+            #    Protocol), the editorial may have labeled the address
+            #    FREEZABLE based on amounts alone — but the issuer
+            #    cannot actually freeze. Downgrade to UNRECOVERABLE.
+            #
+            # 2. If the ask is `evidence_type='historical_inflow'`,
+            #    the `usd_value` reflects the trace inflow sum, NOT a
+            #    current balance. Even with a 🟩 FREEZABLE editorial
+            #    note, the customer letter shouldn't claim that USD
+            #    is currently held. Downgrade to INVESTIGATE so the
+            #    letter's preamble reads "issuer to investigate"
+            #    rather than "issuer to freeze the funds currently
+            #    held".
+            ask_capability = (a.get("freeze_capability") or "").lower()
+            ask_evidence_type = (
+                a.get("evidence_type") or "current_balance"
+            ).lower()
+            if status == "FREEZABLE":
+                if ask_capability in ("no", "low"):
+                    status = "UNRECOVERABLE"
+                elif ask_evidence_type == "historical_inflow":
+                    status = "INVESTIGATE"
+
             if status == "FREEZABLE":
                 total_usd += holding_usd
             elif status == "INVESTIGATE":

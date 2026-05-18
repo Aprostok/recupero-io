@@ -175,14 +175,29 @@ def test_earliest_observed_none_when_all_current_balance() -> None:
 def test_jacobs_v_cfi01_freezable_shape() -> None:
     """The acceptance shape Jacob's email specifies: Tether letter
     bundling 3 USDT addresses, Circle letter with 1 USDC address.
-    All historical_inflow evidence. The brief's FREEZABLE list must
-    have:
-      - Tether entry: historical_count=3, current_balance_count=0,
-        evidence_mode='historical_only', total_usd reflects the
-        sum.
-      - Circle entry: historical_count=1, evidence_mode='historical_only'.
-    AND the editorial DESTINATION_NOTES must classify all 4 addresses
-    as FREEZABLE (assuming the AI follows the v0.14.9 prompt update).
+    All historical_inflow evidence.
+
+    v0.16.1 (audit follow-up) — corrected semantics:
+
+    Even when the AI editorial marks a historical-inflow address as
+    🟩 FREEZABLE in the per-address note, `_extract_freezable` now
+    DOWNGRADES that to INVESTIGATE in the per-issuer aggregate. The
+    reason: `usd_value` on a historical_inflow ask represents the
+    trace INFLOW USD (not a current balance), so a per-issuer
+    aggregate of "total_usd" that sums those numbers would let the
+    customer letter claim "$X currently held" — a factually
+    incorrect statement that prompted Jacob's bug report.
+
+    The contract instead:
+      - per-issuer total_usd            → 0 for historical-only mode
+      - per-issuer total_suspected_usd  → sum of historical-inflow $
+      - evidence_mode                   → 'historical_only'
+      - per-holding evidence_type       → 'historical_inflow'
+      - per-holding status              → 'INVESTIGATE' (downgraded)
+
+    The freeze-letter template branches on evidence_mode to switch
+    language to "received at"/"investigate disposition" so the
+    letter is factually correct for these addresses.
     """
     freeze_asks = {
         "by_issuer": {
@@ -204,8 +219,11 @@ def test_jacobs_v_cfi01_freezable_shape() -> None:
             ],
         },
     }
-    # Editorial notes pre-marking these as FREEZABLE (the AI under
-    # v0.14.9 should produce these classifications).
+    # Editorial notes that the AI editorial would produce — the v0.14.9
+    # prompt encourages 🟩 FREEZABLE for historical-inflow at freezable
+    # issuers because "the operator will still send a freeze letter."
+    # v0.16.1 catches and downgrades the per-issuer aggregate so the
+    # letter doesn't make a current-balance claim.
     editorial_notes = {
         "0x00000688768803Bbd44095770895ad27ad6b0d95": "🟩 FREEZABLE — Tether",
         "0x5141B82f5fFDa4c6fE1E372978F1C5427640a190": "🟩 FREEZABLE — Tether",
@@ -216,30 +234,55 @@ def test_jacobs_v_cfi01_freezable_shape() -> None:
                               editorial_notes=editorial_notes)
     by_issuer = {entry["issuer"]: entry for entry in out}
 
-    # Tether: 3 historical holdings, $254K+ total.
+    # Tether: 3 historical holdings → all downgraded to INVESTIGATE.
     tether = by_issuer["Tether"]
     assert tether["evidence_mode"] == "historical_only"
     assert tether["historical_count"] == 3
     assert tether["current_balance_count"] == 0
-    # All 3 marked FREEZABLE → total_usd sums all 3.
-    expected_tether = Decimal("170687.26") + Decimal("82277.60") + Decimal("1597.70")
-    # The brief uses formatted strings; compare via stripped parse.
+    # The actionable headline number (currently held) is $0 —
+    # NOTHING is currently held because all evidence is historical.
     actual_tether = Decimal(
         tether["total_usd"].replace("$", "").replace(",", "")
     )
-    assert actual_tether == expected_tether
+    assert actual_tether == Decimal("0"), (
+        f"historical-only evidence must NOT contribute to total_usd "
+        f"(the 'currently held' figure). Got: ${actual_tether}"
+    )
+    # The suspected/investigate number captures the historical receipt
+    # total — the letter still cites this as evidence of theft routing.
+    expected_suspected = (
+        Decimal("170687.26") + Decimal("82277.60") + Decimal("1597.70")
+    )
+    actual_suspected = Decimal(
+        tether["total_suspected_usd"].replace("$", "").replace(",", "")
+    )
+    assert actual_suspected == expected_suspected, (
+        f"total_suspected_usd must sum historical-inflow $. "
+        f"Got ${actual_suspected}, expected ${expected_suspected}"
+    )
     # Earliest observation Oct 9.
     assert tether["earliest_observed"] == "2025-10-09T00:29:00Z"
 
-    # Circle: 1 historical holding, $8.9K.
+    # Circle: 1 historical holding.
     circle = by_issuer["Circle"]
     assert circle["evidence_mode"] == "historical_only"
     assert circle["historical_count"] == 1
     assert circle["current_balance_count"] == 0
+    # Same semantics: historical-only contributes to suspected, not total.
+    circle_total = Decimal(circle["total_usd"].replace("$", "").replace(",", ""))
+    assert circle_total == Decimal("0")
 
     # And every per-holding entry must carry evidence_type so the
     # letter template can render the "current" / "historical" pill
-    # per-row.
+    # per-row, plus the per-row status reflects the v0.16.1 downgrade.
     for entry in out:
         for h in entry["holdings"]:
             assert h["evidence_type"] in ("current_balance", "historical_inflow")
+            if h["evidence_type"] == "historical_inflow":
+                # v0.16.1: AI editorial may say FREEZABLE but the
+                # aggregator downgrades the per-row status too so the
+                # letter's Status column reads INVESTIGATE.
+                assert h["status"] == "INVESTIGATE", (
+                    f"historical-inflow row must be downgraded to "
+                    f"INVESTIGATE. Got status={h['status']!r}"
+                )

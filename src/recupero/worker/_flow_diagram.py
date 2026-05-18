@@ -436,7 +436,15 @@ def _promote_freezable_holdings(
         # The wallet stays a plain Wallet node; the token holding is
         # still surfaced via the freeze_asks.json table in the
         # accompanying brief.
-        if capability == "no":
+        #
+        # v0.16.1 (internal audit follow-up): the brief carries either
+        # the raw freeze_asks form ('yes'/'limited'/'no') OR the
+        # display-mapped form ('HIGH'/'MEDIUM'/'LOW') depending on
+        # which path produced it (emit_brief.py:538 maps; the
+        # skip_editorial _synthesize_freeze_brief_from_asks does not).
+        # Recognize both so the gate fires on either schema. Mirrors
+        # the same dual-form acceptance in recovery/scorer.py:190.
+        if capability in ("no", "low"):
             skipped_non_freezable += len(entry.get("holdings") or [])
             continue
         identity = f"{issuer}\nholding ({token})" if token else f"{issuer} holding"

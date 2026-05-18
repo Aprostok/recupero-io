@@ -236,9 +236,15 @@ def test_render_recoverable_variant() -> None:
     assert "USDC" in html  # the recovered stablecoin
 
 
-def test_render_unrecoverable_variant() -> None:
+def test_render_unrecoverable_variant(monkeypatch) -> None:
     """When freeze_brief shows no recoverable funds, the
-    unrecoverable variant renders with the refund message."""
+    unrecoverable variant renders with the refund message.
+
+    v0.15.2: the unrecoverable variant is gated behind
+    RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE=1 (operator opt-in).
+    This test sets the env var so it exercises the actual render
+    path rather than the gate."""
+    monkeypatch.setenv("RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", "1")
     case = _make_minimal_case()
     victim = VictimInfo(
         name="John Smith", email="john@example.com",
@@ -270,10 +276,15 @@ def test_render_unrecoverable_variant() -> None:
     assert "Engage Recupero for active recovery" not in html
 
 
-def test_render_unrecoverable_with_custom_explanation() -> None:
+def test_render_unrecoverable_with_custom_explanation(monkeypatch) -> None:
     """Operator-supplied case-specific prose for why funds are
     unrecoverable (mixer, CEX, self-custody, etc.) appears in the
-    rendered letter when provided."""
+    rendered letter when provided.
+
+    v0.15.2: requires operator opt-in env var to render the
+    unrecoverable variant (see the gate at the top of
+    _victim_summary.py)."""
+    monkeypatch.setenv("RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", "1")
     case = _make_minimal_case()
     victim = VictimInfo(
         name="Alice", email="alice@example.com",
@@ -312,7 +323,12 @@ def test_render_unrecoverable_with_custom_explanation() -> None:
 def test_render_returns_none_on_template_failure(monkeypatch) -> None:
     """If the Jinja render fails (template missing, bad context),
     the renderer logs and returns None instead of crashing the
-    surrounding build_all_deliverables call."""
+    surrounding build_all_deliverables call.
+
+    v0.15.2: opt into the unrecoverable gate so the None return is
+    attributable to the template failure (the original intent of
+    this test), not to the safety gate firing first."""
+    monkeypatch.setenv("RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", "1")
     case = _make_minimal_case()
     victim = VictimInfo(name="X", wallet_address="0x" + "1" * 40)
     investigator = InvestigatorInfo(
@@ -334,11 +350,21 @@ def test_render_returns_none_on_template_failure(monkeypatch) -> None:
         assert out_path is None
 
 
-def test_recoverable_variant_renders_with_real_e917ffc5_freezable() -> None:
+def test_recoverable_variant_renders_with_real_e917ffc5_freezable(
+    monkeypatch,
+) -> None:
     """End-to-end with the actual freeze_brief.json shape from real
     case e917ffc5 (4 issuers, 6+18+17+17 holdings, ~$1M suspected,
     ~$7k freezable). Renders without errors and includes all 4
-    issuers in the per-issuer table."""
+    issuers in the per-issuer table.
+
+    Note: the test's name is historical — the ~$12.6k total freezable
+    is actually BELOW the $40k recoverable floor, so the renderer
+    selects the unrecoverable variant. The test exercises the per-
+    issuer table population, which both variants share. v0.15.2:
+    opt into the unrecoverable gate so this end-to-end render still
+    runs."""
+    monkeypatch.setenv("RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", "1")
     case = _make_minimal_case()
     victim = VictimInfo(
         name="Validation Run", email="val@test.local",
@@ -385,3 +411,104 @@ def test_recoverable_variant_renders_with_real_e917ffc5_freezable() -> None:
 
     # Freezable counts: 4 issuers
     assert "4" in html  # somewhere should reference the issuer count
+
+
+# ---- v0.15.2 unrecoverable-emit safety gate ---- #
+
+
+def test_unrecoverable_gate_suppresses_emission_by_default(
+    monkeypatch, caplog
+) -> None:
+    """v0.15.2: with no env opt-in, render_victim_summary returns
+    None for an unrecoverable case AND writes no file to disk.
+
+    This is the customer-protection guarantee — until the
+    freeze_asks synthesis bug uncovered in V-CFI01 validation is
+    fixed end-to-end, a "we cannot help you" letter cannot
+    accidentally auto-emit on a false-negative classification."""
+    monkeypatch.delenv("RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", raising=False)
+    case = _make_minimal_case()
+    victim = VictimInfo(
+        name="Gated Victim", email="gated@example.com",
+        wallet_address="0x" + "1" * 40,
+    )
+    investigator = InvestigatorInfo(
+        name="Alec Prostok", organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+
+    import logging
+    with TemporaryDirectory() as tmp:
+        briefs_dir = Path(tmp)
+        with caplog.at_level(logging.WARNING, logger="recupero.worker._victim_summary"):
+            out_path = render_victim_summary(
+                case=case, victim=victim, investigator=investigator,
+                freeze_brief={"FREEZABLE": []},
+                briefs_dir=briefs_dir,
+            )
+        assert out_path is None
+        # No file should have been written to the briefs dir.
+        assert list(briefs_dir.glob("victim_summary_*.html")) == []
+        # The gate must announce itself in the log so the operator
+        # can find out why the artifact didn't appear.
+        assert any(
+            "safety gate" in rec.getMessage()
+            for rec in caplog.records
+        ), [rec.getMessage() for rec in caplog.records]
+
+
+def test_unrecoverable_gate_passes_with_explicit_opt_in(monkeypatch) -> None:
+    """Setting RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE=1 restores
+    the original render behavior. This is the path operators take
+    AFTER they've verified freeze_asks is structurally correct for
+    the case at hand."""
+    monkeypatch.setenv("RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", "1")
+    case = _make_minimal_case()
+    victim = VictimInfo(
+        name="Opted In", email="opted@example.com",
+        wallet_address="0x" + "1" * 40,
+    )
+    investigator = InvestigatorInfo(
+        name="Alec Prostok", organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+
+    with TemporaryDirectory() as tmp:
+        briefs_dir = Path(tmp)
+        out_path = render_victim_summary(
+            case=case, victim=victim, investigator=investigator,
+            freeze_brief={"FREEZABLE": []},
+            briefs_dir=briefs_dir,
+        )
+        assert out_path is not None
+        assert "unrecoverable" in out_path.name
+
+
+def test_unrecoverable_gate_does_not_affect_recoverable_path(monkeypatch) -> None:
+    """The safety gate is asymmetric — it only suppresses the
+    unrecoverable variant. Recoverable cases (where there are
+    confirmed freezable funds above the floor) render exactly as
+    before, with or without the env var set."""
+    monkeypatch.delenv("RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE", raising=False)
+    case = _make_minimal_case()
+    victim = VictimInfo(
+        name="Recoverable Vic", email="rec@example.com",
+        wallet_address="0x" + "1" * 40,
+    )
+    investigator = InvestigatorInfo(
+        name="Alec Prostok", organization="Recupero LLC",
+        email="alec@recupero.io",
+    )
+    fb = {"FREEZABLE": [_circle_freezable_entry("$70,975.80")]}
+
+    with TemporaryDirectory() as tmp:
+        briefs_dir = Path(tmp)
+        out_path = render_victim_summary(
+            case=case, victim=victim, investigator=investigator,
+            freeze_brief=fb, briefs_dir=briefs_dir,
+        )
+        assert out_path is not None
+        # The recoverable variant always renders; the gate is
+        # unrecoverable-only.
+        assert "recoverable" in out_path.name
+        assert "unrecoverable" not in out_path.name

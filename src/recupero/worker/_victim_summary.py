@@ -45,6 +45,7 @@ concern, not a per-case reports concern.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -72,6 +73,35 @@ _TEMPLATES_DIR = (
 # that range. Floor is centralized in recupero._pricing and
 # defaults to 4× the engagement fee.
 from recupero._pricing import RECOVERABLE_FLOOR_USD as _RECOVERABLE_FLOOR_USD
+
+# v0.15.2 safety gate. The unrecoverable variant tells the customer
+# we cannot help them recover the funds and acknowledges the $99
+# refund. Both statements are only correct if the upstream
+# classifier had complete, accurate freeze_asks input. Field
+# validation on V-CFI01 (May 2026) showed `synthesize_historical_
+# freeze_asks` can structurally under-report, which routes
+# false-negative cases to the unrecoverable template. Until the
+# synthesis bug is fixed and integration-tested end-to-end, we
+# default-OFF the auto-emission of the unrecoverable variant so an
+# operator can't accidentally send a "we can't help" letter on a
+# case where the trace actually identified freezable assets.
+#
+# To re-enable (only after fixing freeze_asks coverage and
+# end-to-end verifying), set:
+#
+#     RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE=1
+#
+# The recoverable variant is unaffected by this gate — false
+# positives there have no comparable customer-harm risk (offering
+# Tier 2 on a case that actually has freezable funds is the
+# product's normal operating mode).
+_UNRECOVERABLE_GATE_ENV = "RECUPERO_ALLOW_UNRECOVERABLE_DELIVERABLE"
+
+
+def _unrecoverable_emit_allowed() -> bool:
+    """v0.15.2 safety gate. Returns True only when the operator
+    has explicitly opted in via env var. Default: False."""
+    return os.environ.get(_UNRECOVERABLE_GATE_ENV, "").strip() == "1"
 
 
 def classify_recovery_prospects(
@@ -152,6 +182,23 @@ def render_victim_summary(
         is_recoverable, total_freezable_usd, total_suspected_usd = (
             classify_recovery_prospects(freeze_brief)
         )
+
+        # v0.15.2 safety gate: don't auto-emit the "we cannot help"
+        # variant unless the operator explicitly opted in. Returning
+        # None here is the same signal the existing render_victim_summary
+        # contract uses for any other "didn't write a file" condition,
+        # so the worker's caller already handles it gracefully (logs
+        # a warning, keeps generating other artifacts).
+        if not is_recoverable and not _unrecoverable_emit_allowed():
+            log.warning(
+                "victim_summary_unrecoverable suppressed by safety gate "
+                "(set %s=1 to enable). case_id=%s total_freezable_usd=%s "
+                "total_suspected_usd=%s — verify freeze_asks completeness "
+                "before re-enabling.",
+                _UNRECOVERABLE_GATE_ENV, case.case_id,
+                total_freezable_usd, total_suspected_usd,
+            )
+            return None
 
         template_name = (
             "victim_summary_recoverable.html.j2"

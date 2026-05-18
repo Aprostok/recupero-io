@@ -78,14 +78,37 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                     write_body=write_body,
                 )
             elif self.path == "/dashboard.json":
-                # Aggregated counters for the admin-UI homepage.
-                # Cached on demand — no in-process cache layer
-                # because the queries are cheap (<200ms typically)
-                # and the UI polls at 60s+, so cache hit rate is
-                # marginal. Add a TTL cache here if traffic warrants.
+                # Aggregated counters for the admin-UI homepage. Same
+                # admin-key gate as /investigations* (v0.16.6 audit r8a
+                # CRITICAL): the payload exposes case counts, totals,
+                # and recent-error labels — operator-internal, not for
+                # public eyes.
+                import os as _os
+                import hmac
+                expected = _os.environ.get(
+                    "RECUPERO_ADMIN_KEY", "",
+                ).strip()
+                if not expected:
+                    self._respond(
+                        503,
+                        {"error": "admin endpoint disabled "
+                                  "(set RECUPERO_ADMIN_KEY to enable)"},
+                        write_body=write_body,
+                    )
+                    return
+                supplied = self.headers.get(
+                    "X-Recupero-Admin-Key", "",
+                ).strip()
+                if not supplied or not hmac.compare_digest(
+                    supplied, expected,
+                ):
+                    self._respond(
+                        401,
+                        {"error": "missing or invalid X-Recupero-Admin-Key"},
+                        write_body=write_body,
+                    )
+                    return
                 try:
-                    import os as _os
-
                     from recupero.worker.dashboard_summary import (
                         build_dashboard_summary,
                     )
@@ -116,12 +139,50 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
 
         def _handle_investigations(self, *, write_body: bool) -> None:
             import os as _os
+            import hmac
             from urllib.parse import parse_qs, urlsplit
             from uuid import UUID
 
+            # v0.16.6 (audit r8a CRITICAL): require an admin shared
+            # secret on /investigations* and /dashboard.json. Pre-fix
+            # these endpoints exposed full case PII (victim wallet,
+            # email, signed-URL artifact links) to anyone who could
+            # reach the worker port. The admin UI now sends
+            # `X-Recupero-Admin-Key` on every request; the secret is
+            # also accepted as a `?admin_key=` query param for local
+            # curl-based debugging. If RECUPERO_ADMIN_KEY is unset,
+            # the endpoint denies everything (fail-closed) so a
+            # mis-configured deploy can't accidentally leak PII.
+            expected_admin_key = _os.environ.get(
+                "RECUPERO_ADMIN_KEY", ""
+            ).strip()
+            if not expected_admin_key:
+                self._respond(
+                    503,
+                    {"error": "admin endpoint disabled "
+                              "(set RECUPERO_ADMIN_KEY env var to enable)"},
+                    write_body=write_body,
+                )
+                return
+            header_key = self.headers.get(
+                "X-Recupero-Admin-Key", ""
+            ).strip()
             parsed = urlsplit(self.path)
+            qs_pre = parse_qs(parsed.query)
+            query_key = (qs_pre.get("admin_key") or [""])[0].strip()
+            supplied = header_key or query_key
+            if not supplied or not hmac.compare_digest(
+                supplied, expected_admin_key,
+            ):
+                self._respond(
+                    401,
+                    {"error": "missing or invalid X-Recupero-Admin-Key"},
+                    write_body=write_body,
+                )
+                return
+
             path = parsed.path.rstrip("/")
-            qs = parse_qs(parsed.query)
+            qs = qs_pre
             dsn = _os.environ.get("SUPABASE_DB_URL", "")
             sb_url = _os.environ.get("SUPABASE_URL", "").rstrip("/")
             sb_key = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")

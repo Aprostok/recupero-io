@@ -120,7 +120,11 @@ def score_token(
 def _score_bytecode(bytecode: str) -> list[TokenRiskSignal]:
     """Walk known honeypot-pattern selectors over the bytecode."""
     out: list[TokenRiskSignal] = []
-    bc = bytecode.lower().lstrip("0x")
+    # `lstrip("0x")` is a classic bug: it strips a CHARACTER SET, not a prefix,
+    # so any leading '0' or 'x' chars get eaten. A bytecode "0x000001f4..."
+    # would become "1f4...", silently dropping leading-zero selectors that
+    # honeypot detectors look for. `removeprefix` strips only the literal "0x".
+    bc = bytecode.lower().removeprefix("0x")
     for selector, description in _HONEYPOT_BYTECODE_PATTERNS.items():
         if selector in bc:
             out.append(TokenRiskSignal(

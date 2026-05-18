@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -27,6 +28,28 @@ from recupero.config import RecuperoConfig
 from recupero.models import Case
 
 log = logging.getLogger(__name__)
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Atomic file write — tempfile + os.replace. Used for case.json
+    and manifest.json so a worker crash mid-write can't leave a
+    truncated file that fails parsing.
+
+    Atomic on POSIX and Windows (Python 3.3+'s os.replace is atomic
+    on both). Matches the atomic_write_text helper in recupero._common
+    but stays bytes-based here since orjson emits bytes.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_bytes(data)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
+        raise
 
 
 class CaseStore:
@@ -43,11 +66,16 @@ class CaseStore:
         return d
 
     def write_case(self, case: Case) -> Path:
+        # All three writes (case.json, manifest.json, transfers.csv)
+        # are atomic via tempfile+rename. A worker crash mid-write
+        # used to leave truncated case.json that crashed downstream
+        # parsers; now either the previous version is intact or the
+        # new version is fully written.
         d = self.case_dir(case.case_id)
         case_path = d / "case.json"
         payload = case.model_dump(mode="json")
         opts = orjson.OPT_INDENT_2 if self.pretty else 0
-        case_path.write_bytes(orjson.dumps(payload, option=opts))
+        _atomic_write_bytes(case_path, orjson.dumps(payload, option=opts))
         log.info("wrote case file %s", case_path)
 
         # Manifest — small subset of metadata, easy to read
@@ -69,7 +97,10 @@ class CaseStore:
             "written_at": datetime.now(UTC).isoformat(),
         }
         manifest_path = d / "manifest.json"
-        manifest_path.write_bytes(orjson.dumps(manifest, option=orjson.OPT_INDENT_2))
+        _atomic_write_bytes(
+            manifest_path,
+            orjson.dumps(manifest, option=orjson.OPT_INDENT_2),
+        )
 
         # CSV mirror — flat view for spreadsheet review and LE
         self._write_transfers_csv(case, d / "transfers.csv")

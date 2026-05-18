@@ -8,6 +8,7 @@ decision-making is anchored on.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -47,18 +48,34 @@ _UNKNOWN_ISSUER_PRIOR = 0.30
 # Per-jurisdiction multipliers. USA/EU/UK = baseline 1.0;
 # non-cooperative jurisdictions reduce expected recovery.
 _JURISDICTION_MULT: dict[str, float] = {
-    "USA": 1.0,
-    "United States": 1.0,
+    # ORDER MATTERS: longer/more-specific entries first so they match before
+    # shorter aliases. "United Kingdom" before "UK"; "United States" before
+    # "USA"; "North Korea" before "Korea". The lookup uses word-boundary
+    # regex so "UK" no longer matches inside "Ukraine" (the prior substring
+    # match returned 1.0 for Ukraine cases — a sanctions-risk jurisdiction
+    # incorrectly scored as fully cooperative). Word boundaries also fix
+    # spurious matches like "EU" inside "European".
     "United Kingdom": 1.0,
+    "United States": 1.0,
+    "North Korea": 0.05,
+    "South Korea": 0.85,
+    "USA": 1.0,
     "UK": 1.0,
     "EU": 0.95,
     "Canada": 0.95,
+    "Switzerland": 0.90,
+    "Japan": 0.90,
+    "Australia": 0.90,
     "Singapore": 0.85,
-    "UAE": 0.7,
+    "Hong Kong": 0.65,
+    "UAE": 0.70,
+    "Brazil": 0.65,
+    "Mexico": 0.60,
+    "India": 0.65,
+    "Ukraine": 0.40,   # cooperative but war-impacted; partial-recovery prior
     "Russia": 0.15,
-    "Belarus": 0.10,
-    "North Korea": 0.05,
     "Iran": 0.10,
+    "Belarus": 0.10,
 }
 
 # Default for unknown jurisdictions — slight discount for uncertainty.
@@ -393,8 +410,12 @@ def _resolve_jurisdiction_multiplier(jur: str) -> float:
     if not jur:
         return _UNKNOWN_JURISDICTION_MULT
     j_lower = jur.lower()
+    # Word-boundary match — `\bUK\b` does NOT match "Ukraine". The
+    # earlier substring loop hit "UK" first for any string containing
+    # "uk" and returned 1.0 (fully cooperative) for sanctioned/war-risk
+    # jurisdictions whose names happened to contain that bigram.
     for key, mult in _JURISDICTION_MULT.items():
-        if key.lower() in j_lower:
+        if re.search(rf"\b{re.escape(key.lower())}\b", j_lower):
             return mult
     return _UNKNOWN_JURISDICTION_MULT
 

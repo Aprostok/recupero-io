@@ -530,23 +530,42 @@ def synthesize_historical_freeze_asks(
     Returns:
       List of FreezeAsk records sorted by holding_usd_value descending.
     """
+    # Address normalization is chain-aware. EVM addresses are
+    # case-insensitive hex; we lowercase for canonical keys. Tron /
+    # Solana / Bitcoin addresses are base58 — lowercasing produces
+    # invalid addresses that won't match anything. Preserve case for
+    # those chains; the underlying address bytes ARE case-significant.
+    chain_str = (
+        case.chain.value
+        if hasattr(case.chain, "value")
+        else str(case.chain)
+    ).lower()
+    _CASE_SENSITIVE_CHAINS = {"tron", "solana", "bitcoin"}
+
+    def _norm_addr(a: str | None) -> str:
+        if not a:
+            return ""
+        return a if chain_str in _CASE_SENSITIVE_CHAINS else a.lower()
+
     db = issuer_db if issuer_db is not None else load_issuer_db()
-    exclude = {a.lower() for a in (exclude_addresses or set())}
+    exclude = {_norm_addr(a) for a in (exclude_addresses or set())}
     if case.seed_address:
-        exclude.add(case.seed_address.lower())
+        exclude.add(_norm_addr(case.seed_address))
 
     # Aggregate per (to_address, token_contract): sum USD, sum decimal
     # amount, count transfers, earliest observation timestamp.
     agg: dict[tuple[str, str], dict] = {}
     for t in case.transfers:
-        to_addr = (t.to_address or "").lower()
+        to_addr = _norm_addr(t.to_address)
         if not to_addr or to_addr in exclude:
             continue
         # Skip transfers FROM the to_addr to itself (rare but observed).
-        if to_addr == (t.from_address or "").lower():
+        if to_addr == _norm_addr(t.from_address):
             continue
         # Need a contract to match issuer DB (native ETH doesn't have
-        # an issuer freeze pathway anyway).
+        # an issuer freeze pathway anyway). Contracts are token
+        # identifiers — always lowercased for the DB lookup key
+        # regardless of chain (issuers.json stores them lowercase).
         contract = (t.token.contract or "").lower()
         if not contract:
             continue

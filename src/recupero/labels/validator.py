@@ -61,17 +61,42 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
         "required": ["address", "name"],
         "optional": [
             "category", "source", "exchange", "confidence", "notes",
+            "added_at",
         ],
     },
     "bridges.json": {
         "wrapping": "list",
         "required": ["address", "name"],
-        "optional": ["category", "source", "notes", "destinations"],
+        "optional": [
+            "category", "source", "notes", "destinations",
+            "chain", "contract", "confidence", "added_at",
+            "follow_up_url", "supports_to_chains",
+        ],
+    },
+    # Issuers map freezable-token contracts → the legal issuer who can
+    # freeze them. Schema differs from address-level seed files: the
+    # primary key is (chain, contract) not `address`, so duplicate
+    # detection runs on contract rather than address. Validating this
+    # file catches issuer drift (e.g., a stablecoin migrating issuers,
+    # or a wrapper getting added without `delegates_to`).
+    "issuers.json": {
+        "wrapping": "tokens",
+        "required": ["chain", "contract", "symbol", "issuer", "freeze_capability"],
+        "optional": [
+            "freeze_notes", "primary_contact", "secondary_contact",
+            "jurisdiction", "delegates_to", "le_portal_url",
+            "freeze_response_time_hours", "notes", "added_at", "source",
+        ],
     },
 }
 
 
 _ALLOWED_CONFIDENCE = frozenset(["high", "medium", "low"])
+
+# Issuer freeze_capability is the basis for HIGH/MEDIUM/LOW freezability
+# routing in the brief generator. Drift here silently mis-routes freeze
+# asks (e.g., a "yes" issuer typo'd as "yse" would fall through to LOW).
+_ALLOWED_FREEZE_CAPABILITY = frozenset(["yes", "limited", "no"])
 
 
 @dataclass
@@ -147,6 +172,18 @@ def validate_seed_files(seeds_dir: Path | None = None) -> ValidationReport:
                 ))
                 continue
             entries = raw.get("addresses", [])
+        elif spec["wrapping"] == "tokens":
+            # issuers.json uses {"tokens": [...]}: a list of freezable-token
+            # records keyed by (chain, contract). Top-level "_meta" sibling
+            # is allowed and ignored.
+            if not isinstance(raw, dict) or "tokens" not in raw:
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=-1,
+                    severity="error", field=None,
+                    message="Expected object with 'tokens' key at top level",
+                ))
+                continue
+            entries = raw.get("tokens", [])
         else:
             entries = []
 
@@ -166,6 +203,11 @@ def _validate_entries(
     allowed = set(required) | set(optional)
 
     seen_addresses: set[str] = set()
+    # For issuers.json (wrapping="tokens"), the unique key is (chain, contract)
+    # rather than `address`. Tracked separately so we don't false-positive on
+    # the same contract appearing under different chains.
+    seen_token_keys: set[tuple[str, str]] = set()
+    is_issuers_file = spec.get("wrapping") == "tokens"
     for i, entry in enumerate(entries):
         report.entries_checked += 1
         if not isinstance(entry, dict):
@@ -189,6 +231,34 @@ def _validate_entries(
                     severity="error", field=req_field,
                     message=f"Missing required field {req_field!r}",
                 ))
+
+        # Issuer-file extras: freeze_capability enum + (chain, contract) dedup.
+        if is_issuers_file:
+            fc = entry.get("freeze_capability")
+            if fc is not None and fc not in _ALLOWED_FREEZE_CAPABILITY:
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=i,
+                    severity="error", field="freeze_capability",
+                    message=(
+                        f"freeze_capability must be one of "
+                        f"{sorted(_ALLOWED_FREEZE_CAPABILITY)}, got {fc!r}"
+                    ),
+                ))
+            chain_v = entry.get("chain")
+            contract_v = entry.get("contract")
+            if isinstance(chain_v, str) and isinstance(contract_v, str) and contract_v:
+                tk = (chain_v.lower(), contract_v.lower())
+                if tk in seen_token_keys:
+                    report.issues.append(ValidationIssue(
+                        file=filename, entry_index=i,
+                        severity="warning", field="contract",
+                        message=(
+                            f"Duplicate (chain, contract) within file: "
+                            f"({chain_v!r}, {contract_v!r}). Each token "
+                            "should appear at most once."
+                        ),
+                    ))
+                seen_token_keys.add(tk)
 
         addr = entry.get("address")
         if isinstance(addr, str) and addr:

@@ -136,13 +136,30 @@ def identify_pass2_candidates(
     # Aggregate inflows from victim per destination address.
     seed_lower = case.seed_address.lower()
     inflow_by_addr: dict[str, Decimal] = {}
+    # v0.16.6 (audit r8a HIGH): ALSO aggregate the GROSS inflow
+    # observed in the trace (sum across ALL transfers TO the address,
+    # not just from the seed). When the victim's transfer is routed
+    # through a drainer (victim → drainer → hub), there's no DIRECT
+    # seed→hub edge in case.transfers and inflow_by_addr[hub] would
+    # be 0 — pass-2 would never fire for the hub. The V-CFI01 pattern
+    # is exactly this: drainer between victim and consolidation hub.
+    # Falling back to gross inflow when seed-direct is zero lets
+    # pass-2 fire on real hubs that aren't seed-adjacent.
+    gross_inflow_by_addr: dict[str, Decimal] = {}
     for t in case.transfers:
-        if t.from_address.lower() != seed_lower:
-            continue
         if t.usd_value_at_tx is None:
             continue
-        key = t.to_address.lower()
-        inflow_by_addr[key] = inflow_by_addr.get(key, Decimal("0")) + t.usd_value_at_tx
+        to_key = t.to_address.lower()
+        gross_inflow_by_addr[to_key] = (
+            gross_inflow_by_addr.get(to_key, Decimal("0"))
+            + t.usd_value_at_tx
+        )
+        if t.from_address.lower() != seed_lower:
+            continue
+        inflow_by_addr[to_key] = (
+            inflow_by_addr.get(to_key, Decimal("0"))
+            + t.usd_value_at_tx
+        )
 
     # For each FREEZABLE entry: extract the address (from the
     # first holding), its current_balance, and compute the ratio.
@@ -155,10 +172,17 @@ def identify_pass2_candidates(
             current_balance = _parse_usd(holding.get("usd"))
             if current_balance is None or current_balance < balance:
                 continue
+            # Prefer direct-from-seed inflow when available; fall back
+            # to gross trace inflow when the victim-to-hub path goes
+            # through an intermediary (drainer case). Either way, the
+            # hub must have RECEIVED something in this trace to count
+            # as a candidate.
             inflow = inflow_by_addr.get(addr, Decimal("0"))
             if inflow <= 0:
-                # No traceable inflow from this victim → not a
-                # candidate (it's downstream noise, not a hub).
+                inflow = gross_inflow_by_addr.get(addr, Decimal("0"))
+            if inflow <= 0:
+                # Not seen in the trace at all — genuinely a non-hub
+                # (current balance is unrelated to this case).
                 continue
             ratio_actual = float(current_balance / inflow)
             if ratio_actual < ratio:
@@ -280,14 +304,40 @@ def merge_perpetrator_findings(
         if addr not in pass1_depth_at or t.hop_depth > pass1_depth_at[addr]:
             pass1_depth_at[addr] = t.hop_depth
 
+    # v0.16.6 (audit r8a CRITICAL): dedupe pass-2 transfers against
+    # pass-1's set BEFORE appending. Pre-fix, every (tx_hash,
+    # log_index, from, to) edge that appeared in both pass-1 (via
+    # hub→destination at depth=1) and pass-2 (via hub-as-seed) got
+    # appended TWICE — only the `hop_depth` differed, so transfer_id
+    # didn't collide. Downstream synthesize_historical_freeze_asks
+    # then double-counted the USD on those edges (it aggregates by
+    # (to_addr, contract) and sums usd_value_at_tx, blind to the
+    # duplicate).
+    #
+    # Dedup key: (tx_hash, from, to, token.contract) — sufficient to
+    # identify the same on-chain edge even when transfer_id /
+    # hop_depth differ.
+    def _edge_key(t):
+        return (
+            t.tx_hash,
+            (t.from_address or "").lower(),
+            (t.to_address or "").lower(),
+            ((getattr(t.token, "contract", None) or "")
+                if t.token else "").lower(),
+        )
+
+    seen_edges = {_edge_key(t) for t in pass1_case.transfers}
     merged_transfers = list(pass1_case.transfers)
+    duplicates_skipped = 0
     for pass2_case in pass2_cases:
         hub = pass2_case.seed_address.lower()
         offset = pass1_depth_at.get(hub, 0)
         for t in pass2_case.transfers:
-            # Build a new Transfer with shifted depth + phase tag.
-            # We rely on Transfer being a pydantic model with
-            # model_copy() — adjust if the underlying impl changes.
+            edge = _edge_key(t)
+            if edge in seen_edges:
+                duplicates_skipped += 1
+                continue
+            seen_edges.add(edge)
             try:
                 shifted = t.model_copy(update={
                     "hop_depth": t.hop_depth + offset + 1,
@@ -295,6 +345,12 @@ def merge_perpetrator_findings(
             except Exception:  # noqa: BLE001
                 shifted = t
             merged_transfers.append(shifted)
+    if duplicates_skipped:
+        log.info(
+            "pass2 merge: deduped %d transfer(s) that appeared in both "
+            "pass-1 and pass-2 (would have double-counted USD).",
+            duplicates_skipped,
+        )
 
     # Create the merged case. We use pass1_case as the basis
     # so its metadata (incident_time, seed_address, etc.) is

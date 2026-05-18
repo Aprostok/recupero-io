@@ -136,13 +136,21 @@ class _RateLimiter:
         self._next_allowed = 0.0
 
     def wait(self) -> None:
+        # Reserve a slot under the lock, then sleep WITHOUT holding the lock.
+        # The previous implementation called time.sleep() inside `with self._lock:`,
+        # which serialized every worker thread on the same CoinGecko client
+        # instance: with N threads sharing one limiter at 0.5 rps, a flood of
+        # 10 lookups would block for 20s wall-clock even though the *intent*
+        # was a 2-second pacing window. Holding the lock only long enough to
+        # advance `_next_allowed` lets threads queue their reservations in
+        # parallel and each one sleeps on its own.
         with self._lock:
             now = time.monotonic()
-            sleep = self._next_allowed - now
-            if sleep > 0:
-                time.sleep(sleep)
-                now = time.monotonic()
-            self._next_allowed = now + self.min_interval
+            target = max(self._next_allowed, now)
+            self._next_allowed = target + self.min_interval
+        delay = target - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
 
 class CoinGeckoClient:
@@ -267,9 +275,18 @@ class CoinGeckoClient:
             usd = self._fetch_history(cg_id, d)
         except Exception as e:  # noqa: BLE001 — we want to keep tracing alive
             log.debug("coingecko fetch failed for %s on %s: %s", cg_id, d, e)
-            self.cache.put(key, {"usd": None, "error": f"fetch_error: {e}"})
+            # DO NOT cache transient fetch errors. The previous code wrote
+            # {"usd": None, "error": "fetch_error: ..."} into the persistent
+            # cache, which meant a single 5xx blip during a token's first
+            # lookup permanently poisoned the cache for that (token, date)
+            # pair — every subsequent run read None back and never re-fetched.
+            # Cache only holds confirmed "CoinGecko returned a valid response
+            # with no USD price for this date" (handled below as usd=None).
             return PriceResult(usd_value=None, source=None, error=f"fetch_error: {e}")
 
+        # `usd is None` here means CoinGecko's response parsed successfully
+        # but had no market_data.current_price.usd — a real "no data for this
+        # date" answer (e.g. token didn't exist yet on that day). Safe to cache.
         self.cache.put(key, {"usd": str(usd) if usd is not None else None})
         return PriceResult(
             usd_value=Decimal(str(usd)) if usd is not None else None,
@@ -294,7 +311,12 @@ class CoinGeckoClient:
                 "coingecko contract->id resolution failed for %s on %s: %s",
                 addr_lower, token.chain.value, e,
             )
-            cg_id = None
+            # Do NOT cache a transient lookup failure as None — that would
+            # mean every subsequent transfer in this process for the same
+            # token gets `no_coingecko_mapping` even after CoinGecko comes
+            # back. A genuine 404 still caches (handled by _fetch_contract_to_id
+            # returning None without raising).
+            return None
         self._contract_id_cache[cache_key] = cg_id
         return cg_id
 
@@ -315,8 +337,11 @@ class CoinGeckoClient:
         if resp.status_code == 404:
             return None
         if resp.status_code == 429:
-            time.sleep(15)
-            return None
+            # Raise so tenacity backs off and retries instead of silently
+            # returning None — a returned None used to be cached in
+            # `_contract_id_cache` and permanently marked the token
+            # un-priceable for the rest of the process.
+            raise httpx.TransportError("coingecko rate limited (429)")
         resp.raise_for_status()
         data = resp.json()
         return data.get("id")
@@ -335,7 +360,10 @@ class CoinGeckoClient:
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=params)
         if resp.status_code == 429:
-            time.sleep(15)
+            # Tenacity handles the actual backoff (exponential 2→30s); raising
+            # immediately lets the next caller share the cooldown rather than
+            # the original 15s hard-sleep, which blocked the worker thread
+            # for far longer than the public-tier 60s/min window required.
             raise httpx.TransportError("rate limited")
         resp.raise_for_status()
         data = resp.json()
@@ -383,7 +411,10 @@ class CoinGeckoClient:
             usd = self._fetch_simple_price(cg_id)
         except Exception as e:  # noqa: BLE001
             log.debug("coingecko price_now failed for %s: %s", cg_id, e)
-            self.cache.put(cache_key, {"usd": None, "error": f"fetch_error: {e}"})
+            # See the matching note in price_at(): don't cache transient
+            # fetch errors. Poisoned negative-cache entries kept dormant
+            # detection from ever pricing a token whose first lookup
+            # happened to coincide with a CoinGecko hiccup.
             return PriceResult(usd_value=None, source=None, error=f"fetch_error: {e}")
 
         self.cache.put(cache_key, {"usd": str(usd) if usd is not None else None})

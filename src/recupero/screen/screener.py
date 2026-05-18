@@ -199,14 +199,13 @@ def _normalize_for_lookup(address: str, *, chain: str) -> str:
     if not address:
         raise ValueError("address is empty")
 
-    if chain == "tron":
-        # Tron addresses are base58check; case is meaningful.
+    # Case-sensitive chains: base58 / base58check encode the address
+    # bytes in a way that's case-meaningful. Lowercasing produces
+    # wrong addresses that won't match any DB entry.
+    if chain in ("tron", "bitcoin", "solana"):
         return address
-    if chain == "bitcoin":
-        return address
-    # Default: treat as EVM. Lowercase canonical.
-    if address.startswith("0x") or address.startswith("0X"):
-        return address.lower()
+    # Default: treat as EVM. Hex addresses are case-insensitive; we
+    # canonicalize lowercase for stable DB keys.
     return address.lower()
 
 

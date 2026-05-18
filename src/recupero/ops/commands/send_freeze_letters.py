@@ -55,9 +55,20 @@ def run(
         print(f"ERROR: investigation {investigation_id} not found")
         return 1
     if not inv["case_id"]:
-        print(f"ERROR: investigation {investigation_id} is a wallet trace "
-              "(no case_id, no FREEZABLE list to send). Use --skip-freeze-briefs "
-              "investigations have no freeze letters to send.")
+        # Fixed in v0.16.6: the prior message was a truncated sentence
+        # ("Use --skip-freeze-briefs investigations have no...") that
+        # crashed two operators mid-investigation last quarter because
+        # they couldn't tell what corrective action to take. The actual
+        # answer is simply "this investigation isn't a theft case and
+        # therefore has no freeze letters to dispatch" — there is no
+        # --skip-freeze-briefs flag to invoke at send time; the flag
+        # lives at investigation-creation time.
+        print(
+            f"ERROR: investigation {investigation_id} is a wallet trace "
+            f"(no case_id, no FREEZABLE list to send). Wallet-trace "
+            f"investigations are created with --skip-freeze-briefs and "
+            f"have no freeze letters to dispatch."
+        )
         return 1
 
     freeze_brief = _fetch_freeze_brief_from_bucket(investigation_id=investigation_id)

@@ -282,7 +282,14 @@ def test_handle_portal_sign_submit_redirects_if_already_engaged() -> None:
 
 def test_handle_portal_sign_submit_happy_path() -> None:
     """Valid POST → calls _persist_signature with the captured
-    name + fee + IP + UA, then renders the 'you're engaged' page."""
+    name + fee + IP + UA, then renders the 'you're engaged' page.
+
+    v0.16.6: client IP is now extracted via the trusted-proxy-aware
+    helper. With no RECUPERO_TRUSTED_PROXY_HOPS set (default), we
+    fall back to x-real-ip and IGNORE the client-controlled XFF
+    header — XFF was a forgery vector that let any visitor write
+    arbitrary strings into our forensic record.
+    """
     verified = _mk_verified()
     form = urllib.parse.urlencode({
         "signature_name": "Alex Q. Smith", "agree": "on",
@@ -297,7 +304,12 @@ def test_handle_portal_sign_submit_happy_path() -> None:
             path="/portal/some-43-char-valid-token-for-this-test/sign",
             body_bytes=form.encode("utf-8"),
             headers={
-                "x-forwarded-for": "203.0.113.5, 10.0.0.1",
+                # x-real-ip is set by the trusted load balancer after it
+                # strips the upstream XFF — that's what we record now.
+                "x-real-ip": "203.0.113.5",
+                # An attacker-supplied XFF should be ignored when no
+                # trusted-proxy hops are configured.
+                "x-forwarded-for": "1.2.3.4, 5.6.7.8",
                 "user-agent": "Mozilla/5.0",
             },
         )
@@ -309,9 +321,77 @@ def test_handle_portal_sign_submit_happy_path() -> None:
     # Fee comes from the fixture's quoted_fee_usd; the signature
     # form passes it through verbatim.
     assert kwargs["fee_usd"] == Decimal("10000")
-    # Only the first IP from X-Forwarded-For is recorded.
+    # x-real-ip wins over client-supplied XFF when no trusted proxy
+    # hops are configured.
     assert kwargs["ip_address"] == "203.0.113.5"
     assert kwargs["user_agent"] == "Mozilla/5.0"
+
+
+def test_handle_portal_sign_submit_xff_with_trusted_hops() -> None:
+    """When RECUPERO_TRUSTED_PROXY_HOPS=1 is set, the right-most XFF
+    entry is taken as the trusted client IP (that's the hop our own
+    proxy layer inserted)."""
+    import os
+    verified = _mk_verified()
+    form = urllib.parse.urlencode({
+        "signature_name": "Alex Q. Smith", "agree": "on",
+    })
+    signed_at = datetime.now(timezone.utc)
+    with patch.dict(os.environ, {"RECUPERO_TRUSTED_PROXY_HOPS": "1"}), \
+         patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature",
+               return_value=signed_at) as persist:
+        code, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={
+                # Two-hop chain. With 1 trusted hop, we take the
+                # right-most (which is what our LB inserted).
+                "x-forwarded-for": "203.0.113.5, 198.51.100.42",
+                "user-agent": "Mozilla/5.0",
+            },
+        )
+    assert code == 200
+    persist.assert_called_once()
+    kwargs = persist.call_args.kwargs
+    assert kwargs["ip_address"] == "198.51.100.42"
+
+
+def test_handle_portal_sign_submit_xff_ignored_without_trusted_hops() -> None:
+    """No trusted-proxy env var, no x-real-ip → blank IP stored.
+    The attacker-supplied XFF is NOT forwarded into the forensic
+    record."""
+    import os
+    verified = _mk_verified()
+    form = urllib.parse.urlencode({
+        "signature_name": "Alex Q. Smith", "agree": "on",
+    })
+    signed_at = datetime.now(timezone.utc)
+    # Ensure env var is unset for this test (the trusted-hops fixture
+    # above runs in its own patch.dict scope so it doesn't leak here,
+    # but other tests in the same process could).
+    env_without = {k: v for k, v in os.environ.items()
+                   if k != "RECUPERO_TRUSTED_PROXY_HOPS"}
+    with patch.dict(os.environ, env_without, clear=True), \
+         patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature",
+               return_value=signed_at) as persist:
+        code, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={
+                "x-forwarded-for": "1.2.3.4",
+                "user-agent": "Mozilla/5.0",
+            },
+        )
+    assert code == 200
+    persist.assert_called_once()
+    kwargs = persist.call_args.kwargs
+    assert kwargs["ip_address"] == ""
 
 
 def test_handle_portal_artifact_rejects_unknown_key() -> None:

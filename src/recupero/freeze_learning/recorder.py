@@ -251,10 +251,20 @@ def compute_priors_from_outcomes(
                 except (TypeError, AttributeError):
                     pass
         avg_h = sum(response_hours) / len(response_hours) if response_hours else None
-        median_h = (
-            sorted(response_hours)[len(response_hours) // 2]
-            if response_hours else None
-        )
+        # True median: average the two middle values for even-sized samples.
+        # The previous code returned `sorted[n//2]` which is the UPPER of the
+        # two middle values when n is even — for n=2 with [1, 100] it returned
+        # 100 instead of 50.5, biasing every two-sample issuer's learned
+        # response-time prior upward by up to 100%.
+        if response_hours:
+            sorted_h = sorted(response_hours)
+            n_h = len(sorted_h)
+            if n_h % 2 == 1:
+                median_h = sorted_h[n_h // 2]
+            else:
+                median_h = (sorted_h[n_h // 2 - 1] + sorted_h[n_h // 2]) / 2.0
+        else:
+            median_h = None
 
         out[(issuer, language)] = IssuerPrior(
             issuer=issuer,

@@ -45,13 +45,19 @@ class _RateLimiter:
         self._next_allowed = 0.0
 
     def wait(self) -> None:
+        # Reserve a slot under the lock, sleep without it. The previous
+        # version held `self._lock` across `time.sleep()`, which serialized
+        # every concurrent caller end-to-end instead of letting them queue
+        # reservations in parallel — under contention the effective rps
+        # collapsed to 1/(sum of all callers' waits) instead of the
+        # configured rate.
         with self._lock:
             now = time.monotonic()
-            sleep_for = self._next_allowed - now
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-                now = time.monotonic()
-            self._next_allowed = now + self.min_interval
+            target = max(self._next_allowed, now)
+            self._next_allowed = target + self.min_interval
+        delay = target - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
 
 class EtherscanClient:
@@ -133,53 +139,136 @@ class EtherscanClient:
         except (KeyError, ValueError, TypeError):
             return 0
 
+    # Etherscan v2 caps every account-action query at page*offset <= 10_000.
+    # With offset=1000 that gives us up to 10 pages before the API itself
+    # rejects further paging. Anything beyond that requires re-querying with
+    # a narrower block window (which the caller can do by walking start_block
+    # forward to the last seen block + 1).
+    _ETHERSCAN_MAX_PAGES = 10
+    _ETHERSCAN_PAGE_SIZE_CAP = 10_000  # max page*offset Etherscan accepts
+
+    def _paginate_account_action(
+        self,
+        *,
+        action: str,
+        address: str,
+        start_block: int,
+        end_block: int,
+        page: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        """Drives page=1..N pagination for account txlist-style actions.
+
+        Pre-v0.16.6 this client called Etherscan with `page=1, offset=1000`
+        and stopped — silently truncating any wallet with >1000 hits of a
+        given transfer type. Consolidation hubs in V-CFI01-shape cases
+        routinely have thousands of historical inflows; truncation meant
+        the historical-inflow synthesizer would generate freeze asks
+        against only the most recent slice of victims, missing the bulk
+        of the recoverable amount.
+
+        Single-page mode is preserved when callers explicitly pass page>1
+        (they're driving pagination themselves) — that path is used by
+        the inspector's incremental scan and a few tests with mocks.
+
+        Returns all rows aggregated across pages. Logs a warning if the
+        last page filled completely AND we've hit `_ETHERSCAN_MAX_PAGES`,
+        which means the wallet has more rows than Etherscan will return
+        for this block window — caller should narrow the window.
+        """
+        # If caller wants a specific single page, honor it (back-compat).
+        if page != 1:
+            data = self._call(
+                module="account",
+                action=action,
+                address=address,
+                startblock=str(start_block),
+                endblock=str(end_block),
+                page=str(page),
+                offset=str(offset),
+                sort="asc",
+            )
+            return self._coerce_list(data)
+
+        all_rows: list[dict[str, Any]] = []
+        cur_page = 1
+        while cur_page <= self._ETHERSCAN_MAX_PAGES:
+            # Stay under Etherscan's hard cap on page*offset.
+            if cur_page * offset > self._ETHERSCAN_PAGE_SIZE_CAP:
+                break
+            data = self._call(
+                module="account",
+                action=action,
+                address=address,
+                startblock=str(start_block),
+                endblock=str(end_block),
+                page=str(cur_page),
+                offset=str(offset),
+                sort="asc",
+            )
+            rows = self._coerce_list(data)
+            if not rows:
+                break
+            all_rows.extend(rows)
+            # If the page wasn't full, we've reached the end.
+            if len(rows) < offset:
+                break
+            cur_page += 1
+        else:
+            # `while...else` runs when the loop exited via the condition
+            # (not via break). That means we made MAX_PAGES requests and
+            # the last one was full — meaning more data exists.
+            log.warning(
+                "etherscan pagination capped at %d pages for %s action=%s "
+                "addr=%s start_block=%d — wallet has >%d rows in window; "
+                "caller should re-query with narrower block range",
+                self._ETHERSCAN_MAX_PAGES, "txlist", action, address,
+                start_block, self._ETHERSCAN_MAX_PAGES * offset,
+            )
+        return all_rows
+
     def get_normal_transactions(
         self, address: str, start_block: int, end_block: int = 99_999_999, page: int = 1, offset: int = 1000
     ) -> list[dict[str, Any]]:
-        """Module=account, action=txlist. Returns native-ETH transactions involving address."""
-        data = self._call(
-            module="account",
+        """Module=account, action=txlist. Returns native-ETH transactions involving address.
+
+        Auto-paginates to up to 10 pages (the Etherscan cap) when called with
+        the default page=1. Pass page>1 for manual single-page paging.
+        """
+        return self._paginate_account_action(
             action="txlist",
             address=address,
-            startblock=str(start_block),
-            endblock=str(end_block),
-            page=str(page),
-            offset=str(offset),
-            sort="asc",
+            start_block=start_block,
+            end_block=end_block,
+            page=page,
+            offset=offset,
         )
-        return self._coerce_list(data)
 
     def get_internal_transactions(
         self, address: str, start_block: int, end_block: int = 99_999_999, page: int = 1, offset: int = 1000
     ) -> list[dict[str, Any]]:
         """Module=account, action=txlistinternal. Catches contract-mediated value moves."""
-        data = self._call(
-            module="account",
+        return self._paginate_account_action(
             action="txlistinternal",
             address=address,
-            startblock=str(start_block),
-            endblock=str(end_block),
-            page=str(page),
-            offset=str(offset),
-            sort="asc",
+            start_block=start_block,
+            end_block=end_block,
+            page=page,
+            offset=offset,
         )
-        return self._coerce_list(data)
 
     def get_erc20_transfers(
         self, address: str, start_block: int, end_block: int = 99_999_999, page: int = 1, offset: int = 1000
     ) -> list[dict[str, Any]]:
         """Module=account, action=tokentx."""
-        data = self._call(
-            module="account",
+        return self._paginate_account_action(
             action="tokentx",
             address=address,
-            startblock=str(start_block),
-            endblock=str(end_block),
-            page=str(page),
-            offset=str(offset),
-            sort="asc",
+            start_block=start_block,
+            end_block=end_block,
+            page=page,
+            offset=offset,
         )
-        return self._coerce_list(data)
 
     def get_transaction_by_hash(self, tx_hash: str) -> dict[str, Any]:
         data = self._call(module="proxy", action="eth_getTransactionByHash", txhash=tx_hash)

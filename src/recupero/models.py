@@ -164,7 +164,15 @@ class ExchangeEndpoint(BaseModel):
 
 
 class Case(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Forward-compatible: reads from older or newer pipelines ignore
+    # fields they don't know about rather than raising. The inner
+    # types (Transfer / Counterparty / TokenRef / Label) keep
+    # extra="forbid" because their shapes are stable contracts —
+    # we WANT to crash if those drift. Only the top-level Case
+    # container evolves across pipeline versions; this `ignore`
+    # lets a v0.13.x reader open a v0.16.x case (and vice versa)
+    # without parse errors.
+    model_config = ConfigDict(extra="ignore")
 
     schema_version: str = SCHEMA_VERSION
     case_id: str

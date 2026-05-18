@@ -56,6 +56,54 @@ from recupero.portal.tokens import VerifiedToken, verify_token
 
 log = logging.getLogger(__name__)
 
+def _extract_client_ip(headers: dict[str, str]) -> str:
+    """Return the client IP we'll persist alongside an engagement signature.
+
+    X-Forwarded-For is client-controlled: any visitor can put whatever
+    they want in the header, so trusting it unconditionally produces a
+    forensics-grade record of attacker-supplied lies. The prior code
+    read XFF first, no questions asked, meaning the IP column in
+    engagement_signatures was effectively user input.
+
+    Mitigation:
+
+    * If ``RECUPERO_TRUSTED_PROXY_HOPS`` is set (an integer N), trust
+      only the right-most N hops of XFF — those are the addresses
+      inserted by our own proxy layer (Railway / Fly load balancer /
+      Cloudflare in front of the worker). Walk leftward from the end
+      and return the last entry the trusted layer added.
+
+    * If the env var is unset (default), DO NOT trust XFF at all.
+      Fall back to ``x-real-ip`` (which Railway and Fly set themselves
+      after stripping XFF) and finally to the empty string. This is
+      the safe default for first-deploy / unknown infrastructure.
+
+    The change is intentionally minimal: callers still get a string,
+    and storage still happens. We've just stopped trusting whatever
+    the client typed.
+    """
+    raw_xff = headers.get("x-forwarded-for", "") or ""
+    xff_chain = [p.strip() for p in raw_xff.split(",") if p.strip()]
+    try:
+        trusted_hops = int(os.environ.get("RECUPERO_TRUSTED_PROXY_HOPS", "0"))
+    except (TypeError, ValueError):
+        trusted_hops = 0
+    if trusted_hops > 0 and xff_chain:
+        # The right-most entry was added by the load balancer closest
+        # to us; walk N hops back from the tail. If the chain is shorter
+        # than N hops, the deployment is mis-configured — take the
+        # left-most entry (still inside the trusted segment) rather
+        # than fabricate trust.
+        idx = max(0, len(xff_chain) - trusted_hops)
+        return xff_chain[idx]
+    real_ip = (headers.get("x-real-ip", "") or "").strip()
+    if real_ip:
+        return real_ip
+    # No trusted source available. Return empty so persistence layer can
+    # store NULL rather than a header-injected forgery.
+    return ""
+
+
 # Jinja env is lazy-built on first request — avoids the import cost
 # for healthcheck-only deployments that never hit /portal.
 _jinja_env = None
@@ -212,9 +260,7 @@ def _route_sign_submit(
         from recupero._pricing import ENGAGEMENT_FEE_USD
         fee = ENGAGEMENT_FEE_USD
 
-    ip = (headers.get("x-forwarded-for", "") or "").split(",")[0].strip()
-    if not ip:
-        ip = headers.get("x-real-ip", "")
+    ip = _extract_client_ip(headers)
     user_agent = headers.get("user-agent", "")[:500]
 
     # The agreement text the victim agreed to — keep this verbatim

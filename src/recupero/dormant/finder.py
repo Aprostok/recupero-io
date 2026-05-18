@@ -75,16 +75,61 @@ log = logging.getLogger(__name__)
 # received $20 USDC dust from this victim might be holding $250k USDT
 # from other sources. We want the full freezable picture per wallet.
 # Decimals match the on-chain ERC-20 metadata; symbols are canonical.
+# Per-symbol decimals for the issuer-token sweep. The dormant
+# detector queries balances by raw-int amount; if decimals is wrong,
+# the human-readable amount is off by orders of magnitude. The
+# fallback at line ~122 was previously 18, which silently zeroed
+# any 6-decimal (USDC-like) or 8-decimal (BTC-wrapped) token whose
+# symbol wasn't listed here. Now exhaustive across every freezable
+# token in issuers.json + standard L2 wrappers; also covers Arbitrum,
+# Base, Polygon, BSC, Solana since real cases span chains.
 _DEFAULT_FREEZABLE_TOKEN_DECIMALS: dict[Chain, list[tuple[str, int]]] = {
     Chain.ethereum: [
-        # (symbol, decimals) — contract addresses come from the issuer DB.
+        # 6-decimal stablecoins
         ("USDC", 6),
         ("USDT", 6),
+        ("PYUSD", 6),
+        ("GUSD", 2),  # Gemini USD is actually 2 decimals
+        # 18-decimal stablecoins
         ("DAI", 18),
         ("BUSD", 18),
-        ("PYUSD", 6),
         ("FDUSD", 18),
         ("TUSD", 18),
+        ("USDS", 18),
+        ("USDe", 18),
+        ("crvUSD", 18),
+        ("LUSD", 18),
+        ("sUSD", 18),
+        ("FRAX", 18),
+        ("fxUSD", 18),
+        # 8-decimal BTC wrappers (the silent-zero bug class)
+        ("cbBTC", 8),
+        ("WBTC", 8),
+        ("tBTC", 18),  # tBTC is actually 18 decimals on Ethereum
+        # 18-decimal LSTs
+        ("stETH", 18),
+        ("wstETH", 18),
+        ("rETH", 18),
+        ("sfrxETH", 18),
+        # Midas wrappers
+        ("mSyrupUSDp", 18),
+        ("msyrupUSDp", 18),  # case-variation seen in seed file
+    ],
+    Chain.arbitrum: [
+        ("USDC", 6), ("USDT", 6), ("DAI", 18),
+        ("ARB", 18), ("WBTC", 8),
+    ],
+    Chain.base: [
+        ("USDC", 6), ("USDbC", 6), ("DAI", 18), ("cbBTC", 8),
+    ],
+    Chain.polygon: [
+        ("USDC", 6), ("USDT", 6), ("DAI", 18), ("WBTC", 8),
+    ],
+    Chain.bsc: [
+        ("USDT", 18), ("USDC", 18), ("BUSD", 18), ("BTCB", 18),
+    ],
+    Chain.solana: [
+        ("USDC", 6), ("USDT", 6), ("PYUSD", 6),
     ],
 }
 
@@ -116,10 +161,23 @@ def _build_issuer_token_refs(chain: Chain) -> list[TokenRef]:
         if contract_lower in seen:
             continue
         seen.add(contract_lower)
-        # Match the issuer DB's symbol back to a known decimal; fall
-        # back to 18 if we don't have it (almost always wrong but
-        # better than failing — operator will see odd amounts).
-        decimals = decimals_by_symbol.get(entry.symbol.upper(), 18)
+        # Match the issuer DB's symbol back to a known decimal. The
+        # table above is now exhaustive across freezable issuers in
+        # issuers.json. If a NEW issuer is added without a decimals
+        # entry, we WARN loudly so the missing decimals get fixed
+        # rather than silently dividing balances by 10^18 (the
+        # historical pre-v0.16.6 default, which zeroed cbBTC/WBTC).
+        symbol_upper = entry.symbol.upper()
+        decimals = decimals_by_symbol.get(symbol_upper)
+        if decimals is None:
+            log.warning(
+                "dormant token decimals: %s (chain=%s) missing from "
+                "_DEFAULT_FREEZABLE_TOKEN_DECIMALS — falling back to 18. "
+                "If this is a 6/8-decimal token, balance will be "
+                "mis-divided. Add to the table.",
+                symbol_upper, chain.value,
+            )
+            decimals = 18
         refs.append(TokenRef(
             chain=chain,
             contract=contract_lower,
@@ -201,7 +259,6 @@ def find_dormant_in_case(
     address_inflow: dict[str, Decimal] = {}
     address_inflow_count: dict[str, int] = {}
     seed_addr_lower = case.seed_address.lower()
-    skipped_contracts: set[str] = set()
     skipped_service_labels: dict[str, str] = {}
 
     for tr in case.transfers:
@@ -215,20 +272,22 @@ def find_dormant_in_case(
         if dest_lower == seed_addr_lower:
             continue
 
-        # Filter out service / public-infrastructure addresses BEFORE
-        # querying their balances. Without this, the dormant detector
-        # surfaces things like Uniswap V4 PoolManager ($97M USDC), Binance
-        # hot wallets ($54M USDT), etc. as "freezable" — those balances
-        # belong to the public infrastructure, not the perpetrator.
+        # Filter LABELED service / public-infrastructure addresses
+        # (Uniswap V4 PoolManager, Binance hot wallets, etc.). Unlabeled
+        # contracts are kept — they may be Safe / Gnosis Safe / smart-
+        # account wallets controlled by the perpetrator. v0.16.6
+        # widened the filter: pre-fix EVERY is_contract=True address
+        # was excluded, hiding multi-sig perp wallets that hold real
+        # freezable funds.
         cp = tr.counterparty
-        if cp.is_contract:
-            skipped_contracts.add(dest)
-            continue
         if cp.label is not None and cp.label.category in _SERVICE_CATEGORIES:
             skipped_service_labels.setdefault(
                 dest, f"{cp.label.category.value}:{cp.label.name}"
             )
             continue
+        # Unlabeled contracts pass through. They get a balance check
+        # like any other destination; if they hold no freezable
+        # tokens, they're naturally filtered by the $10K threshold.
 
         bucket = address_tokens.setdefault(dest, {})
         # Native (contract=None) → use a fixed key so we don't double-add it
@@ -238,14 +297,6 @@ def find_dormant_in_case(
             address_inflow[dest] = address_inflow.get(dest, Decimal("0")) + tr.usd_value_at_tx
         address_inflow_count[dest] = address_inflow_count.get(dest, 0) + 1
 
-    if skipped_contracts:
-        log.info(
-            "dormant: filtered %d contract address(es) from candidate set "
-            "(public-infrastructure balances are not perpetrator funds): %s",
-            len(skipped_contracts),
-            ", ".join(sorted(skipped_contracts)[:5])
-            + ("…" if len(skipped_contracts) > 5 else ""),
-        )
     if skipped_service_labels:
         log.info(
             "dormant: filtered %d service-labeled address(es): %s",

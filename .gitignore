@@ -44,3 +44,12 @@ dump_hl_victim.py
 # Patch files — these were transient build artifacts, no need to version
 apply_patch*.py
 recupero.zip
+
+# Claude Code worktree state — local-only, not for the repo
+.claude/
+
+# Smoke-test output directories — regenerated per-run, not versioned
+scripts/_smoke_deliverables_out/
+scripts/_smoke_flow_out/
+scripts/_smoke_trace_report_out/
+scripts/_validation_download/

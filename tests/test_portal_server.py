@@ -222,10 +222,80 @@ def test_handle_portal_status_renders_html() -> None:
 # Same-origin headers that satisfy the v0.16.7 CSRF / Origin guard.
 # Every POST /sign in production carries these because the form is
 # rendered AND submitted from the same host.
+#
+# v0.17.6 (round-10 security CRIT): the CSRF guard no longer trusts
+# the Host header for non-localhost hosts — production deploys must
+# set ``RECUPERO_PORTAL_PUBLIC_ORIGIN`` to the canonical origin. The
+# autouse fixture below pins that env var for every test in this
+# module so the test headers match the configured production origin.
 _SAME_ORIGIN_HEADERS = {
     "host": "portal.example.com",
     "origin": "https://portal.example.com",
 }
+
+
+@pytest.fixture(autouse=True)
+def _pin_portal_origin(monkeypatch):
+    """v0.17.6: pin RECUPERO_PORTAL_PUBLIC_ORIGIN so the strict CSRF
+    check in _origin_matches_self matches the test headers."""
+    monkeypatch.setenv("RECUPERO_PORTAL_PUBLIC_ORIGIN", "https://portal.example.com")
+
+
+def test_csrf_rejects_host_header_spoof_in_production(monkeypatch) -> None:
+    """v0.17.6 (round-10 security CRIT): with no PUBLIC_ORIGIN env
+    configured, a malicious Host header MUST NOT be trusted to define
+    the same-origin set. Pre-v0.17.6 an attacker who controlled the
+    Host header (e.g. a misconfigured proxy that passed Host through)
+    could set Host: attacker.com + Origin: https://attacker.com and
+    pass the same-origin check.
+    """
+    # Clear the env var to simulate a production misconfig.
+    monkeypatch.delenv("RECUPERO_PORTAL_PUBLIC_ORIGIN", raising=False)
+    verified = _mk_verified()
+    form = urllib.parse.urlencode({"signature_name": "Alex Smith", "agree": "on"})
+    with patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature") as persist:
+        code, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={
+                "host": "attacker.com",
+                "origin": "https://attacker.com",
+                "user-agent": "evil",
+            },
+        )
+    # MUST reject — without the env var pinned, attacker.com Host
+    # cannot define the trust boundary.
+    assert code == 403, (
+        f"CSRF guard accepted attacker-controlled Host header — got {code}"
+    )
+    persist.assert_not_called()
+
+
+def test_csrf_allows_localhost_fallback_for_dev(monkeypatch) -> None:
+    """v0.17.6: localhost / 127.0.0.1 Host fallback is preserved so
+    local-dev workflows (uvicorn serving 127.0.0.1:8000) still work
+    without setting the env var."""
+    monkeypatch.delenv("RECUPERO_PORTAL_PUBLIC_ORIGIN", raising=False)
+    verified = _mk_verified()
+    form = urllib.parse.urlencode({"signature_name": "Alex Smith", "agree": "on"})
+    with patch("recupero.portal.server.verify_token", return_value=verified), \
+         patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
+         patch("recupero.portal.server._persist_signature") as persist:
+        code, _, _ = handle_portal(
+            method="POST",
+            path="/portal/some-43-char-valid-token-for-this-test/sign",
+            body_bytes=form.encode("utf-8"),
+            headers={
+                "host": "127.0.0.1:8000",
+                "origin": "http://127.0.0.1:8000",
+                "user-agent": "test",
+            },
+        )
+    # Localhost fallback must still pass — code != 403.
+    assert code != 403, "localhost CSRF fallback regression — dev workflow broken"
 
 
 def test_handle_portal_sign_form_rejects_short_name() -> None:

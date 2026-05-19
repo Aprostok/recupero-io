@@ -87,9 +87,61 @@ def _load_rate_limits() -> dict[str, float]:
     return out
 
 
+def _is_production_environment() -> bool:
+    """Best-effort detection of a production deploy.
+
+    v0.17.6 (round-10 security CRIT): _is_optional_auth() previously
+    relied on the operator never setting RECUPERO_API_AUTH_OPTIONAL=1
+    in prod. Accidentally setting it (env-var copy-paste, stale
+    .env file in a CI deploy) silently disabled API auth — every
+    endpoint went public with no warning. This helper inspects
+    common deploy markers so the bypass can REFUSE to engage when
+    we're clearly running in prod.
+
+    Detected markers (any one is enough):
+      * RAILWAY_ENVIRONMENT=production (Railway PRD service)
+      * ENVIRONMENT=production / ENV=production / NODE_ENV=production
+      * RECUPERO_ENV=production
+      * SENTRY_ENVIRONMENT=production
+    """
+    prod_markers = {
+        "RAILWAY_ENVIRONMENT",
+        "ENVIRONMENT",
+        "ENV",
+        "NODE_ENV",
+        "RECUPERO_ENV",
+        "SENTRY_ENVIRONMENT",
+    }
+    for var in prod_markers:
+        val = (os.environ.get(var) or "").strip().lower()
+        if val in ("production", "prod"):
+            return True
+    return False
+
+
 def _is_optional_auth() -> bool:
-    """Local-dev bypass. NEVER set in production."""
-    return os.environ.get("RECUPERO_API_AUTH_OPTIONAL", "").strip() == "1"
+    """Local-dev bypass. Production-environment markers REFUSE the
+    bypass and log a loud WARNING so accidental setting in prod
+    can't go undetected.
+
+    v0.17.6 (round-10 security CRIT): pre-v0.17.6 this was a pure
+    env-var read. Now: if we detect production AND someone set the
+    bypass anyway, we log+ignore. Optional-auth requires both
+    RECUPERO_API_AUTH_OPTIONAL=1 AND no production marker.
+    """
+    requested = os.environ.get("RECUPERO_API_AUTH_OPTIONAL", "").strip() == "1"
+    if not requested:
+        return False
+    if _is_production_environment():
+        log.warning(
+            "RECUPERO_API_AUTH_OPTIONAL=1 is set but a production "
+            "environment marker (RAILWAY_ENVIRONMENT / ENVIRONMENT / "
+            "etc.) was detected — REFUSING the auth bypass. Remove "
+            "the env var or unset the production marker if this was "
+            "intentional."
+        )
+        return False
+    return True
 
 
 async def require_api_key(request: Request) -> str:

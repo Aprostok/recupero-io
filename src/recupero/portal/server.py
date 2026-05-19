@@ -175,19 +175,32 @@ def _origin_matches_self(headers: dict[str, str]) -> bool:
     We accept the request only when Origin (or Referer if Origin is
     absent) matches the portal's own scheme://host.
 
-    The expected origin is `RECUPERO_PORTAL_PUBLIC_ORIGIN` (e.g.
-    `https://app.recupero.io`). When unset, we fall back to accepting
-    only same-host requests inferred from the inbound `Host` header —
-    less strict but better than nothing for local-dev.
+    Trust hierarchy (v0.17.6 round-10 security CRIT tightened):
+      1. ``RECUPERO_PORTAL_PUBLIC_ORIGIN`` env (operator-pinned
+         canonical origin, e.g. ``https://app.recupero.io``). This is
+         the ONLY value trusted in production.
+      2. Fallback to the inbound ``Host`` header ONLY when the host
+         is a localhost shape (``localhost``, ``127.0.0.1``, ``[::1]``,
+         optionally with :port). Pre-v0.17.6 we trusted ``Host`` for
+         every host — an attacker who could land arbitrary Host
+         headers (some misconfigured reverse proxies pass them
+         through unmodified) could spoof an Origin match by serving
+         a malicious page on a domain that produces a matching
+         Host header echo. The localhost-only relaxation closes
+         the prod exposure without breaking local-dev `127.0.0.1:8000`
+         workflows.
     """
     configured = os.environ.get("RECUPERO_PORTAL_PUBLIC_ORIGIN", "").strip().rstrip("/")
     expected_origins: list[str] = []
     if configured:
         expected_origins.append(configured)
-    host = (headers.get("host", "") or "").strip()
-    if host:
-        # Accept either scheme for the same host so local-dev works.
+
+    # v0.17.6: only relax to Host fallback when the host looks like
+    # a local-dev address. Production MUST configure the env var.
+    host = (headers.get("host", "") or "").strip().lower()
+    if host and _is_localhost_host(host):
         expected_origins.extend([f"https://{host}", f"http://{host}"])
+
     if not expected_origins:
         # No way to know what to compare against. Fail open here would
         # be terrible; fail closed.
@@ -209,6 +222,30 @@ def _origin_matches_self(headers: dict[str, str]) -> bool:
 
     # Neither header present → reject (same as a cross-origin POST in
     # a browser, which is browser-stripped to "null").
+    return False
+
+
+def _is_localhost_host(host: str) -> bool:
+    """True iff `host` (lowercased, may include :port) is local-dev.
+
+    Recognized shapes:
+      * localhost (any port)
+      * 127.0.0.1 / 127.0.0.x for any 0-255 last octet (any port)
+      * ::1 / [::1] (any port)
+    """
+    # Strip optional :port.
+    hostname = host.split(":")[0] if not host.startswith("[") else (
+        host[1:].split("]")[0]
+    )
+    if hostname in ("localhost", "::1"):
+        return True
+    if hostname.startswith("127."):
+        parts = hostname.split(".")
+        if len(parts) == 4:
+            try:
+                return all(0 <= int(p) <= 255 for p in parts)
+            except ValueError:
+                return False
     return False
 
 

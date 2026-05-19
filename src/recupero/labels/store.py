@@ -37,17 +37,19 @@ SEEDS_DIR = Path(__file__).parent / "seeds"
 def _label_key(address: str) -> str:
     """Compute the dict key used to store/look up a label.
 
+    v0.17.9: delegates to recupero._common.canonical_address_key —
+    single source of truth for EVM-lower / base58-preserve heuristic
+    across risk_scoring, correlation, indirect_exposure, clustering,
+    drainer_detection, perpetrator_trace, cross_chain, and the
+    label store.
+
     EVM hex addresses (0x... 42 chars) are case-insensitive: lowercased so
     "0xABCD..." and "0xabcd..." match. Base58 (Solana / Tron T-prefix /
     Bitcoin) and any other non-EVM form is case-SENSITIVE on-chain — keys
     must preserve case verbatim.
-
-    Heuristic dispatch on prefix+length avoids the need to pass `chain`
-    through every call site (the existing API doesn't carry it on `add`).
     """
-    if address.startswith("0x") and len(address) == 42:
-        return address.lower()
-    return address  # base58 / case-sensitive
+    from recupero._common import canonical_address_key
+    return canonical_address_key(address)
 
 
 class LabelStore:

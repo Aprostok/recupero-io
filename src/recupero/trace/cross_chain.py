@@ -161,16 +161,26 @@ def ingest_bridge_seeds(path: Path | None = None) -> dict[tuple[Chain, str], Bri
         supports_raw = entry.get("supports_to_chains") or []
         supports = tuple(s.lower() for s in supports_raw if isinstance(s, str))
 
+        # v0.17.9 (round-10 forensic HIGH): canonical address keying.
+        # EVM bridges → lower-cased; Solana / Tron base58 bridges
+        # (Wormhole portal on Solana, JustSwap on Tron) preserve case
+        # so the DB lookup matches a tracer-supplied case-preserved
+        # destination. Pre-v0.17.9 a Solana bridge address was stored
+        # lowercased and the trace's case-preserved to_address never
+        # matched — every Wormhole-Solana handoff missed the bridge
+        # detection.
+        from recupero._common import canonical_address_key as _ck
+        addr_key = _ck(addr)
         info = BridgeInfo(
             chain=chain,
-            address=addr.lower(),
+            address=addr_key,
             name=entry.get("name", "(unknown bridge)"),
             protocol=entry.get("protocol", entry.get("name", "(unknown)")),
             confidence=entry.get("confidence", "medium"),
             follow_up_url=entry.get("follow_up_url"),
             supports_to_chains=supports,
         )
-        out[(chain, addr.lower())] = info
+        out[(chain, addr_key)] = info
 
     log.debug("ingested %d bridge entries from %s", len(out), src)
     return out
@@ -208,8 +218,9 @@ def identify_cross_chain_handoffs(
     handoffs: list[CrossChainHandoff] = []
     seen_keys: set[tuple[str, str]] = set()  # de-dup on (tx, bridge_addr)
 
+    from recupero._common import canonical_address_key as _ck
     for t in case.transfers:
-        bridge_addr = t.to_address.lower()
+        bridge_addr = _ck(t.to_address)
         key = (t.chain, bridge_addr)
         info = db.get(key)
         if info is None:

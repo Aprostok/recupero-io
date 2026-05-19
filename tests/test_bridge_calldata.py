@@ -89,8 +89,14 @@ def _build_wormhole_transfer_calldata(
 def test_wormhole_decode_solana_recipient() -> None:
     """Wormhole TokenBridge.transferTokens with recipientChain=1
     (Solana) → destination_chain='solana', recipient = 32-byte
-    pubkey preserved as hex (Solana base58 conversion is caller's
-    job)."""
+    pubkey encoded to **base58** (v0.17.5 forensic CRIT fix).
+
+    Pre-v0.17.5 the decoder returned a 0x-hex form that the
+    downstream Solana adapter couldn't lookup — cross-chain BFS
+    continuation silently dropped every Wormhole→Solana handoff.
+    Now we encode to base58 here so callers don't need to know
+    the destination chain to interpret destination_address.
+    """
     pubkey_hex = "c" * 64  # 32 bytes
     calldata = _build_wormhole_transfer_calldata(
         recipient_chain=1, recipient_bytes32=pubkey_hex,
@@ -100,7 +106,12 @@ def test_wormhole_decode_solana_recipient() -> None:
     )
     assert out is not None
     assert out.destination_chain == "solana"
-    assert out.destination_address == "0x" + pubkey_hex
+    # base58 of 32 bytes of 0xcc — round-trip-check rather than
+    # hardcode the literal so the test exercises the encoder.
+    from recupero.trace.bridge_calldata import _b58encode_no_checksum
+    assert out.destination_address == _b58encode_no_checksum(
+        bytes.fromhex(pubkey_hex)
+    )
     assert out.bridge_method == "transferTokens"
     assert out.confidence == "high"
 

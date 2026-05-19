@@ -196,22 +196,64 @@ class TronAdapter(ChainAdapter):
         return out
 
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
-        """Tron chain-of-custody receipt.
+        """Tron chain-of-custody receipt (v0.17.5).
 
-        TronGrid's /walletsolidity/gettransactionbyid + getreceipt
-        return the raw signed tx and its receipt. We package them
-        into the EvidenceReceipt model identical in shape to the
-        EVM evidence files.
+        Fetches the raw signed transaction, the receipt (post-execution
+        info), and the block header containing the transaction. Packages
+        them into an EvidenceReceipt identical in shape to the EVM
+        evidence files — the freeze-letter generator and the
+        forensic-bundle archive treat them interchangeably.
+
+        Tron tx hashes are 64-char lowercase hex WITHOUT a 0x prefix.
+        The client strips a leading 0x if a caller passes one.
+
+        Raises:
+            TronGridError: when any of the three wallet endpoints fail
+                or return an empty envelope. Callers should catch and
+                fall back to a tx-hash-only chain-of-custody row.
         """
-        # NB: the JSON-RPC-style endpoints live under /walletsolidity/.
-        # Using the REST-style /v1/transactions/{tx_hash} would
-        # return a parsed view, but we want the raw signed tx for
-        # custody. Implementation deferred — for v0.12.0 we raise
-        # so callers that need this get a clear error.
-        raise NotImplementedError(
-            "Tron evidence-receipt fetch not yet implemented. "
-            "Brief outputs work without it; chain-of-custody bundles "
-            "for Tron cases need v0.12.x."
+        signed_tx = self.client.get_transaction_by_id(tx_hash)
+        if not signed_tx or not signed_tx.get("txID"):
+            raise TronGridError(
+                f"empty signed-tx envelope for {tx_hash} — "
+                "TronGrid returned no txID (may be unknown or pending)"
+            )
+        receipt = self.client.get_transaction_info_by_id(tx_hash)
+        if not receipt or "id" not in receipt:
+            raise TronGridError(
+                f"empty receipt for {tx_hash} — TronGrid returned no id "
+                "(tx may be unconfirmed)"
+            )
+        block_number = int(receipt.get("blockNumber") or 0)
+        block_ts_ms = int(receipt.get("blockTimeStamp") or 0)
+        if block_ts_ms <= 0:
+            raise TronGridError(
+                f"receipt for {tx_hash} missing blockTimeStamp — "
+                "cannot assemble evidence (tx may be unconfirmed)"
+            )
+        block_time = datetime.fromtimestamp(block_ts_ms / 1000.0, tz=UTC)
+        try:
+            block_header = self.client.get_block_by_num(block_number)
+        except TronGridError as e:
+            # Block-header fetch is best-effort — its absence doesn't
+            # invalidate the receipt for legal purposes. We persist an
+            # empty dict + log so ops can see degraded coverage.
+            log.warning(
+                "tron block-header fetch failed for tx=%s block=%d: %s",
+                tx_hash, block_number, e,
+            )
+            block_header = {}
+        return EvidenceReceipt(
+            chain=Chain.tron,
+            tx_hash=tx_hash,
+            block_number=block_number,
+            block_time=block_time,
+            raw_transaction=signed_tx,
+            raw_receipt=receipt,
+            raw_block_header=block_header,
+            fetched_at=datetime.now(tz=UTC),
+            fetched_from="api.trongrid.io/wallet/gettransactionbyid",
+            explorer_url=self.explorer_tx_url(tx_hash),
         )
 
     def explorer_tx_url(self, tx_hash: str) -> str:

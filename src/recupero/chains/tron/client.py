@@ -59,6 +59,19 @@ from tenacity import (
 log = logging.getLogger(__name__)
 
 
+def _strip_0x(s: str) -> str:
+    """Strip an optional 0x prefix from a hex string.
+
+    Tron txID's are 64-char lowercase hex WITHOUT a 0x prefix. Some
+    callers (and explorer URLs) pass the EVM-style 0x prefix anyway;
+    the wallet endpoints reject those. Normalize defensively.
+    """
+    s = (s or "").strip()
+    if s.startswith(("0x", "0X")):
+        return s[2:]
+    return s
+
+
 # Public TronGrid endpoints. Mainnet only — we don't expose Shasta /
 # Nile testnets because forensic cases always run against mainnet.
 TRONGRID_BASE_MAINNET = "https://api.trongrid.io"
@@ -222,7 +235,49 @@ class TronGridClient:
         "up through now" timestamp window."""
         return self._get("/v1/blocks/latest")
 
-    # ---------- Low-level GET ---------- #
+    def get_transaction_by_id(self, tx_hash: str) -> dict[str, Any]:
+        """Fetch the signed transaction by hash (v0.17.5).
+
+        Used by the adapter's fetch_evidence_receipt to assemble
+        the chain-of-custody bundle. Returns the raw signed-tx
+        envelope including ``raw_data`` (contract list, ref_block,
+        expiration, fee_limit), ``signature``, and ``txID``.
+
+        Tron tx hashes are 64-char lowercase hex (no 0x prefix).
+        The /wallet/gettransactionbyid endpoint expects POST with
+        ``{"value": hex_hash}``.
+        """
+        return self._post(
+            "/wallet/gettransactionbyid",
+            body={"value": _strip_0x(tx_hash)},
+        )
+
+    def get_transaction_info_by_id(self, tx_hash: str) -> dict[str, Any]:
+        """Fetch the transaction receipt (post-execution info) by hash.
+
+        Returns block number, contract results, log events, energy
+        usage, and fee — the receipt half of the evidence bundle.
+
+        Same POST shape as get_transaction_by_id.
+        """
+        return self._post(
+            "/wallet/gettransactioninfobyid",
+            body={"value": _strip_0x(tx_hash)},
+        )
+
+    def get_block_by_num(self, block_num: int) -> dict[str, Any]:
+        """Fetch a block header by block number (v0.17.5).
+
+        Tron's wallet endpoint returns the block header + parent
+        hash + transactions array. We use it for the
+        EvidenceReceipt.raw_block_header field.
+        """
+        return self._post(
+            "/wallet/getblockbynum",
+            body={"num": int(block_num)},
+        )
+
+    # ---------- Low-level GET / POST ---------- #
 
     @retry(
         retry=retry_if_exception_type(TronGridRateLimitError),
@@ -271,6 +326,56 @@ class TronGridClient:
         if isinstance(body, dict) and body.get("Error"):
             raise TronGridError(f"TronGrid error for {url}: {body.get('Error')}")
         return body
+
+    @retry(
+        retry=retry_if_exception_type(TronGridRateLimitError),
+        wait=wait_exponential(multiplier=1.0, min=1, max=30),
+        stop=stop_after_attempt(5),
+        reraise=True,
+    )
+    def _post(
+        self,
+        path: str,
+        *,
+        body: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Internal JSON POST with rate limiting + 429 / 5xx retry.
+
+        Used for Tron's wallet endpoints (gettransactionbyid,
+        gettransactioninfobyid, getblockbynum), which require POST
+        even when semantically read-only. The retry / error shape
+        mirrors _get exactly.
+        """
+        self.limiter.wait()
+        url = f"{self.base_url}{path}"
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["TRON-PRO-API-KEY"] = self.api_key
+        try:
+            resp = self._client.post(url, json=body, headers=headers)
+        except httpx.RequestError as e:
+            raise TronGridError(f"network error: {e}") from e
+        if resp.status_code == 429:
+            ra = resp.headers.get("Retry-After", "(none)")
+            log.info("trongrid 429 rate limit; retry-after=%s", ra)
+            raise TronGridRateLimitError(
+                f"HTTP 429 for {url} (retry-after={ra})"
+            )
+        if resp.status_code >= 500:
+            raise TronGridRateLimitError(
+                f"HTTP {resp.status_code} for {url}: {resp.text[:200]!r}"
+            )
+        if resp.status_code != 200:
+            raise TronGridError(
+                f"HTTP {resp.status_code} for {url}: {resp.text[:500]!r}"
+            )
+        try:
+            out = resp.json()
+        except ValueError as e:
+            raise TronGridError(f"non-JSON response from {url}: {e}") from e
+        if isinstance(out, dict) and out.get("Error"):
+            raise TronGridError(f"TronGrid error for {url}: {out.get('Error')}")
+        return out if isinstance(out, dict) else {"data": out}
 
 
 __all__ = (

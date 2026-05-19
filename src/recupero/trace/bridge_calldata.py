@@ -45,6 +45,40 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 
+# Bitcoin / Solana / Tron base58 alphabet (same set, same order).
+# Used by the Wormhole decoder to convert raw 32-byte pubkeys
+# (Solana destinations) and 21-byte payloads (Tron destinations)
+# into the canonical address forms the downstream adapters expect.
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _b58encode_no_checksum(b: bytes) -> str:
+    """Encode raw bytes as base58 (no checksum step).
+
+    Solana addresses are b58(pubkey) with no checksum, so this is the
+    direct encoding. Tron addresses are b58(payload + sha256d(payload)[:4]);
+    the caller computes the checksum and passes the concatenation.
+
+    Duplicates the implementation in chains.tron.address._b58encode
+    intentionally — pulling it in would create a dependency from a
+    chain-agnostic module to a chain-specific one. The alphabet and
+    encoding rules are fixed by the base58 spec (Satoshi 2009), so
+    duplication carries near-zero drift risk.
+    """
+    n_leading_zeros = 0
+    for byte in b:
+        if byte == 0:
+            n_leading_zeros += 1
+        else:
+            break
+    num = int.from_bytes(b, "big")
+    encoded = ""
+    while num > 0:
+        num, rem = divmod(num, 58)
+        encoded = _B58_ALPHABET[rem] + encoded
+    return ("1" * n_leading_zeros) + encoded
+
+
 @dataclass(frozen=True)
 class BridgeDecodeResult:
     """One decoded bridge call.
@@ -116,6 +150,12 @@ _WORMHOLE_CHAIN_IDS = {
     23: "arbitrum",
     24: "optimism",
     30: "base",
+    # v0.17.5 (round-10 forensic HIGH): Tron + Bitcoin coverage.
+    # Tron (chain 18) and Bitcoin (chain 21) handoffs were silently
+    # dropped pre-v0.17.5 because their Wormhole IDs weren't mapped;
+    # adapter exists for both now.
+    18: "tron",
+    21: "bitcoin",
 }
 
 # LayerZero chain IDs (Stargate uses these).
@@ -218,12 +258,34 @@ def _decode_wormhole(
         # recipient — bytes32 at slot [96..128]
         recipient_hex = args_blob[96*2:128*2]
         # For EVM destinations: right-padded address (last 40 hex)
-        # For Solana: full 32-byte pubkey (use as-is)
+        # For Solana: full 32-byte pubkey → base58
+        # For Tron: 21-byte payload (prefix 0x41 + 20 address bytes) → base58check
         if dest_chain == "solana":
-            # Solana addresses are base58 of the 32-byte pubkey. We can
-            # surface the hex form; the operator's tooling (Solscan etc.)
-            # will accept it.
-            dest_address = "0x" + recipient_hex
+            # v0.17.5 (round-10 forensic CRIT): pre-v0.17.5 we surfaced
+            # the raw "0x" + 64-hex form of the 32-byte pubkey, but
+            # Solana's RPC and the Helius client both require base58
+            # — so any cross-chain BFS continuation against the decoded
+            # destination silently failed at the adapter boundary
+            # (returned []). Encode here so the downstream Solana
+            # adapter receives the canonical form.
+            try:
+                pubkey_bytes = bytes.fromhex(recipient_hex)
+                dest_address = _b58encode_no_checksum(pubkey_bytes)
+            except ValueError:
+                dest_address = None
+        elif dest_chain == "tron":
+            # v0.17.5 (round-10 forensic CRIT): Wormhole-to-Tron is
+            # rare but legitimate. The bytes32 recipient encodes the
+            # full 21-byte payload (0x41 prefix + 20 address bytes)
+            # right-padded into 32 bytes — last 21 are the payload.
+            try:
+                payload = bytes.fromhex(recipient_hex[-42:])
+                # Append checksum and encode.
+                import hashlib as _hl
+                checksum = _hl.sha256(_hl.sha256(payload).digest()).digest()[:4]
+                dest_address = _b58encode_no_checksum(payload + checksum)
+            except ValueError:
+                dest_address = None
         else:
             dest_address = "0x" + recipient_hex[24:]  # last 20 bytes
 

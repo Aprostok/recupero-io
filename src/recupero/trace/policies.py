@@ -51,6 +51,26 @@ def _is_burn_or_zero_address(address: Address) -> bool:
     return address in _BURN_OR_ZERO_ADDRESSES
 
 
+def _is_synthetic_placeholder(address: Address) -> bool:
+    """True if `address` is a synthetic Recupero-internal placeholder.
+
+    v0.17.5 (round-10 forensic HIGH): the Hyperliquid scraper emits
+    Transfer rows whose ``to_address`` is ``"hyperliquid:unknown_destination"``
+    for events with no parseable on-chain destination (Recupero-side
+    metadata, NOT a real address). Pre-v0.17.5 the BFS tried to
+    follow these — adapter.is_contract / fetch_*_outflows obviously
+    fail, but each fail still burned one Etherscan probe + one
+    Helius/TronGrid round-trip per BFS wave. Now: terminal, like
+    burn addresses.
+
+    Pattern: ``<protocol>:<sentinel>`` — colon-separated. No real
+    on-chain address contains a colon, so the check is unambiguous.
+    """
+    if not address:
+        return False
+    return ":" in address
+
+
 @dataclass
 class TracePolicy:
     """Default policy.
@@ -105,6 +125,11 @@ class TracePolicy:
         # tracing further is wasted budget and the analyst-facing brief
         # showing "trace continues at 0x0…" reads as a forensic error.
         if _is_burn_or_zero_address(transfer.to_address):
+            return False
+        # v0.17.5 (round-10 forensic HIGH): synthetic placeholders (e.g.
+        # "hyperliquid:unknown_destination") are TERMINAL — no adapter
+        # can resolve them and each fail burns API budget.
+        if _is_synthetic_placeholder(transfer.to_address):
             return False
         if transfer.counterparty.label is None:
             return True  # unlabeled — still investigate

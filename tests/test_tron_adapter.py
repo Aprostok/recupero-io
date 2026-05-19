@@ -269,3 +269,73 @@ def test_for_chain_dispatches_tron() -> None:
     from recupero.chains.base import ChainAdapter
     adapter = ChainAdapter.for_chain(Chain.tron, config=None)
     assert isinstance(adapter, TronAdapter)
+
+
+# ---- fetch_evidence_receipt (v0.17.5) ---- #
+
+
+def test_evidence_receipt_assembles_three_endpoint_bundle() -> None:
+    """v0.17.5 (round-10 forensic CRIT): fetch_evidence_receipt
+    now wires together /wallet/gettransactionbyid +
+    /wallet/gettransactioninfobyid + /wallet/getblockbynum, packs
+    them into EvidenceReceipt, and returns. Pre-v0.17.5 it raised
+    NotImplementedError, so every Tron chain-of-custody bundle was
+    missing — failing the audit-grade promise to compliance teams.
+    """
+    client = MagicMock()
+    client.get_transaction_by_id.return_value = {
+        "txID": "abc123",
+        "raw_data": {"contract": [{"type": "TriggerSmartContract"}]},
+        "signature": ["deadbeef"],
+    }
+    client.get_transaction_info_by_id.return_value = {
+        "id": "abc123",
+        "blockNumber": 12345,
+        "blockTimeStamp": 1_750_000_000_000,
+        "contractResult": ["00"],
+        "fee": 1000,
+    }
+    client.get_block_by_num.return_value = {
+        "blockID": "0000000000003039xxx",
+        "block_header": {"raw_data": {"number": 12345}},
+    }
+    adapter = TronAdapter(client=client)
+    receipt = adapter.fetch_evidence_receipt("abc123")
+    assert receipt.chain == Chain.tron
+    assert receipt.tx_hash == "abc123"
+    assert receipt.block_number == 12345
+    assert receipt.raw_transaction["txID"] == "abc123"
+    assert receipt.raw_receipt["id"] == "abc123"
+    assert "0000000000003039" in receipt.raw_block_header["blockID"]
+    assert "tronscan" in receipt.explorer_url
+
+
+def test_evidence_receipt_raises_on_empty_signed_tx() -> None:
+    """An unknown / pending tx returns {} from TronGrid — we surface
+    that as a TronGridError so the caller can fall back to a
+    tx-hash-only chain-of-custody row rather than persisting an
+    incomplete EvidenceReceipt."""
+    client = MagicMock()
+    client.get_transaction_by_id.return_value = {}
+    adapter = TronAdapter(client=client)
+    with pytest.raises(TronGridError, match="empty signed-tx envelope"):
+        adapter.fetch_evidence_receipt("unknown_hash")
+
+
+def test_evidence_receipt_tolerates_block_header_fetch_failure() -> None:
+    """If only the block-header fetch fails (TronGrid 5xx mid-call),
+    we still produce an EvidenceReceipt — chain-of-custody legality
+    for the transaction itself doesn't depend on the block-header
+    bundle. raw_block_header lands as {} and we log a WARNING."""
+    client = MagicMock()
+    client.get_transaction_by_id.return_value = {
+        "txID": "x", "raw_data": {}, "signature": [],
+    }
+    client.get_transaction_info_by_id.return_value = {
+        "id": "x", "blockNumber": 99, "blockTimeStamp": 1_750_000_000_000,
+    }
+    client.get_block_by_num.side_effect = TronGridError("flaky")
+    adapter = TronAdapter(client=client)
+    receipt = adapter.fetch_evidence_receipt("x")
+    assert receipt.raw_block_header == {}
+    assert receipt.block_number == 99

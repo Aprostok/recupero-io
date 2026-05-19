@@ -909,17 +909,30 @@ def _build_transfer(raw: dict, *, hop_depth: int, parent_transfer_id: str | None
 
 
 def _compute_exchange_endpoints(transfers: list[Transfer]) -> list[ExchangeEndpoint]:
+    # v0.18.3 (round-11 trace-HIGH-001): canonical-key the aggregation
+    # dict. Pre-v0.18.3 used raw `t.to_address` directly — for Solana
+    # / Tron / Bitcoin a counterparty address arriving from different
+    # adapters with mixed-case OR an operator-pasted label match in
+    # different case would split into two distinct ExchangeEndpoint
+    # rows for the SAME logical address (totals halved, deposit
+    # windows split). Now: key by canonical form, preserve the
+    # first-seen original-case form for display.
+    from recupero._common import canonical_address_key as _ck
     by_addr: dict[str, list[Transfer]] = defaultdict(list)
+    display_addr: dict[str, str] = {}  # canonical → first-seen original case
     for t in transfers:
         if (
             t.counterparty.label is not None
             and t.counterparty.label.category
             in (LabelCategory.exchange_deposit, LabelCategory.exchange_hot_wallet)
         ):
-            by_addr[t.to_address].append(t)
+            key = _ck(t.to_address)
+            by_addr[key].append(t)
+            display_addr.setdefault(key, t.to_address)
 
     endpoints: list[ExchangeEndpoint] = []
-    for address, ts in by_addr.items():
+    for key, ts in by_addr.items():
+        address = display_addr.get(key, key)
         label = ts[0].counterparty.label
         # v0.17.3 (round-10 audit MED): explicit narrowing — the filter
         # above only kept transfers where label is not None, but `assert`

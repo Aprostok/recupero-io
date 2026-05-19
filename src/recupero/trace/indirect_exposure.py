@@ -212,12 +212,26 @@ def compute_indirect_exposure(
                 best_paths[dst] = (weighted, 1, ())
 
         # Hop 2..max_h: for each address we've reached, propagate
-        # to its outflow destinations using the amount-share
-        # factor.
+        # to its outflow destinations using the amount-share factor.
+        #
+        # v0.18.3 (round-11 forensic-CRIT-001/002 + trace-CRIT-002):
+        # pre-v0.18.3 the gate `if h + 1 > hop: continue` allowed ANY
+        # address at h < hop to re-extend, recording the new entry
+        # with the OUTER loop's `hop` value rather than `h + 1`. At
+        # outer-iter hop=3, an h=1 entry extending one step had its
+        # destination stamped hop=3 — but it's truly only 2 hops from
+        # source. Combined with single-decay-only weighting, this
+        # inflated OFAC indirect-exposure numbers by ~1/decay (2× at
+        # default 0.5) and double-counted across sources. The
+        # `combined_indirect_usd` headline on the brief was off by
+        # 2-4× whenever max_h >= 3.
+        #
+        # New: strict level-by-level BFS — only extend from entries
+        # exactly one hop shallower than the current outer hop.
         for hop in range(2, max_h + 1):
             additions: list[tuple[str, Decimal, int, tuple[str, ...]]] = []
             for addr, (weighted_in, h, path) in list(best_paths.items()):
-                if h + 1 > hop:
+                if h + 1 != hop:
                     continue
                 total_out = outflow_totals.get(addr, Decimal("0"))
                 if total_out <= 0:

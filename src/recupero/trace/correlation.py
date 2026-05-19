@@ -190,15 +190,35 @@ def build_observations(
     # drainer signals so we can flag this column for future lookups.
     drainer_attributed: set[str] = set()
     if drainer_findings is not None:
+        # v0.18.3 (round-11 trace-CRIT-001): pre-v0.18.3 this block
+        # was DOUBLY broken:
+        #   1. `DrainerSignal.severity` is a STRING ("critical" /
+        #      "high" / "medium" / "low"), but the code did
+        #      `>= 3` against it → TypeError → swallowed by bare
+        #      except → `drainer_attributed` stayed empty FOREVER.
+        #   2. `DrainerSignal` exposes `address` (singular), NOT
+        #      `addresses` (plural) — even if the type bug were
+        #      fixed, the iteration would land on an empty list.
+        # Net effect: `is_drainer_attributed` was permanently False
+        # on every observation written to public.address_observations,
+        # SILENTLY DEFEATING the compounding-moat capability
+        # ("this wallet has been seen as drainer infrastructure in
+        # N prior cases"). Now: map severity string → int, iterate
+        # the singular `address` field.
+        _SEVERITY_TO_INT = {"critical": 4, "high": 3, "medium": 2, "low": 1}
         try:
             signals = getattr(drainer_findings, "signals", []) or []
             for sig in signals:
-                # Each signal has `addresses` (list of involved
-                # addresses) and a `severity` int. We flag the
-                # high-severity ones.
-                if getattr(sig, "severity", 0) >= 3:
-                    for a in getattr(sig, "addresses", []) or []:
-                        drainer_attributed.add(_ck(a))
+                raw_sev = getattr(sig, "severity", None)
+                sev_int = (
+                    _SEVERITY_TO_INT.get(raw_sev.lower(), 0)
+                    if isinstance(raw_sev, str)
+                    else (int(raw_sev) if raw_sev is not None else 0)
+                )
+                if sev_int >= 3:
+                    addr = getattr(sig, "address", None) or getattr(sig, "counterparty", None)
+                    if addr:
+                        drainer_attributed.add(_ck(addr))
         except Exception:  # noqa: BLE001
             # Defensive — if drainer_findings doesn't conform to the
             # expected shape, just skip this enrichment.
@@ -424,19 +444,33 @@ def lookup_correlations(
         log.warning("psycopg not installed — correlation lookup skipped")
         return {}
 
-    # Lowercase EVM-shaped inputs; preserve case for non-EVM (BTC base58,
-    # Tron base58check are case-sensitive). We can't reliably tell here
-    # without a chain hint, so we query with the lowercase form AND the
-    # original form via UNION, and let the caller's chain context match.
+    # v0.18.3 (round-11 arch-CRIT-002 + trace-HIGH-002): canonical
+    # address keying. Pre-v0.18.3 the function did `addr.strip()`
+    # + `addr.strip().lower()` and queried BOTH via UNION-style ANY(),
+    # claiming "we can't reliably tell here without a chain hint".
+    # But (a) we DO have a chain-aware heuristic via _ck, and (b)
+    # writers (build_observations + recorder) now use _ck so the
+    # rows in address_observations are stored canonical-keyed.
+    # Mixed-case EVM inputs match the lowercased rows; base58
+    # inputs match the case-preserved rows. Single-query, deterministic.
     queries: list[str] = []
     for a in addresses:
-        a_stripped = a.strip()
-        if not a_stripped:
-            continue
-        queries.append(a_stripped)
-        lower = a_stripped.lower()
-        if lower != a_stripped:
-            queries.append(lower)
+        canon = _ck(a)
+        if canon:
+            queries.append(canon)
+    # Defense-in-depth: also include the raw lowercased form for
+    # legacy rows that may have been written pre-v0.17.5 (when the
+    # writer was unconditional .lower()). Cheap union; no false
+    # positives because EVM canonical form == lowercase form anyway.
+    legacy_lowered: list[str] = []
+    for a in addresses:
+        a_stripped = (a or "").strip()
+        if a_stripped:
+            lower = a_stripped.lower()
+            canon = _ck(a_stripped)
+            if lower != canon:  # only add if it would expand coverage
+                legacy_lowered.append(lower)
+    queries.extend(legacy_lowered)
     if not queries:
         return {}
 

@@ -140,7 +140,19 @@ def detect_drainer_pattern(
     from recupero._common import canonical_address_key as _ck
     seed = _ck(case.seed_address)
 
-    # Signal 1: direct outflow to known drainer
+    # Signal 1: direct outflow to known drainer.
+    #
+    # v0.18.3 (round-11 trace-MED-010): deterministic attribution.
+    # Pre-v0.18.3 `findings.drainer_attribution = entry.name` was
+    # unconditionally OVERWRITTEN on every match — so when the victim
+    # sent to multiple known drainers (Pink Drainer + Inferno Drainer
+    # in the same case), the brief showed whichever was iterated
+    # LAST, depending on case.transfers ordering AND high_risk_db
+    # dict iteration order (hash-seed dependent across Python
+    # invocations). Same exact case re-emitted could report different
+    # drainer attribution. Now: keep the FIRST match in transfer
+    # order (deterministic by block_time / tx_hash ordering of
+    # case.transfers, which is stable across runs).
     for t in case.transfers:
         if _ck(t.from_address) != seed:
             continue
@@ -160,11 +172,11 @@ def detect_drainer_pattern(
             ),
             confidence="high",
         ))
-        # Attribution: the highest-confidence drainer overlap
-        # becomes the classification's attributed operator.
-        findings.drainer_attribution = entry.name
-        findings.is_drainer_case = True
-        findings.classification_confidence = "high"
+        # Deterministic attribution: first match wins.
+        if not findings.is_drainer_case:
+            findings.drainer_attribution = entry.name
+            findings.is_drainer_case = True
+            findings.classification_confidence = "high"
 
     # Signal 2: outflow to non-protocol contract.
     #

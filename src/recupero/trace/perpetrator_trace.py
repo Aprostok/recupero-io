@@ -300,14 +300,22 @@ def merge_perpetrator_findings(
     # to pass-1's coordinate system.
     # v0.17.9: canonical keying for the depth-at-hub map so base58
     # destinations match the seed_address lookup below.
+    #
+    # v0.18.3 (round-11 trace-HIGH-003): MIN depth, not MAX. Pre-v0.18.3
+    # took the MAXIMUM depth at which we reached the address — but
+    # pass-2 then SHIFTS pass-2 transfers by `1 + pass1_depth_at[hub]
+    # + 1`. With MAX, a hub reachable at both depth 1 (direct) AND
+    # depth 2 (via drainer→hub) was shifted by `1 + 2 + 1 = 4`,
+    # marking pass-2 transfers as 4-hops-from-victim when they're
+    # really 2 hops (depth 1 to the hub + 1 hop into pass-2). The
+    # brief's "pass-2 holdings at hop 4 from victim" misled investigators
+    # into thinking the chain was longer than reality. MIN preserves
+    # the shortest-path semantics callers assume.
     from recupero._common import canonical_address_key as _ck
     pass1_depth_at: dict[str, int] = {}
     for t in pass1_case.transfers:
         addr = _ck(t.to_address)
-        # Take the MAXIMUM depth at which we reached the address
-        # — handles cases where multiple pass-1 paths converge
-        # on the same hub.
-        if addr not in pass1_depth_at or t.hop_depth > pass1_depth_at[addr]:
+        if addr not in pass1_depth_at or t.hop_depth < pass1_depth_at[addr]:
             pass1_depth_at[addr] = t.hop_depth
 
     # v0.16.6 (audit r8a CRITICAL): dedupe pass-2 transfers against

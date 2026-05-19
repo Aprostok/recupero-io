@@ -291,9 +291,15 @@ def generate_briefs(
         "brief_id": brief_id,
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),  # explicit UTC suffix
         "verified_at": now.strftime("%Y-%m-%d"),
+        # v0.17.4 (round-10 audit HIGH): primary_chain populated for the
+        # LE handoff template. Pre-v0.17.4 the template's
+        # `{{ primary_chain | default("Ethereum") }}` silently rendered
+        # "Ethereum" for every Solana/Tron/BSC theft, putting a wrong-
+        # chain attestation on the cover page of every non-ETH brief.
+        "primary_chain": primary_case.chain.value.capitalize(),
         "trace_started_at": (
-            primary_case.trace_started_at.strftime("%Y-%m-%d %H:%M:%S")
-            if primary_case.trace_started_at else "—"
+            primary_case.trace_started_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+            if primary_case.trace_started_at else None
         ),
         "software_version": __version__,
         "victim": victim.model_dump(),
@@ -957,10 +963,19 @@ def _build_issuer_freezable_ctx(
             n_historical += 1
         else:
             n_current += 1
+        # v0.17.4 (round-10 audit CRIT): per-holding chain. Pre-v0.17.4
+        # the URL was always built against `chain` (the case's source
+        # chain), so freezable holdings discovered via cross-chain BFS
+        # continuation (e.g., USDC on Polygon found from an Ethereum
+        # seed) rendered as etherscan.io links. Compliance reviewers
+        # clicked through to "address not found" — or worse, to a
+        # third party's wallet that happened to share the same hex
+        # address on Ethereum.
+        per_holding_chain = h.get("chain") or chain
         holdings_out.append({
             "address": addr,
             "address_short": _short_addr(addr),
-            "explorer_url": _address_explorer_url(addr, chain),
+            "explorer_url": _address_explorer_url(addr, per_holding_chain),
             "amount": h.get("amount", "—"),
             "usd": h.get("usd", "—"),
             "status": h.get("status", "INVESTIGATE"),

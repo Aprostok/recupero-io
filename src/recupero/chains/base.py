@@ -95,3 +95,25 @@ class ChainAdapter(ABC):
     @abstractmethod
     def explorer_address_url(self, address: Address) -> str:
         ...
+
+    # --- lifecycle ---
+
+    def close(self) -> None:
+        """Release any HTTP clients / file handles held by the adapter.
+
+        Default implementation closes ``self.client`` if it has a
+        ``close`` method (matches the EVM/Helius/TronGrid client
+        pattern). Adapters with multiple clients should override.
+
+        v0.17.4 (round-10 audit CRIT): the tracer's cross-chain
+        continuation pass instantiated destination-chain adapters
+        per investigation but never closed them — over hours of
+        operation the worker leaked httpx clients until the OS
+        file-descriptor limit was hit and the process hung.
+        """
+        client = getattr(self, "client", None)
+        if client is not None and hasattr(client, "close"):
+            try:
+                client.close()
+            except Exception:  # noqa: BLE001
+                pass

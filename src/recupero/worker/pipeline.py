@@ -183,33 +183,54 @@ def _is_obvious_placeholder_address(addr: str) -> bool:
     *contain* a placeholder-like substring; only addresses whose
     *entire body* matches a placeholder pattern.
 
-    Returns False for any non-EVM-shaped input (wrong length,
-    missing 0x prefix, etc.) — the chain adapter handles
-    validation for those cases.
+    v0.17.4 (round-10 audit MED): non-EVM coverage extended.
+    Solana base58 sentinels (all-1 system program, all-A vanity,
+    11111... incinerator), Tron T-prefix repeating-fill, and
+    Bitcoin all-1 bech32 are now detected so non-EVM placeholder
+    submissions also fail fast before burning AI budget.
     """
-    if not addr or not addr.startswith("0x"):
+    if not addr:
         return False
-    body = addr[2:].lower()
-    if len(body) != 40:
-        return False
-    # All same character — zero / max / repeating filler addresses.
-    if len(set(body)) == 1:
-        return True
-    # Cycling-digit pattern. Try cycle lengths that divide 40 evenly.
-    # 10 catches Hekla's 1234567890-repeating; 8/5/4/2 catch other
-    # plausible filler patterns.
-    for cycle_len in (2, 4, 5, 8, 10, 20):
-        if len(body) % cycle_len != 0:
-            continue
-        first = body[:cycle_len]
-        if body == first * (len(body) // cycle_len):
+    if addr.startswith("0x"):
+        body = addr[2:].lower()
+        if len(body) != 40:
+            return False
+        # All same character — zero / max / repeating filler addresses.
+        if len(set(body)) == 1:
             return True
-    # Known test sentinels operators sometimes paste.
-    _KNOWN_SENTINELS = {
-        "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-        "cafebabecafebabecafebabecafebabecafebabe",
+        # Cycling-digit pattern. Try cycle lengths that divide 40 evenly.
+        for cycle_len in (2, 4, 5, 8, 10, 20):
+            if len(body) % cycle_len != 0:
+                continue
+            first = body[:cycle_len]
+            if body == first * (len(body) // cycle_len):
+                return True
+        # Known test sentinels operators sometimes paste.
+        _KNOWN_SENTINELS = {
+            "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+            "cafebabecafebabecafebabecafebabecafebabe",
+        }
+        if body in _KNOWN_SENTINELS:
+            return True
+        return False
+
+    # Non-EVM detection (v0.17.4).
+    # Solana addresses are 32-44 chars base58; Tron is 34 chars T-prefix
+    # base58. Repeating-character / Solana system program sentinels are
+    # the common placeholder shapes operators paste.
+    _NON_EVM_PLACEHOLDERS = {
+        # Solana system program — operators sometimes paste as "Solana
+        # null address". Real cases reaching this address would be
+        # genuine system-program interactions, not theft destinations.
+        "11111111111111111111111111111111",
+        # Solana incinerator program (burn).
+        "1nc1nerator11111111111111111111111111111111",
     }
-    if body in _KNOWN_SENTINELS:
+    if addr in _NON_EVM_PLACEHOLDERS:
+        return True
+    # All-same-character placeholder (e.g., "AAAAA..." Solana vanity).
+    # Bitcoin bech32 "bc1q" + all-q is impractical but check.
+    if len(addr) >= 25 and len(set(addr)) <= 2:
         return True
     return False
 
@@ -349,6 +370,15 @@ def _run_one_inner(
 
     api_costs_usd: Decimal | None = None
 
+    # v0.17.4 (round-10 audit HIGH): track the "between-stage" phase so
+    # the catch-all `except Exception` below can tag mark_failed with
+    # something more actionable than stage="unknown". When the worker
+    # blew up populating the watchlist or summarizing the freeze brief,
+    # ops had no way to tell that from a tracer crash without reading
+    # the full traceback. _run_stage already tags its own stage via
+    # _StageFailure; this covers everything in between.
+    _phase = "setup"
+
     try:
         with _local_case_dir(cfg, case_id_str) as (local_store, case_dir):
             # Seed victim.json only when we have a backing case.
@@ -384,11 +414,13 @@ def _run_one_inner(
             else:
                 _hydrate_local_from_bucket(store, case_dir, ["freeze_asks.json"])
 
-            # Watchlist population is best-effort: failures here log but do
-            # not fail the investigation. The audit list is a side-effect,
-            # not a deliverable.
-            _populate_watchlist(inv, local_store, case_dir, db)
-
+            # v0.17.4 (round-10 audit HIGH): pass-2 BEFORE watchlist.
+            # Pre-v0.17.4 the watchlist was populated using only
+            # pass-1 destinations, then pass-2 added new perp wallets
+            # that NEVER entered the watchlist — defeating the whole
+            # point of pass-2 (surface downstream destinations for
+            # nightly monitoring).
+            #
             # Pass-2 perpetrator-forward trace (v0.8.0) ----------------------
             # Runs from the consolidation hub(s) identified during
             # pass-1, surfacing downstream destinations that
@@ -413,6 +445,11 @@ def _run_one_inner(
                     local_store=local_store, case_dir=case_dir, bucket=store,
                 )
 
+            # Watchlist population AFTER pass-2 so newly-discovered
+            # downstream destinations enter monitoring. Best-effort.
+            _phase = "watchlist"
+            _populate_watchlist(inv, local_store, case_dir, db)
+
             # Editorial stage ----------------------------------------------
             # Skipped when the row has skip_editorial=True (wallet
             # traces, internal R&D — no real victim to write prose
@@ -432,9 +469,23 @@ def _run_one_inner(
                     lambda: _stage_ai_editorial(inv, case_id_str, case_data,
                                                 local_store, case_dir, store),
                 )
-                # Write the cost on the row before pausing — pass 2 won't
-                # have access to this local since the review checkpoint
-                # resets state. mark_built_package's COALESCE preserves it.
+                # v0.17.4 (round-10 audit HIGH): persist api_costs_usd
+                # BEFORE the status transition. Pre-v0.17.4, if the
+                # mark_review_required UPDATE failed (transient DB
+                # blip), the Anthropic spend was real but no audit
+                # record survived — operators silently undercounted
+                # AI costs. Now: dedicated record call first; status
+                # transition is a separate operation.
+                try:
+                    db.record_api_cost(inv.id, api_costs_usd)
+                except Exception as exc:  # noqa: BLE001
+                    # Even this fails? Log loudly so monitoring catches it.
+                    log.exception(
+                        "investigation %s: FAILED to persist api_costs_usd=$%s "
+                        "before review_required transition (anthropic spend "
+                        "occurred but audit row is now incomplete): %s",
+                        inv.id, api_costs_usd, exc,
+                    )
                 _stop_hb()
                 db.mark_review_required(inv.id, api_costs_usd=api_costs_usd)
                 log.info("investigation %s paused at review_required (api_costs=$%s)",
@@ -476,13 +527,28 @@ def _run_one_inner(
                     ),
                 )
 
-            # Per docs/investigation-integration.md, the worker passes
-            # through `building_package` (output columns written here),
-            # then `complete` (stamps completed_at). The Python-side
-            # builder generates per-issuer freeze HTMLs + LE handoff;
-            # JS-based PDF/docx production is still deferred but the
-            # worker now produces the operator-ready HTML deliverables.
+            # v0.17.4 (round-10 audit HIGH): build_package FIRST, then
+            # mark_built_package. Pre-v0.17.4 the summary columns
+            # (total_loss_usd, max_recoverable_usd, freezable_issuers)
+            # were committed BEFORE the deliverables were actually
+            # built. If _stage_build_package then crashed, the row
+            # ended up `failed` but with summary columns populated —
+            # contradicting the contract that "those columns mean we
+            # have artifacts." Also: this eliminates the prior double
+            # DB transition to `building_package`.
+            #
+            # Run the package-building stage in the BUILDING_PACKAGE
+            # state, then commit summary columns + transition to
+            # complete only after artifacts exist.
+            _phase = "summarize"
             summary = _summarize_brief(case_dir / "freeze_brief.json")
+            _run_stage(
+                db, inv.id, S.BUILDING_PACKAGE,
+                lambda: _stage_build_package(inv, case_id_str,
+                                             local_store, case_dir, store),
+            )
+            _phase = "finalize"
+            _stop_hb()
             db.mark_built_package(
                 inv.id,
                 storage_path=store.storage_prefix,  # "investigations/<id>/" (with trailing /)
@@ -491,12 +557,6 @@ def _run_one_inner(
                 freezable_issuers=summary.get("freezable_issuers"),
                 api_costs_usd=api_costs_usd,
             )
-            _run_stage(
-                db, inv.id, S.BUILDING_PACKAGE,
-                lambda: _stage_build_package(inv, case_id_str,
-                                             local_store, case_dir, store),
-            )
-            _stop_hb()
             db.mark_completed(inv.id)
             log.info("investigation %s completed", inv.id)
 
@@ -505,9 +565,17 @@ def _run_one_inner(
         _stop_hb()
         db.mark_failed(inv.id, stage=exc.stage, error=exc.message)
     except Exception as exc:  # noqa: BLE001
-        log.exception("investigation %s failed (unstaged): %s", inv.id, exc)
+        # v0.17.4 (round-10 audit HIGH): tag the phase (setup / watchlist /
+        # summarize / finalize) instead of the bare "unknown" — gives ops
+        # actionable info from the row alone without re-deriving from the
+        # traceback. Genuinely unknown errors (none of the explicit phase
+        # transitions fired) still surface as "unknown" because _phase
+        # starts there.
+        log.exception("investigation %s failed (%s): %s", inv.id, _phase, exc)
         _stop_hb()
-        db.mark_failed(inv.id, stage="unknown", error=f"{type(exc).__name__}: {exc}")
+        db.mark_failed(
+            inv.id, stage=_phase, error=f"{type(exc).__name__}: {exc}",
+        )
 
 
 # ----- Stages ----- #
@@ -970,6 +1038,10 @@ def _synthesize_freeze_brief_from_asks(
                 total_recoverable += usd
             token_entry["holdings"].append({
                 "address": e.get("address"),
+                # v0.17.4 (round-10 audit HIGH): preserve per-holding
+                # chain so explorer URLs render against the correct
+                # explorer for cross-chain freezable destinations.
+                "chain": e.get("chain"),
                 "amount": (
                     f"{e.get('amount', '?')} {symbol}"
                     if e.get("amount") else "?"
@@ -1499,17 +1571,27 @@ def _hydrate_local_from_bucket(
     filenames: list[str],
 ) -> None:
     """Pull a few files from the bucket into ``case_dir`` so a downstream
-    stage can read them. Used on resume."""
+    stage can read them. Used on resume.
+
+    v0.17.4 (round-10 audit CRIT): writes are now atomic via
+    `atomic_write_text` (tempfile + os.replace). Pre-v0.17.4 a worker
+    crash mid-`write_text` left a TRUNCATED case.json that the next
+    stage parsed without complaint — running editorial against an
+    empty trace, then emitting an empty brief, then shipping a hollow
+    PDF to LE. Now: bucket downloads either land in full or not at all.
+    """
+    from recupero._common import atomic_write_text
     case_dir.mkdir(parents=True, exist_ok=True)
     for name in filenames:
         try:
             if name.endswith(".json"):
                 data = store.read_json(name)
-                (case_dir / name).write_text(
-                    json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8",
+                atomic_write_text(
+                    case_dir / name,
+                    json.dumps(data, indent=2, ensure_ascii=False),
                 )
             else:
                 text = store.read_text(name)
-                (case_dir / name).write_text(text, encoding="utf-8")
+                atomic_write_text(case_dir / name, text)
         except FileNotFoundError:
             log.warning("expected %s in bucket on resume but it was missing", name)

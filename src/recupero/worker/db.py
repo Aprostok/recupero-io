@@ -522,6 +522,46 @@ class WorkerDB:
             },
         )
 
+    def record_api_cost(
+        self,
+        investigation_id: UUID,
+        api_costs_usd: Decimal,
+    ) -> None:
+        """Persist editorial-stage API spend independently of any status transition.
+
+        v0.17.4 (round-10 audit HIGH): pre-v0.17.4 the api_costs_usd
+        column was only written as a side effect of mark_review_required
+        (and the equivalent for mark_built_package). If that UPDATE
+        failed (pooler hiccup, contention) the Anthropic spend was real
+        but invisible to ops accounting. The pipeline now calls
+        record_api_cost() BEFORE the status transition, so a partial
+        failure still leaves an audit trail.
+
+        We intentionally accept worker_id mismatch here (no AND
+        worker_id = me clause): pass 2 may run on a different worker
+        than pass 1, and we'd rather over-record costs than lose them.
+        The pipeline only calls this immediately after spending, so
+        accidental cross-investigation writes are not a concern.
+
+        Semantics match mark_review_required's COALESCE(new, existing):
+        set when given, preserve otherwise. The pipeline's call pattern
+        is record_api_cost(x) → mark_review_required(api_costs_usd=x),
+        so both writes converge on the same value and no double-counting
+        occurs in either the happy path or the partial-failure path.
+        """
+        sql = f"""
+            UPDATE {T_INV}
+               SET {COL_API_COSTS} = %(api)s
+             WHERE {COL_ID} = %(id)s;
+        """
+        self._exec(
+            sql,
+            {
+                "api": api_costs_usd,
+                "id": investigation_id,
+            },
+        )
+
     def mark_review_required(
         self,
         investigation_id: UUID,

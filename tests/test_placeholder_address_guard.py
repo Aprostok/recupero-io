@@ -146,16 +146,24 @@ def test_wrong_length_not_flagged() -> None:
     assert not _is_obvious_placeholder_address("0x" + "0" * 41)
 
 
-def test_solana_base58_not_flagged() -> None:
-    """A real Solana address (base58) doesn't start with 0x and has
-    different length — should pass through as False rather than
-    confusing the detector."""
-    # Sample Solana addresses
+def test_solana_real_address_not_flagged() -> None:
+    """A real Solana address (base58, mixed-character) passes through
+    as False — only obvious-placeholder shapes flip True."""
     assert not _is_obvious_placeholder_address(
         "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"  # Token program
     )
-    assert not _is_obvious_placeholder_address(
-        "11111111111111111111111111111111"  # System program (base58 1s)
+
+
+def test_solana_system_program_flagged() -> None:
+    """v0.17.4: the Solana system program (32 base58 ones) is exactly
+    the kind of sentinel operators paste into the intake form — fail
+    fast before burning AI budget on an empty case. Same rationale as
+    the 0x000…000 zero address on EVM."""
+    assert _is_obvious_placeholder_address(
+        "11111111111111111111111111111111"  # System program
+    )
+    assert _is_obvious_placeholder_address(
+        "1nc1nerator11111111111111111111111111111111"  # Incinerator
     )
 
 

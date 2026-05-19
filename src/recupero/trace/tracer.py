@@ -347,24 +347,37 @@ def run_trace(
     # visited set. Same-chain only; cross-chain bridge destinations
     # are still surfaced via the post-trace report (multi-chain BFS
     # state is a larger refactor for v0.16.10).
-    _continue_past_dex_and_bridges(
-        case=case,
-        chain=chain,
-        adapter=adapter,
-        label_store=label_store,
-        price_client=price_client,
-        policy=policy,
-        incident_time=incident_time,
-        config=config,
-        env=env,
-        evidence_dir=case_dir / "tx_evidence",
-        visited=visited,
-        is_contract_cache=is_contract_cache,
-        trace_concurrency=trace_concurrency,
-    )
-
-    # Cleanup
-    price_client.close()
+    # v0.17.4 (round-10 audit CRIT): wrap continuation + cleanup in
+    # try/finally so price_client (and any dst-chain adapters opened
+    # by the continuation pass) are released even on exception.
+    # Pre-v0.17.4 a continuation-pass crash leaked httpx clients
+    # for the lifetime of the worker process; over hours of activity
+    # the OS file-descriptor limit hit and the process wedged.
+    try:
+        _continue_past_dex_and_bridges(
+            case=case,
+            chain=chain,
+            adapter=adapter,
+            label_store=label_store,
+            price_client=price_client,
+            policy=policy,
+            incident_time=incident_time,
+            config=config,
+            env=env,
+            evidence_dir=case_dir / "tx_evidence",
+            visited=visited,
+            is_contract_cache=is_contract_cache,
+            trace_concurrency=trace_concurrency,
+        )
+    finally:
+        try:
+            price_client.close()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            adapter.close()
+        except Exception:  # noqa: BLE001
+            pass
     return case
 
 
@@ -471,6 +484,9 @@ def _continue_past_dex_and_bridges(
     # adapter (different chain) — they don't share the source-chain
     # adapter's wave loop. Shape: list[(chain, address, depth_hint)].
     cross_chain_seeds: list[tuple[Chain, Address, int]] = []
+    # v0.17.4 (round-10 audit HIGH): dedup cross-chain seeds so the
+    # same destination doesn't get traced twice. Keyed on (chain, addr).
+    cross_chain_visited: set[tuple[str, str]] = set()
 
     for handoff in handoffs:
         # Same-chain destination from decoded calldata.
@@ -484,6 +500,22 @@ def _continue_past_dex_and_bridges(
             dest_key = _address_visited_key(chain, decoded_addr)
             if dest_key in visited:
                 continue
+            # v0.17.4 (round-10 audit MED): apply the same stop_at_contract
+            # gate as the primary BFS. Without it, a bridge handoff to a
+            # router contract gets traced and the router's outflows
+            # explode the budget on the next pass.
+            if policy.stop_at_contract:
+                try:
+                    if adapter.is_contract(decoded_addr):
+                        log.info(
+                            "skipping same-chain bridge dest %s on %s — "
+                            "is_contract=True",
+                            decoded_addr, chain.value,
+                        )
+                        visited.add(dest_key)
+                        continue
+                except Exception:  # noqa: BLE001
+                    pass  # treat as EOA on lookup failure
             continuation_seeds.append((decoded_addr, 1, "bridge_handoff_samechain"))
             visited.add(dest_key)
         elif cross_chain_continue and decoded_chain_str:
@@ -492,11 +524,23 @@ def _continue_past_dex_and_bridges(
             try:
                 dest_chain = Chain(decoded_chain_str)
             except (ValueError, KeyError):
-                log.info(
-                    "cross-chain handoff to unknown chain %r; skipping",
+                # v0.17.4 (round-10 audit HIGH): log at WARNING (was
+                # INFO). Decoded destinations to chains not in our
+                # Chain enum (avalanche / optimism / linea / zksync)
+                # are detected but silently dropped — they belong on
+                # the v0.17.x chain-expansion roadmap.
+                log.warning(
+                    "cross-chain handoff decoded to chain %r — not in "
+                    "Chain enum, BFS continuation skipped. Brief "
+                    "candidate list still surfaces it.",
                     decoded_chain_str,
                 )
                 continue
+            # v0.17.4 (round-10 audit HIGH): dedup cross-chain seeds.
+            xkey = (dest_chain.value, _address_visited_key(dest_chain, decoded_addr))
+            if xkey in cross_chain_visited:
+                continue
+            cross_chain_visited.add(xkey)
             cross_chain_seeds.append((dest_chain, decoded_addr, 1))
 
     if not continuation_seeds and not cross_chain_seeds:
@@ -579,26 +623,37 @@ def _continue_past_dex_and_bridges(
                     dst_chain.value, exc,
                 )
                 continue
+            # v0.17.4 (round-10 audit CRIT): try/finally so the
+            # destination-chain adapter's httpx client is released
+            # even when the wave raises. Pre-v0.17.4 each cross-chain
+            # continuation leaked one or more httpx clients per
+            # investigation — FD exhaustion over hours of operation.
             try:
-                xchain_results = _process_wave(
-                    dst_seeds,
-                    adapter=dst_adapter,
-                    label_store=label_store,
-                    price_client=price_client,
-                    policy=policy,
-                    incident_time=incident_time,
-                    config=config,
-                    evidence_dir=evidence_dir,
-                    concurrency=trace_concurrency,
-                )
-            except Exception as exc:  # noqa: BLE001
-                log.warning(
-                    "cross-chain continuation on %s failed: %s — skipping",
-                    dst_chain.value, exc,
-                )
-                continue
-            for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
-                new_transfers.extend(hop_transfers)
+                try:
+                    xchain_results = _process_wave(
+                        dst_seeds,
+                        adapter=dst_adapter,
+                        label_store=label_store,
+                        price_client=price_client,
+                        policy=policy,
+                        incident_time=incident_time,
+                        config=config,
+                        evidence_dir=evidence_dir,
+                        concurrency=trace_concurrency,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "cross-chain continuation on %s failed: %s — skipping",
+                        dst_chain.value, exc,
+                    )
+                    continue
+                for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                    new_transfers.extend(hop_transfers)
+            finally:
+                try:
+                    dst_adapter.close()
+                except Exception:  # noqa: BLE001
+                    pass
 
     if new_transfers:
         case.transfers = list(case.transfers) + new_transfers

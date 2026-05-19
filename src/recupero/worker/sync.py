@@ -133,11 +133,15 @@ def download_editorial(store: SupabaseCaseStore, case_dir: Path) -> None:
     The admin UI is allowed to rewrite this file during the review checkpoint.
     The worker MUST re-read it from the bucket before the emit stage; the
     in-memory or local-disk copy may be stale.
+
+    v0.17.4 (round-10 audit HIGH): write is now atomic. A worker crash
+    mid-`write_text` could leave an empty brief_editorial.json that the
+    next stage misread as REVIEW_REQUIRED=False, emitting a broken brief.
     """
+    from recupero._common import atomic_write_text
     data = store.read_json("brief_editorial.json")
     dest = case_dir / "brief_editorial.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(dest, json.dumps(data, indent=2, ensure_ascii=False))
     log.debug("refreshed brief_editorial.json from bucket → %s", dest)
 
 

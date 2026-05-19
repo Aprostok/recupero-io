@@ -606,6 +606,10 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
                 primary_contact = a.get("primary_contact")
             holdings.append({
                 "address": addr,
+                # v0.17.4 (round-10 audit HIGH): per-holding chain.
+                # Cross-chain freezable holdings render against the
+                # correct explorer URL instead of always-etherscan.
+                "chain": a.get("chain"),
                 "amount": f"{a.get('amount', '?')} {a.get('symbol', '')}",
                 "usd": usd(holding_usd),
                 "status": status,

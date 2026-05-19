@@ -103,10 +103,39 @@ class TracePolicy:
     service_wallet_outflow_threshold: int = 200
 
     def should_include(self, transfer: Transfer) -> bool:
-        """Filter: should this transfer appear in the case at all?"""
+        """Filter: should this transfer appear in the case at all?
+
+        v0.18.0 (round-11 forensic-HIGH-003): pre-v0.18.0 transfers with
+        `usd_value_at_tx is None` (pricing fetch failed, token had no
+        coingecko_id, historical price unavailable, etc.) UNCONDITIONALLY
+        passed the dust filter — they got included in the case with no
+        USD value. Downstream `_compute_total_drained` and `_sum_usd`
+        skip None-USD transfers, so they didn't inflate the headline,
+        but they DID:
+          * bloat the counterparty list with phantom dust hops
+          * pass through to brief destinations sorted at $0
+          * confuse the operator ("why is this $0 transfer in the brief?")
+        Now: when USD is unavailable AND token amount is below a tiny
+        absolute floor (10 units of any token regardless of decimals),
+        treat as dust. Real theft transfers have non-trivial amounts;
+        unpriced dust transfers (spam, airdrops, sentinel) get the same
+        treatment as priced dust.
+        """
         if (
             transfer.usd_value_at_tx is not None
             and transfer.usd_value_at_tx < self.dust_threshold_usd
+        ):
+            return False
+        # Unpriced transfers: defensive amount-only dust check.
+        # `amount_decimal` is the human-units amount (1.0 ETH not 10^18).
+        # A transfer of < 10 token-units of ANY token without a USD price
+        # is overwhelmingly dust/spam. Real theft amounts always exceed
+        # this regardless of token decimals — even a 6-decimal stablecoin
+        # at 10 units = $10 of value if real.
+        if (
+            transfer.usd_value_at_tx is None
+            and transfer.amount_decimal is not None
+            and transfer.amount_decimal < Decimal("10")
         ):
             return False
         return True

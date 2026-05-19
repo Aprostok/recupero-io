@@ -325,8 +325,16 @@ def _extract_destinations(
     candidate_addrs.update(editorial_notes.keys())
 
     # Don't include the victim's own seed if it somehow slipped through.
-    candidate_addrs.discard(case.seed_address)
-    candidate_addrs.discard(seed_lower)
+    # v0.18.0 (round-11 reports-CRIT-001): pre-v0.18.0 we only discarded
+    # the raw `case.seed_address` and `seed_lower`. For base58 chains
+    # (Solana / Tron / Bitcoin), `seed_lower` is the case-PRESERVED form
+    # (canonical_address_key keeps base58 case). If a freeze_targets entry
+    # somehow contained the seed in a DIFFERENT case (operator-pasted into
+    # editorial, round-tripped through JSON), the `discard` missed it and
+    # the victim's own wallet appeared in the customer-facing DESTINATIONS
+    # list — embarrassing on a freeze letter cover. Now: filter by
+    # canonical key so case-variants of the seed are all caught.
+    candidate_addrs = {a for a in candidate_addrs if _ck(a) != seed_lower}
 
     destinations = []
     for addr in sorted(
@@ -1061,10 +1069,19 @@ def emit_brief(
         )
         # Build address-balance lookup from the freezable list
         # so clusters can report their total exposure.
+        # v0.18.0 (round-11 forensic-HIGH-001): canonical-key the
+        # address. Pre-v0.18.0 this was `.lower()` — fine for EVM, but
+        # `clusters_to_brief_section` keys cluster members via
+        # canonical_address_key (which preserves base58 case for
+        # Solana / Tron / Bitcoin). The mismatch silently returned
+        # $0.00 for every base58 cluster's `total_balance_usd`, sorting
+        # them to the bottom of the brief and burying the largest
+        # exposures.
+        from recupero._common import canonical_address_key as _ck
         address_balances: dict[str, Decimal] = {}
         for entry in freezable:
             for holding in entry.get("holdings") or []:
-                addr = (holding.get("address") or "").lower()
+                addr = _ck(holding.get("address") or "")
                 if not addr:
                     continue
                 bal = _parse_usd_string(holding.get("usd"))

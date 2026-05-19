@@ -433,7 +433,7 @@ def _check_one_address(
     global rate-limiters in their respective clients; running multiple
     instances of this function in parallel can't exceed the per-key cap.
     """
-    holdings = _fetch_holdings(address, tokens, adapter, price_client)
+    holdings = _fetch_holdings(address, tokens, adapter, price_client, chain=chain)
     total_usd = sum(
         (h.usd_value for h in holdings if h.usd_value is not None),
         start=Decimal("0"),
@@ -470,8 +470,15 @@ def _fetch_holdings(
     tokens: list[TokenRef],
     adapter: EthereumAdapter,
     price_client: CoinGeckoClient,
+    chain: Chain = Chain.ethereum,
 ) -> list[TokenHolding]:
-    """Fetch current balance for each (address, token) pair and price them."""
+    """Fetch current balance for each (address, token) pair and price them.
+
+    v0.18.0 (round-11 pricing-CRIT-005): `chain` parameter added so the
+    native-balance check uses the chain's actual native asset (BNB on BSC,
+    POL on Polygon, etc.) instead of hardcoding ETH. Defaults to ethereum
+    for back-compat with callers that don't pass chain.
+    """
     holdings: list[TokenHolding] = []
     for token in tokens:
         if token.contract is None:
@@ -491,26 +498,99 @@ def _fetch_holdings(
             usd_value=usd, pricing_error=price.error,
         ))
 
-    # Always check native ETH (any address might still hold gas dust or more)
-    try:
-        eth_raw = adapter.client.get_eth_balance(address)
-    except Exception as e:  # noqa: BLE001
-        log.debug("native balance failed for %s: %s", address, e)
-        eth_raw = 0
-    if eth_raw > 0:
-        eth_token = TokenRef(
-            chain=Chain.ethereum, contract=None,
-            symbol="ETH", decimals=18, coingecko_id="ethereum",
-        )
-        eth_decimal = Decimal(eth_raw) / Decimal(10 ** 18)
-        price = price_client.price_now(eth_token)
-        usd = (price.usd_value * eth_decimal) if price.usd_value is not None else None
-        holdings.append(TokenHolding(
-            token=eth_token, raw_amount=eth_raw, decimal_amount=eth_decimal,
-            usd_value=usd, pricing_error=price.error,
-        ))
+    # v0.18.0 (round-11 pricing-CRIT-005): chain-aware native balance.
+    # Pre-v0.18.0 this hardcoded ETH (chain=ethereum, decimals=18,
+    # coingecko_id=ethereum) for every chain. Net effect on non-Ethereum:
+    #   * BSC: BNB ($600-700 USD) priced as ETH ($2-3K USD) → 4-5× over
+    #   * Polygon: POL ($0.30-0.50) priced as ETH → 6000-10000× over
+    #   * Tron / Solana / Bitcoin: adapter.client.get_eth_balance
+    #     AttributeErrors silently (`except Exception`) — bug masked,
+    #     no native dormant detection on those chains
+    # Now: dispatch to per-chain native-balance method + chain-appropriate
+    # TokenRef. Best-effort: chains whose adapter doesn't expose a native
+    # balance probe just skip the native check (consistent with old
+    # masked behavior, but logged at debug).
+    # `chain` was threaded through the kwarg above (default Chain.ethereum
+    # for back-compat). For multi-chain dispatch the caller passes the
+    # actual chain.
+    _native = _fetch_native_holding(address, adapter, chain, price_client)
+    if _native is not None:
+        holdings.append(_native)
 
     return holdings
+
+
+# Per-chain native-asset metadata. Used by _fetch_native_holding to
+# build the correct TokenRef + decimals for the dormant detector's
+# native balance check. Mirrors the per-chain fields in config.py's
+# *Params classes (native_symbol / native_decimals / coingecko_native_id)
+# without taking a config dependency here.
+_NATIVE_BY_CHAIN: dict[Chain, dict[str, object]] = {
+    Chain.ethereum: {"symbol": "ETH",  "decimals": 18, "cg": "ethereum"},
+    Chain.arbitrum: {"symbol": "ETH",  "decimals": 18, "cg": "ethereum"},
+    Chain.base:     {"symbol": "ETH",  "decimals": 18, "cg": "ethereum"},
+    Chain.bsc:      {"symbol": "BNB",  "decimals": 18, "cg": "binancecoin"},
+    Chain.polygon:  {"symbol": "POL",  "decimals": 18, "cg": "polygon-ecosystem-token"},
+    Chain.solana:   {"symbol": "SOL",  "decimals": 9,  "cg": "solana"},
+    Chain.tron:     {"symbol": "TRX",  "decimals": 6,  "cg": "tron"},
+    Chain.bitcoin:  {"symbol": "BTC",  "decimals": 8,  "cg": "bitcoin"},
+}
+
+
+def _fetch_native_holding(
+    address: str,
+    adapter,
+    chain: Chain,
+    price_client: CoinGeckoClient,
+) -> TokenHolding | None:
+    """Best-effort native-balance probe per chain.
+
+    Returns None when:
+      * the chain isn't in `_NATIVE_BY_CHAIN` (unknown native asset)
+      * the adapter doesn't expose a method we know how to call
+      * the balance probe raises (transient network, rate limit)
+      * the balance is zero
+
+    Each adapter exposes the native-balance method differently:
+      * EVM: `adapter.client.get_eth_balance(address)` returns wei
+      * Solana / Tron / Bitcoin: not currently exposed → skip
+    """
+    meta = _NATIVE_BY_CHAIN.get(chain)
+    if meta is None:
+        return None
+    raw = 0
+    try:
+        # EVM family — the unified Etherscan-V2 client exposes
+        # get_eth_balance regardless of which chain it's pointed at
+        # (the chainid is set at client construction). For BSC / Polygon
+        # / etc. the same call returns the chain's native asset balance.
+        client = getattr(adapter, "client", None)
+        if client is not None and hasattr(client, "get_eth_balance"):
+            raw = client.get_eth_balance(address)
+        else:
+            # Solana / Tron / Bitcoin: no native-balance method exposed
+            # on the adapter today. Skip silently (consistent with the
+            # pre-v0.18.0 masked behavior, but documented).
+            return None
+    except Exception as e:  # noqa: BLE001
+        log.debug("native balance failed for %s on %s: %s", address, chain.value, e)
+        return None
+    raw = int(raw or 0)
+    if raw <= 0:
+        return None
+    token = TokenRef(
+        chain=chain, contract=None,
+        symbol=str(meta["symbol"]),
+        decimals=int(meta["decimals"]),  # type: ignore[arg-type]
+        coingecko_id=str(meta["cg"]),
+    )
+    decimal_amount = Decimal(raw) / Decimal(10 ** int(meta["decimals"]))  # type: ignore[arg-type]
+    price = price_client.price_now(token)
+    usd = (price.usd_value * decimal_amount) if price.usd_value is not None else None
+    return TokenHolding(
+        token=token, raw_amount=raw, decimal_amount=decimal_amount,
+        usd_value=usd, pricing_error=price.error,
+    )
 
 
 def write_dormant_report(

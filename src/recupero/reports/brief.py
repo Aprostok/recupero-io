@@ -640,12 +640,57 @@ def _find_theft_events(
         # diverges or the case has no direct-from-seed transfers).
         outbound = list(case.transfers)
 
-    # Primary event: highest-USD with sensible fallback
+    # Primary event: highest-USD with sensible fallback.
+    #
+    # v0.18.0 (round-11 forensic-CRIT-005): pre-v0.18.0 the unpriced
+    # fallback was `max(outbound, key=amount_decimal)` — which compares
+    # raw token-amount values across different tokens. Result: a
+    # 1,000,000,000,000-token shitcoin transfer was picked as "primary
+    # theft event" over a 1 ETH transfer, because Decimal compares the
+    # numeric value of amount_decimal regardless of what token it is.
+    # The LE handoff cover then claimed the headline theft was a
+    # billion-shitcoin transfer instead of the real $3K ETH theft.
+    #
+    # New behavior:
+    #   1. Prefer priced transfers (still picks max USD).
+    #   2. Unpriced fallback: prefer NATIVE-asset transfers first (ETH,
+    #      BNB, SOL, etc.) since those are typically real currency; among
+    #      those pick the largest. Then known stablecoins (USDC, USDT,
+    #      DAI). Then everything else by recency (most-recent first).
+    #   3. Final fallback: first by block_time ascending (oldest first).
+    #
+    # The result is operationally never wrong — if priced data exists
+    # at all, the USD ranking dominates. The unpriced fallback is a
+    # last-resort heuristic and we surface it via a `log.warning`.
     priced = [t for t in outbound if t.usd_value_at_tx is not None]
     if priced:
         primary = max(priced, key=lambda t: t.usd_value_at_tx)
     else:
-        primary = max(outbound, key=lambda t: t.amount_decimal, default=None)
+        _NATIVE_SYMBOLS = {"ETH", "BNB", "SOL", "TRX", "BTC", "POL", "MATIC", "AVAX"}
+        _STABLE_SYMBOLS = {"USDC", "USDT", "DAI", "BUSD", "FDUSD", "TUSD", "USDP", "USDE", "USDe", "PYUSD"}
+
+        def _rank_key(t):
+            sym = (t.token.symbol or "").upper()
+            if sym in _NATIVE_SYMBOLS:
+                tier = 0
+            elif sym in _STABLE_SYMBOLS:
+                tier = 1
+            else:
+                tier = 2
+            # Within tier, prefer larger amount_decimal but the
+            # comparison is now within a SINGLE token class (native,
+            # stablecoin, or other). Negate so max() picks the largest.
+            return (tier, -float(t.amount_decimal or 0), t.block_time)
+
+        primary = min(outbound, key=_rank_key, default=None)
+        if primary is not None:
+            log.warning(
+                "_find_theft_events: no transfer carried usd_value_at_tx; "
+                "picked primary by token-class fallback (sym=%s, "
+                "amount=%s, tx=%s). Pricing failure upstream — verify "
+                "the brief's headline before LE handoff.",
+                primary.token.symbol, primary.amount_decimal, primary.tx_hash,
+            )
     if primary is None:
         return []
 

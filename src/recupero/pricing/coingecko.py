@@ -387,16 +387,25 @@ class CoinGeckoClient:
         if token.contract is None:
             # Native — caller should have set coingecko_id ('ethereum' for ETH)
             return None
-        addr_lower = token.contract.lower()
-        cache_key = (token.chain, addr_lower)
+        # v0.18.0 (round-11 forensic-HIGH-002): chain-aware case
+        # preservation. EVM contracts are case-insensitive (lowercased
+        # for canonical-key consistency); Solana / Tron mints are
+        # case-sensitive at the network layer AND CoinGecko expects the
+        # canonical mixed-case form at /coins/{platform}/contract/{addr}.
+        # Pre-v0.18.0 every base58 lookup got lowercased → 404 → cached
+        # as None → every non-stablecoin SPL/TRC-20 was unpriced AND the
+        # process-wide cache poisoned for that token.
+        from recupero._common import canonical_address_key as _ck
+        canon = _ck(token.contract)
+        cache_key = (token.chain, canon)
         if cache_key in self._contract_id_cache:
             return self._contract_id_cache[cache_key]
         try:
-            cg_id = self._fetch_contract_to_id(token.chain, addr_lower)
+            cg_id = self._fetch_contract_to_id(token.chain, canon)
         except Exception as e:  # noqa: BLE001
             log.debug(
                 "coingecko contract->id resolution failed for %s on %s: %s",
-                addr_lower, token.chain.value, e,
+                canon, token.chain.value, e,
             )
             # Do NOT cache a transient lookup failure as None — that would
             # mean every subsequent transfer in this process for the same
@@ -413,12 +422,17 @@ class CoinGeckoClient:
         retry=retry_if_exception_type(httpx.TransportError),
         reraise=True,
     )
-    def _fetch_contract_to_id(self, chain: Chain, contract_lower: str) -> str | None:
+    def _fetch_contract_to_id(self, chain: Chain, contract_canon: str) -> str | None:
+        """v0.18.0: parameter renamed from `contract_lower` to `contract_canon`
+        — for EVM platforms this is the lower-cased hex (CoinGecko expects
+        lowercase); for Solana / Tron it's the canonical mixed-case base58
+        (CoinGecko expects the on-chain canonical form, not the lowercased
+        form which doesn't decode to a valid address)."""
         platform = _CHAIN_TO_CG_PLATFORM.get(chain)
         if platform is None:
             log.debug("no coingecko platform mapping for chain %s", chain.value)
             return None
-        url = f"{self._base_url()}/coins/{platform}/contract/{contract_lower}"
+        url = f"{self._base_url()}/coins/{platform}/contract/{contract_canon}"
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=self._auth_params())
         if resp.status_code == 404:

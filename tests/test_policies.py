@@ -59,10 +59,29 @@ class TestTracePolicy:
         assert p.should_include(_transfer(Decimal("10"))) is False
         assert p.should_include(_transfer(Decimal("100"))) is True
 
-    def test_unknown_usd_passes_through(self) -> None:
+    def test_unknown_usd_with_substantial_amount_passes(self) -> None:
+        """v0.18.0 (round-11 forensic-HIGH-003): unpriced transfers
+        with a substantial token amount (>=10 units) still pass — we
+        can't know the USD but the on-chain amount is real and
+        worth surfacing.
+        """
         p = TracePolicy(dust_threshold_usd=Decimal("50"))
-        # If we don't know the USD, we still keep the transfer (better than dropping silently)
-        assert p.should_include(_transfer(None)) is True
+        # Build a transfer with usd=None but amount_decimal=100 token units.
+        t = _transfer(None)
+        t = t.model_copy(update={"amount_decimal": Decimal("100")})
+        assert p.should_include(t) is True
+
+    def test_unknown_usd_with_dust_amount_filtered(self) -> None:
+        """v0.18.0 (round-11 forensic-HIGH-003): unpriced transfers
+        with <10 token units are treated as dust. Pre-v0.18.0
+        unpriced dust passed silently, bloating the counterparty
+        list with phantom hops. Fixture default amount_decimal is
+        1 wei (essentially zero) so the bare unpriced transfer
+        is now filtered.
+        """
+        p = TracePolicy(dust_threshold_usd=Decimal("50"))
+        # Default fixture has amount_decimal = 1 wei (< 10).
+        assert p.should_include(_transfer(None)) is False
 
     def test_max_depth_blocks_traversal(self) -> None:
         p = TracePolicy(max_depth=1)

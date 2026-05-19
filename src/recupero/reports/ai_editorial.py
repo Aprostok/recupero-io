@@ -88,6 +88,34 @@ def _compute_usd_cost(
     )
     return cost.quantize(Decimal("0.0001"))
 
+
+def _resolve_max_usd_per_call() -> Decimal:
+    """Resolve the per-call USD ceiling.
+
+    v0.17.8 (round-10 ops HIGH): operator-overridable via
+    ``RECUPERO_AI_MAX_USD_PER_CALL``. Default $2.00 — generous against
+    typical $0.05-0.15 per editorial call but small enough to catch
+    a runaway retry loop. Set to 0 to disable (logged as WARN).
+    """
+    raw = (os.environ.get("RECUPERO_AI_MAX_USD_PER_CALL", "") or "").strip()
+    if not raw:
+        return Decimal("2.00")
+    try:
+        val = Decimal(raw)
+    except Exception:  # noqa: BLE001
+        log.warning(
+            "RECUPERO_AI_MAX_USD_PER_CALL=%r is not a valid Decimal — "
+            "falling back to default $2.00", raw,
+        )
+        return Decimal("2.00")
+    if val <= 0:
+        log.warning(
+            "RECUPERO_AI_MAX_USD_PER_CALL=%s disables the per-call "
+            "cost ceiling. Runaway retries will burn real budget.", val,
+        )
+        return Decimal("999999")  # effectively unlimited
+    return val
+
 # Fields the AI is asked to draft. Other editorial fields (investigator name,
 # entity, etc.) are static and don't go through the AI.
 AI_DRAFTED_KEYS = [
@@ -1014,7 +1042,13 @@ def call_anthropic_for_editorial(
     # Hard cost ceiling so a misbehaving model can't burn through the
     # budget on retries. Typical cost is $0.05-0.15; $2 leaves plenty
     # of headroom while protecting against runaway loops.
-    _MAX_USD_PER_CALL = Decimal("2.00")
+    #
+    # v0.17.8 (round-10 ops HIGH): operator-overridable via
+    # ``RECUPERO_AI_MAX_USD_PER_CALL`` env. Tightening is desirable
+    # in CI / staging where a $2 runaway burns real budget across
+    # many failing tests. Disabling (set to 0) preserves backward
+    # compatibility but logs a WARN.
+    _MAX_USD_PER_CALL = _resolve_max_usd_per_call()
     for attempt in range(2):  # one retry on bad JSON
         # Pre-flight cost check on retries only (first attempt hasn't
         # billed anything yet).

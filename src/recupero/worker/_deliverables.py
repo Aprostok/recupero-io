@@ -846,6 +846,52 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
             pass
 
 
+def _subprocess_safe_env() -> dict[str, str]:
+    """Return a minimal env dict for render / patcher subprocesses.
+
+    v0.17.7 (round-10 PDF/Output security HIGH): pre-v0.17.7 every
+    subprocess.Popen inherited the worker's full env, including:
+
+      * ANTHROPIC_API_KEY (editorial-stage credentials)
+      * SUPABASE_DB_URL (Postgres password embedded)
+      * HELIUS_API_KEY (Solana RPC creds)
+      * COINGECKO_API_KEY (pricing creds)
+      * RECUPERO_TOKEN_PEPPER (portal-token HMAC pepper)
+      * SMTP / SendGrid creds
+      * Sentry DSN
+
+    If WeasyPrint or any of its deep deps (pango, cairo, fontconfig,
+    pypdf) ever dumped env-var contents into a crash trace, the
+    stderr-capture tempfile would land in Railway logs — every
+    secret leaked at once. The render + patcher subprocesses read
+    NO secrets, so we hand them the minimum needed to find Python,
+    fonts, and tempdirs.
+
+    Allowed keys:
+      * PATH, HOME, LANG/LC_* — POSIX basics
+      * TMPDIR/TEMP/TMP — scratch space
+      * PYTHONPATH/PYTHONHOME/PYTHONIOENCODING — Python interp
+      * XDG_*, FONTCONFIG_*, PANGO_*, CAIRO_* — render cache dirs
+      * SYSTEMROOT, WINDIR, USERPROFILE, APPDATA, LOCALAPPDATA —
+        Windows DLL search path
+    """
+    _ALLOWED_ENV_KEYS = (
+        "PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE",
+        "TMPDIR", "TEMP", "TMP",
+        "PYTHONPATH", "PYTHONHOME", "PYTHONIOENCODING",
+        "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_CONFIG_HOME",
+        "SYSTEMROOT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+        "FONTCONFIG_FILE", "FONTCONFIG_PATH",
+    )
+    import os as _os
+    return {
+        k: v for k, v in _os.environ.items()
+        if k in _ALLOWED_ENV_KEYS
+        or k.startswith("PANGO_")
+        or k.startswith("CAIRO_")
+    }
+
+
 def _patch_pdf_links_subprocess(
     pdf_path: Path, *, timeout_sec: float = 60.0,
 ) -> None:
@@ -900,6 +946,10 @@ def _patch_pdf_links_subprocess(
             [sys.executable, "-c", script, str(pdf_path), str(html_path)],
             stdout=subprocess.PIPE,
             stderr=stderr_file,
+            # v0.17.7: same env-strip rationale as
+            # _render_pdf_in_subprocess. The pypdf patcher reads no
+            # secrets either, so we hand it the minimal env.
+            env=_subprocess_safe_env(),
         )
         deadline = time.monotonic() + timeout_sec
         # Poll loop — yields CPU back to other threads (heartbeat)
@@ -984,6 +1034,7 @@ def _render_pdf_in_subprocess(
     try:
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=stderr_file,
+            env=_subprocess_safe_env(),
         )
         deadline = time.monotonic() + timeout_sec
         while True:

@@ -734,9 +734,13 @@ def _cluster_style(issuer: str) -> dict[str, str]:
 
 
 def _short_addr(addr: str) -> str:
-    if not addr or len(addr) < 12:
-        return addr or ""
-    return f"{addr[:6]}…{addr[-4:]}"
+    # v0.17.3 (round-10 audit MED): delegates to canonical
+    # recupero._common.short_addr so the 6 prior independent
+    # implementations don't drift over time.
+    from recupero._common import short_addr as _canonical
+    return _canonical(addr)
+
+
 
 
 def _soft_wrap(text: str, *, width: int) -> str:

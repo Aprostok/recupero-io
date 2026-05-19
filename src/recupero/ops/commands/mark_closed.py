@@ -30,7 +30,7 @@ def run(*, investigation_id: UUID, reason: str, dsn: str) -> int:
     """Close an active engagement. Returns 0 on success, 1 on
     errors / no-active-engagement."""
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn, conn.cursor() as cur:
+                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, engagement_started_at, engagement_closed_at, "
             "       change_summary "

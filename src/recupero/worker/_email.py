@@ -161,7 +161,14 @@ def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
             attempt_idx + 1, total_attempts, wait_sec, last_exc,
         )
         time.sleep(wait_sec)
-    assert last_exc is not None
+    # v0.17.3 (round-10 audit HIGH): replaced `assert last_exc is not None`
+    # because asserts are STRIPPED under `python -O`, then `raise None`
+    # raises `TypeError: exceptions must derive from BaseException`
+    # masking the original retry-exhaustion error.
+    if last_exc is None:
+        raise RuntimeError(
+            "resend retry loop exited without exception — unreachable"
+        )
     raise last_exc
 
 
@@ -344,7 +351,7 @@ def has_been_sent(
         return False
 
     try:
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -402,7 +409,7 @@ def _log_to_audit(
 
     inv_id_str = str(investigation_id) if investigation_id else None
     try:
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """

@@ -140,11 +140,13 @@ class GraphEdge:
 
 
 def _short_addr(addr: str) -> str:
-    if not addr:
-        return ""
-    if len(addr) <= 12:
-        return addr
-    return f"{addr[:6]}…{addr[-4:]}"
+    # v0.17.3 (round-10 audit MED): delegates to canonical
+    # recupero._common.short_addr so the 6 prior independent
+    # implementations don't drift over time.
+    from recupero._common import short_addr as _canonical
+    return _canonical(addr)
+
+
 
 
 def _explorer_url(chain: str, address: str) -> str:

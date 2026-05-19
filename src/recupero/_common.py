@@ -213,6 +213,100 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
         raise
 
 
+# ---- Database connect helper ---- #
+#
+# v0.17.3 (round-10 audit CRIT): every psycopg.connect site MUST pass
+# `prepare_threshold=None` to remain compatible with Supabase's
+# transaction-mode pooler (port 6543). The v0.16.7 audit added the
+# flag to worker/db.py + pricing/cache.py + worker/main.py, but the
+# round-10 audit found 50+ other sites that silently regressed —
+# payments/dispatcher, portal/server, portal/tokens, monitoring,
+# freeze_learning, screen, watchlist, ops/commands/*, etc.
+#
+# Centralizing the connect path here means new code can't add a new
+# regression. Existing direct `psycopg.connect(..., prepare_threshold=None, connect_timeout=10)` calls are
+# legacy and should be migrated; the round-10 fix touches them
+# individually for surgical-blame-line preservation but new code
+# should use `db_connect()`.
+
+
+def db_connect(dsn: str, **overrides: Any):
+    """Open a psycopg connection with Recupero's standard pooler-safe
+    defaults. Caller can override any kwarg.
+
+    Defaults:
+      * ``prepare_threshold=None`` — disables psycopg auto-prepare so
+        Supabase's transaction-mode pooler doesn't reject after ~5 ops.
+      * ``connect_timeout=10`` — fail-fast on DB outages.
+      * ``autocommit=True`` — most call sites use single-statement ops.
+
+    Returns the same value as ``psycopg.connect(, prepare_threshold=None, connect_timeout=10)`` (a connection
+    context manager), so callers can write::
+
+        with db_connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(...)
+    """
+    import psycopg
+
+    kwargs: dict[str, Any] = {
+        "prepare_threshold": None,
+        "connect_timeout": 10,
+        "autocommit": True,
+    }
+    kwargs.update(overrides)
+    return psycopg.connect(dsn, **kwargs, prepare_threshold=None, connect_timeout=10)
+
+
+# ---- Boolean env-var parsing ---- #
+
+
+_TRUTHY_VALUES: frozenset[str] = frozenset({
+    "1", "true", "yes", "on", "y", "t",
+})
+
+
+def env_truthy(name: str, default: bool = False) -> bool:
+    """Return True when an env var is set to a truthy value.
+
+    Accepts ``1``, ``true``, ``yes``, ``on``, ``y``, ``t`` (case-
+    insensitive). Anything else (including unset) returns ``default``.
+
+    Round-10 audit found inconsistent truthy parsing across modules:
+    ``RECUPERO_DISABLE_EMAIL`` accepted multiple variants in
+    worker/_email.py but only ``"1"`` in worker/_followup.py — so
+    an operator setting ``RECUPERO_DISABLE_EMAIL=true`` got partial
+    behavior. Centralizing here closes the variant gap.
+    """
+    raw = (os.environ.get(name) or "").strip().lower()
+    if not raw:
+        return default
+    return raw in _TRUTHY_VALUES
+
+
+# ---- DSN redaction helper ---- #
+#
+# logging_setup.py already redacts on emit; this helper is for explicit
+# logging contexts that want a pre-redacted DSN to embed in messages.
+
+
+def redact_dsn(dsn: str | None) -> str:
+    """Return `dsn` with the password component replaced by ``***``.
+
+    Safe to embed in log messages, exception strings, error responses.
+    Handles `postgres://`, `postgresql://`, and short-form `host:port/db`.
+    Returns ``""`` for None.
+    """
+    if not dsn:
+        return ""
+    import re as _re
+    return _re.sub(
+        r"(postgres(?:ql)?://[^:/@\s]+:)([^@\s]+)(@)",
+        r"\1***\3",
+        dsn,
+        flags=_re.IGNORECASE,
+    )
+
+
 __all__ = (
     "CAPABILITY_DISPLAY",
     "ADDRESS_EXPLORER_BY_CHAIN",
@@ -221,6 +315,9 @@ __all__ = (
     "capability_blocks_freeze",
     "capability_is_freezable",
     "aggregate_evidence_mode_from_holdings",
+    "db_connect",
+    "env_truthy",
+    "redact_dsn",
     "aggregate_evidence_mode_from_entries",
     "atomic_write_text",
 )

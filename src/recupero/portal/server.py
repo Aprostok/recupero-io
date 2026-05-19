@@ -800,7 +800,7 @@ def _persist_signature(
     we wrap both in an explicit BEGIN/COMMIT.
     """
     with psycopg.connect(dsn, autocommit=False, row_factory=dict_row,
-                         connect_timeout=10) as conn:
+                         connect_timeout=10, prepare_threshold=None) as conn:
         with conn.cursor() as cur:
             # v0.16.12: row-lock the investigation FIRST. SKIP LOCKED
             # would silently drop one of the two concurrent POSTs;

@@ -107,7 +107,7 @@ def run(
     params["limit"] = limit
 
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn, conn.cursor() as cur:
+                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall()
 

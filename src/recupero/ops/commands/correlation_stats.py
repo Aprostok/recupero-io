@@ -40,7 +40,7 @@ def run(*, dsn: str) -> int:
     print()
 
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
+        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 # 1. Aggregate counts.
                 cur.execute("""

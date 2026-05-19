@@ -361,7 +361,7 @@ def record_observations(
     """
     written = 0
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
             for obs in observations:
                 cur.execute(sql, {
                     "address": obs.address,
@@ -446,7 +446,7 @@ def lookup_correlations(
          LIMIT 10000;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
+        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {
                     "addresses": queries,

@@ -238,16 +238,23 @@ def find_dormant_in_case(
     Only the chain of the case is queried (mixed-chain cases would need
     per-chain dispatch — out of scope for now).
     """
-    if case.chain != Chain.ethereum:
-        # Phase 1: only Ethereum. Solana / Arbitrum / BSC support is a follow-up.
+    # v0.17.3 (round-10 audit HIGH): chain-aware adapter dispatch.
+    # Pre-v0.17.3 hard-coded Ethereum-only gate at this line silently
+    # returned [] for every non-Ethereum case — making the v0.16.7
+    # expanded decimals table (which added Arb/Base/Polygon/BSC/Solana/
+    # Tron tokens) entirely unreachable. The round-10 audit caught
+    # this as a regression: the fix shipped the table without removing
+    # the gate.
+    from recupero.chains.base import ChainAdapter
+    try:
+        adapter = ChainAdapter.for_chain(case.chain, (config, env))
+    except (NotImplementedError, Exception) as exc:  # noqa: BLE001
         log.warning(
-            "dormant detection currently supports Ethereum only; case is %s. "
-            "Returning empty list.",
-            case.chain.value,
+            "dormant detection: no adapter for chain=%s (%s); "
+            "returning empty list",
+            case.chain.value, exc,
         )
         return []
-
-    adapter = EthereumAdapter((config, env))
     cache_dir = Path(config.storage.data_dir) / "prices_cache"
     price_client = CoinGeckoClient(config, env, cache_dir)
 
@@ -265,9 +272,17 @@ def find_dormant_in_case(
         # Only consider on-chain destination addresses.
         # Skip the seed itself (we don't freeze the victim).
         # Skip addresses with placeholder labels like "hyperliquid:unknown_*"
+        #
+        # v0.17.3 (round-10 audit HIGH): the prior `not dest.startswith("0x")`
+        # filter excluded Solana base58, Tron T-prefix, Bitcoin bc1q
+        # addresses unconditionally — defeating the multi-chain adapter
+        # dispatch above. Now: only skip the explicit Hyperliquid
+        # sentinel placeholders, and let the per-chain adapter's
+        # balance query decide whether the address is real.
         dest = tr.to_address
-        if not dest or dest.startswith("hyperliquid:") or not dest.startswith("0x"):
+        if not dest or dest.startswith("hyperliquid:"):
             continue
+        # Skip self-references (don't freeze the victim).
         dest_lower = dest.lower()
         if dest_lower == seed_addr_lower:
             continue

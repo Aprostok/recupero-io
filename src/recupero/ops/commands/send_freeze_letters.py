@@ -312,7 +312,7 @@ def _record_freeze_letter_sent(
 
 def _fetch_investigation(*, investigation_id: UUID, dsn: str) -> dict | None:
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn, conn.cursor() as cur:
+                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, case_id, status FROM public.investigations WHERE id = %s",
             (str(investigation_id),),
@@ -499,7 +499,7 @@ def _already_sent_to(
     """Per-recipient idempotency: have we sent this email_type to
     this address for this investigation already?"""
     try:
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5) as conn:
+        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """

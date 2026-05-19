@@ -37,7 +37,7 @@ def run(
     errors / declined-by-operator."""
     # Build a FollowupCandidate from the row
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn, conn.cursor() as cur:
+                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(
             """
                 SELECT i.id            AS investigation_id,

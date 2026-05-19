@@ -368,7 +368,7 @@ def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
 
     try:
         import psycopg
-        with psycopg.connect(db_url, autocommit=True, connect_timeout=10) as conn:
+        with psycopg.connect(db_url, autocommit=True, connect_timeout=10, prepare_threshold=None) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
                 cur.fetchone()

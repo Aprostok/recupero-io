@@ -866,7 +866,17 @@ def _compute_exchange_endpoints(transfers: list[Transfer]) -> list[ExchangeEndpo
     endpoints: list[ExchangeEndpoint] = []
     for address, ts in by_addr.items():
         label = ts[0].counterparty.label
-        assert label is not None
+        # v0.17.3 (round-10 audit MED): explicit narrowing — the filter
+        # above only kept transfers where label is not None, but `assert`
+        # is stripped under `python -O`. An unreachable-state crash here
+        # would mean the filter regressed; surface it via RuntimeError
+        # rather than the silent AttributeError we'd hit later.
+        if label is None:
+            log.warning(
+                "exchange endpoint aggregation: filtered transfer carries "
+                "None label for address=%s — skipping", address,
+            )
+            continue
         endpoints.append(
             ExchangeEndpoint(
                 address=address,

@@ -79,13 +79,31 @@ def _investigator_defaults() -> dict[str, str]:
     }
 
 
-# Module-load cache kept for back-compat with code that imports _INV
-# directly. Prefer calling _investigator_defaults() at use-time so
-# env changes take effect without a worker restart.
-_INV = _investigator_defaults()
+# v0.17.3 (round-10 audit MED): module-load cache REMOVED. Pre-v0.17.3
+# `_INV = _investigator_defaults()` ran at import, so EDITORIAL_TEMPLATE's
+# INVESTIGATOR_* fields were frozen at module-load — defeating the
+# v0.16.9 fix that made _investigator_defaults() resolve at call time.
+# `EDITORIAL_TEMPLATE` is now a dict factory; the single consumer
+# (emit_editorial_template at ~line 842) calls it on every write.
 
 
-EDITORIAL_TEMPLATE: dict[str, Any] = {
+def _editorial_template() -> dict[str, Any]:
+    """Return a fresh dict of the editorial-template defaults, with
+    investigator fields resolved at call time. Replaces the prior
+    module-level EDITORIAL_TEMPLATE constant."""
+    inv = _investigator_defaults()
+    base = dict(_EDITORIAL_TEMPLATE_STATIC)
+    base.update({
+        "INVESTIGATOR_NAME": inv["INVESTIGATOR_NAME"],
+        "INVESTIGATOR_EMAIL": inv["INVESTIGATOR_EMAIL"],
+        "INVESTIGATOR_ENTITY": inv["INVESTIGATOR_ENTITY"],
+        "INVESTIGATOR_ENTITY_FULL": inv["INVESTIGATOR_ENTITY_FULL"],
+        "INVESTIGATOR_WEB": inv["INVESTIGATOR_WEB"],
+    })
+    return base
+
+
+_EDITORIAL_TEMPLATE_STATIC: dict[str, Any] = {
     "CASE_ID": "TODO: fill in (e.g. RCP-2026-0427)",
     "REPORT_DATE": "TODO: human-readable report date (e.g. 'April 20, 2026')",
     "INCIDENT_DATE": "TODO: human-readable incident date (e.g. 'April 19, 2026')",
@@ -106,13 +124,16 @@ EDITORIAL_TEMPLATE: dict[str, Any] = {
             "reason": "TODO: e.g. 'Sent to Tornado Cash. Mixed. Not traceable post-mixing with current techniques.'"
         }
     ],
-    "INVESTIGATOR_NAME": _INV["INVESTIGATOR_NAME"],
-    "INVESTIGATOR_EMAIL": _INV["INVESTIGATOR_EMAIL"],
-    "INVESTIGATOR_ENTITY": _INV["INVESTIGATOR_ENTITY"],
-    "INVESTIGATOR_ENTITY_FULL": _INV["INVESTIGATOR_ENTITY_FULL"],
-    "INVESTIGATOR_WEB": _INV["INVESTIGATOR_WEB"],
+    # v0.17.3: INVESTIGATOR_* fields populated by _editorial_template()
+    # at call-time so env-var rotation takes effect without restart.
     "TEMPLATE_VERSION": "v1.0 — April 2026",
 }
+
+
+# Back-compat alias: existing imports of EDITORIAL_TEMPLATE still work
+# but they read a SNAPSHOT taken at import. Document this so anyone
+# adding a new caller knows to use `_editorial_template()` instead.
+EDITORIAL_TEMPLATE = _editorial_template()
 
 
 def _now_utc_iso_seconds() -> str:
@@ -839,7 +860,9 @@ def write_editorial_template(case_dir: Path) -> Path:
     path = case_dir / "brief_editorial.json"
     if path.exists():
         return path
-    path.write_text(json.dumps(EDITORIAL_TEMPLATE, indent=2), encoding="utf-8")
+    # v0.17.3: call factory so investigator-* env-var rotation takes
+    # effect without a worker restart.
+    path.write_text(json.dumps(_editorial_template(), indent=2), encoding="utf-8")
     return path
 
 

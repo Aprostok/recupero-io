@@ -119,6 +119,16 @@ def _patched_finder(monkeypatch, balances: dict[str, dict[str, int]], eth_balanc
 
     monkeypatch.setattr(finder_mod, "EthereumAdapter", fake_ethereum_adapter)
     monkeypatch.setattr(finder_mod, "CoinGeckoClient", fake_price_client)
+    # v0.17.3: finder now dispatches via ChainAdapter.for_chain (round-10
+    # audit HIGH — removed Ethereum-only gate). Patch the factory to
+    # return the fake EthereumAdapter for the test's Ethereum case so
+    # the existing test fixtures keep working.
+    from recupero.chains.base import ChainAdapter
+    monkeypatch.setattr(
+        ChainAdapter,
+        "for_chain",
+        classmethod(lambda cls, chain, bundle: fake_ethereum_adapter(bundle)),
+    )
 
 
 class TestDormantBasic:

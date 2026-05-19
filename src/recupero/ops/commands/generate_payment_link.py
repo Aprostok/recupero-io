@@ -66,7 +66,7 @@ def run(
     # message. Catches operator-typo case_ids before we mint a URL
     # the webhook would later reject as audit_only.
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn, conn.cursor() as cur:
+                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT case_number, client_name, client_email "
             "  FROM public.cases WHERE id = %s",

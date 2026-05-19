@@ -218,7 +218,7 @@ def record_alert_attempt(
         RETURNING id;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True) as conn, conn.cursor() as cur:
+        with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
             cur.execute(sql, {
                 "sub": payload.subscription_id,
                 "trigger": payload.trigger_type,

@@ -168,7 +168,7 @@ def run_monitor_tick(
     """
 
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row) as conn:
+        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 cur.execute(select_sql, {"cap": cap})
                 rows = list(cur.fetchall())
@@ -202,7 +202,7 @@ def run_monitor_tick(
             # Always update the cursor — even when no alerts fired —
             # so the next tick doesn't re-evaluate the same history.
             try:
-                with psycopg.connect(dsn, autocommit=True) as conn:
+                with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn:
                     with conn.cursor() as cur:
                         cur.execute(update_sql, {
                             "cursor": new_cursor or None,

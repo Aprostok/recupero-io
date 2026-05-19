@@ -27,7 +27,7 @@ def run(*, investigation_id: UUID, fee_usd: Decimal, dsn: str) -> int:
     """Mark an investigation as Tier-2 engaged. Returns 0 on success,
     1 on errors (missing investigation, etc.)."""
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn, conn.cursor() as cur:
+                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, status, engagement_started_at, engagement_closed_at "
             "  FROM public.investigations WHERE id = %s",

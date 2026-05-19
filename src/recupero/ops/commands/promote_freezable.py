@@ -59,7 +59,7 @@ def run(
         return 1
 
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10) as conn, conn.cursor() as cur:
+                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(
             """
                 SELECT id, chain, address, status, is_freezeable,

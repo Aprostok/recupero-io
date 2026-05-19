@@ -113,10 +113,26 @@ AI_DRAFTED_KEYS = [
 # from the production deploy's identity. Eventually, when the cases table
 # carries a per-case investigator field, these become the fallback only
 # and per-case values flow through the pipeline instead.
+#
+# v0.17.3 (round-10 audit HIGH): defaults reconciled with emit_brief.py.
+# Pre-v0.17.3 this module hard-coded "Alec Prostok" / "alec@recupero.io"
+# while emit_brief.py defaulted to "(operator name not configured)" /
+# "compliance@recupero.io" — so when RECUPERO_INVESTIGATOR_* env vars
+# were unset, the AI prompt and the no-AI template rendered DIFFERENT
+# investigator identities into the same brief. Centralized fix below.
 def _investigator_defaults() -> dict[str, str]:
+    """Resolve investigator identity at call-time (never at module-load).
+
+    v0.17.3: returns "(operator name not configured)" / "compliance@
+    recupero.io" when env vars are unset, matching emit_brief.py exactly.
+    The placeholder ensures an unconfigured deploy ships obvious
+    placeholders rather than the developer's name signing legal docs.
+    """
     return {
-        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "Alec Prostok"),
-        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "alec@recupero.io"),
+        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "").strip()
+            or "(operator name not configured)",
+        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "").strip()
+            or "compliance@recupero.io",
         "INVESTIGATOR_ENTITY": os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
         "INVESTIGATOR_ENTITY_FULL": os.environ.get(
             "RECUPERO_INVESTIGATOR_ENTITY_FULL",
@@ -127,7 +143,12 @@ def _investigator_defaults() -> dict[str, str]:
     }
 
 
-STATIC_EDITORIAL_DEFAULTS = _investigator_defaults()
+# v0.17.3 (round-10 audit MED): module-load cache REMOVED.
+# Pre-v0.17.3 `STATIC_EDITORIAL_DEFAULTS = _investigator_defaults()`
+# evaluated env vars at import — defeating the v0.16.9 fix that made
+# the function call-time. Operators rotating RECUPERO_INVESTIGATOR_*
+# after worker start saw stale values. The single consumer at line
+# ~1180 now calls _investigator_defaults() directly.
 
 # Compact, illustrative few-shot. Mirrors the production Sarah Chen case.
 # This is fictional test data already used in the codebase as the canonical
@@ -423,9 +444,13 @@ USER_PROMPT_TEMPLATE = FEW_SHOT_PROMPT_TEMPLATE + CASE_PROMPT_TEMPLATE
 
 
 def _short_addr(addr: str) -> str:
-    if len(addr) <= 10:
-        return addr
-    return f"{addr[:6]}…{addr[-4:]}"
+    # v0.17.3 (round-10 audit MED): delegates to canonical
+    # recupero._common.short_addr so the 6 prior independent
+    # implementations don't drift over time.
+    from recupero._common import short_addr as _canonical
+    return _canonical(addr)
+
+
 
 
 def _now_utc_iso_seconds() -> str:
@@ -892,8 +917,12 @@ def _call_messages_with_retry(
             )
             time.sleep(wait_sec)
     # Defensive — shouldn't reach here because the loop either returns
-    # or raises, but mypy can't see that.
-    assert last_exc is not None
+    # or raises. v0.17.3 (round-10 audit HIGH): `assert` stripped under
+    # `python -O`, then `raise None` masks the actual error.
+    if last_exc is None:
+        raise RuntimeError(
+            "anthropic retry loop exited without exception — unreachable"
+        )
     raise last_exc
 
 
@@ -1172,8 +1201,9 @@ def build_editorial_dict(
             editorial["VICTIM_JURISDICTION"] = citizenship
             editorial["VICTIM_JURISDICTION_AI_CONFIDENCE"] = "medium"
 
-    # Static defaults
-    for k, v in STATIC_EDITORIAL_DEFAULTS.items():
+    # Investigator defaults — resolved at call-time so env-var rotation
+    # takes effect without a worker restart (round-10 audit fix).
+    for k, v in _investigator_defaults().items():
         editorial[k] = v
 
     # Pre-fill from the cases row (PR #12 columns: address_line1,

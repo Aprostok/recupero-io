@@ -99,7 +99,7 @@ def populate_from_case(
             asset_contract = COALESCE(EXCLUDED.asset_contract, public.watchlist.asset_contract),
             notes = EXCLUDED.notes;
     """
-    with psycopg.connect(dsn, autocommit=False) as conn:
+    with psycopg.connect(dsn, autocommit=False, prepare_threshold=None, connect_timeout=10) as conn:
         with conn.cursor() as cur:
             cur.executemany(sql, rows)
         conn.commit()

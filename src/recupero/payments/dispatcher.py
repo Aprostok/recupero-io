@@ -125,7 +125,7 @@ def dispatch(*, event: StripeEvent, dsn: str) -> DispatchResult:
     # If the row already exists, return early without re-running
     # side effects.
     with psycopg.connect(dsn, autocommit=False, row_factory=dict_row,
-                         connect_timeout=10) as conn:
+                         connect_timeout=10, prepare_threshold=None) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """

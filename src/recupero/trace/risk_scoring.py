@@ -130,6 +130,35 @@ class AddressRiskScore:
     exposures: list[AddressExposure] = field(default_factory=list)
 
 
+def _canonical_address_key(addr: str) -> str:
+    """Normalize an address into the form used as a dict key.
+
+    v0.17.5 (round-10 forensic HIGH): pre-v0.17.5 every seed entry
+    was stored as ``addr.lower()`` which silently corrupted base58
+    chains (Solana / Tron / Bitcoin legacy) because base58 IS
+    case-sensitive on-chain. A sanctioned Solana wallet pasted as
+    ``BcrW1fJRwSoNYRBn5UxbVKsKsXdNRwGsQbf5KAcDuwfV`` would be
+    stored as ``bcrw1fjrwsonyrbn5uxbvkskskxdnrwgsqbf5kacduwfv`` —
+    and the screener's case-preserving lookup (correct per chain
+    semantics) would miss it.
+
+    Heuristic: only addresses that look EVM (``0x`` + 40 hex) get
+    lowercased. Everything else preserves case so base58 lookups
+    match. Bech32 (Bitcoin native segwit) is canonical-lowercase per
+    BIP173 so the case-preserved form is also lowercased — a no-op.
+    """
+    if not isinstance(addr, str):
+        return ""
+    s = addr.strip()
+    if not s:
+        return ""
+    if s.startswith("0x") and len(s) == 42:
+        # All chars after 0x are expected to be hex — lowercase to
+        # canonical form.
+        return s.lower()
+    return s
+
+
 def load_high_risk_db(
     high_risk_path: Path | None = None,
     mixers_path: Path | None = None,
@@ -147,7 +176,8 @@ def load_high_risk_db(
         for risk-scoring purposes) and category
         "mixer_sanctioned".
 
-    Returns ``{lowercased_address: HighRiskEntry}``.
+    Returns ``{canonical_address_key: HighRiskEntry}`` — EVM
+    lowercased, base58 case-preserved (v0.17.5).
     """
     out: dict[str, HighRiskEntry] = {}
 
@@ -165,8 +195,11 @@ def load_high_risk_db(
                 severity = int(entry.get("severity", 3))
             except (TypeError, ValueError):
                 severity = 3
-            out[addr.lower()] = HighRiskEntry(
-                address=addr.lower(),
+            key = _canonical_address_key(addr)
+            if not key:
+                continue
+            out[key] = HighRiskEntry(
+                address=key,
                 name=entry.get("name", "(unknown)"),
                 risk_category=entry.get("risk_category", "unknown"),
                 severity=severity,
@@ -189,16 +222,18 @@ def load_high_risk_db(
             addr = entry.get("address")
             if not isinstance(addr, str) or not addr.strip():
                 continue
-            addr_lower = addr.lower()
+            key = _canonical_address_key(addr)
+            if not key:
+                continue
             # high_risk.json entries take precedence (more curated).
-            if addr_lower in out:
+            if key in out:
                 continue
             try:
                 severity = int(entry.get("severity", 4))
             except (TypeError, ValueError):
                 severity = 4
-            out[addr_lower] = HighRiskEntry(
-                address=addr_lower,
+            out[key] = HighRiskEntry(
+                address=key,
                 name=entry.get("name", "(ransomware)"),
                 risk_category=entry.get("risk_category", "ransomware"),
                 severity=severity,
@@ -252,15 +287,17 @@ def load_high_risk_db(
                     continue
                 # Don't overwrite high_risk.json entries if there's
                 # a duplicate; the more specific entry wins.
-                addr_lower = addr.lower()
-                if addr_lower in out:
+                key = _canonical_address_key(addr)
+                if not key:
+                    continue
+                if key in out:
                     continue
                 notes = entry.get("notes") or ""
                 # If notes mention OFAC, treat as sanctioned;
                 # otherwise mixer_high_risk.
                 is_sanctioned = "ofac" in notes.lower() or "sanction" in notes.lower()
-                out[addr_lower] = HighRiskEntry(
-                    address=addr_lower,
+                out[key] = HighRiskEntry(
+                    address=key,
                     name=entry.get("name", "(mixer)"),
                     risk_category=(
                         "mixer_sanctioned" if is_sanctioned

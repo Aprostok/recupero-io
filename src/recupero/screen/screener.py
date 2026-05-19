@@ -192,7 +192,16 @@ def screen_address(
 
 
 def _normalize_for_lookup(address: str, *, chain: str) -> str:
-    """Canonicalize an address for DB lookup."""
+    """Canonicalize an address for DB lookup.
+
+    v0.17.5 (round-10 forensic HIGH): pre-v0.17.5 the chain hint was
+    the sole arbiter — calls that defaulted to chain="ethereum" but
+    passed a Solana/Tron base58 address ended up lowercased and
+    never matched the high-risk seed (which now case-preserves base58
+    after v0.17.5 trace.risk_scoring fix). Be defensive: any address
+    that doesn't LOOK like a hex EVM address preserves case, even
+    when the explicit chain hint says ethereum.
+    """
     if not isinstance(address, str):
         raise TypeError(f"address must be str, got {type(address)!r}")
     address = address.strip()
@@ -204,9 +213,12 @@ def _normalize_for_lookup(address: str, *, chain: str) -> str:
     # wrong addresses that won't match any DB entry.
     if chain in ("tron", "bitcoin", "solana"):
         return address
-    # Default: treat as EVM. Hex addresses are case-insensitive; we
-    # canonicalize lowercase for stable DB keys.
-    return address.lower()
+    # Defensive shape-check: even when chain="ethereum" (the default),
+    # if the address doesn't look like 0x + 40 hex it's almost certainly
+    # a misrouted base58 lookup. Preserve case.
+    if address.startswith("0x") and len(address) == 42:
+        return address.lower()
+    return address
 
 
 def _source_for_category(cat_lower: str) -> str:

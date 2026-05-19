@@ -353,3 +353,54 @@ def test_brief_section_empty_when_no_exposures() -> None:
     assert section["summary"]["ofac_exposed_count"] == 0
     assert section["summary"]["highest_score"] == 0
     assert section["summary"]["highest_score_address"] is None
+
+
+def test_load_preserves_base58_case_for_solana() -> None:
+    """v0.17.5 (round-10 forensic HIGH): pre-v0.17.5 the loader
+    stored every address ``addr.lower()`` which mangled base58
+    chains. A sanctioned Solana wallet pasted in its canonical
+    mixed-case form would never be found by a case-preserving
+    screener lookup. Now: only EVM (0x + 40 hex) gets lowercased;
+    base58 entries land as-given.
+    """
+    from recupero.trace.risk_scoring import load_high_risk_db
+
+    with TemporaryDirectory() as td:
+        td_p = Path(td)
+        hr_path = td_p / "high_risk.json"
+        hr_path.write_text(json.dumps({
+            "_meta": {"_section": "test"},
+            "addresses": [
+                {
+                    # Real Solana address (mixed-case base58).
+                    "address": "BcrW1fJRwSoNYRBn5UxbVKsKsXdNRwGsQbf5KAcDuwfV",
+                    "name": "Test Sanctioned SOL",
+                    "risk_category": "ofac_sanctioned",
+                    "severity": 4,
+                },
+                {
+                    # Real EVM address (checksum-cased).
+                    "address": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                    "name": "Test EVM",
+                    "risk_category": "ofac_sanctioned",
+                    "severity": 4,
+                },
+            ],
+        }))
+        mx_path = td_p / "mixers.json"
+        mx_path.write_text("[]")
+        rw_path = td_p / "ransomware.json"
+        rw_path.write_text(json.dumps({"addresses": []}))
+        db = load_high_risk_db(
+            high_risk_path=hr_path,
+            mixers_path=mx_path,
+            ransomware_path=rw_path,
+        )
+
+    # Solana entry preserved case-for-case.
+    assert "BcrW1fJRwSoNYRBn5UxbVKsKsXdNRwGsQbf5KAcDuwfV" in db, (
+        f"Solana base58 was mangled by lowercasing — got keys {list(db)}"
+    )
+    # EVM entry was lowercased canonically.
+    assert "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" in db
+    assert "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48" not in db

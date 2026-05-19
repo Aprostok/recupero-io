@@ -139,3 +139,12 @@ warn_unused_configs = true
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
+# v0.20.0 (round-13 Phase B): integration-test markers.
+# `live` — test hits real external services; requires
+#   RECUPERO_INTEGRATION_LIVE=1 to opt in (gated by the
+#   `live_mode_required` fixture in tests/integration/conftest.py).
+# `slow` — test takes > 5s; can be skipped with `-m "not slow"`.
+markers = [
+    "live: test requires real external services (set RECUPERO_INTEGRATION_LIVE=1)",
+    "slow: test takes > 5 seconds",
+]

@@ -302,7 +302,13 @@ def generate_briefs(
         "ic3_case_id": ic3_case_id,
         "draft": draft,
         "draft_label": draft_label or "DRAFT",
-        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),  # explicit UTC suffix
+        # v0.19.1 (round-12 PDF-CRIT-4): the 23 templates that render this
+        # field already append a literal " UTC" suffix. Pre-v0.19.1 the
+        # value carried a trailing 'Z', producing "2026-05-19T17:00:00Z UTC"
+        # on every cover page + footer + section header — stuttered
+        # timestamp on legal documents reads as templated/broken to LE
+        # and lawyers. Strip the 'Z'; templates own the UTC marker.
+        "generated_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
         "verified_at": now.strftime("%Y-%m-%d"),
         # v0.17.4 (round-10 audit HIGH): primary_chain populated for the
         # LE handoff template. Pre-v0.17.4 the template's

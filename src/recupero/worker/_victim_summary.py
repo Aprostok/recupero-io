@@ -335,7 +335,13 @@ def _build_context(
         "case": case,
         "victim": victim.model_dump(),
         "investigator": investigator.__dict__,
-        "chain_display": case.chain.value.capitalize(),
+        # v0.19.1 (round-12 PDF-CRIT-5): use the canonical per-chain
+        # display-name map so "bsc" → "BNB Chain" and "hyperliquid" →
+        # "Hyperliquid" matches the LE handoff + engagement letter
+        # instead of `.capitalize()` = "Bsc". Pre-v0.19.1 a single
+        # case had different chain names across customer email vs LE
+        # docs — operator brand inconsistency on every BSC case.
+        "chain_display": _resolve_chain_display(case.chain.value),
         "max_depth": case.config_used.get("trace", {}).get("max_depth", 1) if case.config_used else 1,
         "summary": {
             "transfers": len(case.transfers),
@@ -396,6 +402,34 @@ def _parse_usd_string(s: str | None) -> Decimal:
 def _fmt_usd(d: Decimal) -> str:
     """Format Decimal as ``$X,XXX.YY``."""
     return f"${d:,.2f}"
+
+
+# v0.19.1 (round-12 PDF-CRIT-5): canonical chain display-name resolver.
+# Mirrors reports.brief._resolve_primary_chain_display so customer
+# email, engagement letter, and LE handoff all render the same chain
+# string. Pre-v0.19.1 the victim summary used `.capitalize()` which
+# produced "Bsc" / "Hyperliquid" inconsistent with the LE handoff's
+# "BNB Chain" rendering.
+_CHAIN_DISPLAY: dict[str, str] = {
+    "ethereum":    "Ethereum",
+    "arbitrum":    "Arbitrum",
+    "polygon":     "Polygon",
+    "base":        "Base",
+    "bsc":         "BNB Chain",
+    "solana":      "Solana",
+    "tron":        "Tron",
+    "bitcoin":     "Bitcoin",
+    "hyperliquid": "Hyperliquid",
+}
+
+
+def _resolve_chain_display(chain: str | None) -> str:
+    """Map a chain identifier → operator-facing display name. Falls
+    back to ``.capitalize()`` for unknown chains so new chains render
+    sanely until added to the map."""
+    if not chain:
+        return ""
+    return _CHAIN_DISPLAY.get(chain.lower(), chain.capitalize())
 
 
 __all__ = ("render_victim_summary", "classify_recovery_prospects")

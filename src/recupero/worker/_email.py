@@ -96,15 +96,14 @@ def _default_from_addr() -> str:
 _RESEND_RETRY_WAITS_SEC = (5, 15, 30)
 
 
-_TRUTHY_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on", "y", "t"})
-
-
-def _is_truthy(s: str) -> bool:
-    """Return True if `s` looks like a boolean-true env var value.
-
-    Accepts: "1", "true", "yes", "on", "y", "t" (case-insensitive).
-    """
-    return (s or "").strip().lower() in _TRUTHY_VALUES
+# v0.19.1 (round-12 arch-HIGH-3): delegate to the canonical env_truthy
+# helper so a single source defines what "true" means across the worker.
+# Pre-v0.19.1 this module kept its own `_is_truthy` while followup /
+# deliverables / ops-commands checked `== "1"` — an operator setting
+# `RECUPERO_DISABLE_EMAIL=true` got email skipped on the trace pipeline
+# but emails still went out from the followup cron + send_le_handoff.
+# Partial mode is the hardest debug shape.
+from recupero._common import env_truthy as _is_truthy_env  # noqa: E402
 
 
 def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
@@ -230,7 +229,7 @@ def send_email(
     # ("1", "true", "yes", "on", case-insensitive). Pre-v0.16.10 only
     # the literal "1" worked, so operators who set "true" expected
     # disabled email but got real sends.
-    if _is_truthy(os.environ.get("RECUPERO_DISABLE_EMAIL", "")):
+    if _is_truthy_env("RECUPERO_DISABLE_EMAIL"):
         log.info(
             "RECUPERO_DISABLE_EMAIL set — skipping send to %s "
             "(would have sent: %s, type=%s, attachments=%d)",

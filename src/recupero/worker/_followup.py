@@ -287,7 +287,14 @@ def run_followup_cron(*, dsn: str) -> dict[str, Any]:
     The cron caller uses ``failed`` to set the process exit code;
     skipped-disabled does not count as failed.
     """
-    email_disabled = os.environ.get("RECUPERO_DISABLE_EMAIL", "").strip() == "1"
+    # v0.19.1 (round-12 arch-HIGH-3): canonical env_truthy so
+    # ``RECUPERO_DISABLE_EMAIL=true`` (the natural shell-savvy form)
+    # is honored consistently across the trace pipeline and followup
+    # cron. Pre-v0.19.1 followup only accepted "1" while _email.py
+    # accepted "true" — partial-mode silently sent followups while
+    # the rest of the pipeline went quiet.
+    from recupero._common import env_truthy
+    email_disabled = env_truthy("RECUPERO_DISABLE_EMAIL")
     candidates = find_followups_due(dsn=dsn)
     sent = 0
     failed = 0

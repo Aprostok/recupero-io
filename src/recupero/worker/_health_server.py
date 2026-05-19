@@ -397,12 +397,23 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
 
             try:
                 result = dispatch(event=event, dsn=dsn)
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 # Return 500 so Stripe retries — this is almost
                 # certainly a transient DB blip given the dispatcher
                 # is pure SQL.
-                log.exception("stripe webhook dispatch failed: %s", exc)
-                self._respond(500, {"error": f"dispatch failed: {exc}"})
+                #
+                # v0.19.1 (round-12 sec-HIGH-2): generic detail on the
+                # wire. Pre-v0.19.1 we echoed `f"dispatch failed: {exc}"`
+                # to Stripe's webhook response body, and psycopg's
+                # OperationalError messages routinely embed the full
+                # DSN with password ("FATAL: password authentication
+                # failed for user 'postgres' at host 'aws-1-us-east-1
+                # .pooler.supabase.com:6543'"). Any operator with view
+                # access to the Stripe Dashboard webhook log saw the
+                # DB creds verbatim. This mirrors the v0.18.2 fix to
+                # the API's /v1/correlations endpoint.
+                log.exception("stripe webhook dispatch failed")
+                self._respond(500, {"error": "dispatch failed"})
                 return
 
             self._respond(200, {

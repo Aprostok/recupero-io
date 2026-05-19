@@ -467,6 +467,15 @@ def match_freeze_asks(
                             should review these and add them to issuers.json
                             if they're worth chasing.
     """
+    # v0.19.1 (round-12 forensic-HIGH-1): use the canonical key so the
+    # consumer-side lookup matches the writer-side (load_issuer_db) which
+    # v0.18.0 fixed to case-preserve Solana/Tron base58 mints. Pre-v0.19.1
+    # this consumer kept the legacy `.lower()` so every Solana stablecoin
+    # freeze ask (USDC `EPjFWdd5...`, USDT `Es9vMFrz...`) silently lower-
+    # cased to a non-on-chain key, missed the DB lookup, and got routed
+    # to `unmatched` — no freeze letters generated on Solana cases despite
+    # the writer-side fix.
+    from recupero._common import canonical_address_key as _ck
     db = issuer_db if issuer_db is not None else load_issuer_db()
     matched: list[FreezeAsk] = []
     unmatched: list[TokenHolding] = []
@@ -475,12 +484,12 @@ def match_freeze_asks(
         for holding in candidate.holdings:
             if holding.usd_value is None or holding.usd_value < min_holding_usd:
                 continue
-            contract_lower = (holding.token.contract or "").lower()
-            if not contract_lower:
+            contract_key = _ck(holding.token.contract or "")
+            if not contract_key:
                 # Native token (ETH/SOL/etc.) — no issuer to contact for freeze
                 unmatched.append(holding)
                 continue
-            key = (candidate.chain, contract_lower)
+            key = (candidate.chain, contract_key)
             issuer_entry = db.get(key)
             if issuer_entry is None:
                 unmatched.append(holding)
@@ -584,10 +593,13 @@ def synthesize_historical_freeze_asks(
         if to_addr == _norm_addr(t.from_address):
             continue
         # Need a contract to match issuer DB (native ETH doesn't have
-        # an issuer freeze pathway anyway). Contracts are token
-        # identifiers — always lowercased for the DB lookup key
-        # regardless of chain (issuers.json stores them lowercase).
-        contract = (t.token.contract or "").lower()
+        # an issuer freeze pathway anyway). v0.19.1 (round-12
+        # forensic-HIGH-1): canonical_address_key — case-preserves
+        # Solana/Tron base58 mints, lowercases EVM hex. Pre-v0.19.1
+        # `.lower()` mangled Solana mints to a non-on-chain string and
+        # missed the DB lookup for every Solana historical-inflow ask.
+        from recupero._common import canonical_address_key as _ck_token
+        contract = _ck_token(t.token.contract or "")
         if not contract:
             continue
         key = (to_addr, contract)
@@ -612,12 +624,15 @@ def synthesize_historical_freeze_asks(
             bucket["explorer_url"] = t.explorer_url
 
     out: list[FreezeAsk] = []
+    # v0.19.1 (round-12 forensic-HIGH-1): canonical key for the second
+    # DB lookup, matching the writer-side issuers.json normalization.
+    from recupero._common import canonical_address_key as _ck_bucket
     for bucket in agg.values():
         if bucket["total_usd"] < min_inflow_usd:
             continue
         chain = bucket["chain"]
-        contract_lower = (bucket["token"].contract or "").lower()
-        issuer_entry = db.get((chain, contract_lower))
+        contract_key = _ck_bucket(bucket["token"].contract or "")
+        issuer_entry = db.get((chain, contract_key))
         if issuer_entry is None:
             # No issuer to contact — skip (these become
             # 'unmatched' equivalents handled by the operator review
@@ -701,14 +716,29 @@ def detect_exchange_deposits(
     per_addr_first: dict[str, datetime] = {}
     per_addr_last: dict[str, datetime] = {}
     per_addr_label: dict[str, Label] = {}
+    # v0.19.1 (round-12 forensic-HIGH-3): on Solana/Tron, the same CEX
+    # wallet can arrive in mixed-case forms from different code paths
+    # (adapter raw vs label-store post-normalize). Keying by raw t.to_address
+    # split per-wallet aggregates into two ExchangeDeposit rows, each with
+    # half the USD and split windows. Now: aggregate on canonical key,
+    # preserve original case in a `display_addr` map for output. Mirrors
+    # the v0.18.3 fix in `_compute_exchange_endpoints` (trace/tracer.py).
+    from recupero._common import canonical_address_key as _ck_addr
+    per_addr_display: dict[str, str] = {}
 
     exchange_categories = {LabelCategory.exchange_deposit, LabelCategory.exchange_hot_wallet}
 
     for t in case.transfers:
-        to_addr = t.to_address
-        label = label_store.lookup(to_addr, chain=case.chain)
+        to_addr_raw = t.to_address
+        label = label_store.lookup(to_addr_raw, chain=case.chain)
         if label is None or label.category not in exchange_categories:
             continue
+
+        to_addr = _ck_addr(to_addr_raw)
+        if not to_addr:
+            continue
+        # Remember the first-seen original case for display.
+        per_addr_display.setdefault(to_addr, to_addr_raw)
 
         # Track aggregate inflows to this address
         if t.usd_value_at_tx is not None:
@@ -722,13 +752,13 @@ def detect_exchange_deposits(
             per_addr_last[to_addr] = bt
 
     out: list[ExchangeDeposit] = []
-    for addr, total_usd in per_addr_usd.items():
+    for canon_addr, total_usd in per_addr_usd.items():
         if total_usd < min_deposit_usd:
             continue
-        label = per_addr_label[addr]
-        # Use the right explorer for the case's chain, not a hardcoded
-        # etherscan URL (was wrong for Solana / Tron / Bitcoin CEX
-        # deposits — addresses 404'd in operator click-throughs).
+        # Aggregates keyed by canonical form; display form uses the
+        # first-seen original case for explorer-link compatibility.
+        addr = per_addr_display.get(canon_addr, canon_addr)
+        label = per_addr_label[canon_addr]
         out.append(ExchangeDeposit(
             candidate_address=addr,
             chain=case.chain,
@@ -737,9 +767,9 @@ def detect_exchange_deposits(
             label_category=label.category.value,
             label_confidence=label.confidence,
             total_deposited_usd=total_usd,
-            deposit_count=per_addr_count[addr],
-            first_deposit_at=per_addr_first.get(addr),
-            last_deposit_at=per_addr_last.get(addr),
+            deposit_count=per_addr_count[canon_addr],
+            first_deposit_at=per_addr_first.get(canon_addr),
+            last_deposit_at=per_addr_last.get(canon_addr),
             explorer_url=_explorer_address_url(case.chain, addr),
         ))
 

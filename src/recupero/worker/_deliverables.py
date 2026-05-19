@@ -334,6 +334,17 @@ def build_all_deliverables(
             if issuer_name:
                 freezable_by_issuer[issuer_name] = entry
 
+        # v0.19.1 (round-12 PDF-CRIT-1): wire IC3 case ID + DRAFT flag
+        # through the worker → brief boundary. Pre-v0.19.1 the v0.18.6
+        # `ic3_case_id` / `draft` kwargs were added to generate_briefs()
+        # but the worker (the only path that runs in production) never
+        # passed them, so every production LE handoff rendered without
+        # the IC3 Reference row — FBI couldn't match the case to the
+        # IC3 complaint record.
+        _ic3_case_id = (freeze_brief.get("IC3_CASE_ID") or "").strip() or None
+        _draft = bool(freeze_brief.get("DRAFT") or freeze_brief.get("draft"))
+        _draft_label = freeze_brief.get("DRAFT_LABEL") or freeze_brief.get("draft_label")
+
         for issuer_name, issuer_info in issuers_seen.items():
             try:
                 bundle = generate_briefs(
@@ -345,6 +356,9 @@ def build_all_deliverables(
                     issuer=issuer_info,
                     flow_filename=flow_filename,
                     issuer_freezable=freezable_by_issuer.get(issuer_name),
+                    ic3_case_id=_ic3_case_id,
+                    draft=_draft,
+                    draft_label=_draft_label,
                 )
                 written.append(bundle.maple_path)
                 written.append(bundle.le_path)

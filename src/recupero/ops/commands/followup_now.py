@@ -104,12 +104,15 @@ def run(
         freezable_issuers=row["freezable_issuers"],
     )
 
-    # If email is disabled (RECUPERO_DISABLE_EMAIL=1), don't treat
-    # the skipped send as a failure for the operator's exit code.
-    # send_followup returns False on skip OR fail; we check the
-    # env directly to distinguish.
-    import os as _os
-    email_disabled = _os.environ.get("RECUPERO_DISABLE_EMAIL", "").strip() == "1"
+    # If email is disabled (RECUPERO_DISABLE_EMAIL truthy), don't
+    # treat the skipped send as a failure for the operator's exit
+    # code. send_followup returns False on skip OR fail; we check
+    # the env directly to distinguish. v0.19.1 (round-12 arch-HIGH-3):
+    # canonical env_truthy honors "1" / "true" / "yes" / "on" so an
+    # operator setting RECUPERO_DISABLE_EMAIL=true in their .env
+    # doesn't trip an "OK but no send" log line on ops invocations.
+    from recupero._common import env_truthy
+    email_disabled = env_truthy("RECUPERO_DISABLE_EMAIL")
 
     ok = send_followup(candidate=candidate, dsn=dsn)
     if ok:

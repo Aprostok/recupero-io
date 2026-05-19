@@ -309,10 +309,12 @@ def _build_context(
 
 
 def _change_to_ctx(mc: MaterialChange) -> dict[str, Any]:
-    explorer = _ADDRESS_EXPLORER_BY_CHAIN.get(
-        mc.chain, "https://etherscan.io/address/"
-    )
-    explorer_url = f"{explorer}{mc.address}"
+    # v0.19.1 (round-12 PDF-CRIT-2): no etherscan fallback — Solana/
+    # Tron/BTC/Hyperliquid addresses on a digest row otherwise rendered
+    # an etherscan.io/address/<base58> link that 404s on click. Template
+    # guards the row with {% if explorer_url %}.
+    explorer = _ADDRESS_EXPLORER_BY_CHAIN.get(mc.chain)
+    explorer_url = f"{explorer}{mc.address}" if explorer else ""
     row_class = "perp-row" if mc.role in {"perpetrator", "current_holder"} else ""
 
     return {

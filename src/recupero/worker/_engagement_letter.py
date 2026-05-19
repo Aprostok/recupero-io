@@ -184,7 +184,10 @@ def _build_context(
         "victim": victim.model_dump(),
         "investigator": investigator.__dict__,
         "investigator_jurisdiction": investigator_jurisdiction,
-        "chain_display": case.chain.value.capitalize(),
+        # v0.19.1 (round-12 PDF-CRIT-5): use canonical chain display
+        # name so engagement letter, customer email, and LE handoff
+        # all render "BNB Chain" / "Hyperliquid" instead of "Bsc".
+        "chain_display": _resolve_chain_display(case.chain.value),
         "freezable_issuer_count": freezable_issuer_count,
         "total_freezable_usd": _fmt_usd(total_freezable_usd),
         # v0.16.7 fix: `total_suspected_usd` is INVESTIGATE-only (see
@@ -212,6 +215,14 @@ def _build_context(
 def _fmt_usd(d: Decimal) -> str:
     """Format Decimal as ``$X,XXX.YY`` (e.g., '$2,000.00')."""
     return f"${d:,.2f}"
+
+
+def _resolve_chain_display(chain: str | None) -> str:
+    """Delegate to victim_summary's canonical map so the engagement
+    letter, customer email, and LE handoff all render the same name
+    for every chain. v0.19.1 (round-12 PDF-CRIT-5)."""
+    from recupero.worker._victim_summary import _resolve_chain_display as _rcd
+    return _rcd(chain)
 
 
 __all__ = ("render_engagement_letter",)

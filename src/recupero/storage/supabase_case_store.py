@@ -160,13 +160,26 @@ class SupabaseCaseStore:
     # ----- High-level Case I/O ----- #
 
     def write_case(self, case: Case) -> str:
+        """Upload case bundle to Supabase Storage.
+
+        v0.19.1 (round-12 resilience-HIGH-1): write order inverted so
+        ``case.json`` lands LAST. Pre-v0.19.1 the order was case.json →
+        manifest.json → transfers.csv; a worker crash (OOM, SIGKILL on
+        Railway redeploy, transient 5xx on the second upload) between
+        steps left case.json present but the companion artifacts
+        missing. The pipeline's resume probe checks for case.json as
+        the "this stage completed" sentinel, so on the next claim it
+        skipped the trace stage but downstream deliverables choked on
+        the absent manifest/transfers — empty PDFs shipped to victims.
+        Now: companions first, case.json last → resume sentinel only
+        flips after every artifact is durably stored.
+        """
         log.info("writing case to supabase storage prefix %s", self.storage_prefix)
 
         opts = orjson.OPT_INDENT_2 if self._pretty else 0
         case_payload = case.model_dump(mode="json")
         case_bytes = orjson.dumps(case_payload, option=opts)
         case_path = self.storage_prefix + "case.json"
-        self._upload(case_path, case_bytes, "application/json")
 
         # Manifest fields mirror CaseStore.write_case exactly.
         manifest = {
@@ -187,10 +200,13 @@ class SupabaseCaseStore:
             "written_at": datetime.now(UTC).isoformat(),
         }
         manifest_bytes = orjson.dumps(manifest, option=orjson.OPT_INDENT_2)
-        self._upload(self.storage_prefix + "manifest.json", manifest_bytes, "application/json")
-
         csv_bytes = self._render_transfers_csv(case)
+
+        # Companions FIRST so case.json is the sentinel that flips
+        # only when the bundle is durable end-to-end.
         self._upload(self.storage_prefix + "transfers.csv", csv_bytes, "text/csv; charset=utf-8")
+        self._upload(self.storage_prefix + "manifest.json", manifest_bytes, "application/json")
+        self._upload(case_path, case_bytes, "application/json")
 
         return case_path
 

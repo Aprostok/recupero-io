@@ -633,27 +633,36 @@
   {% endif %}
 </table>
 
+{# v0.19.1 (round-12 PDF-HIGH-7): chain-parameterized attestation prose.
+   Pre-v0.19.1 the verification + attestation sections hardcoded
+   "Ethereum mainnet" and "Etherscan" — every Solana/Tron/BSC/BTC LE
+   handoff therefore signed an attestation contradicting the actual
+   chain shown on the cover. Compliance reviewers reject the package
+   on the attestation alone. Now: `primary_chain` populates the
+   chain-name banner and the explorer name follows. #}
 <h2>8. Verification</h2>
 <p>
-  Every fact in this package is drawn from public Ethereum mainnet state
-  and is independently verifiable. Each transaction listed in the timeline
-  links to its Etherscan record. For each transaction we retain, on file:
-  the raw transaction object, receipt, block header, fetch timestamp, and
-  direct verification link.
+  Every fact in this package is drawn from public {{ primary_chain | default("Ethereum") }}
+  on-chain state and is independently verifiable. Each transaction listed
+  in the timeline links to its block-explorer record. For each transaction
+  we retain, on file: the raw transaction object, receipt, block header,
+  fetch timestamp, and direct verification link.
 </p>
 <p class="small">
-  Sources: Etherscan API v2 (transaction history); CoinGecko (historical
-  pricing); our internal label database for entity attribution.
+  Sources: on-chain RPC + chain-explorer API (transaction history);
+  CoinGecko (historical pricing); our internal label database for entity
+  attribution.
 </p>
 
 <h2>9. Investigator Attestation</h2>
 <div class="signature-block">
   <p>
     I prepared this package on behalf of {{ victim.name }} from public
-    Ethereum mainnet data fetched between {{ trace_started_at }} and
-    {{ generated_at }} UTC. The transaction hashes, addresses, timestamps,
-    and amounts set out in this brief are accurate to the best of my
-    knowledge and were independently verified at the time of fetch.
+    {{ primary_chain | default("Ethereum") }} on-chain data fetched between
+    {{ trace_started_at }} and {{ generated_at }} UTC. The transaction
+    hashes, addresses, timestamps, and amounts set out in this brief are
+    accurate to the best of my knowledge and were independently verified
+    at the time of fetch.
   </p>
   <div class="signature-line"></div>
   <div class="signature-fields">

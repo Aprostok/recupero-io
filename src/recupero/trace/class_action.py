@@ -203,6 +203,16 @@ def compute_class_action_opportunity(
             continue
 
         # Total prior USD: use the corr's aggregated figure.
+        # NB (round-12): an audit pass flagged this as a potential
+        # double-count when multiple addresses share one prior case.
+        # The metric is intentionally per-address-aggregate ("USD that
+        # flowed through addresses linking this case to priors") rather
+        # than per-case-loss; we don't carry per-case loss data through
+        # the correlation pipeline, so the per-case-max alternative
+        # isn't computable without a schema change. The headline note
+        # text is already hedged ("estimated combined loss"); operators
+        # reviewing the brief understand it as an exposure aggregate,
+        # not a victim-loss tally.
         total_loss_estimate += corr.prior_total_usd_flowed or Decimal("0")
 
         # Take a representative role. Prefer a qualifying role

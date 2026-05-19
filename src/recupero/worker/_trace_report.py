@@ -300,11 +300,21 @@ def _build_freezable_table(
 
 
 def _explorer_url(address: str, chain: str) -> str:
+    """Resolve an address → block-explorer URL for `chain`.
+
+    v0.19.1 (round-12 PDF-CRIT-2): pre-v0.19.1 unknown chains fell
+    back to ``etherscan.io/address/``. That meant every Solana / Tron
+    / Bitcoin / Hyperliquid address in the operator-facing trace
+    report linked to ``etherscan.io/address/<base58>`` → 404 on
+    every click. The internal trace report mismatched ``brief.py``'s
+    no-fallback contract (which returns ""); we now align both paths.
+    Empty return lets the template guard the link with ``{% if %}``.
+    """
     if not address:
         return ""
-    prefix = _ADDRESS_EXPLORER_BY_CHAIN.get(
-        chain, "https://etherscan.io/address/",
-    )
+    prefix = _ADDRESS_EXPLORER_BY_CHAIN.get(chain)
+    if not prefix:
+        return ""
     return f"{prefix}{address}"
 
 

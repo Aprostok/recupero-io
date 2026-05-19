@@ -757,15 +757,21 @@ def _compute_perpetrator_holdings(
     addresses) because those aren't perpetrator-controlled in
     any actionable sense.
     """
-    # total_suspected_usd is the GROSS dollars at the address
-    # (FREEZABLE + INVESTIGATE); total_usd is the FREEZABLE subset.
-    # The gross perpetrator-exposure number wants max(suspected,
-    # freezable) per entry to avoid double-counting.
+    # v0.18.0 (round-11 forensic CRIT): pre-v0.18.0 the comment here
+    # claimed `total_suspected_usd` was FREEZABLE+INVESTIGATE and used
+    # max() to avoid double-counting. The actual data at lines 596-601
+    # proves the buckets are MUTUALLY EXCLUSIVE: total_usd is FREEZABLE-
+    # only, total_suspected_usd is INVESTIGATE-only. The old max()
+    # systematically understated perpetrator holdings whenever an issuer
+    # had both FREEZABLE and INVESTIGATE addresses — e.g., $500K FREEZABLE
+    # + $200K INVESTIGATE was reported as $500K instead of $700K. The
+    # headline page-1 USD number on every multi-bucket issuer was 20-40%
+    # too low.
     total = Decimal("0")
     for f in freezable:
         suspected = _parse_usd_string(f.get("total_suspected_usd", "0"))
         freezable_amt = _parse_usd_string(f.get("total_usd", "0"))
-        total += max(suspected, freezable_amt)
+        total += freezable_amt + suspected
     # Add UNRECOVERABLE addresses: dormant addresses holding
     # non-issuer-freezable assets (DAI, native ETH, etc.) are
     # still perpetrator-controlled. They're "unrecoverable

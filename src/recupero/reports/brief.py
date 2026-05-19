@@ -909,6 +909,35 @@ def _fmt_usd(d: Decimal | None) -> str:
     return f"{d:,.2f}"
 
 
+def _ensure_usd_prefix(s: str | None) -> str:
+    """Normalize a maybe-USD string so the LE handoff never prints
+    a bare number that reads as a token amount.
+
+    v0.18.0 (round-11 forensic CRIT): operators / hand-edited
+    freeze_brief.json files may carry total_usd as a bare
+    "1037451.35" — emit_brief.usd() always adds `$`, but
+    upstream-of-emit_brief paths and skip-editorial synthesizers
+    don't always go through that helper. Templates that already
+    prefix the prose with "USD " stay correct (extra `$` is then
+    "USD $X" — verbose but unambiguous); templates without the
+    `USD ` prose prefix (le.html.j2:274/283/293) now get a
+    proper `$X` rendering.
+    """
+    if s is None or s == "":
+        return "$0"
+    s = str(s).strip()
+    if s.startswith("$") or s.startswith("USD"):
+        return s
+    # Bare numeric? Add the $ prefix. Anything else (already-
+    # formatted strings like "—") passes through unchanged.
+    try:
+        # Strip any commas before testing.
+        Decimal(s.replace(",", ""))
+        return f"${s}"
+    except Exception:  # noqa: BLE001
+        return s
+
+
 def _build_issuer_freezable_ctx(
     raw: dict | None, chain: Chain | str,
 ) -> dict | None:
@@ -1004,11 +1033,17 @@ def _build_issuer_freezable_ctx(
     else:
         evidence_mode = "current_balance_only"
 
+    # v0.18.0 (round-11 forensic CRIT): hand-edited freeze_brief.json
+    # entries may carry total_usd as a bare "1037451.35" with no `$`
+    # prefix (emit_brief.usd() adds it, but pre-existing rows / R&D
+    # paths may not). Normalize here so the LE handoff cover never
+    # prints "1,037,451.35 of stolen funds is held" — which reads as
+    # a token amount, not a dollar amount, to the LE reader.
     return {
         "token": raw.get("token") or "—",
         "freeze_capability": raw.get("freeze_capability") or "UNKNOWN",
-        "total_usd_freezable": raw.get("total_usd") or "$0",
-        "total_usd_suspected": raw.get("total_suspected_usd") or "$0",
+        "total_usd_freezable": _ensure_usd_prefix(raw.get("total_usd")),
+        "total_usd_suspected": _ensure_usd_prefix(raw.get("total_suspected_usd")),
         "holdings": holdings_out,
         "freezable_holdings": freezable,
         "investigate_holdings": investigate,

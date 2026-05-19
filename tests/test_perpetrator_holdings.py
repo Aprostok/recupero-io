@@ -43,18 +43,30 @@ def test_perpetrator_holdings_zigha_shape_sums_freezable_and_unrecoverable() -> 
     """The Zigha case shape: hub + downstream destinations holding
     a mix of freezable and unrecoverable assets. The headline
     should sum the GROSS at every perpetrator-controlled address,
-    not just the attribution share."""
+    not just the attribution share.
+
+    v0.18.0 (round-11 forensic CRIT): the prior version of this test
+    had ``total_usd`` and ``total_suspected_usd`` set to the SAME value
+    per issuer, because the original implementation comment claimed
+    ``total_suspected_usd = FREEZABLE + INVESTIGATE`` and the test
+    pinned that semantics with ``max()``. The actual emit_brief loop
+    routes each holding into EXACTLY ONE bucket (FREEZABLE-status
+    holdings → total_usd, INVESTIGATE-status holdings →
+    total_suspected_usd) — the two are mutually exclusive. Test data
+    now reflects realistic emit_brief output and the assertion uses
+    the corrected sum semantics.
+    """
     freezable = [
-        # Maple destination — $3.27M freezable (the lawyer-relevant
-        # number; the address's gross is what matters, not
-        # attribution share).
+        # Maple destination — $3.27M FREEZABLE-status holdings.
+        # total_suspected_usd = 0 because no INVESTIGATE-status rows
+        # at Maple in the real case.
         {"issuer": "Maple Finance", "token": "mSyrupUSDp",
          "total_usd": "$3,270,000.00",
-         "total_suspected_usd": "$3,270,000.00"},
-        # Hub — $655K gross even though only $101 was traceable
-        # from this victim.
+         "total_suspected_usd": "$0.00"},
+        # Hub — $655K INVESTIGATE-status (pending KYC verification),
+        # $0 FREEZABLE.
         {"issuer": "(unknown)", "token": "DAI",
-         "total_usd": "$0.00",  # gross-not-freezable position
+         "total_usd": "$0.00",
          "total_suspected_usd": "$655,000.00"},
     ]
     unrecoverable = [
@@ -67,30 +79,48 @@ def test_perpetrator_holdings_zigha_shape_sums_freezable_and_unrecoverable() -> 
          "reason": "Dormant"},
     ]
     total = _compute_perpetrator_holdings(freezable, unrecoverable)
-    # Expected ~$22.05M — the Maple freezable + the hub + the
-    # three dormant destinations. Within rounding of the CFI
-    # report's $24.28M (the missing piece is the $120K Solana
-    # bridge, which v0.8.0 cross-chain handoff would surface).
-    assert total > Decimal("20_000_000"), (
-        f"Zigha-shape headline should be eight figures, got {total}"
-    )
-    assert total < Decimal("25_000_000"), (
-        f"Zigha-shape headline shouldn't double-count, got {total}"
+    # Expected = $3.27M (Maple FREEZABLE) + $655K (Hub INVESTIGATE)
+    #           + $10.08M + $6.91M + $1.14M (Unrecoverable)
+    #         = $22,055,000 exactly.
+    assert total == Decimal("22055000"), (
+        f"Zigha-shape headline should be $22.055M (3.27M FREEZABLE + "
+        f"655K INVESTIGATE + 18.13M Unrecoverable), got {total}"
     )
 
 
 def test_perpetrator_holdings_chen_shape_matches_attribution() -> None:
     """Chen-like single-issuer case: $50K stolen, all went to one
-    Circle USDC address that holds $50K. Gross == attribution.
-    Headline = attribution, no surprise."""
+    Circle USDC address that holds $50K of FREEZABLE-status.
+    Gross == attribution. Headline = $50K (FREEZABLE only; no
+    INVESTIGATE bucket on this case)."""
     freezable = [
         {"issuer": "Circle", "token": "USDC",
          "total_usd": "$50,000.00",
-         "total_suspected_usd": "$50,000.00"},
+         "total_suspected_usd": "$0.00"},
     ]
     unrecoverable: list[dict] = []
     total = _compute_perpetrator_holdings(freezable, unrecoverable)
     assert total == Decimal("50000.00")
+
+
+def test_perpetrator_holdings_sums_both_buckets_when_mixed() -> None:
+    """v0.18.0 (round-11 forensic CRIT): when an issuer has BOTH
+    FREEZABLE and INVESTIGATE holdings, the perpetrator-holdings
+    total must SUM them, not take max(). Pre-v0.18.0 the page-1
+    headline understated perpetrator exposure by the INVESTIGATE
+    bucket whenever both buckets were non-empty — typically 20-40%
+    too low on multi-bucket issuers."""
+    freezable = [
+        # An issuer with BOTH FREEZABLE and INVESTIGATE positions.
+        # Pre-v0.18.0 max() would report $500K; correct answer is $700K.
+        {"issuer": "Circle", "token": "USDC",
+         "total_usd": "$500,000.00",
+         "total_suspected_usd": "$200,000.00"},
+    ]
+    total = _compute_perpetrator_holdings(freezable, [])
+    assert total == Decimal("700000.00"), (
+        f"Mixed-bucket issuer must sum FREEZABLE + INVESTIGATE, got {total}"
+    )
 
 
 def test_perpetrator_holdings_empty_returns_zero() -> None:
@@ -98,17 +128,25 @@ def test_perpetrator_holdings_empty_returns_zero() -> None:
     assert _compute_perpetrator_holdings([], []) == Decimal("0")
 
 
-def test_perpetrator_holdings_uses_max_of_total_and_suspected() -> None:
-    """A FREEZABLE entry's `total_suspected_usd` is the gross at
-    the address; `total_usd` is the freezable subset. We use the
-    LARGER of the two to capture the full perpetrator position
-    even when only a fraction is freezable. (Common: address
-    holds $1M, only $200K is in USDC; gross perp position is
-    $1M, freezable is $200K.)"""
+def test_perpetrator_holdings_sums_freezable_and_investigate_buckets() -> None:
+    """v0.18.0 (round-11 forensic CRIT, renamed from
+    `uses_max_of_total_and_suspected`): the OLD assumption was that
+    `total_suspected_usd` = FREEZABLE + INVESTIGATE cumulative — so
+    `max(suspected, freezable)` would give the gross perpetrator
+    position. The actual emit_brief loop (emit_brief.py:596-601)
+    routes EACH holding into EXACTLY ONE bucket: FREEZABLE → total_usd,
+    INVESTIGATE → total_suspected_usd. So the gross is the SUM, not
+    the max.
+
+    Common shape: address holds $1M, of which $200K is USDC under
+    Circle (FREEZABLE, capability=high) and $800K is other tokens
+    pending KYC verification (INVESTIGATE). Gross perpetrator
+    position = $200K + $800K = $1M.
+    """
     freezable = [
         {"issuer": "X", "token": "Y",
-         "total_usd": "$200,000.00",          # freezable portion
-         "total_suspected_usd": "$1,000,000.00"},  # gross at the address
+         "total_usd": "$200,000.00",          # FREEZABLE-status
+         "total_suspected_usd": "$800,000.00"},  # INVESTIGATE-status
     ]
     total = _compute_perpetrator_holdings(freezable, [])
     assert total == Decimal("1_000_000.00")
@@ -159,11 +197,19 @@ def _stub_case():
 def test_totals_includes_perpetrator_holdings_key() -> None:
     """The TOTAL_PERPETRATOR_HOLDINGS_USD key is present in the
     return dict so emit_brief can wire it through to the
-    rendered output. UI contract."""
+    rendered output. UI contract.
+
+    v0.18.0 (round-11 forensic CRIT): fixture data now reflects
+    realistic emit_brief output (each holding in EXACTLY ONE bucket).
+    Pre-v0.18.0 the test had FREEZABLE and INVESTIGATE buckets both
+    set to $50K, which made sense under the old max() implementation
+    but doesn't match the actual data shape emit_brief writes.
+    """
     case = _stub_case()
     freezable = [{
         "issuer": "Circle", "token": "USDC",
-        "total_usd": "$50,000.00", "total_suspected_usd": "$50,000.00",
+        # $50K FREEZABLE, no INVESTIGATE positions on this issuer.
+        "total_usd": "$50,000.00", "total_suspected_usd": "$0.00",
         "total_excluded_usd": "$0.00",
     }]
     totals = _compute_totals(case, freezable, [])

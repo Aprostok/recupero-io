@@ -89,8 +89,12 @@ def generate_daily_digest(
     )
     html = env.get_template("mini_freeze_digest.html.j2").render(**ctx)
 
+    # v0.17.7 (round-10 PDF/Output HIGH): atomic write so a crash
+    # mid-render can't leave a half-written digest.html on disk that
+    # the bucket sync would then ship to operators.
+    from recupero._common import atomic_write_text
     html_path = output_dir / f"{digest_id}.html"
-    html_path.write_text(html, encoding="utf-8")
+    atomic_write_text(html_path, html)
     log.info("digest HTML rendered: %s (%d bytes)", html_path.name, html_path.stat().st_size)
 
     # PDF render in subprocess so a WeasyPrint OOM doesn't take down
@@ -103,6 +107,14 @@ def generate_daily_digest(
     try:
         import subprocess
         import sys
+        # v0.17.7 (round-10 PDF/Output security HIGH): strip secrets
+        # from the env handed to WeasyPrint. Same rationale as
+        # worker._deliverables._subprocess_safe_env — render
+        # subprocesses don't need the worker's API keys / DB DSN, and
+        # a WeasyPrint crash trace that dumps env-vars would leak
+        # them through the captured stderr. Reuse the helper rather
+        # than re-defining the allowlist.
+        from recupero.worker._deliverables import _subprocess_safe_env
         candidate = html_path.with_suffix(".pdf")
         result = subprocess.run(
             [
@@ -112,6 +124,7 @@ def generate_daily_digest(
                 str(html_path), str(candidate),
             ],
             capture_output=True, timeout=90.0,
+            env=_subprocess_safe_env(),
         )
         if result.returncode == 0:
             pdf_path = candidate
@@ -141,9 +154,9 @@ def generate_daily_digest(
         pdf_filename=pdf_path.name if pdf_path else None,
     )
     summary_path = output_dir / f"{digest_id}.summary.json"
-    summary_path.write_text(
+    atomic_write_text(
+        summary_path,
         json.dumps(summary, indent=2, default=_json_default),
-        encoding="utf-8",
     )
     log.info(
         "digest summary written: %s (%d bytes)",

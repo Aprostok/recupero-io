@@ -133,8 +133,11 @@ def identify_pass2_candidates(
 
     candidates: list[Pass2Candidate] = []
     freezable_entries = freeze_brief.get("FREEZABLE") or []
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying so
+    # base58 chains aren't mangled out of the inflow aggregation.
+    from recupero._common import canonical_address_key as _ck
     # Aggregate inflows from victim per destination address.
-    seed_lower = case.seed_address.lower()
+    seed_lower = _ck(case.seed_address)
     inflow_by_addr: dict[str, Decimal] = {}
     # v0.16.6 (audit r8a HIGH): ALSO aggregate the GROSS inflow
     # observed in the trace (sum across ALL transfers TO the address,
@@ -149,12 +152,12 @@ def identify_pass2_candidates(
     for t in case.transfers:
         if t.usd_value_at_tx is None:
             continue
-        to_key = t.to_address.lower()
+        to_key = _ck(t.to_address)
         gross_inflow_by_addr[to_key] = (
             gross_inflow_by_addr.get(to_key, Decimal("0"))
             + t.usd_value_at_tx
         )
-        if t.from_address.lower() != seed_lower:
+        if _ck(t.from_address) != seed_lower:
             continue
         inflow_by_addr[to_key] = (
             inflow_by_addr.get(to_key, Decimal("0"))
@@ -166,7 +169,7 @@ def identify_pass2_candidates(
     for entry in freezable_entries:
         holdings = entry.get("holdings") or []
         for holding in holdings:
-            addr = (holding.get("address") or "").lower()
+            addr = _ck(holding.get("address") or "")
             if not addr or addr == seed_lower:
                 continue
             current_balance = _parse_usd(holding.get("usd"))
@@ -295,9 +298,12 @@ def merge_perpetrator_findings(
     # Build a quick lookup of pass-1 hop-depth-at-hub for each
     # pass-2 root, so we can shift pass-2 depths to be relative
     # to pass-1's coordinate system.
+    # v0.17.9: canonical keying for the depth-at-hub map so base58
+    # destinations match the seed_address lookup below.
+    from recupero._common import canonical_address_key as _ck
     pass1_depth_at: dict[str, int] = {}
     for t in pass1_case.transfers:
-        addr = t.to_address.lower()
+        addr = _ck(t.to_address)
         # Take the MAXIMUM depth at which we reached the address
         # — handles cases where multiple pass-1 paths converge
         # on the same hub.
@@ -318,10 +324,18 @@ def merge_perpetrator_findings(
     # identify the same on-chain edge even when transfer_id /
     # hop_depth differ.
     def _edge_key(t):
+        # v0.17.9: canonical keying preserves base58 case so a Solana
+        # edge in pass-1 isn't seen as "different" from the same edge
+        # in pass-2 just because of operator-pasted case differences.
+        # Token contract: stays lowercased — EVM contract addresses
+        # are case-insensitive and Solana mint addresses are stored
+        # canonical-case in the seed maps; comparing them lowercased
+        # is the safer dedup key for the (tx_hash, from, to, contract)
+        # tuple.
         return (
             t.tx_hash,
-            (t.from_address or "").lower(),
-            (t.to_address or "").lower(),
+            _ck(t.from_address or ""),
+            _ck(t.to_address or ""),
             ((getattr(t.token, "contract", None) or "")
                 if t.token else "").lower(),
         )
@@ -330,7 +344,7 @@ def merge_perpetrator_findings(
     merged_transfers = list(pass1_case.transfers)
     duplicates_skipped = 0
     for pass2_case in pass2_cases:
-        hub = pass2_case.seed_address.lower()
+        hub = _ck(pass2_case.seed_address)
         offset = pass1_depth_at.get(hub, 0)
         for t in pass2_case.transfers:
             edge = _edge_key(t)

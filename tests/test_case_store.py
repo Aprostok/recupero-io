@@ -110,3 +110,33 @@ class TestCaseStore:
         assert rows[0]["to_exchange"] == "MEXC"
         assert rows[0]["token_symbol"] == "ETH"
         assert rows[0]["usd_value_at_tx"] == "3000.00"
+
+    def test_manifest_embeds_artifact_sha256(self, tmp_path: Path) -> None:
+        """v0.17.7 (round-10 forensic HIGH): manifest must include
+        SHA256 of case.json + transfers.csv for chain-of-custody.
+        Compliance teams + LE verify these hashes against the
+        artifacts before treating the bundle as authoritative.
+        """
+        import hashlib
+        import json
+
+        store = CaseStore(RecuperoConfig(storage=StorageParams(data_dir=str(tmp_path))))
+        case = _sample_case()
+        store.write_case(case)
+        case_dir = tmp_path / "cases" / "UNITTEST"
+        manifest = json.loads((case_dir / "manifest.json").read_text())
+        assert "artifact_sha256" in manifest, (
+            "manifest missing artifact_sha256 — chain-of-custody regression"
+        )
+        hashes = manifest["artifact_sha256"]
+        assert "case.json" in hashes
+        assert "transfers.csv" in hashes
+        # Recompute and verify exact match.
+        case_actual = hashlib.sha256(
+            (case_dir / "case.json").read_bytes()
+        ).hexdigest()
+        csv_actual = hashlib.sha256(
+            (case_dir / "transfers.csv").read_bytes()
+        ).hexdigest()
+        assert hashes["case.json"] == case_actual
+        assert hashes["transfers.csv"] == csv_actual

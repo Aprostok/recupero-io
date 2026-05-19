@@ -15,6 +15,7 @@ Layout (mirrored in docs/PHASE1_SPEC.md):
 from __future__ import annotations
 
 import csv
+import hashlib
 import logging
 import os
 from datetime import UTC, datetime
@@ -75,8 +76,29 @@ class CaseStore:
         case_path = d / "case.json"
         payload = case.model_dump(mode="json")
         opts = orjson.OPT_INDENT_2 if self.pretty else 0
-        _atomic_write_bytes(case_path, orjson.dumps(payload, option=opts))
+        case_bytes = orjson.dumps(payload, option=opts)
+        _atomic_write_bytes(case_path, case_bytes)
         log.info("wrote case file %s", case_path)
+
+        # CSV mirror — flat view for spreadsheet review and LE.
+        # Write BEFORE the manifest so we can hash the on-disk CSV
+        # for the manifest's chain-of-custody record.
+        csv_path = d / "transfers.csv"
+        self._write_transfers_csv(case, csv_path)
+
+        # v0.17.7 (round-10 forensic HIGH): manifest now embeds SHA256
+        # of the two produced artifacts. Compliance teams + LE expect
+        # a chain-of-custody record they can independently verify;
+        # pre-v0.17.7 the manifest only carried counts (transfer_count,
+        # exchange_endpoint_count) which couldn't detect tampering.
+        # Hashes are computed from the bytes we actually wrote, not
+        # re-read from disk, so a concurrent-write race can't alter
+        # the recorded value.
+        case_sha256 = hashlib.sha256(case_bytes).hexdigest()
+        try:
+            csv_sha256 = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+        except OSError:
+            csv_sha256 = None
 
         # Manifest — small subset of metadata, easy to read
         manifest = {
@@ -95,15 +117,17 @@ class CaseStore:
             "total_usd_out": str(case.total_usd_out) if case.total_usd_out is not None else None,
             "config_used": case.config_used,
             "written_at": datetime.now(UTC).isoformat(),
+            # v0.17.7: chain-of-custody artifact hashes.
+            "artifact_sha256": {
+                "case.json": case_sha256,
+                "transfers.csv": csv_sha256,
+            },
         }
         manifest_path = d / "manifest.json"
         _atomic_write_bytes(
             manifest_path,
             orjson.dumps(manifest, option=orjson.OPT_INDENT_2),
         )
-
-        # CSV mirror — flat view for spreadsheet review and LE
-        self._write_transfers_csv(case, d / "transfers.csv")
 
         return case_path
 

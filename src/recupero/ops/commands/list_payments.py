@@ -155,7 +155,17 @@ def _print_table(rows: list[dict[str, Any]]) -> None:
             f"{status:<10} {case_disp:<14} {action}"
         )
         if notes:
-            print(f"  └─ {notes[:160]}")
+            # v0.18.9 (round-11 ops-MED-020): sanitize terminal escape
+            # sequences. Pre-v0.18.9 a malicious Stripe-webhook metadata
+            # payload could embed ANSI codes (\x1b[2J = clear screen)
+            # into payments.notes — `recupero-ops list-payments` would
+            # then wipe the operator's terminal mid-output. Now: strip
+            # ESC (\x1b), CR/LF, and other control chars before printing.
+            import re as _re_sanitize
+            safe_notes = _re_sanitize.sub(
+                r"[\x00-\x08\x0b-\x1f\x7f]", "?", notes,
+            ).replace("\r", " ").replace("\n", " ")
+            print(f"  └─ {safe_notes[:160]}")
 
 
 def _action_label(amount_type: str, notes: str) -> str:

@@ -165,6 +165,22 @@ def cli() -> None:
              "(e.g., 'victim', 'attorney', 'family-member').",
     )
 
+    # ----- revoke-token ----- #
+    # v0.18.9 (round-11 ops-HIGH-010): CLI wrapper around
+    # portal.tokens.revoke_token. Pre-v0.18.9 the function existed
+    # in `__all__` but no CLI surface — operators responding to a
+    # leaked-link incident had to run raw SQL.
+    p_revoke = sub.add_parser(
+        "revoke-token",
+        help="Revoke a portal bearer token so the URL stops working. "
+             "Use when a victim accidentally forwarded the link, or "
+             "when ops sees suspicious portal-access patterns.",
+    )
+    p_revoke.add_argument(
+        "token_id",
+        help="UUID of the case_tokens row (printed by generate-customer-link).",
+    )
+
     # ----- stripe-mode ----- #
     sub.add_parser(
         "stripe-mode",
@@ -429,6 +445,21 @@ def cli() -> None:
             label=args.label,
             dsn=_require_dsn(),
         ))
+
+    if args.command == "revoke-token":
+        # v0.18.9 (round-11 ops-HIGH-010): inline revoke. No
+        # confirmation prompt — revoking an active token is the
+        # right thing under any "operator panic" workflow (forwarded
+        # link, suspicious access).
+        from recupero.portal.tokens import revoke_token
+        token_id = _parse_uuid(args.token_id, field_name="token_id")
+        ok = revoke_token(token_id=token_id, dsn=_require_dsn())
+        if ok:
+            print(f"OK — revoked portal token {token_id}")
+            sys.exit(0)
+        else:
+            print(f"ERROR: no active token found with id={token_id}")
+            sys.exit(1)
 
     if args.command == "promote-freezable":
         from recupero.ops.commands import promote_freezable as cmd

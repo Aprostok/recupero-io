@@ -42,6 +42,41 @@ def run(
 ) -> int:
     """Send the LE handoff to a specific recipient. Returns 0 on
     success, 1 on errors."""
+    # v0.18.9 (round-11 ops-HIGH-009): email validation + known-LE-domain
+    # warning. Pre-v0.18.9 a typo'd recipient (`fbi.glv` instead of
+    # `fbi.gov`) sent the entire forensic package (victim seed_address,
+    # transaction list, sometimes wallet privkey hashes) to whoever
+    # owned that domain. The idempotency check let the typo through if
+    # it was never sent there before.
+    import re as _re
+    if not _re.match(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$", to_email):
+        print(
+            f"ERROR: --to {to_email!r} doesn't look like a valid email "
+            f"address. Refusing to send forensic PII to a malformed "
+            f"recipient. Verify the address before retry."
+        )
+        return 2
+    # Soft-warn on unknown TLDs that are NOT in the LE allowlist. The
+    # operator can override after confirmation (the existing `confirm`
+    # gate still applies).
+    _LE_KNOWN_DOMAINS = {
+        "fbi.gov", "ic3.gov", "secretservice.gov", "justice.gov",
+        "treasury.gov", "ag.state",  # state AG common suffix
+        "interpol.int", "europol.europa.eu", "nca.gov.uk",
+    }
+    _domain = to_email.split("@", 1)[1].lower()
+    if not any(
+        _domain == d or _domain.endswith("." + d)
+        for d in _LE_KNOWN_DOMAINS
+    ):
+        print(
+            f"WARNING: recipient domain {_domain!r} is not in the "
+            f"known-LE allowlist ({sorted(_LE_KNOWN_DOMAINS)}). "
+            f"Confirm this is intentional. The forensic package contains "
+            f"victim PII (seed_address, transaction list, evidence "
+            f"receipts) and is irreversibly sent on confirmation."
+        )
+
     inv = _fetch_investigation(investigation_id=investigation_id, dsn=dsn)
     if not inv:
         print(f"ERROR: investigation {investigation_id} not found")
@@ -91,10 +126,21 @@ def run(
         le_html_name.replace(".html", ".pdf"),  # the LE handoff itself
     ]
     # Find trace_report + flow PDFs in the bucket
+    # v0.18.9 (round-11 ops-HIGH-008): parenthesize operator precedence.
+    # Pre-v0.18.9: `A and B or C and D` works for this exact case but is
+    # brittle — adding a third prefix without parentheses would let
+    # non-PDF files slip through into the LE handoff email, sending
+    # customer PII to whatever address the operator typed.
+    _LE_ATTACHMENT_PREFIXES = ("trace_report_", "flow_")
     for f in bucket_files:
         name = f.get("name", "")
-        if name.startswith("trace_report_") and name.endswith(".pdf") or name.startswith("flow_") and name.endswith(".pdf"):
+        if (
+            any(name.startswith(p) for p in _LE_ATTACHMENT_PREFIXES)
+            and name.endswith(".pdf")
+        ):
             pdf_candidates.append(name)
+    # Defense-in-depth: dedupe (a future bucket re-scan could double-list).
+    pdf_candidates = list(dict.fromkeys(pdf_candidates))
     attachments: list[Path] = []
     for pdf_name in pdf_candidates:
         p = _download_pdf(

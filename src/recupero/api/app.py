@@ -45,6 +45,20 @@ def _resolve_git_sha() -> str | None:
     return sha or None
 
 
+def _docs_locked_in_production() -> bool:
+    """v0.18.9 (round-11 api-MED-005): lock /docs, /openapi.json,
+    /redoc in production. Operator opt-in via
+    RECUPERO_API_DOCS_PUBLIC=1 to re-expose."""
+    import os as _os
+    if (_os.environ.get("RECUPERO_API_DOCS_PUBLIC", "") or "").strip() == "1":
+        return False
+    try:
+        from recupero.api.auth import _is_production_environment
+        return _is_production_environment()
+    except Exception:  # noqa: BLE001
+        return False
+
+
 app = FastAPI(
     title="Recupero API",
     description=(
@@ -54,9 +68,14 @@ app = FastAPI(
         "recovery attorneys, and OSINT teams."
     ),
     version=_resolve_version(),
-    docs_url="/docs",
-    openapi_url="/openapi.json",
-    redoc_url="/redoc",
+    # v0.18.9 (round-11 api-MED-005): /docs, /openapi.json, /redoc
+    # auth-gate in production. Pre-v0.18.9 these were unconditionally
+    # public — the OpenAPI spec leaks the full endpoint surface +
+    # Pydantic model shapes + internal field names. In production
+    # opt-in only via RECUPERO_API_DOCS_PUBLIC=1.
+    docs_url="/docs" if not _docs_locked_in_production() else None,
+    openapi_url="/openapi.json" if not _docs_locked_in_production() else None,
+    redoc_url="/redoc" if not _docs_locked_in_production() else None,
 )
 
 
@@ -84,12 +103,19 @@ class ScreenRequest(BaseModel):
 class TokenRiskRequest(BaseModel):
     contract_address: str = Field(..., description="Token contract address.")
     chain: str = Field("ethereum")
+    # v0.18.9 (round-11 api-MED-004): cap at 64KB hex (32KB binary).
+    # Real contract bytecode tops out around ~24KB binary at the
+    # EIP-170 contract-size limit; 64KB hex is 2.7× headroom for
+    # init-code analysis. Without the cap a malicious caller can
+    # POST a 16MB hex string (FastAPI's default body cap) and
+    # quadratic-worst-case the bytecode-heuristic regex pass.
     bytecode: str | None = Field(
-        None,
+        None, max_length=65536,
         description=(
             "Optional contract runtime bytecode (hex). When supplied, "
             "the bytecode-heuristic pass runs to detect honeypot "
-            "selectors (setBuyTax, setMaxTxAmount, etc.)."
+            "selectors (setBuyTax, setMaxTxAmount, etc.). Capped at "
+            "64KB hex (= 32KB binary, 2.7× EIP-170 limit)."
         ),
     )
     tx_history_stats: dict[str, Any] | None = Field(

@@ -95,9 +95,27 @@ class _Heartbeat:
     def start(self) -> None:
         self._thread.start()
 
+    # v0.18.1 (round-11 worker-CRIT-002): join timeout is now generous
+    # but the heartbeat thread is also explicitly bounded — its DB
+    # call uses connect_timeout=10 (via WorkerDB._PSYCOPG_KW), so a
+    # blocked psycopg.connect can hold the thread at most ~10s.
+    # Combined with the v0.18.1 reaper change that clears worker_id
+    # AND the v0.18.1 mark_* terminal-state guards, a late heartbeat
+    # write can no longer (a) re-write last_heartbeat_at on a reaped
+    # row (worker_id filter) nor (b) let a zombie mark_* succeed
+    # against a reaped row (status guard).
+    _STOP_JOIN_TIMEOUT_SEC = 30
+
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=self._interval + 5)
+        self._thread.join(timeout=self._STOP_JOIN_TIMEOUT_SEC)
+        if self._thread.is_alive():
+            log.warning(
+                "heartbeat thread did not exit within %ds — proceeding "
+                "anyway; v0.18.1 reaper + mark_* guards prevent stale "
+                "writes from corrupting row state.",
+                self._STOP_JOIN_TIMEOUT_SEC,
+            )
 
     def stop_idempotent(self) -> None:
         """Stop the heartbeat thread; safe to call multiple times.
@@ -109,11 +127,17 @@ class _Heartbeat:
         heartbeating" to the reaper. The outer `finally: hb.stop()`
         in main.py still runs as a safety net but is a no-op when
         the thread already exited.
+
+        v0.18.1 (round-11 worker-CRIT-002): join uses the larger
+        timeout. The reaper + mark_* guards in v0.18.1 make a stale
+        heartbeat write provably safe (it'll match zero rows due to
+        worker_id NULL after reap + status NOT IN terminal-states
+        on every mark_*).
         """
         if not self._stop.is_set():
             self._stop.set()
             if self._thread.is_alive():
-                self._thread.join(timeout=self._interval + 5)
+                self._thread.join(timeout=self._STOP_JOIN_TIMEOUT_SEC)
 
     def _run(self) -> None:
         # Wait the interval first; the claim already set the heartbeat to NOW().

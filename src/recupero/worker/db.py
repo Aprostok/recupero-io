@@ -367,7 +367,16 @@ class WorkerDB:
                SET {COL_STATUS} = %(failed)s,
                    {COL_FAILED_AT} = NOW(),
                    {COL_ERROR_MESSAGE} = %(msg)s,
-                   {COL_ERROR_STAGE} = stale.{COL_STATUS}
+                   {COL_ERROR_STAGE} = stale.{COL_STATUS},
+                   -- v0.18.1 (round-11 worker-HIGH-005): also clear
+                   -- worker_id and heartbeat so the doomed worker's
+                   -- still-alive heartbeat thread can't re-write
+                   -- last_heartbeat_at (producing "failed but
+                   -- heartbeating" rows) and so the zombie worker's
+                   -- subsequent mark_* UPDATE can't drive the row to
+                   -- `complete` via its now-stale worker_id filter.
+                   {COL_WORKER_ID} = NULL,
+                   {COL_HEARTBEAT} = NULL
               FROM stale
              WHERE i.{COL_ID} = stale.{COL_ID}
             RETURNING i.{COL_ID}, stale.{COL_STATUS};
@@ -419,7 +428,16 @@ class WorkerDB:
                SET {COL_STATUS} = %(failed)s,
                    {COL_FAILED_AT} = NOW(),
                    {COL_ERROR_MESSAGE} = %(msg)s,
-                   {COL_ERROR_STAGE} = stale.{COL_STATUS}
+                   {COL_ERROR_STAGE} = stale.{COL_STATUS},
+                   -- v0.18.1 (round-11 worker-HIGH-005): also clear
+                   -- worker_id and heartbeat so the doomed worker's
+                   -- still-alive heartbeat thread can't re-write
+                   -- last_heartbeat_at (producing "failed but
+                   -- heartbeating" rows) and so the zombie worker's
+                   -- subsequent mark_* UPDATE can't drive the row to
+                   -- `complete` via its now-stale worker_id filter.
+                   {COL_WORKER_ID} = NULL,
+                   {COL_HEARTBEAT} = NULL
               FROM stale
              WHERE i.{COL_ID} = stale.{COL_ID}
             RETURNING i.{COL_ID}, stale.{COL_STATUS};
@@ -498,31 +516,32 @@ class WorkerDB:
         investigation_id: UUID,
         api_costs_usd: Decimal,
     ) -> None:
-        """Persist editorial-stage API spend independently of any status transition.
+        """Accumulate editorial-stage API spend onto the row.
 
-        v0.17.4 (round-10 audit HIGH): pre-v0.17.4 the api_costs_usd
-        column was only written as a side effect of mark_review_required
-        (and the equivalent for mark_built_package). If that UPDATE
-        failed (pooler hiccup, contention) the Anthropic spend was real
-        but invisible to ops accounting. The pipeline now calls
-        record_api_cost() BEFORE the status transition, so a partial
-        failure still leaves an audit trail.
+        v0.18.1 (round-11 worker-CRIT-004): pre-v0.18.1 this method
+        OVERWROTE api_costs_usd with the passed value. Combined with
+        the no-worker_id-filter docstring intent ("over-record rather
+        than lose"), a cross-worker resume on the same row silently
+        LOST the pass-1 spend. Sequence:
+          1. Worker A pass-1 spends $0.40, record_api_cost($0.40) → $0.40
+          2. Worker A crashes, row reaped to `failed`
+          3. UI re-queues row; Worker B claims at fresh `pending`
+          4. Worker B re-runs editorial, spends $0.30
+          5. record_api_cost($0.30) → OVERWRITES → $0.30 (lost $0.40)
 
-        We intentionally accept worker_id mismatch here (no AND
-        worker_id = me clause): pass 2 may run on a different worker
-        than pass 1, and we'd rather over-record costs than lose them.
-        The pipeline only calls this immediately after spending, so
-        accidental cross-investigation writes are not a concern.
+        New behavior: COALESCE(existing, 0) + delta. Pipeline calls
+        with the per-pass DELTA (the cost incurred during this run
+        only). mark_review_required and mark_built_package no longer
+        accept api_costs_usd — record_api_cost is the sole writer.
 
-        Semantics match mark_review_required's COALESCE(new, existing):
-        set when given, preserve otherwise. The pipeline's call pattern
-        is record_api_cost(x) → mark_review_required(api_costs_usd=x),
-        so both writes converge on the same value and no double-counting
-        occurs in either the happy path or the partial-failure path.
+        We intentionally accept worker_id mismatch here (no
+        AND worker_id = me clause): pass 2 may legitimately run on
+        a different worker, and we want to preserve the audit trail
+        across that handoff.
         """
         sql = f"""
             UPDATE {T_INV}
-               SET {COL_API_COSTS} = %(api)s
+               SET {COL_API_COSTS} = COALESCE({COL_API_COSTS}, 0) + %(api)s
              WHERE {COL_ID} = %(id)s;
         """
         self._exec(
@@ -547,6 +566,12 @@ class WorkerDB:
         starts with a fresh local variable. Once stored on the row,
         mark_built_package's COALESCE preserves it through completion.
         """
+        # v0.18.1 (round-11 worker-HIGH-006): terminal-state guard.
+        # Prevents a zombie worker whose row was reaped to `failed`
+        # from later flipping it to `review_required`. The reaper
+        # already clears worker_id (v0.18.1 HIGH-005) so the
+        # `worker_id = me` predicate normally protects this, but
+        # belt-and-suspenders.
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
@@ -555,7 +580,8 @@ class WorkerDB:
                    {COL_HEARTBEAT} = NULL,
                    {COL_API_COSTS} = COALESCE(%(api)s, {COL_API_COSTS})
              WHERE {COL_ID} = %(id)s
-               AND {COL_WORKER_ID} = %(worker)s;
+               AND {COL_WORKER_ID} = %(worker)s
+               AND {COL_STATUS} NOT IN ('failed', 'complete');
         """
         self._exec(
             sql,
@@ -589,6 +615,7 @@ class WorkerDB:
         through ``building_package`` immediately and calls
         ``mark_completed`` next.
         """
+        # v0.18.1 (round-11 worker-HIGH-006): terminal-state guard.
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
@@ -599,7 +626,8 @@ class WorkerDB:
                    {COL_API_COSTS} = COALESCE(%(api)s, {COL_API_COSTS}),
                    {COL_FREEZABLE_ISSUERS} = COALESCE(%(issuers)s, {COL_FREEZABLE_ISSUERS})
              WHERE {COL_ID} = %(id)s
-               AND {COL_WORKER_ID} = %(worker)s;
+               AND {COL_WORKER_ID} = %(worker)s
+               AND {COL_STATUS} NOT IN ('failed', 'complete');
         """
         self._exec(
             sql,
@@ -622,13 +650,17 @@ class WorkerDB:
         Output columns are written by ``mark_built_package`` in the
         prior transition.
         """
+        # v0.18.1 (round-11 worker-HIGH-006): terminal-state guard
+        # prevents a zombie-worker race from flipping a reaped-failed
+        # row to `complete`.
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
                    {COL_COMPLETED_AT} = NOW(),
                    {COL_HEARTBEAT} = NOW()
              WHERE {COL_ID} = %(id)s
-               AND {COL_WORKER_ID} = %(worker)s;
+               AND {COL_WORKER_ID} = %(worker)s
+               AND {COL_STATUS} NOT IN ('failed', 'complete');
         """
         self._exec(
             sql,

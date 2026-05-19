@@ -172,8 +172,17 @@ def _query_investigations(conn) -> dict[str, Any]:
                 n = int(r["n"])
                 total_cost += Decimal(r["cost"] or 0)
                 # Roll up working states into 'active' for the UI.
-                if status in {"claimed", "tracing", "listing_freeze_targets",
-                              "editorial_drafting", "emitting", "building_package"}:
+                # v0.18.1 (round-11 worker-CRIT-001): pre-v0.18.1 used
+                # `"listing_freeze_targets"` and `"editorial_drafting"`
+                # but state.py declares the wire values as
+                # `"finding_freeze_targets"` and `"drafting_editorial"`.
+                # Active rows in those statuses fell through every
+                # elif branch and never incremented `out["active"]`.
+                # `total_api_costs_usd` still accumulated from them,
+                # producing inconsistent counts. Sourcing from
+                # state.ACTIVE_STATUSES so this can't drift again.
+                from recupero.worker.state import ACTIVE_STATUSES
+                if status in ACTIVE_STATUSES:
                     out["active"] += n
                 elif status == "pending":
                     out["pending"] = n

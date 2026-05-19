@@ -269,11 +269,21 @@ def db_connect(dsn: str, **overrides: Any):
       * ``connect_timeout=10`` — fail-fast on DB outages.
       * ``autocommit=True`` — most call sites use single-statement ops.
 
-    Returns the same value as ``psycopg.connect(, prepare_threshold=None, connect_timeout=10)`` (a connection
-    context manager), so callers can write::
+    Returns the same value as ``psycopg.connect(dsn, prepare_threshold=None,
+    connect_timeout=10, autocommit=True)`` (a connection context manager),
+    so callers can write::
 
         with db_connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(...)
+
+    v0.18.1 (round-11 arch-CRIT-001): pre-v0.18.1 the function passed
+    `prepare_threshold` and `connect_timeout` BOTH as explicit kwargs
+    AND in `**kwargs`, raising `TypeError: got multiple values for
+    keyword argument 'prepare_threshold'` on FIRST call. The helper
+    was a planted bomb — module docstring claimed it consolidated
+    50+ direct `psycopg.connect` call sites but the migration never
+    happened (`Grep db_connect` returned only the definition). Now:
+    single forward of the merged kwargs dict.
     """
     import psycopg
 
@@ -283,7 +293,7 @@ def db_connect(dsn: str, **overrides: Any):
         "autocommit": True,
     }
     kwargs.update(overrides)
-    return psycopg.connect(dsn, **kwargs, prepare_threshold=None, connect_timeout=10)
+    return psycopg.connect(dsn, **kwargs)
 
 
 # ---- Boolean env-var parsing ---- #

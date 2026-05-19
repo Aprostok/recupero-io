@@ -487,7 +487,11 @@ def _run_one_inner(
                         inv.id, api_costs_usd, exc,
                     )
                 _stop_hb()
-                db.mark_review_required(inv.id, api_costs_usd=api_costs_usd)
+                # v0.18.1 (round-11 worker-CRIT-004): pass api_costs_usd=None
+                # — record_api_cost above is the sole writer (it accumulates
+                # via COALESCE+=). Passing the cumulative value here would
+                # double-write on the same row.
+                db.mark_review_required(inv.id, api_costs_usd=None)
                 log.info("investigation %s paused at review_required (api_costs=$%s)",
                          inv.id, api_costs_usd)
                 return
@@ -555,7 +559,11 @@ def _run_one_inner(
                 total_loss_usd=summary.get("total_loss_usd"),
                 max_recoverable_usd=summary.get("max_recoverable_usd"),
                 freezable_issuers=summary.get("freezable_issuers"),
-                api_costs_usd=api_costs_usd,
+                # v0.18.1: api_costs_usd is recorded via record_api_cost
+                # at editorial-stage exit; mark_built_package no longer
+                # owns the column. Pass None so the column is preserved
+                # via COALESCE on the DB side.
+                api_costs_usd=None,
             )
             db.mark_completed(inv.id)
             log.info("investigation %s completed", inv.id)

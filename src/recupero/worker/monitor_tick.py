@@ -176,6 +176,11 @@ def run_monitor_tick(
         result.errors.append(f"subscription fetch failed: {exc}")
         return result
 
+    # v0.18.4 (round-11 worker-MED-039): clear per-tick adapter
+    # cache at the start so we don't reuse stale adapter state
+    # across ticks. The close-on-tick-end is in a `finally` below.
+    _reset_adapter_cache()
+
     for row in rows:
         sub_id = row["id"]
         try:
@@ -187,11 +192,26 @@ def run_monitor_tick(
             from recupero.monitoring.poller import evaluate_all_activities
             to_fire, new_cursor = evaluate_all_activities(sub, activities)
 
+            # v0.18.4 (round-11 worker-HIGH-019): dispatch each alert
+            # in its own try/except. Pre-v0.18.4 a single webhook
+            # raising (rate limit, network error) propagated through
+            # the loop AND skipped the cursor UPDATE below — the
+            # next tick re-evaluated the SAME activities and re-fired
+            # the SAME webhooks, double-alerting the recipient. Now:
+            # per-activity isolation; cursor advances regardless.
             last_alerted_at: datetime | None = None
             for activity in to_fire:
-                fired = _dispatch_alert_for_activity(
-                    sub=sub, activity=activity, dsn=dsn,
-                )
+                try:
+                    fired = _dispatch_alert_for_activity(
+                        sub=sub, activity=activity, dsn=dsn,
+                    )
+                except Exception as disp_exc:  # noqa: BLE001
+                    log.warning(
+                        "monitor_tick: alert dispatch raised for sub %s "
+                        "activity %s: %s — continuing with next activity",
+                        sub_id, getattr(activity, "tx_hash", "?"), disp_exc,
+                    )
+                    fired = False
                 result.alerts_fired += 1
                 if fired:
                     result.alerts_succeeded += 1
@@ -199,8 +219,9 @@ def run_monitor_tick(
                 else:
                     result.alerts_failed += 1
 
-            # Always update the cursor — even when no alerts fired —
-            # so the next tick doesn't re-evaluate the same history.
+            # Always update the cursor — even when no alerts fired or
+            # when every alert dispatch failed — so the next tick
+            # doesn't re-evaluate the same history.
             try:
                 with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn:
                     with conn.cursor() as cur:
@@ -221,6 +242,8 @@ def run_monitor_tick(
             )
             log.warning("monitor_tick: sub %s failed: %s", sub_id, sub_exc)
 
+    # v0.18.4 (round-11 worker-MED-039): release adapter FDs at end of tick.
+    _reset_adapter_cache()
     return result
 
 
@@ -269,6 +292,43 @@ def _resolve_activities(
     return []
 
 
+# v0.18.4 (round-11 worker-MED-039): per-chain adapter cache for the
+# monitor_tick fan-out. Each tick handles N subscriptions across a
+# small set of chains; the adapter construction is per-chain, not
+# per-subscription. Cache lives for the duration of a single
+# run_monitor_tick invocation (cleared by the caller via
+# `_reset_adapter_cache` at tick boundary).
+_ADAPTER_CACHE: dict[Any, Any] = {}
+
+
+def _get_cached_adapter(chain_enum):
+    """Build-or-fetch the adapter for `chain_enum`. Single
+    config-load + single adapter per chain per tick."""
+    cached = _ADAPTER_CACHE.get(chain_enum)
+    if cached is not None:
+        return cached
+    from recupero.chains.base import ChainAdapter
+    from recupero.config import load_config
+    cfg, env = load_config()
+    bundle = (cfg, env)
+    adapter = ChainAdapter.for_chain(chain_enum, bundle)
+    _ADAPTER_CACHE[chain_enum] = adapter
+    return adapter
+
+
+def _reset_adapter_cache() -> None:
+    """Close + clear the per-tick adapter cache. Called by
+    run_monitor_tick at tick boundary to release FDs."""
+    for adapter in list(_ADAPTER_CACHE.values()):
+        try:
+            close = getattr(adapter, "close", None)
+            if close is not None:
+                close()
+        except Exception:  # noqa: BLE001
+            pass
+    _ADAPTER_CACHE.clear()
+
+
 def _fetch_evm_activities(sub: Any) -> list[Any]:
     """Best-effort EVM activity fetch via the existing chain adapter.
 
@@ -289,11 +349,14 @@ def _fetch_evm_activities(sub: Any) -> list[Any]:
         log.warning("activity fetcher imports failed: %s", e)
         return []
 
+    # v0.18.4 (round-11 worker-MED-039): cache adapter per chain
+    # across the tick. Pre-v0.18.4 every subscription rebuilt
+    # `load_config()` + `ChainAdapter.for_chain(...)`. 50 EVM subs/
+    # tick × 50ms setup = 2.5s of pure overhead per tick, plus FD
+    # leaks since adapter.close() was never called.
     try:
-        cfg, env = load_config()
         chain_enum = Chain(sub.chain)
-        bundle = (cfg, env)
-        adapter = ChainAdapter.for_chain(chain_enum, bundle)
+        adapter = _get_cached_adapter(chain_enum)
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "could not build adapter for chain %r sub %s: %s",

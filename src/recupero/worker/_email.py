@@ -54,6 +54,7 @@ import json
 import logging
 import mimetypes
 import os
+import re
 import time
 import urllib.error
 import urllib.request
@@ -375,13 +376,37 @@ def has_been_sent(
 def _format_from_header(
     from_addr: str | None, from_name: str | None,
 ) -> str:
-    """Build the From: header. Resend accepts ``Name <email@host>``."""
-    addr = (from_addr
+    """Build the From: header. Resend accepts ``Name <email@host>``.
+
+    v0.18.4 (round-11 worker-CRIT-004 + worker-HIGH-008):
+    * detect the case where the operator pasted the WHOLE header
+      into RECUPERO_EMAIL_FROM (e.g. `Recupero <alec@recupero.io>`).
+      Pre-v0.18.4 we double-wrapped it into
+      `Recupero Investigation Services <Recupero <alec@recupero.io>>`
+      which Resend rejects as malformed RFC 5322.
+    * reject any From containing `\r`, `\n`, `\0`, `<`, `>` in the
+      NAME portion — CRLF in the env var would have allowed header
+      injection (Bcc: attacker@…) through Resend's JSON encoding.
+    """
+    addr_raw = (from_addr
             or os.environ.get("RECUPERO_EMAIL_FROM", "").strip()
             or _DEFAULT_FROM_ADDR)
-    name = (from_name
+    name_raw = (from_name
             or os.environ.get("RECUPERO_EMAIL_FROM_NAME", "").strip()
             or _DEFAULT_FROM_NAME)
+
+    # If operator pasted the whole header `Name <addr>` into FROM,
+    # use it verbatim and skip name-wrapping.
+    if "<" in addr_raw and ">" in addr_raw:
+        # Sanitize control chars but otherwise pass through.
+        safe = re.sub(r"[\r\n\x00]", "", addr_raw)
+        return safe
+
+    # Sanitize name: strip CRLF / nulls / angle-bracket injection.
+    name = re.sub(r"[\r\n\x00<>]", "", name_raw)
+    # Sanitize addr: strip CRLF / nulls. Angle brackets in addr
+    # would break the wrap; reject by collapsing them.
+    addr = re.sub(r"[\r\n\x00<>]", "", addr_raw)
     return f"{name} <{addr}>"
 
 

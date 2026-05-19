@@ -1388,15 +1388,46 @@ def _populate_watchlist(
             freeze_asks = json.loads(freeze_asks_path.read_text(encoding="utf-8-sig"))
         else:
             freeze_asks = {}
-        n = populate_from_case(
-            dsn=db.dsn,
-            case=case,
-            freeze_asks=freeze_asks,
-            investigation_id=inv.id,
-            case_id=inv.case_id,
+        # v0.18.4 (round-11 worker-HIGH-007): retry with backoff so
+        # a transient DB hiccup doesn't permanently silently drop
+        # watchlist rows. Pre-v0.18.4 a single failure logged a
+        # warning and moved on — on the resumed pass `has_case` /
+        # `has_freeze` / `has_editorial` are all True so this is
+        # never re-attempted. Now: 3 attempts with 1s/3s backoff,
+        # then surface as a stage failure (so the row goes to
+        # failed/needs-attention rather than silently complete with
+        # missing nightly monitoring).
+        import time as _time
+        attempts = 3
+        last_exc: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                n = populate_from_case(
+                    dsn=db.dsn,
+                    case=case,
+                    freeze_asks=freeze_asks,
+                    investigation_id=inv.id,
+                    case_id=inv.case_id,
+                )
+                log.info("watchlist populated: %d row(s) for inv=%s", n, inv.id)
+                return
+            except Exception as e:  # noqa: BLE001
+                last_exc = e
+                if attempt + 1 < attempts:
+                    _time.sleep(1.0 if attempt == 0 else 3.0)
+                    log.warning(
+                        "watchlist population attempt %d/%d failed for inv=%s: %s — retrying",
+                        attempt + 1, attempts, inv.id, e,
+                    )
+        log.error(
+            "watchlist population FAILED after %d attempts for inv=%s: %s — "
+            "monitoring coverage incomplete; rerun manually with "
+            "`recupero-ops repopulate-watchlist %s`",
+            attempts, inv.id, last_exc, inv.id,
         )
-        log.info("watchlist populated: %d row(s) for inv=%s", n, inv.id)
     except Exception as e:  # noqa: BLE001
+        # Top-level except for non-retry-loop errors (case load,
+        # freeze_asks parse, etc.).
         log.warning("watchlist population failed for inv=%s: %s", inv.id, e)
 
 
@@ -1488,30 +1519,29 @@ def _local_case_dir(
         case_dir = local_store.case_dir(case_id)
         yield local_store, case_dir
     finally:
-        # Best-effort recursive cleanup. Worker shouldn't crash on temp dir
-        # cleanup failures (e.g., locked log file on Windows).
+        # v0.18.4 (round-11 worker-HIGH-011 + arch-MED-017): use
+        # shutil.rmtree(ignore_errors=True). Pre-v0.18.4 a hand-rolled
+        # `_rmtree` recursed and `except OSError: pass`'d on rmdir
+        # failures — over weeks of operation on Windows (locked log
+        # files) and Linux (rare permission issues) the bare-except
+        # silently leaked tempdirs that accumulated in %TEMP% / /tmp,
+        # eventually exhausting disk. shutil.rmtree with ignore_errors
+        # handles retries / Windows handle-release more gracefully and
+        # is the canonical stdlib API for this exact use case.
+        import shutil
         try:
-            _rmtree(tmp)
+            shutil.rmtree(tmp, ignore_errors=True)
+            # Detect leak: if the dir still exists after ignore_errors,
+            # surface it so ops can sweep manually before disk fills.
+            if tmp.exists():
+                log.warning(
+                    "tempdir %s persists after shutil.rmtree(ignore_errors=True) — "
+                    "likely Windows file-handle leak; manual cleanup recommended",
+                    tmp,
+                )
         except Exception as e:  # noqa: BLE001
-            log.warning("could not clean up tempdir %s: %s", tmp, e)
-
-
-def _rmtree(path: Path) -> None:
-    if not path.exists():
-        return
-    if path.is_file() or path.is_symlink():
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            pass
-        return
-    for child in path.iterdir():
-        _rmtree(child)
-    try:
-        path.rmdir()
-    except OSError:
-        # Some Windows scenarios leave a handle open briefly; ignore.
-        pass
+            # shutil.rmtree(ignore_errors=True) shouldn't raise but be defensive.
+            log.warning("tempdir cleanup unexpectedly raised: %s — %s", tmp, e)
 
 
 def _write_victim_from_case(

@@ -820,11 +820,23 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
         "HTML(filename=sys.argv[1], url_fetcher=_no_network_fetcher)"
         ".write_pdf(sys.argv[2], **kwargs)\n"
     )
+    # v0.18.4 (round-11 worker-HIGH-009/013): atomic write. Render
+    # to a sibling tempfile, then os.replace() onto the final path
+    # so a SIGTERM / OOM-kill mid-render can't leave a truncated PDF
+    # that the bucket sync would then ship to compliance teams. Same
+    # contract as _common.atomic_write_text but adapted for PDFs
+    # (binary, written by a subprocess).
+    tmp_path = pdf_path.with_suffix(pdf_path.suffix + ".tmp")
     _render_pdf_in_subprocess(
         script=script,
-        args=[str(html_path), str(pdf_path)],
+        args=[str(html_path), str(tmp_path)],
         label=html_path.name,
     )
+    # If the subprocess succeeded the tmp file is complete. Atomic
+    # rename onto the final path. If it didn't succeed,
+    # _render_pdf_in_subprocess already raised — we never reach here.
+    import os as _os
+    _os.replace(str(tmp_path), str(pdf_path))
 
 
 def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:

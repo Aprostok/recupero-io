@@ -270,6 +270,22 @@ def run_forever(
             # Once we've claimed, we always finish the current row before
             # checking _shutdown again. Mid-stage SIGKILL would corrupt
             # state; the reaper covers that case if Railway forces it.
+            #
+            # v0.18.4 (round-11 worker-CRIT-001): explicit invariant check.
+            # If shutdown was signaled BEFORE this claim succeeded, surface
+            # it so ops can correlate the late-arriving row with the
+            # shutdown event in the same log line. The reaper's
+            # stale_after_sec must be tuned ≥ longest expected stage
+            # duration (default 600s); a longer-than-expected investigation
+            # mid-redeploy will be reaped by the next-pod's reaper sweep.
+            if _shutdown.is_set():
+                log.warning(
+                    "claimed investigation %s AFTER shutdown signal — "
+                    "will complete this row before exiting; reaper will "
+                    "catch it on next pod's claim cycle if we hit SIGKILL "
+                    "(stale_after_sec=%d)",
+                    inv.id, stale_after_sec,
+                )
             with SupabaseCaseStore(
                 cfg, supabase_url, service_role,
                 investigation_id=str(inv.id),

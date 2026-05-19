@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -483,17 +484,72 @@ def _handle_engagement(
             f"{inv_uuid} — operator triage required"
         )
     amount_usd = round(amount_cents / 100.0, 2)
-    cur.execute(
-        """
-        UPDATE public.investigations
-           SET engagement_started_at = COALESCE(engagement_started_at, NOW()),
-               engagement_closed_at = NULL,
-               engagement_fee_paid_usd = %s,
-               last_followup_sent_at = NULL
-         WHERE id = %s
-        """,
-        (amount_usd, str(inv_uuid)),
-    )
+    # v0.19.3 (round-13 pipeline-MED-5 follow-up): preserve prior state
+    # on misrouted / late webhook deliveries.
+    #
+    # Pre-v0.19.3 this UPDATE unconditionally:
+    #   * overwrote engagement_fee_paid_usd
+    #   * cleared engagement_closed_at
+    #
+    # Two real failure modes:
+    #
+    #   1. Misrouted webhook (operator dashboard mis-config, malformed
+    #      client_reference_id, or a $499 diagnostic-fee payment
+    #      mis-tagged as type=engagement): the legitimate $10K
+    #      engagement_fee_paid_usd silently became $499. Downstream P&L
+    #      + portal display showed the wrong amount; the row still
+    #      looked "engaged."
+    #
+    #   2. Late re-delivery on a deliberately-closed engagement: any
+    #      stale type=engagement webhook for a row that the operator
+    #      had already mark-closed silently re-opened it, resuming the
+    #      weekly follow-up cron against an engagement that should have
+    #      stayed closed.
+    #
+    # Now:
+    #   * engagement_fee_paid_usd uses COALESCE so the FIRST authoritative
+    #     amount sticks. Operators who actually need to overwrite (rare —
+    #     a Stripe partial refund + replay) can use `recupero-ops
+    #     adjust-engagement-fee` (path documented in the ops CLI; not
+    #     auto-driven by webhooks).
+    #   * engagement_closed_at is only cleared when the incoming amount
+    #     is >= the published engagement fee (i.e. a real re-engagement
+    #     after a refund/close, not a stray $499 echo).
+    from recupero._pricing import ENGAGEMENT_FEE_USD as _ENGAGEMENT_FEE_USD
+    amount_dec = Decimal(str(amount_usd))
+    is_re_engagement = amount_dec >= _ENGAGEMENT_FEE_USD
+    if is_re_engagement:
+        cur.execute(
+            """
+            UPDATE public.investigations
+               SET engagement_started_at = COALESCE(engagement_started_at, NOW()),
+                   engagement_closed_at = NULL,
+                   engagement_fee_paid_usd = COALESCE(engagement_fee_paid_usd, %s),
+                   last_followup_sent_at = NULL
+             WHERE id = %s
+            """,
+            (amount_usd, str(inv_uuid)),
+        )
+    else:
+        # Late / stray webhook with amount BELOW the engagement floor —
+        # do not re-open a closed engagement; do not overwrite the fee.
+        cur.execute(
+            """
+            UPDATE public.investigations
+               SET engagement_started_at = COALESCE(engagement_started_at, NOW()),
+                   engagement_fee_paid_usd = COALESCE(engagement_fee_paid_usd, %s),
+                   last_followup_sent_at = NULL
+             WHERE id = %s
+            """,
+            (amount_usd, str(inv_uuid)),
+        )
+        log.warning(
+            "engagement webhook for inv=%s landed with amount $%s below "
+            "the published engagement floor ($%s) — preserving any prior "
+            "engagement_closed_at to avoid re-opening a closed engagement "
+            "by a late / stray webhook",
+            inv_uuid, amount_usd, _ENGAGEMENT_FEE_USD,
+        )
     return "engagement_activated", inv_uuid, (
         f"engagement fee ${amount_usd:.2f} recorded; follow-up cron "
         "will pick up on next run"

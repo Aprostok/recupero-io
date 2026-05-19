@@ -45,6 +45,10 @@ from recupero._common import (
     investigator_defaults as _investigator_defaults,
     short_addr,
 )
+from recupero.models import Case, LabelCategory
+from recupero.reports.brief import BRIEF_SCHEMA_VERSION as _BRIEF_SCHEMA_VERSION
+from recupero.reports.victim import VictimInfo, load_victim
+from recupero.storage.case_store import CaseStore
 
 # v0.19.2 (round-13 CRIT, code-quality #1): the prior `log.info(...)` at
 # `_compact_empty_freezable_only` (line ~691) referenced a name that
@@ -54,10 +58,6 @@ from recupero._common import (
 # silently broke the brief render for that case. Closed by adding
 # the standard module-level logger here.
 log = logging.getLogger(__name__)
-from recupero.models import Case, LabelCategory
-from recupero.reports.brief import BRIEF_SCHEMA_VERSION as _BRIEF_SCHEMA_VERSION
-from recupero.reports.victim import VictimInfo, load_victim
-from recupero.storage.case_store import CaseStore
 
 
 # Investigator identity is resolved from env vars at call-time via

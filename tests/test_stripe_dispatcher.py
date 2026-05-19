@@ -231,6 +231,75 @@ def test_engagement_payment_activates_engagement() -> None:
     assert "COALESCE(engagement_started_at" in inv_updates[0]
 
 
+def test_engagement_payment_uses_coalesce_to_preserve_existing_fee() -> None:
+    """v0.19.3 (round-13 pipeline-MED-5 follow-up): the UPDATE applies
+    ``engagement_fee_paid_usd = COALESCE(engagement_fee_paid_usd, %s)``
+    so the FIRST authoritative amount sticks. Pre-v0.19.3 a misrouted
+    webhook (a $499 diagnostic-fee payment mis-tagged as
+    type=engagement) would silently overwrite a legitimate $10K
+    engagement amount. The portal display + downstream P&L would
+    show $499; the row still looked engaged."""
+    inv_uuid = uuid4()
+    event = _mk_event(
+        amount_total=1000000,  # $10,000 in cents
+        metadata={"type": "engagement", "investigation_id": str(inv_uuid)},
+    )
+    mock_conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.side_effect = [
+        {"id": str(uuid4())},
+        {"id": str(inv_uuid)},
+    ]
+    mock_conn.cursor.return_value.__enter__.return_value = cur
+    with patch("recupero.payments.dispatcher.psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = mock_conn
+        result = dispatch(event=event, dsn="fake")
+
+    assert result.action == "engagement_activated"
+    sql_calls = [c.args[0] for c in cur.execute.call_args_list]
+    inv_updates = [s for s in sql_calls if "UPDATE public.investigations" in s]
+    assert len(inv_updates) == 1
+    # COALESCE on the fee column — first amount sticks.
+    assert "engagement_fee_paid_usd = COALESCE(engagement_fee_paid_usd" in inv_updates[0]
+
+
+def test_below_floor_engagement_webhook_does_not_re_open_closed_engagement() -> None:
+    """v0.19.3 (round-13 pipeline-MED-5 follow-up): an engagement-type
+    webhook with amount BELOW the published engagement floor
+    (e.g. $499 diagnostic mis-tagged as type=engagement, or a late
+    partial-refund replay) must NOT clear engagement_closed_at.
+    Pre-v0.19.3 ANY type=engagement webhook for a closed engagement
+    silently re-opened it and resumed the follow-up cron."""
+    inv_uuid = uuid4()
+    # Send a $499 amount with type=engagement — this is the misrouted
+    # / stray-replay shape we're defending against.
+    event = _mk_event(
+        amount_total=49900,  # $499
+        metadata={"type": "engagement", "investigation_id": str(inv_uuid)},
+    )
+    mock_conn = MagicMock()
+    cur = MagicMock()
+    cur.fetchone.side_effect = [
+        {"id": str(uuid4())},
+        {"id": str(inv_uuid)},
+    ]
+    mock_conn.cursor.return_value.__enter__.return_value = cur
+    with patch("recupero.payments.dispatcher.psycopg.connect") as connect:
+        connect.return_value.__enter__.return_value = mock_conn
+        result = dispatch(event=event, dsn="fake")
+
+    assert result.action == "engagement_activated"
+    sql_calls = [c.args[0] for c in cur.execute.call_args_list]
+    inv_updates = [s for s in sql_calls if "UPDATE public.investigations" in s]
+    assert len(inv_updates) == 1
+    # CRITICAL: the below-floor branch does NOT include
+    # `engagement_closed_at = NULL`. Pin it so a future "always clear"
+    # refactor must update this test.
+    assert "engagement_closed_at = NULL" not in inv_updates[0], (
+        "below-floor engagement webhook must not re-open a closed engagement"
+    )
+
+
 def test_engagement_payment_without_investigation_id_is_audit_only() -> None:
     """Operator-side mistake: Checkout Session for engagement fee
     is missing metadata.investigation_id. Log + flag.

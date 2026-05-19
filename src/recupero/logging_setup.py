@@ -174,6 +174,20 @@ _BEARER_PATTERN = re.compile(
 _API_KEY_PATTERN = re.compile(
     r"(?i)([?&](?:api[_-]?key|admin[_-]?key|token)=)([^&\s]+)",
 )
+# v0.17.10 (round-10 security MED): Recupero-specific header redaction.
+# When an httpx response is logged with response.headers / .request.headers
+# the sensitive auth-key headers come through verbatim. These patterns
+# match the literal `Header-Name: VALUE` / `'Header-Name': 'VALUE'` shapes
+# httpx + Python's stdlib logging produce.
+_AUTH_HEADER_PATTERN = re.compile(
+    r"(?i)(['\"]?(?:x-recupero-api-key|tron-pro-api-key|x-cg-pro-api-key|"
+    r"x-cg-demo-api-key|x-api-key|helius-api-key|authorization)['\"]?\s*[:=]\s*['\"]?)"
+    r"([A-Za-z0-9._\-]{8,})",
+)
+# Anthropic API keys (ant-...) and OpenAI keys (sk-...).
+_LITERAL_KEY_PATTERN = re.compile(
+    r"\b(sk-(?:ant-)?[A-Za-z0-9_\-]{16,})",
+)
 
 
 def _redact(text: str) -> str:
@@ -182,6 +196,8 @@ def _redact(text: str) -> str:
     text = _DSN_PASSWORD_PATTERN.sub(r"\1***\3", text)
     text = _BEARER_PATTERN.sub(r"\1***", text)
     text = _API_KEY_PATTERN.sub(r"\1***", text)
+    text = _AUTH_HEADER_PATTERN.sub(r"\1***", text)
+    text = _LITERAL_KEY_PATTERN.sub("***", text)
     return text
 
 

@@ -104,6 +104,21 @@ def fmt_usd_short(amount: Decimal | int | float) -> str:
     return f"${d:,.2f}"
 
 
+def fmt_usd_or(amount: Decimal | int | float | None, fallback: str = "(unknown)") -> str:
+    """USD formatter that accepts None.
+
+    v0.18.7 (round-11 arch-HIGH-003): the canonical None-handler.
+    Pre-v0.18.7 six modules each had their own `_fmt_usd` with
+    different None semantics (`"—"` in mini_freeze, `"(unknown)"` in
+    brief, `"$0"` in trace_report) — the same Decimal(None) rendered
+    differently across artifacts in the same case folder. Now one
+    source of truth; consumers pick the fallback string.
+    """
+    if amount is None:
+        return fallback
+    return fmt_usd(amount)
+
+
 __all__ = (
     "DIAGNOSTIC_FEE_USD",
     "ENGAGEMENT_FEE_USD",

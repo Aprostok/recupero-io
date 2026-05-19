@@ -139,10 +139,16 @@ def test_few_shot_summary_uses_plain_language() -> None:
 def test_editorial_template_has_victim_summary_placeholder() -> None:
     """Operators who edit brief_editorial.json by hand should see a
     TODO placeholder for VICTIM_SUMMARY, not silently get a missing
-    field at emit-brief time."""
-    from recupero.reports.emit_brief import EDITORIAL_TEMPLATE
-    assert "VICTIM_SUMMARY" in EDITORIAL_TEMPLATE
-    template_value = EDITORIAL_TEMPLATE["VICTIM_SUMMARY"]
+    field at emit-brief time.
+
+    v0.18.7 (round-11 arch-HIGH-005): EDITORIAL_TEMPLATE module-load
+    snapshot was removed (it regressed v0.17.3's env-var-call-time
+    fix). Use the factory function `_editorial_template()` instead.
+    """
+    from recupero.reports.emit_brief import _editorial_template
+    tpl = _editorial_template()
+    assert "VICTIM_SUMMARY" in tpl
+    template_value = tpl["VICTIM_SUMMARY"]
     assert "TODO" in template_value
 
 

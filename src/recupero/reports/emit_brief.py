@@ -130,10 +130,16 @@ _EDITORIAL_TEMPLATE_STATIC: dict[str, Any] = {
 }
 
 
-# Back-compat alias: existing imports of EDITORIAL_TEMPLATE still work
-# but they read a SNAPSHOT taken at import. Document this so anyone
-# adding a new caller knows to use `_editorial_template()` instead.
-EDITORIAL_TEMPLATE = _editorial_template()
+# v0.18.7 (round-11 arch-HIGH-005): EDITORIAL_TEMPLATE module-level
+# snapshot REMOVED. It was a regression of the v0.17.3 fix:
+# `_editorial_template()` reads env vars (operator name, contact)
+# at CALL time so a deploy with the env vars set late doesn't get
+# stamped with "(operator name not configured)". The module-level
+# alias took the snapshot at IMPORT time, undoing the fix for any
+# caller that imported the alias. Grep confirms no internal callers
+# rely on the symbol; if external tooling did, the migration path
+# is one line (`from emit_brief import _editorial_template; tpl =
+# _editorial_template()`).
 
 
 def _now_utc_iso_seconds() -> str:

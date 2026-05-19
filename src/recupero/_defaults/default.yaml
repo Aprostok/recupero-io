@@ -3,16 +3,29 @@
 
 trace:
   # Maximum hops from the seed (victim) address.
-  # Phase 1 default is 1 — we want first-hop outflows clean before going deeper.
-  max_depth: 1
+  # v0.18.7 (round-11 pricing-MED-011): bumped from 1 → 2 to match
+  # config.py's Pydantic default. The v0.7.4 fix moved this to 2
+  # to walk past consolidation hubs (Zigha-pattern), but default.yaml
+  # was never updated — operators have been getting depth=1 silently.
+  max_depth: 2
 
   # Skip individual transfers below this USD value at time of tx.
   # Filters dust attacks and tiny incidental transfers.
-  dust_threshold_usd: 50.0
+  # v0.18.7 (round-11 pricing-MED-012): lowered from 50 → 10 to match
+  # config.py's Pydantic default. The v0.7.4 fix lowered this to 10
+  # to surface smaller dormant-target inflows.
+  dust_threshold_usd: 10.0
 
   # Stop following a path once it deposits to a labeled exchange — we have what
   # we need (the freeze point). Set false to continue traversing past CEX deposits.
   stop_at_exchange: true
+
+  # v0.18.7 (round-11 pricing-MED-013): explicit defaults for the
+  # stop_at_contract / stop_at_bridge gates so the YAML carries the
+  # full TracePolicy surface. Both are True by default — contracts
+  # and labeled bridges are TERMINAL for the BFS.
+  stop_at_contract: true
+  stop_at_bridge: true
 
   # Look only at transfers occurring at or after the incident timestamp.
   # Set buffer_minutes to look slightly before in case the victim's reported time

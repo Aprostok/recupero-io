@@ -319,10 +319,15 @@ def _fetch_evm_activities(sub: Any) -> list[Any]:
         :_MAX_ACTIVITY_PER_SUB
     ]
 
+    # v0.17.10 (round-10 forensic MED): canonical-key the watched
+    # address compare so base58 Solana / Tron watchlist subscriptions
+    # actually match the adapter's case-preserved "from" field.
+    from recupero._common import canonical_address_key as _ck
+    sub_addr_key = _ck(sub.address)
     out: list[Any] = []
     for r in raw:
         # Filter: only emit OUTBOUND from our watched address.
-        if (r.get("from") or "").lower() != sub.address.lower():
+        if _ck(r.get("from") or "") != sub_addr_key:
             continue
         block_time = r.get("block_time")
         block_time_iso = (

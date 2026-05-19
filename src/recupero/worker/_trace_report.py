@@ -184,12 +184,16 @@ def _compute_stats(case: Case) -> dict[str, Any]:
 def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
     """One row per distinct destination address. Aggregates totals
     when an address appears in multiple transfers."""
+    # v0.17.10: canonical address keying for the destinations table
+    # so base58 destinations on Solana / Tron / Bitcoin are counted
+    # against their on-chain canonical case.
+    from recupero._common import canonical_address_key as _ck
     chain_str = case.chain.value
-    seed = (case.seed_address or "").lower()
+    seed = _ck(case.seed_address or "")
     by_addr: dict[str, dict[str, Any]] = {}
     for t in case.transfers or []:
         addr = t.to_address
-        key = addr.lower()
+        key = _ck(addr)
         if key == seed:
             continue
         entry = by_addr.get(key)

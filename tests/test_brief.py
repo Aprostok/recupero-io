@@ -128,6 +128,22 @@ class TestBriefHelpers:
         hops = _build_hops(theft, [])
         assert hops == []
 
+    def test_pluralize_filter(self):
+        """v0.17.2 (POLISH-4): pluralize filter handles count=1
+        (singular) and count!=1 (plural), with optional explicit
+        plural form for irregular nouns."""
+        from recupero.reports.brief import _pluralize_filter
+        # Singular for n == 1
+        assert _pluralize_filter(1, "transfer") == "transfer"
+        # Auto-pluralize for n != 1
+        assert _pluralize_filter(0, "transfer") == "transfers"
+        assert _pluralize_filter(2, "transfer") == "transfers"
+        # Explicit plural for irregular nouns
+        assert _pluralize_filter(1, "address", "addresses") == "address"
+        assert _pluralize_filter(3, "address", "addresses") == "addresses"
+        # Non-int input falls back to singular safely
+        assert _pluralize_filter("not_a_number", "transfer") == "transfer"
+
     def test_build_hop_tree_captures_fanout(self):
         """v0.16.11 (round-9 output-artifacts HIGH): when a perpetrator
         wallet splits funds to MULTIPLE downstream addresses, the

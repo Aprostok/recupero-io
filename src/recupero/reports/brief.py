@@ -233,8 +233,14 @@ def generate_briefs(
         )
     theft_transfer = theft_events[0]  # primary (headline) event
 
-    # Build the forwarding chain across linked cases
+    # Build the forwarding chain across linked cases.
+    # v0.17.2 (POLISH-3): also build the full fan-out tree so the LE
+    # handoff template can render every dispersal branch, not just
+    # the primary linear chain. The legacy `hops` field is kept for
+    # back-compat with v0.16.x templates; new templates should consume
+    # `hops_tree` for the complete picture.
     hops = _build_hops(theft_transfer, linked_cases)
+    hops_tree = _build_hop_tree(theft_transfer, linked_cases)
 
     # Determine current holder: last hop's destination, or theft_transfer's destination if no hops
     if hops:
@@ -378,6 +384,30 @@ def generate_briefs(
             }
             for h in hops
         ],
+        # v0.17.2 (POLISH-3): full fan-out tree exposed for templates
+        # that want to render every dispersal branch. Each entry carries
+        # the same shape as `hops` entries plus `usd_value` for
+        # USD-rank-aware sorting in the template.
+        "hops_tree": [
+            {
+                "tx_hash": h.tx_hash,
+                "timestamp_human": h.block_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "from_address": h.from_address,
+                "to_address": h.to_address,
+                "amount_human": _fmt_decimal(h.amount_decimal),
+                "symbol": h.token.symbol,
+                "usd_value": (
+                    f"${h.usd_value_at_tx:,.2f}"
+                    if h.usd_value_at_tx is not None else None
+                ),
+                "explorer_url": h.explorer_url,
+                "from_explorer_url": _address_explorer_url(h.from_address, h.chain),
+                "to_explorer_url": _address_explorer_url(h.to_address, h.chain),
+            }
+            for h in hops_tree
+        ],
+        "hops_tree_branch_count": len(hops_tree),
+        "hops_tree_has_fanout": len(hops_tree) > len(hops),
         "current_holder": {
             "address": current_holder_addr,
             "explorer_url": _address_explorer_url(
@@ -427,6 +457,12 @@ def generate_briefs(
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    # v0.17.2 (output polish POLISH-4): pluralization filter so
+    # templates can write `{{ n }} {{ n | pluralize("transfer") }}`
+    # and get "1 transfer" / "2 transfers" without manual ternaries.
+    # The 2-arg form lets callers override the plural ending for
+    # irregular nouns: `{{ n | pluralize("hop", "hops") }}`.
+    env.filters["pluralize"] = _pluralize_filter
 
     issuer_template = "issuer_freeze_request.html.j2"
     # The legacy maple.html.j2 hardcodes "is currently held in"
@@ -621,6 +657,27 @@ def _find_theft_events(
     # callers reading [0] get the headline event consistently
     cluster.sort(key=lambda t: t.block_time)
     return [primary] + cluster
+
+
+def _pluralize_filter(n: int, singular: str, plural: str | None = None) -> str:
+    """Jinja filter: return singular or plural noun based on count.
+
+    Usage in templates:
+      {{ n }} {{ n | pluralize("transfer") }}        -> "1 transfer" / "2 transfers"
+      {{ n }} {{ n | pluralize("hop", "hops") }}     -> "1 hop"      / "2 hops"
+      {{ n }} {{ n | pluralize("address", "addresses") }}
+
+    Auto-pluralization adds "s" when plural is None. Pass the explicit
+    plural form for irregular nouns ("addresses", "criteria", etc.).
+    v0.17.2 (output polish POLISH-4).
+    """
+    try:
+        count = int(n)
+    except (TypeError, ValueError):
+        return singular
+    if count == 1:
+        return singular
+    return plural if plural is not None else singular + "s"
 
 
 _BASE58_CHAINS: frozenset[Chain] = frozenset({

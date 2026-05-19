@@ -773,17 +773,26 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
     # artifacts (engagement_letter.pdf, freeze_brief.pdf, …) get
     # distinguishable metadata without per-artifact code paths.
     #
+    # v0.17.2 (output polish POLISH-1): when RECUPERO_PDF_VARIANT=pdf/a-3b
+    # is set, render archive-grade PDF/A-3b. PDF/A is the standard
+    # bank/LE archival systems expect for evidence retention; refuses
+    # to render when fonts aren't embedded (which is why POLISH-2
+    # bundles them). Default off because PDF/A is stricter — operators
+    # opt in once the font-embedding work is verified for their deploy.
+    #
     # The subprocess script is built as a sys.argv passthrough so the
     # render stays isolated from the parent worker's address space.
-    # `sys.argv[3]` is the document title; everything else is fixed.
     script = (
-        "import sys\n"
+        "import os, sys\n"
         "from weasyprint import HTML\n"
-        "HTML(filename=sys.argv[1]).write_pdf(\n"
-        "    sys.argv[2],\n"
-        "    pdf_identifier=sys.argv[1].encode('utf-8'),\n"
-        "    custom_metadata=True,\n"
-        ")\n"
+        "variant = os.environ.get('RECUPERO_PDF_VARIANT', '').strip()\n"
+        "kwargs = {\n"
+        "    'pdf_identifier': sys.argv[1].encode('utf-8'),\n"
+        "    'custom_metadata': True,\n"
+        "}\n"
+        "if variant:\n"
+        "    kwargs['pdf_variant'] = variant\n"
+        "HTML(filename=sys.argv[1]).write_pdf(sys.argv[2], **kwargs)\n"
     )
     _render_pdf_in_subprocess(
         script=script,

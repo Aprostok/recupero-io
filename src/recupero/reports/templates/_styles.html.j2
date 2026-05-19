@@ -2,6 +2,16 @@
 {# Design language: restrained navy + gold, confident type hierarchy,        #}
 {# generous whitespace. Inspired by high-end legal / security firm output.   #}
 <style>
+  /*
+   * v0.17.2 (output polish POLISH-2): font fallback chain documented
+   * inline below. WeasyPrint without @font-face uses Bitstream Charter /
+   * Liberation Serif depending on the container — same case rendered
+   * differently on dev vs Railway. The fallback chain in :root below
+   * uses ONLY widely-available system fonts. For PDF/A-compliant deploys
+   * that need byte-identical renders, drop Inter / Source Serif Pro /
+   * JetBrains Mono TTFs into /app/fonts and add @font-face rules
+   * pointing at file:///app/fonts/*.ttf — WeasyPrint will embed them.
+   */
   /* ===================================================================
      Design tokens — palette, type, spacing
      =================================================================== */
@@ -110,6 +120,38 @@
     background: var(--paper);
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    position: relative;
+  }
+
+  /*
+   * v0.17.2 (output polish POLISH-4): DRAFT / PRE-RELEASE watermark.
+   *
+   * Templates that need to mark a doc as draft (operator review,
+   * pre-emit-brief preview, etc.) wrap the body in:
+   *
+   *     <body class="draft">
+   *
+   * which surfaces a large semi-transparent "DRAFT" overlay diagonally
+   * across every page. Final / shipped artifacts omit the class and
+   * render clean. Implemented via a single ::before pseudo-element so
+   * adding it to a template is a one-line change.
+   *
+   * Operators can also pass ``draft_label="REVIEW"`` etc. via the
+   * template context if a custom label is needed.
+   */
+  body.draft::before {
+    content: attr(data-draft-label, "DRAFT");
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-30deg);
+    font-family: var(--font-serif);
+    font-size: 100pt;
+    font-weight: bold;
+    color: rgba(140, 16, 16, 0.10);
+    z-index: 1000;
+    pointer-events: none;
+    letter-spacing: 0.15em;
   }
 
   /* ===================================================================

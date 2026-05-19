@@ -88,7 +88,8 @@ class TestBscStablecoinsPriceCorrectly:
 
 class TestSolanaStablecoinsPriceCorrectly:
     def test_solana_usdc_prices_at_par_via_canonical(self, tmp_path):
-        """Solana's USDC has a base58 mint, stored lowercased."""
+        """Solana's USDC has a base58 mint, stored case-sensitively
+        (v0.17.5 forensic HIGH)."""
         client = _make_client(tmp_path)
         token = TokenRef(
             chain=Chain.solana,
@@ -99,6 +100,37 @@ class TestSolanaStablecoinsPriceCorrectly:
         result = client.price_at(token, WHEN)
         assert result.usd_value == Decimal("1.00")
         assert result.source == "stablecoin_par"
+
+    def test_solana_usdc_spoof_with_different_case_does_not_match(self, tmp_path):
+        """v0.17.5 (round-10 forensic HIGH): a base58 spoof whose
+        lowercase form happens to collide with the canonical USDC
+        mint MUST NOT be priced at par. Pre-v0.17.5 the comparison
+        lowercased both sides, so any address that lowercased to
+        ``epjfwdd5...`` was a free $1.00 — an attacker who vanity-mined
+        a colliding spoof could mint phantom liabilities into a victim's
+        case totals.
+        """
+        client = _make_client(tmp_path)
+        # Same lowercase form as USDC but different case → spoof shape.
+        spoof_addr = "epjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        assert spoof_addr.lower() == (
+            "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v".lower()
+        ), "test setup: spoof must share lowercase form with canonical"
+        token = TokenRef(
+            chain=Chain.solana,
+            contract=spoof_addr,
+            symbol="USDC",
+            decimals=6,
+        )
+        result = client.price_at(token, WHEN)
+        # Must NOT be priced at par. Either flagged as spoof or falls
+        # through to CoinGecko contract lookup (which would 404 for a
+        # never-existed spoof and return a different error). Either way,
+        # source != "stablecoin_par".
+        assert result.source != "stablecoin_par", (
+            f"base58 spoof {spoof_addr!r} was incorrectly priced as "
+            f"canonical USDC at $1.00 — case-sensitive guard failed"
+        )
 
 
 class TestEthereumStablecoinsStillWork:

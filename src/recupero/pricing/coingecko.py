@@ -80,21 +80,25 @@ _CANONICAL_STABLECOIN_CONTRACTS: dict[tuple[Chain, str], str] = {
     (Chain.bsc, "USDC"):       "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d",
     (Chain.bsc, "BUSD"):       "0xe9e7cea3dedca5984780bafc599bd69add087d56",
     (Chain.bsc, "DAI"):        "0x1af3f329e8be154074d8769d1ffa4ee058b1dbc3",
-    # Solana (base58, not hex; lower-cased for lookup consistency)
-    (Chain.solana, "USDC"):    "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
-    (Chain.solana, "USDT"):    "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",
+    # Solana (base58 — case-sensitive on-chain).
+    # v0.17.5 (round-10 forensic HIGH): canonical mixed-case stored
+    # exactly as the mint publishes. The matching helper compares
+    # exact-equal for base58 chains so a vanity-mined spoof whose
+    # lowercase form collides with USDC's can no longer be priced
+    # at par. EVM remains lowercase-compared (EIP-55 checksum is a
+    # UI convention, not a uniqueness factor).
+    (Chain.solana, "USDC"):    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    (Chain.solana, "USDT"):    "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
     # Tron — CRITICAL: USDT-TRC20 is the largest stablecoin deployment in
     # crypto (~$60B circulating, the single biggest USDT chain). Pre-v0.16.7
     # the absence of this entry meant a legit USDT-TRC20 transfer fell
     # through to the API contract-lookup path and, if CoinGecko was momentarily
-    # unreachable, ended up flagged as `spoofed_canonical_symbol` —
-    # the exact OPPOSITE failure mode of the Ethereum spoof-protection.
-    # Tron base58 is case-sensitive on-chain but stored lower-case here for
-    # lookup consistency with `token_contract_lower` comparison at the call
-    # site (Solana follows the same pattern above).
-    (Chain.tron, "USDT"):      "tr7nhqjekqxgtci8q8zy4pl8otszgjlj6t",
-    (Chain.tron, "USDC"):      "tekxitehnzsmse2xqrbj4w32run966rdz8",
-    (Chain.tron, "USDD"):      "tnuc9qb1rrps5cbwlmnmxxbjyfoydxjwfr",
+    # unreachable, ended up flagged as `spoofed_canonical_symbol`.
+    # v0.17.5: stored in canonical on-chain case for the same
+    # base58-spoof-protection reason as Solana above.
+    (Chain.tron, "USDT"):      "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+    (Chain.tron, "USDC"):      "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
+    (Chain.tron, "USDD"):      "TNUC9Qb1rrPS5CbWLmNMxXBjyFoydXjWFR",
     # Base
     (Chain.base, "USDC"):      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     # Polygon
@@ -102,6 +106,48 @@ _CANONICAL_STABLECOIN_CONTRACTS: dict[tuple[Chain, str], str] = {
     (Chain.polygon, "USDT"):   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     (Chain.polygon, "DAI"):    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
 }
+
+# v0.17.5 (round-10 forensic HIGH): case-aware comparison so base58
+# stablecoin spoofs don't match the canonical contract. EVM contracts
+# are case-insensitive (the EIP-55 checksum is just a UI convention) so
+# lowercase comparison is correct. Solana / Tron / Bitcoin base58 IS
+# case-sensitive, so we compare exactly — except the canonical map
+# stores them lowercase for lookup-key consistency, so the input is
+# also lowercased for chains where the on-chain alphabet is fixed
+# lowercase or case-insensitive.
+_CASE_INSENSITIVE_CHAINS = frozenset({
+    Chain.ethereum, Chain.arbitrum, Chain.bsc, Chain.polygon, Chain.base,
+    # Bitcoin uses bech32 (all-lowercase per BIP173) — case-insensitive.
+    Chain.bitcoin,
+})
+
+
+def _contract_matches_canonical(
+    chain: Chain,
+    token_contract: str,
+    canonical_contract: str,
+) -> bool:
+    """Case-aware match for stablecoin canonical-contract checks.
+
+    EVM + bech32 → lowercase compare. Base58 (Solana / Tron) → exact.
+    The canonical map's base58 entries are stored lowercase but for
+    fixed-case-format chains that's not actually meaningful, so we
+    fall back to exact-match against the stored form (a future cleanup
+    would store base58 in canonical case, but the current map is
+    consistent so this still rejects spoofs whose case differs).
+    """
+    if not token_contract:
+        return False
+    if chain in _CASE_INSENSITIVE_CHAINS:
+        return token_contract.lower() == canonical_contract.lower()
+    # Base58 (Solana, Tron) — case-sensitive on-chain. The canonical
+    # map currently stores them lowercased; an attacker would need to
+    # vanity-mine an address whose lowercased form matches USDT's,
+    # which is computationally hard but not impossible. Compare the
+    # input as-is to the stored form so a spoof with non-lowercase
+    # characters won't pass.
+    return token_contract == canonical_contract
+
 
 # Hard sanity ceiling on per-transfer USD. Any single transfer claiming more
 # than this is treated as a pricing error and excluded from totals.
@@ -253,8 +299,9 @@ class CoinGeckoClient:
         symbol_upper = token.symbol.upper()
         if symbol_upper in _STABLECOIN_SYMBOLS:
             canonical = _CANONICAL_STABLECOIN_CONTRACTS.get((token.chain, symbol_upper))
-            token_contract_lower = (token.contract or "").lower()
-            if canonical and token_contract_lower == canonical:
+            if canonical and _contract_matches_canonical(
+                token.chain, token.contract or "", canonical,
+            ):
                 return PriceResult(
                     usd_value=Decimal("1.00"),
                     source="stablecoin_par",
@@ -267,7 +314,7 @@ class CoinGeckoClient:
             # contract lookup below.
             log.debug(
                 "stablecoin symbol %s on %s at %s does not match canonical — falling through",
-                symbol_upper, token.chain.value, token_contract_lower or "no_contract",
+                symbol_upper, token.chain.value, (token.contract or "no_contract"),
             )
 
         # Resolve to coingecko_id (via token's hint, static map, or API)
@@ -277,10 +324,14 @@ class CoinGeckoClient:
             # resolve, surface the spoof-suspicion clearly rather than a generic
             # "no mapping" error.
             if symbol_upper in _STABLECOIN_SYMBOLS:
+                # v0.17.5 (round-10 forensic MED): the error string uses the
+                # raw token.contract (no .lower()) so base58 chains preserve
+                # case in the audit trail — an operator triaging the row needs
+                # to see the actual on-chain address pattern to confirm the spoof.
                 return PriceResult(
                     usd_value=None,
                     source=None,
-                    error=f"spoofed_canonical_symbol:{symbol_upper}_at_{(token.contract or '').lower() or 'no_contract'}_on_{token.chain.value}",
+                    error=f"spoofed_canonical_symbol:{symbol_upper}_at_{(token.contract or 'no_contract')}_on_{token.chain.value}",
                 )
             return PriceResult(
                 usd_value=None,
@@ -407,13 +458,15 @@ class CoinGeckoClient:
         (much cheaper than /coins/{id}/history). For dormant-wallet detection
         we want today's price, not the historical price at the incident.
 
-        Stablecoins still get the $1.00 par treatment.
+        Stablecoins still get the $1.00 par treatment — case-sensitive
+        canonical check (v0.17.5) so base58 spoofs don't match.
         """
         symbol_upper = token.symbol.upper()
         if symbol_upper in _STABLECOIN_SYMBOLS:
             canonical = _CANONICAL_STABLECOIN_CONTRACTS.get((token.chain, symbol_upper))
-            token_contract_lower = (token.contract or "").lower()
-            if canonical and token_contract_lower == canonical:
+            if canonical and _contract_matches_canonical(
+                token.chain, token.contract or "", canonical,
+            ):
                 return PriceResult(
                     usd_value=Decimal("1.00"), source="stablecoin_par", error=None,
                 )

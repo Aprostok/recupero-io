@@ -213,8 +213,15 @@ def _build_context(
 
 
 def _fmt_usd(d: Decimal) -> str:
-    """Format Decimal as ``$X,XXX.YY`` (e.g., '$2,000.00')."""
-    return f"${d:,.2f}"
+    """Format Decimal as ``$X,XXX.YY`` (e.g., '$2,000.00').
+
+    v0.20.0 (round-13 arch follow-up): delegate to canonical helper.
+    The engagement letter never renders an "(unknown)" amount in its
+    fee fields (all are non-Optional callers), so the fallback is
+    decorative; "$0" is the safe choice for any defensive path.
+    """
+    from recupero._pricing import fmt_usd_or
+    return fmt_usd_or(d, fallback="$0")
 
 
 def _resolve_chain_display(chain: str | None) -> str:

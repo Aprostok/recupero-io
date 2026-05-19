@@ -15,6 +15,8 @@ attempt.
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import hashlib
 import hmac
 import json
@@ -218,7 +220,7 @@ def record_alert_attempt(
         RETURNING id;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        with db_connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(sql, {
                 "sub": payload.subscription_id,
                 "trigger": payload.trigger_type,

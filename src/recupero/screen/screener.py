@@ -10,6 +10,8 @@ response or an exchange's compliance dashboard.
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import logging
 import os
 from dataclasses import asdict, dataclass, field
@@ -265,7 +267,7 @@ def _lookup_correlation_for_address(
          WHERE address = %(addr)s
            AND chain = %(chain)s;
     """
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
+    with db_connect(dsn, row_factory=dict_row) as conn:
         with conn.cursor() as cur:
             cur.execute(sql, {"addr": address, "chain": chain})
             row = cur.fetchone() or {}

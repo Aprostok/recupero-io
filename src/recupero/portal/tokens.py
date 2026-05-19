@@ -24,6 +24,8 @@ handler bumps it once per (token, day) at most.
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import hashlib
 import hmac
 import logging
@@ -166,8 +168,7 @@ def generate_token(
     else:
         expires_at = datetime.now(UTC) + timedelta(days=ttl_days)
 
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         # Verify the case exists first so we don't insert orphan
         # token rows on operator typos.
         cur.execute(
@@ -246,8 +247,7 @@ def verify_token(*, token: str, dsn: str) -> VerifiedToken | None:
 
     now = datetime.now(UTC)
     candidate_hmac = compute_token_hmac(token)
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         # Primary path: HMAC lookup. Only fires when the pepper is
         # configured AND the column exists (legacy deployments without
         # migration 014 fall through silently).
@@ -379,8 +379,7 @@ def revoke_token(*, token_id: UUID, dsn: str) -> bool:
     """Mark a token as revoked. Idempotent: re-revoking a revoked
     token is a no-op + returns True so scripts can re-run safely.
     Returns False if the token doesn't exist."""
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             """
                 UPDATE public.case_tokens

@@ -28,6 +28,8 @@ that would lose the original promotion audit trail. Use
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import logging
 import os
 from collections.abc import Callable
@@ -58,8 +60,7 @@ def run(
         )
         return 1
 
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             """
                 SELECT id, chain, address, status, is_freezeable,

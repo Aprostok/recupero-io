@@ -13,6 +13,8 @@ commitment window).
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import logging
 from decimal import Decimal
 from uuid import UUID
@@ -40,8 +42,7 @@ def run(*, investigation_id: UUID, fee_usd: Decimal, dsn: str) -> int:
         )
         return 1
 
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, status, engagement_started_at, engagement_closed_at "
             "  FROM public.investigations WHERE id = %s",

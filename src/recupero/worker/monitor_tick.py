@@ -62,6 +62,7 @@ Out of scope for v0.14.6
 
 from __future__ import annotations
 
+from recupero._common import db_connect
 import logging
 import os
 import sys
@@ -168,7 +169,7 @@ def run_monitor_tick(
     """
 
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
+        with db_connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(select_sql, {"cap": cap})
                 rows = list(cur.fetchall())
@@ -223,7 +224,7 @@ def run_monitor_tick(
             # when every alert dispatch failed — so the next tick
             # doesn't re-evaluate the same history.
             try:
-                with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn:
+                with db_connect(dsn) as conn:
                     with conn.cursor() as cur:
                         cur.execute(update_sql, {
                             "cursor": new_cursor or None,

@@ -20,6 +20,7 @@ Configuration is via env vars (loaded from .env):
 
 from __future__ import annotations
 
+from recupero._common import db_connect
 import argparse
 import logging
 import os
@@ -408,7 +409,7 @@ def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
 
     try:
         import psycopg
-        with psycopg.connect(db_url, autocommit=True, connect_timeout=10, prepare_threshold=None) as conn:
+        with db_connect(db_url) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
                 cur.fetchone()

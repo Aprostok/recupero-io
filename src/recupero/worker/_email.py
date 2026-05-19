@@ -103,7 +103,7 @@ _RESEND_RETRY_WAITS_SEC = (5, 15, 30)
 # `RECUPERO_DISABLE_EMAIL=true` got email skipped on the trace pipeline
 # but emails still went out from the followup cron + send_le_handoff.
 # Partial mode is the hardest debug shape.
-from recupero._common import env_truthy as _is_truthy_env  # noqa: E402
+from recupero._common import db_connect, env_truthy as _is_truthy_env  # noqa: E402
 
 
 def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
@@ -365,7 +365,7 @@ def has_been_sent(
         return False
 
     try:
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, prepare_threshold=None) as conn:
+        with db_connect(dsn, connect_timeout=5) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -462,7 +462,7 @@ def _log_to_audit(
 
     inv_id_str = str(investigation_id) if investigation_id else None
     try:
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, prepare_threshold=None) as conn:
+        with db_connect(dsn, connect_timeout=5) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """

@@ -39,6 +39,19 @@ class Chain(str, Enum):
     base = "base"
     bsc = "bsc"
     polygon = "polygon"
+    # v0.20.0 (round-13 type-MED-8): Hyperliquid was treated as the
+    # raw string "hyperliquid" throughout the codebase (explorer maps,
+    # adapter routing, watch_tick) but was missing from the Chain enum.
+    # Pydantic models carrying `chain: Chain` would reject a hyperliquid
+    # case row; the in-flight code-paths handled it via str comparisons
+    # only. Adding the enum member closes the type-system gap.
+    #
+    # NB: Hyperliquid uses EVM-format addresses but isn't an EVM chain —
+    # the scraper at `chains/hyperliquid/scraper.py` deliberately sets
+    # `Case.chain = Chain.ethereum` (now upgradable to `Chain.hyperliquid`)
+    # for downstream brief / freeze pipelines that haven't been wired
+    # for the chain.
+    hyperliquid = "hyperliquid"
 
 
 class LabelCategory(str, Enum):

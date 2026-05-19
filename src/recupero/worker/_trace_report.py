@@ -318,13 +318,13 @@ def _explorer_url(address: str, chain: str) -> str:
     return f"{prefix}{address}"
 
 
+# v0.20.0 (round-13 arch follow-up): delegate to canonical helper.
+# trace_report template embeds the value directly (no literal "USD "
+# prefix), so $ prefix from fmt_usd_or is right. Fallback "$0"
+# preserves the prior trace_report style.
 def _fmt_usd(v: Decimal | None) -> str:
-    if v is None:
-        return "$0"
-    try:
-        return f"${v:,.2f}"
-    except (TypeError, ValueError):
-        return "$0"
+    from recupero._pricing import fmt_usd_or
+    return fmt_usd_or(v, fallback="$0")
 
 
 def _fmt_decimal(v: Decimal | None) -> str:

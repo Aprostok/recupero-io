@@ -972,10 +972,14 @@ def _fmt_decimal(d: Decimal | None) -> str:
     return f"{d:,.6f}".rstrip("0").rstrip(".")
 
 
+# v0.20.0 (round-13 arch follow-up): delegate to canonical helper.
+# Templates that consume these strings already render a literal
+# "USD " prefix around the value, so the bare-format variant is
+# correct here. Fallback "(unknown)" preserves the prior contract.
+from recupero._pricing import fmt_usd_bare_or as _fmt_usd_bare_or
+
 def _fmt_usd(d: Decimal | None) -> str:
-    if d is None:
-        return "(unknown)"
-    return f"{d:,.2f}"
+    return _fmt_usd_bare_or(d, fallback="(unknown)")
 
 
 # v0.18.6 (round-11 PDF-HIGH-010): per-chain display-name map.

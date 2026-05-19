@@ -27,6 +27,8 @@ without requiring a live DB.
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import json
 import os
 import logging
@@ -144,8 +146,7 @@ class PostgresPriceCache:
     def get(self, key: str) -> dict | None:
         import psycopg
         try:
-            with psycopg.connect(self._dsn, autocommit=True, connect_timeout=10,
-                                 prepare_threshold=None) as conn, conn.cursor() as cur:
+            with db_connect(self._dsn) as conn, conn.cursor() as cur:
                 cur.execute(
                     "SELECT usd_price, error_msg FROM public.pricing_cache "
                     "WHERE cache_key = %s",
@@ -181,8 +182,7 @@ class PostgresPriceCache:
         usd_param = None if usd in (None, "None", "") else str(usd)
         error_param = value.get("error")
         try:
-            with psycopg.connect(self._dsn, autocommit=True, connect_timeout=10,
-                                 prepare_threshold=None) as conn, conn.cursor() as cur:
+            with db_connect(self._dsn) as conn, conn.cursor() as cur:
                 cur.execute(
                     """
                         INSERT INTO public.pricing_cache

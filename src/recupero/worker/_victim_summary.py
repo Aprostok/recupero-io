@@ -400,8 +400,15 @@ def _parse_usd_string(s: str | None) -> Decimal:
 
 
 def _fmt_usd(d: Decimal) -> str:
-    """Format Decimal as ``$X,XXX.YY``."""
-    return f"${d:,.2f}"
+    """Format Decimal as ``$X,XXX.YY``.
+
+    v0.20.0 (round-13 arch follow-up): delegate to canonical helper
+    so the victim-summary, engagement letter, trace report, and
+    LE handoff all flow through one formatter; future precision /
+    locale changes land in one place.
+    """
+    from recupero._pricing import fmt_usd_or
+    return fmt_usd_or(d, fallback="$0")
 
 
 # v0.19.1 (round-12 PDF-CRIT-5): canonical chain display-name resolver.

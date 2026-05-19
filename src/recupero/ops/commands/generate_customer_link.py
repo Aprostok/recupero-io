@@ -26,6 +26,8 @@ won't need this.
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import logging
 import os
 from uuid import UUID
@@ -49,8 +51,7 @@ def run(
     # Fetch the case so we can echo back "V-058868 (Validation Run)" in
     # the success line — much easier for the operator to confirm "yes
     # this is the right case" than seeing only the UUID.
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT case_number, client_name FROM public.cases WHERE id = %s",
             (str(case_id),),

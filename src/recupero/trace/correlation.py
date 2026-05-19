@@ -55,7 +55,7 @@ from uuid import UUID
 # entries written into address_observations. A correlation lookup
 # from a future case that pastes the canonical mixed-case form
 # would miss every prior sighting.
-from recupero._common import canonical_address_key as _ck
+from recupero._common import db_connect, canonical_address_key as _ck
 
 if TYPE_CHECKING:  # pragma: no cover
     from recupero.models import Case
@@ -389,7 +389,7 @@ def record_observations(
     """
     written = 0
     try:
-        with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        with db_connect(dsn) as conn, conn.cursor() as cur:
             for obs in observations:
                 cur.execute(sql, {
                     "address": obs.address,
@@ -488,7 +488,7 @@ def lookup_correlations(
          LIMIT 10000;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
+        with db_connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {
                     "addresses": queries,

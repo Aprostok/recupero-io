@@ -7,6 +7,8 @@ audit write fails (logged at WARN).
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
@@ -107,7 +109,7 @@ def record_letter_sent(
         RETURNING id;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        with db_connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(sql, {
                 "id": letter_id, "case": case_id, "inv": investigation_id,
                 "issuer": issuer, "target": target_address,
@@ -156,7 +158,7 @@ def record_outcome(
         RETURNING id;
     """
     try:
-        with psycopg.connect(dsn, autocommit=True, prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+        with db_connect(dsn) as conn, conn.cursor() as cur:
             cur.execute(sql, {
                 "letter": letter_id, "type": outcome_type,
                 "frozen": frozen_usd, "returned": returned_usd,
@@ -331,7 +333,7 @@ def refresh_priors(dsn: str) -> int:
             refreshed_at          = NOW();
     """
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
+        with db_connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(query)
                 rows = list(cur.fetchall())
@@ -377,7 +379,7 @@ def load_learned_priors(dsn: str) -> dict[str, IssuerPrior]:
     """
     out: dict[str, IssuerPrior] = {}
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row, prepare_threshold=None, connect_timeout=10) as conn:
+        with db_connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 cur.execute(sql, {
                     "threshold": _MIN_SAMPLE_SIZE_FOR_LEARNED_PRIOR,

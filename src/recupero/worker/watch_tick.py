@@ -386,8 +386,7 @@ def _fetch_eligible(
     # safely to 0 without silently capping everything.
     use_limit = limit if (limit is not None and limit > 0) else None
     pooled_dsn = _pooled_dsn(dsn)
-    with psycopg.connect(pooled_dsn, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db_connect(pooled_dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         sql, params = sql_with_priority, (hot_interval_sec, min_interval_sec)
         try:
             if use_limit is not None:
@@ -889,8 +888,7 @@ def _persist_and_diff(
     tick otherwise and drown the operator in noise.
     """
     pooled_dsn = _pooled_dsn(dsn)
-    with psycopg.connect(pooled_dsn, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db_connect(pooled_dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         # Pull the most recent prior snapshot — single ORDER BY +
         # LIMIT 1 is index-served by watchlist_snapshots_recent_idx.
         cur.execute(
@@ -987,7 +985,7 @@ def _persist_and_diff(
 
 # v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
 # this was duplicated verbatim in 4 worker modules).
-from recupero._common import pooled_dsn as _pooled_dsn  # noqa: E402
+from recupero._common import db_connect, pooled_dsn as _pooled_dsn  # noqa: E402
 
 
 __all__ = (

@@ -17,6 +17,8 @@ LE handoff twice to the same officer is a no-op.
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import json
 import logging
 import os
@@ -198,8 +200,7 @@ def run(
 
 
 def _fetch_investigation(*, investigation_id: UUID, dsn: str) -> dict | None:
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, case_id, status FROM public.investigations WHERE id = %s",
             (str(investigation_id),),
@@ -294,7 +295,7 @@ def _already_sent_to(
     dsn: str,
 ) -> bool:
     try:
-        with psycopg.connect(dsn, autocommit=True, connect_timeout=5, prepare_threshold=None) as conn:
+        with db_connect(dsn, connect_timeout=5) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """

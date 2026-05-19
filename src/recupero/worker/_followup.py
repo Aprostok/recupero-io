@@ -56,6 +56,7 @@ from uuid import UUID
 import psycopg
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from psycopg.rows import dict_row
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 
@@ -110,8 +111,7 @@ def find_followups_due(*, dsn: str) -> list[FollowupCandidate]:
          ORDER BY i.last_followup_sent_at ASC NULLS FIRST
     """
     out: list[FollowupCandidate] = []
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             sql,
             {"window": _ENGAGEMENT_WINDOW_DAYS,
@@ -238,8 +238,7 @@ def send_followup(
     if result.success:
         # Stamp last_followup_sent_at
         try:
-            with psycopg.connect(dsn, autocommit=True,
-                                 connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+            with db_connect(dsn) as conn, conn.cursor() as cur:
                 cur.execute(
                     "UPDATE public.investigations "
                     "   SET last_followup_sent_at = NOW() "
@@ -348,8 +347,7 @@ def _fetch_recent_actions(
     """
     actions: list[dict[str, str]] = []
     try:
-        with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                             connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
             cur.execute(sql, (str(investigation_id),))
             for r in cur.fetchall():
                 desc = _describe_email_action(

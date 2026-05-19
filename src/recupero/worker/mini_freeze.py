@@ -342,13 +342,12 @@ def _change_to_ctx(mc: MaterialChange) -> dict[str, Any]:
     }
 
 
+# v0.20.0 (round-13 arch follow-up): delegate to canonical helper.
+# Digest template already renders "USD " around each amount, so we
+# use the bare variant. Fallback "—" matches the digest's prior style.
 def _fmt_usd(usd: Decimal | None) -> str:
-    if usd is None:
-        return "—"
-    try:
-        return f"{usd:,.2f}"
-    except (ValueError, TypeError):
-        return "—"
+    from recupero._pricing import fmt_usd_bare_or
+    return fmt_usd_bare_or(usd, fallback="—")
 
 
 def _fmt_signed_usd(usd: Decimal | None) -> str:

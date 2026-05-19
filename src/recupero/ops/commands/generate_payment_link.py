@@ -38,6 +38,8 @@ Typical run::
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import logging
 from uuid import UUID
 
@@ -65,8 +67,7 @@ def run(
     # Verify the case exists and pull a few fields for the success
     # message. Catches operator-typo case_ids before we mint a URL
     # the webhook would later reject as audit_only.
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT case_number, client_name, client_email "
             "  FROM public.cases WHERE id = %s",

@@ -23,6 +23,7 @@ from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 
@@ -36,8 +37,7 @@ def run(
     """Force-send a follow-up email. Returns 0 on success, 1 on
     errors / declined-by-operator."""
     # Build a FollowupCandidate from the row
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             """
                 SELECT i.id            AS investigation_id,

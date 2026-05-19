@@ -124,8 +124,7 @@ def build_dashboard_summary(*, dsn: str) -> dict[str, Any]:
 
     pooled = _pooled_dsn(dsn)
     try:
-        with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
-                             prepare_threshold=None, connect_timeout=10) as conn:
+        with db_connect(pooled, row_factory=dict_row) as conn:
             payload["cases"]             = _query_cases(conn) or payload["cases"]
             payload["investigations"]    = _query_investigations(conn) or payload["investigations"]
             payload["watchlist"]         = _query_watchlist(conn) or payload["watchlist"]
@@ -739,7 +738,7 @@ def _query_payments(conn) -> dict[str, Any]:
 #
 # v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
 # this was duplicated verbatim in 4 worker modules).
-from recupero._common import pooled_dsn as _pooled_dsn  # noqa: E402
+from recupero._common import db_connect, pooled_dsn as _pooled_dsn  # noqa: E402
 
 
 __all__ = ("build_dashboard_summary",)

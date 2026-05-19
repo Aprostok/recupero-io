@@ -15,6 +15,8 @@ on the cli for the full row + extra detail.
 
 from __future__ import annotations
 
+from recupero._common import db_connect
+
 import sys
 from datetime import UTC, datetime
 from typing import Any
@@ -173,16 +175,14 @@ def _print_artifacts_section(*, investigation_id: UUID) -> None:
 
 
 def _fetch_investigation(*, investigation_id: UUID, dsn: str) -> dict | None:
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM public.investigations WHERE id = %s",
                     (str(investigation_id),))
         return cur.fetchone()
 
 
 def _fetch_case(*, case_id: UUID, dsn: str) -> dict | None:
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT case_number, client_name, client_email, status, country "
             "  FROM public.cases WHERE id = %s",
@@ -192,8 +192,7 @@ def _fetch_case(*, case_id: UUID, dsn: str) -> dict | None:
 
 
 def _fetch_emails(*, investigation_id: UUID, dsn: str) -> list[dict]:
-    with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
-                         connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             """
                 SELECT sent_at, email_type, to_address, subject,

@@ -141,8 +141,7 @@ def list_investigations(
 
     items: list[dict[str, Any]] = []
     total = 0
-    with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db_connect(pooled, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(count_sql, params)
         row = cur.fetchone()
         total = int(row["n"]) if row else 0
@@ -186,8 +185,7 @@ def get_investigation_detail(
     inv_id_str = str(investigation_id)
 
     pooled = _pooled_dsn(dsn)
-    with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
-                         prepare_threshold=None, connect_timeout=10) as conn, conn.cursor() as cur:
+    with db_connect(pooled, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM public.investigations WHERE id = %s",
                     (inv_id_str,))
         row = cur.fetchone()
@@ -444,8 +442,7 @@ def _fetch_emails_summary(
 
     pooled = _pooled_dsn(dsn)
     try:
-        with psycopg.connect(pooled, autocommit=True, row_factory=dict_row,
-                             prepare_threshold=None, connect_timeout=10) as conn:
+        with db_connect(pooled, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 # Aggregates first
                 cur.execute(
@@ -899,7 +896,7 @@ def _build_summary(
 #
 # v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
 # this was duplicated verbatim in 4 worker modules).
-from recupero._common import pooled_dsn as _pooled_dsn  # noqa: E402
+from recupero._common import db_connect, pooled_dsn as _pooled_dsn  # noqa: E402
 
 
 __all__ = ("list_investigations", "get_investigation_detail")

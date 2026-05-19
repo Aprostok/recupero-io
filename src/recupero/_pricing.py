@@ -116,7 +116,41 @@ def fmt_usd_or(amount: Decimal | int | float | None, fallback: str = "(unknown)"
     """
     if amount is None:
         return fallback
-    return fmt_usd(amount)
+    try:
+        return fmt_usd(amount)
+    except (TypeError, ValueError):
+        # Some legacy callers pass garbage strings; preserve the
+        # existing "$0"/"—"/"(unknown)" fallback contract rather
+        # than raising mid-render.
+        return fallback
+
+
+def fmt_usd_bare_or(
+    amount: Decimal | int | float | None,
+    fallback: str = "(unknown)",
+) -> str:
+    """USD formatter (no ``$`` prefix) that accepts None.
+
+    v0.20.0 (round-13 arch follow-up): some templates already render a
+    literal ``USD `` prefix around the value (the LE handoff cover,
+    the trace_report's totals row, the mini-freeze digest's snapshot
+    table). For those templates, the canonical `fmt_usd_or` would
+    produce ``USD $1,037,451.35`` — verbose and inconsistent with
+    cover-page formality. This variant returns ``1,037,451.35``
+    (no $) so consumers in those templates can keep their literal
+    prefix without double-stamping.
+
+    Same None / TypeError semantics as `fmt_usd_or`.
+    """
+    if amount is None:
+        return fallback
+    try:
+        d = Decimal(str(amount))
+        if d == d.to_integral_value():
+            return f"{int(d):,}"
+        return f"{d:,.2f}"
+    except (TypeError, ValueError):
+        return fallback
 
 
 __all__ = (
@@ -128,4 +162,6 @@ __all__ = (
     "ENGAGEMENT_FEE_CENTS",
     "fmt_usd",
     "fmt_usd_short",
+    "fmt_usd_or",
+    "fmt_usd_bare_or",
 )

@@ -98,7 +98,14 @@ _CANONICAL_STABLECOIN_CONTRACTS: dict[tuple[Chain, str], str] = {
     # base58-spoof-protection reason as Solana above.
     (Chain.tron, "USDT"):      "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
     (Chain.tron, "USDC"):      "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
-    (Chain.tron, "USDD"):      "TNUC9Qb1rrPS5CbWLmNMxXBjyFoydXjWFR",
+    # v0.18.0 (round-11 pricing-CRIT-002): canonical Tron USDD address
+    # per tronscan + issuers.json is "TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR"
+    # (uppercase R, lowercase p in positions 9-10). Pre-v0.18.0 we had
+    # `TNUC9Qb1rrPS5CbWLmNMxXBjyFoydXjWFR` (lowercase rr, uppercase P) —
+    # a different on-chain address. Tron base58check is case-sensitive,
+    # so the comparison would always miss → real USDD transfers fell
+    # through to `spoofed_canonical_symbol`.
+    (Chain.tron, "USDD"):      "TNUC9Qb1rRpS5CbWLmNMxXBjyFoydXjWFR",
     # Base
     (Chain.base, "USDC"):      "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
     # Polygon

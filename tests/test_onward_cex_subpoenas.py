@@ -105,11 +105,19 @@ def _mk_case(transfers: list[Transfer]) -> Case:
 
 
 class _FakeLabelStore:
-    """Minimal LabelStore stub — looks up by address, returns Label."""
+    """Minimal LabelStore stub — looks up by address, returns Label.
+
+    v0.18.0 (round-11 freeze.asks-CRIT-007): accepts optional
+    `chain=` kwarg to match the real LabelStore.lookup signature.
+    Existing tests pass EVM hex (lowercased) so we still key on
+    `address.lower()` for back-compat; a chain-aware fake would
+    canonical-key. Tests that need base58 chain-aware lookups should
+    use the real LabelStore.
+    """
     def __init__(self, labels: dict[str, Label]) -> None:
         self._labels = {k.lower(): v for k, v in labels.items()}
 
-    def lookup(self, address: str) -> Label | None:
+    def lookup(self, address: str, chain=None) -> Label | None:  # noqa: ARG002
         return self._labels.get(address.lower())
 
 

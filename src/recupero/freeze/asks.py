@@ -244,7 +244,17 @@ def synthesize_onward_cex_subpoenas(
     operator runs list-freeze-targets which produces this set,
     then this function uses it).
     """
-    upstream_lower = {a.lower() for a in upstream_freeze_target_addresses}
+    # v0.18.0 (round-11 freeze.asks-CRIT-006/007): canonical-key the
+    # upstream set AND pass `chain=case.chain` to label_store.lookup.
+    # Pre-v0.18.0 base58 addresses were mangled (lowercased) so
+    # upstream membership always missed for Solana/Tron/Bitcoin; AND
+    # the label lookup defaulted to Chain.ethereum (since no `chain`
+    # arg was passed), so `to_checksum_address` was attempted on a
+    # base58 string → ValueError → label=None → every flow was
+    # silently filtered out. Net effect: Solana/Tron CEX subpoena
+    # recommendations always empty.
+    from recupero._common import canonical_address_key as _ck
+    upstream_lower = {_ck(a) for a in upstream_freeze_target_addresses}
     if not upstream_lower:
         return []
 
@@ -266,14 +276,14 @@ def synthesize_onward_cex_subpoenas(
     # Aggregate per (upstream_address, cex_address, token_symbol).
     agg: dict[tuple[str, str, str], dict] = {}
     for t in case.transfers:
-        from_lower = (t.from_address or "").lower()
+        from_lower = _ck(t.from_address or "")
         if from_lower not in upstream_lower:
             continue
         to_addr = t.to_address or ""
         if not to_addr:
             continue
         # Check if the to_address has a CEX label.
-        label = label_store.lookup(to_addr)
+        label = label_store.lookup(to_addr, chain=case.chain)
         if label is None:
             continue
         cat = (
@@ -289,10 +299,11 @@ def synthesize_onward_cex_subpoenas(
             name = label.name or ""
             exchange_name = name.split(":")[0].strip() or "(unknown exchange)"
 
-        key = (from_lower, to_addr.lower(), t.token.symbol)
+        to_key = _ck(to_addr)
+        key = (from_lower, to_key, t.token.symbol)
         bucket = agg.setdefault(key, {
             "upstream_address": from_lower,
-            "cex_address": to_addr.lower(),
+            "cex_address": to_key,
             "chain": t.chain,
             "exchange": exchange_name,
             "label_name": label.name,
@@ -382,6 +393,16 @@ def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEn
     src = path or _ISSUER_DB_PATH
     raw = json.loads(src.read_text(encoding="utf-8-sig"))
     out: dict[tuple[Chain, str], IssuerEntry] = {}
+    # v0.18.0 (round-11 pricing-CRIT-003/004): chain-aware
+    # canonical-key normalization. Pre-v0.18.0 every contract was
+    # unconditionally lowercased — which is fine for EVM hex
+    # (case-insensitive) but PRODUCES INVALID on-chain addresses
+    # for Solana / Tron / Bitcoin (base58 is case-sensitive at the
+    # network layer). Solana USDC `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
+    # lowercased to `epjfwdd5...` is not a valid Solana mint
+    # address, breaking dormant detection + pricing entirely on
+    # those chains.
+    from recupero._common import canonical_address_key as _ck
     # Pass 1: populate every entry.
     for tok in raw.get("tokens", []):
         try:
@@ -389,12 +410,12 @@ def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEn
         except (ValueError, KeyError):
             log.debug("skipping issuer entry with unknown chain: %s", tok)
             continue
-        contract = (tok.get("contract") or "").lower()
+        contract = _ck(tok.get("contract") or "")
         if not contract:
             continue
         delegates_to_raw = tok.get("delegates_to")
         delegates_to = (
-            delegates_to_raw.lower()
+            _ck(delegates_to_raw)
             if isinstance(delegates_to_raw, str) and delegates_to_raw.strip()
             else None
         )

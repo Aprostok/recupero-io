@@ -135,7 +135,8 @@
     },
     {
       "chain": "solana",
-      "contract": "epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v",
+      "_comment_address_case": "v0.18.0 (round-11 pricing-CRIT-003): Solana base58 mints stored case-preserved. Pre-v0.18.0 entries were all-lowercase which produces INVALID on-chain addresses (Solana base58 is case-sensitive at the network layer).",
+      "contract": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
       "symbol": "USDC",
       "issuer": "Circle",
       "freeze_capability": "yes",
@@ -145,7 +146,7 @@
     },
     {
       "chain": "solana",
-      "contract": "es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb",
+      "contract": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
       "symbol": "USDT",
       "issuer": "Tether",
       "freeze_capability": "yes",

@@ -166,42 +166,62 @@ def detect_drainer_pattern(
         findings.is_drainer_case = True
         findings.classification_confidence = "high"
 
-    # Signal 2: outflow to non-protocol contract (suggests
-    # approval-exploit, even without explicit Approval event in
-    # the trace data we have today).
-    for t in case.transfers:
-        if _ck(t.from_address) != seed:
-            continue
-        if not t.counterparty.is_contract:
-            continue
-        # Skip known protocols / DEXes — those are normal
-        # interactions, not drainer indicators.
-        dst = _ck(t.to_address)
-        if dst in db:
-            continue
-        # Don't flag if the destination is one of our known
-        # safe categories (bridge, exchange, etc.) — those
-        # require label-store integration. For now, all
-        # unknown contracts produce a medium signal.
-        findings.signals.append(DrainerSignal(
-            signal_type="approval_to_unknown_contract",
-            address=seed,
-            counterparty=dst,
-            counterparty_name="(unknown contract)",
-            severity="medium",
-            description=(
-                "Victim's wallet sent funds to an unknown contract. "
-                "Consistent with approval-exploit drainer pattern; "
-                "verify by checking for prior setApprovalForAll / "
-                "permit signatures from the victim's wallet."
-            ),
-            confidence="medium",
-        ))
-        # Only set classification if not already high-confidence
-        # from Signal 1.
-        if not findings.is_drainer_case:
-            findings.is_drainer_case = True
-            findings.classification_confidence = "medium"
+    # Signal 2: outflow to non-protocol contract.
+    #
+    # v0.18.0 (round-11 forensic CRIT-003): pre-v0.18.0 this signal
+    # fired for ANY victim transfer to ANY contract not in the
+    # high-risk DB — including Uniswap routers, Aave pools, Lido
+    # staking contracts, Curve, and every legitimate DeFi protocol
+    # the victim had ever interacted with. Result: every victim who
+    # had used a DEX before the theft got their case mis-classified
+    # as drainer-attribution, with `is_drainer_case=True` and
+    # `confidence="medium"` written verbatim to the brief and onward
+    # to LE. The wrong narrative routed the case down the wrong SAR
+    # category.
+    #
+    # New behavior: require ACTUAL approval evidence. The current
+    # case-data shape doesn't include Approval events (TODO in
+    # detect_approval_signatures), so this signal is now a no-op
+    # until that data lands. When approval-event ingestion ships,
+    # this branch should fire ONLY when there's a matching
+    # setApprovalForAll/permit signature from the victim's wallet
+    # to the contract address.
+    #
+    # Until then: surface "unknown-contract outflow" as INFORMATION
+    # only — not a drainer attribution. The brief's narrative
+    # section can still mention it (operators can read the case data
+    # themselves) but the case-level `is_drainer_case` flag stays
+    # off, preventing the false routing to drainer-specific
+    # workflows.
+    if False:  # gated until approval-event data is available
+        for t in case.transfers:
+            if _ck(t.from_address) != seed:
+                continue
+            if not t.counterparty.is_contract:
+                continue
+            dst = _ck(t.to_address)
+            if dst in db:
+                continue
+            # Verify a matching approval was given (placeholder for
+            # when approval-event data ships). For now this branch
+            # is unreachable; left as scaffolding so the wire-up is
+            # a one-line gate flip when the data lands.
+            findings.signals.append(DrainerSignal(
+                signal_type="approval_to_unknown_contract",
+                address=seed,
+                counterparty=dst,
+                counterparty_name="(unknown contract)",
+                severity="medium",
+                description=(
+                    "Victim's wallet granted approval to an unknown "
+                    "contract before funds left. Approval-exploit "
+                    "drainer pattern."
+                ),
+                confidence="medium",
+            ))
+            if not findings.is_drainer_case:
+                findings.is_drainer_case = True
+                findings.classification_confidence = "medium"
 
     return findings
 

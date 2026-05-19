@@ -108,13 +108,16 @@ def test_drainer_direct_outflow_to_known_drainer_is_critical() -> None:
     assert any(s.severity == "critical" for s in findings.signals)
 
 
-def test_drainer_outflow_to_unknown_contract_is_medium() -> None:
-    """Victim → unknown contract (is_contract=True, not in
-    known protocols) → medium signal + medium-confidence
-    drainer classification. The smoking gun (approval signature)
-    would upgrade this to high confidence in a full
-    integration, but the contract-destination alone is a
-    drainer indicator worth surfacing."""
+def test_drainer_outflow_to_unknown_contract_no_classification_without_approval() -> None:
+    """v0.18.0 (round-11 forensic CRIT-003): pre-v0.18.0 Signal-2
+    fired for ANY transfer to any contract not in the high-risk
+    DB. Result: every victim who had used a DEX before the theft
+    got mis-classified as drainer-attribution. New behavior: a
+    bare contract-destination is NOT enough — we require actual
+    approval evidence (setApprovalForAll / permit signature) before
+    flagging. Until approval-event data lands in case shape, this
+    signal is gated off.
+    """
     case = _mk_case([
         _mk_transfer(
             from_addr="0x" + "a" * 40,
@@ -124,8 +127,13 @@ def test_drainer_outflow_to_unknown_contract_is_medium() -> None:
         ),
     ])
     findings = detect_drainer_pattern(case, high_risk_db={})
-    assert findings.is_drainer_case is True
-    assert findings.classification_confidence == "medium"
+    # Contract-destination alone no longer triggers drainer classification.
+    assert findings.is_drainer_case is False
+    # And no signal is emitted for the unknown-contract case.
+    assert not any(
+        s.signal_type == "approval_to_unknown_contract"
+        for s in findings.signals
+    )
 
 
 def test_drainer_outflow_to_normal_wallet_no_classification() -> None:

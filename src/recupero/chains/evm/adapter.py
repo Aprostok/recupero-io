@@ -219,6 +219,21 @@ class EvmAdapter(ChainAdapter):
             to_l = tx.get("to", "").lower()
             if from_l != addr_l:
                 return False
+            # v0.18.0 (round-11 chains-CRIT-001): contract-creation tx
+            # has empty `to` and populates `contractAddress` instead.
+            # Pre-v0.18.0 `_normalize_native` would call
+            # `to_checksum_address("")` → eth_utils.InvalidAddress
+            # → the entire fetch_native_outflows loop aborted with an
+            # uncaught exception → trace silently returned 0 outflows
+            # for the seed. Any seed wallet that ever deployed a
+            # contract was effectively un-traceable.
+            #
+            # Skip contract-creation txs from the outflow list. The
+            # forensic significance is "victim deployed a contract"
+            # — not a money-flow event. Future enhancement could
+            # surface these as a separate signal.
+            if not to_l or to_l == "0x":
+                return False
             # v0.16.11: drop wrap-deposit transfers. ETH → WETH contract
             # is the depositor wrapping into IOU form; the subsequent
             # WETH-token outflow already captures the real movement.

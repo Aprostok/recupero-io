@@ -133,6 +133,53 @@ class TestEthereumAdapter:
         assert all(t["tx_hash"] != "0xwrap" for t in out)
 
     @respx.mock
+    def test_native_outflows_filters_contract_creation_tx(self, adapter: EthereumAdapter) -> None:
+        """v0.18.0 (round-11 chains-CRIT-001): contract-creation txs
+        from the seed wallet have empty `to` and populate
+        `contractAddress` instead. Pre-v0.18.0 `_normalize_native`
+        called `to_checksum_address("")` → eth_utils.InvalidAddress
+        → entire fetch_native_outflows loop aborted with an uncaught
+        exception → trace silently returned 0 outflows for the seed.
+        Any seed wallet that had EVER deployed a contract was
+        effectively un-traceable.
+        """
+        seed = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
+        target = "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d"
+        rows = [
+            # Normal outbound — kept.
+            {
+                "blockNumber": "19000001",
+                "timeStamp": "1736942400",
+                "hash": "0xkeep",
+                "from": seed,
+                "to": target,
+                "value": "1000000000000000000",
+                "isError": "0",
+            },
+            # CONTRACT-CREATION tx — empty `to`, populated
+            # `contractAddress`. Pre-v0.18.0 this crashed the loop.
+            {
+                "blockNumber": "19000002",
+                "timeStamp": "1736942500",
+                "hash": "0xcreate",
+                "from": seed,
+                "to": "",
+                "contractAddress": "0x1234567890abcdef1234567890abcdef12345678",
+                "value": "500000000000000000",
+                "isError": "0",
+            },
+        ]
+        respx.get("https://api.etherscan.io/v2/api").mock(
+            return_value=httpx.Response(200, json=_ok(rows))
+        )
+        # Must not raise — pre-v0.18.0 this would explode on the empty `to`.
+        out = adapter.fetch_native_outflows(seed, start_block=19000000)
+        # Normal outbound is preserved.
+        assert any(t["tx_hash"] == "0xkeep" for t in out)
+        # Contract-creation tx is filtered out (not a forensic money-flow event).
+        assert all(t["tx_hash"] != "0xcreate" for t in out)
+
+    @respx.mock
     def test_erc20_outflows_normalizes_token_metadata(self, adapter: EthereumAdapter) -> None:
         seed = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
         target = "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d"

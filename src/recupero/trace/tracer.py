@@ -356,6 +356,7 @@ def run_trace(
         policy=policy,
         incident_time=incident_time,
         config=config,
+        env=env,
         evidence_dir=case_dir / "tx_evidence",
         visited=visited,
         is_contract_cache=is_contract_cache,
@@ -375,6 +376,7 @@ def _continue_past_dex_and_bridges(
     label_store: LabelStore,
     price_client: CoinGeckoClient,
     policy: TracePolicy,
+    env: RecuperoEnv,
     incident_time: datetime,
     config: RecuperoConfig,
     evidence_dir: Path,
@@ -432,36 +434,72 @@ def _continue_past_dex_and_bridges(
         continuation_seeds.append((recipient, 1, "dex_swap_output"))
         visited.add(recipient_key)
 
-    # --- Same-chain bridge destinations ---
+    # --- Bridge handoffs (same-chain + cross-chain) ---
+    #
+    # v0.16.13 (round-9 forensic ARCH): cross-chain BFS state.
+    # When `RECUPERO_CROSS_CHAIN_CONTINUATION=1` is set AND the bridge
+    # handoff carries a decoded destination_chain that we have an
+    # adapter for, we run a shallow (depth=1) BFS on the destination
+    # chain using a freshly-instantiated adapter. The resulting
+    # transfers are tagged with the destination chain (each Transfer
+    # carries its own `chain` field) and merged into the case.
+    #
+    # Off by default because:
+    #   (a) the destination-chain trace burns extra Etherscan/Helius
+    #       quota that may not be budgeted for routine cases
+    #   (b) the case's `chain` stays as the source chain, but
+    #       individual transfers will carry destination chains —
+    #       downstream consumers that assume case.chain == transfer.chain
+    #       need to be tested against multi-chain output first
+    #
+    # The handoffs report ALWAYS surfaces the decoded destination
+    # (regardless of the env var), so operators can manually pursue
+    # the next chain even when the env var is off.
     try:
-        handoffs = identify_cross_chain_handoffs(case)
+        # Pass the source-chain adapter so handoff decoding can fetch
+        # tx receipts + decode bridge calldata.
+        handoffs = identify_cross_chain_handoffs(case, adapter=adapter)
     except Exception as exc:  # noqa: BLE001
         log.warning("bridge-handoff detection failed; skipping: %s", exc)
         handoffs = []
-    for handoff in handoffs:
-        dest_addr = getattr(handoff, "destination_address", None)
-        dest_chain = getattr(handoff, "destination_chain", None)
-        confidence = getattr(handoff, "confidence", "low")
-        if confidence != "high" or not dest_addr:
-            continue
-        # ONLY continue when destination is the same chain. Cross-
-        # chain hops need a separate adapter and multi-chain trace
-        # state — surface them in the handoffs report but don't
-        # mid-trace BFS across chains.
-        if dest_chain and dest_chain != chain.value:
-            log.info(
-                "cross-chain bridge handoff dest=%s on %s (current %s); "
-                "surfacing in handoffs report — multi-chain BFS deferred",
-                dest_addr, dest_chain, chain.value,
-            )
-            continue
-        dest_key = _address_visited_key(chain, dest_addr)
-        if dest_key in visited:
-            continue
-        continuation_seeds.append((dest_addr, 1, "bridge_handoff"))
-        visited.add(dest_key)
 
-    if not continuation_seeds:
+    cross_chain_continue = os.environ.get(
+        "RECUPERO_CROSS_CHAIN_CONTINUATION", "",
+    ).strip().lower() in ("1", "true", "yes", "on")
+
+    # Track cross-chain seeds separately because they need their OWN
+    # adapter (different chain) — they don't share the source-chain
+    # adapter's wave loop. Shape: list[(chain, address, depth_hint)].
+    cross_chain_seeds: list[tuple[Chain, Address, int]] = []
+
+    for handoff in handoffs:
+        # Same-chain destination from decoded calldata.
+        decoded_chain_str = handoff.decoded_destination_chain
+        decoded_addr = handoff.decoded_destination_address
+        decoded_conf = handoff.decoded_confidence
+        if decoded_conf != "high" or not decoded_addr:
+            continue
+        if decoded_chain_str and decoded_chain_str == chain.value:
+            # Same chain — use the existing continuation seed list.
+            dest_key = _address_visited_key(chain, decoded_addr)
+            if dest_key in visited:
+                continue
+            continuation_seeds.append((decoded_addr, 1, "bridge_handoff_samechain"))
+            visited.add(dest_key)
+        elif cross_chain_continue and decoded_chain_str:
+            # Cross-chain — only if env var allows AND we have an
+            # adapter for the destination chain.
+            try:
+                dest_chain = Chain(decoded_chain_str)
+            except (ValueError, KeyError):
+                log.info(
+                    "cross-chain handoff to unknown chain %r; skipping",
+                    decoded_chain_str,
+                )
+                continue
+            cross_chain_seeds.append((dest_chain, decoded_addr, 1))
+
+    if not continuation_seeds and not cross_chain_seeds:
         return
 
     # Cap to bound the additional fetch budget. Real cases rarely
@@ -507,14 +545,70 @@ def _continue_past_dex_and_bridges(
     for _from_addr, _depth, hop_transfers, _is_service in cont_results:
         new_transfers.extend(hop_transfers)
 
+    # v0.16.13: cross-chain continuation pass. Each destination chain
+    # needs its own adapter — group seeds by chain, instantiate one
+    # adapter per chain, run a shallow wave. Bounded to prevent
+    # quota explosion: at most RECUPERO_MAX_CROSS_CHAIN_SEEDS (default 10)
+    # across all destination chains.
+    if cross_chain_seeds:
+        max_xchain = int(os.environ.get(
+            "RECUPERO_MAX_CROSS_CHAIN_SEEDS", "10",
+        ))
+        if len(cross_chain_seeds) > max_xchain:
+            log.warning(
+                "cross-chain seeds capped at %d (had %d)",
+                max_xchain, len(cross_chain_seeds),
+            )
+            cross_chain_seeds = cross_chain_seeds[:max_xchain]
+        # Group by destination chain.
+        by_chain: dict[Chain, list[tuple[Address, int]]] = {}
+        for (dst_chain, dst_addr, depth_hint) in cross_chain_seeds:
+            by_chain.setdefault(dst_chain, []).append((dst_addr, depth_hint))
+
+        log.info(
+            "cross-chain BFS continuation: %d seed(s) across %d chain(s)",
+            len(cross_chain_seeds), len(by_chain),
+        )
+
+        for dst_chain, dst_seeds in by_chain.items():
+            try:
+                dst_adapter = ChainAdapter.for_chain(dst_chain, (config, env))
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "cross-chain continuation: failed to instantiate %s adapter: %s",
+                    dst_chain.value, exc,
+                )
+                continue
+            try:
+                xchain_results = _process_wave(
+                    dst_seeds,
+                    adapter=dst_adapter,
+                    label_store=label_store,
+                    price_client=price_client,
+                    policy=policy,
+                    incident_time=incident_time,
+                    config=config,
+                    evidence_dir=evidence_dir,
+                    concurrency=trace_concurrency,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "cross-chain continuation on %s failed: %s — skipping",
+                    dst_chain.value, exc,
+                )
+                continue
+            for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                new_transfers.extend(hop_transfers)
+
     if new_transfers:
         case.transfers = list(case.transfers) + new_transfers
         case.exchange_endpoints = _compute_exchange_endpoints(case.transfers)
         case.unlabeled_counterparties = _collect_unlabeled(case.transfers)
         case.total_usd_out = _sum_usd(case.transfers)
         log.info(
-            "BFS continuation added %d transfers from %d new seeds",
-            len(new_transfers), len(continuation_seeds),
+            "BFS continuation added %d transfers (same-chain seeds: %d, "
+            "cross-chain seeds: %d)",
+            len(new_transfers), len(continuation_seeds), len(cross_chain_seeds),
         )
 
 

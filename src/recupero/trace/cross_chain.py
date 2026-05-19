@@ -102,6 +102,21 @@ class CrossChainHandoff:
     block_time_iso: str
     follow_up_url: str | None
     destination_chain_candidates: tuple[str, ...]
+    # v0.16.13 (round-9 forensic ARCH): decoded destination from
+    # bridge_calldata.decode_bridge_calldata. Populated when an
+    # adapter is passed to identify_cross_chain_handoffs AND the
+    # bridge's protocol has a recognized method-signature decoder
+    # (Wormhole, Across, Stargate). None when:
+    #   * adapter not provided (default — keeps prior behavior)
+    #   * tx receipt fetch failed
+    #   * bridge protocol not in the decoder dispatch table
+    #   * method signature unrecognized
+    # When present + decoded_confidence == "high", the tracer's
+    # continuation pass can pursue the destination_address on the
+    # destination chain. See trace/tracer._continue_past_dex_and_bridges.
+    decoded_destination_chain: str | None = None
+    decoded_destination_address: str | None = None
+    decoded_confidence: str | None = None  # 'high' | 'medium' | 'low'
 
 
 def ingest_bridge_seeds(path: Path | None = None) -> dict[tuple[Chain, str], BridgeInfo]:
@@ -164,6 +179,8 @@ def ingest_bridge_seeds(path: Path | None = None) -> dict[tuple[Chain, str], Bri
 def identify_cross_chain_handoffs(
     case: Case,
     bridge_db: dict[tuple[Chain, str], BridgeInfo] | None = None,
+    *,
+    adapter: Any = None,
 ) -> list[CrossChainHandoff]:
     """Scan ``case.transfers`` for transfers that landed at a
     known bridge contract.
@@ -171,6 +188,14 @@ def identify_cross_chain_handoffs(
     Returns one ``CrossChainHandoff`` per detected transfer,
     sorted by ``amount_usd`` descending (largest first — investigator
     workflow priority).
+
+    v0.16.13 (round-9 forensic ARCH): when ``adapter`` is provided
+    AND the bridge has a recognized calldata decoder (Wormhole, Across,
+    Stargate), this function fetches the source tx's evidence receipt,
+    decodes the bridge call, and populates the handoff's
+    ``decoded_destination_*`` fields. The tracer's continuation pass
+    then uses those fields to enqueue the destination_address on the
+    destination_chain for a shallow follow-up trace.
 
     Defensive: returns ``[]`` if the bridge db can't be loaded.
     Never raises — failure to detect handoffs is a brief-quality
@@ -195,6 +220,41 @@ def identify_cross_chain_handoffs(
             continue
         seen_keys.add(dedup_key)
 
+        # v0.16.13: decode the bridge call to recover destination
+        # chain + address when possible. Best-effort — failures
+        # leave the decoded_* fields as None so the brief renders
+        # the legacy "destination_chain_candidates" framing.
+        decoded_chain: str | None = None
+        decoded_address: str | None = None
+        decoded_confidence: str | None = None
+        if adapter is not None:
+            try:
+                from recupero.trace.bridge_calldata import decode_bridge_calldata
+                receipt = adapter.fetch_evidence_receipt(t.tx_hash)
+                input_data = (
+                    receipt.raw_transaction.get("input")
+                    if receipt and receipt.raw_transaction else None
+                )
+                result = decode_bridge_calldata(
+                    bridge_protocol=info.protocol,
+                    input_data=input_data,
+                )
+                if result is not None:
+                    decoded_chain = result.destination_chain
+                    decoded_address = result.destination_address
+                    decoded_confidence = result.confidence
+                    log.info(
+                        "cross-chain handoff decoded: tx=%s bridge=%s "
+                        "→ chain=%s addr=%s (confidence=%s)",
+                        t.tx_hash[:12], info.name,
+                        decoded_chain, decoded_address, decoded_confidence,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.debug(
+                    "cross-chain decode failed for tx=%s bridge=%s: %s",
+                    t.tx_hash, info.name, exc,
+                )
+
         handoffs.append(CrossChainHandoff(
             source_address=t.from_address,
             source_chain=t.chain,
@@ -209,6 +269,9 @@ def identify_cross_chain_handoffs(
             block_time_iso=t.block_time.isoformat().replace("+00:00", "Z"),
             follow_up_url=info.follow_up_url,
             destination_chain_candidates=info.supports_to_chains,
+            decoded_destination_chain=decoded_chain,
+            decoded_destination_address=decoded_address,
+            decoded_confidence=decoded_confidence,
         ))
 
     handoffs.sort(
@@ -230,7 +293,7 @@ def handoffs_to_brief_section(
     """
     out: list[dict[str, Any]] = []
     for h in handoffs:
-        out.append({
+        entry: dict[str, Any] = {
             "source_chain": h.source_chain.value,
             "source_address": h.source_address,
             "tx_hash": h.source_tx_hash,
@@ -247,7 +310,15 @@ def handoffs_to_brief_section(
             "follow_up_url": h.follow_up_url,
             "destination_chain_candidates": list(h.destination_chain_candidates),
             "investigator_note": _build_investigator_note(h),
-        })
+        }
+        # v0.16.13: emit the decoded destination when present so the
+        # brief can render "→ Solana / 0xABC..." instead of a vague
+        # "supports Solana, Avalanche, Polygon" candidate list.
+        if h.decoded_destination_chain or h.decoded_destination_address:
+            entry["decoded_destination_chain"] = h.decoded_destination_chain
+            entry["decoded_destination_address"] = h.decoded_destination_address
+            entry["decoded_confidence"] = h.decoded_confidence
+        out.append(entry)
     return out
 
 

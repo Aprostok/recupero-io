@@ -24,6 +24,7 @@ so the pooler is happy.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -197,14 +198,65 @@ class WorkerDB:
             raise ValueError("worker_id is required")
         self._dsn = dsn
         self.worker_id = worker_id
+        # v0.16.13 (round-9 worker ARCH): optional connection pool.
+        # The default per-call connect pattern is fine for Supabase's
+        # transaction-mode pooler (port 6543) which handles connection
+        # multiplexing on its side. But under heavy claim-stress the
+        # client-side connect overhead adds up — each WorkerDB call
+        # opens + tears down a TCP+TLS handshake. A small connection
+        # pool amortizes this when concurrent operations hit the same
+        # WorkerDB instance (e.g., heartbeat thread + main run loop).
+        #
+        # Off by default — set RECUPERO_DB_POOL_SIZE > 0 to enable.
+        # Pool size 2-3 per worker keeps Supabase pool slots reasonable
+        # (Railway typically spawns 1-2 workers; 5-6 total slots
+        # consumed per project, well under Supabase's free-tier 60).
+        self._pool = None
+        pool_size_raw = os.environ.get("RECUPERO_DB_POOL_SIZE", "").strip()
+        if pool_size_raw:
+            try:
+                pool_size = int(pool_size_raw)
+            except ValueError:
+                pool_size = 0
+            if pool_size > 0:
+                try:
+                    from psycopg_pool import ConnectionPool
+                    self._pool = ConnectionPool(
+                        dsn,
+                        min_size=1,
+                        max_size=pool_size,
+                        kwargs={**self._PSYCOPG_KW, "autocommit": True},
+                        timeout=10,
+                        open=True,
+                    )
+                    log.info(
+                        "WorkerDB connection pool active: max_size=%d",
+                        pool_size,
+                    )
+                except ImportError:
+                    log.warning(
+                        "RECUPERO_DB_POOL_SIZE set but psycopg_pool not "
+                        "installed; falling back to per-call connect"
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "WorkerDB pool init failed: %s — falling back to "
+                        "per-call connect", exc,
+                    )
 
     @property
     def dsn(self) -> str:
         return self._dsn
 
     def close(self) -> None:
-        # No persistent connection to close.
-        pass
+        # Close the pool if we created one. Per-call connect mode is
+        # a no-op (each call closes its own connection).
+        if self._pool is not None:
+            try:
+                self._pool.close()
+            except Exception:  # noqa: BLE001
+                pass
+            self._pool = None
 
     def __enter__(self) -> WorkerDB:
         return self

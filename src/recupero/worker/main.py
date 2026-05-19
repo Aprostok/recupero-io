@@ -99,6 +99,22 @@ class _Heartbeat:
         self._stop.set()
         self._thread.join(timeout=self._interval + 5)
 
+    def stop_idempotent(self) -> None:
+        """Stop the heartbeat thread; safe to call multiple times.
+
+        v0.16.13 (round-9 worker ARCH): pipeline.run_one invokes this
+        before each final mark_* transition to eliminate the race
+        where the heartbeat thread fires AFTER worker_id has been
+        cleared, briefly making the row look "claimed but
+        heartbeating" to the reaper. The outer `finally: hb.stop()`
+        in main.py still runs as a safety net but is a no-op when
+        the thread already exited.
+        """
+        if not self._stop.is_set():
+            self._stop.set()
+            if self._thread.is_alive():
+                self._thread.join(timeout=self._interval + 5)
+
     def _run(self) -> None:
         # Wait the interval first; the claim already set the heartbeat to NOW().
         while not self._stop.wait(self._interval):
@@ -237,7 +253,16 @@ def run_forever(
                 hb = _Heartbeat(db, inv, heartbeat_sec)
                 hb.start()
                 try:
-                    run_one(inv, config=cfg, env=env, db=db, store=store)
+                    # v0.16.13: pass hb.stop_idempotent as a pre-finalize
+                    # hook so pipeline.run_one can shut the heartbeat
+                    # thread down BEFORE issuing the final mark_*
+                    # transition. Eliminates the race where the
+                    # heartbeat overwrites last_heartbeat_at AFTER
+                    # worker_id was cleared.
+                    run_one(
+                        inv, config=cfg, env=env, db=db, store=store,
+                        stop_heartbeat=hb.stop_idempotent,
+                    )
                 finally:
                     hb.stop()
 

@@ -31,7 +31,7 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -224,13 +224,23 @@ def run_one(
     env: RecuperoEnv,
     db: WorkerDB,
     store: SupabaseCaseStore,
+    stop_heartbeat: Callable[[], None] | None = None,
 ) -> None:
     """Drive one investigation forward as far as it can go.
 
     Catches all exceptions per stage and marks the row failed with the
     stage name + error text. Returns cleanly on review_required (worker
     drops the row; a future claim resumes after the UI approves).
+
+    v0.16.13 (round-9 worker ARCH): the optional ``stop_heartbeat``
+    callable is invoked IMMEDIATELY BEFORE any final mark_* transition
+    (mark_completed / mark_failed / mark_review_required). This
+    eliminates the race where the heartbeat thread updates
+    last_heartbeat_at AFTER mark_* clears worker_id, briefly making
+    the row look "claimed but heartbeating" to the reaper. main.py
+    passes the Heartbeat.stop() as this callable.
     """
+    _stop_hb = stop_heartbeat or (lambda: None)
     log.info("running investigation id=%s case_id=%s status=%s",
              inv.id, inv.case_id, inv.status)
 
@@ -250,6 +260,7 @@ def run_one(
             "placeholder — failing fast before burning API budget",
             inv.id, inv.seed_address,
         )
+        _stop_hb()
         db.mark_failed(
             inv.id,
             stage="setup",
@@ -284,6 +295,7 @@ def run_one(
         if case_data is None:
             # Don't crash silently — surface the FK referent missing so it
             # can be triaged from the admin UI.
+            _stop_hb()
             db.mark_failed(
                 inv.id, stage="setup",
                 error=f"cases row {inv.case_id} not found (FK violation)",
@@ -391,6 +403,7 @@ def run_one(
                 # Write the cost on the row before pausing — pass 2 won't
                 # have access to this local since the review checkpoint
                 # resets state. mark_built_package's COALESCE preserves it.
+                _stop_hb()
                 db.mark_review_required(inv.id, api_costs_usd=api_costs_usd)
                 log.info("investigation %s paused at review_required (api_costs=$%s)",
                          inv.id, api_costs_usd)
@@ -403,6 +416,7 @@ def run_one(
                     (case_dir / "brief_editorial.json").read_text(encoding="utf-8-sig")
                 )
                 if editorial.get("REVIEW_REQUIRED", False):
+                    _stop_hb()
                     db.mark_review_required(inv.id)
                     log.info("investigation %s still REVIEW_REQUIRED; pausing", inv.id)
                     return
@@ -450,14 +464,17 @@ def run_one(
                 lambda: _stage_build_package(inv, case_id_str,
                                              local_store, case_dir, store),
             )
+            _stop_hb()
             db.mark_completed(inv.id)
             log.info("investigation %s completed", inv.id)
 
     except _StageFailure as exc:
         log.exception("investigation %s failed at %s", inv.id, exc.stage)
+        _stop_hb()
         db.mark_failed(inv.id, stage=exc.stage, error=exc.message)
     except Exception as exc:  # noqa: BLE001
         log.exception("investigation %s failed (unstaged): %s", inv.id, exc)
+        _stop_hb()
         db.mark_failed(inv.id, stage="unknown", error=f"{type(exc).__name__}: {exc}")
 
 

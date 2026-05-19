@@ -164,6 +164,35 @@ def aggregate_evidence_mode_from_entries(
 # ---- Display helpers ---- #
 
 
+def canonical_address_key(addr: str | None) -> str:
+    """Return the canonical dict-key form of an address.
+
+    v0.17.5 (round-10 forensic HIGH): centralizes a heuristic that
+    was getting reinvented (slightly differently) in trace.risk_scoring,
+    screen.screener, trace.correlation, and dormant.finder.
+
+    Convention:
+      * EVM (``0x`` + 40 hex) → lower-cased canonical form. EIP-55
+        checksum case is a UI convention; the lower-cased form is
+        the only stable comparator.
+      * Everything else (Solana / Tron / Bitcoin base58, bech32,
+        synthetic Hyperliquid sentinels) → preserved as-given. Base58
+        IS case-sensitive on-chain, so lowercasing it silently
+        corrupts the address.
+
+    Empty / None → empty string. Callers should treat "" as
+    "not a valid address" and skip.
+    """
+    if not isinstance(addr, str):
+        return ""
+    s = addr.strip()
+    if not s:
+        return ""
+    if s.startswith("0x") and len(s) == 42:
+        return s.lower()
+    return s
+
+
 def short_addr(addr: str | None) -> str:
     """Truncate an address for display: 0xAAAAbb...XXXXyyyy -> 0xAAAAbb…yyyy.
 

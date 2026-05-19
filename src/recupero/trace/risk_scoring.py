@@ -131,32 +131,15 @@ class AddressRiskScore:
 
 
 def _canonical_address_key(addr: str) -> str:
-    """Normalize an address into the form used as a dict key.
+    """v0.17.5 — delegates to recupero._common.canonical_address_key.
 
-    v0.17.5 (round-10 forensic HIGH): pre-v0.17.5 every seed entry
-    was stored as ``addr.lower()`` which silently corrupted base58
-    chains (Solana / Tron / Bitcoin legacy) because base58 IS
-    case-sensitive on-chain. A sanctioned Solana wallet pasted as
-    ``BcrW1fJRwSoNYRBn5UxbVKsKsXdNRwGsQbf5KAcDuwfV`` would be
-    stored as ``bcrw1fjrwsonyrbn5uxbvkskskxdnrwgsqbf5kacduwfv`` —
-    and the screener's case-preserving lookup (correct per chain
-    semantics) would miss it.
-
-    Heuristic: only addresses that look EVM (``0x`` + 40 hex) get
-    lowercased. Everything else preserves case so base58 lookups
-    match. Bech32 (Bitcoin native segwit) is canonical-lowercase per
-    BIP173 so the case-preserved form is also lowercased — a no-op.
+    Kept as a module-local wrapper so existing imports
+    (``from recupero.trace.risk_scoring import _canonical_address_key``)
+    still resolve, but the implementation now lives in _common where
+    screen.screener, trace.correlation, and dormant.finder can share it.
     """
-    if not isinstance(addr, str):
-        return ""
-    s = addr.strip()
-    if not s:
-        return ""
-    if s.startswith("0x") and len(s) == 42:
-        # All chars after 0x are expected to be hex — lowercase to
-        # canonical form.
-        return s.lower()
-    return s
+    from recupero._common import canonical_address_key
+    return canonical_address_key(addr)
 
 
 def load_high_risk_db(

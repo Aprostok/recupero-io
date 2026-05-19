@@ -49,6 +49,14 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+# v0.17.5 (round-10 forensic HIGH): canonical address keying.
+# EVM → lower, base58 → preserve case. Pre-v0.17.5 every site here
+# called ``addr.lower()`` directly, mangling Solana / Tron / Bitcoin
+# entries written into address_observations. A correlation lookup
+# from a future case that pastes the canonical mixed-case form
+# would miss every prior sighting.
+from recupero._common import canonical_address_key as _ck
+
 if TYPE_CHECKING:  # pragma: no cover
     from recupero.models import Case
 
@@ -165,14 +173,14 @@ def build_observations(
     for t in case.transfers:
         chain = t.token.chain.value if hasattr(t.token.chain, "value") else str(t.token.chain)
         for raw_addr in (t.from_address, t.to_address):
-            addr = raw_addr.lower()
+            addr = _ck(raw_addr)
             chains_seen.setdefault(addr, chain)
             usd = t.usd_value_at_tx or Decimal("0")
             usd_flow_by_addr[addr] = usd_flow_by_addr.get(addr, Decimal("0")) + usd
 
     # Special-case the seed address — always the victim, regardless
     # of whether it appears in any transfer (e.g. zero-value cases).
-    victim_addr = (case.seed_address or "").lower()
+    victim_addr = _ck(case.seed_address or "")
     if victim_addr and victim_addr not in chains_seen:
         chains_seen[victim_addr] = (
             case.chain.value if hasattr(case.chain, "value") else str(case.chain)
@@ -190,7 +198,7 @@ def build_observations(
                 # high-severity ones.
                 if getattr(sig, "severity", 0) >= 3:
                     for a in getattr(sig, "addresses", []) or []:
-                        drainer_attributed.add(a.lower())
+                        drainer_attributed.add(_ck(a))
         except Exception:  # noqa: BLE001
             # Defensive — if drainer_findings doesn't conform to the
             # expected shape, just skip this enrichment.
@@ -201,7 +209,7 @@ def build_observations(
 
     def _emit(addr: str, role: str, label_cat: str | None = None,
               label_name: str | None = None) -> None:
-        addr = addr.lower()
+        addr = _ck(addr)
         if not addr:
             return
         key = (addr, role)
@@ -251,7 +259,7 @@ def build_observations(
         cp = t.counterparty
         if cp is None:
             continue
-        addr = (cp.address or "").lower()
+        addr = _ck(cp.address or "")
         if not addr or addr in counterparties_seen:
             continue
         counterparties_seen[addr] = cp
@@ -275,7 +283,7 @@ def build_observations(
     # bucketed gets 'high_risk_destination' (we know it's freezable
     # → exchange/issuer deposit).
     for addr in freeze_targets_by_addr.keys():
-        _emit(addr.lower(), "exchange_deposit")
+        _emit(_ck(addr), "exchange_deposit")
 
     # 4. Drainer-attributed addresses we haven't already labeled get
     # the 'drainer_contract' role even if they had no counterparty.

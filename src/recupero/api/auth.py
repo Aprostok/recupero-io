@@ -14,6 +14,7 @@ dependency pass through without a key. NEVER set in production.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 import threading
@@ -47,15 +48,38 @@ _buckets: dict[str, _Bucket] = {}
 _buckets_lock = threading.Lock()
 
 
+# v0.18.2 (round-11 api-CRIT-002): cache the parsed key map at
+# module-load so each request doesn't re-parse RECUPERO_API_KEYS
+# from env. Cache invalidates when the env var changes (sha256
+# fingerprint of the raw string), so operators can rotate keys via
+# Railway redeploys without a process restart. Locked for thread
+# safety since FastAPI may serve concurrent requests on multiple
+# threads / async workers.
+_keys_cache: dict[str, str] = {}
+_keys_cache_fingerprint: str | None = None
+_keys_cache_lock = threading.Lock()
+
+
 def _load_api_keys() -> dict[str, str]:
-    """Parse RECUPERO_API_KEYS env var into {name: secret} map.
+    """Parse RECUPERO_API_KEYS env var into {secret: name} map.
 
     Format: 'name1:secret1,name2:secret2'. Whitespace stripped.
     Empty pairs silently skipped.
+
+    v0.18.2 (round-11 api-CRIT-002): caches the parsed map keyed on
+    a hash of the raw env value. Subsequent calls return the cache
+    until the env var changes — Railway redeploys with a new
+    RECUPERO_API_KEYS will produce a new fingerprint and reparse.
     """
+    import hashlib
     raw = os.environ.get("RECUPERO_API_KEYS", "").strip()
     if not raw:
         return {}
+    fingerprint = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    with _keys_cache_lock:
+        global _keys_cache_fingerprint
+        if fingerprint == _keys_cache_fingerprint and _keys_cache:
+            return dict(_keys_cache)
     out: dict[str, str] = {}
     for pair in raw.split(","):
         pair = pair.strip()
@@ -66,7 +90,35 @@ def _load_api_keys() -> dict[str, str]:
         secret = secret.strip()
         if name and secret:
             out[secret] = name  # keyed by secret for O(1) lookup
+    with _keys_cache_lock:
+        _keys_cache.clear()
+        _keys_cache.update(out)
+        _keys_cache_fingerprint = fingerprint
     return out
+
+
+def _find_api_key_constant_time(provided: str) -> str | None:
+    """Match `provided` against configured secrets in constant time.
+
+    v0.18.2 (round-11 sec-HIGH-004): pre-v0.18.2 the lookup was
+    `dict.get(provided)` which uses Python's string-equality
+    short-circuit — observable timing differences on short prefix
+    mismatches enable a remote-timing side-channel attacker to
+    learn the first 1-2 bytes of any valid API key over millions
+    of probes. Now: iterate every configured secret with
+    `hmac.compare_digest` and return the name only on full match.
+    For <100 keys this is microseconds and reveals nothing.
+    """
+    keys = _load_api_keys()
+    if not keys:
+        return None
+    # Probe every key; do NOT short-circuit on first match.
+    matched: str | None = None
+    for secret, name in keys.items():
+        if hmac.compare_digest(secret, provided):
+            matched = name
+            # No break — keep iterating to maintain constant work.
+    return matched
 
 
 def _load_rate_limits() -> dict[str, float]:
@@ -164,8 +216,11 @@ async def require_api_key(request: Request) -> str:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing X-Recupero-API-Key header",
         )
-    keys = _load_api_keys()
-    key_name = keys.get(key_secret)
+    # v0.18.2 (round-11 sec-HIGH-004): constant-time match.
+    # See `_find_api_key_constant_time` for the timing-side-channel
+    # rationale. Defense against a remote attacker who can sample
+    # response-time variance to learn prefix bytes of valid keys.
+    key_name = _find_api_key_constant_time(key_secret)
     if key_name is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

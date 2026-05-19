@@ -240,17 +240,27 @@ async def correlation_endpoint(
     import os
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
     if not dsn:
+        # v0.18.2 (round-11 sec-HIGH-005, api-MED-002): generic detail.
+        # Pre-v0.18.2 the message leaked the internal env-var name.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="correlation DB not configured (SUPABASE_DB_URL unset)",
+            detail="correlation lookup unavailable",
         )
     try:
         from recupero.trace.correlation import lookup_correlations
         results = lookup_correlations([address], dsn=dsn)
     except Exception as e:  # noqa: BLE001
+        # v0.18.2 (round-11 sec-HIGH-005): psycopg's exception messages
+        # routinely embed the full DSN with embedded password
+        # ("FATAL: password authentication failed for user 'postgres'
+        # at host 'db.xxxxxx.supabase.co:6543'"). Pre-v0.18.2 we echoed
+        # that verbatim to the API consumer. Now: log server-side
+        # (where _redact strips the DSN) but return a generic detail
+        # to the wire.
+        log.warning("correlation lookup failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"correlation lookup failed: {e}",
+            detail="correlation lookup failed",
         ) from e
     found = results.get(address.lower()) or results.get(address)
     if found is None:

@@ -217,12 +217,25 @@
 <svg id="graph"></svg>
 <div id="tooltip"></div>
 
-<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"
+        integrity="sha384-AhwQXVdEjW4kDb59qmxIEnHcZuLqLDjEPiD3v1qXmONpqDqHE4mO6Em5Pf6FRY3w"
+        crossorigin="anonymous"></script>
+{# v0.18.2 (round-11 sec-CRIT-001 + CRIT-002): JSON-in-<script> XSS
+   was the canonical "json.dumps directly into <script>" shape — any
+   on-chain label containing `</script>` (attacker-controlled
+   Etherscan address tags, user-submitted labels in future push)
+   breaks out of the script block → arbitrary JS in operator's
+   browser on admin-UI open. jsDelivr CDN load had no SRI hash —
+   CDN compromise → operator-browser RCE. Fixed: SRI added; JSON
+   embedded as type="application/json" (browsers do NOT execute
+   these) and JSON.parse'd at runtime. The graph_data_json producer
+   in graph_ui.py also escapes </script> sequences before embed. #}
+<script id="graph-data" type="application/json">{{ graph_data_json|safe }}</script>
 <script>
 // Embedded case data — no external API calls beyond the D3 library
 // load above. This file is fully self-contained and safe to email,
 // attach, or open offline (after D3 caches).
-const graphData = {{ graph_data_json|safe }};
+const graphData = JSON.parse(document.getElementById('graph-data').textContent);
 
 const svg = d3.select("#graph");
 const tooltip = d3.select("#tooltip");

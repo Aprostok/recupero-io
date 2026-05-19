@@ -270,10 +270,23 @@ def render_graph_html(
         loader=FileSystemLoader(_TEMPLATES_DIR),
         autoescape=select_autoescape(["html", "j2"]),
     )
+    # v0.18.2 (round-11 sec-CRIT-001): defense-in-depth escape for
+    # `</script>` substrings in node labels. The template now embeds
+    # graph_data inside `<script type="application/json">` which
+    # browsers don't execute, but escaping the dangerous sequence at
+    # the data layer too means even a non-strict HTML parser can't be
+    # tricked. Also escapes HTML comment sequences <!-- / --> which
+    # can interact with old HTML4 quirks.
     template = env.get_template("interactive_graph.html.j2")
+    safe_json = (
+        json.dumps(graph_data, separators=(",", ":"))
+        .replace("</", "<\\/")
+        .replace("<!--", "<\\!--")
+        .replace("-->", "-\\->")
+    )
     html = template.render(
         title=title or f"Fund-flow graph — {graph_data['meta']['case_id']}",
-        graph_data_json=json.dumps(graph_data, separators=(",", ":")),
+        graph_data_json=safe_json,
         meta=graph_data["meta"],
     )
     output_path.write_text(html, encoding="utf-8")

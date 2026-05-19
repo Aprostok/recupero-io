@@ -235,13 +235,19 @@ def test_correlations_503_when_dsn_unset(
     client: TestClient, auth_bypass_env: None
 ) -> None:
     """No SUPABASE_DB_URL → 503 (correlation lookup is unavailable
-    rather than returning a misleading 'not found')."""
+    rather than returning a misleading 'not found').
+
+    v0.18.2 (round-11 sec-HIGH-005): detail no longer leaks the
+    internal env-var name `SUPABASE_DB_URL`. Generic "unavailable"
+    message; server-side log still surfaces specifics."""
     prev = os.environ.get("SUPABASE_DB_URL")
     os.environ.pop("SUPABASE_DB_URL", None)
     try:
         r = client.get("/v1/correlations/0xabc")
         assert r.status_code == 503
-        assert "SUPABASE_DB_URL" in r.json()["detail"]
+        # Detail should NOT leak the env-var name.
+        assert "SUPABASE_DB_URL" not in r.json()["detail"]
+        assert "unavailable" in r.json()["detail"].lower()
     finally:
         if prev is not None:
             os.environ["SUPABASE_DB_URL"] = prev

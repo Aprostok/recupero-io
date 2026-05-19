@@ -116,11 +116,28 @@ def generate_daily_digest(
         # than re-defining the allowlist.
         from recupero.worker._deliverables import _subprocess_safe_env
         candidate = html_path.with_suffix(".pdf")
+        # v0.18.2 (round-11 sec-HIGH-008): SSRF lockdown — see
+        # _deliverables._html_to_pdf for the rationale. WeasyPrint
+        # default url_fetcher follows arbitrary URLs in HTML; cron
+        # is just as exposed as the main-worker render path.
         result = subprocess.run(
             [
                 sys.executable, "-c",
-                "import sys; from weasyprint import HTML; "
-                "HTML(filename=sys.argv[1]).write_pdf(sys.argv[2])",
+                "import os, sys\n"
+                "from urllib.parse import urlparse\n"
+                "from weasyprint import HTML\n"
+                "from weasyprint.urls import default_url_fetcher\n"
+                "_base = os.path.dirname(os.path.abspath(sys.argv[1]))\n"
+                "def _no_net(url, timeout=10, ssl_context=None):\n"
+                "    p = urlparse(url)\n"
+                "    if p.scheme in ('http','https','ftp'):\n"
+                "        raise ValueError('remote fetch refused')\n"
+                "    if p.scheme in ('','file'):\n"
+                "        path = os.path.abspath(p.path or url)\n"
+                "        if not path.startswith(_base):\n"
+                "            raise ValueError('out-of-tree path')\n"
+                "    return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)\n"
+                "HTML(filename=sys.argv[1], url_fetcher=_no_net).write_pdf(sys.argv[2])",
                 str(html_path), str(candidate),
             ],
             capture_output=True, timeout=90.0,

@@ -219,7 +219,14 @@ def test_render_html_includes_chain_legend() -> None:
 
 def test_embedded_graph_data_is_valid_json() -> None:
     """The rendered HTML embeds graph data as a JSON literal — it
-    must parse back as valid JSON when extracted."""
+    must parse back as valid JSON when extracted.
+
+    v0.18.2 (round-11 sec-CRIT-001): the embed shape changed from
+    `const graphData = {...};` (inside <script>, XSS vulnerable) to
+    `<script id="graph-data" type="application/json">{...}</script>`
+    (browser does NOT execute these; JSON.parse'd at runtime). The
+    JSON content is identical; only the wrapping changed.
+    """
     transfers = [_transfer(from_addr=VICTIM, to_addr=PERP, usd=Decimal("1234.56"))]
     case = _case(transfers)
     graph_data = build_graph_data(case)
@@ -227,17 +234,60 @@ def test_embedded_graph_data_is_valid_json() -> None:
         out_path = Path(tmp) / "graph.html"
         render_graph_html(graph_data, out_path)
         html = out_path.read_text(encoding="utf-8")
-        # The data is between "const graphData = " and ";"
-        marker = "const graphData = "
-        idx = html.find(marker)
-        assert idx >= 0, "graphData literal not found in HTML"
-        after = html[idx + len(marker):]
-        # Find the matching ';' — the data is a single JSON literal
-        # with no trailing newline before the semicolon.
-        json_text = after.split(";\n", 1)[0]
+        # Extract between the new application/json script tag.
+        import re
+        match = re.search(
+            r'<script id="graph-data" type="application/json">(.*?)</script>',
+            html, re.DOTALL,
+        )
+        assert match is not None, (
+            "graph data not found inside application/json script block "
+            "— v0.18.2 XSS-mitigation embed shape regressed"
+        )
+        json_text = match.group(1)
         parsed = json.loads(json_text)
         assert parsed["meta"]["case_id"] == "V-CFI01"
         assert len(parsed["nodes"]) == 2  # victim + perp
+
+
+def test_graph_data_escapes_script_breakout() -> None:
+    """v0.18.2 (round-11 sec-CRIT-001): the data-layer escape
+    replaces `</script>` substrings with `<\\/script>` so even a
+    non-strict HTML parser that ignored the application/json
+    type can't be tricked. We pin this defense-in-depth here so
+    a future refactor doesn't accidentally remove it.
+    """
+    # Build a Label with the dangerous substring and inject via
+    # counterparty_label so it flows into the graph_data labels.
+    xss_label = Label(
+        address=PERP,
+        name="</script><img src=x>",  # XSS attempt in label
+        category=LabelCategory.exchange_deposit,
+        source="test",
+        confidence="high",
+        added_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    transfers = [_transfer(
+        from_addr=VICTIM, to_addr=PERP, usd=Decimal("100"),
+        counterparty_label=xss_label,
+    )]
+    case = _case(transfers)
+    graph_data = build_graph_data(case)
+    with TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "graph.html"
+        render_graph_html(graph_data, out_path)
+        html = out_path.read_text(encoding="utf-8")
+        # The dangerous substring must be escaped in the embedded JSON.
+        import re
+        match = re.search(
+            r'<script id="graph-data" type="application/json">(.*?)</script>',
+            html, re.DOTALL,
+        )
+        assert match is not None
+        # The escaped form `<\/script>` should NOT contain a literal `</script>`.
+        assert "</script>" not in match.group(1), (
+            "unescaped </script> inside graph-data block — XSS regression"
+        )
 
 
 # ---- GraphNode / GraphEdge to_dict ---- #

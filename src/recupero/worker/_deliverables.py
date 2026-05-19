@@ -782,9 +782,34 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
     #
     # The subprocess script is built as a sys.argv passthrough so the
     # render stays isolated from the parent worker's address space.
+    #
+    # v0.18.2 (round-11 sec-HIGH-008): SSRF lockdown. Pre-v0.18.2
+    # WeasyPrint's default url_fetcher resolved any <img src>,
+    # @font-face url(), or <link href> over HTTP — including
+    # http://169.254.169.254 (cloud metadata service), http://railway.internal,
+    # http://localhost:8080. The editorial AI is a prompt-injection
+    # vector controlling text in INCIDENT_NARRATIVE_*; an attacker
+    # who slipped <img src=http://169.254.169.254/...> into editorial
+    # JSON would have WeasyPrint fetch IAM credentials. New: refuse
+    # any URL scheme outside `file://` rooted at the case_dir.
     script = (
         "import os, sys\n"
         "from weasyprint import HTML\n"
+        "from urllib.parse import urlparse\n"
+        "\n"
+        "_case_dir = os.path.dirname(os.path.abspath(sys.argv[1]))\n"
+        "\n"
+        "def _no_network_fetcher(url, timeout=10, ssl_context=None):\n"
+        "    p = urlparse(url)\n"
+        "    if p.scheme in ('http', 'https', 'ftp'):\n"
+        "        raise ValueError(f'WeasyPrint refused remote fetch: {url}')\n"
+        "    if p.scheme in ('', 'file'):\n"
+        "        path = os.path.abspath(p.path or url)\n"
+        "        if not path.startswith(_case_dir):\n"
+        "            raise ValueError(f'WeasyPrint refused out-of-tree path: {url}')\n"
+        "    from weasyprint.urls import default_url_fetcher\n"
+        "    return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)\n"
+        "\n"
         "variant = os.environ.get('RECUPERO_PDF_VARIANT', '').strip()\n"
         "kwargs = {\n"
         "    'pdf_identifier': sys.argv[1].encode('utf-8'),\n"
@@ -792,7 +817,8 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
         "}\n"
         "if variant:\n"
         "    kwargs['pdf_variant'] = variant\n"
-        "HTML(filename=sys.argv[1]).write_pdf(sys.argv[2], **kwargs)\n"
+        "HTML(filename=sys.argv[1], url_fetcher=_no_network_fetcher)"
+        ".write_pdf(sys.argv[2], **kwargs)\n"
     )
     _render_pdf_in_subprocess(
         script=script,
@@ -830,10 +856,26 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
         tmp.write(html_shell)
         shell_path = Path(tmp.name)
     try:
+        # v0.18.2 (round-11 sec-HIGH-008): same SSRF lockdown as the
+        # HTML→PDF path. SVG documents can carry <image href="http://...">
+        # which WeasyPrint would otherwise fetch.
         _render_pdf_in_subprocess(
             script=(
-                "import sys; from weasyprint import HTML; "
-                "HTML(filename=sys.argv[1], base_url=sys.argv[3])"
+                "import os, sys\n"
+                "from urllib.parse import urlparse\n"
+                "from weasyprint import HTML\n"
+                "from weasyprint.urls import default_url_fetcher\n"
+                "_base = os.path.abspath(sys.argv[3])\n"
+                "def _no_net(url, timeout=10, ssl_context=None):\n"
+                "    p = urlparse(url)\n"
+                "    if p.scheme in ('http','https','ftp'):\n"
+                "        raise ValueError(f'remote fetch refused: {url}')\n"
+                "    if p.scheme in ('','file'):\n"
+                "        path = os.path.abspath(p.path or url)\n"
+                "        if not path.startswith(_base):\n"
+                "            raise ValueError(f'out-of-tree path: {url}')\n"
+                "    return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)\n"
+                "HTML(filename=sys.argv[1], base_url=sys.argv[3], url_fetcher=_no_net)"
                 ".write_pdf(sys.argv[2])"
             ),
             args=[str(shell_path), str(pdf_path), str(svg_path.parent)],

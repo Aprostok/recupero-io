@@ -48,35 +48,49 @@ def _outcome_row(
 
 
 def test_single_letter_with_full_freeze_outcome() -> None:
-    """One letter, one full_freeze outcome → p_any_freeze = 1.0."""
+    """v0.17.1 (QUANT-1): with the Beta(2, 2) prior, one full_freeze
+    observation produces posterior mean (2 + 1) / (2 + 2 + 1) = 0.6,
+    NOT the pre-v0.17.1 frequency MLE of 1.0. The Beta posterior
+    refuses to overcommit on a single data point — which is exactly
+    why we adopted it (MLE collapses to 0.0 / 1.0 on small samples
+    and over-promises in legal documents)."""
     rows = [_outcome_row(outcome_type="full_freeze")]
     priors = compute_priors_from_outcomes(rows)
     assert ("Tether", "standard") in priors
     p = priors[("Tether", "standard")]
     assert p.sample_size == 1
-    assert p.p_any_freeze == 1.0
-    assert p.p_full_freeze == 1.0
-    assert p.p_returned_to_victim == 0.0  # not yet returned
+    # Beta(2+1, 2+0) posterior mean = 3/5 = 0.6
+    assert p.p_any_freeze == pytest.approx(0.6, abs=0.001)
+    assert p.p_full_freeze == pytest.approx(0.6, abs=0.001)
+    # No win observation → Beta(2+0, 2+1) = 2/5 = 0.4
+    assert p.p_returned_to_victim == pytest.approx(0.4, abs=0.001)
 
 
 def test_declined_outcome_counts_as_no_freeze() -> None:
+    """v0.17.1: Beta(2, 2) posterior with 0 wins, 1 loss → 2/5 = 0.4
+    (NOT 0.0). The prior 0.0 was overconfident — it implied "this
+    issuer will NEVER freeze" from a single data point."""
     rows = [_outcome_row(outcome_type="declined")]
     priors = compute_priors_from_outcomes(rows)
     p = priors[("Tether", "standard")]
-    assert p.p_any_freeze == 0.0
+    assert p.p_any_freeze == pytest.approx(0.4, abs=0.001)
 
 
 def test_returned_to_victim_is_win() -> None:
+    """v0.17.1: Beta posterior produces 0.6 for both fields with n=1."""
     rows = [_outcome_row(outcome_type="returned_to_victim")]
     priors = compute_priors_from_outcomes(rows)
     p = priors[("Tether", "standard")]
-    assert p.p_any_freeze == 1.0
-    assert p.p_returned_to_victim == 1.0
+    assert p.p_any_freeze == pytest.approx(0.6, abs=0.001)
+    assert p.p_returned_to_victim == pytest.approx(0.6, abs=0.001)
 
 
 def test_strongest_outcome_per_letter_wins() -> None:
     """A letter that first gets 'acknowledged' then 'full_freeze' →
-    counts as full_freeze (the stronger outcome)."""
+    counts as full_freeze (the stronger outcome).
+
+    v0.17.1: with Beta(2, 2) prior + 1 win, posterior = 3/5 = 0.6.
+    """
     letter_id = uuid4()
     rows = [
         _outcome_row(letter_id=letter_id, outcome_type="acknowledged"),
@@ -84,14 +98,18 @@ def test_strongest_outcome_per_letter_wins() -> None:
     ]
     priors = compute_priors_from_outcomes(rows)
     p = priors[("Tether", "standard")]
-    # One letter, one data point — the strongest outcome.
     assert p.sample_size == 1
-    assert p.p_any_freeze == 1.0
-    assert p.p_full_freeze == 1.0
+    assert p.p_any_freeze == pytest.approx(0.6, abs=0.001)
+    assert p.p_full_freeze == pytest.approx(0.6, abs=0.001)
 
 
 def test_multiple_letters_aggregate() -> None:
-    """5 letters: 3 frozen, 2 declined → p_any_freeze = 0.6."""
+    """5 letters: 3 frozen, 2 declined.
+
+    v0.17.1: Beta(2 + 3, 2 + 2) posterior = 5/9 ≈ 0.556 (vs MLE 0.6).
+    The prior pulls the estimate slightly toward 0.5; data dominates
+    at this sample size but the floor/ceiling don't collapse.
+    """
     rows = []
     for _ in range(3):
         rows.append(_outcome_row(outcome_type="full_freeze"))
@@ -100,16 +118,21 @@ def test_multiple_letters_aggregate() -> None:
     priors = compute_priors_from_outcomes(rows)
     p = priors[("Tether", "standard")]
     assert p.sample_size == 5
-    assert p.p_any_freeze == 0.6
+    # Beta(5, 4) posterior mean = 5/9 ≈ 0.5556
+    assert p.p_any_freeze == pytest.approx(5 / 9, abs=0.001)
 
 
 def test_partial_freeze_counts_as_freeze() -> None:
-    """partial_freeze → counts as any_freeze=true."""
+    """partial_freeze → counts as any_freeze=true.
+
+    v0.17.1: Beta(2+1, 2+0) posterior = 0.6 (NOT 1.0). And since
+    it's partial (not full), p_full_freeze gets 0 wins → 0.4.
+    """
     rows = [_outcome_row(outcome_type="partial_freeze")]
     p = compute_priors_from_outcomes(rows)[("Tether", "standard")]
-    assert p.p_any_freeze == 1.0
-    assert p.p_full_freeze == 0.0  # not full
-    assert p.p_returned_to_victim == 0.0
+    assert p.p_any_freeze == pytest.approx(0.6, abs=0.001)
+    assert p.p_full_freeze == pytest.approx(0.4, abs=0.001)  # not full
+    assert p.p_returned_to_victim == pytest.approx(0.4, abs=0.001)
 
 
 def test_per_issuer_buckets_separate() -> None:
@@ -119,14 +142,19 @@ def test_per_issuer_buckets_separate() -> None:
         _outcome_row(issuer="Circle", outcome_type="declined"),
     ]
     priors = compute_priors_from_outcomes(rows)
-    assert priors[("Tether", "standard")].p_any_freeze == 1.0
-    assert priors[("Circle", "standard")].p_any_freeze == 0.0
+    # Tether: 1 win, 0 loss → Beta(3, 2) = 0.6
+    # Circle: 0 win, 1 loss → Beta(2, 3) = 0.4
+    assert priors[("Tether", "standard")].p_any_freeze == pytest.approx(0.6, abs=0.001)
+    assert priors[("Circle", "standard")].p_any_freeze == pytest.approx(0.4, abs=0.001)
 
 
 def test_per_letter_language_buckets_separate() -> None:
     """'standard' and 'le_backed' letters at Tether get separate
     priors — this is how the operator learns 'does FBI backing
-    materially help?'."""
+    materially help?'.
+
+    v0.17.1: Beta posterior means 0.4 / 0.6 instead of 0.0 / 1.0.
+    """
     rows = [
         _outcome_row(
             issuer="Tether", letter_language="standard",
@@ -138,8 +166,51 @@ def test_per_letter_language_buckets_separate() -> None:
         ),
     ]
     priors = compute_priors_from_outcomes(rows)
-    assert priors[("Tether", "standard")].p_any_freeze == 0.0
-    assert priors[("Tether", "le_backed")].p_any_freeze == 1.0
+    assert priors[("Tether", "standard")].p_any_freeze == pytest.approx(0.4, abs=0.001)
+    assert priors[("Tether", "le_backed")].p_any_freeze == pytest.approx(0.6, abs=0.001)
+
+
+def test_beta_posterior_mean_helper_known_values() -> None:
+    """Sanity-check the Beta-Binomial conjugate math.
+
+    Beta(α+wins, β+losses) posterior mean = (α+wins) / (α+β+n) where
+    n = wins + losses. With α=β=2:
+      * 0 wins, 0 trials  → prior mean = 2/4 = 0.5
+      * 0 wins, 1 trial   → Beta(2, 3), mean = 2/5 = 0.4
+      * 1 win, 1 trial    → Beta(3, 2), mean = 3/5 = 0.6
+      * 10 wins, 10 trials (ALL wins) → Beta(12, 2), mean = 12/14 ≈ 0.857
+        — the prior pulls back from 1.0 toward 0.5 with weight 4, so
+        even "perfect track record" yields 86%, not overconfident 100%.
+      * 5 wins, 10 trials (BALANCED) → Beta(7, 7), mean = 0.5
+      * 19 wins, 20 trials → Beta(21, 3), mean = 21/24 ≈ 0.875
+        (NOT MLE 0.95 — the prior still has visible weight at this n).
+    """
+    from recupero.freeze_learning.recorder import _beta_posterior_mean
+    assert _beta_posterior_mean(0, 0) == pytest.approx(0.5, abs=0.001)
+    assert _beta_posterior_mean(0, 1) == pytest.approx(0.4, abs=0.001)
+    assert _beta_posterior_mean(1, 1) == pytest.approx(0.6, abs=0.001)
+    assert _beta_posterior_mean(10, 10) == pytest.approx(12 / 14, abs=0.001)
+    assert _beta_posterior_mean(5, 10) == pytest.approx(0.5, abs=0.001)
+    assert _beta_posterior_mean(19, 20) == pytest.approx(21 / 24, abs=0.001)
+    # Edge case: degenerate input (more wins than trials) falls back
+    # to the prior mean instead of exploding.
+    assert _beta_posterior_mean(5, 2) == pytest.approx(0.5, abs=0.001)
+    assert _beta_posterior_mean(-1, 5) == pytest.approx(0.5, abs=0.001)
+
+
+def test_beta_credible_interval_bounds_sanity() -> None:
+    """Beta credible interval must satisfy low <= mean <= high
+    and the bounds must lie in [0, 1]."""
+    from recupero.freeze_learning.recorder import (
+        _beta_posterior_mean, beta_credible_interval,
+    )
+    for wins, n in [(0, 1), (1, 1), (5, 10), (50, 100), (95, 100)]:
+        low, high = beta_credible_interval(wins, n, level=0.90)
+        mean = _beta_posterior_mean(wins, n)
+        assert 0.0 <= low <= mean <= high <= 1.0
+        # Wider interval for smaller n
+        assert (high - low) > 0
+
 
 
 def test_response_time_computed_from_timestamps() -> None:

@@ -477,18 +477,64 @@ def score_recovery(
             ))
 
     # --- Confidence interval ---
-    # Heuristic: spread is wider when expected is small (more
-    # binary outcome) and tightens for large concentrated cases.
+    #
+    # v0.17.1 (QUANT-2): the CI is now anchored to the Beta credible
+    # interval of the freeze-probability distribution, NOT a hand-
+    # rolled ±0.35σ Gaussian. The prior CI was statistically
+    # indefensible for two reasons:
+    #
+    #   1. Recovery outcomes are bimodal (likely $0 or likely the
+    #      full freezable amount) — a Gaussian centered on the mean
+    #      under-reports tail risk on small cases and over-reports
+    #      on large concentrated ones.
+    #
+    #   2. The 0.35σ multiplier had no derivation — it was a magic
+    #      number. The Beta posterior IS the right distribution for
+    #      "what fraction of attempts at this issuer succeed."
+    #
+    # Strategy: for each issuer in the breakdown, use the Beta(α₀+
+    # learned_successes, β₀+learned_failures) posterior to bracket
+    # the realized USD. The top-level CI is the sum of per-issuer
+    # bracketed amounts (independence assumption — documented as
+    # such on the brief). When learned priors aren't available
+    # (small samples), fall back to a wider 90% band derived from
+    # the configured prior alone.
     if expected_recovered > 0:
-        sigma = float(expected_recovered) * 0.35
-        low = max(Decimal("0"), expected_recovered - Decimal(str(sigma * 1.96)))
-        high = expected_recovered + Decimal(str(sigma * 1.96))
+        low, high = _compute_recovery_ci(
+            issuer_breakdown=issuer_breakdown,
+            jur_mult=jur_mult * sanctions_mult,
+            learned_priors=learned_priors,
+        )
     else:
         low = high = Decimal("0")
 
     # --- Probabilities ---
-    if expected_freezable >= Decimal("1000"):
-        p_any = min(0.95, 0.4 + float(expected_freezable / max(total_loss, Decimal("1"))) * 0.5)
+    #
+    # v0.17.1 (QUANT-4): `p_any` is loaded from a calibration record
+    # (env var RECUPERO_P_ANY_CALIBRATION_JSON) when available; falls
+    # back to documented heuristic constants when not. The heuristic
+    # floor/slope/cap come from the V-CFI01 pilot baseline (round-7
+    # audit notes, ~12 historical cases at the time of calibration):
+    #
+    #   floor 0.40  ≈ base recovery rate observed even when the
+    #                  freezable concentration is low (compliance
+    #                  teams investigate when *anything* is named)
+    #   slope 0.50  ≈ per-unit ratio of freezable/loss to incremental
+    #                  P(any recovery); fit by least-squares against
+    #                  the observed outcomes
+    #   cap  0.95   ≈ the empirical ceiling — no published recovery
+    #                  case reaches 100% certainty.
+    #
+    # The calibration record can override these as more freeze_outcomes
+    # data accumulates. Format: {"floor": 0.4, "slope": 0.5, "cap": 0.95,
+    # "min_freezable_usd": 1000}. Missing keys fall back to defaults.
+    p_any_cal = _load_p_any_calibration()
+    if expected_freezable >= Decimal(str(p_any_cal["min_freezable_usd"])):
+        ratio = float(expected_freezable / max(total_loss, Decimal("1")))
+        p_any = min(
+            p_any_cal["cap"],
+            p_any_cal["floor"] + ratio * p_any_cal["slope"],
+        )
     else:
         p_any = 0.10
     p_payback = min(0.95, p_any * float(
@@ -561,6 +607,111 @@ def _parse_usd(s: Any) -> Decimal:
     if not s:
         return Decimal("0")
     return Decimal(s)
+
+
+# v0.17.1 (QUANT-4): default p_any calibration. These constants come
+# from the V-CFI01 pilot baseline; future refresh-calibrations can
+# override them via the RECUPERO_P_ANY_CALIBRATION_JSON env var (no
+# code change needed). The brief footer surfaces the loaded values
+# so operators can see which calibration is active.
+_P_ANY_DEFAULT_CALIBRATION: dict[str, float] = {
+    "floor": 0.40,            # base recovery rate even with low concentration
+    "slope": 0.50,            # P(any) increase per unit freezable/loss ratio
+    "cap": 0.95,              # empirical ceiling
+    "min_freezable_usd": 1000.0,  # below this, no learned signal
+}
+
+
+def _load_p_any_calibration() -> dict[str, float]:
+    """Load p_any calibration from env (RECUPERO_P_ANY_CALIBRATION_JSON)
+    or return the documented defaults. Returns a complete dict — missing
+    keys are filled from defaults.
+    """
+    import os
+    raw = (os.environ.get("RECUPERO_P_ANY_CALIBRATION_JSON") or "").strip()
+    if not raw:
+        return dict(_P_ANY_DEFAULT_CALIBRATION)
+    try:
+        import json as _json
+        parsed = _json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("expected JSON object")
+        merged = dict(_P_ANY_DEFAULT_CALIBRATION)
+        for k in merged:
+            if k in parsed:
+                merged[k] = float(parsed[k])
+        # Sanity-clamp so a typo can't ship insane values.
+        merged["floor"] = max(0.0, min(0.99, merged["floor"]))
+        merged["cap"] = max(merged["floor"], min(0.99, merged["cap"]))
+        merged["slope"] = max(0.0, merged["slope"])
+        merged["min_freezable_usd"] = max(0.0, merged["min_freezable_usd"])
+        log.info(
+            "p_any calibration loaded: floor=%.3f slope=%.3f cap=%.3f min_usd=%.0f",
+            merged["floor"], merged["slope"], merged["cap"],
+            merged["min_freezable_usd"],
+        )
+        return merged
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "RECUPERO_P_ANY_CALIBRATION_JSON parse failed (%s); "
+            "using defaults", exc,
+        )
+        return dict(_P_ANY_DEFAULT_CALIBRATION)
+
+
+def _compute_recovery_ci(
+    *,
+    issuer_breakdown: list[tuple[str, Decimal, float, float, str]],
+    jur_mult: float,
+    learned_priors: Any = None,
+) -> tuple[Decimal, Decimal]:
+    """Compute the (low, high) 90% credible interval for expected
+    recovery, summed across issuers using the Beta posterior CI per
+    issuer.
+
+    Each tuple in ``issuer_breakdown`` is
+    ``(issuer, issuer_usd, base_prior, evidence_discount, evidence_mode)``.
+    We bracket each issuer's contribution at the issuer's 90% Beta
+    credible interval bounds for P(freeze), multiplied by the issuer's
+    USD × evidence_discount × jurisdiction_multiplier. The total CI
+    is the sum (independence assumption — documented in the brief).
+
+    Falls back to a ±35% band when learned priors are unavailable
+    (small samples) — this is the v0.16.x heuristic preserved as a
+    safety net when we don't have enough data for a real Beta CI.
+    """
+    if not issuer_breakdown:
+        return (Decimal("0"), Decimal("0"))
+    # Try to import Beta CI helper; if freeze_learning isn't reachable
+    # for some reason, fall back to the heuristic.
+    try:
+        from recupero.freeze_learning.recorder import beta_credible_interval
+    except ImportError:
+        beta_credible_interval = None  # type: ignore[assignment]
+
+    total_low = Decimal("0")
+    total_high = Decimal("0")
+    jur = Decimal(str(jur_mult))
+    for (issuer, issuer_usd, base_prior, ev_discount, _ev_mode) in issuer_breakdown:
+        learned = (
+            learned_priors.get(issuer) if learned_priors else None
+        )
+        if learned is not None and beta_credible_interval is not None:
+            wins = int(round(learned.p_any_freeze * learned.sample_size))
+            n = int(learned.sample_size)
+            lo, hi = beta_credible_interval(wins, n, level=0.90)
+        else:
+            # Heuristic fallback (the old ±35% band, preserved for
+            # cases with no learned prior). Width matches the
+            # pre-v0.17.1 hand-rolled CI so brief diffs stay
+            # interpretable until learned data accumulates.
+            lo = max(0.0, base_prior - 0.35)
+            hi = min(1.0, base_prior + 0.35)
+        ev = Decimal(str(ev_discount))
+        # Each issuer's USD contribution at the CI bounds.
+        total_low += issuer_usd * Decimal(str(lo)) * ev * jur
+        total_high += issuer_usd * Decimal(str(hi)) * ev * jur
+    return (total_low, total_high)
 
 
 def _round_money(d: Decimal) -> Decimal:

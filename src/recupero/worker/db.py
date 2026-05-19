@@ -198,65 +198,36 @@ class WorkerDB:
             raise ValueError("worker_id is required")
         self._dsn = dsn
         self.worker_id = worker_id
-        # v0.16.13 (round-9 worker ARCH): optional connection pool.
-        # The default per-call connect pattern is fine for Supabase's
-        # transaction-mode pooler (port 6543) which handles connection
-        # multiplexing on its side. But under heavy claim-stress the
-        # client-side connect overhead adds up — each WorkerDB call
-        # opens + tears down a TCP+TLS handshake. A small connection
-        # pool amortizes this when concurrent operations hit the same
-        # WorkerDB instance (e.g., heartbeat thread + main run loop).
+        # v0.17.8 (round-10 ops HIGH): the previous v0.16.13 connection-
+        # pool prelude allocated `self._pool` but no DB method ever
+        # consumed it — every _exec / _query / claim_one path went
+        # straight to psycopg.connect(dsn, ...). The dead init opened
+        # a pool, held its slots against Supabase's quota, and the
+        # close() teardown returned them. Net effect: real per-call
+        # connects PLUS phantom pool overhead. Removed.
         #
-        # Off by default — set RECUPERO_DB_POOL_SIZE > 0 to enable.
-        # Pool size 2-3 per worker keeps Supabase pool slots reasonable
-        # (Railway typically spawns 1-2 workers; 5-6 total slots
-        # consumed per project, well under Supabase's free-tier 60).
-        self._pool = None
-        pool_size_raw = os.environ.get("RECUPERO_DB_POOL_SIZE", "").strip()
-        if pool_size_raw:
-            try:
-                pool_size = int(pool_size_raw)
-            except ValueError:
-                pool_size = 0
-            if pool_size > 0:
-                try:
-                    from psycopg_pool import ConnectionPool
-                    self._pool = ConnectionPool(
-                        dsn,
-                        min_size=1,
-                        max_size=pool_size,
-                        kwargs={**self._PSYCOPG_KW, "autocommit": True},
-                        timeout=10,
-                        open=True,
-                    )
-                    log.info(
-                        "WorkerDB connection pool active: max_size=%d",
-                        pool_size,
-                    )
-                except ImportError:
-                    log.warning(
-                        "RECUPERO_DB_POOL_SIZE set but psycopg_pool not "
-                        "installed; falling back to per-call connect"
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    log.warning(
-                        "WorkerDB pool init failed: %s — falling back to "
-                        "per-call connect", exc,
-                    )
+        # Supabase's transaction-mode pooler (port 6543) already does
+        # the connection multiplexing on its side — for any reasonable
+        # claim throughput the per-call connect is fine. If client-side
+        # pooling becomes necessary we'll wire it through every method
+        # in one PR, not leave a half-built scaffold.
+        if (os.environ.get("RECUPERO_DB_POOL_SIZE", "") or "").strip():
+            log.warning(
+                "RECUPERO_DB_POOL_SIZE is set but client-side pooling "
+                "was removed in v0.17.8 (the prior code initialized a "
+                "pool but never used it). Unset the env var; rely on "
+                "Supabase's transaction-mode pooler instead."
+            )
 
     @property
     def dsn(self) -> str:
         return self._dsn
 
     def close(self) -> None:
-        # Close the pool if we created one. Per-call connect mode is
-        # a no-op (each call closes its own connection).
-        if self._pool is not None:
-            try:
-                self._pool.close()
-            except Exception:  # noqa: BLE001
-                pass
-            self._pool = None
+        # v0.17.8: no client-side pool to release. Method preserved
+        # for callers that already invoke it (WorkerDB is used as a
+        # context manager in main.py).
+        return None
 
     def __enter__(self) -> WorkerDB:
         return self

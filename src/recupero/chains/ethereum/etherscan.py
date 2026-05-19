@@ -340,6 +340,13 @@ class EtherscanClient:
         resp = self._client.get(self.api_base, params=params)
         if resp.status_code == 429:
             raise EtherscanRateLimitError("HTTP 429")
+        # v0.18.5 (round-11 chains-CRIT-004): 5xx → retryable. A
+        # transient 503 from Etherscan (deploy, edge restart) would
+        # otherwise kill the trace branch.
+        if resp.status_code >= 500:
+            raise EtherscanRateLimitError(
+                f"HTTP {resp.status_code} (transient)"
+            )
         resp.raise_for_status()
         data = resp.json()
 

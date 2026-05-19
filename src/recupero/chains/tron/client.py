@@ -94,15 +94,20 @@ class _RateLimiter:
         self._next_allowed = 0.0
 
     def wait(self) -> None:
+        # v0.18.5 (round-11 chains-CRIT-003): reserve under lock,
+        # sleep WITHOUT it. Pre-v0.18.5 the entire `time.sleep` ran
+        # while holding the lock — every concurrent thread queued
+        # behind it serialized to ~1/rps regardless of parallelism.
+        # Etherscan client has this exact fix documented; ported here.
         if self.min_interval <= 0:
             return
         with self._lock:
             now = time.monotonic()
-            sleep_for = self._next_allowed - now
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-                now = time.monotonic()
-            self._next_allowed = now + self.min_interval
+            target = max(self._next_allowed, now)
+            self._next_allowed = target + self.min_interval
+        delay = target - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
 
 class TronGridClient:
@@ -295,11 +300,12 @@ class TronGridClient:
         try:
             resp = self._client.get(url, params=params, headers=headers)
         except httpx.RequestError as e:
-            # Network-level error (DNS, connect, read timeout). Not
-            # retried — the caller decides whether to bail. We log
-            # at WARN; tenacity won't retry because we don't raise
-            # a TronGridRateLimitError.
-            raise TronGridError(f"network error: {e}") from e
+            # v0.18.5 (round-11 chains-CRIT-005): treat transient
+            # network errors (DNS, connect, read timeout, RST) as
+            # retryable. Pre-v0.18.5 a single TCP RST killed
+            # mid-pagination — TronGrid pagination at page 12 of 50
+            # would silently drop pages 12+ on one bad request.
+            raise TronGridRateLimitError(f"network error: {e}") from e
         if resp.status_code == 429:
             ra = resp.headers.get("Retry-After", "(none)")
             log.info("trongrid 429 rate limit; retry-after=%s", ra)
@@ -354,7 +360,8 @@ class TronGridClient:
         try:
             resp = self._client.post(url, json=body, headers=headers)
         except httpx.RequestError as e:
-            raise TronGridError(f"network error: {e}") from e
+            # v0.18.5 (round-11 chains-CRIT-005): network errors → retryable.
+            raise TronGridRateLimitError(f"network error: {e}") from e
         if resp.status_code == 429:
             ra = resp.headers.get("Retry-After", "(none)")
             log.info("trongrid 429 rate limit; retry-after=%s", ra)

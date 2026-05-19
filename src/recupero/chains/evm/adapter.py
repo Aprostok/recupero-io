@@ -133,7 +133,14 @@ class EvmAdapter(ChainAdapter):
     # already in the hundreds of millions). The transactions ARE there — the
     # API just returns empty. Workaround: for these chains, query from
     # startblock=0 and apply the block filter client-side.
-    _CLIENT_SIDE_STARTBLOCK_FILTER_CHAIN_IDS: frozenset[int] = frozenset({42161})
+    # v0.18.5 (round-11 chains-MED-001): high-block-rate chains
+    # where Etherscan V2's startblock filter sometimes returns
+    # empty for large start_block values ("No transactions found").
+    # 42161 Arbitrum was the original case; reports of same behavior
+    # on Polygon (137) and Base (8453) — both have fast blocks. Use
+    # client-side filter on these chains: fetch all then drop pre-
+    # start_block locally.
+    _CLIENT_SIDE_STARTBLOCK_FILTER_CHAIN_IDS: frozenset[int] = frozenset({42161, 137, 8453})
 
     def _needs_client_side_start_block_filter(self) -> bool:
         return self.profile.chain_id in self._CLIENT_SIDE_STARTBLOCK_FILTER_CHAIN_IDS

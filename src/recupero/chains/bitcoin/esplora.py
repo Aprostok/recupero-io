@@ -80,15 +80,17 @@ class _RateLimiter:
         self._next_allowed = 0.0
 
     def wait(self) -> None:
+        # v0.18.5 (round-11 chains-CRIT-003): reserve under lock,
+        # sleep without it. See Etherscan client for full rationale.
         if self.min_interval <= 0:
             return
         with self._lock:
             now = time.monotonic()
-            sleep_for = self._next_allowed - now
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-                now = time.monotonic()
-            self._next_allowed = now + self.min_interval
+            target = max(self._next_allowed, now)
+            self._next_allowed = target + self.min_interval
+        delay = target - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
 
 class EsploraClient:
@@ -208,7 +210,8 @@ class EsploraClient:
         try:
             resp = self._client.get(url)
         except httpx.RequestError as e:
-            raise EsploraError(f"network error: {e}") from e
+            # v0.18.5 (round-11 chains-CRIT-005): network errors → retryable.
+            raise EsploraRateLimitError(f"network error: {e}") from e
         if resp.status_code == 429:
             ra = resp.headers.get("Retry-After", "(none)")
             log.info("esplora 429 rate limit; retry-after=%s", ra)

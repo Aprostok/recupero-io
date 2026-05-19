@@ -38,13 +38,17 @@ class _RateLimiter:
         self._next_allowed = 0.0
 
     def wait(self) -> None:
+        # v0.18.5 (round-11 chains-CRIT-003): reserve under lock,
+        # sleep without it. See Etherscan client for full rationale.
+        if self.min_interval <= 0:
+            return
         with self._lock:
             now = time.monotonic()
-            sleep_for = self._next_allowed - now
-            if sleep_for > 0:
-                time.sleep(sleep_for)
-                now = time.monotonic()
-            self._next_allowed = now + self.min_interval
+            target = max(self._next_allowed, now)
+            self._next_allowed = target + self.min_interval
+        delay = target - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
 
 
 class HeliusClient:
@@ -136,6 +140,13 @@ class HeliusClient:
             raise HeliusRateLimitError("HTTP 429")
         if resp.status_code == 401:
             raise HeliusError("HTTP 401 — HELIUS_API_KEY rejected")
+        # v0.18.5 (round-11 chains-CRIT-004): treat 5xx as retryable.
+        # Pre-v0.18.5 a transient 503/504 from Helius killed the
+        # entire trace branch — only 429 was in the retry list.
+        if resp.status_code >= 500:
+            raise HeliusRateLimitError(
+                f"HTTP {resp.status_code} (transient)"
+            )
         resp.raise_for_status()
         data = resp.json()
         if isinstance(data, list) and data:
@@ -174,6 +185,13 @@ class HeliusClient:
             raise HeliusRateLimitError("HTTP 429")
         if resp.status_code == 401:
             raise HeliusError("HTTP 401 — HELIUS_API_KEY rejected")
+        # v0.18.5 (round-11 chains-CRIT-004): treat 5xx as retryable.
+        # Pre-v0.18.5 a transient 503/504 from Helius killed the
+        # entire trace branch — only 429 was in the retry list.
+        if resp.status_code >= 500:
+            raise HeliusRateLimitError(
+                f"HTTP {resp.status_code} (transient)"
+            )
         resp.raise_for_status()
         data = resp.json()
         if not isinstance(data, list):
@@ -190,6 +208,15 @@ class HeliusClient:
     )
     def _rpc_call(self, method: str, params: list[Any] | None = None) -> dict[str, Any]:
         self.limiter.wait()
+        # v0.18.5 (round-11 chains-CRIT-002): pre-v0.18.5 the api-key
+        # sat in the URL `?api-key=...`. httpx.HTTPStatusError exception
+        # messages include the URL, which would have leaked the key
+        # into tracebacks. The v0.17.10 secret-redaction patterns
+        # catch the `?api-key=` query-param shape in logs (verified by
+        # tests/test_logging_redact.py), so logged-and-redacted is the
+        # current defense. Leaving the query-param for API compatibility
+        # — Helius docs assume this shape. The redaction layer is the
+        # belt-and-suspenders that makes it safe.
         url = f"{self.RPC}/?api-key={self.api_key}"
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}
         resp = self._client.post(url, json=payload)

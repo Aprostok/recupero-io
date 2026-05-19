@@ -93,11 +93,35 @@ def _events_to_transfers(
     are included for context — they show when funds arrived on Hyperliquid
     before being drained.
     """
+    # v0.18.5 (round-11 chains-MED-009): Hyperliquid `delta_type`
+    # informs whether the event is a USDC withdraw/deposit (real
+    # money flow) or a position/spot/class transfer (internal
+    # accounting). Pre-v0.18.5 we attributed EVERY event with a
+    # USDC delta to "USDC on Arbitrum" — including spot HYPE
+    # transfers that happened to have a USDC component, and
+    # internal subAccountTransfer events. The brief mislabeled
+    # token type and the pricing chain mis-priced.
+    #
+    # Real on-chain money-flow events: `withdraw`, `deposit`. Other
+    # delta_types are surfaced ONLY if their semantics align with
+    # external value transfer (which today only those two do).
+    _MONEY_FLOW_DELTA_TYPES = {"withdraw", "deposit"}
     transfers: list[Transfer] = []
     for idx, evt in enumerate(events):
         # Only events with a real USDC delta are meaningful for the money-flow
         # picture. Skip position transfers, class transfers, etc. with zero delta.
         if evt.usdc_delta == 0:
+            continue
+
+        # v0.18.5: skip non-money-flow event types so the brief's
+        # transfer list reflects ACTUAL on-chain value movement, not
+        # Hyperliquid's internal accounting categories.
+        delta_type = getattr(evt, "delta_type", None)
+        if delta_type and delta_type not in _MONEY_FLOW_DELTA_TYPES:
+            log.debug(
+                "skipping hyperliquid event delta_type=%r (not a money-flow): %s",
+                delta_type, evt.hash,
+            )
             continue
 
         usdc_abs = abs(evt.usdc_delta)

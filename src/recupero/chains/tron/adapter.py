@@ -174,8 +174,19 @@ class TronAdapter(ChainAdapter):
         forensic cases).
         """
         addr = normalize_tron_address(from_address)
+        # v0.18.5 (round-11 chains-CRIT-006): thread start_block through.
+        # `block_at_or_before` returns unix-seconds (Tron has no
+        # block-by-timestamp API), and TronGrid's TRC-20 endpoint
+        # filters by `min_timestamp` in MILLISECONDS. Pre-v0.18.5
+        # `start_block` was silently dropped — every Tron trace
+        # fetched FULL history, hitting the 10k pagination cap and
+        # truncating the OLDEST data (= incident period). Now: pass
+        # min_timestamp = start_block * 1000.
+        min_timestamp_ms = int(start_block) * 1000 if start_block > 0 else None
         try:
-            raw = self.client.get_trc20_transfers(addr, only_from=True)
+            raw = self.client.get_trc20_transfers(
+                addr, only_from=True, min_timestamp=min_timestamp_ms,
+            )
         except TronGridError as e:
             log.warning("trc20 outflow fetch failed for %s: %s", addr, e)
             return []
@@ -344,10 +355,29 @@ class TronAdapter(ChainAdapter):
         # tuple so the tracer's de-duplication keys are stable.
         synthetic_log_index = None
 
+        # v0.18.5 (round-11 chains-HIGH-003): use the event's
+        # block_number when present. Pre-v0.18.5 we hardcoded
+        # block_number=0 for every Tron transfer; downstream
+        # BFS-cursor logic (`block_number + 1` for next-page
+        # start_block) was pegged at 1 forever; brief's
+        # "earliest/latest block" was always 0..0; cross-chain
+        # comparisons mis-ordered Tron rows relative to EVM.
+        # TronGrid's v1 endpoint emits `block_number` (or
+        # `blockNumber` depending on endpoint variant) per row.
+        block_number_raw = (
+            event.get("block_number")
+            or event.get("blockNumber")
+            or 0
+        )
+        try:
+            block_number = int(block_number_raw)
+        except (TypeError, ValueError):
+            block_number = 0
+
         return {
             "chain": Chain.tron,
             "tx_hash": tx_id,
-            "block_number": 0,  # Tron's REST endpoint doesn't return block_number
+            "block_number": block_number,
             "block_time": block_time,
             "log_index": synthetic_log_index,
             "from": from_b58,

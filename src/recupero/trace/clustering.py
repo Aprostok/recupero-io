@@ -183,9 +183,15 @@ def cluster_addresses(
     if not case.transfers:
         return [], []
 
-    # Skip the victim's own address — clustering it with anyone
-    # else is meaningless.
-    seed_lower = case.seed_address.lower()
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying so
+    # base58 chains (Solana/Tron/Bitcoin) cluster against case-preserved
+    # forms. Pre-v0.17.9 the seed_lower / src.lower() / dst.lower()
+    # mangled base58 addresses and split them into two pseudo-addresses
+    # (the lowercased form and the canonical-cased form when matched
+    # elsewhere), producing false "co-spending pattern" clusters
+    # between an address and its own lowercase.
+    from recupero._common import canonical_address_key as _ck
+    seed_lower = _ck(case.seed_address)
     excluded_addrs = {seed_lower}
 
     # Build address → first interaction timestamp lookups for
@@ -201,8 +207,8 @@ def cluster_addresses(
     for t in case.transfers:
         if t.usd_value_at_tx is None or t.usd_value_at_tx < _MIN_CLUSTERING_USD:
             continue
-        src = t.from_address.lower()
-        dst = t.to_address.lower()
+        src = _ck(t.from_address)
+        dst = _ck(t.to_address)
         ts = t.block_time
         all_addresses.add(src)
         all_addresses.add(dst)
@@ -296,8 +302,8 @@ def cluster_addresses(
     for t in case.transfers:
         if t.usd_value_at_tx is None or t.usd_value_at_tx < _MIN_CLUSTERING_USD:
             continue
-        src = t.from_address.lower()
-        dst = t.to_address.lower()
+        src = _ck(t.from_address)
+        dst = _ck(t.to_address)
         if src in shared_infra or src in excluded_addrs:
             continue
         if dst in shared_infra or dst in excluded_addrs:

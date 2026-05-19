@@ -167,11 +167,18 @@ def compute_indirect_exposure(
     # Used for amount-share normalization (mixing penalty).
     outflow_totals: dict[str, Decimal] = defaultdict(Decimal)
 
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying so
+    # base58 chains (Solana / Tron / Bitcoin) match the high_risk_db's
+    # case-preserved entries. Pre-v0.17.9 the .lower() here defeated
+    # the v0.17.5 risk-DB fix — a sanctioned Solana wallet stored
+    # case-preserved in high_risk_db couldn't find ITS OWN transfers
+    # in the case graph because we keyed them lowercased.
+    from recupero._common import canonical_address_key as _ck
     for t in case.transfers:
         if t.usd_value_at_tx is None or t.usd_value_at_tx <= 0:
             continue
-        src = t.from_address.lower()
-        dst = t.to_address.lower()
+        src = _ck(t.from_address)
+        dst = _ck(t.to_address)
         if src == dst:
             continue
         forward_flows[src][dst] += t.usd_value_at_tx

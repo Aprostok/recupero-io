@@ -134,13 +134,17 @@ def detect_drainer_pattern(
         if entry.risk_category == "scam_drainer"
     }
 
-    seed = case.seed_address.lower()
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying so
+    # base58 chains match the high_risk_db's case-preserved entries.
+    # See trace.risk_scoring v0.17.5 fix.
+    from recupero._common import canonical_address_key as _ck
+    seed = _ck(case.seed_address)
 
     # Signal 1: direct outflow to known drainer
     for t in case.transfers:
-        if t.from_address.lower() != seed:
+        if _ck(t.from_address) != seed:
             continue
-        dst = t.to_address.lower()
+        dst = _ck(t.to_address)
         if dst not in drainer_addresses:
             continue
         entry = db[dst]
@@ -166,13 +170,13 @@ def detect_drainer_pattern(
     # approval-exploit, even without explicit Approval event in
     # the trace data we have today).
     for t in case.transfers:
-        if t.from_address.lower() != seed:
+        if _ck(t.from_address) != seed:
             continue
         if not t.counterparty.is_contract:
             continue
         # Skip known protocols / DEXes — those are normal
         # interactions, not drainer indicators.
-        dst = t.to_address.lower()
+        dst = _ck(t.to_address)
         if dst in db:
             continue
         # Don't flag if the destination is one of our known

@@ -5,7 +5,7 @@
 <title>LE Handoff Package — Case {{ case_id }}</title>
 {% include "_styles.html.j2" %}
 </head>
-<body>
+<body{% if draft %} class="draft" data-draft-label="{{ draft_label | default('DRAFT') }}"{% endif %}>
 
 <section class="cover">
   <div class="cover-letterhead">
@@ -46,6 +46,16 @@
       <dt>Brief Identifier</dt>
       <dd class="mono">{{ brief_id }}</dd>
     </div>
+    {% if ic3_case_id %}
+    {# v0.18.6 (round-11 PDF-CRIT-006): IC3 reference rendered when
+       operator captured it at intake. FBI uses this to cross-reference
+       the IC3 complaint record; pre-v0.18.6 the LE handoff dropped
+       it entirely. #}
+    <div class="cover-meta-item">
+      <dt>IC3 Reference</dt>
+      <dd class="mono">{{ ic3_case_id }}</dd>
+    </div>
+    {% endif %}
     <div class="cover-meta-item">
       <dt>Stolen Value (Initial)</dt>
       <dd>USD {{ asset.usd_value_at_theft }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>

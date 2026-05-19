@@ -187,6 +187,14 @@ def generate_briefs(
     outbound_count_of_stolen_asset: int = 0,
     flow_filename: str | None = None,
     issuer_freezable: dict | None = None,
+    # v0.18.6 (round-11 PDF-CRIT-006): IC3 case ID flows through
+    # editorial JSON (cases.ic3_case_id captured at intake) but was
+    # never wired into the LE handoff. Operators curate it specifically
+    # so FBI can cross-reference the IC3 record; pre-v0.18.6 the
+    # handoff dropped it entirely.
+    ic3_case_id: str | None = None,
+    draft: bool = False,
+    draft_label: str | None = None,
 ) -> BriefBundle:
     """Render both briefs and write them to disk.
 
@@ -289,6 +297,10 @@ def generate_briefs(
     ctx: dict[str, Any] = {
         "case_id": primary_case.case_id,
         "brief_id": brief_id,
+        # v0.18.6: IC3 reference + DRAFT watermark plumbed into ctx.
+        "ic3_case_id": ic3_case_id,
+        "draft": draft,
+        "draft_label": draft_label or "DRAFT",
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),  # explicit UTC suffix
         "verified_at": now.strftime("%Y-%m-%d"),
         # v0.17.4 (round-10 audit HIGH): primary_chain populated for the
@@ -296,7 +308,12 @@ def generate_briefs(
         # `{{ primary_chain | default("Ethereum") }}` silently rendered
         # "Ethereum" for every Solana/Tron/BSC theft, putting a wrong-
         # chain attestation on the cover page of every non-ETH brief.
-        "primary_chain": primary_case.chain.value.capitalize(),
+        # v0.18.6 (round-11 PDF-HIGH-010): use emit_brief's display-name
+        # map so "bsc" → "BNB Chain" instead of `.capitalize()` =
+        # "Bsc". Pre-v0.18.6 the LE handoff cover for a BSC case
+        # printed "USDT on Bsc"; the trace report for the same case
+        # printed "BNB Chain". Inconsistent + unprofessional.
+        "primary_chain": _resolve_primary_chain_display(primary_case),
         "trace_started_at": (
             primary_case.trace_started_at.strftime("%Y-%m-%dT%H:%M:%SZ")
             if primary_case.trace_started_at else None
@@ -952,6 +969,27 @@ def _fmt_usd(d: Decimal | None) -> str:
     if d is None:
         return "(unknown)"
     return f"{d:,.2f}"
+
+
+# v0.18.6 (round-11 PDF-HIGH-010): per-chain display-name map.
+# Mirrors emit_brief._extract_primary_chain so both renderers agree.
+_PRIMARY_CHAIN_DISPLAY: dict[str, str] = {
+    "ethereum": "Ethereum",
+    "arbitrum": "Arbitrum",
+    "base": "Base",
+    "bsc": "BNB Chain",
+    "polygon": "Polygon",
+    "solana": "Solana",
+    "tron": "Tron",
+    "bitcoin": "Bitcoin",
+    "hyperliquid": "Hyperliquid",
+}
+
+
+def _resolve_primary_chain_display(primary_case) -> str:
+    """Map a Case's chain enum to its human-facing display name."""
+    raw = primary_case.chain.value if hasattr(primary_case.chain, "value") else str(primary_case.chain)
+    return _PRIMARY_CHAIN_DISPLAY.get(raw, raw.capitalize() if raw else "Ethereum")
 
 
 def _ensure_usd_prefix(s: str | None) -> str:

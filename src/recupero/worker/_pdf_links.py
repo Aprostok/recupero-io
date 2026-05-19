@@ -44,8 +44,12 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
-# Match any chain-explorer URL the freeze letter might link to.
-# Used to extract the address→href mapping from the source HTML.
+# v0.18.6 (round-11 PDF-HIGH-009): match every chain explorer the
+# templates link to. Pre-v0.18.6 the regex only covered EVM + Solana
+# + Hyperliquid — tronscan.org and mempool.space (Bitcoin) were
+# missing, so the pdf_links patcher silently added zero annotations
+# on Tron and Bitcoin freeze letters / LE handoffs (every base58
+# address in the PDF was unclickable).
 _EXPLORER_URL_RE = re.compile(
     r"https?://(?:"
     r"etherscan\.io|"
@@ -54,18 +58,24 @@ _EXPLORER_URL_RE = re.compile(
     r"polygonscan\.com|"
     r"bscscan\.com|"
     r"solscan\.io|"
+    r"tronscan\.org|"  # v0.18.6
+    r"mempool\.space|"  # v0.18.6
+    r"blockstream\.info|"  # v0.18.6 — alternate Bitcoin explorer
     r"app\.hyperliquid\.xyz"
-    r")/(?:address|account|tx)/(0x[0-9a-fA-F]+|[1-9A-HJ-NP-Za-km-z]{32,44})",
+    r")(?:/#)?/(?:address|account|tx|transaction)/(0x[0-9a-fA-F]+|[1-9A-HJ-NP-Za-km-z]{26,44})",
     re.IGNORECASE,
 )
 
-# Match the rendered SHORT-form address text WeasyPrint puts in the
-# PDF — patterns the templates use: full 42-char "0x..." or the
-# truncated "0x1234…abcd" form. The truncation char varies between
-# HTML entity sources; we match both "…" (U+2026) and "..." (ASCII).
+# v0.18.6 (round-11 PDF-HIGH-009): match the rendered SHORT-form
+# address text WeasyPrint puts in the PDF. Pre-v0.18.6 the pattern
+# was `0x[hex]…[hex]` only — every Solana/Tron/Bitcoin base58
+# address was silently un-annotated. Now matches BOTH:
+#   * EVM hex: `0x1234…abcd`
+#   * base58: `TR7N…Lj6t` / `EPjF…Dt1v` / `bc1q…` etc.
+# Both use the truncation char patterns (`…` U+2026 or `...` ASCII).
 _RENDERED_ADDRESS_RE = re.compile(
-    r"0x[0-9a-fA-F]{4,40}"
-    r"(?:(?:…|\.\.\.)[0-9a-fA-F]{2,8})?"
+    r"(?:0x[0-9a-fA-F]{4,40}|[1-9A-HJ-NP-Za-km-z]{4,44})"
+    r"(?:(?:…|\.\.\.)[0-9a-fA-F1-9A-HJ-NP-Za-km-z]{2,8})?"
 )
 
 

@@ -5,7 +5,7 @@
 <title>Recovery Investigation Summary — {{ victim.name }}</title>
 {% include "_styles.html.j2" %}
 </head>
-<body>
+<body{% if draft %} class="draft" data-draft-label="{{ draft_label | default('DRAFT') }}"{% endif %}>
 
 <section class="cover">
   <div class="cover-letterhead">

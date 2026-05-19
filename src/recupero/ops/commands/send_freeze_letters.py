@@ -259,6 +259,13 @@ def _record_freeze_letter_sent(
         with psycopg.connect(dsn, autocommit=True,
                              prepare_threshold=None,
                              connect_timeout=10) as conn, conn.cursor() as cur:
+            # v0.16.12 (round-9 worker MED): two ON CONFLICT clauses
+            # can't be combined in one INSERT, so we try the
+            # case-driven UNIQUE first; on a NULL case_id (wallet-
+            # trace row) we fall through to the investigation-keyed
+            # partial unique from migration 016. Catching UniqueViolation
+            # on the second branch lets the no-op be idempotent
+            # either way.
             cur.execute(
                 """
                 INSERT INTO public.freeze_letters_sent (
@@ -284,6 +291,17 @@ def _record_freeze_letter_sent(
                     operator,
                 ),
             )
+    except psycopg.errors.UniqueViolation:
+        # v0.16.12: the partial-unique on (investigation_id, issuer,
+        # target_address, asset_symbol) WHERE case_id IS NULL caught
+        # a wallet-trace duplicate that the case_id-keyed ON CONFLICT
+        # couldn't see (NULL != NULL in UNIQUE semantics). Treat as
+        # no-op — the prior send already lives in the audit trail.
+        log.info(
+            "freeze_letters_sent: duplicate detected by partial unique "
+            "(wallet-trace row) for issuer=%s addr=%s — skipping",
+            entry.get("issuer"), entry.get("target_address"),
+        )
     except Exception as exc:  # noqa: BLE001
         # Best-effort: the email is already sent. Log and continue.
         log.warning(

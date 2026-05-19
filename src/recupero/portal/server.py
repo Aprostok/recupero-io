@@ -454,6 +454,16 @@ def _route_sign_submit(
             ip_address=ip,
             user_agent=user_agent,
         )
+    except _DoubleSubmitError as exc:
+        # v0.16.12: a concurrent POST won the FOR UPDATE race. The
+        # engagement IS real — the first POST committed — we just
+        # don't duplicate the signature row. Redirect to the status
+        # page so the user sees the success state.
+        log.info(
+            "portal: double-submit detected for token=%s..., redirecting: %s",
+            token[:8], exc,
+        )
+        return _redirect(f"/portal/{token}")
     except Exception as exc:  # noqa: BLE001
         log.exception("portal: signature persist failed: %s", exc)
         return _route_sign_form(
@@ -740,6 +750,13 @@ def _fmt_dt(dt: datetime | None) -> str:
     return dt.strftime("%B %d, %Y")
 
 
+class _DoubleSubmitError(Exception):
+    """Raised when the engagement-signature row already exists for the
+    given investigation (concurrent POST detected). The portal handler
+    converts this to a redirect to the status page — the engagement is
+    already real, we just don't insert a duplicate."""
+
+
 def _persist_signature(
     *,
     dsn: str,
@@ -755,6 +772,29 @@ def _persist_signature(
     """Write the signature row + activate the engagement in one
     transaction. Returns the signed_at timestamp the DB recorded.
 
+    v0.16.12 (round-9 security CRIT): double-submit guard. Two
+    simultaneous POSTs (back-button reload, hostile family member,
+    browser auto-retry) used to both pass the "already engaged"
+    short-circuit at the request entry and both INSERT signature rows
+    for the same investigation. Now:
+
+      1. SELECT ... FOR UPDATE on the investigations row serializes
+         concurrent transactions trying to engage the same
+         investigation.
+      2. Re-check engagement_started_at INSIDE the locked transaction.
+         If it's already set, raise _DoubleSubmitError — the handler
+         redirects to the status page rather than inserting a second
+         signature row.
+      3. Partial unique index on engagement_signatures
+         (investigation_id WHERE NOT NULL) — migration 015 — is
+         defense-in-depth: if the lock fails (timeout, retry storm)
+         the constraint still rejects the duplicate INSERT.
+
+    Why not just rely on the unique index? The lock-then-check
+    pattern lets us redirect on the second POST instead of
+    surfacing an IntegrityError to the user — better UX, same
+    forensic outcome.
+
     If the signature row writes but the engagement update fails (or
     vice versa) the operator ends up with a half-engaged case, so
     we wrap both in an explicit BEGIN/COMMIT.
@@ -762,21 +802,57 @@ def _persist_signature(
     with psycopg.connect(dsn, autocommit=False, row_factory=dict_row,
                          connect_timeout=10) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO public.engagement_signatures
-                    (case_id, investigation_id, case_token_id,
+            # v0.16.12: row-lock the investigation FIRST. SKIP LOCKED
+            # would silently drop one of the two concurrent POSTs;
+            # we want the second one to WAIT and then see the
+            # already-engaged state. Plain FOR UPDATE blocks the
+            # second POST until the first commits.
+            if investigation_id is not None:
+                cur.execute(
+                    """
+                    SELECT engagement_started_at, engagement_closed_at
+                      FROM public.investigations
+                     WHERE id = %s
+                     FOR UPDATE
+                    """,
+                    (str(investigation_id),),
+                )
+                lock_row = cur.fetchone()
+                if (
+                    lock_row is not None
+                    and lock_row["engagement_started_at"] is not None
+                    and lock_row["engagement_closed_at"] is None
+                ):
+                    # The first POST won. Don't insert a duplicate;
+                    # let the handler redirect to the status page.
+                    raise _DoubleSubmitError(
+                        f"investigation {investigation_id} already engaged"
+                    )
+
+            try:
+                cur.execute(
+                    """
+                    INSERT INTO public.engagement_signatures
+                        (case_id, investigation_id, case_token_id,
+                         signature_name, agreement_text, fee_usd,
+                         ip_address, user_agent)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING signed_at
+                    """,
+                    (str(case_id),
+                     str(investigation_id) if investigation_id else None,
+                     str(token_id),
                      signature_name, agreement_text, fee_usd,
-                     ip_address, user_agent)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING signed_at
-                """,
-                (str(case_id),
-                 str(investigation_id) if investigation_id else None,
-                 str(token_id),
-                 signature_name, agreement_text, fee_usd,
-                 ip_address or None, user_agent or None),
-            )
+                     ip_address or None, user_agent or None),
+                )
+            except psycopg.errors.UniqueViolation as exc:
+                # The partial unique index (migration 015) caught a
+                # duplicate that slipped past the row-lock — unlikely
+                # but possible on connection-pool retries. Treat the
+                # same as the lock-detected case: redirect, not error.
+                raise _DoubleSubmitError(
+                    f"unique constraint blocked duplicate signature: {exc}"
+                ) from exc
             signed_at = cur.fetchone()["signed_at"]
 
             # Activate the engagement. Idempotency: only set

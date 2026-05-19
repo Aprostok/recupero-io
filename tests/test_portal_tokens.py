@@ -224,6 +224,46 @@ def test_verify_token_returns_none_for_short_input() -> None:
     assert out is None
 
 
+def test_verify_token_rejects_overlong_input() -> None:
+    """v0.16.12: tokens >64 chars rejected without DB hit.
+    Real tokens are 43 chars; longer input is a brute-force probe
+    or accidental URL-encoding doubled-up."""
+    out = verify_token(token="x" * 4096, dsn="ignored")
+    assert out is None
+
+
+def test_compute_token_hmac_returns_none_when_pepper_unset(monkeypatch) -> None:
+    """v0.16.12: HMAC computation returns None when the server pepper
+    isn't configured. Callers fall back to legacy raw-token comparison
+    (with a WARNING log) so existing deploys aren't broken."""
+    from recupero.portal.tokens import compute_token_hmac
+    monkeypatch.delenv("RECUPERO_TOKEN_PEPPER", raising=False)
+    assert compute_token_hmac("anything") is None
+
+
+def test_compute_token_hmac_with_hex_pepper(monkeypatch) -> None:
+    """v0.16.12: 64-char hex pepper produces a 64-char hex HMAC digest."""
+    from recupero.portal.tokens import compute_token_hmac
+    monkeypatch.setenv("RECUPERO_TOKEN_PEPPER", "00" * 32)
+    out = compute_token_hmac("test-token-value")
+    assert out is not None
+    assert len(out) == 64
+    assert all(c in "0123456789abcdef" for c in out)
+    # Deterministic: same input → same output.
+    assert compute_token_hmac("test-token-value") == out
+    # Different input → different output.
+    assert compute_token_hmac("other-token") != out
+
+
+def test_compute_token_hmac_rejects_short_pepper(monkeypatch, caplog) -> None:
+    """v0.16.12: a too-short pepper (typo / accidentally-truncated)
+    must NOT silently downgrade to weak HMAC; return None + log error
+    so the operator notices."""
+    from recupero.portal.tokens import compute_token_hmac
+    monkeypatch.setenv("RECUPERO_TOKEN_PEPPER", "abc")  # 3 chars, way too short
+    assert compute_token_hmac("test-token") is None
+
+
 def test_verify_token_returns_none_for_unknown_token() -> None:
     """No matching row → return None. The handler renders the same
     'link unavailable' page as for revoked/expired tokens so the

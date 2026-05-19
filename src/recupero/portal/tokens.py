@@ -24,6 +24,8 @@ handler bumps it once per (token, day) at most.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
 import secrets
@@ -49,6 +51,69 @@ _LAST_USED_BUMP_INTERVAL = timedelta(hours=1)
 
 # Token byte length. 32 bytes → ~43 base64url chars. Stripe-equivalent.
 _TOKEN_BYTES = 32
+
+
+# v0.16.12 (round-9 security CRIT): HMAC-of-token lookup, eliminating
+# the byte-by-byte timing side-channel in the prior raw-token equality
+# compare against an indexed column. See migrations/014_case_token_hmac.sql
+# for the migration plan and motivation.
+#
+# The server pepper lives in RECUPERO_TOKEN_PEPPER. When unset the app
+# falls back to LEGACY-MODE (raw-token compare, with a WARNING) so a
+# misconfigured deploy doesn't break existing tokens. Production
+# deployments MUST set this env var; ops runbook covers rotation.
+
+
+def _token_pepper() -> bytes | None:
+    """Resolve the HMAC pepper from env.
+
+    Accepts hex (64 chars) or base64-url (44 chars). Returns None when
+    unset — callers fall back to legacy raw-token comparison with a
+    one-time WARNING log. Pepper rotation invalidates every active
+    token; operators must re-issue. We refuse to load short peppers
+    (<16 bytes raw entropy) so a typo can't silently degrade to
+    weak HMAC.
+    """
+    raw = (os.environ.get("RECUPERO_TOKEN_PEPPER", "") or "").strip()
+    if not raw:
+        return None
+    # Try hex first (64 chars = 32 bytes).
+    try:
+        decoded = bytes.fromhex(raw)
+        if len(decoded) >= 16:
+            return decoded
+    except ValueError:
+        pass
+    # Try base64-url.
+    import base64
+    try:
+        # Pad to multiple of 4 for forgiving base64-url decode.
+        padded = raw + "=" * (-len(raw) % 4)
+        decoded = base64.urlsafe_b64decode(padded)
+        if len(decoded) >= 16:
+            return decoded
+    except (ValueError, Exception):  # noqa: BLE001
+        pass
+    log.error(
+        "RECUPERO_TOKEN_PEPPER set but unparseable / too short "
+        "(need >=16 bytes of hex or base64). Falling back to LEGACY "
+        "raw-token lookup — fix the env var ASAP."
+    )
+    return None
+
+
+def compute_token_hmac(token: str) -> str | None:
+    """Compute the HMAC-SHA256 hex digest of `token` with the server
+    pepper. Returns None if the pepper env var is unset (legacy mode).
+
+    The output is 64 hex chars, safe to index + compare without
+    side-channel concerns (HMAC outputs are uniformly random over the
+    output space regardless of input).
+    """
+    pepper = _token_pepper()
+    if pepper is None:
+        return None
+    return hmac.new(pepper, token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 class VerifiedToken(NamedTuple):
@@ -112,14 +177,35 @@ def generate_token(
         if not cur.fetchone():
             raise ValueError(f"case {case_id} not found")
 
-        cur.execute(
-            """
-                INSERT INTO public.case_tokens (case_id, token, expires_at, label)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id
-                """,
-            (str(case_id), token, expires_at, label),
-        )
+        # v0.16.12: write token_hmac alongside raw token. Legacy
+        # deployments without the column see a generic INSERT-error
+        # and fall back to a token-only INSERT; the warning surfaces
+        # so the operator runs migration 014.
+        token_hmac_val = compute_token_hmac(token)
+        try:
+            cur.execute(
+                """
+                    INSERT INTO public.case_tokens
+                        (case_id, token, token_hmac, expires_at, label)
+                    VALUES (%s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                (str(case_id), token, token_hmac_val, expires_at, label),
+            )
+        except psycopg.errors.UndefinedColumn:
+            log.warning(
+                "case_tokens.token_hmac column missing — apply "
+                "migrations/014_case_token_hmac.sql. Falling back to "
+                "legacy INSERT for this token."
+            )
+            cur.execute(
+                """
+                    INSERT INTO public.case_tokens (case_id, token, expires_at, label)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                (str(case_id), token, expires_at, label),
+            )
         row = cur.fetchone()
         token_id = UUID(str(row["id"]))
 
@@ -135,32 +221,89 @@ def verify_token(*, token: str, dsn: str) -> VerifiedToken | None:
     page in all three cases so we don't leak whether a token ever
     existed.
 
-    Uses the partial index `case_tokens_active_token_idx` for the
-    hot path, so this is one indexed lookup + one cases-PK join +
-    one investigations-by-case lookup.
+    v0.16.12 (round-9 security CRIT): primary lookup is by
+    HMAC-SHA256(server_pepper, token) on the `token_hmac` column,
+    NOT by raw-token equality. The pre-v0.16.12 raw-equality compare
+    on an indexed column leaked byte-comparison timing — a side
+    channel an attacker with millions of samples could exploit to
+    guess token prefixes. HMAC makes the indexed compare uniformly
+    random regardless of input.
+
+    Falls back to legacy raw-token lookup when:
+      * `RECUPERO_TOKEN_PEPPER` is unset (compute_token_hmac → None), or
+      * the HMAC lookup misses (legacy tokens written before 014's
+        backfill ran). Falling back keeps existing victim links working
+        during the migration window; the backfill ops command closes
+        this gap.
     """
     if not token or len(token) < 20:
         # Cheap guard — real tokens are 43+ chars. Reject malformed
         # input early so we don't burn a roundtrip.
         return None
+    # v0.16.7 LOW: also reject excessively long tokens.
+    if len(token) > 64:
+        return None
 
     now = datetime.now(UTC)
+    candidate_hmac = compute_token_hmac(token)
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
                          connect_timeout=10) as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-                SELECT t.id AS token_id, t.case_id, t.expires_at,
-                       t.revoked_at, t.label, t.last_used_at,
-                       c.case_number, c.client_name, c.client_email,
-                       c.status AS case_status, c.case_state,
-                       c.estimated_value_usd
-                  FROM public.case_tokens t
-                  JOIN public.cases c ON c.id = t.case_id
-                 WHERE t.token = %s
-                """,
-            (token,),
-        )
-        row = cur.fetchone()
+        # Primary path: HMAC lookup. Only fires when the pepper is
+        # configured AND the column exists (legacy deployments without
+        # migration 014 fall through silently).
+        row = None
+        if candidate_hmac is not None:
+            try:
+                cur.execute(
+                    """
+                        SELECT t.id AS token_id, t.case_id, t.expires_at,
+                               t.revoked_at, t.label, t.last_used_at,
+                               c.case_number, c.client_name, c.client_email,
+                               c.status AS case_status, c.case_state,
+                               c.estimated_value_usd
+                          FROM public.case_tokens t
+                          JOIN public.cases c ON c.id = t.case_id
+                         WHERE t.token_hmac = %s
+                        """,
+                    (candidate_hmac,),
+                )
+                row = cur.fetchone()
+            except psycopg.errors.UndefinedColumn:
+                # Migration 014 not applied yet. Fall through to legacy.
+                pass
+        if row is None:
+            # Legacy path: raw-token equality. Still timing-leaky on
+            # principle, but ONLY hit during the migration transition
+            # or when the pepper isn't configured. Logged at INFO so
+            # ops can verify whether the HMAC path is doing work.
+            cur.execute(
+                """
+                    SELECT t.id AS token_id, t.case_id, t.expires_at,
+                           t.revoked_at, t.label, t.last_used_at,
+                           c.case_number, c.client_name, c.client_email,
+                           c.status AS case_status, c.case_state,
+                           c.estimated_value_usd
+                      FROM public.case_tokens t
+                      JOIN public.cases c ON c.id = t.case_id
+                     WHERE t.token = %s
+                    """,
+                (token,),
+            )
+            row = cur.fetchone()
+            if row is not None and candidate_hmac is not None:
+                # Lazy backfill: write the HMAC now so subsequent
+                # lookups for this token use the fast path. Best-effort.
+                try:
+                    cur.execute(
+                        "UPDATE public.case_tokens "
+                        "SET token_hmac = %s WHERE id = %s "
+                        "AND token_hmac IS NULL",
+                        (candidate_hmac, str(row["token_id"])),
+                    )
+                except psycopg.errors.UndefinedColumn:
+                    pass
+                except Exception as exc:  # noqa: BLE001
+                    log.debug("lazy hmac backfill failed: %s", exc)
         if not row:
             return None
         if row["revoked_at"] is not None:

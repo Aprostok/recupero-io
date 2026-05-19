@@ -59,6 +59,16 @@ from recupero.portal.tokens import VerifiedToken, verify_token
 
 log = logging.getLogger(__name__)
 
+# v0.18.2 (round-11 api-CRIT-003): once-per-process warning flag so
+# the prod-misconfig ERROR fires once rather than on every request.
+_IP_MISCONFIG_WARNED = False
+
+
+def _set_ip_misconfig_warned() -> None:
+    global _IP_MISCONFIG_WARNED
+    _IP_MISCONFIG_WARNED = True
+
+
 def _extract_client_ip(headers: dict[str, str]) -> str:
     """Return the client IP we'll persist alongside an engagement signature.
 
@@ -91,6 +101,32 @@ def _extract_client_ip(headers: dict[str, str]) -> str:
         trusted_hops = int(os.environ.get("RECUPERO_TRUSTED_PROXY_HOPS", "0"))
     except (TypeError, ValueError):
         trusted_hops = 0
+
+    # v0.18.2 (round-11 api-CRIT-003): in production, RECUPERO_TRUSTED_PROXY_HOPS
+    # MUST be set. Railway/Fly always sit behind a proxy; if the
+    # operator forgot to set the env var, this function silently
+    # returned "" for EVERY engagement signature — the legal-defensibility
+    # claim on /sign ("Your IP address will be recorded for audit
+    # purposes") became a misrepresentation. We now log a one-time
+    # ERROR per process when trusted_hops=0 in a detected production
+    # environment so the misconfig surfaces.
+    if trusted_hops <= 0:
+        try:
+            from recupero.api.auth import _is_production_environment
+            if _is_production_environment() and not _IP_MISCONFIG_WARNED:
+                log.error(
+                    "portal: RECUPERO_TRUSTED_PROXY_HOPS is unset in a "
+                    "PRODUCTION environment — engagement signatures will "
+                    "land with ip_address=NULL, breaking the legal-"
+                    "defensibility audit trail claimed on /sign. Set "
+                    "the env var to the number of proxy hops between "
+                    "the client and the worker (Railway = 1; Cloudflare "
+                    "+ Railway = 2)."
+                )
+                _set_ip_misconfig_warned()
+        except Exception:  # noqa: BLE001
+            pass  # detection failure shouldn't break the signature flow
+
     candidate: str | None = None
     if trusted_hops > 0 and xff_chain:
         # The right-most entry was added by the load balancer closest
@@ -513,6 +549,36 @@ def _route_sign_submit(
         "portal: signature captured case=%s investigation=%s name=%r fee=%s",
         verified.case_id, verified.investigation_id, name, fee,
     )
+
+    # v0.18.2 (round-11 sec-HIGH-003): rotate the bearer token after
+    # successful engagement signing. Pre-v0.18.2 the same token
+    # remained valid for its full TTL (90 days default). Anyone who
+    # later obtained the URL via:
+    #   * email-forward of the original diagnostic email
+    #   * browser-history scrape on a shared/kiosk device
+    #   * screen-share recording / shoulder surf at signing
+    # could re-open /portal/<token>, see PII (case_number, client_email,
+    # estimated_value_usd), and download artifacts for ~89 days.
+    # New: revoke the just-used token; the signed.html.j2 page is
+    # rendered with the SAME token URL (one final render is fine);
+    # subsequent /portal/<token> requests fail with "link unavailable".
+    # Customers who need ongoing access get a fresh token via the
+    # admin UI's generate-customer-link path.
+    try:
+        from recupero.portal.tokens import revoke_token
+        revoke_token(token_id=verified.token_id, dsn=dsn)
+        log.info(
+            "portal: rotated token after signing token_id=%s case=%s",
+            verified.token_id, verified.case_id,
+        )
+    except Exception as rotate_exc:  # noqa: BLE001
+        # Best-effort. If revocation fails, the engagement is still
+        # captured; ops can revoke manually. Logged loudly so monitoring
+        # picks it up.
+        log.exception(
+            "portal: post-sign token rotation failed token_id=%s: %s",
+            verified.token_id, rotate_exc,
+        )
 
     html = _get_jinja_env().get_template("signed.html.j2").render(
         token=token,

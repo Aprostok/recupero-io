@@ -732,9 +732,51 @@ def _enumerate_all_destinations(
     return rows
 
 
+# v0.18.2 (round-11 sec-HIGH-013): per-field length caps prevent a
+# 4MB AI output → 4MB PDF render DoS. Conservative ceilings — the
+# longest legitimate VICTIM_SUMMARY runs ~1500 chars in worst case;
+# INCIDENT_NARRATIVE_RECUPERO ~3000 chars; DESTINATION_NOTES totals
+# typically under 8000 chars across all addresses combined. 4× the
+# typical max is room to grow without enabling abuse.
+_AI_FIELD_MAX_LENGTHS: dict[str, int] = {
+    "INCIDENT_TYPE": 200,
+    "INCIDENT_NARRATIVE_RECUPERO": 12000,
+    "INCIDENT_NARRATIVE_FIRST_PERSON": 12000,
+    "VICTIM_JURISDICTION": 300,
+    "DESTINATION_NOTES": 32000,  # this is a dict; checked as JSON-encoded length
+    "UNRECOVERABLE_ITEMS": 16000,  # list of dicts; same JSON-encoded check
+    "VICTIM_SUMMARY": 6000,
+}
+
+
 def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
-    """Return a list of validation problems with the AI output. Empty = clean."""
+    """Return a list of validation problems with the AI output. Empty = clean.
+
+    v0.18.2 (round-11 sec-HIGH-013): now also enforces per-field
+    length caps (defense against unbounded AI output → PDF DoS) and
+    warns about unknown top-level keys (defense against prompt-
+    injection that smuggles new fields into the output that future
+    template changes might iterate over).
+    """
     problems = []
+    # v0.18.2: per-field length caps
+    for k, max_len in _AI_FIELD_MAX_LENGTHS.items():
+        v = ai_obj.get(k)
+        if v is None:
+            continue
+        # For dicts/lists, measure JSON-encoded length (this is what
+        # eventually lands in brief_editorial.json).
+        if isinstance(v, (dict, list)):
+            measured = len(json.dumps(v, ensure_ascii=False))
+        elif isinstance(v, str):
+            measured = len(v)
+        else:
+            continue
+        if measured > max_len:
+            problems.append(
+                f"{k} exceeds max length {max_len} (got {measured}) — "
+                f"AI output is unbounded; reject to prevent PDF-DoS"
+            )
     required_keys = [
         "INCIDENT_TYPE", "INCIDENT_TYPE_AI_CONFIDENCE",
         "INCIDENT_NARRATIVE_RECUPERO", "INCIDENT_NARRATIVE_RECUPERO_AI_CONFIDENCE",
@@ -752,6 +794,28 @@ def _validate_ai_output(ai_obj: dict[str, Any]) -> list[str]:
     for k in required_keys:
         if k not in ai_obj:
             problems.append(f"missing key: {k}")
+
+    # v0.18.2 (round-11 sec-HIGH-013): unknown-key warning. Pydantic
+    # `extra="forbid"` equivalent — prompt-injection attacker can't
+    # smuggle a new field (e.g., "INCIDENT_NARRATIVE_RECUPERO_OVERRIDE")
+    # that future template changes might iterate over. We WARN
+    # (not hard-fail) so adding new legitimate fields in a future
+    # release doesn't require updating this list in lock-step.
+    _allowed_keys = set(required_keys) | {
+        # Optional / forward-compat keys the model may emit.
+        "REVIEW_REQUIRED",
+        "REVIEW_REASON",
+        "TEMPLATE_VERSION",
+        "INVESTIGATOR_NOTES",
+    }
+    unknown = set(ai_obj.keys()) - _allowed_keys
+    if unknown:
+        # Don't fail — just log so the model's drift surfaces. The
+        # downstream emit_brief loop picks only keys it knows.
+        log.warning(
+            "ai_editorial: unknown top-level keys in AI output: %s "
+            "(allowed: required + %s)", sorted(unknown), sorted(_allowed_keys - set(required_keys)),
+        )
 
     valid_confidence = {"low", "medium", "high"}
     for k, v in ai_obj.items():

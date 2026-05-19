@@ -576,7 +576,18 @@ def _route_artifact(
         log.warning("portal artifact sign failed: %s", exc)
         return _render_error(503, "could not sign artifact URL — try again")
 
-    return 302, b"", {"Location": signed}
+    # v0.17.6 (round-10 security HIGH): the artifact 302 used to skip
+    # _with_security_headers, so the Location-only response was missing
+    # Referrer-Policy: no-referrer. Browsers following the redirect
+    # would attach the portal URL (which contains the bearer token)
+    # in the Referer header to Supabase Storage — leaking it into any
+    # downstream CDN access log Supabase serves through. Wrap properly.
+    # Also Cache-Control: private, no-store so intermediate caches
+    # don't retain the signed URL once it 302's into a different origin.
+    return 302, b"", _with_security_headers({
+        "Location": signed,
+        "Cache-Control": "private, no-store, max-age=0",
+    })
 
 
 def _resolve_portal_artifact(

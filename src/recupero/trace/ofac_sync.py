@@ -70,7 +70,19 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from xml.etree import ElementTree as ET
+
+# v0.17.6 (round-10 security HIGH): prefer defusedxml when available
+# to harden the SDN parse against billion-laughs / XXE attacks. Even
+# though we trust Treasury as the source, an MITM or compromised CDN
+# could inject hostile XML; defusedxml refuses entity-expansion bombs
+# that the stdlib ElementTree happily processes. Falls back to stdlib
+# with a one-time WARNING when defusedxml isn't installed (test envs).
+try:
+    from defusedxml import ElementTree as ET  # type: ignore[no-redef]
+    _XML_PARSER_HARDENED = True
+except ImportError:
+    from xml.etree import ElementTree as ET  # type: ignore[no-redef]
+    _XML_PARSER_HARDENED = False
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +98,10 @@ OFAC_CONS_ADVANCED_URL = "https://www.treasury.gov/ofac/downloads/cons_advanced.
 DEFAULT_OFAC_CSV_PATH = (
     Path(__file__).parent.parent / "labels" / "seeds" / "ofac_crypto_live.csv"
 )
+
+# Module-level flag so the defusedxml-fallback WARN fires at most once
+# per process even when the sync is invoked repeatedly.
+_PARSER_HARDENING_WARNED = False
 
 # Chains we care about — the OFAC feed labels are like
 # "Digital Currency Address - ETH" or "Digital Currency Address - XBT".
@@ -218,17 +234,41 @@ def sync_ofac_sdn(
 
 def load_ofac_csv(
     csv_path: Path | None = None,
+    *,
+    staleness_warn_days: int = 30,
 ) -> list[OFACCryptoEntry]:
     """Load the previously-synced OFAC CSV. Returns ``[]`` when
     the file doesn't exist (no prior sync run).
 
     risk_scoring.load_high_risk_db() calls this so live OFAC
     entries flow into the brief without a code deploy.
+
+    v0.17.6 (round-10 security HIGH): logs a WARN when the CSV file's
+    mtime is older than ``staleness_warn_days`` (default 30). Treasury
+    updates the SDN list multiple times per week; running with a
+    months-old CSV is the silent failure mode of "this case missed
+    a newly-listed Lazarus wallet because the sync cron broke 6 weeks
+    ago." Operators see this warning in Railway logs and can
+    investigate. Set staleness_warn_days=0 to disable (tests).
     """
     path = csv_path or DEFAULT_OFAC_CSV_PATH
     if not path.exists():
         log.debug("ofac csv not present at %s (no prior sync)", path)
         return []
+    if staleness_warn_days > 0:
+        try:
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
+            age_days = (datetime.now(UTC) - mtime).days
+            if age_days > staleness_warn_days:
+                log.warning(
+                    "ofac_csv: file at %s is %d days old (threshold %d). "
+                    "Treasury updates the SDN list ~3x/week; this deploy "
+                    "may be missing recent additions. Re-run "
+                    "`recupero-ops ofac-sync` to refresh.",
+                    path, age_days, staleness_warn_days,
+                )
+        except OSError:
+            pass
     try:
         out: list[OFACCryptoEntry] = []
         with path.open("r", encoding="utf-8") as f:
@@ -256,6 +296,11 @@ def load_ofac_csv(
 def _extract_crypto_entries(xml_bytes: bytes) -> list[OFACCryptoEntry]:
     """Parse the OFAC SDN XML and extract crypto address entries.
 
+    v0.17.6: when defusedxml is unavailable, log a one-time WARNING
+    so ops knows the deploy is using the less-hardened parser. The
+    runtime risk is small (we only consume Treasury's signed-TLS
+    feed), but defense-in-depth.
+
     Treasury's SDN feed structure (simplified):
 
       <sdnList>
@@ -279,6 +324,17 @@ def _extract_crypto_entries(xml_bytes: bytes) -> list[OFACCryptoEntry]:
     XML namespacing varies; we use .iter() to find elements
     regardless of namespace prefix.
     """
+    if not _XML_PARSER_HARDENED:
+        # WARN once per process — repeat WARNs every sync would spam logs.
+        global _PARSER_HARDENING_WARNED
+        if not _PARSER_HARDENING_WARNED:
+            log.warning(
+                "ofac_sync: defusedxml not installed — falling back to "
+                "stdlib xml.etree.ElementTree which is vulnerable to "
+                "billion-laughs/XXE if the OFAC feed is tampered with. "
+                "Install defusedxml in production: `pip install defusedxml`."
+            )
+            _PARSER_HARDENING_WARNED = True
     root = ET.fromstring(xml_bytes)
     entries: list[OFACCryptoEntry] = []
 

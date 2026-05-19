@@ -607,21 +607,9 @@ def _run_watch_tick_once(*, limit: int | None) -> int:
 
 def _count_active_watchlist(dsn: str) -> int:
     """Total active rows in public.watchlist (irrespective of cooldown)."""
-    import re as _re
-
     import psycopg as _psy
-    pooled = dsn
-    if "db." in pooled and ".supabase.co" in pooled:
-        m = _re.search(
-            r"postgres(?:ql)?://([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co",
-            pooled,
-        )
-        if m:
-            user, pwd, ref = m.group(1), m.group(2), m.group(3)
-            pooled = (
-                f"postgresql://{user}.{ref}:{pwd}"
-                f"@aws-1-us-east-1.pooler.supabase.com:6543/postgres"
-            )
+    from recupero._common import pooled_dsn as _pooled_dsn
+    pooled = _pooled_dsn(dsn)
     try:
         with _psy.connect(pooled, autocommit=True, prepare_threshold=None,
                           connect_timeout=10) as conn, conn.cursor() as cur:

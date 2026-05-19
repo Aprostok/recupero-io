@@ -57,6 +57,8 @@ from typing import TYPE_CHECKING, Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from recupero._common import short_addr as _short_addr
+
 if TYPE_CHECKING:  # pragma: no cover
     from recupero.models import Case
 
@@ -137,16 +139,6 @@ class GraphEdge:
             "lastTime": self.last_time,
             "isCrossChain": self.is_cross_chain,
         }
-
-
-def _short_addr(addr: str) -> str:
-    # v0.17.3 (round-10 audit MED): delegates to canonical
-    # recupero._common.short_addr so the 6 prior independent
-    # implementations don't drift over time.
-    from recupero._common import short_addr as _canonical
-    return _canonical(addr)
-
-
 
 
 def _explorer_url(chain: str, address: str) -> str:

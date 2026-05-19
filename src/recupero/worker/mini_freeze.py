@@ -44,6 +44,7 @@ _TEMPLATES_DIR = Path(__file__).parent.parent / "reports" / "templates"
 # watchlist digests for those chains silently dropped explorer links.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+    short_addr as _short_addr,
 )
 
 
@@ -337,16 +338,6 @@ def _change_to_ctx(mc: MaterialChange) -> dict[str, Any]:
         "delta_usd_human": _fmt_signed_usd(mc.delta_usd),
         "tx_count_delta_human": _fmt_signed_count(mc.tx_count_delta),
     }
-
-
-def _short_addr(addr: str) -> str:
-    # v0.17.3 (round-10 audit MED): delegates to canonical
-    # recupero._common.short_addr so the 6 prior independent
-    # implementations don't drift over time.
-    from recupero._common import short_addr as _canonical
-    return _canonical(addr)
-
-
 
 
 def _fmt_usd(usd: Decimal | None) -> str:

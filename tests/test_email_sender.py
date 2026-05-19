@@ -72,11 +72,29 @@ def test_missing_api_key_returns_failure(monkeypatch) -> None:
 
 
 def test_from_header_default(monkeypatch) -> None:
-    """No env vars set → use the module defaults."""
+    """No env vars set → falls back to the canonical investigator-identity
+    placeholder address (``compliance@recupero.io``), NOT the dev's
+    address. v0.19.0 (round-11 arch follow-up): pre-v0.19.0 the
+    fallback hard-coded ``alec@recupero.io``, so an unconfigured deploy
+    routed every outbound message through the dev's mailbox; now the
+    fallback flows from ``recupero._common.investigator_defaults``."""
     monkeypatch.delenv("RECUPERO_EMAIL_FROM", raising=False)
     monkeypatch.delenv("RECUPERO_EMAIL_FROM_NAME", raising=False)
+    monkeypatch.delenv("RECUPERO_INVESTIGATOR_EMAIL", raising=False)
     assert _format_from_header(None, None) == (
-        "Recupero Investigation Services <alec@recupero.io>"
+        "Recupero Investigation Services <compliance@recupero.io>"
+    )
+
+
+def test_from_header_uses_investigator_email_when_set(monkeypatch) -> None:
+    """v0.19.0: setting RECUPERO_INVESTIGATOR_EMAIL propagates to the
+    From: fallback. Verifies the env-var path doesn't drift from
+    investigator_defaults() over time."""
+    monkeypatch.delenv("RECUPERO_EMAIL_FROM", raising=False)
+    monkeypatch.delenv("RECUPERO_EMAIL_FROM_NAME", raising=False)
+    monkeypatch.setenv("RECUPERO_INVESTIGATOR_EMAIL", "ops@example.com")
+    assert _format_from_header(None, None) == (
+        "Recupero Investigation Services <ops@example.com>"
     )
 
 

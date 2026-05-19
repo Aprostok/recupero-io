@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -986,22 +985,9 @@ def _persist_and_diff(
     )
 
 
-def _pooled_dsn(dsn: str) -> str:
-    """Rewrite a direct-host Supabase DSN to the transaction pooler
-    (port 6543) — same workaround used elsewhere for IPv6-only direct
-    hosts that some home networks can't resolve."""
-    if "db." in dsn and ".supabase.co" in dsn:
-        m = re.search(
-            r"postgres(?:ql)?://([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co",
-            dsn,
-        )
-        if m:
-            user, pwd, ref = m.group(1), m.group(2), m.group(3)
-            return (
-                f"postgresql://{user}.{ref}:{pwd}"
-                f"@aws-1-us-east-1.pooler.supabase.com:6543/postgres"
-            )
-    return dsn
+# v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
+# this was duplicated verbatim in 4 worker modules).
+from recupero._common import pooled_dsn as _pooled_dsn  # noqa: E402
 
 
 __all__ = (

@@ -25,7 +25,10 @@ Required env vars:
   * SUPABASE_DB_URL       — for the audit log (same DB the worker uses)
 
 Optional env vars:
-  * RECUPERO_EMAIL_FROM       — From: address (default "alec@recupero.io")
+  * RECUPERO_EMAIL_FROM       — From: address. Default falls back to
+                                ``RECUPERO_INVESTIGATOR_EMAIL`` and
+                                ultimately to ``compliance@recupero.io``
+                                when neither is set.
   * RECUPERO_EMAIL_FROM_NAME  — From: display name (default "Recupero Investigation Services")
   * RECUPERO_DISABLE_EMAIL    — If "1", skip sending entirely + log only.
                                 For local development / testing.
@@ -69,8 +72,19 @@ log = logging.getLogger(__name__)
 
 
 _RESEND_API_BASE = "https://api.resend.com"
-_DEFAULT_FROM_ADDR = "alec@recupero.io"
+# v0.19.0: From-address default now resolves at call-time via the
+# canonical investigator-identity helper so an unconfigured deploy
+# can't ship the dev's email on every outbound message. Pre-v0.19.0
+# `_DEFAULT_FROM_ADDR = "alec@recupero.io"` was baked in as a module
+# constant; rotating RECUPERO_INVESTIGATOR_EMAIL had no effect on
+# already-imported workers.
 _DEFAULT_FROM_NAME = "Recupero Investigation Services"
+
+
+def _default_from_addr() -> str:
+    """Resolve the canonical From: fallback address at call time."""
+    from recupero._common import investigator_defaults
+    return investigator_defaults()["INVESTIGATOR_EMAIL"]
 
 # Retry sequence (seconds) for transient Resend failures. Mirrors
 # the ai_editorial retry budget so worker logs read consistently
@@ -390,7 +404,7 @@ def _format_from_header(
     """
     addr_raw = (from_addr
             or os.environ.get("RECUPERO_EMAIL_FROM", "").strip()
-            or _DEFAULT_FROM_ADDR)
+            or _default_from_addr())
     name_raw = (from_name
             or os.environ.get("RECUPERO_EMAIL_FROM_NAME", "").strip()
             or _DEFAULT_FROM_NAME)

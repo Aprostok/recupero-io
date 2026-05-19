@@ -45,6 +45,7 @@ _TEMPLATES_DIR = Path(__file__).parent.parent / "reports" / "templates"
 # Chain explorer prefixes — centralized in src/recupero/_common.py.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+    short_addr as _short_addr,
 )
 
 
@@ -305,16 +306,6 @@ def _explorer_url(address: str, chain: str) -> str:
         chain, "https://etherscan.io/address/",
     )
     return f"{prefix}{address}"
-
-
-def _short_addr(addr: str) -> str:
-    # v0.17.3 (round-10 audit MED): delegates to canonical
-    # recupero._common.short_addr so the 6 prior independent
-    # implementations don't drift over time.
-    from recupero._common import short_addr as _canonical
-    return _canonical(addr)
-
-
 
 
 def _fmt_usd(v: Decimal | None) -> str:

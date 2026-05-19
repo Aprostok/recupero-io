@@ -895,22 +895,11 @@ def _build_summary(
     return out
 
 
-# ----- DSN pooler (mirrors dashboard_summary._pooled_dsn) ----- #
-
-
-def _pooled_dsn(dsn: str) -> str:
-    if "db." in dsn and ".supabase.co" in dsn:
-        m = re.search(
-            r"postgres(?:ql)?://([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co",
-            dsn,
-        )
-        if m:
-            user, pwd, ref = m.group(1), m.group(2), m.group(3)
-            return (
-                f"postgresql://{user}.{ref}:{pwd}"
-                f"@aws-1-us-east-1.pooler.supabase.com:6543/postgres"
-            )
-    return dsn
+# ----- DSN pooler ----- #
+#
+# v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
+# this was duplicated verbatim in 4 worker modules).
+from recupero._common import pooled_dsn as _pooled_dsn  # noqa: E402
 
 
 __all__ = ("list_investigations", "get_investigation_detail")

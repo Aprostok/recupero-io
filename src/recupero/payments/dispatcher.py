@@ -742,10 +742,15 @@ def _try_send_alert(*, subject: str, body_html: str) -> None:
     dispatcher's hot path.
     """
     import os
+    # v0.19.0: final fallback resolves via the canonical investigator
+    # identity (RECUPERO_INVESTIGATOR_EMAIL / compliance@recupero.io)
+    # instead of the dev's email. Pre-v0.19.0 an unconfigured deploy
+    # routed ops alerts to alec@recupero.io regardless of operator.
+    from recupero._common import investigator_defaults
     to = (
         os.environ.get("RECUPERO_OPS_ALERT_EMAIL", "").strip()
         or os.environ.get("RECUPERO_EMAIL_FROM", "").strip()
-        or "alec@recupero.io"  # final fallback — the From default
+        or investigator_defaults()["INVESTIGATOR_EMAIL"]
     )
     try:
         from recupero.worker._email import send_email

@@ -136,14 +136,30 @@ def send_followup(
     *,
     candidate: FollowupCandidate,
     dsn: str,
-    investigator_name: str = "Alec Prostok",
-    investigator_email: str = "alec@recupero.io",
+    investigator_name: str | None = None,
+    investigator_email: str | None = None,
 ) -> bool:
     """Render + send one follow-up email. Updates
     ``last_followup_sent_at`` on success. Returns True on success,
     False on render failure / send failure.
+
+    v0.19.0: ``investigator_name`` / ``investigator_email`` default to
+    ``None``; if unset they're resolved at call-time via
+    ``recupero._common.investigator_defaults()``. Pre-v0.19.0 the
+    defaults hard-coded "Alec Prostok" / "alec@recupero.io" — so an
+    operator running Recupero under a different identity needed an
+    extra step to override per call, and an unconfigured deploy
+    signed the dev's name on every follow-up.
     """
+    from recupero._common import investigator_defaults
     from recupero.worker._email import send_email
+
+    if investigator_name is None or investigator_email is None:
+        _inv = investigator_defaults()
+        if investigator_name is None:
+            investigator_name = _inv["INVESTIGATOR_NAME"]
+        if investigator_email is None:
+            investigator_email = _inv["INVESTIGATOR_EMAIL"]
 
     now = datetime.now(UTC)
     days_since = (now - candidate.engagement_started_at).days

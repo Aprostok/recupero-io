@@ -96,6 +96,7 @@ def check_brief_schema_version(brief: dict[str, Any]) -> str | None:
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
     atomic_write_text,
+    short_addr as _short_addr,
 )
 
 
@@ -1141,18 +1142,6 @@ def _build_issuer_freezable_ctx(
         "current_balance_count": n_current,
         "earliest_observed": raw.get("earliest_observed"),
     }
-
-
-def _short_addr(addr: str) -> str:
-    """Truncate addresses for inline display.
-
-    v0.16.10: delegates to recupero._common.short_addr so the brief
-    and the LE handoff render addresses identically. Previously this
-    used 8-char prefix while emit_brief.py used 6-char prefix; the
-    same address rendered differently across artifacts.
-    """
-    from recupero._common import short_addr as _canonical
-    return _canonical(addr)
 
 
 def _build_le_routing_ctx(

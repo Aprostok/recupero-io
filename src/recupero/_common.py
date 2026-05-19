@@ -296,6 +296,54 @@ def db_connect(dsn: str, **overrides: Any):
     return psycopg.connect(dsn, **kwargs)
 
 
+# ---- Investigator identity defaults ---- #
+#
+# v0.19.0 (round-11 arch follow-up): single source for the
+# operator-identity fallbacks used by emit_brief.py (no-AI template
+# write path) AND ai_editorial.py (AI-prompt context). Pre-v0.19.0 both
+# modules defined `_investigator_defaults()` independently — the two
+# implementations drifted (ai_editorial returned an extra
+# `TEMPLATE_VERSION` key; otherwise identical) and any field-add
+# required touching two files. With one source, adding a new
+# investigator-identity env var lives in one place.
+
+
+def investigator_defaults() -> dict[str, str]:
+    """Resolve investigator identity from env at call-time.
+
+    Returns a dict of INVESTIGATOR_* fields populated from
+    ``RECUPERO_INVESTIGATOR_*`` env vars. Unset name / email fall back
+    to obvious placeholders so an unconfigured deploy can't silently
+    ship the developer's name on legal documents.
+
+    Read at call-time — never module-load — so a deploy that sets the
+    env vars late (or rotates them) picks up the new value without a
+    worker restart.
+    """
+    return {
+        "INVESTIGATOR_NAME": (
+            os.environ.get("RECUPERO_INVESTIGATOR_NAME", "").strip()
+            or "(operator name not configured)"
+        ),
+        "INVESTIGATOR_EMAIL": (
+            os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "").strip()
+            or "compliance@recupero.io"
+        ),
+        "INVESTIGATOR_ENTITY": (
+            os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC")
+        ),
+        "INVESTIGATOR_ENTITY_FULL": (
+            os.environ.get(
+                "RECUPERO_INVESTIGATOR_ENTITY_FULL",
+                "Recupero LLC, a Delaware limited liability company",
+            )
+        ),
+        "INVESTIGATOR_WEB": (
+            os.environ.get("RECUPERO_INVESTIGATOR_WEB", "recupero.io")
+        ),
+    }
+
+
 # ---- Boolean env-var parsing ---- #
 
 
@@ -320,6 +368,58 @@ def env_truthy(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw in _TRUTHY_VALUES
+
+
+# ---- DSN pooler rewrite ---- #
+#
+# v0.19.0 (round-11 arch follow-up): single source for the
+# direct-host → transaction-pooler rewrite. Pre-v0.19.0 this function
+# was duplicated verbatim in worker/watch_tick.py, worker/dashboard_summary.py,
+# worker/investigations_api.py, and inlined in worker/main.py. The
+# pooler region ("aws-1-us-east-1") was hardcoded in 4 places — when
+# Supabase added EU and AP regions, three of those four needed a copy
+# edit. Centralized here so the region map lives in one place.
+
+
+def pooled_dsn(dsn: str) -> str:
+    """Rewrite a direct-host Supabase DSN to the transaction pooler
+    (port 6543).
+
+    Why: some home networks + Railway sandbox can't reach Supabase's
+    IPv6-only direct host (``db.<ref>.supabase.co``); the pooler endpoint
+    (``aws-1-us-east-1.pooler.supabase.com``) is dual-stack and is the
+    long-term-supported entry point for non-transaction-mode work.
+
+    Behavior is best-effort: if the DSN doesn't match the direct-host
+    pattern (already pooled, custom DSN, env-var unset), returns it
+    unchanged. The matching is regex-based on the user/password/ref
+    triple so the password may contain special chars without breaking
+    parsing.
+
+    The pooler region defaults to ``us-east-1`` because that's where
+    every Recupero project lives today. Operators running a Supabase
+    project in another region can set ``RECUPERO_SUPABASE_POOLER_HOST``
+    to override the full host string (e.g.
+    ``aws-1-eu-central-1.pooler.supabase.com``).
+    """
+    if not dsn or "db." not in dsn or ".supabase.co" not in dsn:
+        return dsn
+    import re as _re
+    m = _re.search(
+        r"postgres(?:ql)?://([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co",
+        dsn,
+    )
+    if not m:
+        return dsn
+    user, pwd, ref = m.group(1), m.group(2), m.group(3)
+    pooler_host = (
+        os.environ.get("RECUPERO_SUPABASE_POOLER_HOST", "").strip()
+        or "aws-1-us-east-1.pooler.supabase.com"
+    )
+    return (
+        f"postgresql://{user}.{ref}:{pwd}"
+        f"@{pooler_host}:6543/postgres"
+    )
 
 
 # ---- DSN redaction helper ---- #
@@ -356,7 +456,10 @@ __all__ = (
     "aggregate_evidence_mode_from_holdings",
     "db_connect",
     "env_truthy",
+    "investigator_defaults",
+    "pooled_dsn",
     "redact_dsn",
     "aggregate_evidence_mode_from_entries",
     "atomic_write_text",
+    "canonical_address_key",
 )

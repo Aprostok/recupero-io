@@ -40,43 +40,22 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from recupero._common import (
+    investigator_defaults as _investigator_defaults,
+    short_addr,
+)
 from recupero.models import Case, LabelCategory
 from recupero.reports.brief import BRIEF_SCHEMA_VERSION as _BRIEF_SCHEMA_VERSION
 from recupero.reports.victim import VictimInfo, load_victim
 from recupero.storage.case_store import CaseStore
 
 
-# Investigator identity is resolved from env vars at module load with the
-# current solo-operator values as fallback. Set RECUPERO_INVESTIGATOR_*
-# in Railway Variables to override per deployment. See identical block in
-# reports/ai_editorial.py — both modules need the same values because
-# emit_brief writes the EDITORIAL_TEMPLATE that ships when AI editorial
-# is skipped, and ai_editorial bakes the same defaults into its prompt.
-def _investigator_defaults() -> dict[str, str]:
-    """Resolve investigator identity from env. Read at call-time
-    (no module-load caching) so multi-tenant deploys can set env
-    per-request without restarting the worker.
-
-    v0.16.9 (round-9 output-artifacts LOW): the prior module-load
-    `_INV` cache was evaluated ONCE at import. Operators rotating
-    `RECUPERO_INVESTIGATOR_NAME` after the worker started saw stale
-    values in every brief. Plus the hardcoded fallback "Alec Prostok"
-    / "alec@recupero.io" silently shipped on every brief whenever
-    the env var was unset, signing legal documents in the wrong
-    operator's name.
-    """
-    return {
-        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "").strip()
-            or "(operator name not configured)",
-        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "").strip()
-            or "compliance@recupero.io",
-        "INVESTIGATOR_ENTITY": os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
-        "INVESTIGATOR_ENTITY_FULL": os.environ.get(
-            "RECUPERO_INVESTIGATOR_ENTITY_FULL",
-            "Recupero LLC, a Delaware limited liability company",
-        ),
-        "INVESTIGATOR_WEB": os.environ.get("RECUPERO_INVESTIGATOR_WEB", "recupero.io"),
-    }
+# Investigator identity is resolved from env vars at call-time via
+# `recupero._common.investigator_defaults()` (imported above as
+# `_investigator_defaults`). Pre-v0.19.0 the function was defined
+# inline here AND in reports/ai_editorial.py with the same body —
+# centralized in v0.19.0 so adding a new RECUPERO_INVESTIGATOR_*
+# env var lives in one place.
 
 
 # v0.17.3 (round-10 audit MED): module-load cache REMOVED. Pre-v0.17.3
@@ -154,17 +133,6 @@ def _parse_usd_string(s: str) -> Decimal:
         return Decimal(s)
     except Exception:
         return Decimal("0")
-
-
-def short_addr(addr: str) -> str:
-    """Shorten an address for display.
-
-    v0.16.10: delegates to recupero._common.short_addr so the brief
-    and the LE handoff render the same address identically (was
-    diverging — see the comment on _common.short_addr).
-    """
-    from recupero._common import short_addr as _canonical
-    return _canonical(addr)
 
 
 def usd(v: Decimal | float | int | None) -> str:

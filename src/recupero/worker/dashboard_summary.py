@@ -92,7 +92,6 @@ Schema:
 from __future__ import annotations
 
 import logging
-import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -736,22 +735,11 @@ def _query_payments(conn) -> dict[str, Any]:
     return out
 
 
-# ----- DSN pooler rewrite (mirrors watch_tick._pooled_dsn) ----- #
-
-
-def _pooled_dsn(dsn: str) -> str:
-    if "db." in dsn and ".supabase.co" in dsn:
-        m = re.search(
-            r"postgres(?:ql)?://([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co",
-            dsn,
-        )
-        if m:
-            user, pwd, ref = m.group(1), m.group(2), m.group(3)
-            return (
-                f"postgresql://{user}.{ref}:{pwd}"
-                f"@aws-1-us-east-1.pooler.supabase.com:6543/postgres"
-            )
-    return dsn
+# ----- DSN pooler rewrite ----- #
+#
+# v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
+# this was duplicated verbatim in 4 worker modules).
+from recupero._common import pooled_dsn as _pooled_dsn  # noqa: E402
 
 
 __all__ = ("build_dashboard_summary",)

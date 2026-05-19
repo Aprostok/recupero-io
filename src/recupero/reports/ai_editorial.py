@@ -37,6 +37,11 @@ from typing import Any
 
 # anthropic is loaded lazily so module import doesn't fail without the package.
 
+from recupero._common import (
+    investigator_defaults as _investigator_defaults,
+    short_addr as _short_addr,
+)
+
 log = logging.getLogger(__name__)
 
 MODEL = "claude-opus-4-7"
@@ -142,41 +147,26 @@ AI_DRAFTED_KEYS = [
 # carries a per-case investigator field, these become the fallback only
 # and per-case values flow through the pipeline instead.
 #
-# v0.17.3 (round-10 audit HIGH): defaults reconciled with emit_brief.py.
-# Pre-v0.17.3 this module hard-coded "Alec Prostok" / "alec@recupero.io"
-# while emit_brief.py defaulted to "(operator name not configured)" /
-# "compliance@recupero.io" — so when RECUPERO_INVESTIGATOR_* env vars
-# were unset, the AI prompt and the no-AI template rendered DIFFERENT
-# investigator identities into the same brief. Centralized fix below.
-def _investigator_defaults() -> dict[str, str]:
-    """Resolve investigator identity at call-time (never at module-load).
-
-    v0.17.3: returns "(operator name not configured)" / "compliance@
-    recupero.io" when env vars are unset, matching emit_brief.py exactly.
-    The placeholder ensures an unconfigured deploy ships obvious
-    placeholders rather than the developer's name signing legal docs.
-    """
-    return {
-        "INVESTIGATOR_NAME": os.environ.get("RECUPERO_INVESTIGATOR_NAME", "").strip()
-            or "(operator name not configured)",
-        "INVESTIGATOR_EMAIL": os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "").strip()
-            or "compliance@recupero.io",
-        "INVESTIGATOR_ENTITY": os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
-        "INVESTIGATOR_ENTITY_FULL": os.environ.get(
-            "RECUPERO_INVESTIGATOR_ENTITY_FULL",
-            "Recupero LLC, a Delaware limited liability company",
-        ),
-        "INVESTIGATOR_WEB": os.environ.get("RECUPERO_INVESTIGATOR_WEB", "recupero.io"),
-        "TEMPLATE_VERSION": "v1.0 — April 2026",
-    }
-
-
+# v0.19.0: investigator identity resolved via the canonical
+# `recupero._common.investigator_defaults()` (imported above as
+# `_investigator_defaults`). Pre-v0.19.0 the function was defined
+# inline here AND in emit_brief.py — that duplication drifted in the
+# v0.17.x audit cycle (this module returned an extra TEMPLATE_VERSION
+# key) and any field-add required touching two files. The single
+# consumer below augments the canonical dict with TEMPLATE_VERSION
+# directly.
+#
 # v0.17.3 (round-10 audit MED): module-load cache REMOVED.
 # Pre-v0.17.3 `STATIC_EDITORIAL_DEFAULTS = _investigator_defaults()`
 # evaluated env vars at import — defeating the v0.16.9 fix that made
 # the function call-time. Operators rotating RECUPERO_INVESTIGATOR_*
 # after worker start saw stale values. The single consumer at line
 # ~1180 now calls _investigator_defaults() directly.
+
+# Editorial-template version banner, written into every editorial dict
+# alongside the investigator-identity fields. Bumped when the JSON
+# schema changes in a backward-incompatible way.
+_EDITORIAL_TEMPLATE_VERSION = "v1.0 — April 2026"
 
 # Compact, illustrative few-shot. Mirrors the production Sarah Chen case.
 # This is fictional test data already used in the codebase as the canonical
@@ -469,14 +459,6 @@ Draft the editorial JSON for the actual case. Output only the JSON object, no co
 # this and get a single concatenated string. New code should use the
 # split templates above with cache_control on the few-shot block.
 USER_PROMPT_TEMPLATE = FEW_SHOT_PROMPT_TEMPLATE + CASE_PROMPT_TEMPLATE
-
-
-def _short_addr(addr: str) -> str:
-    # v0.17.3 (round-10 audit MED): delegates to canonical
-    # recupero._common.short_addr so the 6 prior independent
-    # implementations don't drift over time.
-    from recupero._common import short_addr as _canonical
-    return _canonical(addr)
 
 
 
@@ -1304,6 +1286,11 @@ def build_editorial_dict(
     # takes effect without a worker restart (round-10 audit fix).
     for k, v in _investigator_defaults().items():
         editorial[k] = v
+    # TEMPLATE_VERSION sits alongside the investigator fields in the
+    # written editorial dict; it tracks the editorial schema rather
+    # than operator identity, so it stays out of the canonical
+    # `investigator_defaults()` return.
+    editorial["TEMPLATE_VERSION"] = _EDITORIAL_TEMPLATE_VERSION
 
     # Pre-fill from the cases row (PR #12 columns: address_line1,
     # address_line2, jurisdiction, ic3_case_id). Applied LAST so a

@@ -48,18 +48,29 @@ from recupero.reports.victim import VictimInfo
 log = logging.getLogger(__name__)
 
 
-# Default investigator info when the cases row doesn't carry it (the schema
-# doesn't have an investigator column today). Each Railway deployment can
-# override via RECUPERO_INVESTIGATOR_* env vars; the fallback values
-# match the solo-operator setup. When the cases table eventually carries
-# a per-case investigator field, those values will flow through and these
-# only apply for legacy rows.
-_DEFAULT_INVESTIGATOR = InvestigatorInfo(
-    name=os.environ.get("RECUPERO_INVESTIGATOR_NAME", "Alec Prostok"),
-    organization=os.environ.get("RECUPERO_INVESTIGATOR_ENTITY", "Recupero LLC"),
-    email=os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "alec@recupero.io"),
-    phone=os.environ.get("RECUPERO_INVESTIGATOR_PHONE") or None,
-)
+# Default investigator info when the cases row doesn't carry it (the
+# schema doesn't have an investigator column today). Each Railway
+# deployment can override via RECUPERO_INVESTIGATOR_* env vars.
+#
+# v0.19.0 (round-11 arch follow-up): build the dataclass at call-time
+# (not module-load), and source fields from the canonical
+# `_common.investigator_defaults()` so an unconfigured deploy ships
+# obvious placeholders rather than the developer's name signing legal
+# documents. Pre-v0.19.0 a module-load build cached "Alec Prostok" /
+# "alec@recupero.io" as the fallback the moment the worker booted —
+# rotating the env var later did nothing for already-loaded workers
+# AND the dev's name signed every letter when env was unset.
+
+
+def _default_investigator() -> InvestigatorInfo:
+    from recupero._common import investigator_defaults
+    inv = investigator_defaults()
+    return InvestigatorInfo(
+        name=inv["INVESTIGATOR_NAME"],
+        organization=inv["INVESTIGATOR_ENTITY"],
+        email=inv["INVESTIGATOR_EMAIL"],
+        phone=os.environ.get("RECUPERO_INVESTIGATOR_PHONE") or None,
+    )
 
 
 def build_all_deliverables(
@@ -149,7 +160,7 @@ def build_all_deliverables(
             "letters but still emitting trace_report.html",
         )
 
-    investigator = investigator or _DEFAULT_INVESTIGATOR
+    investigator = investigator or _default_investigator()
 
     # Render the fund-flow SVG once into briefs/flow_<hash>.svg.
     # Letters reference this file as an attachment-pointer in

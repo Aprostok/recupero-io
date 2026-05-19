@@ -247,6 +247,7 @@ def _entity_badge(identity: str | None) -> tuple[str, str, str] | None:
 # flow diagrams on those chains silently lost link-outs.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _EXPLORER_BY_CHAIN,
+    short_addr as _short_addr,
 )
 
 
@@ -731,14 +732,6 @@ def _cluster_style(issuer: str) -> dict[str, str]:
         "penwidth":  "1.2",
         "margin":    "12",
     }
-
-
-def _short_addr(addr: str) -> str:
-    # v0.17.3 (round-10 audit MED): delegates to canonical
-    # recupero._common.short_addr so the 6 prior independent
-    # implementations don't drift over time.
-    from recupero._common import short_addr as _canonical
-    return _canonical(addr)
 
 
 

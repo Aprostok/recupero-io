@@ -493,7 +493,8 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
     distill it to the facts the AI needs: total drained, first-hop address,
     freezable holdings by issuer, mixer/bridge destinations, label hints.
     """
-    seed_lower = case.seed_address.lower()
+    from recupero._common import canonical_address_key as _ck
+    seed_lower = _ck(case.seed_address)
     total_drained = Decimal("0")
     per_first_hop_usd: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_first_hop_first_seen: dict[str, datetime] = {}
@@ -505,7 +506,7 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
 
     for t in case.transfers:
         # First-hop tracking
-        if t.from_address.lower() == seed_lower:
+        if _ck(t.from_address) == seed_lower:
             if t.usd_value_at_tx is not None:
                 total_drained += t.usd_value_at_tx
                 per_first_hop_usd[t.to_address] += t.usd_value_at_tx

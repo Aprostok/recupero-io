@@ -152,14 +152,19 @@ def _build_context(
 def _compute_stats(case: Case) -> dict[str, Any]:
     transfers = case.transfers or []
     max_depth = max((t.hop_depth for t in transfers), default=0)
+    # v0.17.9 (round-10 forensic HIGH): canonical-key the destinations set
+    # so base58 destinations are counted as distinct addresses on their
+    # canonical case-preserved form, matching how the brief / freeze
+    # letters address them.
+    from recupero._common import canonical_address_key as _ck
     total_usd = Decimal(0)
     destinations: set[str] = set()
     for t in transfers:
         if t.usd_value_at_tx:
             total_usd += t.usd_value_at_tx
-        destinations.add(t.to_address.lower())
+        destinations.add(_ck(t.to_address))
     # Drop the seed itself from the destinations count if it appears.
-    destinations.discard((case.seed_address or "").lower())
+    destinations.discard(_ck(case.seed_address or ""))
     return {
         "total_transfers":     len(transfers),
         "max_depth_reached":   max_depth,

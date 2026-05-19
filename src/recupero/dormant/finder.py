@@ -265,7 +265,10 @@ def find_dormant_in_case(
     address_tokens: dict[str, dict[str, TokenRef]] = {}
     address_inflow: dict[str, Decimal] = {}
     address_inflow_count: dict[str, int] = {}
-    seed_addr_lower = case.seed_address.lower()
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying so
+    # base58 self-reference checks don't false-match on lowercase collision.
+    from recupero._common import canonical_address_key as _ck
+    seed_addr_lower = _ck(case.seed_address)
     skipped_service_labels: dict[str, str] = {}
 
     for tr in case.transfers:
@@ -283,7 +286,7 @@ def find_dormant_in_case(
         if not dest or dest.startswith("hyperliquid:"):
             continue
         # Skip self-references (don't freeze the victim).
-        dest_lower = dest.lower()
+        dest_lower = _ck(dest)
         if dest_lower == seed_addr_lower:
             continue
 

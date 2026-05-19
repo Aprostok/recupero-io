@@ -121,7 +121,13 @@ def _build_rows(
     'current_holder', is_freezeable=True), the freeze_asks pass
     overwrites the cheaper categorization.
     """
-    victim_addr = case.seed_address.lower()
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying so
+    # the watchlist's dedup-by-address layer doesn't merge two distinct
+    # base58 addresses whose lowercase forms collide, and doesn't fail
+    # to dedup the same base58 address when the operator-pasted case
+    # differs from the on-chain canonical case.
+    from recupero._common import canonical_address_key as _ck
+    victim_addr = _ck(case.seed_address)
 
     # First pass: every counterparty in every transfer (excluding victim).
     by_address: dict[str, dict[str, Any]] = {}
@@ -140,13 +146,14 @@ def _build_rows(
     ) -> None:
         if not address:
             return
-        if address.lower() == victim_addr:
+        addr_key = _ck(address)
+        if addr_key == victim_addr:
             return
         # Promote to a "stronger" categorization on collision.
-        existing = by_address.get(address.lower())
+        existing = by_address.get(addr_key)
         if existing and not _should_overwrite(existing, role, is_freezeable):
             return
-        by_address[address.lower()] = {
+        by_address[addr_key] = {
             "address": address,
             "chain": case.chain.value,
             "case_id": case_id,
@@ -207,7 +214,7 @@ def _build_rows(
     contract_addrs: set[str] = set()
     for tr in case.transfers:
         if tr.counterparty.is_contract:
-            contract_addrs.add(tr.to_address.lower())
+            contract_addrs.add(_ck(tr.to_address))
 
     by_issuer = freeze_asks.get("by_issuer") or {}
     for issuer, asks in by_issuer.items():
@@ -215,7 +222,7 @@ def _build_rows(
             ask_addr = ask.get("address")
             if not ask_addr:
                 continue
-            if ask_addr.lower() in contract_addrs:
+            if _ck(ask_addr) in contract_addrs:
                 log.info(
                     "watchlist: skipping is_freezeable=True on contract address "
                     "%s (issuer=%s, symbol=%s) — defense-in-depth filter",

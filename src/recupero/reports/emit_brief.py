@@ -205,9 +205,10 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
     per_addr_usd: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_addr_first_seen: dict[str, datetime] = {}
 
-    seed_lower = case.seed_address.lower()
+    from recupero._common import canonical_address_key as _ck
+    seed_lower = _ck(case.seed_address)
     for t in case.transfers:
-        if t.from_address.lower() == seed_lower:
+        if _ck(t.from_address) == seed_lower:
             to = t.to_address
             if t.usd_value_at_tx is not None:
                 per_addr_usd[to] += t.usd_value_at_tx
@@ -288,13 +289,14 @@ def _extract_destinations(
     per_addr_is_mixer: dict[str, bool] = defaultdict(bool)
     per_addr_tokens: dict[str, set[str]] = defaultdict(set)
 
-    seed_lower = case.seed_address.lower()
+    from recupero._common import canonical_address_key as _ck
+    seed_lower = _ck(case.seed_address)
     for t in case.transfers:
         to = t.to_address
         # Skip transfers back to the victim's seed wallet — those aren't
         # destinations we'd freeze. (Should already be filtered upstream
         # but defensive here.)
-        if to.lower() == seed_lower:
+        if _ck(to) == seed_lower:
             continue
         if t.usd_value_at_tx is not None:
             per_addr_received[to] += t.usd_value_at_tx
@@ -720,10 +722,11 @@ def _compute_total_drained(case: Case) -> Decimal:
     headline numbers, NOT a sum of current freezable + unrecoverable balances
     (which can be inflated by bystander wallets caught in graph expansion).
     """
-    seed_lower = case.seed_address.lower()
+    from recupero._common import canonical_address_key as _ck
+    seed_lower = _ck(case.seed_address)
     total = Decimal("0")
     for t in case.transfers:
-        if t.from_address.lower() == seed_lower and t.usd_value_at_tx is not None:
+        if _ck(t.from_address) == seed_lower and t.usd_value_at_tx is not None:
             total += t.usd_value_at_tx
     return total
 

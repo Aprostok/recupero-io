@@ -318,14 +318,21 @@ def score_addresses(
     if not db:
         return {}
 
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying so
+    # the case-graph compare against the v0.17.5 high-risk DB
+    # actually matches base58 sanctions entries. Pre-v0.17.9 the
+    # .lower() here defeated the v0.17.5 high_risk_db case-preservation,
+    # the same regression we fixed in indirect_exposure / clustering /
+    # drainer_detection / perpetrator_trace.
+    from recupero._common import canonical_address_key as _ck
     # Aggregate exposures by (address-in-case, counterparty,
     # direction). Each unique combination becomes one
     # AddressExposure entry.
     agg: dict[tuple[str, str, str], dict[str, Any]] = {}
     for t in case.transfers:
         usd = t.usd_value_at_tx or Decimal("0")
-        src = t.from_address.lower()
-        dst = t.to_address.lower()
+        src = _ck(t.from_address)
+        dst = _ck(t.to_address)
 
         # Check both ends: if either side matches a high-risk entry,
         # the OTHER side gets an exposure record.

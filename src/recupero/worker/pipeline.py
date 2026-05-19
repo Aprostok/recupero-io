@@ -707,7 +707,11 @@ def _stage_list_freeze_targets(
     # Merge historical-inflow asks into the current-balance match list.
     # Exclude addresses already in matched to avoid duplicates; re-sort
     # by USD descending so highest-value asks come first.
-    exclude_addrs = {a.candidate_address.lower() for a in matched}
+    # v0.17.9 (round-10 forensic HIGH): canonical-key the exclusion set
+    # so base58 candidate addresses don't lowercase-collide with each
+    # other.
+    from recupero._common import canonical_address_key as _ck
+    exclude_addrs = {_ck(a.candidate_address) for a in matched}
     try:
         historical_asks = synthesize_historical_freeze_asks(
             case,

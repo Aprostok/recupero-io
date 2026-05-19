@@ -67,7 +67,9 @@ def aggregate_stolen(
     when it leaves the victim (correct) and again when it's forwarded from
     the perpetrator's wallet #1 to wallet #2 (double-count).
     """
-    perp_lower = {a.lower() for a in perpetrator_addresses}
+    # v0.17.9 (round-10 forensic HIGH): canonical address keying.
+    from recupero._common import canonical_address_key as _ck
+    perp_lower = {_ck(a) for a in perpetrator_addresses}
     by_asset_map: dict[tuple[str, str | None], StolenAssetSummary] = {}
     by_victim: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     matched: list[dict[str, Any]] = []
@@ -77,11 +79,11 @@ def aggregate_stolen(
 
     for case in cases:
         for t in case.transfers:
-            if t.to_address.lower() not in perp_lower:
+            if _ck(t.to_address) not in perp_lower:
                 continue
             # Skip perpetrator-to-perpetrator internal movements — that's the
             # same stolen money, not additional theft.
-            if exclude_internal_transfers and t.from_address.lower() in perp_lower:
+            if exclude_internal_transfers and _ck(t.from_address) in perp_lower:
                 skipped_internal += 1
                 continue
             n += 1

@@ -626,12 +626,13 @@ def _find_theft_events(
     if not case.transfers:
         return []
 
-    seed_lower = case.seed_address.lower()
+    from recupero._common import canonical_address_key as _ck
+    seed_lower = _ck(case.seed_address)
 
     # Outbound transfers from the victim
     outbound = [
         t for t in case.transfers
-        if t.from_address.lower() == seed_lower
+        if _ck(t.from_address) == seed_lower
     ]
     if not outbound:
         # Fallback: any transfer in the case (preserves legacy
@@ -856,12 +857,15 @@ def _build_identified_wallets(
 
     _add(victim.wallet_address, "Victim", "EOA", "Source of stolen funds", "victim-row")
 
+    from recupero._common import canonical_address_key as _ck
+    victim_key = _ck(victim.wallet_address)
+    current_holder_key = _ck(current_holder)
     for c in [primary, *linked]:
         for t in c.transfers:
-            if t.from_address.lower() == victim.wallet_address.lower():
+            if _ck(t.from_address) == victim_key:
                 continue  # victim already added
             cp_label = t.counterparty.label
-            if t.to_address.lower() == current_holder.lower():
+            if _ck(t.to_address) == current_holder_key:
                 role = "Current holder of stolen position"
                 row_class = "perp-row"
             elif cp_label and cp_label.category.value == "perpetrator":

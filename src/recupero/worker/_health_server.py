@@ -66,6 +66,14 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
         def _serve(self, *, write_body: bool) -> None:
             if self.path == "/healthz":
                 self._respond(200, {"alive": True}, write_body=write_body)
+            elif self.path == "/metrics":
+                # v0.17.0 (observability OBS-4): Prometheus text-format
+                # metrics. Public — operators expect /metrics to be
+                # scrapable without auth (it's the Prometheus convention
+                # and the payload carries no PII, just operational
+                # counters). Lock down at the network layer if needed
+                # (Railway internal-only routing).
+                self._serve_metrics(write_body=write_body)
             elif self.path in ("/health", "/"):
                 try:
                     ok, details = check_fn()
@@ -414,6 +422,25 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
             self.end_headers()
             if write_body:
                 self.wfile.write(payload)
+
+        def _serve_metrics(self, *, write_body: bool) -> None:
+            """Prometheus text-format render. Always returns 200, even
+            with an empty registry (Prometheus accepts that and just
+            logs no samples)."""
+            try:
+                from recupero.observability.metrics import metrics_endpoint_text
+                body = metrics_endpoint_text().encode("utf-8")
+            except Exception as e:  # noqa: BLE001
+                body = f"# metrics renderer failed: {e}\n".encode("utf-8")
+            self.send_response(200)
+            self.send_header(
+                "Content-Type",
+                "text/plain; version=0.0.4; charset=utf-8",
+            )
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            if write_body:
+                self.wfile.write(body)
 
         # Silence the default per-request stderr line so Railway logs
         # aren't dominated by healthcheck traffic.

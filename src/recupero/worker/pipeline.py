@@ -239,8 +239,40 @@ def run_one(
     last_heartbeat_at AFTER mark_* clears worker_id, briefly making
     the row look "claimed but heartbeating" to the reaper. main.py
     passes the Heartbeat.stop() as this callable.
+
+    v0.17.0 (observability): every log record emitted inside this
+    function carries investigation_id + case_id + worker_id via the
+    run_context contextvar — no per-call extra={} boilerplate needed.
+    JSON-formatter consumers can filter Railway logs by these fields
+    directly.
     """
     _stop_hb = stop_heartbeat or (lambda: None)
+    from recupero.logging_setup import run_context
+
+    with run_context(
+        investigation_id=str(inv.id),
+        case_id=str(inv.case_id) if inv.case_id else None,
+        worker_id=db.worker_id,
+    ):
+        return _run_one_inner(
+            inv, config=config, env=env, db=db, store=store,
+            stop_heartbeat=_stop_hb,
+        )
+
+
+def _run_one_inner(
+    inv: Investigation,
+    *,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+    db: WorkerDB,
+    store: SupabaseCaseStore,
+    stop_heartbeat: Callable[[], None],
+) -> None:
+    """Body of run_one, factored out so the public function can wrap
+    every log record in the per-investigation context. See run_one
+    docstring for behavior."""
+    _stop_hb = stop_heartbeat
     log.info("running investigation id=%s case_id=%s status=%s",
              inv.id, inv.case_id, inv.status)
 
@@ -1304,12 +1336,8 @@ def _run_stage(
     Lets exceptions propagate as _StageFailure tagged with the current stage.
 
     v0.16.11 (round-9 worker ARCH): structured stage-boundary logging.
-    Pre-v0.16.11 stage transitions logged via plain message strings,
-    so operators had to grep Railway logs by investigation UUID to
-    follow a single case through the pipeline. Now each stage emits
-    START + END (or FAIL) records with `investigation_id` + `stage`
-    + `duration_sec` as logging extras — Railway's filter UI can
-    pivot on them directly.
+    v0.17.0 (observability): also records Prometheus stage-duration
+    histogram + stage-runs counter via observability.metrics.
     """
     import time as _time
     extra = {"investigation_id": str(inv_id), "stage": stage}
@@ -1325,6 +1353,7 @@ def _run_stage(
             stage, elapsed, exc.message,
             extra={**extra, "duration_sec": round(elapsed, 2), "outcome": "fail"},
         )
+        _record_stage_metric(stage, elapsed, "fail")
         raise
     except Exception as e:  # noqa: BLE001
         elapsed = _time.monotonic() - started
@@ -1333,6 +1362,7 @@ def _run_stage(
             stage, elapsed, type(e).__name__,
             extra={**extra, "duration_sec": round(elapsed, 2), "outcome": "fail"},
         )
+        _record_stage_metric(stage, elapsed, "fail")
         raise _StageFailure(stage, f"{type(e).__name__}: {e}") from e
     else:
         elapsed = _time.monotonic() - started
@@ -1341,7 +1371,18 @@ def _run_stage(
             stage, elapsed,
             extra={**extra, "duration_sec": round(elapsed, 2), "outcome": "ok"},
         )
+        _record_stage_metric(stage, elapsed, "ok")
         return result
+
+
+def _record_stage_metric(stage: str, elapsed_sec: float, outcome: str) -> None:
+    """Best-effort metrics dispatch. Never propagates failures —
+    observability is a non-fatal add-on."""
+    try:
+        from recupero.observability.metrics import record_stage_duration
+        record_stage_duration(stage, elapsed_sec, outcome=outcome)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @contextmanager

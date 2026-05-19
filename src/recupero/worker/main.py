@@ -284,7 +284,7 @@ _CLAIM_FAILURE_COOLDOWN_SEC = 30.0
 
 def _try_claim(db: WorkerDB) -> Investigation | None:
     try:
-        return db.claim_one()
+        inv = db.claim_one()
     except Exception as e:  # noqa: BLE001
         # Use log.exception so the full traceback lands in Railway logs.
         # The original bug was invisible for 12 hours because the brief
@@ -298,10 +298,22 @@ def _try_claim(db: WorkerDB) -> Investigation | None:
             "Cooling down %.0fs before next claim sweep. Cause: %s",
             _CLAIM_FAILURE_COOLDOWN_SEC, e,
         )
+        _record_claim_metric("fail")
         # Sleep on the shutdown event so a SIGTERM during the cooldown
         # still drains cleanly instead of waiting the full 30s.
         _shutdown.wait(_CLAIM_FAILURE_COOLDOWN_SEC)
         return None
+    _record_claim_metric("ok" if inv else "empty")
+    return inv
+
+
+def _record_claim_metric(outcome: str) -> None:
+    """Best-effort metrics dispatch. See pipeline._record_stage_metric."""
+    try:
+        from recupero.observability.metrics import record_claim
+        record_claim(outcome)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ----- CLI ----- #
@@ -685,6 +697,15 @@ def cli() -> None:
 
     load_dotenv()
     setup_logging(args.log_level.upper())
+
+    # v0.17.0 (observability): init Sentry if SENTRY_DSN is set. No-op
+    # when unset OR when sentry-sdk isn't installed; the worker keeps
+    # running with JSON-formatted log output as the primary signal.
+    try:
+        from recupero.observability import init_sentry
+        init_sentry()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Sentry init failed (non-fatal): %s", exc)
 
     if args.health_check:
         sys.exit(health_check())

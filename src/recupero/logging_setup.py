@@ -1,16 +1,153 @@
 """Logging configuration.
 
-Outputs to stdout (Rich-formatted) and to a per-case log file in
-{case_dir}/logs/trace.log. Both at the configured level.
+Outputs to stdout (Rich-formatted by default, JSON via env var) and
+to a per-case log file in {case_dir}/logs/trace.log. Both at the
+configured level.
+
+v0.17.0 (observability):
+  * `RECUPERO_LOG_FORMAT=json` switches stdout to JSON-per-line so
+    Railway's log filter UI can pivot on structured fields directly.
+  * `RECUPERO_LOG_FORMAT=rich` (default) keeps the existing
+    human-readable RichHandler output for local dev.
+  * Per-request context (investigation_id, case_id, stage, request_id)
+    propagates via a contextvars.ContextVar, populated by the
+    `RunContext` helper. Every log record emitted INSIDE a `with
+    run_context(...)` block carries the same correlation fields
+    automatically — no per-call `extra={...}` boilerplate.
 """
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
+import json as _json
 import logging
+import os
 import re
+import sys
+import time
 from pathlib import Path
+from typing import Any
+from uuid import uuid4
 
 from rich.logging import RichHandler
+
+
+# v0.17.0: per-request context. Stores a dict of correlation fields
+# (investigation_id, case_id, stage, request_id) that the JSON
+# formatter merges into every log record emitted inside the context.
+# Async-safe via contextvars (each asyncio task / thread inherits a
+# copy on creation; mutations don't leak out).
+_LOG_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
+    "_LOG_CONTEXT", default={},
+)
+
+
+@contextlib.contextmanager
+def run_context(**fields: Any):
+    """Push correlation fields onto the per-task log context.
+
+    Usage:
+
+        with run_context(investigation_id=str(inv.id), stage="trace"):
+            log.info("starting trace")  # auto-tagged
+
+    Nested calls merge with parent context; the outer fields win on
+    collision (the inner block can't override the run's
+    investigation_id, but it CAN add a more-specific stage tag).
+
+    A fresh `request_id` UUID is auto-generated when not provided.
+    """
+    parent = _LOG_CONTEXT.get()
+    merged = dict(parent)
+    if "request_id" not in fields and "request_id" not in merged:
+        merged["request_id"] = uuid4().hex[:12]
+    # Caller fields don't override parent fields (outer scope wins).
+    for k, v in fields.items():
+        merged.setdefault(k, v)
+    token = _LOG_CONTEXT.set(merged)
+    try:
+        yield merged
+    finally:
+        _LOG_CONTEXT.reset(token)
+
+
+def current_log_context() -> dict[str, Any]:
+    """Return a snapshot of the current log context. Used by Sentry
+    integration to tag events without reaching into the contextvar
+    directly."""
+    return dict(_LOG_CONTEXT.get())
+
+
+class _ContextInjectingFilter(logging.Filter):
+    """Merge the active run_context fields into every log record's
+    __dict__ so formatters + downstream handlers can read them
+    uniformly. Records that already carry an `extra={...}` field of
+    the same name win (explicit > contextual).
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        ctx = _LOG_CONTEXT.get()
+        for k, v in ctx.items():
+            if not hasattr(record, k):
+                setattr(record, k, v)
+        return True
+
+
+class _JsonFormatter(logging.Formatter):
+    """One-line JSON per record. Includes correlation fields from the
+    run_context contextvar plus any `extra={...}` kwargs passed at
+    the log call site.
+
+    Output shape:
+      {"ts": "2026-05-18T04:22:17.123Z", "level": "INFO",
+       "logger": "recupero.worker.pipeline", "msg": "...",
+       "investigation_id": "...", "stage": "trace", "request_id": "...",
+       "duration_sec": 12.3, "outcome": "ok"}
+
+    Reserved keys are populated unconditionally. Anything else on the
+    LogRecord's __dict__ (set by the context filter or `extra=`) is
+    emitted as-is unless it's a stdlib logging internal (filtered).
+    """
+
+    _STDLIB_RECORD_KEYS = {
+        "name", "msg", "args", "levelname", "levelno", "pathname",
+        "filename", "module", "exc_info", "exc_text", "stack_info",
+        "lineno", "funcName", "created", "msecs", "relativeCreated",
+        "thread", "threadName", "processName", "process", "message",
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        # ISO8601 with Z suffix + millisecond resolution.
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(record.created))
+        ts = f"{ts}.{int(record.msecs):03d}Z"
+        try:
+            message = record.getMessage()
+        except Exception as exc:  # noqa: BLE001
+            message = f"<getMessage failed: {exc}>"
+        payload: dict[str, Any] = {
+            "ts": ts,
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": message,
+        }
+        # Merge any custom attributes (set by the context filter or by
+        # the call site's extra={...}). Stdlib-internal keys excluded.
+        for k, v in record.__dict__.items():
+            if k in self._STDLIB_RECORD_KEYS or k.startswith("_"):
+                continue
+            try:
+                _json.dumps(v)  # cheap serializability check
+                payload[k] = v
+            except (TypeError, ValueError):
+                payload[k] = repr(v)
+        # Exception info if present (already rendered by the
+        # _SecretRedactingFilter into record.exc_text).
+        if record.exc_info and not record.exc_text:
+            record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            payload["exception"] = record.exc_text
+        return _json.dumps(payload, separators=(",", ":"))
 
 
 # v0.16.7 (round-9 security HIGH): redact secrets from every log record
@@ -71,8 +208,19 @@ class _SecretRedactingFilter(logging.Filter):
 
 
 def setup_logging(level: str, case_dir: Path | None = None) -> None:
+    """Configure root logger handlers.
+
+    Format selection via `RECUPERO_LOG_FORMAT`:
+      * "json"  → JSON-per-line on stdout (Railway-friendly, machine-
+                  parseable; includes run_context correlation fields).
+      * "rich"  → human-readable Rich tracebacks (default; local dev).
+      * unset / other → defaults to "rich".
+
+    File handler (case_dir-rooted trace.log) always uses the
+    plain-text format — it's a per-case forensic artifact, not a
+    log-aggregation feed.
+    """
     # Force UTF-8 on stdout/stderr (Windows defaults to cp1252 which crashes on Unicode)
-    import sys
     for stream in (sys.stdout, sys.stderr):
         rec = getattr(stream, "reconfigure", None)
         if rec is not None:
@@ -89,10 +237,21 @@ def setup_logging(level: str, case_dir: Path | None = None) -> None:
     # it reaches any handler. Attached at the root-logger level so child
     # loggers automatically inherit it.
     secret_filter = _SecretRedactingFilter()
+    # v0.17.0: merge run_context correlation fields into every record
+    # so the JSON formatter can emit them and the plain-text formatter
+    # can ignore them gracefully.
+    context_filter = _ContextInjectingFilter()
+
+    log_format = (os.environ.get("RECUPERO_LOG_FORMAT") or "").strip().lower()
 
     # Console
-    console = RichHandler(rich_tracebacks=True, show_time=True, show_path=False)
+    if log_format == "json":
+        console: logging.Handler = logging.StreamHandler(sys.stdout)
+        console.setFormatter(_JsonFormatter())
+    else:
+        console = RichHandler(rich_tracebacks=True, show_time=True, show_path=False)
     console.setLevel(level.upper())
+    console.addFilter(context_filter)  # context BEFORE redaction
     console.addFilter(secret_filter)
     root.addHandler(console)
 
@@ -106,9 +265,17 @@ def setup_logging(level: str, case_dir: Path | None = None) -> None:
             datefmt="%Y-%m-%dT%H:%M:%S%z",
         ))
         fh.setLevel(level.upper())
+        fh.addFilter(context_filter)
         fh.addFilter(secret_filter)
         root.addHandler(fh)
 
     # Quiet overly chatty libs at INFO level
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+
+__all__ = (
+    "setup_logging",
+    "run_context",
+    "current_log_context",
+)

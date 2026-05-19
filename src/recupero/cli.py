@@ -38,9 +38,49 @@ from recupero.reports.victim import VictimInfo, load_victim, write_victim
 from recupero.storage.case_store import CaseStore
 from recupero.trace.tracer import run_trace
 
-app = typer.Typer(add_completion=False, no_args_is_help=True, help="Recupero — crypto theft tracing.")
+app = typer.Typer(
+    add_completion=False,
+    no_args_is_help=True,
+    help=(
+        "Recupero — crypto theft tracing.\n\n"
+        "Sibling console scripts (separately installed):\n"
+        "  recupero-ops     — operator commands (case lifecycle, freeze sends, etc.)\n"
+        "  recupero-worker  — long-running pipeline worker\n"
+        "  recupero-api     — authenticated REST surface (FastAPI/uvicorn)"
+    ),
+)
 console = Console()
 log = logging.getLogger(__name__)
+
+
+def _print_version_and_exit(value: bool) -> None:
+    """Typer ``--version`` callback. v0.19.2 (round-13 CLI-HIGH-9):
+    previously the only way to learn the deployed version was to read
+    `/v1/health`, run `pip show recupero`, or eval `recupero.__version__`
+    — none of which is discoverable from `--help`."""
+    if not value:
+        return
+    try:
+        from importlib.metadata import version as _v
+        ver = _v("recupero")
+    except Exception:  # noqa: BLE001
+        ver = "unknown"
+    typer.echo(f"recupero {ver}")
+    raise typer.Exit()
+
+
+@app.callback()
+def _root(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_print_version_and_exit,
+        is_eager=True,
+        help="Show recupero version and exit.",
+    ),
+) -> None:
+    """Top-level callback so ``recupero --version`` works."""
+    _ = version  # silence unused-arg lint; callback fires before this
 
 
 def _sync_to_bucket(investigation_id: str | None, case_dir: Path) -> None:

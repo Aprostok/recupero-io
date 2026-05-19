@@ -1739,11 +1739,22 @@ def test_v_cfi01_synthesizer_excludes_unrecoverable_from_max_recoverable() -> No
             f"MAX_RECOVERABLE_USD must exclude UNRECOVERABLE rows. "
             f"Got ${max_recoverable} — DAI was wrongly included."
         )
-        # TOTAL_LOSS_USD (suspected sum) still includes everything.
+        # v0.19.2 (round-13 code-quality #6): TOTAL_LOSS_USD on the
+        # skip-editorial path is now $0 (the path is wallet-trace /
+        # R&D — no victim → no real loss). TOTAL_SUSPECTED_USD is the
+        # field that aggregates across all asks; assert against that.
+        # Pre-v0.19.2 TOTAL_LOSS_USD was mislabeled as the suspected
+        # sum, conflating two semantically distinct figures.
         total_loss = Decimal(
             brief["TOTAL_LOSS_USD"].replace("$", "").replace(",", "")
         )
-        assert total_loss >= Decimal("700000")
+        assert total_loss == Decimal("0"), (
+            "skip-editorial TOTAL_LOSS_USD must be $0 (no victim data)"
+        )
+        total_suspected = Decimal(
+            brief["TOTAL_SUSPECTED_USD"].replace("$", "").replace(",", "")
+        )
+        assert total_suspected >= Decimal("700000")
 
 
 def test_v_cfi01_few_shot_math_consistent() -> None:

@@ -310,16 +310,22 @@ def test_has_been_sent_returns_false_on_no_match() -> None:
         ) is False
 
 
-def test_has_been_sent_returns_false_on_db_error() -> None:
-    """If the DB query fails (network blip, permissions), return
-    False so we don't get stuck unable to send. Risk of one
-    duplicate send is acceptable; risk of zero sends is not."""
+def test_has_been_sent_fails_closed_on_db_error() -> None:
+    """v0.19.2 (round-13 pipeline-HIGH-1): when the audit query fails
+    (network blip, pooler 5xx, permissions) we now return True so the
+    caller treats the send as "already done" and skips. Pre-v0.19.2
+    we returned False ("not yet sent → go ahead"); but the victim-
+    summary path mints a NEW Stripe payment link on every send, so a
+    duplicate could mean a duplicate $10K engagement charge. Trading
+    a delayed legitimate send (operator can force via ops CLI once
+    the DB recovers) for an impossible duplicate charge is the right
+    direction."""
     with patch("recupero.worker._email.psycopg.connect",
                side_effect=Exception("network down")):
         assert has_been_sent(
             investigation_id=uuid4(), email_type="victim_summary",
             dsn="postgresql://test",
-        ) is False
+        ) is True
 
 
 # ---- EmailResult shape ---- #

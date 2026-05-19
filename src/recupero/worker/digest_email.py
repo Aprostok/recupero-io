@@ -71,13 +71,17 @@ def maybe_send_digest_email(
     if not recipients:
         return False
 
-    always_send = (
-        os.environ.get("RECUPERO_DIGEST_ALWAYS_SEND", "").strip() == "1"
-    )
+    # v0.19.2 (round-13 pipeline-MED-8): env_truthy so "true" / "yes" /
+    # "on" all work, matching RECUPERO_DISABLE_EMAIL's canonical
+    # parsing. Pre-v0.19.2 only the literal "1" enabled all-clear
+    # digests; operators who set "true" got silent fall-through and
+    # an empty inbox they couldn't diagnose.
+    from recupero._common import env_truthy
+    always_send = env_truthy("RECUPERO_DIGEST_ALWAYS_SEND")
     if material_count == 0 and not always_send:
         log.info(
             "digest email skipped — no material changes and "
-            "RECUPERO_DIGEST_ALWAYS_SEND != 1"
+            "RECUPERO_DIGEST_ALWAYS_SEND is not set"
         )
         return False
 

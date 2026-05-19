@@ -52,9 +52,20 @@ def _parse_uuid(s: str, *, field_name: str = "investigation_id") -> UUID:
 
 def _confirm(prompt: str, *, default: bool = False) -> bool:
     """Interactive y/N prompt. Returns True if user confirmed,
-    False on N / empty / EOF. Honors --yes flag via the
-    RECUPERO_OPS_ASSUME_YES env var for scripted ops use."""
-    if os.environ.get("RECUPERO_OPS_ASSUME_YES", "").strip() == "1":
+    False on N / empty / EOF. Honors the ``RECUPERO_OPS_ASSUME_YES``
+    env var (any canonical truthy value: ``1`` / ``true`` / ``yes`` /
+    ``on``) for scripted ops use.
+
+    v0.19.2 (round-13 CLI-HIGH-7): the env-var check now flows through
+    `recupero._common.env_truthy` so it matches the project-wide
+    truthy parsing. Pre-v0.19.2 we accepted only the literal "1", but
+    `RECUPERO_DISABLE_EMAIL` accepted full truthy variants — operators
+    who copy-pasted `RECUPERO_DISABLE_EMAIL=true` style into their cron
+    and wrote `RECUPERO_OPS_ASSUME_YES=true` got the interactive prompt
+    blocking the cron mid-run.
+    """
+    from recupero._common import env_truthy
+    if env_truthy("RECUPERO_OPS_ASSUME_YES"):
         return True
     default_str = "Y/n" if default else "y/N"
     try:
@@ -69,9 +80,21 @@ def _confirm(prompt: str, *, default: bool = False) -> bool:
 
 def cli() -> None:
     """Entry point for ``recupero-ops``."""
+    # v0.19.2 (round-13 CLI-HIGH-9): pull deployed version for --version.
+    try:
+        from importlib.metadata import version as _v
+        _recupero_version = _v("recupero")
+    except Exception:  # noqa: BLE001
+        _recupero_version = "unknown"
+
     parser = argparse.ArgumentParser(
         prog="recupero-ops",
         description="Operator CLI for investigation management.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"recupero-ops (recupero {_recupero_version})",
     )
     parser.add_argument(
         "--log-level",

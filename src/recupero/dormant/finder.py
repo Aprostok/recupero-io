@@ -308,8 +308,14 @@ def find_dormant_in_case(
         # tokens, they're naturally filtered by the $10K threshold.
 
         bucket = address_tokens.setdefault(dest, {})
-        # Native (contract=None) → use a fixed key so we don't double-add it
-        token_key = (tr.token.contract or "__native__").lower()
+        # Native (contract=None) → use a fixed key so we don't double-add it.
+        # v0.19.2 (round-13 type-HIGH-2): canonical_address_key — case-
+        # preserves Solana / Tron base58 mints, lowercases EVM hex.
+        # Pre-v0.19.2 `.lower()` mangled the mint to a non-on-chain
+        # string; two on-chain mints whose lowercased forms collided
+        # got merged into one bucket entry (silent forensic corruption).
+        from recupero._common import canonical_address_key as _ck
+        token_key = _ck(tr.token.contract) if tr.token.contract else "__native__"
         bucket.setdefault(token_key, tr.token)
         if tr.usd_value_at_tx is not None:
             address_inflow[dest] = address_inflow.get(dest, Decimal("0")) + tr.usd_value_at_tx
@@ -332,9 +338,12 @@ def find_dormant_in_case(
     # bigger position. ~5-7 extra balance calls per address.
     issuer_token_refs = _build_issuer_token_refs(case.chain)
     if issuer_token_refs:
+        # v0.19.2 (round-13 type-HIGH-2): canonical_address_key for the
+        # second bucket-key compute, matching the trace-derived path.
+        from recupero._common import canonical_address_key as _ck_ref
         for bucket in address_tokens.values():
             for ref in issuer_token_refs:
-                token_key = (ref.contract or "__native__").lower()
+                token_key = _ck_ref(ref.contract) if ref.contract else "__native__"
                 bucket.setdefault(token_key, ref)
         log.info(
             "dormant: also sweeping %d issuer-controlled tokens "

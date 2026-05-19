@@ -32,6 +32,7 @@ Design notes:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from collections import defaultdict
@@ -44,6 +45,15 @@ from recupero._common import (
     investigator_defaults as _investigator_defaults,
     short_addr,
 )
+
+# v0.19.2 (round-13 CRIT, code-quality #1): the prior `log.info(...)` at
+# `_compact_empty_freezable_only` (line ~691) referenced a name that
+# was NEVER bound — emit_brief never imported logging. Whenever the
+# capability-blocks-freeze path fired on every holding (the documented
+# v0.16.8 case), the call raised NameError, escaped emit_brief, and
+# silently broke the brief render for that case. Closed by adding
+# the standard module-level logger here.
+log = logging.getLogger(__name__)
 from recupero.models import Case, LabelCategory
 from recupero.reports.brief import BRIEF_SCHEMA_VERSION as _BRIEF_SCHEMA_VERSION
 from recupero.reports.victim import VictimInfo, load_victim
@@ -1030,6 +1040,7 @@ def emit_brief(
         handoffs = identify_cross_chain_handoffs(case)
         cross_chain_handoffs = handoffs_to_brief_section(handoffs)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: cross-chain handoffs section build failed: %s — falling back to empty", _exc)
         cross_chain_handoffs = []
 
     # --- Entity clustering (v0.9.0) ---
@@ -1065,6 +1076,7 @@ def emit_brief(
         clusters, unclustered = cluster_addresses(case, address_balances)
         entity_clusters = clusters_to_brief_section(clusters, unclustered)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: entity clusters section build failed: %s — falling back to empty", _exc)
         entity_clusters = {"clusters": [], "unclustered_addresses": []}
 
     # --- Risk scoring (v0.9.1 + v0.10.0) ---
@@ -1084,6 +1096,7 @@ def emit_brief(
         risk_scores = score_addresses(case, high_risk_db=high_risk_db)
         risk_assessment = risk_scores_to_brief_section(risk_scores)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: risk assessment section build failed: %s — falling back to empty", _exc)
         high_risk_db = {}
         risk_assessment = {
             "addresses": {},
@@ -1104,6 +1117,7 @@ def emit_brief(
         indirect_results = compute_indirect_exposure(case, high_risk_db)
         indirect_exposure = indirect_exposure_to_brief_section(indirect_results)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: indirect exposure section build failed: %s — falling back to empty", _exc)
         indirect_exposure = {
             "addresses": {},
             "summary": {
@@ -1124,6 +1138,7 @@ def emit_brief(
         drainer_findings = detect_drainer_pattern(case, high_risk_db=high_risk_db)
         incident_classification = drainer_findings_to_brief_section(drainer_findings)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: drainer/incident classification section build failed: %s — falling back to empty", _exc)
         incident_classification = {
             "is_drainer_case": False,
             "drainer_attribution": None,
@@ -1144,6 +1159,7 @@ def emit_brief(
         dex_swap_records = detect_dex_swaps(case)
         dex_swaps = dex_swaps_to_brief_section(dex_swap_records)
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: dex swaps section build failed: %s — falling back to empty", _exc)
         dex_swaps = []
 
     # --- Cross-case correlation (v0.11.0) ---
@@ -1184,6 +1200,7 @@ def emit_brief(
             freeze_targets_by_addr=freeze_targets_by_addr,
         )
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: cross-case correlation section build failed: %s — falling back to empty", _exc)
         cross_case_correlation = {
             "addresses": {},
             "summary": {
@@ -1207,6 +1224,7 @@ def emit_brief(
             current_case_id=_case_uuid,
         )
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: class action opportunity section build failed: %s — falling back to empty", _exc)
         class_action_opportunity = {
             "triggered": False,
             "potential_co_victim_case_count": 0,
@@ -1343,6 +1361,7 @@ def emit_brief(
         from recupero.recovery.scorer import score_recovery
         brief["RECOVERY_ESTIMATE"] = score_recovery(brief).to_json_safe()
     except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: recovery estimate section build failed: %s — falling back to empty", _exc)
         brief["RECOVERY_ESTIMATE"] = None
     return brief
 

@@ -1121,11 +1121,23 @@ def _synthesize_freeze_brief_from_asks(
     # Skip_editorial path has no rich destination data (that comes from
     # emit_brief._extract_destinations which needs the trace). Empty
     # DESTINATIONS list is the schema-correct value here.
+    #
+    # v0.19.2 (round-13 code-quality #6): TOTAL_LOSS_USD on this path
+    # is intentionally $0 — the skip-editorial path is a wallet-trace /
+    # R&D run without a victim, so "loss" has no meaning. Pre-v0.19.2
+    # we wrote `f"${total_suspected:,.2f}"` here, but `total_suspected`
+    # is the sum-across-all-asks (perp wallets' current holdings,
+    # possibly from other victims) — emit_brief enforces the distinction
+    # between "loss" (drained from victim) and "suspected" (held in
+    # perp wallets). Writing one as the other misframed the wallet-
+    # trace brief's headline number. The actionable figure on this
+    # path is `MAX_RECOVERABLE_USD` (already populated correctly).
     out = {
         "SCHEMA_VERSION": BRIEF_SCHEMA_VERSION,
         "FREEZABLE": freezable,
         "DESTINATIONS": [],
-        "TOTAL_LOSS_USD": f"${total_suspected:,.2f}",
+        "TOTAL_LOSS_USD": "$0.00",
+        "TOTAL_SUSPECTED_USD": f"${total_suspected:,.2f}",
         "MAX_RECOVERABLE_USD": f"${total_recoverable:,.2f}",
         "SOURCE": "synthesized from freeze_asks.json (skip_editorial path)",
     }

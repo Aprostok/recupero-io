@@ -89,6 +89,23 @@ COL_JURISDICTION = "jurisdiction"
 COL_IC3_CASE_ID = "ic3_case_id"
 
 
+# ----- Exceptions ----- #
+
+
+class WorkerClaimLost(Exception):
+    """Raised when a worker's terminal-state UPDATE matches zero rows.
+
+    v0.19.2 (round-13 pipeline-HIGH-2): the mark_built_package /
+    mark_completed UPDATEs gate on `worker_id = me AND status NOT IN
+    ('failed', 'complete')`. If the reaper concurrently cleared
+    worker_id, the gate silently no-ops and the pipeline thinks the
+    transition succeeded — but the row is reaped and the customer-
+    paid case is invisible to downstream views. Raising this exception
+    lets `pipeline.run_one` tag the row as `failed` with a clear
+    failure phase tag.
+    """
+
+
 # ----- Row models ----- #
 
 
@@ -629,7 +646,7 @@ class WorkerDB:
                AND {COL_WORKER_ID} = %(worker)s
                AND {COL_STATUS} NOT IN ('failed', 'complete');
         """
-        self._exec(
+        self._exec_expect_one_row(
             sql,
             {
                 "status": S.BUILDING_PACKAGE,
@@ -641,6 +658,7 @@ class WorkerDB:
                 "id": investigation_id,
                 "worker": self.worker_id,
             },
+            op="mark_built_package",
         )
 
     def mark_completed(self, investigation_id: UUID) -> None:
@@ -662,13 +680,14 @@ class WorkerDB:
                AND {COL_WORKER_ID} = %(worker)s
                AND {COL_STATUS} NOT IN ('failed', 'complete');
         """
-        self._exec(
+        self._exec_expect_one_row(
             sql,
             {
                 "status": S.COMPLETED,
                 "id": investigation_id,
                 "worker": self.worker_id,
             },
+            op="mark_completed",
         )
 
     def mark_failed(
@@ -704,3 +723,27 @@ class WorkerDB:
     def _exec(self, sql: str, params: dict[str, Any]) -> None:
         with psycopg.connect(self._dsn, autocommit=True, **self._PSYCOPG_KW) as conn, conn.cursor() as cur:
             cur.execute(sql, params)
+
+    def _exec_expect_one_row(self, sql: str, params: dict[str, Any], *, op: str) -> None:
+        """Like ``_exec`` but raises ``WorkerClaimLost`` if zero rows
+        matched.
+
+        v0.19.2 (round-13 pipeline-HIGH-2): the worker's mark_* terminal
+        transitions all carry ``WHERE worker_id = me AND status NOT IN
+        ('failed', 'complete')``. If the reaper concurrently cleared
+        worker_id (per v0.18.1 worker-HIGH-005), the UPDATE silently
+        matches zero rows and the worker proceeds as if "marked complete"
+        — but the row is in `failed`/`reaped` state with no `completed_at`
+        timestamp. Customer who received the PDF + paid is invisible to
+        downstream "complete cases" views forever. Now: detect zero
+        rowcount and raise so pipeline.run_one tags the row failed at
+        stage='finalize-lost-claim' instead of silently "succeeding."
+        """
+        with psycopg.connect(self._dsn, autocommit=True, **self._PSYCOPG_KW) as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            if cur.rowcount == 0:
+                raise WorkerClaimLost(
+                    f"{op}: zero rows matched — claim lost to reaper "
+                    f"(worker_id cleared or row already terminal). "
+                    f"id={params.get('id')!s}"
+                )

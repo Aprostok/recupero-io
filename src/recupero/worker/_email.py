@@ -379,8 +379,23 @@ def has_been_sent(
                 )
                 return cur.fetchone() is not None
     except Exception as exc:  # noqa: BLE001
-        log.warning("has_been_sent: audit query failed: %s", exc)
-        return False
+        # v0.19.2 (round-13 pipeline-HIGH-1): fail-CLOSED on audit-query
+        # failure. Pre-v0.19.2 a transient pooler blip caused the
+        # idempotency check to return False (= "not yet sent"), and the
+        # caller would then send the victim summary again — but the
+        # victim-summary path mints a NEW portal token + a fresh Stripe
+        # payment link. Customer who already paid the engagement fee
+        # could click the new link and pay it twice; the dispatcher
+        # COALESCEs `engagement_started_at` so state doesn't reset but
+        # both payments land as separate Stripe charges. Treating "DB
+        # unreachable" as "already sent" trades a delayed legitimate
+        # send for an impossible duplicate charge. Operators can force
+        # a send via the ops CLI once the DB recovers.
+        log.warning(
+            "has_been_sent: audit query failed — failing closed to "
+            "prevent duplicate send: %s", exc,
+        )
+        return True
 
 
 # ----- internals ----- #

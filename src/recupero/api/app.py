@@ -81,15 +81,33 @@ app = FastAPI(
 
 # ---- Request / response models ---- #
 
+# v0.19.2 (round-13 type-HIGH-3): supported-chain enum for API request
+# validation. Pre-v0.19.2 the request models accepted any `chain: str`
+# — Pydantic let `chain="foobar"` through, the screener then failed
+# deep inside with a TypeError that surfaced as a confusing 400.
+# Now: Pydantic returns a 422 up-front listing the allowed values.
+# Mirrors `recupero.models.Chain` (we don't import that enum directly
+# because Chain is a `str` Enum that pickles oddly through FastAPI
+# OpenAPI; a Literal keeps the OpenAPI spec readable).
+from typing import Literal as _Literal
+
+_SupportedChain = _Literal[
+    "ethereum", "arbitrum", "base", "bsc", "polygon",
+    "solana", "tron", "bitcoin", "hyperliquid",
+]
+
 
 class ScreenRequest(BaseModel):
-    address: str = Field(..., description="Wallet address to screen.")
-    chain: str = Field(
+    # v0.19.2 (round-13 sec-MED-5 follow-on): max_length cap on the
+    # address field so an authenticated caller can't POST a 16MB
+    # address string and force downstream lookups to walk it.
+    address: str = Field(
+        ..., min_length=1, max_length=128,
+        description="Wallet address to screen.",
+    )
+    chain: _SupportedChain = Field(
         "ethereum",
-        description=(
-            "Chain hint: 'ethereum' | 'arbitrum' | 'base' | 'bsc' | "
-            "'polygon' | 'solana' | 'tron' | 'bitcoin'."
-        ),
+        description="Chain hint — one of the supported chains.",
     )
     use_correlation_db: bool = Field(
         True,
@@ -101,8 +119,11 @@ class ScreenRequest(BaseModel):
 
 
 class TokenRiskRequest(BaseModel):
-    contract_address: str = Field(..., description="Token contract address.")
-    chain: str = Field("ethereum")
+    contract_address: str = Field(
+        ..., min_length=1, max_length=128,
+        description="Token contract address.",
+    )
+    chain: _SupportedChain = Field("ethereum")
     # v0.18.9 (round-11 api-MED-004): cap at 64KB hex (32KB binary).
     # Real contract bytecode tops out around ~24KB binary at the
     # EIP-170 contract-size limit; 64KB hex is 2.7× headroom for

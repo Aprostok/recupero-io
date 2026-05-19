@@ -25,7 +25,21 @@ log = logging.getLogger(__name__)
 
 def run(*, investigation_id: UUID, fee_usd: Decimal, dsn: str) -> int:
     """Mark an investigation as Tier-2 engaged. Returns 0 on success,
-    1 on errors (missing investigation, etc.)."""
+    1 on errors (missing investigation, etc.).
+
+    v0.19.2 (round-13 CLI-MED-14): sanity-bound `fee_usd` to (0, 1M].
+    Pre-v0.19.2 `--fee -10000` (operator typo) silently wrote a
+    negative engagement_fee_paid_usd that broke downstream P&L
+    metrics; `--fee 1e30` would have been accepted by Decimal() too.
+    """
+    if fee_usd <= 0 or fee_usd > Decimal("1000000"):
+        print(
+            f"ERROR: --fee must be > 0 and <= $1,000,000 (got {fee_usd}). "
+            f"Engagement fees are typically $10,000; values outside this "
+            f"range are almost always operator typos."
+        )
+        return 1
+
     with psycopg.connect(dsn, autocommit=True, row_factory=dict_row,
                          connect_timeout=10, prepare_threshold=None) as conn, conn.cursor() as cur:
         cur.execute(

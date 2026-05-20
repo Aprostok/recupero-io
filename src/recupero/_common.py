@@ -97,6 +97,51 @@ ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
 }
 
 
+# v0.20.2 (audit-round-3 R3-9/R3-10): display name for each chain's
+# canonical block explorer. Templates that previously hard-coded
+# "Etherscan" / "Source: Etherscan API v2" in their prose now route
+# through this table so cross-chain letters say "Tronscan" /
+# "BscScan" / "Solscan" as appropriate. The default is "the block
+# explorer" — generic-but-correct phrasing for any chain we add
+# before this table is updated.
+EXPLORER_NAME_BY_CHAIN: dict[str, str] = {
+    "ethereum":    "Etherscan",
+    "arbitrum":    "Arbiscan",
+    "polygon":     "PolygonScan",
+    "base":        "BaseScan",
+    "bsc":         "BscScan",
+    "solana":      "Solscan",
+    "hyperliquid": "Hyperliquid Explorer",
+    "bitcoin":     "Mempool.space",
+    "tron":        "Tronscan",
+    "optimism":    "Optimistic Etherscan",
+    "avalanche":   "Snowtrace",
+    "linea":       "LineaScan",
+    "blast":       "BlastScan",
+    "zksync":      "zkSync Explorer",
+    "scroll":      "ScrollScan",
+    "mantle":      "MantleScan",
+}
+
+
+def explorer_name_for_chain(chain: Any) -> str:
+    """Return the display name of the canonical block explorer for
+    ``chain``. Accepts either a `Chain` enum or a chain string.
+    Falls back to "the block explorer" for unknown chains so prose
+    stays correct (just less specific) — safer than rendering
+    ``"Etherscan"`` on a non-EVM letter.
+
+    Used by letter templates to render chain-conditional prose
+    (e.g., "Each wallet links to its <Tronscan> record" on a Tron
+    case, "<Etherscan>" on an ETH case).
+    """
+    if hasattr(chain, "value"):
+        chain_str = chain.value
+    else:
+        chain_str = str(chain) if chain is not None else ""
+    return EXPLORER_NAME_BY_CHAIN.get(chain_str.lower(), "the block explorer")
+
+
 # ---- Evidence-mode aggregation ---- #
 
 # `evidence_mode` aggregates the per-holding evidence_type fields up
@@ -461,6 +506,8 @@ def redact_dsn(dsn: str | None) -> str:
 __all__ = (
     "CAPABILITY_DISPLAY",
     "ADDRESS_EXPLORER_BY_CHAIN",
+    "EXPLORER_NAME_BY_CHAIN",
+    "explorer_name_for_chain",
     "short_addr",
     "capability_display",
     "capability_blocks_freeze",

@@ -200,10 +200,21 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
         entry = by_addr.get(key)
         if entry is None:
             label = t.counterparty.label
+            # v0.20.2 (audit-round-3 R3-4): use the per-transfer
+            # chain for explorer URL rather than the primary case
+            # chain. Sibling fix to audit-round-2 #9 for the
+            # freezable table — we missed the destinations table.
+            # On a cross-chain drain (ETH → bridge → Tron USDT),
+            # the Tron destination row was linking to
+            # ``etherscan.io/address/<Tron-base58>`` → 404 on the
+            # operator's first click. Stores the per-row chain so
+            # the explorer dispatcher can render the right
+            # block-explorer URL.
+            row_chain = t.chain.value if hasattr(t.chain, "value") else str(t.chain)
             entry = {
                 "address": addr,
                 "address_short": _short_addr(addr),
-                "explorer_url": _explorer_url(addr, chain_str),
+                "explorer_url": _explorer_url(addr, row_chain),
                 "role": (
                     label.category.value.replace("_", " ").title()
                     if label else "Wallet"
@@ -268,10 +279,19 @@ def _build_freezable_table(
             # INFLOW sum, not a present-day balance — operators
             # reading the report shouldn't conflate the two.
             ev_type = h.get("evidence_type") or "current_balance"
+            # v0.20.2 (audit-round-2 finding #9): use the per-holding
+            # chain when available so cross-chain freezable holdings
+            # link to the correct block explorer. Pre-v0.20.2 every
+            # row was rendered against `chain_str` (the primary case
+            # chain), so a Tron USDT holding in an Ethereum-seeded
+            # case linked to ``etherscan.io/address/<base58>`` → 404.
+            # Falls back to the case chain when emit_brief didn't
+            # carry a per-holding chain through (older briefs).
+            row_chain = h.get("chain") or chain_str
             rows.append({
                 "address": address,
                 "address_short": _short_addr(address),
-                "explorer_url": _explorer_url(address, chain_str),
+                "explorer_url": _explorer_url(address, row_chain),
                 "symbol": symbol,
                 "amount": h.get("amount") or "—",
                 "usd": h.get("usd") or "—",

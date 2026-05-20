@@ -112,7 +112,8 @@
     </div>
     <div class="cover-meta-item">
       <dt>Initial Value</dt>
-      <dd>USD {{ asset.usd_value_at_theft }}</dd>
+      {# v0.20.2 (audit-round-3 R3-3): see brief.py asset ctx. #}
+      <dd>USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}</dd>
     </div>
     {% endif %}
   </dl>
@@ -249,8 +250,9 @@
   <tr><th>From (victim)</th>     <td class="mono victim-row"><a href="{{ theft_event.from_explorer_url }}">{{ theft_event.from_address }}</a></td></tr>
   <tr><th>To (perpetrator)</th>  <td class="mono perp-row"><a href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a></td></tr>
   <tr><th>Asset</th>             <td>{{ asset.symbol }} <span class="small">(contract: {% if asset_contract_explorer_url %}<a class="mono" href="{{ asset_contract_explorer_url }}">{{ asset.contract }}</a>{% else %}<span class="mono">{{ asset.contract }}</span>{% endif %})</span></td></tr>
-  <tr><th>Amount</th>            <td class="amount">{{ asset.amount_human }} {{ asset.symbol }}</td></tr>
-  <tr><th>USD value at time of transaction</th><td class="amount">USD {{ asset.usd_value_at_theft }}</td></tr>
+  {# v0.20.2 (audit-round-3 R3-3): aggregate-across-events. #}
+  <tr><th>Amount{% if asset.is_multi_event %} (total across {{ asset.theft_event_count }} events){% endif %}</th>            <td class="amount">{{ asset.total_amount_human if asset.is_multi_event else asset.amount_human }} {{ asset.symbol }}</td></tr>
+  <tr><th>USD value at time of transaction</th><td class="amount">USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}</td></tr>
   {% if asset.usd_value_current %}
   <tr><th>USD value (current estimate)</th>    <td class="amount">USD {{ asset.usd_value_current }}</td></tr>
   {% endif %}
@@ -295,7 +297,7 @@
   A complete fund-flow visualization is provided as a separate SVG
   attachment (<span class="mono">{{ flow_filename }}</span>) accompanying
   this letter. Open the file in any modern browser to inspect at full
-  resolution; each wallet node links directly to its Etherscan record.
+  resolution; each wallet node links directly to its {{ primary_chain_explorer_name }} record.
 </p>
 {% endif %}
 
@@ -349,13 +351,33 @@
     </tr>
   </thead>
   <tbody>
+    {# v0.20.2 (audit-round-3 R3-2): explicit branches per status so
+       UNRECOVERABLE / EXCHANGE / TRANSIT rows are not silently
+       mislabeled as INVESTIGATE. Same fix as le.html.j2 from
+       audit-round-2 #10 — the issuer-facing letter had the bug
+       too: every non-FREEZABLE row rendered with a red INVESTIGATE
+       pill, including UNRECOVERABLE protocol contracts and
+       EXCHANGE deposit addresses that the issuer's compliance
+       team would (correctly) bin as not their problem. The
+       resulting credibility hit on an issuer letter is much
+       worse than the LE one — the issuer can call us out by
+       saying "row 4 isn't a real freeze target, why is it on
+       your INVESTIGATE list?" #}
     {% for h in issuer_freezable.holdings %}
     <tr>
       <td>
         {% if h.status == 'FREEZABLE' %}
         <span class="label-pill" style="color:#2F6B3E;">FREEZABLE</span>
-        {% else %}
+        {% elif h.status == 'INVESTIGATE' %}
         <span class="label-pill" style="color:#7C2D12;">INVESTIGATE</span>
+        {% elif h.status == 'UNRECOVERABLE' %}
+        <span class="label-pill" style="color:#6B7280;">UNRECOVERABLE</span>
+        {% elif h.status == 'EXCHANGE' %}
+        <span class="label-pill" style="color:#1E40AF;">EXCHANGE</span>
+        {% elif h.status == 'TRANSIT' %}
+        <span class="label-pill" style="color:#92400E;">TRANSIT</span>
+        {% else %}
+        <span class="label-pill" style="color:#6B7280;">{{ h.status or 'UNKNOWN' }}</span>
         {% endif %}
       </td>
       <td>
@@ -395,7 +417,7 @@
   </p>
   <p class="mono" style="font-size:11pt; margin:0 0 0.7em;"><a href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a></p>
   <p style="margin:0;">
-    <a href="{{ current_holder.explorer_url }}">View on Etherscan</a>
+    <a href="{{ current_holder.explorer_url }}">View on {{ primary_chain_explorer_name }}</a>
     &nbsp;·&nbsp;
     <a href="{{ current_holder.explorer_url }}#tokentxns">Token transfer history</a>
     <br/>
@@ -522,13 +544,13 @@
 <h2>7. Verification</h2>
 <p>
   Every fact in this brief is drawn from public on-chain data and is
-  independently verifiable. Each transaction hash links to its Etherscan
-  record. As of {{ verified_at }} UTC, the recipient wallet shows
+  independently verifiable. Each transaction hash links to its
+  {{ primary_chain_explorer_name }} record. As of {{ verified_at }} UTC, the recipient wallet shows
   {{ outbound_count_of_stolen_asset }} outbound transfers of
   {{ asset.symbol }}.
 </p>
 <p class="small">
-  Sources: Etherscan API v2; CoinGecko historical pricing; our internal
+  Sources: {{ primary_chain_explorer_name }} API; CoinGecko historical pricing; our internal
   cross-case label database.
 </p>
 

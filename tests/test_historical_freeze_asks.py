@@ -194,9 +194,18 @@ def test_jacobs_v_cfi01_case_shape_produces_historical_freeze_asks() -> None:
     asks = synthesize_historical_freeze_asks(
         case, issuer_db=issuer_db, min_inflow_usd=Decimal("1000"),
     )
-    # Expected: at least 2 asks — Tether (for USDT_DEST), Circle (for USDC_DEST).
-    # The hub itself received USDT; it's also in the ask list (separate entry).
-    # The DAI destination is filtered (freeze_capability='no').
+    # Expected: asks for Tether (USDT_DEST), Circle (USDC_DEST), AND
+    # Sky Protocol (DAI_DEST).
+    #
+    # v0.20.2 (audit-round-3 R3-1): synthesis now includes ALL tokens
+    # regardless of freeze_capability — architecture principle: synthesis
+    # produces all data, consumers filter for their own needs.
+    # Pre-R3-1 we had a `continue` for freeze_capability='no' here which
+    # meant the DAI $18M wallet was silently dropped from freeze_brief.json
+    # entirely — the brief couldn't even mark it UNRECOVERABLE. Now the
+    # ask IS produced (so the brief can render it correctly), but
+    # `capability_blocks_freeze('no') == True` means the letter generator
+    # suppresses the Sky Protocol freeze letter.
     issuers = {a.issuer.issuer for a in asks}
     assert "Tether" in issuers, (
         f"Tether ask must be produced for USDT_DEST receipt. Got issuers: {issuers}"
@@ -204,9 +213,18 @@ def test_jacobs_v_cfi01_case_shape_produces_historical_freeze_asks() -> None:
     assert "Circle" in issuers, (
         f"Circle ask must be produced for USDC_DEST receipt. Got issuers: {issuers}"
     )
-    assert "Sky Protocol" not in issuers, (
-        "Sky Protocol must NOT receive a freeze ask — DAI is permissionless "
-        "and a freeze letter would waste the operator's time."
+    # Sky Protocol ask IS produced — synthesis is all-inclusive.
+    # The freeze_capability='no' flag on the ask tells consumers (letter
+    # generator, brief renderer) that no freeze letter should be sent.
+    assert "Sky Protocol" in issuers, (
+        "Sky Protocol ask must be produced (synthesis is all-inclusive). "
+        "The letter generator uses capability_blocks_freeze() to suppress "
+        "the actual freeze letter. Got issuers: " + str(issuers)
+    )
+    sky_asks = [a for a in asks if a.issuer.issuer == "Sky Protocol"]
+    assert all(a.issuer.freeze_capability == "no" for a in sky_asks), (
+        "Sky Protocol asks must carry freeze_capability='no' so consumers "
+        "can suppress the freeze letter correctly."
     )
     # All emitted asks must carry evidence_type='historical_inflow'.
     assert all(a.evidence_type == "historical_inflow" for a in asks)
@@ -255,10 +273,17 @@ def test_aggregates_multiple_transfers_to_same_address() -> None:
     assert asks[0].observed_transfer_count == 3
 
 
-def test_freeze_capability_no_issuers_filtered() -> None:
-    """Sky Protocol / DAI: freeze_capability='no'. Even a $1M DAI
-    inflow must NOT produce an ask — the freeze letter would be
-    pointless and embarrassing."""
+def test_freeze_capability_no_issuers_included_with_flag() -> None:
+    """Sky Protocol / DAI: freeze_capability='no'. A $1M DAI
+    inflow MUST produce an ask so the brief can render it as
+    UNRECOVERABLE — but the ask carries freeze_capability='no'
+    so the letter generator knows NOT to send a freeze letter.
+
+    v0.20.2 (audit-round-3 R3-1): synthesis is all-inclusive;
+    the filter used to live here ('continue' on freeze_capability='no')
+    which silently dropped these wallets from freeze_brief.json
+    entirely. Now synthesis produces the ask with the capability
+    flag, and consumers (letter generator, brief renderer) filter."""
     transfers = [
         _mk_transfer(
             from_addr=VICTIM, to_addr=DAI_DEST,
@@ -270,7 +295,15 @@ def test_freeze_capability_no_issuers_filtered() -> None:
     asks = synthesize_historical_freeze_asks(
         case, issuer_db=_mk_issuer_db(),
     )
-    assert asks == []
+    # Ask IS produced — synthesis does not filter on freeze_capability.
+    assert len(asks) == 1, (
+        f"Expected 1 ask for DAI_DEST (even though freeze_capability='no'). Got: {asks}"
+    )
+    assert asks[0].issuer.freeze_capability == "no", (
+        "Ask must carry freeze_capability='no' so letter generator can "
+        "suppress the Sky Protocol letter."
+    )
+    assert asks[0].evidence_type == "historical_inflow"
 
 
 def test_unknown_contracts_skipped() -> None:

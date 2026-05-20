@@ -219,11 +219,19 @@ def test_match_freeze_asks_skips_above_100m_cap() -> None:
     )
 
 
-def test_match_freeze_asks_routes_freeze_capability_no_to_unmatched() -> None:
-    """Sky Protocol DAI (freeze_capability="no") must land in
-    unmatched, not matched. Pre-v0.20.1 these flowed into freeze_asks
-    and downstream consumers had to filter on the capability field
-    again to suppress letters. Now filtered at synthesis."""
+def test_match_freeze_asks_keeps_freeze_capability_no_holdings() -> None:
+    """v0.20.2 (audit-round-2 finding #5): freeze_capability="no"
+    holdings (Sky DAI, Lido stETH, etc.) MUST flow through to the
+    matched freeze_asks list. They get tagged UNRECOVERABLE
+    downstream by `_extract_freezable`'s `capability_blocks_freeze`
+    check, but they must remain in freeze_asks because
+    `_compute_perpetrator_holdings` reads ONLY the freezable list
+    when computing the perpetrator-holdings headline. v0.20.1's
+    initial filter at this point silently dropped $18M DAI from the
+    headline on Jacob's V-CFI01 — much worse than the cosmetic
+    freeze_asks.json noise it was trying to clean up. The
+    `capability_blocks_freeze` filter at letter-generation time
+    correctly prevents pointless letters."""
     from recupero.freeze.asks import match_freeze_asks
     from recupero.dormant.finder import DormantCandidate, TokenHolding
     from recupero.models import Chain, TokenRef
@@ -245,8 +253,11 @@ def test_match_freeze_asks_routes_freeze_capability_no_to_unmatched() -> None:
         holdings=[holding],
     )
     matched, unmatched = match_freeze_asks([candidate])
-    assert len(matched) == 0
-    assert any(h.token.symbol == "DAI" for h in unmatched)
+    # DAI lands in matched so the brief writer can tag it UNRECOVERABLE
+    # and `_compute_perpetrator_holdings` counts it toward the headline.
+    assert len(matched) == 1
+    assert matched[0].holding_symbol == "DAI"
+    assert matched[0].issuer.freeze_capability == "no"
 
 
 # ---- Residual #5: flow diagram respects FREEZABLE-only promotion ---- #
@@ -310,4 +321,259 @@ def test_asset_issuer_resolves_to_stolen_token_issuer() -> None:
         f"got {resolved!r}. The Section 2 'Asset issuer' cell on a "
         f"Tether-targeted letter must reflect the stolen-token issuer, "
         f"not the freeze-target."
+    )
+
+
+# ======================================================================
+# Audit-round-2 findings (v0.20.2). Each test pins a fix that landed
+# after Jacob's V-CFI01 run exposed an upstream regression OR a seam
+# bug that v0.20.1 didn't address. Build V-CFI01-shape fixtures FIRST,
+# fix the bug, audit-clean-repeat.
+# ======================================================================
+
+
+# ---- Finding #2: pipeline.py suspected_only INVESTIGATE-only ---- #
+
+
+def test_synthesize_freeze_brief_buckets_match_emit_brief_convention() -> None:
+    """`_synthesize_freeze_brief_from_asks` (the skip-editorial path)
+    must produce per-issuer + top-level USD buckets that match
+    `emit_brief._extract_freezable`'s canonical convention:
+
+      * total_usd            = FREEZABLE only
+      * total_suspected_usd  = INVESTIGATE only
+      * total_excluded_usd   = UNRECOVERABLE / EXCHANGE / TRANSIT / UNKNOWN
+
+    Pre-v0.20.2 the suspected bucket double-counted FREEZABLE holdings
+    (it was FREEZABLE+INVESTIGATE), inflating the engagement letter's
+    "Under Investigation" total by ~20x on the V-CFI01 case shape.
+    Verified via source inspection — the full skip-editorial path
+    needs psycopg + Supabase, not feasible at unit scope. The
+    integration test suite covers end-to-end."""
+    import inspect
+    from recupero.worker import pipeline
+    src = inspect.getsource(pipeline._synthesize_freeze_brief_from_asks)
+    # The per-token suspected_only branch must use elif INVESTIGATE, not
+    # if FREEZABLE+INVESTIGATE. Pin the failure mode literally.
+    assert 'elif h_status == "INVESTIGATE":' in src, (
+        "per-token suspected bucket must accumulate INVESTIGATE-only, "
+        "not FREEZABLE+INVESTIGATE — see audit-round-2 finding #2"
+    )
+    # The top-level total_suspected aggregate must also be guarded.
+    assert 'if status == "INVESTIGATE" and usd > 0:' in src, (
+        "top-level total_suspected must guard on INVESTIGATE status; "
+        "pre-v0.20.2 it summed every holding regardless of status"
+    )
+
+
+# ---- Finding #3: _victim_summary per-issuer subtraction ---- #
+
+
+def test_victim_summary_per_issuer_uses_suspected_directly() -> None:
+    """The customer summary's per-issuer "Under Investigation" column
+    must use `entry['total_suspected_usd']` directly. Pre-v0.20.2 the
+    column subtracted `total_usd` (FREEZABLE) from `total_suspected_usd`
+    (INVESTIGATE) — the same v0.16.7 bug that was fixed at the
+    case-level total but slipped through at the per-issuer column.
+    On V-CFI01-shape cases the subtraction always went negative,
+    so the column displayed "—" on every row."""
+    import inspect
+    from recupero.worker import _victim_summary
+    src = inspect.getsource(_victim_summary._build_context)
+    # The subtraction line is gone.
+    assert "suspected_usd - freezable_usd" not in src, (
+        "per-issuer subtraction must be removed — see audit-round-2 "
+        "finding #3. total_suspected_usd is already INVESTIGATE-only."
+    )
+
+
+# ---- Finding #4: LE-routing sum-across-theft_events ---- #
+
+
+def test_le_routing_uses_sum_of_theft_events_usd() -> None:
+    """LE-routing thresholds (IC3-only / state-AG / multi-jurisdiction
+    escalation) must be driven by TOTAL stolen USD, not just the
+    primary theft event's USD. In a V-CFI01-shape case the drain is
+    split across N transactions (e.g. 6 × $600K = $3.6M); pre-v0.20.2
+    we passed only the primary event's USD, so the LE handoff routed
+    to a lower tier than the actual case warranted."""
+    import inspect
+    from recupero.reports import brief
+    src = inspect.getsource(brief.generate_briefs)
+    # The construction of le_routing must sum theft_events.usd_value_at_tx.
+    assert 'for t in theft_events' in src and 'le_routing' in src, (
+        "le_routing must aggregate USD across theft_events — see "
+        "audit-round-2 finding #4"
+    )
+
+
+# ---- Finding #6: flow-diagram canonical-key promotion lookup ---- #
+
+
+def test_flow_diagram_promotion_uses_canonical_key() -> None:
+    """`_promote_freezable_holdings` must look up nodes by
+    canonical_address_key (which lowercases EVM, case-preserves
+    base58). Pre-v0.20.2 it used `.lower()` on both sides — silently
+    breaking base58 chains (Solana / Tron / Bitcoin), where the case
+    of a holding address that doesn't match the trace's case-variant
+    would mean the holding never gets promoted to a labeled cluster."""
+    import inspect
+    from recupero.worker import _flow_diagram
+    src = inspect.getsource(_flow_diagram._promote_freezable_holdings)
+    assert 'canonical_address_key' in src, (
+        "_promote_freezable_holdings must use canonical_address_key, "
+        "not .lower() — see audit-round-2 finding #6"
+    )
+    # And the brittle .lower() pattern must be gone.
+    assert 'addr_lower_to_node' not in src, (
+        "remnants of the old .lower() addr_lower_to_node dict must be "
+        "removed — see audit-round-2 finding #6"
+    )
+
+
+# ---- Finding #7: brief._add canonical seen dedup ---- #
+
+
+def test_identified_wallets_dedup_by_canonical_key() -> None:
+    """`_build_identified_wallets._add` must dedup by canonical key so
+    base58 chains aren't silently corrupted by `.lower()`. EVM
+    addresses still collapse case variants; base58 case is preserved
+    (it's significant on-chain)."""
+    import inspect
+    from recupero.reports import brief
+    src = inspect.getsource(brief._build_identified_wallets)
+    # The _ck import + use must be inside _build_identified_wallets so
+    # the inner _add() function picks it up.
+    assert "_ck(addr)" in src, (
+        "_add() must use canonical_address_key (_ck) for the seen "
+        "dict key — see audit-round-2 finding #7"
+    )
+    # The naive `addr.lower()` key must be gone from this function.
+    assert "key = addr.lower()" not in src, (
+        "stale `key = addr.lower()` line must be removed from "
+        "_build_identified_wallets — see audit-round-2 finding #7"
+    )
+
+
+# ---- Finding #8: _extract_perp_hub canonical per_addr_usd ---- #
+
+
+def test_extract_perp_hub_buckets_by_canonical_key() -> None:
+    """`_extract_perp_hub` must bucket per_addr_usd by canonical_key
+    so two case variants of the same EVM destination don't split the
+    USD total (which could let a smaller single-case-variant
+    destination steal the "largest outflow" crown)."""
+    import inspect
+    from recupero.reports import emit_brief
+    src = inspect.getsource(emit_brief._extract_perp_hub)
+    # The dict must be keyed by _ck(t.to_address), not raw t.to_address.
+    assert "to_canon = _ck(" in src, (
+        "_extract_perp_hub must canonicalize per_addr_usd keys — "
+        "see audit-round-2 finding #8"
+    )
+    # And the display map must preserve the first-occurrence casing.
+    assert "per_addr_display" in src, (
+        "_extract_perp_hub must keep a per_addr_display map so the "
+        "return value preserves on-chain casing — see audit-round-2 "
+        "finding #8"
+    )
+
+
+# ---- Finding #9: trace report per-holding chain ---- #
+
+
+def test_trace_report_freezable_row_uses_per_holding_chain() -> None:
+    """The trace-report's FREEZABLE table must build each row's
+    explorer_url from the per-holding chain, not the primary case
+    chain — cross-chain freezable holdings (e.g. Tron USDT in an
+    Ethereum-seeded case) would otherwise link to
+    ``etherscan.io/address/<base58>`` → 404 on every click."""
+    import inspect
+    from recupero.worker import _trace_report
+    src = inspect.getsource(_trace_report._build_freezable_table)
+    assert 'row_chain = h.get("chain")' in src, (
+        "row_chain must be derived from the per-holding chain — see "
+        "audit-round-2 finding #9"
+    )
+    # And it must be passed to _explorer_url, not chain_str.
+    assert "_explorer_url(address, row_chain)" in src, (
+        "row_chain must be passed to _explorer_url — see "
+        "audit-round-2 finding #9"
+    )
+
+
+# ---- Finding #10: LE template explicit status branches ---- #
+
+
+def test_le_template_branches_per_status_label() -> None:
+    """``le.html.j2`` must emit explicit pills for FREEZABLE /
+    INVESTIGATE / UNRECOVERABLE / EXCHANGE / TRANSIT status. The
+    pre-v0.20.2 `else` fell every non-FREEZABLE status into one
+    "INVESTIGATE" pill, including UNRECOVERABLE protocol contracts
+    and EXCHANGE deposit addresses — the LE reader is expected to
+    route those differently from genuine investigative leads."""
+    from pathlib import Path
+    from recupero.reports import brief
+    tmpl = (
+        Path(brief.__file__).resolve().parent / "templates" / "le.html.j2"
+    ).read_text(encoding="utf-8")
+    for status in ("FREEZABLE", "INVESTIGATE", "UNRECOVERABLE", "EXCHANGE", "TRANSIT"):
+        assert f"'{status}'" in tmpl or f'"{status}"' in tmpl, (
+            f"le.html.j2 must branch on status={status!r} — see "
+            "audit-round-2 finding #10"
+        )
+
+
+# ---- Finding #11: dormant finder canonical address keys ---- #
+
+
+def test_dormant_finder_canonical_address_tokens_keys() -> None:
+    """``address_tokens`` / ``address_inflow`` / ``address_inflow_count``
+    must be keyed by canonical_address_key so two case variants of
+    the same EVM destination don't get two separate buckets (and
+    duplicate dormant balance calls). Base58 chains preserve case
+    via canonical_address_key, so this is safe across multi-chain
+    dispatch."""
+    import inspect
+    from recupero.dormant import finder
+    src = inspect.getsource(finder.find_dormant_in_case)
+    # The canonical dest_key must be used as the dict-key.
+    assert "address_tokens.setdefault(dest_key" in src, (
+        "address_tokens must be keyed by canonical dest_key — see "
+        "audit-round-2 finding #11"
+    )
+    # And the raw `dest`-keyed naive form must be gone.
+    assert "address_tokens.setdefault(dest, {})" not in src, (
+        "stale raw-`dest` keyed setdefault must be removed — see "
+        "audit-round-2 finding #11"
+    )
+
+
+# ---- Finding #12: flow diagram canonical nodes + edges ---- #
+
+
+def test_flow_diagram_aggregate_uses_canonical_keys() -> None:
+    """`_aggregate` must key `nodes` and edge tuples by canonical
+    address so the same address in two case variants doesn't render
+    as two separate nodes (or two parallel edges between "different"
+    nodes). The display address is preserved on _NodeAttrs.address /
+    _EdgeAttrs.src/dst so rendered text matches the on-chain
+    canonical form."""
+    import inspect
+    from recupero.worker import _flow_diagram
+    src = inspect.getsource(_flow_diagram._aggregate)
+    # Canonicalisation imports + applies.
+    assert "canonical_address_key" in src, (
+        "_aggregate must canonicalize node keys — see audit-round-2 "
+        "finding #12"
+    )
+    # The naive raw-address `nodes.setdefault(t.from_address, …)` is
+    # gone — it's replaced with `nodes.setdefault(from_key, …)`.
+    assert "nodes.setdefault(\n            t.from_address," not in src, (
+        "stale raw-`t.from_address` setdefault must be removed — see "
+        "audit-round-2 finding #12"
+    )
+    assert "from_key = canonical_address_key" in src, (
+        "from_key must be canonical_address_key(t.from_address) — "
+        "see audit-round-2 finding #12"
     )

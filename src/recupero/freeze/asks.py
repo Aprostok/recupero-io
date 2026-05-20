@@ -517,14 +517,22 @@ def match_freeze_asks(
             if issuer_entry is None:
                 unmatched.append(holding)
                 continue
-            # Also skip when the issuer's own freeze_capability says "no"
-            # at this earlier stage — pre-v0.20.1 these traveled through
-            # freeze_asks → got tagged UNRECOVERABLE in the brief, but
-            # showed up as noise in freeze_asks.json. Surface them in
-            # unmatched (operator review) rather than as a freeze ask.
-            if (issuer_entry.freeze_capability or "").lower() == "no":
-                unmatched.append(holding)
-                continue
+            # v0.20.2 (audit-round-2 finding #5): DO NOT skip
+            # freeze_capability="no" holdings here. The v0.20.1 attempt
+            # at this looked clean for freeze_asks.json hygiene but
+            # caused a much worse downstream regression: emit_brief's
+            # `_compute_perpetrator_holdings` iterates ONLY the
+            # `freezable` list (which is built from these asks). Routing
+            # freeze_capability=no holdings to `unmatched` silently
+            # dropped them from the brief entirely — including the
+            # $18M dormant DAI on Jacob's CFI-00265 case which was
+            # advertised in this module's docstring as the framing
+            # number for that case. Now: emit the ask; let the brief's
+            # downstream `_extract_freezable` correctly tag it as
+            # UNRECOVERABLE via `capability_blocks_freeze` so the perp
+            # holdings still surface in the headline. The freeze-letter
+            # template + customer summary already correctly filter on
+            # `freeze_capability` when deciding what to send to whom.
             matched.append(FreezeAsk(
                 candidate_address=candidate.address,
                 chain=candidate.chain,
@@ -591,22 +599,21 @@ def synthesize_historical_freeze_asks(
     Returns:
       List of FreezeAsk records sorted by holding_usd_value descending.
     """
-    # Address normalization is chain-aware. EVM addresses are
-    # case-insensitive hex; we lowercase for canonical keys. Tron /
-    # Solana / Bitcoin addresses are base58 — lowercasing produces
-    # invalid addresses that won't match anything. Preserve case for
-    # those chains; the underlying address bytes ARE case-significant.
-    chain_str = (
-        case.chain.value
-        if hasattr(case.chain, "value")
-        else str(case.chain)
-    ).lower()
-    _CASE_SENSITIVE_CHAINS = {"tron", "solana", "bitcoin"}
-
-    def _norm_addr(a: str | None) -> str:
-        if not a:
-            return ""
-        return a if chain_str in _CASE_SENSITIVE_CHAINS else a.lower()
+    # v0.20.2 (audit-round-3 R3-7): use the centralized
+    # `canonical_address_key` instead of the hand-rolled
+    # chain-sensitivity table. The hand-rolled version had two
+    # latent bugs:
+    #   1. The CASE_SENSITIVE_CHAINS set only listed tron / solana /
+    #      bitcoin — Hyperliquid + any new base58 chain were silently
+    #      lower-cased into invalid addresses.
+    #   2. The chain_str was derived from `case.chain` — for a
+    #      cross-chain trace (EVM seed bridged to Tron USDT), the
+    #      per-transfer chain didn't drive normalization, so the
+    #      base58 Tron destinations got EVM-lowercased.
+    # canonical_address_key is chain-agnostic: it sniffs `0x` + 40
+    # hex and lowercases EVM, preserves case otherwise. One source
+    # of truth across the codebase.
+    from recupero._common import canonical_address_key as _norm_addr
 
     db = issuer_db if issuer_db is not None else load_issuer_db()
     exclude = {_norm_addr(a) for a in (exclude_addresses or set())}
@@ -670,11 +677,18 @@ def synthesize_historical_freeze_asks(
             # flow, but historical-inflow asks intentionally only
             # surface addresses where issuer freeze is plausible).
             continue
-        # Skip non-freezable issuer entries (e.g., Sky Protocol /
-        # MakerDAO has freeze_capability='no'). A freeze letter to
-        # them wastes everyone's time.
-        if (issuer_entry.freeze_capability or "").lower() == "no":
-            continue
+        # v0.20.2 (audit-round-3 R3-1): DO NOT skip
+        # freeze_capability="no" issuers here. Same lesson as the
+        # match_freeze_asks fix in audit-round-2 finding #5:
+        # `_compute_perpetrator_holdings` and the brief's freezable
+        # list need to SEE these holdings so the headline
+        # perpetrator-holdings total includes UNRECOVERABLE rows
+        # (e.g., DAI / Sky Protocol). The capability_blocks_freeze
+        # filter at letter-generation time correctly suppresses the
+        # actual freeze letter — but we must NOT drop the data here,
+        # or downstream consumers silently lose visibility of those
+        # funds. Pre-v0.20.2 a V-CFI01-shape historical-only case
+        # with $18M DAI inflow showed $0 perpetrator-holdings.
 
         # Get the address-specific explorer URL via the chain
         # convention. Fall back to the tx URL if needed.
@@ -756,12 +770,24 @@ def detect_exchange_deposits(
     # the v0.18.3 fix in `_compute_exchange_endpoints` (trace/tracer.py).
     from recupero._common import canonical_address_key as _ck_addr
     per_addr_display: dict[str, str] = {}
+    # v0.20.2 (audit-round-3 R3-8): track per-deposit chain so a
+    # cross-chain bridge → CEX deposit (drain on ETH, surfaces on
+    # Tron Binance) records the right chain on the ExchangeDeposit
+    # row. Pre-v0.20.2 we hardcoded `case.chain` for both the
+    # `chain` field and the explorer URL — so a Tron Binance hot
+    # wallet on an ETH-seeded case got an `etherscan.io/address/...`
+    # URL → 404, and the operator's subpoena routing key (per-
+    # chain MLAT) was wrong.
+    per_addr_chain: dict[str, Any] = {}
 
     exchange_categories = {LabelCategory.exchange_deposit, LabelCategory.exchange_hot_wallet}
 
     for t in case.transfers:
         to_addr_raw = t.to_address
-        label = label_store.lookup(to_addr_raw, chain=case.chain)
+        # Per-transfer chain — needed both for the lookup and for
+        # downstream chain-attribution of the deposit row.
+        t_chain = t.chain if t.chain is not None else case.chain
+        label = label_store.lookup(to_addr_raw, chain=t_chain)
         if label is None or label.category not in exchange_categories:
             continue
 
@@ -770,6 +796,10 @@ def detect_exchange_deposits(
             continue
         # Remember the first-seen original case for display.
         per_addr_display.setdefault(to_addr, to_addr_raw)
+        # First-seen chain wins (matches first-seen-display
+        # convention). On the rare cross-chain CEX merge it'd be
+        # operator-confusing to flip the chain mid-aggregate.
+        per_addr_chain.setdefault(to_addr, t_chain)
 
         # Track aggregate inflows to this address
         if t.usd_value_at_tx is not None:
@@ -789,10 +819,11 @@ def detect_exchange_deposits(
         # Aggregates keyed by canonical form; display form uses the
         # first-seen original case for explorer-link compatibility.
         addr = per_addr_display.get(canon_addr, canon_addr)
+        deposit_chain = per_addr_chain.get(canon_addr, case.chain)
         label = per_addr_label[canon_addr]
         out.append(ExchangeDeposit(
             candidate_address=addr,
-            chain=case.chain,
+            chain=deposit_chain,
             exchange=label.exchange or label.name,  # fallback to name if exchange field missing
             label_name=label.name,
             label_category=label.category.value,
@@ -801,7 +832,7 @@ def detect_exchange_deposits(
             deposit_count=per_addr_count[canon_addr],
             first_deposit_at=per_addr_first.get(canon_addr),
             last_deposit_at=per_addr_last.get(canon_addr),
-            explorer_url=_explorer_address_url(case.chain, addr),
+            explorer_url=_explorer_address_url(deposit_chain, addr),
         ))
 
     out.sort(key=lambda d: d.total_deposited_usd, reverse=True)

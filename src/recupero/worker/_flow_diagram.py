@@ -304,7 +304,17 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
         touched, with the strongest category we observed for that address.
       * A list of _EdgeAttrs, one per unique (src, dst) pair, with USD
         totals and date ranges aggregated across all parallel transfers.
+
+    v0.20.2 (audit-round-2 finding #12): all dict keys are canonical
+    (lower-cased EVM / case-preserved base58) so the same address
+    in two case variants doesn't render as two separate nodes (or
+    two parallel edges between "different" nodes). _NodeAttrs.address
+    still holds the original display casing so the rendered diagram
+    text matches the on-chain canonical form. Pre-v0.20.2 a
+    multi-source trace (e.g. Etherscan EIP-55 + Alchemy lowercase)
+    produced visual duplicates.
     """
+    from recupero._common import canonical_address_key
     nodes: dict[str, _NodeAttrs] = {}
     edges: dict[tuple[str, str], _EdgeAttrs] = {}
 
@@ -312,8 +322,9 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
     # transfers originating from it directly (rare but possible during
     # partial trace runs).
     seed = case.seed_address
+    seed_key = canonical_address_key(seed)
     seed_chain = case.chain.value
-    nodes[seed] = _NodeAttrs(
+    nodes[seed_key] = _NodeAttrs(
         address=seed,
         category="victim",
         identity="Victim wallet",
@@ -321,11 +332,13 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
     )
 
     for t in case.transfers:
+        from_key = canonical_address_key(t.from_address)
+        to_key = canonical_address_key(t.to_address)
         # Per-side node bookkeeping. The from-side defaults to an
         # unlabeled wallet (unless we've already seen it as the victim or
         # promoted it via a previous to-side transfer that classified it).
         from_node = nodes.setdefault(
-            t.from_address,
+            from_key,
             _NodeAttrs(address=t.from_address, chain=t.chain.value),
         )
         # Promote chain in case we hit a multi-chain trace — we record
@@ -340,7 +353,7 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
         # shouldn't wipe an entity classification we got from an earlier
         # transfer).
         to_node = nodes.setdefault(
-            t.to_address,
+            to_key,
             _NodeAttrs(address=t.to_address, chain=t.chain.value),
         )
         to_node.chain = t.chain.value
@@ -353,13 +366,14 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
         from_node.outbound_usd += usd
         to_node.inbound_usd += usd
 
-        # Aggregate the edge.
-        key = (t.from_address, t.to_address)
+        # Aggregate the edge. Key is canonical-pair so case variants
+        # of the same logical (src, dst) pair collapse into one edge.
+        key = (from_key, to_key)
         edge = edges.setdefault(
             key,
             _EdgeAttrs(
-                src=t.from_address,
-                dst=t.to_address,
+                src=from_node.address,
+                dst=to_node.address,
                 src_chain=from_node.chain,
                 dst_chain=to_node.chain,
             ),
@@ -405,17 +419,21 @@ def _promote_freezable_holdings(
     address stays labeled as Binance — that's more useful for the
     reader than "Circle holding".
 
-    Address comparison is case-insensitive (EVM addresses get
-    checksummed inconsistently across sources; lower-case is the
-    safe normalization).
+    Address comparison uses ``canonical_address_key`` so EVM
+    addresses are matched case-insensitively and base58 chains
+    (Solana / Tron / Bitcoin) preserve their case-sensitive form.
+    Pre-v0.20.2 this used ``.lower()`` for both sides — which
+    silently broke base58-chain matching for any cross-chain
+    freezable holding whose seed wallet was EVM but downstream
+    funds landed on Solana/Tron.
     """
     holdings = freeze_brief.get("FREEZABLE") or []
     promoted = 0
     skipped_non_freezable = 0
-    addr_lower_to_node: dict[str, _NodeAttrs] = {
-        a.lower(): n for a, n in nodes.items()
+    from recupero._common import canonical_address_key, capability_blocks_freeze
+    addr_canon_to_node: dict[str, _NodeAttrs] = {
+        canonical_address_key(a): n for a, n in nodes.items()
     }
-    from recupero._common import capability_blocks_freeze
     for entry in holdings:
         issuer = entry.get("issuer") or "Issuer"
         token = entry.get("token") or ""
@@ -466,7 +484,7 @@ def _promote_freezable_holdings(
                 # Empty status falls through to promotion for back-compat
                 # with older briefs that omitted the field.
                 continue
-            node = addr_lower_to_node.get(addr.lower())
+            node = addr_canon_to_node.get(canonical_address_key(addr))
             if node is None:
                 # Wallet didn't appear in any transfer in the trace —
                 # the freezable holding is dormant. We don't add a
@@ -513,6 +531,12 @@ def _select_for_render(
     visible — even on an extreme trace where the top 30 edges by USD all
     happen further downstream.
     """
+    # v0.20.2 (audit-round-2 finding #12): _aggregate now keys
+    # `nodes` by canonical address (so case variants collapse).
+    # Reconcile here: the edge endpoints (e.src / e.dst) still hold
+    # their display casing, so we canonicalize at use-site for
+    # dict lookups and keep_addrs membership.
+    from recupero._common import canonical_address_key as _ck_sel
     edges_sorted = sorted(
         edges,
         key=lambda e: (e.total_usd, e.transfer_count),
@@ -521,25 +545,33 @@ def _select_for_render(
     kept_edges = edges_sorted[:_MAX_EDGES]
     omitted = max(0, len(edges_sorted) - len(kept_edges))
 
-    keep_addrs: set[str] = {case.seed_address}
+    seed_key = _ck_sel(case.seed_address)
+    keep_keys: set[str] = {seed_key}
     for e in kept_edges:
-        keep_addrs.add(e.src)
-        keep_addrs.add(e.dst)
+        keep_keys.add(_ck_sel(e.src))
+        keep_keys.add(_ck_sel(e.dst))
 
     # Secondary cap: if the kept-edges' endpoints still exceed _MAX_NODES
     # (which can happen on a wide fan-out graph), keep the highest-USD
     # nodes by combined inbound+outbound flow.
-    if len(keep_addrs) > _MAX_NODES:
+    if len(keep_keys) > _MAX_NODES:
         scored = sorted(
-            ((a, nodes[a].inbound_usd + nodes[a].outbound_usd) for a in keep_addrs),
+            (
+                (k, nodes[k].inbound_usd + nodes[k].outbound_usd)
+                for k in keep_keys
+                if k in nodes
+            ),
             key=lambda kv: kv[1],
             reverse=True,
         )
-        keep_addrs = {a for a, _ in scored[:_MAX_NODES]} | {case.seed_address}
+        keep_keys = {k for k, _ in scored[:_MAX_NODES]} | {seed_key}
         # Drop edges whose endpoints fell out of the node cap.
-        kept_edges = [e for e in kept_edges if e.src in keep_addrs and e.dst in keep_addrs]
+        kept_edges = [
+            e for e in kept_edges
+            if _ck_sel(e.src) in keep_keys and _ck_sel(e.dst) in keep_keys
+        ]
 
-    pruned_nodes = {a: nodes[a] for a in keep_addrs if a in nodes}
+    pruned_nodes = {k: nodes[k] for k in keep_keys if k in nodes}
     return pruned_nodes, kept_edges, omitted
 
 

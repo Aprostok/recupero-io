@@ -312,14 +312,24 @@ def _build_context(
     freezable_entries = freeze_brief.get("FREEZABLE") or []
     freezable_summary: list[dict[str, Any]] = []
     for entry in freezable_entries:
-        freezable_usd = _parse_usd_string(entry.get("total_usd"))
+        # v0.20.2 (audit-round-2 finding #3): `total_suspected_usd`
+        # is ALREADY INVESTIGATE-only per emit_brief's canonical
+        # bucket convention (see emit_brief.py:593 — buckets are
+        # mutually exclusive: total_usd=FREEZABLE, total_suspected_usd
+        # =INVESTIGATE, total_excluded_usd=everything else). Pre-
+        # v0.20.2 we subtracted freezable_usd from suspected_usd
+        # here — the same v0.16.7 bug that was fixed at the
+        # case-level total but slipped through at the per-issuer
+        # column. On a V-CFI01-shape case (all rows FREEZABLE-heavy,
+        # INVESTIGATE-thin) the subtraction always went negative,
+        # so the customer summary table displayed "—" on every row
+        # even though some issuers had real INVESTIGATE-tier USD.
         suspected_usd = _parse_usd_string(entry.get("total_suspected_usd"))
-        suspected_only = suspected_usd - freezable_usd
         freezable_summary.append({
             "issuer": entry.get("issuer", "?"),
             "token": entry.get("token", "?"),
             "total_usd_freezable": entry.get("total_usd") or "$0",
-            "total_usd_suspected_only": _fmt_usd(suspected_only) if suspected_only > 0 else "—",
+            "total_usd_suspected_only": _fmt_usd(suspected_usd) if suspected_usd > 0 else "—",
             "freeze_capability": entry.get("freeze_capability") or "UNKNOWN",
             # Per-entry mode so the customer-letter template can
             # mark each row in the holdings table appropriately.

@@ -58,7 +58,13 @@
     {% endif %}
     <div class="cover-meta-item">
       <dt>Stolen Value (Initial)</dt>
-      <dd>USD {{ asset.usd_value_at_theft }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>
+      {# v0.20.2 (audit-round-3 R3-3): headline USD reflects the
+         TOTAL across all theft_events on a multi-event drain
+         (V-CFI01 shape: 6 × $600K = $3.6M total). The narrative
+         paragraphs below still show the primary event's USD,
+         which is correct (each narrative paragraph describes one
+         specific tx). #}
+      <dd>USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>
     </div>
     <div class="cover-meta-item">
       <dt>Asset Issuer</dt>
@@ -326,7 +332,7 @@
   The fund-flow diagram is provided as a separate SVG attachment
   (<span class="mono">{{ flow_filename }}</span>) accompanying this
   package. Open in any modern browser for full-resolution inspection;
-  each wallet node links to its Etherscan record. Solid arrows
+  each wallet node links to its {{ primary_chain_explorer_name }} record. Solid arrows
   represent observed on-chain transfers, with edge labels showing
   USD-denominated value at the time of transfer and line thickness
   scaled logarithmically to value.
@@ -341,8 +347,11 @@
   {% if issuer.jurisdiction %}<tr><th>Issuer jurisdiction</th><td>{{ issuer.jurisdiction }}</td></tr>{% endif %}
   {% if issuer.secondary_party %}<tr><th>Underlying strategy operator</th><td>{{ issuer.secondary_party }} ({{ issuer.secondary_role }})</td></tr>{% endif %}
   <tr><th>Asset description</th>      <td>{{ asset.description }}</td></tr>
-  <tr><th>Amount</th>                 <td class="amount">{{ asset.amount_human }}</td></tr>
-  <tr><th>USD value at time of theft</th><td class="amount">USD {{ asset.usd_value_at_theft }}</td></tr>
+  {# v0.20.2 (audit-round-3 R3-3): evidence table rolls up to the
+     full multi-event total when applicable; the narrative above
+     enumerates each event. #}
+  <tr><th>Amount{% if asset.is_multi_event %} (total across {{ asset.theft_event_count }} events){% endif %}</th>                 <td class="amount">{{ asset.total_amount_human if asset.is_multi_event else asset.amount_human }}</td></tr>
+  <tr><th>USD value at time of theft</th><td class="amount">USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}</td></tr>
   {% if asset.usd_value_current %}
   <tr><th>USD value (current estimate)</th><td class="amount">USD {{ asset.usd_value_current }}</td></tr>
   {% endif %}
@@ -359,7 +368,7 @@
   {{ "wallet holds" if issuer_freezable.total_count == 1 else "wallets hold" }}
   recoverable {{ issuer_freezable.token }} positions issued by
   {{ issuer.name }}. Each address is independently verifiable on
-  Etherscan and was confirmed at the timestamp shown in the footer.
+  {{ primary_chain_explorer_name }} and was confirmed at the timestamp shown in the footer.
 </p>
 <table class="evidence">
   <thead>
@@ -371,13 +380,29 @@
     </tr>
   </thead>
   <tbody>
+    {# v0.20.2 (audit-round-2 finding #10): explicit branches per
+       status so UNRECOVERABLE / EXCHANGE / TRANSIT rows are not
+       silently mislabeled as INVESTIGATE. Pre-v0.20.2 the `else`
+       branch swallowed every non-FREEZABLE status into one
+       "INVESTIGATE" pill — including UNRECOVERABLE protocol
+       contracts and EXCHANGE deposit addresses (which the LE
+       reader is expected to route differently from genuine
+       investigative leads). #}
     {% for h in issuer_freezable.holdings %}
     <tr>
       <td>
         {% if h.status == 'FREEZABLE' %}
         <span class="label-pill" style="color:#2F6B3E;">FREEZABLE</span>
-        {% else %}
+        {% elif h.status == 'INVESTIGATE' %}
         <span class="label-pill" style="color:#7C2D12;">INVESTIGATE</span>
+        {% elif h.status == 'UNRECOVERABLE' %}
+        <span class="label-pill" style="color:#6B7280;">UNRECOVERABLE</span>
+        {% elif h.status == 'EXCHANGE' %}
+        <span class="label-pill" style="color:#1E40AF;">EXCHANGE</span>
+        {% elif h.status == 'TRANSIT' %}
+        <span class="label-pill" style="color:#92400E;">TRANSIT</span>
+        {% else %}
+        <span class="label-pill" style="color:#6B7280;">{{ h.status or 'UNKNOWN' }}</span>
         {% endif %}
       </td>
       <td class="mono"><a href="{{ h.explorer_url }}">{{ h.address }}</a></td>

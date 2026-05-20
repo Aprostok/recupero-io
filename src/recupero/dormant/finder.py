@@ -265,6 +265,13 @@ def find_dormant_in_case(
     address_tokens: dict[str, dict[str, TokenRef]] = {}
     address_inflow: dict[str, Decimal] = {}
     address_inflow_count: dict[str, int] = {}
+    # v0.20.2 (audit-round-2 finding #11): canonical key → display
+    # address (first-seen original casing). Downstream DormantCandidate
+    # rows carry the display form so EIP-55 mixed case survives into
+    # freeze_asks.json and the operator-facing trace report; the
+    # canonical key drives dedup so two case variants of the same
+    # EVM destination collapse into one balance call.
+    address_display: dict[str, str] = {}
     # v0.17.9 (round-10 forensic HIGH): canonical address keying so
     # base58 self-reference checks don't false-match on lowercase collision.
     from recupero._common import canonical_address_key as _ck
@@ -307,19 +314,32 @@ def find_dormant_in_case(
         # like any other destination; if they hold no freezable
         # tokens, they're naturally filtered by the $10K threshold.
 
-        bucket = address_tokens.setdefault(dest, {})
+        # v0.20.2 (audit-round-2 finding #11): canonical-key the
+        # destination dict-keys so two case variants of the same
+        # EVM address don't get two separate buckets (which then
+        # produced two duplicate dormant balance calls + two
+        # duplicate freeze-ask candidates for one underlying
+        # wallet). Base58 chains (Solana / Tron) preserve case via
+        # canonical_address_key, so this is safe across the
+        # multi-chain dispatch.
+        dest_key = dest_lower  # already _ck(dest) from line above
+        address_display.setdefault(dest_key, dest)
+        bucket = address_tokens.setdefault(dest_key, {})
         # Native (contract=None) → use a fixed key so we don't double-add it.
         # v0.19.2 (round-13 type-HIGH-2): canonical_address_key — case-
         # preserves Solana / Tron base58 mints, lowercases EVM hex.
         # Pre-v0.19.2 `.lower()` mangled the mint to a non-on-chain
         # string; two on-chain mints whose lowercased forms collided
         # got merged into one bucket entry (silent forensic corruption).
-        from recupero._common import canonical_address_key as _ck
         token_key = _ck(tr.token.contract) if tr.token.contract else "__native__"
         bucket.setdefault(token_key, tr.token)
         if tr.usd_value_at_tx is not None:
-            address_inflow[dest] = address_inflow.get(dest, Decimal("0")) + tr.usd_value_at_tx
-        address_inflow_count[dest] = address_inflow_count.get(dest, 0) + 1
+            address_inflow[dest_key] = (
+                address_inflow.get(dest_key, Decimal("0")) + tr.usd_value_at_tx
+            )
+        address_inflow_count[dest_key] = (
+            address_inflow_count.get(dest_key, 0) + 1
+        )
 
     if skipped_service_labels:
         log.info(
@@ -366,16 +386,25 @@ def find_dormant_in_case(
     total_n = len(address_tokens)
     completed = 0
 
-    def _check(address: str, tokens: list[TokenRef]) -> DormantCandidate | None:
+    def _check(
+        canon_key: str, display_addr: str, tokens: list[TokenRef]
+    ) -> DormantCandidate | None:
+        # v0.20.2 (audit-round-2 finding #11): pass the display
+        # address (EIP-55 mixed-case for EVM, original casing for
+        # base58) into _check_one_address so the DormantCandidate's
+        # `address` field — which threads through to freeze_asks.json
+        # and the trace report — preserves on-chain casing. Inflow
+        # lookups use the canonical key, since address_inflow /
+        # address_inflow_count are canonical-keyed.
         return _check_one_address(
-            address=address,
+            address=display_addr,
             tokens=tokens,
             adapter=adapter,
             price_client=price_client,
             chain=case.chain,
             min_usd=min_usd,
-            inflow_usd=address_inflow.get(address, Decimal("0")),
-            inflow_count=address_inflow_count.get(address, 0),
+            inflow_usd=address_inflow.get(canon_key, Decimal("0")),
+            inflow_count=address_inflow_count.get(canon_key, 0),
         )
 
     if total_n == 0:
@@ -383,21 +412,33 @@ def find_dormant_in_case(
     elif _DORMANT_CONCURRENCY <= 1 or total_n == 1:
         # Single-threaded path — keeps test determinism and avoids
         # threadpool overhead for tiny cases.
-        for idx, (address, token_dict) in enumerate(address_tokens.items(), start=1):
-            log.info("dormant #%d/%d: %s (%d tokens)", idx, total_n, address, len(token_dict))
+        for idx, (canon_key, token_dict) in enumerate(address_tokens.items(), start=1):
+            display_addr = address_display.get(canon_key, canon_key)
+            log.info(
+                "dormant #%d/%d: %s (%d tokens)",
+                idx, total_n, display_addr, len(token_dict),
+            )
             try:
-                cand = _check(address, list(token_dict.values()))
+                cand = _check(canon_key, display_addr, list(token_dict.values()))
                 if cand is not None:
                     candidates.append(cand)
             except Exception as e:  # noqa: BLE001
-                log.warning("dormant: balance fetch failed for %s: %s — skipping", address, e)
+                log.warning(
+                    "dormant: balance fetch failed for %s: %s — skipping",
+                    display_addr, e,
+                )
     else:
         with ThreadPoolExecutor(
             max_workers=_DORMANT_CONCURRENCY, thread_name_prefix="dormant"
         ) as pool:
             futures = {
-                pool.submit(_check, address, list(token_dict.values())): address
-                for address, token_dict in address_tokens.items()
+                pool.submit(
+                    _check,
+                    canon_key,
+                    address_display.get(canon_key, canon_key),
+                    list(token_dict.values()),
+                ): address_display.get(canon_key, canon_key)
+                for canon_key, token_dict in address_tokens.items()
             }
             for fut in as_completed(futures):
                 address = futures[fut]

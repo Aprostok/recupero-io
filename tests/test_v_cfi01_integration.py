@@ -1741,20 +1741,31 @@ def test_v_cfi01_synthesizer_excludes_unrecoverable_from_max_recoverable() -> No
         )
         # v0.19.2 (round-13 code-quality #6): TOTAL_LOSS_USD on the
         # skip-editorial path is now $0 (the path is wallet-trace /
-        # R&D — no victim → no real loss). TOTAL_SUSPECTED_USD is the
-        # field that aggregates across all asks; assert against that.
-        # Pre-v0.19.2 TOTAL_LOSS_USD was mislabeled as the suspected
-        # sum, conflating two semantically distinct figures.
+        # R&D — no victim → no real loss).
         total_loss = Decimal(
             brief["TOTAL_LOSS_USD"].replace("$", "").replace(",", "")
         )
         assert total_loss == Decimal("0"), (
             "skip-editorial TOTAL_LOSS_USD must be $0 (no victim data)"
         )
+        # v0.20.2 (audit-round-2 finding #2): TOTAL_SUSPECTED_USD is
+        # INVESTIGATE-only, NOT a gross sum across all asks. This
+        # fixture has Tether USDT ($97K, FREEZABLE) + Sky DAI ($655K,
+        # UNRECOVERABLE) — neither lands in INVESTIGATE, so the
+        # correct suspected bucket is $0. Pre-v0.20.2 the synthesis
+        # path summed every holding's USD into total_suspected
+        # regardless of status, conflating freezable + investigative
+        # + unrecoverable into one inflated "suspected" figure — the
+        # engagement letter then overstated "Under Investigation" by
+        # ~20x on a V-CFI01-shape case.
         total_suspected = Decimal(
             brief["TOTAL_SUSPECTED_USD"].replace("$", "").replace(",", "")
         )
-        assert total_suspected >= Decimal("700000")
+        assert total_suspected == Decimal("0"), (
+            f"TOTAL_SUSPECTED_USD must be INVESTIGATE-only; fixture "
+            f"has no INVESTIGATE holdings so expected $0, got "
+            f"${total_suspected}"
+        )
 
 
 def test_v_cfi01_few_shot_math_consistent() -> None:

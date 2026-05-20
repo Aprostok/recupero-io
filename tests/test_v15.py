@@ -138,20 +138,21 @@ class TestMatchFreezeAsks:
             [_holding("USDC", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                      Decimal("100000"), Decimal("100000"))],
         )
-        # v0.20.1 (Jacob V-CFI01 residual #4): DAI's issuer (Sky Protocol)
-        # has freeze_capability="no" — match_freeze_asks now routes such
-        # holdings to `unmatched` instead of `matched`. Pre-v0.20.1 they
-        # flowed into freeze_asks as noise that downstream consumers had
-        # to filter on `freeze_capability` again; now filtered once at
-        # the synthesis boundary. So the matched count is 2 (Midas +
-        # USDC), and DAI lands in unmatched.
-        matched, unmatched = match_freeze_asks([c1, c2, c3])
-        assert len(matched) == 2
-        # Midas ($3.12M) > USDC ($100K)
-        assert matched[0].holding_symbol == "msyrupUSDp"
-        assert matched[1].holding_symbol == "USDC"
-        # DAI in unmatched
-        assert any(h.token.symbol == "DAI" for h in unmatched)
+        # v0.20.2 (audit-round-2 finding #5): the v0.20.1 filter that
+        # routed freeze_capability="no" holdings to `unmatched` was
+        # REVERTED — `_compute_perpetrator_holdings` reads ONLY the
+        # freezable list when computing the perpetrator-holdings
+        # headline, so dropping DAI here silently zeroed an $18M
+        # headline on Jacob's V-CFI01 case. DAI now flows through to
+        # `matched`; downstream `capability_blocks_freeze` (in
+        # _extract_freezable) tags it UNRECOVERABLE for letter
+        # generation. Sorted DESC by USD: DAI ($9.98M) > Midas
+        # ($3.12M) > USDC ($100K).
+        matched, _unmatched = match_freeze_asks([c1, c2, c3])
+        assert len(matched) == 3
+        assert matched[0].holding_symbol == "DAI"
+        assert matched[1].holding_symbol == "msyrupUSDp"
+        assert matched[2].holding_symbol == "USDC"
 
     def test_multi_holding_per_candidate_split_into_separate_asks(self):
         """One address holding USDC + USDT should produce two FreezeAsks.

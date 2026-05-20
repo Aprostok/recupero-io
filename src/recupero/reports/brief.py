@@ -96,6 +96,7 @@ def check_brief_schema_version(brief: dict[str, Any]) -> str | None:
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
     atomic_write_text,
+    explorer_name_for_chain as _common_explorer_name_for_chain,
     short_addr as _short_addr,
 )
 
@@ -338,11 +339,20 @@ def generate_briefs(
     hops = _build_hops(theft_transfer, linked_cases)
     hops_tree = _build_hop_tree(theft_transfer, linked_cases)
 
-    # Determine current holder: last hop's destination, or theft_transfer's destination if no hops
+    # v0.20.2 (audit-round-3 R3-12): track the per-hop chain on the
+    # current_holder, not just the address. On a cross-chain trail
+    # (ETH drain → bridge → Tron USDT), `hops[-1].chain` may differ
+    # from `primary_case.chain`. Pre-v0.20.2 the
+    # current_holder.explorer_url was always built from
+    # primary_case.chain — so a Tron current-holder linked to
+    # etherscan/404. Now we route the explorer URL through the
+    # actual chain of the final hop.
     if hops:
         current_holder_addr = hops[-1].to_address
+        current_holder_chain = hops[-1].chain
     else:
         current_holder_addr = theft_transfer.to_address
+        current_holder_chain = theft_transfer.chain
 
     # Identify wallets across all cases for the LE summary table
     identified_wallets = _build_identified_wallets(primary_case, linked_cases, victim, current_holder_addr)
@@ -380,6 +390,16 @@ def generate_briefs(
         # printed "USDT on Bsc"; the trace report for the same case
         # printed "BNB Chain". Inconsistent + unprofessional.
         "primary_chain": _resolve_primary_chain_display(primary_case),
+        # v0.20.2 (audit-round-3 R3-9/R3-10): canonical block-
+        # explorer display name for the case chain, so letter prose
+        # can render "View on Tronscan" on a Tron case instead of
+        # the hard-coded "View on Etherscan" that was rendering
+        # alongside Tronscan URLs. Centralized in _common; templates
+        # use `{{ primary_chain_explorer_name }}` (with safe
+        # defaults).
+        "primary_chain_explorer_name": _common_explorer_name_for_chain(
+            primary_case.chain,
+        ),
         "trace_started_at": (
             primary_case.trace_started_at.strftime("%Y-%m-%dT%H:%M:%SZ")
             if primary_case.trace_started_at else None
@@ -409,6 +429,30 @@ def generate_briefs(
             "description": issuer.asset_description or asset_type,
             "amount_human": _fmt_decimal(theft_transfer.amount_decimal),
             "usd_value_at_theft": _fmt_usd(theft_transfer.usd_value_at_tx),
+            # v0.20.2 (audit-round-3 R3-3): expose aggregate
+            # across all theft_events so the headline asset block
+            # renders the TOTAL stolen value on multi-event drains
+            # (e.g., V-CFI01 shape: 6 × $600K = $3.6M). The
+            # `usd_value_at_theft` field stays as the primary
+            # event's USD (back-compat for callers that depend on
+            # the single-event semantics); templates that want
+            # the multi-event headline use `total_usd_value_at_theft`.
+            "total_usd_value_at_theft": _fmt_usd(
+                sum(
+                    (t.usd_value_at_tx for t in theft_events
+                     if t.usd_value_at_tx is not None),
+                    start=Decimal(0),
+                ) or theft_transfer.usd_value_at_tx,
+            ),
+            "total_amount_human": _fmt_decimal(
+                sum(
+                    (t.amount_decimal for t in theft_events
+                     if t.amount_decimal is not None),
+                    start=Decimal(0),
+                ) or theft_transfer.amount_decimal,
+            ),
+            "theft_event_count": len(theft_events),
+            "is_multi_event": len(theft_events) > 1,
             "usd_value_current": asset_usd_value_current,
         },
         "issuer": {
@@ -530,8 +574,12 @@ def generate_briefs(
         ),
         "current_holder": {
             "address": current_holder_addr,
+            # v0.20.2 (audit-round-3 R3-12): per-hop chain so a
+            # cross-chain current-holder (e.g., Tron USDT after a
+            # bridge) links to the right block explorer instead of
+            # always-etherscan.
             "explorer_url": _address_explorer_url(
-                current_holder_addr, primary_case.chain
+                current_holder_addr, current_holder_chain,
             ),
         },
         # Asset contract address: clickable token-contract page when
@@ -566,8 +614,22 @@ def generate_briefs(
         # ``le_routing`` context key. Built from victim's state +
         # country + (approximate) total loss so the LE handoff names
         # specific filing channels (IC3 + state AG + escalation tiers).
+        #
+        # v0.20.2 (audit-round-2 finding #4): LE-routing thresholds
+        # (IC3-only / state-AG / multi-jurisdiction escalation) are
+        # driven by TOTAL loss, not just the primary theft event.
+        # Pre-v0.20.2 we passed `theft_transfer.usd_value_at_tx` —
+        # in a V-CFI01-shape case the drain is split across N
+        # transactions (e.g. 6 × $600K = $3.6M total), and using the
+        # primary alone routed the case to the wrong tier and
+        # understated severity in the LE handoff narrative.
         "le_routing": _build_le_routing_ctx(
-            victim, theft_transfer.usd_value_at_tx,
+            victim,
+            sum(
+                (t.usd_value_at_tx for t in theft_events
+                 if t.usd_value_at_tx is not None),
+                start=Decimal(0),
+            ) or theft_transfer.usd_value_at_tx,
         ),
     }
 
@@ -998,25 +1060,47 @@ def _build_identified_wallets(
 
     # Each identified wallet carries an ``explorer_url`` so the
     # rendered table makes every address a click-through to its
-    # on-chain page. We default the chain to the primary case's chain;
-    # multi-chain support is a follow-up (would need per-row chain
-    # tracking on the underlying transfers).
+    # on-chain page.
+    #
+    # v0.20.2 (audit-round-3 R3-5): per-row chain — pre-v0.20.2 we
+    # used `primary.chain` for every row. On a cross-chain trace
+    # (e.g., ETH drain → bridge → Tron USDT), every Tron / Solana
+    # / Bitcoin address linked to ``etherscan.io/address/<base58>``
+    # → 404. We now track the chain of the transfer where each
+    # address was first seen and pass it through to
+    # _address_explorer_url, so the dispatcher renders the right
+    # block explorer for each row.
     primary_chain = primary.chain
 
-    def _add(addr: str, role: str, type_str: str, notes: str, row_class: str = ""):
-        key = addr.lower()
+    from recupero._common import canonical_address_key as _ck
+
+    def _add(
+        addr: str, role: str, type_str: str, notes: str,
+        row_class: str = "", chain: Any = None,
+    ):
+        # v0.20.2 (audit-round-2 finding #7): canonical-key dedup
+        # so base58 chains (Solana / Tron / Bitcoin) aren't silently
+        # corrupted by `.lower()`. EVM addresses still collapse case
+        # variants; base58 case is preserved (it's significant
+        # on-chain). Aligns this routine with the rest of the
+        # codebase post-v0.17.5.
+        key = _ck(addr)
         if key in seen:
             # Don't downgrade — first observation wins for role/notes
             return
+        row_chain = chain if chain is not None else primary_chain
         seen[key] = {
             "address": addr, "role": role, "type": type_str,
             "notes": notes, "row_class": row_class,
-            "explorer_url": _address_explorer_url(addr, primary_chain),
+            "explorer_url": _address_explorer_url(addr, row_chain),
         }
 
-    _add(victim.wallet_address, "Victim", "EOA", "Source of stolen funds", "victim-row")
+    _add(
+        victim.wallet_address, "Victim", "EOA",
+        "Source of stolen funds", "victim-row",
+        chain=primary_chain,  # victim wallet always on primary case chain
+    )
 
-    from recupero._common import canonical_address_key as _ck
     victim_key = _ck(victim.wallet_address)
     current_holder_key = _ck(current_holder)
     for c in [primary, *linked]:
@@ -1043,7 +1127,7 @@ def _build_identified_wallets(
                 if cp_label.notes:
                     notes_parts.append(cp_label.notes)
             notes = " · ".join(notes_parts) or "—"
-            _add(t.to_address, role, type_str, notes, row_class)
+            _add(t.to_address, role, type_str, notes, row_class, chain=t.chain)
 
     # Sort: victim, perpetrators, then everyone else
     def _sort_key(w: dict[str, Any]) -> tuple[int, str]:

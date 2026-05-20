@@ -185,27 +185,49 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
     if not case.transfers:
         return None
 
-    # Sum USD received per counterparty among transfers leaving the victim wallet
+    # Sum USD received per counterparty among transfers leaving the
+    # victim wallet.
+    #
+    # v0.20.2 (audit-round-2 finding #8): keys are canonical
+    # (lower-cased EVM / case-preserved base58) — pre-v0.20.2 we
+    # used raw `t.to_address` which case-splits the USD bucket when
+    # the same destination appears with EIP-55 mixed case and
+    # all-lowercase across different transfers (Etherscan vs
+    # Alchemy serialise checksum case differently). A real perp hub
+    # could lose its "largest outflow" crown to a smaller, single-
+    # case-variant destination. We still keep the original display
+    # address (first occurrence) for the return value.
+    from recupero._common import canonical_address_key as _ck
     per_addr_usd: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_addr_first_seen: dict[str, datetime] = {}
+    per_addr_display: dict[str, str] = {}
 
-    from recupero._common import canonical_address_key as _ck
-    seed_lower = _ck(case.seed_address)
+    seed_canon = _ck(case.seed_address)
     for t in case.transfers:
-        if _ck(t.from_address) == seed_lower:
-            to = t.to_address
+        if _ck(t.from_address) == seed_canon:
+            to_raw = t.to_address
+            to_canon = _ck(to_raw)
             if t.usd_value_at_tx is not None:
-                per_addr_usd[to] += t.usd_value_at_tx
-            if to not in per_addr_first_seen or t.block_time < per_addr_first_seen[to]:
-                per_addr_first_seen[to] = t.block_time
+                per_addr_usd[to_canon] += t.usd_value_at_tx
+            if (
+                to_canon not in per_addr_first_seen
+                or t.block_time < per_addr_first_seen[to_canon]
+            ):
+                per_addr_first_seen[to_canon] = t.block_time
+                # First-seen wins display so the chosen casing
+                # matches the earliest on-chain reference for that
+                # address.
+                per_addr_display[to_canon] = to_raw
+            per_addr_display.setdefault(to_canon, to_raw)
 
     if not per_addr_usd:
         # Victim never sent anything? Fall back to first outflow counterparty.
         return None
 
-    hub_addr = max(per_addr_usd.items(), key=lambda kv: kv[1])[0]
-    hub_usd = per_addr_usd[hub_addr]
-    hub_first_seen = per_addr_first_seen[hub_addr]
+    hub_canon = max(per_addr_usd.items(), key=lambda kv: kv[1])[0]
+    hub_addr = per_addr_display.get(hub_canon, hub_canon)
+    hub_usd = per_addr_usd[hub_canon]
+    hub_first_seen = per_addr_first_seen[hub_canon]
 
     return {
         "address": hub_addr,
@@ -439,25 +461,48 @@ def _mechanical_destination_note(
             balance_str = usd(balance_usd)
         except Exception:  # noqa: BLE001
             balance_str = "(unknown)"
-        capability = (freeze_info.get("freeze_capability") or "").lower()
-        if capability == "yes":
+        # v0.20.2 (audit-round-3 R3-11): accept both raw
+        # ("yes"/"limited"/"no") AND display ("HIGH"/"MEDIUM"/"LOW")
+        # forms of freeze_capability. The skip_editorial path in
+        # worker/pipeline.py stores the display form; if a re-emit
+        # walks through that data, this routine pre-v0.20.2 fell
+        # through to "Freezability TBD" → emits "🟩 FREEZABLE …
+        # Freezability TBD" on a perfectly-FREEZABLE row, which
+        # contradicts itself. Route through the shared
+        # capability_is_freezable / capability_blocks_freeze
+        # helpers so the taxonomy is consistent across the codebase.
+        from recupero._common import (
+            capability_blocks_freeze,
+            capability_is_freezable,
+        )
+        capability_raw = freeze_info.get("freeze_capability")
+        capability_l = (capability_raw or "").lower()
+        if capability_l in ("yes", "high"):
             cap_phrase = "Freezability HIGH"
-        elif capability == "limited":
+        elif capability_l in ("limited", "medium"):
             cap_phrase = "Freezability LIMITED (issuer pause / admin gate required)"
-        elif capability == "no":
+        elif capability_l in ("no", "low"):
             cap_phrase = "Freezability LOW (no issuer-level freeze pathway)"
         else:
             cap_phrase = "Freezability TBD"
-        # If freeze_capability is 'no' (e.g., DAI, wstETH), this is not
-        # actually freezable — emit a DORMANT/UNRECOVERABLE-flavored
-        # note instead so the operator doesn't send a useless freeze
-        # letter to a non-freezing issuer.
-        if capability == "no":
+        # If the issuer can't freeze (DAI / wstETH style), emit a
+        # DORMANT/UNRECOVERABLE-flavored note so the operator doesn't
+        # send a useless freeze letter to a non-freezing issuer.
+        if capability_blocks_freeze(capability_raw):
             return (
                 f"⬛ UNRECOVERABLE — Holds {balance_str} {symbol} ({issuer}). "
                 f"{cap_phrase}. Candidate for seizure if perpetrator "
                 "identified, but no issuer-level freeze pathway."
             )
+        # Genuine freezable target (capability=yes/HIGH or
+        # limited/MEDIUM both qualify — limited still has a freeze
+        # pathway, just gated). Anything else still gets a
+        # FREEZABLE banner for back-compat, but the phrase reflects
+        # the actual capability tier.
+        if not capability_is_freezable(capability_raw) and capability_l not in (
+            "limited", "medium",
+        ):
+            cap_phrase = "Freezability TBD"
         return (
             f"🟩 FREEZABLE — Holds {balance_str} {symbol} ({issuer}). "
             f"{cap_phrase}. Received {received_str} in trace."
@@ -567,6 +612,21 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
     """
     by_issuer_raw = freeze_asks.get("by_issuer", {})
     editorial_notes = editorial_notes or {}
+    # v0.20.2 (audit-round-2 finding #1): canonical-key editorial_notes
+    # once so the `_classify_address_status(addr, editorial_notes)`
+    # lookup below matches. Pre-v0.20.2 `addr` from freeze_asks was
+    # canonical (lowercased EVM, case-preserved base58) but
+    # editorial_notes was operator-keyed mixed-case from etherscan
+    # paste — so an operator INVESTIGATE tag on `0xA1b2…F00` (checksum)
+    # silently missed when the freeze_ask carried `0xa1b2…f00`
+    # (lowercase). The lookup defaulted to UNKNOWN → rescued to
+    # FREEZABLE → operator's intentional INVESTIGATE tag was overridden
+    # and the position landed in `TOTAL_FREEZABLE_USD` despite the
+    # operator's review classifying it otherwise.
+    from recupero._common import canonical_address_key as _ck_ed
+    editorial_notes_by_canon: dict[str, str] = {
+        _ck_ed(k): v for k, v in editorial_notes.items() if _ck_ed(k)
+    }
     freezable = []
 
     for issuer_name, asks in by_issuer_raw.items():
@@ -585,7 +645,11 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
         for a in asks:
             addr = a["address"]
             holding_usd = Decimal(str(a.get("usd_value") or "0"))
-            status = _classify_address_status(addr, editorial_notes)
+            # v0.20.2 (audit-round-2 finding #1): look up the editorial
+            # status by canonical key, not by raw addr — the operator's
+            # tags are now respected regardless of address casing.
+            addr_canon = _ck_ed(addr)
+            status = _classify_address_status(addr_canon, editorial_notes_by_canon)
 
             # Status policy:
             #   capability=no/low                  → UNRECOVERABLE

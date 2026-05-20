@@ -486,33 +486,58 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
     bridge_addresses: list[str] = []
     label_hints: dict[str, str] = {}  # addr -> label name
 
+    # v0.20.2 (audit-round-3 R3-6): canonical-key all per-address
+    # aggregates so the AI prompt doesn't see two split rows for
+    # the same wallet because Etherscan emitted EIP-55 mixed-case
+    # in one transfer and Alchemy emitted lowercase in another.
+    # Pre-v0.20.2 a 6-tx perp-hub on V-CFI01 could fragment across
+    # 6 separate "first hop" rows; the AI then either picked the
+    # wrong consolidation address or emitted duplicate
+    # DESTINATION_NOTES that collide downstream. We also preserve
+    # the first-seen display casing in per_addr_display so
+    # downstream prompts + brief output show the on-chain canonical
+    # form.
+    per_addr_display: dict[str, str] = {}
     for t in case.transfers:
         # First-hop tracking
         if _ck(t.from_address) == seed_lower:
+            to_canon = _ck(t.to_address)
+            per_addr_display.setdefault(to_canon, t.to_address)
             if t.usd_value_at_tx is not None:
                 total_drained += t.usd_value_at_tx
-                per_first_hop_usd[t.to_address] += t.usd_value_at_tx
-            if t.to_address not in per_first_hop_first_seen or t.block_time < per_first_hop_first_seen[t.to_address]:
-                per_first_hop_first_seen[t.to_address] = t.block_time
+                per_first_hop_usd[to_canon] += t.usd_value_at_tx
+            if (
+                to_canon not in per_first_hop_first_seen
+                or t.block_time < per_first_hop_first_seen[to_canon]
+            ):
+                per_first_hop_first_seen[to_canon] = t.block_time
 
         # Label hints for any downstream address
         if t.counterparty.label:
             cat = t.counterparty.label.category.value
-            label_hints[t.counterparty.address] = t.counterparty.label.name
-            if cat == "mixer" and t.counterparty.address not in mixer_addresses:
-                mixer_addresses.append(t.counterparty.address)
-            elif cat == "bridge" and t.counterparty.address not in bridge_addresses:
-                bridge_addresses.append(t.counterparty.address)
+            cp_canon = _ck(t.counterparty.address)
+            per_addr_display.setdefault(cp_canon, t.counterparty.address)
+            label_hints[cp_canon] = t.counterparty.label.name
+            if cat == "mixer" and cp_canon not in mixer_addresses:
+                mixer_addresses.append(cp_canon)
+            elif cat == "bridge" and cp_canon not in bridge_addresses:
+                bridge_addresses.append(cp_canon)
 
-    # Pick the largest first hop as the consolidation/drainer address
+    # Pick the largest first hop as the consolidation/drainer address.
+    # The dict is canonical-keyed (v0.20.2 R3-6); we look up the
+    # display form via per_addr_display so the AI prompt shows the
+    # on-chain canonical case.
     first_hop_candidate: dict[str, Any] = {}
     if per_first_hop_usd:
-        first_hop_addr, first_hop_usd = max(per_first_hop_usd.items(), key=lambda kv: kv[1])
+        first_hop_canon, first_hop_usd = max(
+            per_first_hop_usd.items(), key=lambda kv: kv[1],
+        )
+        first_hop_display = per_addr_display.get(first_hop_canon, first_hop_canon)
         first_hop_candidate = {
-            "address": first_hop_addr,
-            "address_short": _short_addr(first_hop_addr),
+            "address": first_hop_display,
+            "address_short": _short_addr(first_hop_display),
             "usd_received": f"${first_hop_usd:,.2f}",
-            "first_seen_iso": per_first_hop_first_seen[first_hop_addr].isoformat().replace("+00:00", "Z"),
+            "first_seen_iso": per_first_hop_first_seen[first_hop_canon].isoformat().replace("+00:00", "Z"),
         }
 
     # Per-address signals the AI uses for emoji classification:
@@ -523,14 +548,23 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
     #   the address per our trace. If it's tiny relative to current
     #   balance, the wallet is consolidating from many sources (could
     #   be a perp aggregating victims, or just an unrelated trader).
+    # v0.20.2 (audit-round-3 R3-6): canonical-key here too, mirroring
+    # the first-hop loop above. The freezable_summary loop below
+    # does `address_inflow_usd.get(addr, ...)` against an `addr`
+    # pulled from freeze_asks JSON — those addresses are already
+    # canonical (lower-cased EVM) because freeze_asks is written via
+    # canonical helpers, so the canonical keys here match.
     address_is_contract: dict[str, bool] = {}
     address_inflow_usd: dict[str, Decimal] = {}
     for t in case.transfers:
-        addr = t.to_address
+        addr_canon = _ck(t.to_address)
         if t.counterparty.is_contract:
-            address_is_contract[addr] = True
+            address_is_contract[addr_canon] = True
         if t.usd_value_at_tx is not None:
-            address_inflow_usd[addr] = address_inflow_usd.get(addr, Decimal("0")) + t.usd_value_at_tx
+            address_inflow_usd[addr_canon] = (
+                address_inflow_usd.get(addr_canon, Decimal("0"))
+                + t.usd_value_at_tx
+            )
 
     # Freezable holdings from freeze_asks
     freezable_summary = []
@@ -538,7 +572,12 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
         for a in asks:
             addr = a.get("address", "")
             balance_usd = Decimal(str(a.get("usd_value") or "0"))
-            inflow = address_inflow_usd.get(addr, Decimal("0"))
+            # v0.20.2 (audit-round-3 R3-6): canonical-key lookup
+            # so the freeze_asks address (whatever case it has)
+            # matches the canonical-keyed address_inflow_usd /
+            # address_is_contract maps built above.
+            addr_canon = _ck(addr)
+            inflow = address_inflow_usd.get(addr_canon, Decimal("0"))
             # Magnitude ratio — None if inflow is zero (no signal).
             ratio: str | None = None
             if inflow > 0 and balance_usd > 0:
@@ -565,7 +604,7 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
                 "usd": f"${balance_usd:,.2f}",
                 "inflow_usd_from_this_case": f"${inflow:,.2f}",
                 "balance_to_inflow_ratio": ratio,
-                "is_contract": address_is_contract.get(addr, False),
+                "is_contract": address_is_contract.get(addr_canon, False),
                 "freeze_capability": a.get("freeze_capability", "unknown"),
                 # v0.14.9: evidence-type carries through so the AI can
                 # distinguish freeze NOW (current_balance) from
@@ -660,24 +699,41 @@ def _enumerate_all_destinations(
         freeze_capability when applicable
       * label_hint (mixer/bridge/exchange/protocol label if any)
     """
+    # v0.20.2 (audit-round-3 R3-6): canonical-key per-address
+    # aggregation. Pre-v0.20.2 the same wallet appearing in two
+    # transfers with different case forms (Etherscan EIP-55 vs
+    # Alchemy lowercase) produced two destination rows in
+    # all_significant_destinations — the AI then emitted duplicate
+    # DESTINATION_NOTES (or worse, contradictory classifications
+    # for the same wallet). `label_hints` is already canonical-keyed
+    # by the caller (`_summarize_case_for_ai` v0.20.2). Display
+    # casing is preserved via per_addr_display (first-seen wins).
+    from recupero._common import canonical_address_key as _ck
     per_addr_received: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_addr_tokens: dict[str, set[str]] = defaultdict(set)
+    per_addr_display: dict[str, str] = {}
     for t in case.transfers:
-        to = t.to_address
-        if not to or to.lower() == seed_lower:
+        to_raw = t.to_address
+        if not to_raw:
             continue
+        to_canon = _ck(to_raw)
+        if to_canon == seed_lower:
+            continue
+        per_addr_display.setdefault(to_canon, to_raw)
         if t.usd_value_at_tx is not None:
-            per_addr_received[to] += t.usd_value_at_tx
+            per_addr_received[to_canon] += t.usd_value_at_tx
         if t.token and t.token.symbol:
-            per_addr_tokens[to].add(t.token.symbol)
+            per_addr_tokens[to_canon].add(t.token.symbol)
 
-    # Index freeze_asks by address for quick lookup.
+    # Index freeze_asks by canonical address for collision-free lookup.
     freeze_by_addr: dict[str, dict[str, Any]] = {}
     for issuer, asks in freeze_asks.get("by_issuer", {}).items():
         for a in asks:
             addr = a.get("address")
             if isinstance(addr, str) and addr:
-                freeze_by_addr[addr] = {**a, "issuer": issuer}
+                addr_canon = _ck(addr)
+                freeze_by_addr[addr_canon] = {**a, "issuer": issuer}
+                per_addr_display.setdefault(addr_canon, addr)
 
     candidates: set[str] = {
         a for a, received in per_addr_received.items()
@@ -690,20 +746,21 @@ def _enumerate_all_destinations(
     candidates.update(freeze_by_addr.keys())
 
     rows: list[dict[str, Any]] = []
-    for addr in sorted(
+    for canon in sorted(
         candidates,
         key=lambda a: per_addr_received.get(a, Decimal("0")),
         reverse=True,
     ):
+        addr = per_addr_display.get(canon, canon)
         row: dict[str, Any] = {
             "address": addr,
             "address_short": _short_addr(addr),
-            "usd_received_in_trace": f"${per_addr_received.get(addr, Decimal('0')):,.2f}",
-            "tokens_observed": sorted(per_addr_tokens.get(addr, set())),
-            "label_hint": label_hints.get(addr),
-            "is_in_freeze_asks": addr in freeze_by_addr,
+            "usd_received_in_trace": f"${per_addr_received.get(canon, Decimal('0')):,.2f}",
+            "tokens_observed": sorted(per_addr_tokens.get(canon, set())),
+            "label_hint": label_hints.get(canon),
+            "is_in_freeze_asks": canon in freeze_by_addr,
         }
-        fa = freeze_by_addr.get(addr)
+        fa = freeze_by_addr.get(canon)
         if fa is not None:
             row["freezable_token"] = fa.get("symbol")
             row["freezable_amount"] = fa.get("amount")

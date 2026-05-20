@@ -1013,7 +1013,13 @@ def _synthesize_freeze_brief_from_asks(
                 usd = Decimal(usd_str) if usd_str else Decimal(0)
             except (TypeError, ValueError):
                 usd = Decimal(0)
-            total_suspected += usd
+            # v0.20.2 (audit-round-2 finding #2): `total_suspected`
+            # accumulation moved BELOW status classification so it
+            # tracks INVESTIGATE-only USD, matching emit_brief's
+            # TOTAL_SUSPECTED_USD convention. Pre-v0.20.2 this summed
+            # every holding's USD regardless of status, conflating
+            # freezable + investigative + unrecoverable into the
+            # top-level "suspected" headline.
             cap_raw = (e.get("freeze_capability") or "").lower()
             cap_display = capability_display(cap_raw)
             token_entry = by_token.setdefault(symbol, {
@@ -1048,6 +1054,11 @@ def _synthesize_freeze_brief_from_asks(
             # rows (e.g., DAI) must NOT contribute to MAX_RECOVERABLE_USD.
             if status == "FREEZABLE" and usd > 0:
                 total_recoverable += usd
+            # v0.20.2 (audit-round-2 finding #2): top-level
+            # TOTAL_SUSPECTED_USD is the sum of INVESTIGATE-status
+            # holdings only — same convention as emit_brief.py.
+            if status == "INVESTIGATE" and usd > 0:
+                total_suspected += usd
             token_entry["holdings"].append({
                 "address": e.get("address"),
                 # v0.17.4 (round-10 audit HIGH): preserve per-holding
@@ -1089,10 +1100,17 @@ def _synthesize_freeze_brief_from_asks(
                 if earliest is None or obs < earliest:
                     earliest = obs
             token_entry["earliest_observed"] = earliest
-            # total_usd is the FREEZABLE-status sum; total_suspected_usd
-            # is FREEZABLE + INVESTIGATE. Matches emit_brief.py's main
-            # path so the classifier + recovery scorer see consistent
-            # inputs across both writers.
+            # v0.20.2 (audit-round-2 finding #2): match emit_brief.py's
+            # canonical bucket convention exactly — buckets are mutually
+            # exclusive (each holding lands in one and only one):
+            #   total_usd           = FREEZABLE-status sum
+            #   total_suspected_usd = INVESTIGATE-status sum
+            #   total_excluded_usd  = UNRECOVERABLE / EXCHANGE / TRANSIT / UNKNOWN
+            # Pre-v0.20.2 this bucketed FREEZABLE+INVESTIGATE into
+            # `suspected_only`, double-counting FREEZABLE holdings on
+            # the skip-editorial path and inflating the engagement
+            # letter's "Under Investigation" total by ~20x in the
+            # V-CFI01 case shape (FREEZABLE-heavy / INVESTIGATE-thin).
             freezable_only = Decimal(0)
             suspected_only = Decimal(0)
             excluded_only = Decimal(0)
@@ -1107,7 +1125,7 @@ def _synthesize_freeze_brief_from_asks(
                 h_status = h.get("status")
                 if h_status == "FREEZABLE":
                     freezable_only += h_usd
-                if h_status in ("FREEZABLE", "INVESTIGATE"):
+                elif h_status == "INVESTIGATE":
                     suspected_only += h_usd
                 else:
                     excluded_only += h_usd

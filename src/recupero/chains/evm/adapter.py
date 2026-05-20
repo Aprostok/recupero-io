@@ -91,6 +91,30 @@ def _profile_for(chain: Chain, cfg: RecuperoConfig) -> EvmChainProfile:
             coingecko_native_id=p.coingecko_native_id,
             coingecko_platform=p.coingecko_platform,
         )
+    # v0.20.0 (round-13 chain-coverage research): seven additional
+    # EVM chains via Etherscan V2 multichain. Each uses an identical
+    # profile shape (chain_id + native_symbol + explorer_base +
+    # coingecko_*); the adapter logic doesn't branch further past this
+    # _profile_for resolver.
+    _EXTENDED_EVM_CHAINS = {
+        Chain.optimism:  "optimism",
+        Chain.avalanche: "avalanche",
+        Chain.linea:     "linea",
+        Chain.blast:     "blast",
+        Chain.zksync:    "zksync",
+        Chain.scroll:    "scroll",
+        Chain.mantle:    "mantle",
+    }
+    if chain in _EXTENDED_EVM_CHAINS:
+        attr = _EXTENDED_EVM_CHAINS[chain]
+        p = getattr(cfg, attr)
+        return EvmChainProfile(
+            chain=chain, chain_id=p.chain_id, api_base=p.api_base,
+            native_symbol=p.native_symbol, native_decimals=p.native_decimals,
+            explorer_base=p.explorer_base,
+            coingecko_native_id=p.coingecko_native_id,
+            coingecko_platform=p.coingecko_platform,
+        )
     raise NotImplementedError(f"No EVM profile for chain {chain}")
 
 

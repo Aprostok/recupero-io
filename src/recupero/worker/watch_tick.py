@@ -55,12 +55,24 @@ log = logging.getLogger(__name__)
 
 
 # Etherscan v2 chain-id mapping for the EVM chains we monitor.
+# v0.20.0 (round-13 chain-coverage research): added 7 EVM chains.
+# Each is a free chainid wire-up — Etherscan API V2's multichain
+# endpoint routes the request to the right per-chain explorer using
+# this id. Sources: optimistic.etherscan.io / snowtrace.io / etc.
+# all support the V2 API with the same key.
 _CHAIN_ID_BY_NAME: dict[str, int] = {
-    "ethereum": 1,
-    "arbitrum": 42161,
-    "base":     8453,
-    "polygon":  137,
-    "bsc":      56,
+    "ethereum":  1,
+    "arbitrum":  42161,
+    "base":      8453,
+    "polygon":   137,
+    "bsc":       56,
+    "optimism":  10,
+    "avalanche": 43114,
+    "linea":     59144,
+    "blast":     81457,
+    "zksync":    324,
+    "scroll":    534352,
+    "mantle":    5000,
 }
 
 # Chains that need a non-EVM snapshot path. The watch_tick loop

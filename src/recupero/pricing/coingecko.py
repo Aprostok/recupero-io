@@ -44,6 +44,18 @@ _CHAIN_TO_CG_PLATFORM: dict[Chain, str] = {
     # Tron — CoinGecko platform id is "tron"; required for contract→id
     # resolution on TRC-20 tokens (added in v0.16.7).
     Chain.tron: "tron",
+    # v0.20.0 (round-13 chain-coverage research): platform mappings
+    # for the 7 EVM chains added via Etherscan V2 multichain. Without
+    # these entries, contract→USD lookups silently fail for tokens
+    # on these chains; the trace produces unpriced transfers and the
+    # USD-value-at-tx column reads "(unknown)" in the brief.
+    Chain.optimism:  "optimistic-ethereum",
+    Chain.avalanche: "avalanche",
+    Chain.linea:     "linea",
+    Chain.blast:     "blast",
+    Chain.zksync:    "zksync",
+    Chain.scroll:    "scroll",
+    Chain.mantle:    "mantle",
 }
 
 
@@ -112,6 +124,42 @@ _CANONICAL_STABLECOIN_CONTRACTS: dict[tuple[Chain, str], str] = {
     (Chain.polygon, "USDC"):   "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359",
     (Chain.polygon, "USDT"):   "0xc2132d05d31c914a87c6611c10748aeb04b58e8f",
     (Chain.polygon, "DAI"):    "0x8f3cf7ad23cd3cadbd9735aff958023239c6a063",
+    # v0.20.0 (round-13 chain-coverage research): canonical stablecoin
+    # contracts on the 7 EVM chains added in v0.20.0. Pre-v0.20.0 a
+    # legit USDC transfer on (e.g.) Optimism fell through to the
+    # `spoofed_canonical_symbol` branch because the (chain, symbol)
+    # tuple had no canonical entry. The brief then refused to price
+    # the transfer at par and rendered `(unknown)` for the USD value.
+    # Sources: chain-native USDC docs (Circle) + USDT bridge contracts
+    # (Tether's official deployments page).
+    # --- Optimism ---
+    (Chain.optimism, "USDC"):   "0x0b2c639c533813f4aa9d7837caf62653d097ff85",
+    (Chain.optimism, "USDT"):   "0x94b008aa00579c1307b0ef2c499ad98a8ce58e58",
+    (Chain.optimism, "DAI"):    "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1",
+    (Chain.optimism, "USDC.E"): "0x7f5c764cbc14f9669b88837ca1490cca17c31607",
+    # --- Avalanche C-Chain ---
+    (Chain.avalanche, "USDC"):  "0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e",
+    (Chain.avalanche, "USDT"):  "0x9702230a8ea53601f5cd2dc00fdbc13d4df4a8c7",
+    (Chain.avalanche, "DAI"):   "0xd586e7f844cea2f87f50152665bcbc2c279d8d70",
+    # --- Linea ---
+    (Chain.linea, "USDC"):      "0x176211869ca2b568f2a7d4ee941e073a821ee1ff",
+    (Chain.linea, "USDT"):      "0xa219439258ca9da29e9cc4ce5596924745e12b93",
+    # --- Blast ---
+    # Blast's canonical USDC is a "USDB" wrapper (yield-bearing); listed
+    # as USDB symbol per Blast docs. Real USDC is bridged via WBTC-style
+    # cross-chain wrappers — pricing falls through to the API path.
+    (Chain.blast, "USDB"):      "0x4300000000000000000000000000000000000003",
+    # --- zkSync Era ---
+    (Chain.zksync, "USDC"):     "0x1d17cbcf0d6d143135ae902365d2e5e2a16538d4",
+    (Chain.zksync, "USDC.E"):   "0x3355df6d4c9c3035724fd0e3914de96a5a83aaf4",
+    (Chain.zksync, "USDT"):     "0x493257fd37edb34451f62edf8d2a0c418852ba4c",
+    # --- Scroll ---
+    (Chain.scroll, "USDC"):     "0x06efdbff2a14a7c8e15944d1f4a48f9f95f663a4",
+    (Chain.scroll, "USDT"):     "0xf55bec9cafdbe8730f096aa55dad6d22d44099df",
+    # --- Mantle ---
+    # Mantle's bridged USDC + USDT (Multichain-era wrappers).
+    (Chain.mantle, "USDC"):     "0x09bc4e0d864854c6afb6eb9a9cdf58ac190d0df9",
+    (Chain.mantle, "USDT"):     "0x201eba5cc46d216ce6dc03f6a759e8e766e956ae",
 }
 
 # v0.17.5 (round-10 forensic HIGH): case-aware comparison so base58
@@ -124,6 +172,11 @@ _CANONICAL_STABLECOIN_CONTRACTS: dict[tuple[Chain, str], str] = {
 # lowercase or case-insensitive.
 _CASE_INSENSITIVE_CHAINS = frozenset({
     Chain.ethereum, Chain.arbitrum, Chain.bsc, Chain.polygon, Chain.base,
+    # v0.20.0 (round-13 chain-coverage research): the 7 EVM chains
+    # added via Etherscan V2 multichain. EIP-55 checksum is a UI
+    # convention; lowercase comparison is correct for all EVM chains.
+    Chain.optimism, Chain.avalanche, Chain.linea, Chain.blast,
+    Chain.zksync, Chain.scroll, Chain.mantle,
     # Bitcoin uses bech32 (all-lowercase per BIP173) — case-insensitive.
     Chain.bitcoin,
 })

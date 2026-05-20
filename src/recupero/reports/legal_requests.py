@@ -351,6 +351,96 @@ _EXCHANGE_COMPLIANCE_CONTACTS: dict[str, dict[str, str]] = {
         "legal_name": "Huobi Global (HTX)",
         "compliance_email": "compliance@htx.com",
     },
+    # v0.20.0 (round-13 chain-coverage research): high-volume exchanges
+    # added per the prioritized industry-named-destination list. Each
+    # entry tagged with its HQ jurisdiction so the LE handoff can
+    # route per-country freeze requests correctly.
+    "HTX": {
+        # HTX is the post-rebrand identity of Huobi Global. Keeping
+        # both entries so legacy "Huobi" labels still resolve.
+        "legal_name": "Huobi Global Ltd. (d/b/a HTX)",
+        "compliance_email": "compliance@htx.com",
+    },
+    "Bitget": {
+        "legal_name": "Bitget Limited",
+        "compliance_email": "compliance@bitget.com",
+    },
+    "WhiteBIT": {
+        "legal_name": "WB Services FZE (WhiteBIT)",
+        "compliance_email": "compliance@whitebit.com",
+    },
+    "Upbit": {
+        "legal_name": "Dunamu Inc. (Upbit)",
+        "compliance_email": "compliance@upbit.com",
+    },
+    "Bithumb": {
+        "legal_name": "Bithumb Korea Co., Ltd.",
+        "compliance_email": "compliance@bithumb.com",
+    },
+    "Bitstamp": {
+        "legal_name": "Bitstamp Limited",
+        "compliance_email": "compliance@bitstamp.net",
+    },
+    "Robinhood": {
+        "legal_name": "Robinhood Crypto, LLC",
+        "compliance_email": "legal-investigations@robinhood.com",
+    },
+    "Robinhood Crypto": {
+        "legal_name": "Robinhood Crypto, LLC",
+        "compliance_email": "legal-investigations@robinhood.com",
+    },
+    "Cash App": {
+        "legal_name": "Block, Inc. (Cash App)",
+        "compliance_email": "cashapp.legalprocess@block.xyz",
+    },
+    "BingX": {
+        "legal_name": "BingX Technology Limited",
+        "compliance_email": "compliance@bingx.com",
+    },
+    "Phemex": {
+        "legal_name": "Phemex Pte. Ltd.",
+        "compliance_email": "compliance@phemex.com",
+    },
+    "LBank": {
+        "legal_name": "LBank Exchange",
+        "compliance_email": "compliance@lbank.com",
+    },
+    "Bitkub": {
+        "legal_name": "Bitkub Online Co., Ltd.",
+        "compliance_email": "compliance@bitkub.com",
+    },
+    "Independent Reserve": {
+        "legal_name": "Independent Reserve Pty Ltd",
+        "compliance_email": "compliance@independentreserve.com",
+    },
+    "BTC Markets": {
+        "legal_name": "BTC Markets Pty Ltd",
+        "compliance_email": "compliance@btcmarkets.net",
+    },
+    "CoinJar": {
+        "legal_name": "CoinJar Pty Ltd",
+        "compliance_email": "compliance@coinjar.com",
+    },
+    "WazirX": {
+        "legal_name": "Zanmai Labs Pvt. Ltd. (WazirX)",
+        "compliance_email": "compliance@wazirx.com",
+    },
+    "CoinDCX": {
+        "legal_name": "Neblio Technologies Pvt. Ltd. (CoinDCX)",
+        "compliance_email": "compliance@coindcx.com",
+    },
+    "Mercado Bitcoin": {
+        "legal_name": "Mercado Bitcoin Serviços Digitais Ltda.",
+        "compliance_email": "compliance@mercadobitcoin.com.br",
+    },
+    "Bitvavo": {
+        "legal_name": "Bitvavo B.V.",
+        "compliance_email": "compliance@bitvavo.com",
+    },
+    "Bitso": {
+        "legal_name": "Bitso B.V.",
+        "compliance_email": "compliance@bitso.com",
+    },
 }
 
 

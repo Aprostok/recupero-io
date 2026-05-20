@@ -26,7 +26,14 @@ class ChainAdapter(ABC):
         if chain == Chain.ethereum:
             from recupero.chains.ethereum.adapter import EthereumAdapter
             return EthereumAdapter(config)
-        if chain in (Chain.arbitrum, Chain.bsc, Chain.polygon, Chain.base):
+        # v0.20.0 (round-13 chain-coverage research): seven additional
+        # EVM chains route through the same shared EvmAdapter — Etherscan
+        # V2 multichain covers all of them via the chainid query parameter.
+        if chain in (
+            Chain.arbitrum, Chain.bsc, Chain.polygon, Chain.base,
+            Chain.optimism, Chain.avalanche, Chain.linea, Chain.blast,
+            Chain.zksync, Chain.scroll, Chain.mantle,
+        ):
             # Etherscan V2 unified API covers every EVM-compatible chain
             # via the chainid parameter — same client class, different
             # chain_id + native-symbol per profile.

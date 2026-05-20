@@ -220,6 +220,31 @@ def cli() -> None:
              "risk-scoring. Recommended cadence: weekly via cron.",
     )
 
+    # ----- hack-tracker ----- #
+    # v0.20.0 (Phase D): daily hack-feed aggregator. Feature-flagged
+    # OFF in production — operator must opt in via
+    # RECUPERO_HACK_TRACKER_ENABLED=1 OR _OFFLINE=1.
+    p_tracker = sub.add_parser(
+        "hack-tracker",
+        help="Aggregate daily hack reports from X (Twitter) + OFAC + "
+             "IC3 + CISA + rekt.news into a ranked operator digest. "
+             "Feature-flagged OFF until v0.20.x; "
+             "RECUPERO_HACK_TRACKER_OFFLINE=1 exercises fixture data.",
+    )
+    tracker_sub = p_tracker.add_subparsers(dest="tracker_command", required=True)
+    p_tracker_daily = tracker_sub.add_parser(
+        "daily",
+        help="Print today's digest to stdout (text or JSON).",
+    )
+    p_tracker_daily.add_argument(
+        "--hours", type=int, default=24,
+        help="Lookback window in hours (default 24).",
+    )
+    p_tracker_daily.add_argument(
+        "--format", choices=("text", "json"), default="text",
+        help="Output format. Default text; use json for piping.",
+    )
+
     # ----- correlation-stats ----- #
     sub.add_parser(
         "correlation-stats",
@@ -501,6 +526,20 @@ def cli() -> None:
     if args.command == "ofac-sync":
         from recupero.ops.commands import ofac_sync_cmd as cmd
         sys.exit(cmd.run())
+
+    if args.command == "hack-tracker":
+        # v0.20.0 (Phase D): feature-flagged hack-feed aggregator.
+        # Currently only the `daily` subcommand is wired; future
+        # subcommands (e.g., `mark-read`, `export-csv`) will land
+        # without changing the top-level CLI surface.
+        from recupero.hack_tracker.digest_cli import run as _tracker_run
+        if args.tracker_command == "daily":
+            sys.exit(_tracker_run(
+                hours=args.hours,
+                output_format=args.format,
+            ))
+        print(f"unknown hack-tracker subcommand: {args.tracker_command!r}")
+        sys.exit(2)
 
     if args.command == "correlation-stats":
         from recupero.ops.commands import correlation_stats as cmd

@@ -134,6 +134,113 @@ class BaseParams(BaseModel):
     coingecko_native_id: str = "ethereum"
 
 
+# v0.20.0 (round-13 chain-coverage research): seven EVM chains added.
+# Each is a free Etherscan-V2-multichain wire-up — same `api_base`,
+# different chainid. Defaults sourced from the chain's documentation
+# + CoinGecko platform / native-id mapping.
+
+
+class OptimismParams(BaseModel):
+    """Optimism mainnet — Etherscan V2 unified API, chain_id=10.
+    Native gas token is ETH (OP is an L2 settling to Ethereum)."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 10
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "ETH"
+    native_decimals: int = 18
+    explorer_base: str = "https://optimistic.etherscan.io"
+    coingecko_platform: str = "optimistic-ethereum"
+    coingecko_native_id: str = "ethereum"
+
+
+class AvalancheParams(BaseModel):
+    """Avalanche C-Chain — Etherscan V2 unified API, chain_id=43114.
+    Native gas token is AVAX."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 43114
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "AVAX"
+    native_decimals: int = 18
+    explorer_base: str = "https://snowtrace.io"
+    coingecko_platform: str = "avalanche"
+    coingecko_native_id: str = "avalanche-2"
+
+
+class LineaParams(BaseModel):
+    """Linea — Consensys zk-rollup, Etherscan V2 unified API,
+    chain_id=59144. Native gas token is ETH."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 59144
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "ETH"
+    native_decimals: int = 18
+    explorer_base: str = "https://lineascan.build"
+    coingecko_platform: str = "linea"
+    coingecko_native_id: str = "ethereum"
+
+
+class BlastParams(BaseModel):
+    """Blast — Etherscan V2 unified API, chain_id=81457.
+    Native gas token is ETH."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 81457
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "ETH"
+    native_decimals: int = 18
+    explorer_base: str = "https://blastscan.io"
+    coingecko_platform: str = "blast"
+    coingecko_native_id: str = "ethereum"
+
+
+class ZksyncParams(BaseModel):
+    """zkSync Era — Etherscan V2 unified API, chain_id=324.
+    Native gas token is ETH. Note: zkSync's account-abstraction model
+    can produce wallet shapes that aren't EOA — most tools assume EOA,
+    so traces may surface contract-wallet creations as 'unlabeled
+    contract'."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 324
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "ETH"
+    native_decimals: int = 18
+    explorer_base: str = "https://explorer.zksync.io"
+    coingecko_platform: str = "zksync"
+    coingecko_native_id: str = "ethereum"
+
+
+class ScrollParams(BaseModel):
+    """Scroll — Etherscan V2 unified API, chain_id=534352.
+    Native gas token is ETH."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 534352
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "ETH"
+    native_decimals: int = 18
+    explorer_base: str = "https://scrollscan.com"
+    coingecko_platform: str = "scroll"
+    coingecko_native_id: str = "ethereum"
+
+
+class MantleParams(BaseModel):
+    """Mantle — Etherscan V2 unified API, chain_id=5000.
+    Native gas token is MNT."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 5000
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "MNT"
+    native_decimals: int = 18
+    explorer_base: str = "https://mantlescan.xyz"
+    coingecko_platform: str = "mantle"
+    coingecko_native_id: str = "mantle"
+
+
 class PricingParams(BaseModel):
     provider: str = "coingecko"
     requests_per_second: float = 0.5
@@ -160,6 +267,15 @@ class RecuperoConfig(BaseModel):
     bsc: BscParams = Field(default_factory=BscParams)
     polygon: PolygonParams = Field(default_factory=PolygonParams)
     base: BaseParams = Field(default_factory=BaseParams)
+    # v0.20.0 (round-13 chain-coverage research): seven EVM chains
+    # added via Etherscan V2 multichain.
+    optimism: OptimismParams = Field(default_factory=OptimismParams)
+    avalanche: AvalancheParams = Field(default_factory=AvalancheParams)
+    linea: LineaParams = Field(default_factory=LineaParams)
+    blast: BlastParams = Field(default_factory=BlastParams)
+    zksync: ZksyncParams = Field(default_factory=ZksyncParams)
+    scroll: ScrollParams = Field(default_factory=ScrollParams)
+    mantle: MantleParams = Field(default_factory=MantleParams)
     pricing: PricingParams = Field(default_factory=PricingParams)
     storage: StorageParams = Field(default_factory=StorageParams)
     logging: LoggingParams = Field(default_factory=LoggingParams)

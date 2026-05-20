@@ -82,6 +82,18 @@ ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "hyperliquid": "https://app.hyperliquid.xyz/explorer/address/",
     "bitcoin":     "https://mempool.space/address/",
     "tron":        "https://tronscan.org/#/address/",
+    # v0.20.0 (round-13 chain-coverage research): EVM-trivial wins —
+    # each chain reuses the existing EVM adapter via a chainid wire-up
+    # in worker/watch_tick._CHAIN_ID_BY_NAME + chains/evm/adapter.
+    # Prioritization order matches industry theft-volume reports
+    # (Optimism + Avalanche CRIT; Linea/Blast/zkSync HIGH).
+    "optimism":    "https://optimistic.etherscan.io/address/",
+    "avalanche":   "https://snowtrace.io/address/",
+    "linea":       "https://lineascan.build/address/",
+    "blast":       "https://blastscan.io/address/",
+    "zksync":      "https://explorer.zksync.io/address/",
+    "scroll":      "https://scrollscan.com/address/",
+    "mantle":      "https://mantlescan.xyz/address/",
 }
 
 

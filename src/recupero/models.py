@@ -52,6 +52,25 @@ class Chain(str, Enum):
     # for downstream brief / freeze pipelines that haven't been wired
     # for the chain.
     hyperliquid = "hyperliquid"
+    # v0.20.0 (round-13 chain-coverage research): additional EVM
+    # chains. Each reuses the existing `chains/evm/adapter.py` via a
+    # chainid wire-up in `worker/watch_tick._CHAIN_ID_BY_NAME` (so
+    # the watch-tick + monitor-tick + trace paths all light up
+    # without a new adapter). Etherscan API V2 multichain supports
+    # all seven via the `chainid` query parameter.
+    #
+    # Priority per industry theft-volume reports (Chainalysis 2024-2025,
+    # TRM Insights, PeckShield monthly):
+    #   * optimism, avalanche      → CRIT (top-10 stolen-fund destinations)
+    #   * linea, blast, zksync     → HIGH (active 2025 drainer destinations)
+    #   * scroll, mantle           → MED (smaller but recurring)
+    optimism = "optimism"
+    avalanche = "avalanche"
+    linea = "linea"
+    blast = "blast"
+    zksync = "zksync"
+    scroll = "scroll"
+    mantle = "mantle"
 
 
 class LabelCategory(str, Enum):

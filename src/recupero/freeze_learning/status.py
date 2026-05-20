@@ -91,6 +91,13 @@ class LetterStatus:
     frozen_usd_human: str
     last_followup_sent_at: datetime | None
     followup_stage: str
+    # v0.21.1 (audit-fix A2 HIGH): peak frozen USD across all positive
+    # outcomes for this letter. Used by the aggregate roll-up so a later
+    # request_more_info / acknowledged row doesn't zero out a confirmed
+    # partial_freeze. frozen_usd is the LATEST row's value (may be NULL
+    # when the latest is a non-financial outcome); peak_frozen_usd is the
+    # MAX across rows whose outcome_type is in _POSITIVE_OUTCOMES.
+    peak_frozen_usd: Decimal | None = None
 
 
 @dataclass
@@ -167,23 +174,50 @@ def _badge_for_letter(
 
 
 def fetch_live_filing_status(
-    case_id: UUID | str,
+    case_id: UUID | str | None = None,
     *,
     dsn: str | None,
+    investigation_id: UUID | str | None = None,
 ) -> LiveFilingStatus:
     """Join freeze_letters_sent + freeze_outcomes (latest per letter)
-    + monitoring_subscriptions + monitoring_alerts for ``case_id``.
+    + monitoring_subscriptions + monitoring_alerts.
+
+    v0.21.1 (audit-fix A1 CRITICAL): pre-v0.21.1 this function filtered
+    only by ``case_id``, but the worker pipeline path passes
+    ``case.case_id`` which is a string brief identifier (e.g.
+    ``"V-CFI01-BRIEF-2026-04-19"``), NOT the ``cases.id`` UUID that
+    ``freeze_letters_sent.case_id`` references as an FK. The query
+    matched zero rows in production; Section 5.5 silently rendered the
+    "Pending issuer outreach" branch even after letters were sent and
+    outcomes recorded.
+
+    Fix: filter by ``investigation_id`` when provided (always the case
+    in the worker pipeline path — see _deliverables.py) and FALL BACK
+    to ``case_id`` for callers that have the cases.id UUID in hand
+    (e.g. operator CLI tooling that joined to cases first). Filtering
+    on either column is OK: the (investigation_id, case_id) tuple on
+    freeze_letters_sent is co-determined per the migration 016
+    partial-UNIQUE constraint.
 
     Returns an empty-shape ``LiveFilingStatus`` (``is_empty=True``)
     when:
       * No DSN configured (local CLI emit_brief path) — template
         renders the pending branch.
       * DSN configured but no letters yet — same template branch.
+      * No filter key provided — same.
       * DB error during the join — logged at WARN, template renders
         the pending branch (graceful degradation, never breaks the
         deliverable).
     """
     if not dsn:
+        return LiveFilingStatus()
+    if not investigation_id and not case_id:
+        # Misuse: caller didn't supply any key. Don't risk a full-table
+        # SELECT — return empty.
+        log.warning(
+            "fetch_live_filing_status called without case_id or "
+            "investigation_id — returning empty status"
+        )
         return LiveFilingStatus()
 
     try:
@@ -193,10 +227,20 @@ def fetch_live_filing_status(
 
     from recupero._common import db_connect
 
+    # v0.21.1: prefer investigation_id (always available on the
+    # worker pipeline path) and fall back to case_id (operator CLI
+    # tooling that has the cases.id UUID).
+    if investigation_id:
+        letter_filter_clause = "WHERE fl.investigation_id = %s"
+        letter_filter_value = str(investigation_id)
+    else:
+        letter_filter_clause = "WHERE fl.case_id = %s"
+        letter_filter_value = str(case_id)
+
     # The latest outcome per letter via LATERAL — preserves the
     # "multiple outcomes per letter" time series while giving the
     # template the current state for the badge.
-    letters_sql = """
+    letters_sql = f"""
         SELECT fl.id                       AS letter_id,
                fl.issuer                   AS issuer,
                fl.target_address           AS target_address,
@@ -208,7 +252,17 @@ def fetch_live_filing_status(
                fl.followup_stage           AS followup_stage,
                latest.outcome_type         AS outcome_type,
                latest.frozen_usd           AS frozen_usd,
-               latest.observed_at          AS observed_at
+               latest.observed_at          AS observed_at,
+               -- v0.21.1 (audit-fix A2 HIGH): pull the MAX frozen_usd
+               -- across all positive-outcome rows for this letter, so
+               -- a partial_freeze of $500K followed by a later
+               -- request_more_info (frozen_usd=NULL) doesn't zero out
+               -- the aggregate.
+               (SELECT MAX(fo2.frozen_usd) FROM public.freeze_outcomes fo2
+                 WHERE fo2.letter_id = fl.id
+                   AND fo2.outcome_type IN
+                       ('partial_freeze','full_freeze','returned_to_victim')
+               )                            AS peak_frozen_usd
           FROM public.freeze_letters_sent fl
           LEFT JOIN LATERAL (
               SELECT fo.outcome_type, fo.frozen_usd, fo.observed_at
@@ -217,9 +271,14 @@ def fetch_live_filing_status(
                ORDER BY fo.observed_at DESC
                LIMIT 1
           ) latest ON TRUE
-         WHERE fl.case_id = %s
+         {letter_filter_clause}
          ORDER BY fl.sent_at ASC
     """
+    # Monitoring counters keyed by created_by — used only when caller
+    # passes case_id (string brief identifier, matches the
+    # 'emit_brief:<case_id>' created_by sentinel from subscriber.py).
+    # When invoked with only investigation_id, the monitoring snapshot
+    # stays at zeros.
     monitoring_sql = """
         SELECT
             (SELECT COUNT(*) FROM public.monitoring_subscriptions
@@ -241,7 +300,7 @@ def fetch_live_filing_status(
         with db_connect(dsn, row_factory=dict_row) as conn:
             with conn.cursor() as cur:
                 # Letters table
-                cur.execute(letters_sql, (str(case_id),))
+                cur.execute(letters_sql, (letter_filter_value,))
                 for row in cur.fetchall():
                     sent_at = row["sent_at"]
                     days_since = max(0, (now - sent_at).days)
@@ -251,8 +310,15 @@ def fetch_live_filing_status(
                     frozen = row.get("frozen_usd")
                     if frozen is not None and not isinstance(frozen, Decimal):
                         frozen = Decimal(str(frozen))
+                    peak = row.get("peak_frozen_usd")
+                    if peak is not None and not isinstance(peak, Decimal):
+                        peak = Decimal(str(peak))
                     outcome_type = row.get("outcome_type")
                     followup_stage = row.get("followup_stage") or "initial"
+                    # Display the PEAK frozen amount in the per-letter
+                    # cell so the table tells the truth even when the
+                    # latest outcome is non-financial (acknowledged etc.)
+                    display_frozen = peak if peak is not None else frozen
                     status.letters.append(LetterStatus(
                         letter_id=row["letter_id"],
                         issuer=row["issuer"],
@@ -270,22 +336,30 @@ def fetch_live_filing_status(
                             followup_stage=followup_stage,
                         ),
                         outcome_type=outcome_type,
-                        frozen_usd=frozen,
-                        frozen_usd_human=_fmt_usd(frozen),
+                        frozen_usd=display_frozen,
+                        frozen_usd_human=_fmt_usd(display_frozen),
                         last_followup_sent_at=row.get("last_followup_sent_at"),
                         followup_stage=followup_stage,
+                        peak_frozen_usd=peak,
                     ))
 
-                # Monitoring snapshot (created_by convention from subscriber.py)
-                created_by = f"emit_brief:{case_id}"
-                cur.execute(monitoring_sql, {"created_by": created_by})
-                mon_row = cur.fetchone()
-                if mon_row:
-                    status.monitoring = MonitoringSnapshot(
-                        active_subscriptions=mon_row.get("active_subs") or 0,
-                        alerts_fired_since_brief=mon_row.get("alerts_fired") or 0,
-                        last_alert_at=mon_row.get("last_alert_at"),
-                    )
+                # Monitoring snapshot — the subscriber.py auto-subscribe
+                # writes created_by = f"emit_brief:<case_id>", where
+                # <case_id> is the string brief identifier (NOT the
+                # investigations.id UUID). When the caller only supplied
+                # investigation_id, the monitoring snapshot stays at
+                # zeros — a future revision can resolve the case_id
+                # from the investigation row.
+                if case_id:
+                    created_by = f"emit_brief:{case_id}"
+                    cur.execute(monitoring_sql, {"created_by": created_by})
+                    mon_row = cur.fetchone()
+                    if mon_row:
+                        status.monitoring = MonitoringSnapshot(
+                            active_subscriptions=mon_row.get("active_subs") or 0,
+                            alerts_fired_since_brief=mon_row.get("alerts_fired") or 0,
+                            last_alert_at=mon_row.get("last_alert_at"),
+                        )
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "fetch_live_filing_status failed for case %s — "
@@ -307,16 +381,23 @@ def fetch_live_filing_status(
             (L.requested_freeze_usd for L in status.letters),
             start=Decimal(0),
         )
+        # v0.21.1 (audit-fix A2 HIGH): aggregate the PEAK frozen across
+        # positive-outcome rows per letter, not the latest-row tuple.
+        # A later request_more_info / acknowledged row used to zero out
+        # a previously-confirmed partial_freeze.
         agg.total_confirmed_frozen_usd = sum(
-            (L.frozen_usd for L in status.letters
-             if L.outcome_type in _POSITIVE_OUTCOMES and L.frozen_usd is not None),
+            (L.peak_frozen_usd for L in status.letters
+             if L.peak_frozen_usd is not None),
             start=Decimal(0),
         )
         agg.total_requested_usd_human = _fmt_usd(agg.total_requested_usd)
         agg.total_confirmed_frozen_usd_human = _fmt_usd(agg.total_confirmed_frozen_usd)
         if agg.total_requested_usd > 0:
             ratio = (agg.total_confirmed_frozen_usd / agg.total_requested_usd) * 100
-            agg.freeze_percentage = int(min(100, max(0, ratio)))
+            # v0.21.1 (audit-fix A4 MEDIUM): round to nearest int rather
+            # than truncating, so a 99.6% freeze ratio renders as "100%"
+            # not "99%". Previously systematically under-reported.
+            agg.freeze_percentage = int(round(min(Decimal(100), max(Decimal(0), ratio))))
 
     return status
 

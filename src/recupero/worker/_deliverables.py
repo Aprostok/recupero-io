@@ -355,13 +355,25 @@ def build_all_deliverables(
         # the FIRST render (immediately after emit_brief, no letters
         # mailed yet) this returns an empty LiveFilingStatus and the
         # template renders the "Pending issuer outreach" branch.
+        #
+        # v0.21.1 (audit-fix CRITICAL A1): pass investigation_id (the
+        # worker passes its UUID through this function) so the SQL
+        # filters by freeze_letters_sent.investigation_id rather than
+        # case_id — case_id on that table references cases.id (UUID)
+        # while case.case_id here is a brief identifier string, so the
+        # pre-fix query never matched and Section 5.5 silently rendered
+        # the empty-state branch even after letters and outcomes existed.
         _live_status = None
         try:
             import os as _os
             _dsn = _os.environ.get("SUPABASE_DB_URL", "").strip() or None
-            if _dsn and getattr(case, "case_id", None):
+            if _dsn:
                 from recupero.freeze_learning.status import fetch_live_filing_status
-                _live_status = fetch_live_filing_status(case.case_id, dsn=_dsn)
+                _live_status = fetch_live_filing_status(
+                    case_id=getattr(case, "case_id", None),
+                    investigation_id=investigation_id,
+                    dsn=_dsn,
+                )
         except Exception as _exc:  # noqa: BLE001 — non-fatal
             log.warning(
                 "fetch_live_filing_status failed (non-fatal, "

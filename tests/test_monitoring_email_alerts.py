@@ -206,7 +206,9 @@ def test_dispatch_email_alert_quota_exhausted_skips_send():
         )
     assert send_called is False, "send_email must not be called when quota exhausted"
     assert result.succeeded is False
-    assert result.status_code == 1
+    # v0.21.1: quota-tripped is distinct from send-failure; status_code
+    # is None ("not attempted"), error_message carries the skip reason.
+    assert result.status_code is None
     assert "quota exhausted" in (result.error_message or "").lower()
 
 

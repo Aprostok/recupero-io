@@ -260,29 +260,61 @@ def build_email_alert_body(
     Jinja template in v0.21.x once the live-filing section in
     le.html.j2 is settled.
 
+    v0.21.1 (audit-fix B1 HIGH): every interpolated payload field is
+    HTML-escaped (via ``html.escape``) before substitution into the
+    body. Pre-v0.21.1 a poisoned counterparty_label in the on-chain
+    label DB or a regressed chain adapter that returned a malformed
+    explorer URL could inject script-like fragments into the email
+    body, surfaced to investigator inboxes. Attribute values use
+    ``quote=True`` so a ``"`` in the URL cannot break out of the
+    href quoting.
+
     The body deliberately leads with the alert (what moved, by how
     much, where to) before any branding — the investigator opens
     this on their phone at 2 AM and needs to make a call inside 30
     seconds.
     """
+    import html as _html
     amount_label = (
         f"${payload.amount_usd:,.2f}" if payload.amount_usd is not None
         else "(amount unpriced)"
     )
     counterparty_label = payload.counterparty_label or "(unlabeled)"
     counterparty_addr = payload.counterparty or "(unknown)"
+    # Escape everything that flows into HTML body/attribute context.
+    safe_trigger = _html.escape(payload.trigger_type)
+    safe_address_short = _html.escape(
+        f"{payload.address[:10]}…{payload.address[-6:]}"
+    )
+    safe_chain = _html.escape(payload.chain)
+    safe_counterparty_label = _html.escape(counterparty_label)
+    safe_counterparty_addr = _html.escape(counterparty_addr)
+    safe_tx_short = _html.escape(f"{payload.tx_hash[:14]}…")
+    safe_explorer_url = _html.escape(payload.explorer_url or "", quote=True)
+    safe_block_time = _html.escape(payload.block_time_iso)
+    safe_amount_label = _html.escape(amount_label)
+    # amount_label may contain "$" / digits / "(amount unpriced)" — escape
+    # for consistency even though only "$" is a non-HTML-special char.
     subject = (
         f"[Recupero alert] {payload.trigger_type} — "
         f"{amount_label} on {payload.chain}"
     )
+    # Subject lines do not render HTML — Resend treats them as plain
+    # text. No escaping needed; raw payload values are fine.
     # Plain-text-first HTML so it survives rendering in Gmail's
     # text-only preview pane (the first 100 chars are what shows
     # in the notification on a locked phone).
     portal_link = ""
     if portal_base_url and case_id:
+        # portal_base_url is operator-configured env var (RECUPERO_PORTAL_BASE_URL),
+        # case_id is a trusted UUID — neither is attacker-controlled, but escape
+        # for defense-in-depth.
+        safe_portal_url = _html.escape(
+            f"{portal_base_url}/case/{case_id}", quote=True,
+        )
         portal_link = (
             f'<p style="margin:18px 0">'
-            f'<a href="{portal_base_url}/case/{case_id}" '
+            f'<a href="{safe_portal_url}" '
             f'style="background:#1e3a8a;color:#fff;padding:10px 18px;'
             f'text-decoration:none;border-radius:4px;font-weight:600">'
             f'Open case dashboard</a></p>'
@@ -296,23 +328,23 @@ def build_email_alert_body(
         f'<h2 style="font-size:20px;margin:0 0 14px">'
         f'Movement detected on watched wallet</h2>'
         f'<p style="font-size:15px;margin:0 0 18px">'
-        f'<strong>{payload.trigger_type}</strong> fired on '
-        f'<code>{payload.address[:10]}…{payload.address[-6:]}</code> '
-        f'({payload.chain}).</p>'
+        f'<strong>{safe_trigger}</strong> fired on '
+        f'<code>{safe_address_short}</code> '
+        f'({safe_chain}).</p>'
         f'<table style="border-collapse:collapse;width:100%;'
         f'font-size:14px">'
         f'<tr><td style="padding:6px 0;color:#6b7280">Amount</td>'
         f'<td style="padding:6px 0;text-align:right;font-weight:600">'
-        f'{amount_label}</td></tr>'
+        f'{safe_amount_label}</td></tr>'
         f'<tr><td style="padding:6px 0;color:#6b7280">Counterparty</td>'
-        f'<td style="padding:6px 0;text-align:right">{counterparty_label}<br>'
-        f'<code style="font-size:12px;color:#374151">{counterparty_addr}</code></td></tr>'
+        f'<td style="padding:6px 0;text-align:right">{safe_counterparty_label}<br>'
+        f'<code style="font-size:12px;color:#374151">{safe_counterparty_addr}</code></td></tr>'
         f'<tr><td style="padding:6px 0;color:#6b7280">Tx hash</td>'
         f'<td style="padding:6px 0;text-align:right">'
-        f'<a href="{payload.explorer_url}" style="color:#1e3a8a">'
-        f'{payload.tx_hash[:14]}…</a></td></tr>'
+        f'<a href="{safe_explorer_url}" style="color:#1e3a8a">'
+        f'{safe_tx_short}</a></td></tr>'
         f'<tr><td style="padding:6px 0;color:#6b7280">Block time</td>'
-        f'<td style="padding:6px 0;text-align:right">{payload.block_time_iso}</td></tr>'
+        f'<td style="padding:6px 0;text-align:right">{safe_block_time}</td></tr>'
         f'</table>'
         f'{portal_link}'
         f'<p style="font-size:12px;color:#6b7280;margin:24px 0 0;'
@@ -408,9 +440,17 @@ def dispatch_email_alert(
             "email quota exhausted for sub %s (>= %d/day) — skipping send",
             payload.subscription_id, quota_per_day,
         )
+        # v0.21.1 (audit-fix E1 HIGH): pre-v0.21.1 quota-tripped used
+        # status_code=1 (the sentinel for "Resend rejected the send"),
+        # collapsing two distinct categories (intentional skip vs real
+        # failure) onto the same audit value. Dashboards counting
+        # email_status_code=1 as failures inflated the failure rate.
+        # Now: status_code=None ("not attempted"); the error_message
+        # carries the "quota exhausted" reason so an operator audit
+        # query can distinguish skip-by-policy from delivery-failure.
         return EmailDispatchResult(
             succeeded=False,
-            status_code=1,
+            status_code=None,
             message_id=None,
             to_address=to_email,
             error_message=f"quota exhausted (>= {quota_per_day}/day)",

@@ -109,18 +109,46 @@ def _compute_next_transition(
     now: datetime,
 ) -> tuple[str, str] | None:
     """Given a letter's current stage and how long ago it was sent,
-    return ``(next_stage, template_name)`` if a transition is due,
-    or ``None`` if the letter is not yet eligible / already terminal.
+    return ``(next_stage, template_name)`` for the most-advanced
+    transition the elapsed time supports, or ``None`` if the letter
+    is not yet eligible / already terminal.
+
+    v0.21.1 (audit-fix A3 MEDIUM): pre-v0.21.1 this returned only the
+    immediate next stage. A letter sent 30 days ago at stage='initial'
+    (cron downtime, manual stage rollback) would advance one stage per
+    cron tick. With a 6-hour cadence, three issuer-facing emails fire
+    within 12 hours — looks erratic from the issuer's perspective and
+    races a real outcome being recorded.
+
+    Now: pick the highest stage whose threshold elapsed time supports
+    AND which is strictly more advanced than current_stage. The
+    issuer-facing send is then a single email per tick, but skipping
+    to (e.g.) silence_14d if the letter is 30 days old at 'initial'.
+    silence_14d is INTERNAL to the operator, so a fast jump there is
+    appropriate; the issuer never sees the skipped nudge.
     """
     elapsed = now - sent_at
-    for from_stage, to_stage, threshold, template in _STAGE_TRANSITIONS:
-        if current_stage != from_stage:
-            continue
-        if elapsed >= threshold:
-            return (to_stage, template)
-        # Current stage matches but threshold not yet reached
+    if elapsed <= timedelta(0):
+        # Clock skew / future-dated sent_at — be safe, do nothing.
         return None
-    # current_stage is terminal (silence_14d) — no further transitions
+    # Stage ordering by index in _STAGE_TRANSITIONS.
+    _STAGES_ORDERED = [_STAGE_INITIAL] + [t[1] for t in _STAGE_TRANSITIONS]
+    try:
+        current_idx = _STAGES_ORDERED.index(current_stage)
+    except ValueError:
+        # Unknown stage — defensive: treat as 'initial'.
+        current_idx = 0
+    # Walk transitions in REVERSE (most-advanced first) so we pick the
+    # highest stage whose threshold has elapsed AND is strictly after
+    # the current stage.
+    for from_stage, to_stage, threshold, template in reversed(_STAGE_TRANSITIONS):
+        if elapsed < threshold:
+            continue
+        to_idx = _STAGES_ORDERED.index(to_stage)
+        if to_idx <= current_idx:
+            # Already at or past this stage.
+            continue
+        return (to_stage, template)
     return None
 
 

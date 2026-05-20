@@ -130,19 +130,53 @@ def test_transition_silence_is_terminal():
     assert _compute_next_transition(sent, "silence_14d", now) is None
 
 
-def test_transition_skips_stages_if_letter_is_very_old():
-    """A letter sent 30 days ago but still at 'initial' stage must
-    still progress through the nudge_72h stage first — the cron must
-    NOT skip directly to silence_14d. Stage-by-stage progression
-    preserves the audit trail."""
+def test_transition_jumps_to_highest_stage_for_stale_letters():
+    """v0.21.1 audit-fix A3: a letter sent 30 days ago at stage='initial'
+    (cron downtime, manual rollback) jumps directly to silence_14d
+    rather than firing three escalating emails across consecutive
+    cron ticks.
+
+    Pre-v0.21.1 the function returned the NEXT stage only, so a stale
+    letter walked initial→nudge_72h→escalation_7d→silence_14d across
+    three cron ticks (~12-18 hours apart at the recommended 6h cadence),
+    sending three issuer-facing emails inside half a day — looks erratic
+    from the issuer's perspective and races a real outcome being recorded.
+
+    Now: the function picks the most-advanced stage whose threshold
+    has elapsed AND is strictly after the current stage. silence_14d
+    is the only INTERNAL stage (operator alert, not issuer-facing),
+    so jumping straight there is safe — the issuer never sees the
+    skipped nudge/escalation."""
     now = datetime.now(UTC)
     sent = now - timedelta(days=30)
     result = _compute_next_transition(sent, "initial", now)
     assert result is not None
     next_stage, _ = result
-    # The cron must advance ONE stage per tick — even a 30-day-old
-    # letter gets a 72h nudge first.
-    assert next_stage == "nudge_72h"
+    assert next_stage == "silence_14d", (
+        f"Expected stage-jump to silence_14d on a 30-day-old letter, "
+        f"got {next_stage}"
+    )
+
+
+def test_transition_jumps_to_escalation_for_letter_aged_8_days():
+    """An 8-day-old letter at stage='initial' jumps to escalation_7d
+    (skipping nudge_72h) rather than walking the chain. silence_14d
+    threshold not yet reached."""
+    now = datetime.now(UTC)
+    sent = now - timedelta(days=8)
+    result = _compute_next_transition(sent, "initial", now)
+    assert result is not None
+    next_stage, _ = result
+    assert next_stage == "escalation_7d"
+
+
+def test_transition_clock_skew_returns_none():
+    """v0.21.1 audit-fix A3: defensive — sent_at in the future
+    (NTP skew between worker and DB) returns None rather than
+    firing a nudge with negative elapsed."""
+    now = datetime.now(UTC)
+    sent = now + timedelta(hours=1)
+    assert _compute_next_transition(sent, "initial", now) is None
 
 
 # ─────────────────────────────────────────────────────────────────────────────

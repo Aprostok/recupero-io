@@ -102,6 +102,65 @@ def test_fetch_without_dsn_returns_empty_status():
     assert status.monitoring.active_subscriptions == 0
 
 
+def test_fetch_without_any_key_returns_empty_status():
+    """v0.21.1 audit-fix A1 CRITICAL: a misuse call with neither
+    case_id nor investigation_id must return empty without performing
+    a full-table SELECT."""
+    status = fetch_live_filing_status(
+        case_id=None, investigation_id=None,
+        dsn="postgres://fake",
+    )
+    assert status.is_empty is True
+
+
+def test_fetch_prefers_investigation_id_filter_when_provided():
+    """v0.21.1 audit-fix A1 CRITICAL: when investigation_id is provided
+    (the worker pipeline path), the SQL must filter by
+    freeze_letters_sent.investigation_id, NOT by case_id.
+
+    Pre-v0.21.1 the worker passed `case.case_id` (a brief identifier
+    string) into the case_id filter — but freeze_letters_sent.case_id
+    references cases.id (UUID). The query never matched. Section 5.5
+    silently rendered the empty-state branch in production even after
+    letters had been sent and outcomes recorded.
+
+    This test asserts the SQL emitted contains the investigation_id
+    filter clause when investigation_id is supplied.
+    """
+    captured_sql: list[str] = []
+
+    class _StubCursor:
+        def execute(self, sql, params):
+            captured_sql.append(sql)
+        def fetchall(self):
+            return []
+        def fetchone(self):
+            return None
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    class _StubConn:
+        def cursor(self): return _StubCursor()
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    with patch("recupero._common.db_connect", return_value=_StubConn()):
+        fetch_live_filing_status(
+            case_id="V-CFI01-BRIEF-2026",
+            investigation_id=uuid4(),
+            dsn="postgres://fake",
+        )
+    # First captured SQL is the letters_sql; it must filter by
+    # investigation_id (not case_id) when both are provided.
+    assert any("fl.investigation_id" in s for s in captured_sql), (
+        "letters_sql did not filter by investigation_id when supplied"
+    )
+    assert not any("WHERE fl.case_id" in s for s in captured_sql), (
+        "letters_sql incorrectly used case_id filter when "
+        "investigation_id was provided"
+    )
+
+
 def test_fetch_db_error_returns_empty_status():
     """A DB error during fetch must NOT raise — the LE handoff must
     still render. The empty-state template branch handles the

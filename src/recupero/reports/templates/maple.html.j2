@@ -85,6 +85,15 @@
   </tr>
   {% endfor %}
 </table>
+{% elif forwarding_observed %}
+{# v0.20.1 (Jacob V-CFI01 residual #3): downstream destinations
+   exist even though the linear hop chain is empty. #}
+<p>
+  The funds were forwarded from the initial receiving wallet
+  through multiple downstream destinations rather than a single
+  linear chain. Per-address current locations are documented in
+  Section 4 below.
+</p>
 {% else %}
 <p>No subsequent forwarding observed; the funds remain in the perpetrator's initial receiving wallet.</p>
 {% endif %}

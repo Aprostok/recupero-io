@@ -63,11 +63,11 @@
     },
     {
       "chain": "ethereum",
-      "contract": "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb",
+      "contract": "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50",
       "symbol": "msyrupUSDp",
       "issuer": "Midas",
       "freeze_capability": "yes",
-      "freeze_notes": "Midas issues mSyrup* tokens via permissioned mint/redeem and can freeze specific holders. EU-regulated (BaFin).",
+      "freeze_notes": "Midas issues mSyrup* tokens via permissioned mint/redeem and can freeze specific holders. EU-regulated (BaFin). v0.20.1 (Jacob V-CFI01 residual #1): pre-v0.20.1 the seed contract was 0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb (a different, unrelated contract) — every real msyrupUSDp transfer fell through the issuer DB lookup and no Midas freeze ask was ever emitted. The actual on-chain contract is 0x2fE058CcF29f123f9dd2aEC0418AA66a877d8E50 (Etherscan-verified, observed in CFI-00265).",
       "primary_contact": "compliance@midas.app",
       "secondary_contact": "team@midas.app",
       "jurisdiction": "Germany (BaFin)"

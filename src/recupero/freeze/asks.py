@@ -480,9 +480,32 @@ def match_freeze_asks(
     matched: list[FreezeAsk] = []
     unmatched: list[TokenHolding] = []
 
+    # v0.20.1 (Jacob V-CFI01 residual #4): conservative absolute-value cap.
+    # No legitimate single-victim recoverable balance exceeds this. The
+    # biggest stolen-funds theft cases top out near $50M of a single
+    # stablecoin at a single wallet; anything above $100M at a single
+    # address holding a single token is overwhelmingly a protocol/pool
+    # contract (Lido wstETH custody holds ~$8.8B of stETH; WETH9 holds
+    # all wrapped ETH; etc.). Pre-v0.20.1 these contract balances got
+    # emitted as freeze_asks; the brief writer's freeze_capability=no
+    # tagging kept them out of customer letters, but they polluted the
+    # freeze_asks.json file and the diagnostic surface area downstream
+    # ops paths consume. The right place to stop them is at synthesis.
+    _ABSOLUTE_CAP_USD = Decimal("100000000")  # $100M
     for candidate in candidates:
         for holding in candidate.holdings:
             if holding.usd_value is None or holding.usd_value < min_holding_usd:
+                continue
+            if holding.usd_value > _ABSOLUTE_CAP_USD:
+                log.warning(
+                    "match_freeze_asks: skipping candidate %s holding %s of "
+                    "%s ($%s) — exceeds the $100M absolute cap; "
+                    "near-certain protocol/pool contract, not a wallet. "
+                    "If this is a legitimate freeze target, please open "
+                    "a manual review.",
+                    candidate.address, holding.decimal_amount,
+                    holding.token.symbol, holding.usd_value,
+                )
                 continue
             contract_key = _ck(holding.token.contract or "")
             if not contract_key:
@@ -492,6 +515,14 @@ def match_freeze_asks(
             key = (candidate.chain, contract_key)
             issuer_entry = db.get(key)
             if issuer_entry is None:
+                unmatched.append(holding)
+                continue
+            # Also skip when the issuer's own freeze_capability says "no"
+            # at this earlier stage — pre-v0.20.1 these traveled through
+            # freeze_asks → got tagged UNRECOVERABLE in the brief, but
+            # showed up as noise in freeze_asks.json. Surface them in
+            # unmatched (operator review) rather than as a freeze ask.
+            if (issuer_entry.freeze_capability or "").lower() == "no":
                 unmatched.append(holding)
                 continue
             matched.append(FreezeAsk(

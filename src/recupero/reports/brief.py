@@ -175,6 +175,45 @@ class BriefBundle:
     brief_id: str
 
 
+# ---- Stolen-asset issuer resolution (v0.20.1) ---- #
+
+
+def _resolve_theft_asset_issuer_name(
+    theft_transfer: Transfer, *, fallback: str,
+) -> str:
+    """Resolve the actual issuer of the stolen token via the issuer DB.
+
+    Pre-v0.20.1 the `asset.issuer` field in the freeze-letter context
+    was set to the freeze-TARGET issuer (e.g., Tether for a downstream
+    USDT freeze), which meant a freeze letter sent to Tether about
+    USDT recoverable positions read "Asset issuer: Tether" in Section 2
+    even when the originally-stolen token was msyrupUSDp issued by
+    Midas. The two facts (what was stolen vs whom we're asking to
+    freeze) are distinct and both belong on the letter.
+
+    Falls back to ``fallback`` if no matching entry — preserves
+    backward compatibility for cases where the stolen token isn't in
+    the issuer DB.
+    """
+    try:
+        from recupero._common import canonical_address_key as _ck
+        from recupero.freeze.asks import load_issuer_db
+        contract = theft_transfer.token.contract
+        if not contract:
+            return fallback
+        db = load_issuer_db()
+        canon = _ck(contract)
+        entry = db.get((theft_transfer.chain, canon))
+        if entry and entry.issuer:
+            return entry.issuer
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "could not resolve stolen-asset issuer for %s: %s — falling "
+            "back to %s", theft_transfer.token.symbol, exc, fallback,
+        )
+    return fallback
+
+
 # ---- Small generate_briefs helpers (v0.20.0 Phase C decomposition) ---- #
 
 
@@ -351,7 +390,20 @@ def generate_briefs(
         "asset": {
             "symbol": theft_transfer.token.symbol,
             "contract": theft_transfer.token.contract or "(native)",
-            "issuer": issuer.name,
+            # v0.20.1 (Jacob V-CFI01 residual #6): "issuer" on the
+            # asset block reflects the STOLEN-TOKEN's actual issuer
+            # (resolved from the issuer DB via contract address), NOT
+            # the freeze-target issuer. Pre-v0.20.1 these were
+            # conflated: a Tether-targeted freeze letter for an
+            # mSyrupUSDp theft labeled "Asset issuer: Tether" even
+            # though mSyrupUSDp is issued by Midas. Section 2 of the
+            # letter now reads "Asset issuer: Midas" while the rest
+            # of the letter correctly targets Tether for the downstream
+            # USDT freeze. Both facts coexist; neither overwrites the
+            # other.
+            "issuer": _resolve_theft_asset_issuer_name(
+                theft_transfer, fallback=issuer.name,
+            ),
             "issuer_short": issuer.short_name,
             "type": asset_type,
             "description": issuer.asset_description or asset_type,
@@ -458,6 +510,24 @@ def generate_briefs(
         ],
         "hops_tree_branch_count": len(hops_tree),
         "hops_tree_has_fanout": len(hops_tree) > len(hops),
+        # v0.20.1 (Jacob V-CFI01 residual #3): "forwarding_observed"
+        # is True whenever we have ANY evidence of downstream movement,
+        # including fan-out branches OR per-issuer freezable holdings
+        # (which represent received-from-perp downstream addresses).
+        # Pre-v0.20.1 the freeze-letter template gated Section 3's "no
+        # forwarding observed" stub solely on `hops` — for cases where
+        # the linear hop chain is empty but the issuer freezable list
+        # has downstream wallets, the stub printed contradicting
+        # Section 4 (which listed those wallets).
+        "forwarding_observed": bool(
+            hops
+            or len(hops_tree) > 0
+            or (
+                issuer_freezable
+                and isinstance(issuer_freezable, dict)
+                and issuer_freezable.get("holdings")
+            )
+        ),
         "current_holder": {
             "address": current_holder_addr,
             "explorer_url": _address_explorer_url(

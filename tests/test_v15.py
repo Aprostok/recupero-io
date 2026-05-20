@@ -60,7 +60,7 @@ class TestLoadIssuerDB:
 
     def test_midas_msyrupusdp_loaded(self):
         db = load_issuer_db()
-        msyrup = (Chain.ethereum, "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb")
+        msyrup = (Chain.ethereum, "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50")
         assert msyrup in db
         assert db[msyrup].issuer == "Midas"
         assert db[msyrup].primary_contact == "compliance@midas.app"
@@ -78,7 +78,7 @@ class TestMatchFreezeAsks:
         candidate = _candidate(
             "0x3e2E66af967075120fa8bE27C659d0803DfF4436",
             [_holding("msyrupUSDp",
-                     "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb",
+                     "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50",
                      Decimal("3120000"), Decimal("3109862"))],
         )
         matched, unmatched = match_freeze_asks([candidate])
@@ -130,7 +130,7 @@ class TestMatchFreezeAsks:
         c2 = _candidate(
             "0xb",
             [_holding("msyrupUSDp",
-                     "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb",
+                     "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50",
                      Decimal("3120000"), Decimal("3109862"))],
         )
         c3 = _candidate(
@@ -138,21 +138,35 @@ class TestMatchFreezeAsks:
             [_holding("USDC", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                      Decimal("100000"), Decimal("100000"))],
         )
-        matched, _ = match_freeze_asks([c1, c2, c3])
-        assert len(matched) == 3
-        # DAI ($9.98M) > Midas ($3.12M) > USDC ($100K)
-        assert matched[0].holding_symbol == "DAI"
-        assert matched[1].holding_symbol == "msyrupUSDp"
-        assert matched[2].holding_symbol == "USDC"
+        # v0.20.1 (Jacob V-CFI01 residual #4): DAI's issuer (Sky Protocol)
+        # has freeze_capability="no" — match_freeze_asks now routes such
+        # holdings to `unmatched` instead of `matched`. Pre-v0.20.1 they
+        # flowed into freeze_asks as noise that downstream consumers had
+        # to filter on `freeze_capability` again; now filtered once at
+        # the synthesis boundary. So the matched count is 2 (Midas +
+        # USDC), and DAI lands in unmatched.
+        matched, unmatched = match_freeze_asks([c1, c2, c3])
+        assert len(matched) == 2
+        # Midas ($3.12M) > USDC ($100K)
+        assert matched[0].holding_symbol == "msyrupUSDp"
+        assert matched[1].holding_symbol == "USDC"
+        # DAI in unmatched
+        assert any(h.token.symbol == "DAI" for h in unmatched)
 
     def test_multi_holding_per_candidate_split_into_separate_asks(self):
-        """One address holding USDC + DAI should produce two FreezeAsks."""
+        """One address holding USDC + USDT should produce two FreezeAsks.
+
+        v0.20.1 (Jacob V-CFI01 residual #4): the prior fixture used
+        DAI (Sky Protocol, freeze_capability=no) which now routes to
+        `unmatched`. Replaced with USDT to preserve the original test
+        intent (two-holdings-one-candidate → two-asks-same-candidate).
+        """
         candidate = _candidate(
             "0xmulti",
             [
                 _holding("USDC", "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
                         Decimal("100000"), Decimal("100000")),
-                _holding("DAI", "0x6b175474e89094c44da98b954eedeac495271d0f",
+                _holding("USDT", "0xdac17f958d2ee523a2206206994597c13d831ec7",
                         Decimal("50000"), Decimal("50000")),
             ],
         )
@@ -161,7 +175,7 @@ class TestMatchFreezeAsks:
         # Both reference the same underlying address
         assert all(a.candidate_address == "0xmulti" for a in matched)
         symbols = {a.holding_symbol for a in matched}
-        assert symbols == {"USDC", "DAI"}
+        assert symbols == {"USDC", "USDT"}
 
 
 class TestGroupByIssuer:
@@ -182,31 +196,38 @@ class TestGroupByIssuer:
         assert "Circle" in grouped
         assert len(grouped["Circle"]) == 2
 
-    def test_zigha_scenario_three_freeze_targets_two_issuers(self):
-        """Verify the actual Zigha case shape produces 2 issuer groups."""
+    def test_zigha_scenario_freezable_targets_grouped_by_issuer(self):
+        """Verify the actual Zigha case shape produces correct issuer groups.
+
+        v0.20.1 (Jacob V-CFI01 residual #4): the prior version of this
+        test asserted Sky DAI holdings would land in matched. The
+        v0.20.1 fix routes freeze_capability='no' issuers to unmatched,
+        which is the correct behavior — Sky DAI freeze letters are a
+        waste of time (no protocol authority to freeze). Test now asserts
+        Midas + USDT shape (both freeze_capability='yes' issuers).
+        """
         midas_target = _candidate(
             "0x3e2E66af967075120fa8bE27C659d0803DfF4436",
             [_holding("msyrupUSDp",
-                     "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb",
+                     "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50",
                      Decimal("3120000"), Decimal("3109862"))],
         )
-        sky_target_1 = _candidate(
-            "0x3daFC6a860334d4feB0467a3D58C3687E9E921B6",
-            [_holding("DAI", "0x6b175474e89094c44da98b954eedeac495271d0f",
-                     Decimal("9980000"), Decimal("9980000"))],
+        tether_target_1 = _candidate(
+            "0x00000688768803Bbd44095770895ad27ad6b0d95",
+            [_holding("USDT", "0xdac17f958d2ee523a2206206994597c13d831ec7",
+                     Decimal("170687"), Decimal("170687"))],
         )
-        sky_target_2 = _candidate(
-            "0x415D8D075CAcB5A61Ae854A8e5ea53DF3A76F688",
-            [_holding("DAI", "0x6b175474e89094c44da98b954eedeac495271d0f",
-                     Decimal("6910000"), Decimal("6910000"))],
+        tether_target_2 = _candidate(
+            "0x5141B82f5fFDa4c6fE1E372978F1C5427640a190",
+            [_holding("USDT", "0xdac17f958d2ee523a2206206994597c13d831ec7",
+                     Decimal("73151"), Decimal("73151"))],
         )
-        matched, _ = match_freeze_asks([midas_target, sky_target_1, sky_target_2])
+        matched, _ = match_freeze_asks(
+            [midas_target, tether_target_1, tether_target_2],
+        )
         grouped = group_by_issuer(matched)
-        # Two distinct issuers
         assert len(grouped) == 2
-        # Sky group has 2 asks ($16.89M total), Midas has 1 ($3.12M)
-        sky_key = [k for k in grouped if k.startswith("Sky")][0]
-        assert len(grouped[sky_key]) == 2
+        assert len(grouped["Tether"]) == 2
         assert len(grouped["Midas"]) == 1
-        sky_total = sum(a.holding_usd_value for a in grouped[sky_key])
-        assert sky_total == Decimal("16890000")
+        tether_total = sum(a.holding_usd_value for a in grouped["Tether"])
+        assert tether_total == Decimal("243838")

@@ -451,6 +451,21 @@ def _promote_freezable_holdings(
             addr = h.get("address")
             if not addr:
                 continue
+            # v0.20.1 (Jacob V-CFI01 residual #5): respect the brief's
+            # per-holding classification. The brief's contract-detection
+            # logic (balance-to-inflow ratio + is_contract) tags addresses
+            # that are protocol/pool contracts as INVESTIGATE / UNRECOVERABLE
+            # rather than FREEZABLE. Pre-v0.20.1 the flow-diagram promotion
+            # walked ALL per-issuer holdings indiscriminately and promoted
+            # the contract address (e.g., Threshold's 0x52Aa with $60M USDT
+            # of protocol liquidity) to "Tether holding" in the cluster
+            # box — visually contradicting the brief's UNRECOVERABLE tag.
+            # Now: only promote when the holding's status is FREEZABLE.
+            status = (h.get("status") or "").upper()
+            if status not in ("FREEZABLE", ""):
+                # Empty status falls through to promotion for back-compat
+                # with older briefs that omitted the field.
+                continue
             node = addr_lower_to_node.get(addr.lower())
             if node is None:
                 # Wallet didn't appear in any transfer in the trace —

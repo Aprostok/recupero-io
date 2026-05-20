@@ -60,7 +60,7 @@ from recupero.worker._victim_summary import classify_recovery_prospects
 USDT_CONTRACT = "0xdac17f958d2ee523a2206206994597c13d831ec7"
 USDC_CONTRACT = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
 CBBTC_CONTRACT = "0xcbb7c0006f23900c38eb856149f799620fcb8a4a"
-MSYRUP_CONTRACT = "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb"
+MSYRUP_CONTRACT = "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50"
 DAI_CONTRACT = "0x6b175474e89094c44da98b954eedeac495271d0f"
 
 
@@ -2228,7 +2228,7 @@ def test_v_cfi01_real_artifacts_jacob_run_post_v0_16() -> None:
     USDT_CONTRACT_J = "0xdac17f958d2ee523a2206206994597c13d831ec7"
     USDC_CONTRACT_J = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
     CBBTC_CONTRACT_J = "0xcbb7c0006f23900c38eb856149f799620fcb8a4a"
-    MSYRUP_CONTRACT_J = "0x2fe058cc73f7e2eecaaa17ed8c11c389a35cd5cb"
+    MSYRUP_CONTRACT_J = "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50"
 
     incident_time = datetime(2025, 10, 9, 0, 29, tzinfo=timezone.utc)
 

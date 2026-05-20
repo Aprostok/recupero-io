@@ -265,28 +265,39 @@ def _extract_destinations(
         else _DESTINATION_DUST_USD_DEFAULT
     )
 
-    # Aggregate: for each downstream address, sum of USD received in trace,
-    # and figure a role from counterparty labels.
+    # v0.20.1 (Jacob V-CFI01 residual #2): canonical-key every aggregate
+    # so the same on-chain address can't appear twice in the destination
+    # list with different casing. Pre-v0.20.1 a wallet that surfaced both
+    # in `case.transfers` (mixed case from chain explorer) and in
+    # `freeze_targets_by_addr` (lowercase after the freeze_asks emitter
+    # normalized) produced two rows in DESTINATIONS — the trace one with
+    # the inflow USD, and the freeze one with $0 inflow but FREEZABLE
+    # role. Now: key all internal dicts on canonical form, keep a
+    # display-case map for output. One canonical → one row.
+    from recupero._common import canonical_address_key as _ck
     per_addr_received: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_addr_label_name: dict[str, str | None] = {}
     per_addr_category: dict[str, str | None] = {}
     per_addr_is_mixer: dict[str, bool] = defaultdict(bool)
     per_addr_tokens: dict[str, set[str]] = defaultdict(set)
+    # Display-case map: canonical → first-seen original case. Used so
+    # the brief renders the EIP-55-style mixed-case form rather than
+    # the lowercase canonical-key form (which is harder to spot-check
+    # against block explorers).
+    per_addr_display: dict[str, str] = {}
 
-    from recupero._common import canonical_address_key as _ck
-    seed_lower = _ck(case.seed_address)
+    seed_canon = _ck(case.seed_address)
     for t in case.transfers:
-        to = t.to_address
-        # Skip transfers back to the victim's seed wallet — those aren't
-        # destinations we'd freeze. (Should already be filtered upstream
-        # but defensive here.)
-        if _ck(to) == seed_lower:
+        to_raw = t.to_address
+        to = _ck(to_raw)
+        if not to or to == seed_canon:
             continue
+        per_addr_display.setdefault(to, to_raw)
         if t.usd_value_at_tx is not None:
             per_addr_received[to] += t.usd_value_at_tx
         if t.token and t.token.symbol:
             per_addr_tokens[to].add(t.token.symbol)
-        if t.counterparty.address == to and t.counterparty.label:
+        if t.counterparty.address == to_raw and t.counterparty.label:
             per_addr_label_name[to] = t.counterparty.label.name
             per_addr_category[to] = t.counterparty.label.category.value
             if t.counterparty.label.category == LabelCategory.mixer:
@@ -301,38 +312,48 @@ def _extract_destinations(
         a for a, received in per_addr_received.items()
         if received >= threshold
     }
+    # freeze_targets_by_addr keys are already canonical post-v0.20.1.
     candidate_addrs.update(freeze_targets_by_addr.keys())
+    for a in freeze_targets_by_addr.keys():
+        per_addr_display.setdefault(a, a)
+    # Editorial notes may carry mixed-case keys (operator hand-edited
+    # the JSON). Canonical-key them too, but preserve the operator's
+    # display-form when no other source has provided one.
+    for ed_addr in editorial_notes.keys():
+        canon_ed = _ck(ed_addr)
+        if canon_ed:
+            candidate_addrs.add(canon_ed)
+            per_addr_display.setdefault(canon_ed, ed_addr)
 
-    # Always preserve any address the editorial explicitly labeled (back-
-    # compat: if the operator hand-wrote an entry for a $50 address
-    # because it's evidentially relevant, don't drop it).
-    candidate_addrs.update(editorial_notes.keys())
+    # Filter the victim's own seed (case-variant safe via canonical key).
+    candidate_addrs = {a for a in candidate_addrs if a != seed_canon}
 
-    # Don't include the victim's own seed if it somehow slipped through.
-    # v0.18.0 (round-11 reports-CRIT-001): pre-v0.18.0 we only discarded
-    # the raw `case.seed_address` and `seed_lower`. For base58 chains
-    # (Solana / Tron / Bitcoin), `seed_lower` is the case-PRESERVED form
-    # (canonical_address_key keeps base58 case). If a freeze_targets entry
-    # somehow contained the seed in a DIFFERENT case (operator-pasted into
-    # editorial, round-tripped through JSON), the `discard` missed it and
-    # the victim's own wallet appeared in the customer-facing DESTINATIONS
-    # list — embarrassing on a freeze letter cover. Now: filter by
-    # canonical key so case-variants of the seed are all caught.
-    candidate_addrs = {a for a in candidate_addrs if _ck(a) != seed_lower}
+    # v0.20.1: canonical-key editorial_notes too so a mixed-case operator
+    # edit still matches the canonical key in the candidate_addrs set.
+    editorial_by_canon: dict[str, str] = {
+        _ck(k): v for k, v in editorial_notes.items() if _ck(k)
+    }
 
     destinations = []
-    for addr in sorted(
+    for addr_canon in sorted(
         candidate_addrs,
         key=lambda a: per_addr_received.get(a, Decimal("0")),
         reverse=True,
     ):
-        label_name = per_addr_label_name.get(addr)
-        is_freezable = addr in freeze_targets_by_addr
-        is_mixer = per_addr_is_mixer[addr]
+        # Render the chain-explorer-canonical case (EIP-55 mixed for
+        # EVM, original case-preserved for base58 chains). v0.20.1
+        # (Jacob V-CFI01 residual #2): pre-v0.20.1 the brief sometimes
+        # rendered the all-lowercase canonical-key form, which makes
+        # spot-checking against Etherscan harder. Now we display the
+        # first-seen on-chain form.
+        addr_display = per_addr_display.get(addr_canon, addr_canon)
+        label_name = per_addr_label_name.get(addr_canon)
+        is_freezable = addr_canon in freeze_targets_by_addr
+        is_mixer = per_addr_is_mixer[addr_canon]
 
         # Role inference
         if is_freezable:
-            freeze_info = freeze_targets_by_addr[addr]
+            freeze_info = freeze_targets_by_addr[addr_canon]
             role = f"Holds {freeze_info.get('symbol', 'tokens')} — freezable"
             holding_now = usd(Decimal(str(freeze_info.get("usd_value") or "0")))
         elif is_mixer:
@@ -345,34 +366,33 @@ def _extract_destinations(
             role = "Intermediate wallet"
             holding_now = "unknown (see explorer)"
 
-        # Editorial note if provided, otherwise mechanical fallback that
-        # carries the right emoji status from freeze_targets / label data.
-        if addr in editorial_notes:
-            notes = editorial_notes[addr]
+        # Editorial note if provided, otherwise mechanical fallback.
+        if addr_canon in editorial_by_canon:
+            notes = editorial_by_canon[addr_canon]
         else:
             notes = _mechanical_destination_note(
-                addr=addr,
-                usd_received=per_addr_received.get(addr, Decimal("0")),
-                tokens_observed=per_addr_tokens.get(addr, set()),
-                freeze_info=freeze_targets_by_addr.get(addr),
+                addr=addr_display,
+                usd_received=per_addr_received.get(addr_canon, Decimal("0")),
+                tokens_observed=per_addr_tokens.get(addr_canon, set()),
+                freeze_info=freeze_targets_by_addr.get(addr_canon),
                 label_name=label_name,
                 is_mixer=is_mixer,
             )
 
-        # Status from editorial classification. If no editorial note,
-        # derive status from the mechanical-note emoji prefix we just
-        # synthesized — so the JS builder still gets correct rendering.
-        if addr in editorial_notes:
-            status = _classify_address_status(addr, editorial_notes)
+        # Status from editorial classification.
+        if addr_canon in editorial_by_canon:
+            status = _classify_address_status(
+                addr_canon, {addr_canon: editorial_by_canon[addr_canon]},
+            )
         else:
-            status = _classify_address_status(addr, {addr: notes})
+            status = _classify_address_status(addr_canon, {addr_canon: notes})
 
         destinations.append({
-            "address": addr,
-            "short": short_addr(addr),
+            "address": addr_display,
+            "short": short_addr(addr_display),
             "role": role,
             "usd_holding_now": holding_now,
-            "usd_received_in_trace": usd(per_addr_received.get(addr, Decimal("0"))),
+            "usd_received_in_trace": usd(per_addr_received.get(addr_canon, Decimal("0"))),
             "status": status,
             "notes": notes,
         })
@@ -1251,9 +1271,19 @@ def emit_brief(
     # --- Destinations ---
     # Build address -> freeze info map for role inference
     freeze_targets_by_addr: dict[str, dict[str, Any]] = {}
+    # v0.20.1 (Jacob V-CFI01 residual #2): freeze_asks are emitted with
+    # the canonical (lowercased EVM, case-preserved base58) key, but
+    # `case.transfers` carries the on-chain mixed-case form. Pre-v0.20.1
+    # the `candidate_addrs` union in `_extract_destinations` produced
+    # duplicate entries for the same on-chain wallet — the mixed-case
+    # row from the trace AND the lowercase row from freeze_asks. Now:
+    # key freeze_targets by canonical form so the destination merge
+    # dedups by single canonical identity.
+    from recupero._common import canonical_address_key as _ck_targets
     for issuer, asks in freeze_asks.get("by_issuer", {}).items():
         for ask in asks:
-            freeze_targets_by_addr[ask["address"]] = {**ask, "issuer": issuer}
+            canon = _ck_targets(ask["address"])
+            freeze_targets_by_addr[canon] = {**ask, "issuer": issuer}
 
     editorial_notes = editorial.get("DESTINATION_NOTES", {}) or {}
     # Filter out any placeholder keys

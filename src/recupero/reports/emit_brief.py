@@ -271,7 +271,12 @@ def _parse_dust_threshold() -> Decimal:
         return Decimal("1000.00")
 
 
-_DESTINATION_DUST_USD_DEFAULT = _parse_dust_threshold()
+# v0.20.11 (R15-C LOW): removed the module-load-time constant. The
+# env-var parse now runs at call time inside _extract_destinations()
+# so an operator who rotates RECUPERO_DESTINATION_DUST_USD mid-session
+# sees the change reflected without a worker restart. This mirrors the
+# pattern used for _editorial_template() (v0.17.3) and is safe because
+# _parse_dust_threshold() is cheap (os.environ.get + Decimal parse).
 
 
 def _extract_destinations(
@@ -311,7 +316,7 @@ def _extract_destinations(
     """
     threshold = (
         dust_threshold_usd if dust_threshold_usd is not None
-        else _DESTINATION_DUST_USD_DEFAULT
+        else _parse_dust_threshold()
     )
 
     # v0.20.1 (Jacob V-CFI01 residual #2): canonical-key every aggregate

@@ -191,7 +191,7 @@
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
     {{ asset.symbol }} (USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}{% if asset.is_multi_event %} across {{ asset.theft_event_count }} transactions{% endif %}) was removed from
     {{ victim.name }}'s wallet without authorization and forwarded to
-    <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>,
+    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %},
     where it remains as of {{ verified_at }} UTC. The recipient wallet has
     executed {{ outbound_count_of_stolen_asset }} outbound transfers of this
     asset since receipt. We are writing to request that {{ issuer.short_name }}
@@ -234,7 +234,7 @@
     {% else %}
     {{ victim.name }} should appear in {{ issuer.short_name }}'s records as the
     KYC'd holder of this position. The recipient wallet at
-    <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a> has no
+    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %} has no
     corresponding KYC history; it received the position by direct on-chain
     transfer. The disparity supports the basis for a precautionary hold.
     {% endif %}

@@ -42,7 +42,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Single source of truth for the freeze_brief.json schema version.
 # Imported by emit_brief.py + the worker synthesizer so a future bump
 # only happens here.
-BRIEF_SCHEMA_VERSION = "0.20.10"
+BRIEF_SCHEMA_VERSION = "0.20.11"
 
 # Earliest version that wrote ALL the fields the current rendering
 # chain expects (evidence_type, evidence_mode, etc.). Briefs from
@@ -448,19 +448,27 @@ def generate_briefs(
             # event's USD (back-compat for callers that depend on
             # the single-event semantics); templates that want
             # the multi-event headline use `total_usd_value_at_theft`.
+            # v0.20.11 (R15-A MEDIUM): use a proper "any priced events?"
+            # guard instead of the truthy Decimal sum. `Decimal(0)` is
+            # falsy in Python, so `sum(...) or fallback` silently reverts
+            # to the single-event value when the aggregate is exactly $0
+            # (e.g., all events priced at zero). The correct fallback
+            # condition is "no events had a priced usd_value_at_tx".
             "total_usd_value_at_theft": _fmt_usd(
                 sum(
                     (t.usd_value_at_tx for t in theft_events
                      if t.usd_value_at_tx is not None),
                     start=Decimal(0),
-                ) or theft_transfer.usd_value_at_tx,
+                ) if any(t.usd_value_at_tx is not None for t in theft_events)
+                else theft_transfer.usd_value_at_tx,
             ),
             "total_amount_human": _fmt_decimal(
                 sum(
                     (t.amount_decimal for t in theft_events
                      if t.amount_decimal is not None),
                     start=Decimal(0),
-                ) or theft_transfer.amount_decimal,
+                ) if any(t.amount_decimal is not None for t in theft_events)
+                else theft_transfer.amount_decimal,
             ),
             "theft_event_count": len(theft_events),
             "is_multi_event": len(theft_events) > 1,

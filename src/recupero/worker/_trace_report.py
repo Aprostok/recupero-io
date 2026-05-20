@@ -229,17 +229,21 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
                 "symbol": t.token.symbol,
                 "balance_human": _fmt_decimal(t.amount_decimal),
                 "usd_value_human": _fmt_usd(t.usd_value_at_tx),
-                "_usd": t.usd_value_at_tx or Decimal(0),
+                # v0.20.11 (R15-A LOW): use explicit None check so a
+                # legitimately $0-priced transfer is not confused with
+                # an unpriced one. Decimal(0) is falsy in Python.
+                "_usd": t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0),
             }
             by_addr[key] = entry
         else:
             # Same address re-appears — keep the highest-USD transfer's
             # representation (typically the most relevant flow).
-            if (t.usd_value_at_tx or Decimal(0)) > entry["_usd"]:
+            t_usd = t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0)
+            if t_usd > entry["_usd"]:
                 entry["symbol"] = t.token.symbol
                 entry["balance_human"] = _fmt_decimal(t.amount_decimal)
                 entry["usd_value_human"] = _fmt_usd(t.usd_value_at_tx)
-                entry["_usd"] = t.usd_value_at_tx or Decimal(0)
+                entry["_usd"] = t_usd
     rows = list(by_addr.values())
     rows.sort(key=lambda r: r["_usd"], reverse=True)
     for r in rows:

@@ -23,6 +23,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -196,15 +197,27 @@ def write_csv(
     Linux interpreted the `\\r` as a column separator on certain
     cells. Fixed encoding to be cross-platform consistent.
     """
+    # v0.20.11 (R15-C MEDIUM): atomic write via tmp + os.replace so a
+    # SIGTERM mid-write can't leave a truncated CSV that gets synced to
+    # FBI/IRS-CI analysts. Pattern matches _common.atomic_write_text but
+    # adapted for CSV's file-object writer API.
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=_CSV_COLUMNS, extrasaction="ignore",
-            lineterminator="\n",
-        )
-        writer.writeheader()
-        for fnd in findings:
-            writer.writerow({c: getattr(fnd, c, "") for c in _CSV_COLUMNS})
+    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    try:
+        with tmp_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(
+                f, fieldnames=_CSV_COLUMNS, extrasaction="ignore",
+                lineterminator="\n",
+            )
+            writer.writeheader()
+            for fnd in findings:
+                writer.writerow({c: getattr(fnd, c, "") for c in _CSV_COLUMNS})
+        os.replace(str(tmp_path), str(out_path))
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
     log.info("wrote investigator CSV: %s (%d findings)", out_path, len(findings))
     return out_path
 
@@ -226,7 +239,10 @@ def write_json(
             for fnd in findings
         ],
     }
-    out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    # v0.20.11 (R15-C MEDIUM): atomic write via _common.atomic_write_text
+    # so a SIGTERM mid-write can't produce a truncated JSON file.
+    from recupero._common import atomic_write_text
+    atomic_write_text(out_path, json.dumps(payload, indent=2))
     log.info("wrote investigator JSON: %s (%d findings)", out_path, len(findings))
     return out_path
 

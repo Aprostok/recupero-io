@@ -1,3 +1,11 @@
+{# DEPRECATED: maple.html.j2 is the legacy freeze-request template (pre-v0.14.8).
+   It hardcodes "is currently held in" language without evidence_mode branching
+   and MUST NOT be rendered directly — doing so would produce false claims on
+   historical-receipt cases. brief.py explicitly refuses to fall back to this
+   file (see brief.py generate_briefs error message). Preserved here only so
+   that error message string "refusing to fall back to maple.html.j2" resolves
+   to a real file path, aiding production debugging. Do NOT render this template.
+   The active template is issuer_freeze_request.html.j2. #}
 <!DOCTYPE html>
 <html lang="en">
 <head>

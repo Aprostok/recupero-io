@@ -670,9 +670,15 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
     }
 
 
-# Dust threshold for the AI's destination enumeration. Matches the brief
-# generator's default at recupero.reports.emit_brief.
-_AI_DESTINATION_DUST_USD = Decimal("1000.00")
+# v0.20.11 (R15-C MEDIUM): read the same env var as emit_brief so both
+# pipelines use the same threshold. Pre-v0.20.11 this was a hardcoded
+# Decimal("1000.00") that ignored RECUPERO_DESTINATION_DUST_USD — if an
+# operator lowered the threshold for a small-loss case, emit_brief would
+# include addresses the AI never labelled, silently falling back to
+# mechanical classification for those addresses.
+def _ai_destination_dust_threshold() -> Decimal:
+    from recupero.reports.emit_brief import _parse_dust_threshold
+    return _parse_dust_threshold()
 
 
 def _enumerate_all_destinations(
@@ -735,9 +741,10 @@ def _enumerate_all_destinations(
                 freeze_by_addr[addr_canon] = {**a, "issuer": issuer}
                 per_addr_display.setdefault(addr_canon, addr)
 
+    _dust = _ai_destination_dust_threshold()
     candidates: set[str] = {
         a for a, received in per_addr_received.items()
-        if received >= _AI_DESTINATION_DUST_USD
+        if received >= _dust
     }
     # Always include freeze-asks addresses even if trace inflow is sub-
     # threshold (e.g., $1 of attribution-share but $3M in current

@@ -161,7 +161,7 @@
   <tbody>
     {% for d in destinations %}
     <tr>
-      <td class="mono"><a href="{{ d.explorer_url }}">{{ d.address_short }}</a></td>
+      <td class="mono">{% if d.explorer_url %}<a href="{{ d.explorer_url }}">{{ d.address_short }}</a>{% else %}<span>{{ d.address_short }}</span>{% endif %}</td>
       <td>{{ d.role }}{% if d.label %}<br/><span class="small secondary">{{ d.label }}</span>{% endif %}</td>
       <td>{{ d.symbol or '—' }}</td>
       <td class="mono">{{ d.balance_human or '—' }}</td>
@@ -199,7 +199,7 @@
   <tbody>
     {% for f in freezable_rows %}
     <tr>
-      <td class="mono"><a href="{{ f.explorer_url }}">{{ f.address_short }}</a></td>
+      <td class="mono">{% if f.explorer_url %}<a href="{{ f.explorer_url }}">{{ f.address_short }}</a>{% else %}<span>{{ f.address_short }}</span>{% endif %}</td>
       <td>{{ f.symbol }}</td>
       <td class="mono">{{ f.amount }}</td>
       <td class="amount">{{ f.usd }}</td>
@@ -329,7 +329,7 @@ notification).</p>
 {% endif %}
 
 <h2>6. Risk Assessment</h2>
-{% if risk_assessment and risk_assessment.summary.addresses_assessed > 0 %}
+{% if risk_assessment and risk_assessment.summary is defined and risk_assessment.summary and risk_assessment.summary.addresses_assessed > 0 %}
 <div class="risk-summary">
   <div class="risk-summary-stat">
     <div class="risk-summary-label">Addresses assessed</div>
@@ -367,7 +367,7 @@ notification).</p>
     </tr>
   </thead>
   <tbody>
-    {% for addr, data in risk_assessment.addresses.items() %}
+    {% for addr, data in (risk_assessment.addresses or {}).items() %}
     <tr>
       <td class="mono">{{ addr[:14] }}…</td>
       <td class="amount">{{ data.score }}</td>

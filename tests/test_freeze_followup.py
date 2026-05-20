@@ -245,17 +245,19 @@ def test_render_silence_template_succeeds():
 
 
 def test_cron_skips_candidate_when_outcome_appears_during_tick():
-    """Race scenario: bulk SELECT included letter L, but an operator
-    records a freeze_outcomes row before the dispatcher sends the
-    email. The race-safe re-check must skip the send."""
+    """v0.21.1 (audit-fix C1): bulk SELECT included letter L, but an
+    operator records a freeze_outcomes row before the dispatcher sends
+    the email. The atomic claim UPDATE detects the outcome row via its
+    NOT EXISTS clause and returns False → skip the send.
+    """
     cand = _candidate(next_stage="nudge_72h")
 
     with patch(
         "recupero.worker._freeze_followup.find_freeze_followups_due",
         return_value=[cand],
     ), patch(
-        "recupero.worker._freeze_followup._has_outcome_row",
-        return_value=True,  # outcome row appeared during the tick
+        "recupero.worker._freeze_followup._try_claim_stage_advance",
+        return_value=False,  # claim lost (outcome row or concurrent tick)
     ), patch(
         "recupero.worker._email.send_email",
     ) as mock_send:
@@ -267,9 +269,11 @@ def test_cron_skips_candidate_when_outcome_appears_during_tick():
     assert result.sent_ok == 0
 
 
-def test_cron_sends_and_advances_stage_on_success():
-    """Happy path: candidate found, no outcome race, email sends OK,
-    stage advances, no silence_14d outcome (since this is nudge_72h)."""
+def test_cron_sends_after_successful_claim():
+    """v0.21.1 (audit-fix C1+E3): happy path. The claim UPDATE succeeds
+    (advancing the stage AND verifying no outcome row exists), then
+    the email send succeeds. No rollback needed; the stage was
+    advanced as part of the claim."""
     cand = _candidate(next_stage="nudge_72h")
 
     fake_send = MagicMock(
@@ -278,37 +282,44 @@ def test_cron_sends_and_advances_stage_on_success():
             "skipped": False,
         })(),
     )
-    advance_called = []
+    claim_calls = []
 
-    def _stub_advance(*, letter_id, new_stage, dsn):
-        advance_called.append((letter_id, new_stage))
+    def _stub_claim(*, letter_id, current_stage, new_stage, dsn):
+        claim_calls.append((letter_id, current_stage, new_stage))
+        return True
+
+    rollback_called = []
+
+    def _stub_rollback(*, letter_id, previous_stage, dsn):
+        rollback_called.append((letter_id, previous_stage))
 
     with patch(
         "recupero.worker._freeze_followup.find_freeze_followups_due",
         return_value=[cand],
     ), patch(
-        "recupero.worker._freeze_followup._has_outcome_row",
-        return_value=False,
+        "recupero.worker._freeze_followup._try_claim_stage_advance",
+        side_effect=_stub_claim,
+    ), patch(
+        "recupero.worker._freeze_followup._rollback_stage_advance",
+        side_effect=_stub_rollback,
     ), patch(
         "recupero.worker._email.send_email",
         side_effect=fake_send,
-    ), patch(
-        "recupero.worker._freeze_followup._advance_stage",
-        side_effect=_stub_advance,
     ):
         result = run_freeze_followup_cron(dsn="postgres://fake")
 
     assert result.sent_ok == 1
     assert result.send_failures == 0
-    assert result.silence_outcomes_written == 0  # nudge_72h doesn't write silence
-    assert advance_called == [(LETTER_ID, "nudge_72h")]
+    assert result.silence_outcomes_written == 0
+    assert claim_calls == [(LETTER_ID, "initial", "nudge_72h")]
+    assert rollback_called == [], "Successful send must not roll back the claim"
 
 
 def test_cron_silence_14d_writes_outcome_row_and_routes_to_investigator():
     """When advancing to silence_14d, the cron must:
       1. Send the INTERNAL alert to the investigator (not the issuer)
       2. Write a freeze_outcomes row with outcome_type='silence_14d'
-      3. Advance the followup_stage to silence_14d
+      3. Advance the followup_stage to silence_14d (done via the claim)
     """
     cand = _candidate(
         next_stage="silence_14d",
@@ -334,13 +345,11 @@ def test_cron_silence_14d_writes_outcome_row_and_routes_to_investigator():
         "recupero.worker._freeze_followup.find_freeze_followups_due",
         return_value=[cand],
     ), patch(
-        "recupero.worker._freeze_followup._has_outcome_row",
-        return_value=False,
+        "recupero.worker._freeze_followup._try_claim_stage_advance",
+        return_value=True,
     ), patch(
         "recupero.worker._email.send_email",
         side_effect=_capture_recipient,
-    ), patch(
-        "recupero.worker._freeze_followup._advance_stage",
     ), patch(
         "recupero.worker._freeze_followup._write_silence_outcome",
         side_effect=_stub_silence,
@@ -353,10 +362,13 @@ def test_cron_silence_14d_writes_outcome_row_and_routes_to_investigator():
     assert silence_writes == [LETTER_ID]
 
 
-def test_cron_send_failure_does_not_advance_stage():
-    """If send_email returns success=False, the stage must NOT
-    advance — next tick gets to retry the same email rather than
-    silently dropping it."""
+def test_cron_send_failure_rolls_back_claim():
+    """v0.21.1 (audit-fix C1+E3): when send_email fails AFTER the
+    claim succeeded, the cron must roll back the stage so the next
+    tick retries cleanly. Pre-v0.21.1 a send failure left the stage
+    NOT advanced (claim-then-send pattern was reversed); the new
+    pattern advances stage as part of the claim, so the failure path
+    MUST roll back to restore retry-ability."""
     cand = _candidate(next_stage="nudge_72h")
 
     fake_send_fail = MagicMock(
@@ -365,28 +377,29 @@ def test_cron_send_failure_does_not_advance_stage():
             "error": "HTTP 500", "skipped": False,
         })(),
     )
-    advance_called = []
+    rollback_called = []
 
-    def _stub_advance(*, letter_id, new_stage, dsn):
-        advance_called.append((letter_id, new_stage))
+    def _stub_rollback(*, letter_id, previous_stage, dsn):
+        rollback_called.append((letter_id, previous_stage))
 
     with patch(
         "recupero.worker._freeze_followup.find_freeze_followups_due",
         return_value=[cand],
     ), patch(
-        "recupero.worker._freeze_followup._has_outcome_row",
-        return_value=False,
+        "recupero.worker._freeze_followup._try_claim_stage_advance",
+        return_value=True,
+    ), patch(
+        "recupero.worker._freeze_followup._rollback_stage_advance",
+        side_effect=_stub_rollback,
     ), patch(
         "recupero.worker._email.send_email",
         side_effect=fake_send_fail,
-    ), patch(
-        "recupero.worker._freeze_followup._advance_stage",
-        side_effect=_stub_advance,
     ):
         result = run_freeze_followup_cron(dsn="postgres://fake")
 
     assert result.send_failures == 1
     assert result.sent_ok == 0
-    assert advance_called == [], (
-        "Stage must NOT advance on send failure — preserves retry on next tick"
+    assert rollback_called == [(LETTER_ID, "initial")], (
+        "Stage advance must be ROLLED BACK on send failure so next "
+        "tick retries the same letter rather than silently dropping it"
     )

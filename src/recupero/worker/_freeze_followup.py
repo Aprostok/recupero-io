@@ -264,6 +264,10 @@ def _has_outcome_row(*, letter_id: UUID, dsn: str) -> bool:
     """Race-safe check: re-query for a freeze_outcomes row right
     before sending. An operator may have recorded a response in the
     seconds since the SELECT in find_freeze_followups_due.
+
+    NOTE: v0.21.1 prefers ``_try_claim_stage_advance`` which folds this
+    check + the stage UPDATE into a single atomic statement. Retained
+    for back-compat with the existing test suite.
     """
     with db_connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
@@ -271,6 +275,82 @@ def _has_outcome_row(*, letter_id: UUID, dsn: str) -> bool:
             (letter_id,),
         )
         return cur.fetchone() is not None
+
+
+def _try_claim_stage_advance(
+    *,
+    letter_id: UUID,
+    current_stage: str,
+    new_stage: str,
+    dsn: str,
+) -> bool:
+    """v0.21.1 (audit-fix C1+E3) — atomically advance the followup_stage
+    in a single UPDATE that only fires when:
+      (a) the row's current stage still matches what the candidate
+          captured (no concurrent tick beat us), AND
+      (b) no freeze_outcomes row has been recorded since the bulk
+          SELECT (no operator-side response landed mid-tick).
+
+    Returns True when this tick successfully CLAIMED the stage
+    advance — caller then sends the email. On send failure, caller
+    must call ``_rollback_stage_advance`` to release the claim.
+
+    Returns False when another tick / an operator response beat us;
+    caller skips the email.
+
+    The CTE-based UPDATE serializes per-row under READ COMMITTED so
+    overlapping ticks at the same letter cannot both claim. The
+    `AND NOT EXISTS (...)` clause re-checks the outcome side of the
+    race inside the same UPDATE statement.
+    """
+    sql = """
+        UPDATE public.freeze_letters_sent
+           SET followup_stage = %(new_stage)s,
+               last_followup_sent_at = NOW()
+         WHERE id = %(letter_id)s
+           AND followup_stage = %(current_stage)s
+           AND NOT EXISTS (
+                 SELECT 1 FROM public.freeze_outcomes
+                  WHERE letter_id = %(letter_id)s
+           )
+        RETURNING id;
+    """
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, {
+            "letter_id": letter_id,
+            "current_stage": current_stage,
+            "new_stage": new_stage,
+        })
+        return cur.fetchone() is not None
+
+
+def _rollback_stage_advance(
+    *,
+    letter_id: UUID,
+    previous_stage: str,
+    dsn: str,
+) -> None:
+    """Release a claim made by ``_try_claim_stage_advance`` when the
+    subsequent email send fails. The rollback only fires when the
+    last_followup_sent_at column is recent (within 5 minutes of NOW())
+    — defends against rolling back a legitimate later advance from
+    another tick (race-on-rollback edge case).
+    """
+    sql = """
+        UPDATE public.freeze_letters_sent
+           SET followup_stage = %(prev)s,
+               last_followup_sent_at = NULL
+         WHERE id = %(id)s
+           AND last_followup_sent_at > NOW() - INTERVAL '5 minutes';
+    """
+    try:
+        with db_connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(sql, {"id": letter_id, "prev": previous_stage})
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "rollback of stage advance for letter %s failed (non-fatal): %s",
+            letter_id, exc,
+        )
 
 
 def _render_followup_html(
@@ -416,18 +496,33 @@ def run_freeze_followup_cron(
 
     for cand in candidates:
         try:
-            # Race-safe re-check inside the dispatch loop. An operator
-            # may have recorded a response between the bulk SELECT and
-            # now (seconds-to-minutes).
-            if _has_outcome_row(letter_id=cand.letter_id, dsn=dsn):
+            # v0.21.1 (audit-fix C1 + E3): claim-then-act. The atomic
+            # UPDATE in _try_claim_stage_advance serves both as the
+            # race-safe outcome re-check AND as the stage transition,
+            # so:
+            #   * No two concurrent ticks can claim the same letter
+            #     (per-row serialization under READ COMMITTED).
+            #   * An operator-side outcome row that lands between the
+            #     bulk SELECT and the claim short-circuits the UPDATE
+            #     via the `NOT EXISTS (...)` clause.
+            #   * On send failure, we ROLLBACK the claim so the next
+            #     tick can retry — no email duplicate, no stuck stage.
+            if not _try_claim_stage_advance(
+                letter_id=cand.letter_id,
+                current_stage=cand.followup_stage,
+                new_stage=cand.next_stage,
+                dsn=dsn,
+            ):
                 result.skipped_due_to_outcome_race += 1
                 log.info(
-                    "freeze_followup: letter %s skipped (outcome row "
-                    "appeared between bulk-fetch and dispatch)",
+                    "freeze_followup: letter %s skipped (claim lost — "
+                    "concurrent tick or operator-recorded outcome)",
                     cand.letter_id,
                 )
                 continue
 
+            # We claimed the work; from here a failure rolls back the
+            # claim so the next tick can retry.
             html = _render_followup_html(
                 cand,
                 investigator_name=investigator_name,
@@ -442,6 +537,13 @@ def run_freeze_followup_cron(
                 to_email = cand.contact_email
 
             if not to_email:
+                # Release the claim — next tick can re-evaluate once
+                # contact_email is populated.
+                _rollback_stage_advance(
+                    letter_id=cand.letter_id,
+                    previous_stage=cand.followup_stage,
+                    dsn=dsn,
+                )
                 result.errors.append(
                     f"letter {cand.letter_id}: no recipient for stage {cand.next_stage}"
                 )
@@ -459,27 +561,39 @@ def run_freeze_followup_cron(
                 dsn=dsn,
             )
             if not send_result.success:
+                # Roll back the claim so the next tick retries cleanly.
+                _rollback_stage_advance(
+                    letter_id=cand.letter_id,
+                    previous_stage=cand.followup_stage,
+                    dsn=dsn,
+                )
                 result.send_failures += 1
                 log.warning(
-                    "freeze_followup: send failed for letter %s: %s",
+                    "freeze_followup: send failed for letter %s (claim "
+                    "rolled back, next tick will retry): %s",
                     cand.letter_id, send_result.error,
                 )
-                # Don't advance the stage — next tick will retry the same email.
                 continue
 
-            # Advance the stage + bookkeeping
-            _advance_stage(
-                letter_id=cand.letter_id,
-                new_stage=cand.next_stage,
-                dsn=dsn,
-            )
-
+            # Send succeeded; the stage advance is already committed
+            # (claim acquired it before the send). Only the
+            # silence_14d post-step remains.
             if cand.next_stage == _STAGE_SILENCE_14D:
                 _write_silence_outcome(letter_id=cand.letter_id, dsn=dsn)
                 result.silence_outcomes_written += 1
 
             result.sent_ok += 1
         except Exception as exc:  # noqa: BLE001
+            # Best-effort rollback so a half-completed claim doesn't
+            # block retry forever.
+            try:
+                _rollback_stage_advance(
+                    letter_id=cand.letter_id,
+                    previous_stage=cand.followup_stage,
+                    dsn=dsn,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             result.errors.append(f"letter {cand.letter_id}: {exc}")
             log.warning(
                 "freeze_followup: letter %s dispatch failed: %s",

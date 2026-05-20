@@ -171,6 +171,129 @@ def record_outcome(
         return None
 
 
+class LetterNotFoundError(LookupError):
+    """Raised by record_outcome_by_target when no freeze_letters_sent
+    row matches the given (case_id, issuer, target_address) triple.
+
+    Distinct from a DB failure: this is a "your input doesn't match
+    any letter we sent" error. The API layer turns this into a 404,
+    the CLI surface into a clear error message + non-zero exit code.
+    """
+
+
+# Valid outcome_type values — matches the freeze_outcomes table
+# CHECK constraint (post-migration 018 which added silence_14d).
+# Exported as a public constant so API validation + CLI argument
+# parsing can both consume the same source of truth.
+VALID_OUTCOME_TYPES = frozenset([
+    "acknowledged",
+    "request_more_info",
+    "declined",
+    "partial_freeze",
+    "full_freeze",
+    "released",
+    "returned_to_victim",
+    "silence_14d",
+    "silence_30d",
+    "silence_90d",
+])
+
+
+def record_outcome_by_target(
+    *,
+    case_id: UUID,
+    issuer: str,
+    target_address: str,
+    outcome_type: str,
+    asset_symbol: str | None = None,
+    frozen_usd: Decimal | None = None,
+    returned_usd: Decimal | None = None,
+    response_text: str | None = None,
+    operator_notes: str | None = None,
+    dsn: str,
+) -> UUID:
+    """v0.21.0 — Record a freeze outcome keyed by case + issuer +
+    target address, rather than by letter_id.
+
+    The API endpoint ``POST /v1/freeze-outcomes`` and the operator
+    CLI ``recupero-ops record-freeze-outcome --case`` both consume
+    this. Looks up the freeze_letters_sent row via the UNIQUE
+    constraint on ``(case_id, issuer, target_address, asset_symbol)``
+    and delegates the actual INSERT to record_outcome().
+
+    Idempotency: this writes a NEW freeze_outcomes row on every
+    call — multiple outcomes per letter is the documented design
+    (acknowledged → partial_freeze → full_freeze time series).
+    Callers that want UPDATE-in-place semantics should query the
+    letter row first via the ops CLI.
+
+    Raises:
+        LetterNotFoundError: no matching freeze_letters_sent row.
+        ValueError: outcome_type not in VALID_OUTCOME_TYPES.
+    """
+    if outcome_type not in VALID_OUTCOME_TYPES:
+        raise ValueError(
+            f"outcome_type {outcome_type!r} not in VALID_OUTCOME_TYPES "
+            f"({sorted(VALID_OUTCOME_TYPES)})"
+        )
+
+    try:
+        import psycopg  # noqa: F401
+    except ImportError:  # pragma: no cover
+        raise RuntimeError("psycopg not installed — cannot record outcome") from None
+
+    # Resolve letter_id from the triple. When asset_symbol is provided
+    # the lookup uses the full UNIQUE constraint; otherwise fall back
+    # to the most-recent letter for the case+issuer+address combination
+    # (covers the API caller who doesn't know the symbol but does know
+    # the wallet+issuer).
+    lookup_sql = (
+        """
+        SELECT id FROM public.freeze_letters_sent
+         WHERE case_id = %s
+           AND issuer  = %s
+           AND target_address = %s
+           {asset_clause}
+         ORDER BY sent_at DESC
+         LIMIT 1
+        """
+    )
+    if asset_symbol:
+        lookup_sql = lookup_sql.format(asset_clause="AND asset_symbol = %s")
+        params: tuple = (case_id, issuer, target_address, asset_symbol)
+    else:
+        lookup_sql = lookup_sql.format(asset_clause="")
+        params = (case_id, issuer, target_address)
+
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(lookup_sql, params)
+        row = cur.fetchone()
+        if not row:
+            raise LetterNotFoundError(
+                f"No freeze letter found for case={case_id} issuer={issuer!r} "
+                f"target={target_address!r}"
+                + (f" asset={asset_symbol!r}" if asset_symbol else "")
+            )
+        letter_id = row[0]
+
+    outcome_id = record_outcome(
+        letter_id=letter_id,
+        outcome_type=outcome_type,
+        frozen_usd=frozen_usd,
+        returned_usd=returned_usd,
+        response_text=response_text,
+        operator_notes=operator_notes,
+        dsn=dsn,
+    )
+    if outcome_id is None:
+        # record_outcome already logged; surface a clear error to the
+        # API caller so the 5xx isn't silent.
+        raise RuntimeError(
+            f"freeze_outcomes insert failed for letter {letter_id}"
+        )
+    return outcome_id
+
+
 def compute_priors_from_outcomes(
     outcomes: list[dict[str, Any]],
 ) -> dict[tuple[str, str], IssuerPrior]:

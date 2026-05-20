@@ -330,6 +330,161 @@ async def correlation_endpoint(
     }
 
 
+# ---- v0.21.0: freeze-outcome intake endpoint ---- #
+
+
+class FreezeOutcomeIn(BaseModel):
+    """Inbound payload for ``POST /v1/freeze-outcomes``.
+
+    The caller (issuer compliance team via portal, AUSA via webhook,
+    operator via Postman) identifies the freeze letter by the same
+    triple that uniquely identifies it in our database:
+      (case_id, issuer, target_address)
+
+    + ``asset_symbol`` when more than one asset per (issuer, address)
+    is plausible. Without asset_symbol the lookup picks the most
+    recent letter matching the triple, which is fine for the common
+    single-asset case.
+    """
+    case_id: str = Field(..., description="The case UUID as a string.")
+    issuer: str = Field(..., min_length=1, max_length=200)
+    target_address: str = Field(..., min_length=4, max_length=128)
+    outcome_type: str = Field(
+        ...,
+        description=(
+            "One of: acknowledged, request_more_info, declined, "
+            "partial_freeze, full_freeze, released, returned_to_victim, "
+            "silence_14d, silence_30d, silence_90d."
+        ),
+    )
+    asset_symbol: str | None = Field(default=None, max_length=32)
+    frozen_usd: float | None = Field(default=None, ge=0)
+    returned_usd: float | None = Field(default=None, ge=0)
+    response_text: str | None = Field(default=None, max_length=8000)
+    operator_notes: str | None = Field(default=None, max_length=2000)
+
+
+@app.post(
+    "/v1/freeze-outcomes",
+    tags=["freeze"],
+    summary="Record an issuer response to a freeze letter (v0.21.0).",
+    status_code=status.HTTP_201_CREATED,
+)
+async def record_freeze_outcome_endpoint(
+    req: FreezeOutcomeIn,
+    api_key_name: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Insert a freeze_outcomes row for the freeze letter identified
+    by (case_id, issuer, target_address[, asset_symbol]).
+
+    Designed for two integration paths:
+
+    1. **Exchange compliance teams.** Once we've issued enough freeze
+       letters to a given exchange, we hand them a per-exchange API
+       key + this endpoint URL. They POST acknowledgements / freeze
+       confirmations directly into our system — no email parsing, no
+       operator data entry, no time lag.
+
+    2. **Operator-driven webhooks.** A compliance team that does NOT
+       have an API integration can still close the loop: an AUSA's
+       paralegal forwards the issuer's response email to a webhook
+       parser (out of scope here), which fires this endpoint.
+
+    Returns: ``{outcome_id, letter_id, recorded_at}`` on success.
+
+    Errors:
+      * 404 — no freeze letter matches the supplied triple
+      * 422 — invalid outcome_type (Pydantic + recorder validation)
+      * 503 — DB unavailable
+    """
+    from decimal import Decimal
+    from uuid import UUID
+
+    import os
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="freeze-outcome intake unavailable",
+        )
+
+    try:
+        case_uuid = UUID(req.case_id)
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="case_id is not a valid UUID",
+        ) from None
+
+    try:
+        from recupero.freeze_learning.recorder import (
+            LetterNotFoundError,
+            VALID_OUTCOME_TYPES,
+            record_outcome_by_target,
+        )
+    except ImportError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"recorder unavailable: {e}",
+        ) from e
+
+    if req.outcome_type not in VALID_OUTCOME_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"outcome_type must be one of "
+                f"{sorted(VALID_OUTCOME_TYPES)}"
+            ),
+        )
+
+    try:
+        outcome_id = record_outcome_by_target(
+            case_id=case_uuid,
+            issuer=req.issuer,
+            target_address=req.target_address,
+            asset_symbol=req.asset_symbol,
+            outcome_type=req.outcome_type,
+            frozen_usd=Decimal(str(req.frozen_usd)) if req.frozen_usd is not None else None,
+            returned_usd=Decimal(str(req.returned_usd)) if req.returned_usd is not None else None,
+            response_text=req.response_text,
+            operator_notes=req.operator_notes,
+            dsn=dsn,
+        )
+    except LetterNotFoundError as e:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        ) from None
+    except ValueError as e:  # outcome_type invalid (defense-in-depth)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from None
+    except RuntimeError as e:
+        # Don't leak DSN / internal error details to the caller.
+        log.warning(
+            "/v1/freeze-outcomes record failed for case=%s issuer=%s: %s",
+            req.case_id, req.issuer, e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="freeze-outcome record failed",
+        ) from None
+
+    log.info(
+        "/v1/freeze-outcomes api_key=%s case=%s issuer=%s outcome=%s "
+        "outcome_id=%s",
+        api_key_name, req.case_id, req.issuer, req.outcome_type, outcome_id,
+    )
+    return {
+        "outcome_id": str(outcome_id),
+        "case_id": req.case_id,
+        "issuer": req.issuer,
+        "outcome_type": req.outcome_type,
+        "recorded_at": time.time(),
+    }
+
+
 # ---- Uvicorn entry point ---- #
 
 

@@ -299,12 +299,40 @@ def cli() -> None:
              "letter (the operator's view of what happened: "
              "acknowledged, declined, full_freeze, returned, silence).",
     )
-    p_outcome.add_argument("letter_id", help="UUID of the freeze_letters_sent row")
+    # v0.14.2: positional letter_id form (kept for back-compat with
+    # existing scripts / ops runbooks).
+    # v0.21.0: alternative case-scoped form via --case + --issuer +
+    # --target-address — easier for operators who have the case
+    # context in hand and don't want to look up the letter UUID first.
+    p_outcome.add_argument(
+        "letter_id", nargs="?", default=None,
+        help="UUID of the freeze_letters_sent row (v0.14.2 form). "
+             "Mutually exclusive with --case / --issuer / --target-address.",
+    )
+    p_outcome.add_argument(
+        "--case", dest="case", default=None,
+        help="Case UUID (v0.21.0 lookup form). Used with --issuer "
+             "and --target-address to resolve the letter id.",
+    )
+    p_outcome.add_argument(
+        "--issuer", default=None,
+        help="Issuer name (with --case / --target-address).",
+    )
+    p_outcome.add_argument(
+        "--target-address", default=None,
+        help="Target wallet address (with --case / --issuer).",
+    )
+    p_outcome.add_argument(
+        "--asset-symbol", default=None,
+        help="Asset symbol (optional disambiguator when more than one "
+             "asset has been frozen at the same address by the same issuer).",
+    )
     p_outcome.add_argument(
         "--outcome", required=True,
         choices=("acknowledged", "request_more_info", "declined",
                  "partial_freeze", "full_freeze", "released",
-                 "returned_to_victim", "silence_30d", "silence_90d"),
+                 "returned_to_victim", "silence_14d",
+                 "silence_30d", "silence_90d"),
     )
     p_outcome.add_argument(
         "--frozen-usd", type=str, default=None,
@@ -570,21 +598,68 @@ def cli() -> None:
     if args.command == "record-freeze-outcome":
         from decimal import Decimal as _Decimal
 
-        from recupero.freeze_learning.recorder import record_outcome
+        # Two forms — positional letter_id OR case-scoped triple.
+        # Mutually exclusive: surface a clear error if the operator
+        # mixes them.
+        has_letter_id = bool(args.letter_id)
+        has_triple = bool(args.case and args.issuer and args.target_address)
+        if has_letter_id and has_triple:
+            print("ERROR: pass either positional letter_id OR --case/--issuer/"
+                  "--target-address, not both.", file=sys.stderr)
+            sys.exit(2)
+        if not has_letter_id and not has_triple:
+            print("ERROR: must provide either letter_id (positional) "
+                  "or --case + --issuer + --target-address.",
+                  file=sys.stderr)
+            sys.exit(2)
+
         frozen = _Decimal(args.frozen_usd) if args.frozen_usd else None
         returned = _Decimal(args.returned_usd) if args.returned_usd else None
-        out_id = record_outcome(
-            letter_id=_parse_uuid(args.letter_id, field_name="letter_id"),
-            outcome_type=args.outcome,
-            frozen_usd=frozen,
-            returned_usd=returned,
-            operator_notes=args.note,
-            dsn=_require_dsn(),
+
+        if has_letter_id:
+            # Legacy form: record_outcome by letter_id.
+            from recupero.freeze_learning.recorder import record_outcome
+            out_id = record_outcome(
+                letter_id=_parse_uuid(args.letter_id, field_name="letter_id"),
+                outcome_type=args.outcome,
+                frozen_usd=frozen,
+                returned_usd=returned,
+                operator_notes=args.note,
+                dsn=_require_dsn(),
+            )
+            if out_id is None:
+                print("ERROR: failed to record outcome (see logs).")
+                sys.exit(1)
+            print(f"Recorded outcome {out_id} for letter {args.letter_id}.")
+            sys.exit(0)
+
+        # v0.21.0 case-scoped form
+        from recupero.freeze_learning.recorder import (
+            LetterNotFoundError,
+            record_outcome_by_target,
         )
-        if out_id is None:
-            print("ERROR: failed to record outcome (see logs).")
+        try:
+            out_id = record_outcome_by_target(
+                case_id=_parse_uuid(args.case, field_name="--case"),
+                issuer=args.issuer,
+                target_address=args.target_address,
+                asset_symbol=args.asset_symbol,
+                outcome_type=args.outcome,
+                frozen_usd=frozen,
+                returned_usd=returned,
+                operator_notes=args.note,
+                dsn=_require_dsn(),
+            )
+        except LetterNotFoundError as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        except (ValueError, RuntimeError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
             sys.exit(1)
-        print(f"Recorded outcome {out_id} for letter {args.letter_id}.")
+        print(
+            f"Recorded outcome {out_id} for case {args.case} / "
+            f"issuer {args.issuer} / address {args.target_address}."
+        )
         sys.exit(0)
 
     if args.command == "validate-labels":

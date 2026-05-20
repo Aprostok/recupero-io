@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>7-Day Escalation — Freeze Request {{ case_id }}</title>
+</head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;color:#111;line-height:1.5">
+
+<p>{{ issuer_contact_name or "Compliance team" }},</p>
+
+<p>
+  This is a formal seven-day escalation on the freeze request below.
+  We have received no acknowledgement of any kind in
+  <strong>{{ days_since_sent }} days</strong> since the original
+  request was transmitted on {{ sent_at_human }} UTC.
+</p>
+
+<table style="border-collapse:collapse;width:100%;font-size:14px;margin:18px 0;background:#fef3c7;padding:12px;border:1px solid #d97706;border-radius:4px">
+  <tr><td style="padding:6px 0;color:#92400e;width:40%"><strong>Case</strong></td>
+      <td style="padding:6px 0"><strong>{{ case_id }}</strong></td></tr>
+  <tr><td style="padding:6px 0;color:#92400e">Target wallet</td>
+      <td style="padding:6px 0;font-family:monospace">{{ target_address }}</td></tr>
+  <tr><td style="padding:6px 0;color:#92400e">Asset</td>
+      <td style="padding:6px 0">{{ asset_symbol }}{% if chain %} on {{ chain }}{% endif %}</td></tr>
+  <tr><td style="padding:6px 0;color:#92400e">Amount</td>
+      <td style="padding:6px 0"><strong>USD {{ requested_freeze_usd_human }}</strong></td></tr>
+  <tr><td style="padding:6px 0;color:#92400e">First contact</td>
+      <td style="padding:6px 0">{{ sent_at_human }} UTC (no response)</td></tr>
+  <tr><td style="padding:6px 0;color:#92400e">First follow-up</td>
+      <td style="padding:6px 0">{{ last_followup_sent_at_human }} UTC (no response)</td></tr>
+</table>
+
+<p>
+  Continued non-response materially increases the risk of fund
+  dissipation through downstream conversion. The on-chain trace
+  associated with this case has been preserved as evidence; if
+  this request is not acted upon and the assets subsequently
+  move off-platform, we will be required to document the
+  non-response timeline in any subsequent law-enforcement
+  filing.
+</p>
+
+{% if letter_language == "le_backed" or ic3_case_id %}
+<p>
+  <strong>This request carries law-enforcement backing.</strong>
+  {% if ic3_case_id %}IC3 reference: <strong>{{ ic3_case_id }}</strong>.{% endif %}
+  We anticipate that the responsible federal authority will
+  follow up directly via subpoena should the informal channel
+  produce no result within the next seven days.
+</p>
+{% endif %}
+
+<p>
+  Please confirm receipt at your earliest convenience. If this
+  matter has been routed within your organization, a single-line
+  acknowledgement of the receiving party is sufficient at this
+  stage.
+</p>
+
+<p style="margin-top:24px">
+  Regards,<br/>
+  <strong>{{ investigator_name }}</strong><br/>
+  {{ investigator_entity }}<br/>
+  {{ investigator_email }}
+</p>
+
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+
+<p style="font-size:12px;color:#6b7280">
+  This is the third contact regarding case {{ case_id }} (original
+  freeze request {{ sent_at_human }}; 72-hour follow-up
+  {{ last_followup_sent_at_human }}). A fourteen-day escalation
+  may trigger law-enforcement coordination if no response is
+  received.
+</p>
+
+</body>
+</html>

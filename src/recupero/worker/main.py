@@ -719,6 +719,15 @@ def cli() -> None:
              "Entry point for the every-5-minutes Railway cron.",
     )
     parser.add_argument(
+        "--freeze-followups", action="store_true",
+        help="Run one freeze-letter follow-up cron pass (v0.21.0). "
+             "Walks freeze_letters_sent for letters with no matching "
+             "freeze_outcomes row; progresses each through the "
+             "initial→nudge_72h→escalation_7d→silence_14d state machine "
+             "based on elapsed time since sent_at. Recommended cadence: "
+             "every 6 hours via a Railway cron.",
+    )
+    parser.add_argument(
         "--log-level", default=os.environ.get("RECUPERO_LOG_LEVEL", "INFO"),
         help="Python logging level. Default INFO.",
     )
@@ -756,6 +765,22 @@ def cli() -> None:
     if args.monitor_tick:
         from recupero.worker.monitor_tick import main as _monitor_main
         sys.exit(_monitor_main())
+
+    if args.freeze_followups:
+        from recupero.worker._freeze_followup import run_freeze_followup_cron
+        dsn = os.environ.get("SUPABASE_DB_URL", "")
+        if not dsn:
+            log.error("SUPABASE_DB_URL is not set")
+            sys.exit(2)
+        report = run_freeze_followup_cron(dsn=dsn)
+        log.info(
+            "freeze_followup cron: candidates=%d sent=%d failed=%d "
+            "skipped_outcome_race=%d silence_outcomes=%d errors=%d",
+            report.candidates_found, report.sent_ok, report.send_failures,
+            report.skipped_due_to_outcome_race,
+            report.silence_outcomes_written, len(report.errors),
+        )
+        sys.exit(0 if report.send_failures == 0 else 1)
 
     if args.send_followups:
         from recupero.worker._followup import run_followup_cron

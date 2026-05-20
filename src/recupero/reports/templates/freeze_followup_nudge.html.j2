@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Follow-up — Freeze Request {{ case_id }}</title>
+</head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:640px;margin:0 auto;padding:24px;color:#111;line-height:1.5">
+
+<p>{{ issuer_contact_name or "Compliance team" }},</p>
+
+<p>
+  This is a routine 72-hour follow-up on the freeze request transmitted
+  {{ days_since_sent }} day{{ "s" if days_since_sent != 1 else "" }} ago
+  ({{ sent_at_human }} UTC) regarding case <strong>{{ case_id }}</strong>:
+</p>
+
+<table style="border-collapse:collapse;width:100%;font-size:14px;margin:18px 0;background:#f9fafb;padding:12px;border-radius:4px">
+  <tr><td style="padding:6px 0;color:#6b7280;width:40%">Target wallet</td>
+      <td style="padding:6px 0;font-family:monospace">{{ target_address }}</td></tr>
+  <tr><td style="padding:6px 0;color:#6b7280">Asset</td>
+      <td style="padding:6px 0">{{ asset_symbol }}{% if chain %} on {{ chain }}{% endif %}</td></tr>
+  <tr><td style="padding:6px 0;color:#6b7280">Requested freeze</td>
+      <td style="padding:6px 0"><strong>USD {{ requested_freeze_usd_human }}</strong></td></tr>
+  <tr><td style="padding:6px 0;color:#6b7280">Original letter</td>
+      <td style="padding:6px 0">{{ letter_subject or "(see attachment)" }}</td></tr>
+</table>
+
+<p>
+  We have not yet received an acknowledgement. Please confirm the
+  request is in your queue, even if no action has been taken — knowing
+  the letter is being processed helps us advise the victim accurately
+  on expected response time.
+</p>
+
+{% if letter_language == "le_backed" or ic3_case_id %}
+<p>
+  This request carries law-enforcement backing
+  {% if ic3_case_id %}(IC3 reference: <strong>{{ ic3_case_id }}</strong>){% endif %}
+  and is being tracked as part of an ongoing federal investigation.
+</p>
+{% endif %}
+
+<p>
+  The funds in this wallet remain freezable as of our last on-chain
+  observation. Continued delay materially increases the risk of
+  dissipation through downstream conversion or off-ramping.
+</p>
+
+<p>
+  If we have addressed this to the wrong contact, please forward this
+  to the appropriate compliance address and let us know.
+</p>
+
+<p style="margin-top:24px">
+  Thank you,<br/>
+  <strong>{{ investigator_name }}</strong><br/>
+  {{ investigator_entity }}<br/>
+  {{ investigator_email }}
+</p>
+
+<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">
+
+<p style="font-size:12px;color:#6b7280">
+  Recupero Investigation Services. This message is the second
+  contact regarding case {{ case_id }}; the original freeze request
+  was transmitted {{ sent_at_human }} UTC.
+</p>
+
+</body>
+</html>

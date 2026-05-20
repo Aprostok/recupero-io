@@ -15,19 +15,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VictimInfo(BaseModel):
     """PII about the victim. Loaded only when generating briefs."""
     model_config = ConfigDict(extra="forbid")
 
-    name: str
+    name: str = Field(..., min_length=1)
     citizenship: str | None = None
     address: str | None = None       # postal address (free-form)
     email: str | None = None
     phone: str | None = None
-    wallet_address: str               # the victim's wallet (matches case.seed_address)
+    wallet_address: str = Field(..., min_length=1)  # the victim's wallet (matches case.seed_address)
 
     # State / region — used by the LE-routing module to recommend the
     # right filing channel (state-AG cyber unit vs IC3 vs direct FBI

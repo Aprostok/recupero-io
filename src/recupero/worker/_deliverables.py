@@ -30,6 +30,7 @@ required by the admin UI's wallet-trace view.
 
 from __future__ import annotations
 
+import html as _html
 import logging
 import os
 from decimal import Decimal
@@ -623,7 +624,7 @@ def _build_portal_banner_html(*, case_id: str | None) -> str:
         'View case status, download your artifacts, and (if applicable) '
         'sign the engagement letter electronically from one place.'
         '</div>'
-        f'<a href="{url}" '
+        f'<a href="{_html.escape(url, quote=True)}" '
         'style="display:inline-block;background:#2a5e3e;color:#ffffff;'
         'text-decoration:none;padding:10px 18px;border-radius:5px;'
         'font-weight:600;font-size:14px;">Open case page →</a>'
@@ -700,7 +701,7 @@ def _build_pay_engagement_banner_html(
         'requests, law-enforcement coordination, and weekly status '
         'updates.'
         '</div>'
-        f'<a href="{url}" '
+        f'<a href="{_html.escape(url, quote=True)}" '
         'style="display:inline-block;background:#c47a00;color:#ffffff;'
         'text-decoration:none;padding:10px 18px;border-radius:5px;'
         f'font-weight:600;font-size:14px;">Begin recovery — {fee_short} →</a>'

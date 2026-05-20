@@ -206,7 +206,7 @@
   {% else %}
   <p style="margin:0 0 0.7em 0;">
     The position was promptly forwarded by the perpetrator to a secondary
-    wallet at <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>, where
+    wallet at {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}, where
     {{ outbound_count_of_stolen_asset }} outbound transfers have been
     observed as of {{ verified_at }} UTC.
   </p>
@@ -319,7 +319,7 @@
     {% endif %}
     {% else %}
     <strong>Current state.</strong> Position remains in
-    <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>.
+    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}.
     {{ outbound_count_of_stolen_asset }} outbound transfers of the stolen asset observed
     since receipt.
     {% endif %}
@@ -548,7 +548,7 @@
     holds protocol-level authority over redemption and is the only party
     in a position to technically halt the {{ asset.amount_human }}
     {{ asset.symbol }} position at
-    <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>. A request
+    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}. A request
     originating from your office is materially more enforceable than a
     third-party request.
     {% if issuer.kyc_required %}
@@ -589,7 +589,7 @@
   {% else %}
   <li>Issue legal process to {{ issuer.short_name }} for KYC records on
       any party attempting to redeem or transfer the position out of
-      <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>.</li>
+      {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}.</li>
   {% endif %}
   <li>Issue legal process to any centralized exchange that receives
       onward transfers from the identified perpetrator wallets listed

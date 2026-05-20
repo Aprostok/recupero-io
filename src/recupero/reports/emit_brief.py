@@ -246,9 +246,30 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
 # we drop the destination as noise — token-contract dust, MEV-bot pennies,
 # wrapped-stablecoin micro-routing. Tunable via env for case-specific
 # investigations that need finer granularity.
-_DESTINATION_DUST_USD_DEFAULT = Decimal(
-    os.environ.get("RECUPERO_DESTINATION_DUST_USD", "1000.00")
-)
+def _parse_dust_threshold() -> Decimal:
+    """Parse RECUPERO_DESTINATION_DUST_USD env var safely.
+
+    Security MED-2: the raw Decimal() call at module-load time raises
+    decimal.InvalidOperation and crashes the worker if the env var is
+    set to a non-numeric string (e.g. "none", "disabled", an accidental
+    space). Also guards against negative values which would include ALL
+    destinations regardless of size.
+    """
+    raw = os.environ.get("RECUPERO_DESTINATION_DUST_USD", "1000.00").strip()
+    try:
+        val = Decimal(raw)
+        if val < 0:
+            raise ValueError("negative threshold")
+        return val
+    except Exception:
+        log.warning(
+            "RECUPERO_DESTINATION_DUST_USD=%r is invalid; falling back to $1000.00",
+            raw,
+        )
+        return Decimal("1000.00")
+
+
+_DESTINATION_DUST_USD_DEFAULT = _parse_dust_threshold()
 
 
 def _extract_destinations(

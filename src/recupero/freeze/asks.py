@@ -121,6 +121,23 @@ class FreezeAsk:
     # historical_inflow). >1 indicates repeated dispersal pattern.
     observed_transfer_count: int = 1
 
+    def __post_init__(self) -> None:
+        """Guard against impossible negative amounts that would produce
+        freeze letters saying 'freeze -$47,320' — embarrassing and rejected.
+        A malformed chain-adapter response (negative RPC balance) would
+        silently propagate without this check.
+        """
+        if self.holding_decimal_amount < 0:
+            raise ValueError(
+                f"FreezeAsk.holding_decimal_amount must be >= 0, "
+                f"got {self.holding_decimal_amount!r}"
+            )
+        if self.holding_usd_value is not None and self.holding_usd_value < 0:
+            raise ValueError(
+                f"FreezeAsk.holding_usd_value must be >= 0 or None, "
+                f"got {self.holding_usd_value!r}"
+            )
+
     def short_summary(self) -> str:
         usd = f"${self.holding_usd_value:,.2f}" if self.holding_usd_value else "?"
         suffix = (

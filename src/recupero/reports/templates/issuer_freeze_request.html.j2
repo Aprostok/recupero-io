@@ -402,7 +402,7 @@
   <p style="margin:0;">
     <strong>Totals:</strong>
     {{ issuer_freezable.total_usd_freezable }} confirmed FREEZABLE
-    {% if issuer_freezable.has_investigate %}
+    {% if issuer_freezable.has_investigate and issuer_freezable.total_usd_suspected and issuer_freezable.total_usd_suspected != '$0' %}
     · {{ issuer_freezable.total_usd_suspected }} including positions still under
     investigation
     {% endif %}
@@ -415,11 +415,11 @@
   <p style="margin:0 0 0.4em 0;">
     {{ asset.amount_human }} {{ asset.symbol }} held at:
   </p>
-  <p class="mono" style="font-size:11pt; margin:0 0 0.7em;"><a href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a></p>
+  <p class="mono" style="font-size:11pt; margin:0 0 0.7em;">{% if current_holder.explorer_url %}<a href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}{{ current_holder.address }}{% endif %}</p>
   <p style="margin:0;">
-    <a href="{{ current_holder.explorer_url }}">View on {{ primary_chain_explorer_name }}</a>
+    {% if current_holder.explorer_url %}<a href="{{ current_holder.explorer_url }}">View on {{ primary_chain_explorer_name }}</a>
     &nbsp;·&nbsp;
-    <a href="{{ current_holder.explorer_url }}#tokentxns">Token transfer history</a>
+    <a href="{{ current_holder.explorer_url }}#tokentxns">Token transfer history</a>{% else %}<span class="secondary small">(no block explorer available for this chain)</span>{% endif %}
     <br/>
     Last verified {{ verified_at }} UTC.
     Outbound transfers of this asset since receipt: {{ outbound_count_of_stolen_asset }}.

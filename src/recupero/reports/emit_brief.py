@@ -596,8 +596,15 @@ def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:
     return "UNKNOWN"
 
 
-def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, dict[str, Any]], editorial_notes: dict[str, str] | None = None) -> list[dict[str, Any]]:
+def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, dict[str, Any]], editorial_notes: dict[str, str] | None = None, *, keep_all: bool = False) -> list[dict[str, Any]]:
     """Translate freeze_asks.json's by_issuer structure into the FREEZABLE format.
+
+    ``keep_all=True`` bypasses the v0.16.8 actionable-totals filter so that
+    UNRECOVERABLE-only entries (e.g. Sky Protocol / DAI with freeze_capability='no')
+    are included. Used to build ALL_ISSUER_HOLDINGS for the LE comprehensive view.
+    The default (``keep_all=False``) retains the existing behaviour: entries with
+    zero actionable totals and no FREEZABLE holdings are dropped so the deliverables
+    stage never generates a freeze letter asking an issuer to freeze $0.
 
     issuer_metadata is an optional lookup from issuer_name -> extra fields like
     contact_email, portal_url, typical_response_time, freeze_note. If missing,
@@ -765,6 +772,14 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
     # fire freeze letters asking the issuer to freeze $0. Issuer
     # compliance teams responding to "please freeze $0.00 at this
     # address" undermines the credibility of every subsequent ask.
+    #
+    # v0.20.3 (render-sim audit): keep_all=True bypasses this filter
+    # so ALL_ISSUER_HOLDINGS includes UNRECOVERABLE-only entries for
+    # the LE comprehensive view. The default keep_all=False preserves
+    # the existing behaviour for the FREEZABLE (letters) list.
+    if keep_all:
+        return freezable
+
     filtered: list[dict[str, Any]] = []
     for entry in freezable:
         total_freezable_d = _parse_usd_string(entry.get("total_usd", "0"))
@@ -788,6 +803,23 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             entry.get("issuer", "(unknown)"),
         )
     return filtered
+
+
+def _count_theft_events(case: Case) -> int:
+    """Count the number of individual theft transfers leaving the seed wallet.
+
+    v0.20.3 (render-simulation audit): exposed as THEFT_EVENT_COUNT in the
+    brief dict so callers can surface "6 theft events" in the brief metadata
+    without reconstructing the count from TOTAL_LOSS_USD. For V-CFI01-shape
+    cases (multi-event drain: 6 × $600K = $3.6M) this correctly returns 6;
+    for single-event cases it returns 1.
+    """
+    from recupero._common import canonical_address_key as _ck
+    seed_lower = _ck(case.seed_address)
+    return sum(
+        1 for t in case.transfers
+        if _ck(t.from_address) == seed_lower and t.usd_value_at_tx is not None
+    )
 
 
 def _compute_total_drained(case: Case) -> Decimal:
@@ -1359,6 +1391,14 @@ def emit_brief(
     # Pass editorial_notes so each holding gets a `status` field and the
     # per-issuer `total_usd` only sums FREEZABLE-status holdings.
     freezable = _extract_freezable(freeze_asks, issuer_metadata, editorial_notes)
+    # v0.20.3 (render-sim audit): all-issuers holdings, including
+    # UNRECOVERABLE-only entries filtered out of the FREEZABLE list by
+    # v0.16.8. Used to populate the LE handoff's comprehensive
+    # Section 4.2 view so law enforcement sees the complete picture —
+    # including Sky Protocol / DAI at $655K (seizure target, no
+    # issuer-level freeze pathway). The FREEZABLE list (for letters)
+    # is kept clean; this key is the LE-only comprehensive view.
+    all_issuer_holdings = _extract_freezable(freeze_asks, issuer_metadata, editorial_notes, keep_all=True)
 
     # --- Unrecoverable list ---
     unrecoverable = [
@@ -1438,6 +1478,12 @@ def emit_brief(
         "PRIMARY_CHAIN": primary_chain,
 
         "TOTAL_LOSS_USD": totals["TOTAL_LOSS_USD"],
+        # v0.20.3 (render-simulation audit): number of individual theft
+        # events (transfers out of the seed wallet with a USD value).
+        # For V-CFI01-shape multi-event drains this is 6; for ordinary
+        # single-event thefts this is 1. Exposed so callers can surface
+        # "6 theft events" in brief metadata without reconstructing it.
+        "THEFT_EVENT_COUNT": _count_theft_events(case),
         # v0.7.4 headline: gross perpetrator-controlled holdings.
         # Brief templates lead with this; TOTAL_LOSS_USD is now
         # surfaced as the secondary "attribution scope" figure.
@@ -1501,6 +1547,12 @@ def emit_brief(
         "PERP_HUB": perp_hub,
         "DESTINATIONS": destinations,
         "FREEZABLE": freezable,
+        # v0.20.3 (render-sim audit): comprehensive per-issuer holdings
+        # including UNRECOVERABLE-only entries (e.g. Sky Protocol / DAI)
+        # that are filtered out of FREEZABLE for freeze-letter generation.
+        # Consumers (LE handoff Section 4.2) pass this to generate_briefs
+        # as all_issuers_freezable so law enforcement sees the full picture.
+        "ALL_ISSUER_HOLDINGS": all_issuer_holdings,
         "UNRECOVERABLE": unrecoverable,
         "EXCHANGES": exchanges,
 

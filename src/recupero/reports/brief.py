@@ -276,6 +276,16 @@ def generate_briefs(
     outbound_count_of_stolen_asset: int = 0,
     flow_filename: str | None = None,
     issuer_freezable: dict | None = None,
+    # v0.20.3 (render-simulation audit): the LE handoff is a single
+    # document sent to law enforcement covering the ENTIRE case, not
+    # just one issuer. Pre-v0.20.3 the LE template only showed the
+    # current `issuer_freezable` entry (one issuer), so when Jacob
+    # generated the Midas LE handoff, Circle/Tether/Coinbase holdings
+    # were absent — law enforcement received an incomplete picture.
+    # Now: pass the full freeze_brief.FREEZABLE list so the LE renders
+    # all issuers' holdings (Section 4.2), including UNRECOVERABLE
+    # entries that still matter for seizure if the perp is identified.
+    all_issuers_freezable: list | None = None,
     # v0.18.6 (round-11 PDF-CRIT-006): IC3 case ID flows through
     # editorial JSON (cases.ic3_case_id captured at intake) but was
     # never wired into the LE handoff. Operators curate it specifically
@@ -609,6 +619,23 @@ def generate_briefs(
         "issuer_freezable": _build_issuer_freezable_ctx(
             issuer_freezable, primary_case.chain,
         ),
+        # v0.20.3: all issuers' holdings for the LE handoff Section 4.2.
+        # When the caller passes the full freeze_brief.FREEZABLE list,
+        # the LE renders a comprehensive holdings table (all issuers,
+        # all statuses including UNRECOVERABLE) so law enforcement sees
+        # the complete picture — not just the addressed issuer's slice.
+        "all_issuers_freezable": [
+            {
+                "issuer_name": raw.get("issuer", "Unknown"),
+                "token": raw.get("token", "—"),
+                "freeze_capability": raw.get("freeze_capability", "UNKNOWN"),
+                "total_usd": raw.get("total_usd", "$0"),
+                "total_suspected_usd": raw.get("total_suspected_usd", "$0"),
+                "ctx": _build_issuer_freezable_ctx(raw, primary_case.chain),
+            }
+            for raw in (all_issuers_freezable or [])
+            if raw and isinstance(raw, dict)
+        ] or None,
         # Law-enforcement filing-route recommendation. Only the LE
         # template uses this; the issuer freeze letter ignores the
         # ``le_routing`` context key. Built from victim's state +

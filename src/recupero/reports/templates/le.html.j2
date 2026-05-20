@@ -432,6 +432,70 @@
 </p>
 {% endif %}
 
+{# v0.20.3 (render-sim audit): Section 4.2 — complete holdings inventory
+   across ALL issuers. Pre-v0.20.3 the LE handoff only showed the single
+   issuer passed as `issuer_freezable` (e.g., Midas), so law enforcement
+   received an incomplete picture — Circle/Tether/Coinbase holdings and
+   Sky Protocol UNRECOVERABLE status were invisible. Now: when the caller
+   passes `all_issuers_freezable` (the full freeze_brief.FREEZABLE list),
+   the LE renders every issuer's holdings including UNRECOVERABLE entries
+   that still matter for asset seizure if the perpetrator is identified. #}
+{% if all_issuers_freezable %}
+<h2>4.2 Complete Holdings Inventory — All Issuers</h2>
+<p>
+  The following table lists all identified holdings across every token issuer
+  in this case. This includes <strong>FREEZABLE</strong> positions (primary freeze targets),
+  <strong>INVESTIGATE</strong> positions (requiring KYC verification before status is
+  confirmed), and <strong>UNRECOVERABLE</strong> positions (no issuer-level freeze
+  pathway, but relevant for asset seizure if the perpetrator is identified).
+</p>
+{% for entry in all_issuers_freezable %}
+{% if entry.ctx %}
+<h3>{{ entry.issuer_name }} — {{ entry.token }}</h3>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th style="width:8em;">Status</th>
+      <th>Address</th>
+      <th class="amount" style="width:13em;">Balance</th>
+      <th class="amount" style="width:10em;">USD value</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for h in entry.ctx.holdings %}
+    <tr>
+      <td>
+        {% if h.status == 'FREEZABLE' %}
+        <span class="label-pill" style="color:#2F6B3E; font-weight:600;">FREEZABLE</span>
+        {% elif h.status == 'INVESTIGATE' %}
+        <span class="label-pill" style="color:#7C2D12; font-weight:600;">INVESTIGATE</span>
+        {% elif h.status == 'UNRECOVERABLE' %}
+        <span class="label-pill" style="color:#6B7280; font-weight:600;">UNRECOVERABLE</span>
+        {% elif h.status == 'EXCHANGE' %}
+        <span class="label-pill" style="color:#1E40AF; font-weight:600;">EXCHANGE</span>
+        {% elif h.status == 'TRANSIT' %}
+        <span class="label-pill" style="color:#92400E; font-weight:600;">TRANSIT</span>
+        {% else %}
+        <span class="label-pill" style="color:#6B7280;">{{ h.status or 'UNKNOWN' }}</span>
+        {% endif %}
+      </td>
+      <td class="mono">{% if h.explorer_url %}<a href="{{ h.explorer_url }}">{{ h.address }}</a>{% else %}{{ h.address }}{% endif %}</td>
+      <td class="amount mono">{{ h.amount }}</td>
+      <td class="amount mono">{{ h.usd }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="small">
+  {{ entry.issuer_name }}: {{ entry.total_usd }} freezable
+  {% if entry.total_suspected_usd and entry.total_suspected_usd != '$0' %},
+  {{ entry.total_suspected_usd }} under investigation{% endif %}.
+  Freeze capability: <strong>{{ entry.freeze_capability }}</strong>.
+</p>
+{% endif %}
+{% endfor %}
+{% endif %}
+
 <h2>5. Identified Wallets</h2>
 <table class="evidence">
   <tr>

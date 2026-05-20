@@ -129,7 +129,7 @@
        the cover-title block at the top of the document. #}
     {% if issuer_freezable and issuer_freezable.evidence_mode == "historical_only" %}
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
-    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ asset.symbol }} (USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}{% if asset.is_multi_event %} across {{ asset.theft_event_count }} transactions{% endif %}) was removed from
     {{ victim.name }}'s wallet without authorization. Tracing through
     on-chain forwarding, a documented total of
     <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
@@ -144,7 +144,7 @@
     law-enforcement engagement.
     {% elif issuer_freezable and issuer_freezable.evidence_mode == "mixed" %}
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
-    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ asset.symbol }} (USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}{% if asset.is_multi_event %} across {{ asset.theft_event_count }} transactions{% endif %}) was removed from
     {{ victim.name }}'s wallet without authorization. After tracing
     through on-chain forwarding, stolen funds totaling
     <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
@@ -168,7 +168,7 @@
     law-enforcement engagement.
     {% elif issuer_freezable %}
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
-    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ asset.symbol }} (USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}{% if asset.is_multi_event %} across {{ asset.theft_event_count }} transactions{% endif %}) was removed from
     {{ victim.name }}'s wallet without authorization. After tracing through
     on-chain forwarding, stolen funds totaling
     <strong>{{ issuer_freezable.total_usd_freezable }}</strong>
@@ -189,7 +189,7 @@
     law-enforcement engagement.
     {% else %}
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
-    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }}) was removed from
+    {{ asset.symbol }} (USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}{% if asset.is_multi_event %} across {{ asset.theft_event_count }} transactions{% endif %}) was removed from
     {{ victim.name }}'s wallet without authorization and forwarded to
     <a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>,
     where it remains as of {{ verified_at }} UTC. The recipient wallet has

@@ -631,6 +631,12 @@ def generate_briefs(
                 "freeze_capability": raw.get("freeze_capability", "UNKNOWN"),
                 "total_usd": raw.get("total_usd", "$0"),
                 "total_suspected_usd": raw.get("total_suspected_usd", "$0"),
+                # v0.20.3 (audit-round-4 Finding 3): expose UNRECOVERABLE-
+                # bucket total so the LE Section 4.2 summary paragraph can
+                # show "$655K held (UNRECOVERABLE)" for Sky Protocol / DAI
+                # instead of "$0 freezable", which was factually correct
+                # but made LE discount the seizure-target value.
+                "total_excluded_usd": raw.get("total_excluded_usd", "$0"),
                 "ctx": _build_issuer_freezable_ctx(raw, primary_case.chain),
             }
             for raw in (all_issuers_freezable or [])

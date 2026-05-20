@@ -356,6 +356,14 @@ def build_all_deliverables(
                     issuer=issuer_info,
                     flow_filename=flow_filename,
                     issuer_freezable=freezable_by_issuer.get(issuer_name),
+                    # v0.20.3 (render-sim audit CRIT): pass ALL issuer
+                    # holdings so the LE handoff Section 4.2 renders the
+                    # complete inventory — Tether/Circle/Coinbase holdings
+                    # AND Sky Protocol UNRECOVERABLE were invisible to LE
+                    # before this fix because the production worker never
+                    # passed all_issuers_freezable (only the test harness
+                    # did). Now wired through from freeze_brief directly.
+                    all_issuers_freezable=freeze_brief.get("ALL_ISSUER_HOLDINGS") or None,
                     ic3_case_id=_ic3_case_id,
                     draft=_draft,
                     draft_label=_draft_label,

@@ -424,8 +424,7 @@
   <strong>INVESTIGATE</strong> positions
   ({{ issuer_freezable.investigate_count }} addresses,
   representing additional funds in
-  {{ issuer_freezable.total_usd_suspected }} cumulative
-  including freezable) require KYC verification at
+  {{ issuer_freezable.total_usd_suspected }} (INVESTIGATE-tier only) require KYC verification at
   {{ issuer.short_name }} before status can be confirmed.
   {% endif %}
   Freeze capability assessment: <strong>{{ issuer_freezable.freeze_capability }}</strong>.
@@ -487,9 +486,10 @@
   </tbody>
 </table>
 <p class="small">
-  {{ entry.issuer_name }}: {{ entry.total_usd }} freezable
-  {% if entry.total_suspected_usd and entry.total_suspected_usd != '$0' %},
-  {{ entry.total_suspected_usd }} under investigation{% endif %}.
+  {{ entry.issuer_name }}:
+  {% if entry.total_usd and entry.total_usd != '$0' %}{{ entry.total_usd }} freezable{% endif %}
+  {% if entry.total_suspected_usd and entry.total_suspected_usd != '$0' %}, {{ entry.total_suspected_usd }} under investigation{% endif %}
+  {% if entry.total_excluded_usd and entry.total_excluded_usd != '$0' and (not entry.total_usd or entry.total_usd == '$0') and (not entry.total_suspected_usd or entry.total_suspected_usd == '$0') %}{{ entry.total_excluded_usd }} held (UNRECOVERABLE — no freeze pathway; seizure target if perpetrator identified){% endif %}.
   Freeze capability: <strong>{{ entry.freeze_capability }}</strong>.
 </p>
 {% endif %}
@@ -748,7 +748,7 @@
   <p>
     I prepared this package on behalf of {{ victim.name }} from public
     {{ primary_chain | default("Ethereum") }} on-chain data fetched between
-    {{ trace_started_at }} and {{ generated_at }} UTC. The transaction
+    {{ trace_started_at or generated_at }} and {{ generated_at }} UTC. The transaction
     hashes, addresses, timestamps, and amounts set out in this brief are
     accurate to the best of my knowledge and were independently verified
     at the time of fetch.

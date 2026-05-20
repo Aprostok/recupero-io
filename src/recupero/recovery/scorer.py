@@ -142,6 +142,28 @@ class RecoveryDriver:
 
 
 @dataclass
+class IssuerRecoveryRow:
+    """Per-issuer recovery row exposed to the LE handoff + victim
+    summary templates (v0.22.0).
+
+    Pre-v0.22.0 the scorer computed an internal `issuer_breakdown`
+    tuple list but discarded it after picking the top issuer. Now we
+    expose every row so downstream consumers can render a full table:
+    each issuer's expected_recovered_usd with the base prior, the
+    historical-receipt evidence discount, and a flag for whether the
+    prior was learned from real outcomes or fell back to heuristic.
+    """
+    issuer: str
+    requested_usd: Decimal           # what we're asking the issuer to freeze
+    base_prior: float                # P(any freeze | the request)
+    evidence_discount: float         # 1.0 = current balance, 0.5 = historical-only
+    evidence_mode: str               # 'current_balance_only' / 'historical_only' / 'mixed'
+    effective_prior: float           # base_prior * evidence_discount
+    expected_recovered_usd: Decimal  # requested_usd * effective_prior (pre-jur)
+    is_learned_prior: bool           # True if from learned_priors DB; else heuristic
+
+
+@dataclass
 class RecoveryEstimate:
     """Top-level scoring output."""
     expected_recovered_usd: Decimal
@@ -160,6 +182,10 @@ class RecoveryEstimate:
     headline_summary: str       # 1-line summary for the brief
 
     drivers: list[RecoveryDriver] = field(default_factory=list)
+    # v0.22.0: per-issuer breakdown for the LE handoff + victim summary
+    # "Recovery Forecast" tables. Sorted by expected_recovered_usd DESC
+    # so the most-actionable issuer appears first.
+    per_issuer: list[IssuerRecoveryRow] = field(default_factory=list)
 
     def to_json_safe(self) -> dict[str, Any]:
         d = asdict(self)
@@ -173,6 +199,20 @@ class RecoveryEstimate:
             "expected_net_high_usd",
         ):
             d[k] = f"${self.__dict__[k]:,.2f}"
+        # Format per-issuer rows for template consumption.
+        d["per_issuer"] = [
+            {
+                "issuer": r.issuer,
+                "requested_usd_human": f"${r.requested_usd:,.2f}",
+                "base_prior_pct": f"{r.base_prior * 100:.0f}%",
+                "evidence_discount_pct": f"{r.evidence_discount * 100:.0f}%",
+                "evidence_mode": r.evidence_mode,
+                "effective_prior_pct": f"{r.effective_prior * 100:.0f}%",
+                "expected_recovered_usd_human": f"${r.expected_recovered_usd:,.2f}",
+                "is_learned_prior": r.is_learned_prior,
+            }
+            for r in self.per_issuer
+        ]
         return d
 
 
@@ -227,8 +267,11 @@ def score_recovery(
     # --- Per-issuer expected recovery ---
     # Breakdown tuple: (issuer_name, usd, base_prior,
     #                   evidence_discount, evidence_mode)
+    # v0.22.0: ALSO accumulate IssuerRecoveryRow per entry for the
+    # public per_issuer field on the returned RecoveryEstimate.
     expected_freezable = Decimal("0")
     issuer_breakdown: list[tuple[str, Decimal, float, float, str]] = []
+    per_issuer_rows: list[IssuerRecoveryRow] = []
     for entry in freezable_entries:
         if not isinstance(entry, dict):
             continue
@@ -245,12 +288,18 @@ def score_recovery(
             continue
         # v0.14.2: Use learned prior from freeze_outcomes if available
         # for this issuer; else fall back to heuristic prior.
+        # v0.22.0: track which side won so the template can show
+        # "based on N actual outcomes" vs. "heuristic prior" — material
+        # difference in defensibility of the recovery estimate.
         prior = None
+        is_learned = False
         if learned_priors and issuer in learned_priors:
             lp = learned_priors[issuer]
             prior = float(getattr(lp, "p_any_freeze", lp))
+            is_learned = True
         if prior is None:
             prior = _lookup_issuer_prior(issuer)
+            is_learned = False
         # Freeze capability override. The brief produces both forms
         # depending on which layer: emit_brief maps yes/limited/no →
         # HIGH/MEDIUM/LOW for display, but the raw freeze_asks.json
@@ -297,13 +346,26 @@ def score_recovery(
         # noise that `Decimal(prior_float)` injects (e.g., 0.73 → Decimal(
         # '0.7300000000000000266...')). Threshold comparisons downstream
         # are otherwise vulnerable to flipping on sub-cent margins.
-        expected_freezable += issuer_usd * Decimal(str(prior)) * evidence_discount
+        contribution = issuer_usd * Decimal(str(prior)) * evidence_discount
+        expected_freezable += contribution
         # Track base_prior + evidence_discount separately so the driver
         # narrative + headline summary can decompose them for the
         # operator (vs. collapsing to a single misleading "P(freeze)").
         issuer_breakdown.append(
             (issuer, issuer_usd, prior, float(evidence_discount), ev_mode)
         )
+        # v0.22.0: structured per-issuer row exposed on RecoveryEstimate
+        # for the LE handoff + victim summary "Recovery Forecast" tables.
+        per_issuer_rows.append(IssuerRecoveryRow(
+            issuer=issuer,
+            requested_usd=issuer_usd,
+            base_prior=float(prior),
+            evidence_discount=float(evidence_discount),
+            evidence_mode=ev_mode,
+            effective_prior=float(prior) * float(evidence_discount),
+            expected_recovered_usd=_round_money(contribution),
+            is_learned_prior=is_learned,
+        ))
 
     if issuer_breakdown:
         top_issuer, top_usd, top_prior, top_discount, top_mode = max(
@@ -581,6 +643,14 @@ def score_recovery(
         p_any=p_any,
     )
 
+    # v0.22.0: sort per-issuer breakdown DESC by expected recovery so
+    # the templates lead with the most-actionable issuer.
+    per_issuer_sorted = sorted(
+        per_issuer_rows,
+        key=lambda r: r.expected_recovered_usd,
+        reverse=True,
+    )
+
     return RecoveryEstimate(
         expected_recovered_usd=_round_money(expected_recovered),
         expected_recovered_low_usd=_round_money(low),
@@ -594,6 +664,7 @@ def score_recovery(
         recommendation=rec,
         headline_summary=summary,
         drivers=drivers,
+        per_issuer=per_issuer_sorted,
     )
 
 

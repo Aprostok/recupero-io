@@ -525,6 +525,147 @@
   {% endfor %}
 </table>
 
+{# v0.22.0 — Section 5.4: Recovery Forecast (per-issuer breakdown).
+   Surfaces the scorer's per_issuer rows so law enforcement can see
+   the expected-recovery breakdown at a glance: which issuers are
+   high-probability, which are pre-learned vs. heuristic, which
+   carry historical-receipt discounts. Hidden when the scorer
+   produced no per-issuer data (e.g., no FREEZABLE entries). #}
+{% if recovery_estimate and recovery_estimate.get('per_issuer') %}
+<h2>5.4 Recovery Forecast</h2>
+<p class="small">
+  Per-issuer expected recovery, sorted by contribution. Each row's
+  expected amount is the product of the requested freeze, the
+  base prior (learned from prior outcomes or heuristic), and the
+  evidence-mode discount applied when the underlying evidence is a
+  historical receipt rather than a confirmed current balance.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Issuer</th>
+      <th>Requested</th>
+      <th>Base prior</th>
+      <th>Evidence mode</th>
+      <th>Effective P(freeze)</th>
+      <th>Expected recovery</th>
+      <th>Source</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in recovery_estimate.get('per_issuer') %}
+    <tr>
+      <td><strong>{{ row.issuer }}</strong></td>
+      <td class="amount">{{ row.requested_usd_human }}</td>
+      <td>{{ row.base_prior_pct }}</td>
+      <td>
+        {% if row.evidence_mode == 'historical_only' %}
+        historical receipt (×{{ row.evidence_discount_pct }})
+        {% elif row.evidence_mode == 'mixed' %}
+        mixed (×{{ row.evidence_discount_pct }})
+        {% else %}
+        current balance
+        {% endif %}
+      </td>
+      <td><strong>{{ row.effective_prior_pct }}</strong></td>
+      <td class="amount">{{ row.expected_recovered_usd_human }}</td>
+      <td class="small">
+        {% if row.is_learned_prior %}<em>learned</em>{% else %}heuristic{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="small">
+  <strong>Source key.</strong> <em>learned</em>: per-issuer prior
+  computed from real Recupero freeze-outcome history (≥20 letters
+  required for inclusion); <em>heuristic</em>: hand-coded prior from
+  the issuer-cooperation table (insufficient outcome history for a
+  learned model). Both are jurisdiction-adjusted and may be further
+  reduced by sanctions-overlay or concentration adjustments — see
+  Recovery Drivers below.
+</p>
+{% endif %}
+
+{# v0.22.0 — Recovery Drivers list. Independently gated so it
+   renders when the scorer produces drivers even if no per-issuer
+   breakdown exists (e.g., a case where every freezable issuer
+   has total_usd == $0 but the scorer still emits a jurisdiction
+   driver). Surfaces the scorer's RecoveryDriver entries as
+   "What's helping" / "What's hurting" to give the operator a
+   defensible decomposition of the headline recovery number. #}
+{% if recovery_estimate and recovery_estimate.get('drivers') %}
+<h3>Recovery drivers</h3>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Factor</th>
+      <th>Direction</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for d in recovery_estimate.get('drivers') %}
+    <tr>
+      <td><strong>{{ d.factor }}</strong></td>
+      <td>
+        {% if d.direction == 'positive' %}
+        <span style="color:#166534;font-weight:600">supports</span>
+        {% else %}
+        <span style="color:#991b1b;font-weight:600">reduces</span>
+        {% endif %}
+      </td>
+      <td class="small">{{ d.description }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+{# v0.22.0 — Net-to-victim ROI block. Independently gated so it
+   renders even when per_issuer is empty. Lawyers / AUSAs /
+   financial-recovery counsel weigh case priority on the net dollars
+   actually reaching the victim after fees, not the gross recovery
+   figure. This block makes that conversion explicit. #}
+{% if recovery_estimate and recovery_estimate.get('expected_net_to_victim_usd') %}
+<h3>Net to victim</h3>
+<p class="small">
+  After Recupero's diagnostic + engagement fees and any
+  contingency cut, the projected dollars reaching the victim's
+  account are:
+</p>
+<table class="evidence">
+  <tr>
+    <th>Projected net recovery (mid)</th>
+    <td class="amount"><strong>{{ recovery_estimate.get('expected_net_to_victim_usd') }}</strong></td>
+  </tr>
+  {% if recovery_estimate.get('expected_net_low_usd') and recovery_estimate.get('expected_net_high_usd') %}
+  <tr>
+    <th>95% confidence interval</th>
+    <td class="amount">
+      {{ recovery_estimate.get('expected_net_low_usd') }}
+      &nbsp;–&nbsp;
+      {{ recovery_estimate.get('expected_net_high_usd') }}
+    </td>
+  </tr>
+  {% endif %}
+  {% if recovery_estimate.get('expected_recupero_revenue_usd') %}
+  <tr>
+    <th>Recupero fees (engagement + contingency, projected)</th>
+    <td class="amount small">{{ recovery_estimate.get('expected_recupero_revenue_usd') }}</td>
+  </tr>
+  {% endif %}
+  {% if recovery_estimate.get('probability_pays_back_engagement_180d') %}
+  <tr>
+    <th>Probability case pays back engagement fee within 180d</th>
+    <td class="amount">
+      {{ "%.0f%%"|format(recovery_estimate.get('probability_pays_back_engagement_180d') * 100) }}
+    </td>
+  </tr>
+  {% endif %}
+</table>
+{% endif %}
+
 {# v0.21.0 — Section 5.5: Live Filing Status.
    When `live_status` is provided (re-render after letters have been
    mailed), shows real-time outcomes per freeze letter + monitoring

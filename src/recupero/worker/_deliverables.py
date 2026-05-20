@@ -220,6 +220,30 @@ def build_all_deliverables(
     except Exception as e:  # noqa: BLE001
         log.warning("trace_report generation failed (continuing): %s", e)
 
+    # v0.22.0 — Recovery Snapshot. Pre-engagement deliverable:
+    # 1-page HTML summarising recommendation + headline ROI +
+    # per-issuer breakdown + drivers. Designed to be shared with
+    # the victim BEFORE they pay the engagement fee. Always
+    # emitted when freeze_brief carries a RECOVERY_ESTIMATE.
+    try:
+        if freeze_brief.get("RECOVERY_ESTIMATE"):
+            from recupero.reports.recovery_snapshot import render_recovery_snapshot
+            briefs_dir = case_dir / "briefs"
+            briefs_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_path = render_recovery_snapshot(
+                case_id=freeze_brief.get("CASE_ID") or case.case_id,
+                recovery_estimate=freeze_brief["RECOVERY_ESTIMATE"],
+                briefs_dir=briefs_dir,
+            )
+            if snapshot_path is not None:
+                written.append(snapshot_path)
+                html_paths.append(snapshot_path)
+                log.info("wrote recovery snapshot: %s", snapshot_path.name)
+    except Exception as e:  # noqa: BLE001
+        log.warning(
+            "recovery_snapshot generation failed (non-fatal): %s", e,
+        )
+
     # v0.9.2 — investigator-facing CSV + JSON exports. Government /
     # law-enforcement analysts (FBI, IRS-CI, OFAC) parse these
     # directly into their case-management tools; the customer-facing

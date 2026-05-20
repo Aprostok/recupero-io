@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Recovery Snapshot — {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+<style>
+  /* Recovery Snapshot — pre-engagement deliverable. Designed to be
+     shareable with the victim BEFORE they pay the engagement fee.
+     The audience is non-technical (the victim's lawyer, possibly the
+     victim themselves), so the headline shape is "here's what we
+     think you'll get back" — not a forensic worksheet. */
+  .snapshot-headline {
+    background: linear-gradient(135deg, #fafafa 0%, #f3f4f6 100%);
+    border-left: 4px solid var(--gold-accent);
+    padding: 28px 32px;
+    margin: 24px 0 32px;
+    border-radius: 4px;
+  }
+  .snapshot-headline-label {
+    font-size: var(--type-tiny);
+    text-transform: uppercase;
+    letter-spacing: 0.10em;
+    color: var(--ink-quiet);
+    margin: 0 0 8px;
+  }
+  .snapshot-headline-amount {
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.0;
+  }
+  .snapshot-headline-range {
+    font-size: var(--type-small);
+    color: var(--ink-quiet);
+    margin: 8px 0 0;
+  }
+  .snapshot-recommendation {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 12px;
+    font-size: var(--type-tiny);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin-bottom: 14px;
+  }
+  .snapshot-recommendation.recommend  { background: #DCFCE7; color: #14532D; }
+  .snapshot-recommendation.caveat     { background: #FEF3C7; color: #5C2D0F; }
+  .snapshot-recommendation.discourage { background: #FED7AA; color: #5C1F09; }
+  .snapshot-recommendation.reject     { background: #FECACA; color: #7F1D1D; }
+  .driver-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: var(--type-tiny);
+    font-weight: 600;
+  }
+  .driver-pill.positive { background: #DCFCE7; color: #166534; }
+  .driver-pill.negative { background: #FECACA; color: #991B1B; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Pre-engagement Snapshot</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Case {{ case_id }}</div>
+    <h1>Recovery<br/>Snapshot</h1>
+    <p class="cover-subtitle">
+      An initial assessment of what's recoverable from the trace
+      Recupero has completed on your case. The numbers below are
+      probability-weighted estimates derived from the per-issuer
+      freeze-outcome history we maintain across all prior cases;
+      they are not guarantees. The figures will sharpen as freeze
+      requests go out and responses land.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+</section>
+
+{# Recommendation pill — the lawyer's TL;DR. #}
+<div style="margin: 24px 0 8px;">
+  {% set rec = recovery_estimate.get('recommendation') or 'caveat' %}
+  <span class="snapshot-recommendation {{ rec }}">
+    {% if rec == 'recommend' %}
+    Recommended for engagement
+    {% elif rec == 'caveat' %}
+    Engage with caveat
+    {% elif rec == 'discourage' %}
+    Engagement discouraged
+    {% else %}
+    Recovery not advised
+    {% endif %}
+  </span>
+</div>
+
+{# Headline: estimated net to victim. #}
+<div class="snapshot-headline">
+  <p class="snapshot-headline-label">Projected net recovery to victim</p>
+  <p class="snapshot-headline-amount">
+    {{ recovery_estimate.get('expected_net_to_victim_usd') or '$0' }}
+  </p>
+  <p class="snapshot-headline-range">
+    95% confidence range:
+    {{ recovery_estimate.get('expected_net_low_usd') or '—' }}
+    –
+    {{ recovery_estimate.get('expected_net_high_usd') or '—' }}
+    &nbsp;·&nbsp;
+    {% if recovery_estimate.get('probability_any_recovery_90d') %}
+    {{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }} probability of any recovery within 90 days
+    {% endif %}
+  </p>
+</div>
+
+<p>{{ recovery_estimate.get('headline_summary') or '' }}</p>
+
+<h2>1. Per-issuer breakdown</h2>
+{% if recovery_estimate.get('per_issuer') %}
+<p class="small">
+  Each issuer in your case has a different cooperation history and
+  different freeze authority. The expected-recovery column accounts
+  for both factors plus the strength of the underlying evidence
+  (confirmed current balance versus historical receipt).
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Issuer</th>
+      <th>Frozen if successful</th>
+      <th>Probability we succeed</th>
+      <th>Expected recovery</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in recovery_estimate.get('per_issuer') %}
+    <tr>
+      <td><strong>{{ row.issuer }}</strong></td>
+      <td class="amount">{{ row.requested_usd_human }}</td>
+      <td>
+        <strong>{{ row.effective_prior_pct }}</strong>
+        {% if row.is_learned_prior %}
+        <br/><span class="small secondary">(from {{ row.issuer }}'s prior responses)</span>
+        {% else %}
+        <br/><span class="small secondary">(industry heuristic)</span>
+        {% endif %}
+      </td>
+      <td class="amount"><strong>{{ row.expected_recovered_usd_human }}</strong></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="small">No freezable issuer holdings identified in this case.</p>
+{% endif %}
+
+<h2>2. What's helping and what's hurting</h2>
+{% if recovery_estimate.get('drivers') %}
+<p class="small">
+  Recovery probability is not just about which issuers hold the
+  funds — it's also about the jurisdiction of every party in the
+  chain, whether the funds passed through any sanctioned
+  infrastructure, and how concentrated the recoverable amount is.
+  The drivers below explain the headline number.
+</p>
+<ul>
+  {% for d in recovery_estimate.get('drivers') %}
+  <li style="margin-bottom: 10px;">
+    <span class="driver-pill {{ d.direction }}">
+      {% if d.direction == 'positive' %}+{% else %}−{% endif %}
+      {{ d.factor }}
+    </span>
+    &nbsp;{{ d.description }}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2>3. What happens next</h2>
+<p>
+  If you elect to proceed with the engagement:
+</p>
+<ol>
+  <li>
+    Recupero will transmit formal freeze requests to every issuer
+    listed above within 24 hours. The freeze window for stablecoin
+    issuers is typically 72 hours — moving fast materially improves
+    the odds of an intact freeze.
+  </li>
+  <li>
+    A monitoring subscription will be activated on every wallet in
+    your case. If funds move at any time during the engagement, you
+    will receive an email within minutes and your case dashboard will
+    reflect the new state in real time.
+  </li>
+  <li>
+    Within seven days, you will have a status update with the
+    formal acknowledgements from each issuer. The recovery number
+    above will be revised based on what each issuer actually
+    confirms.
+  </li>
+  <li>
+    If any issuer goes silent past the standard escalation window
+    (typically 14 days), Recupero will recommend a pivot to a formal
+    legal instrument (grand jury subpoena, MLAT request, or FinCEN
+    314(b) information-sharing request) — and prepare the relevant
+    documents on your behalf.
+  </li>
+</ol>
+
+<h2>4. What this snapshot is not</h2>
+<p class="small">
+  <strong>Not a guarantee.</strong> The expected recovery figure is
+  a probability-weighted estimate, not a contractual promise. Real
+  outcomes depend on factors outside Recupero's control — issuer
+  responsiveness on any given day, jurisdictional cooperation, and
+  the perpetrator's actions during the freeze window.
+</p>
+<p class="small">
+  <strong>Not legal advice.</strong> Recovery of stolen
+  cryptocurrency frequently requires a licensed attorney to file
+  the formal legal instruments. Recupero prepares the supporting
+  forensic evidence and draft documents but does not represent
+  victims in legal proceedings.
+</p>
+<p class="small">
+  <strong>Not the full case record.</strong> The complete forensic
+  trace, freeze requests, and law-enforcement handoff documents
+  remain separate deliverables generated alongside this snapshot.
+  This document is a one-page summary intended for the engagement
+  decision.
+</p>
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>{{ case_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Pre-engagement Snapshot.</span>
+    Shareable with the victim, the victim's counsel, and the
+    insurer; not for distribution to issuer compliance teams or
+    law enforcement — those audiences are served by the full
+    freeze-request and LE-handoff deliverables.
+  </div>
+</footer>
+
+</body>
+</html>

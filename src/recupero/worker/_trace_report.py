@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from recupero import __version__
 from recupero.models import Case
@@ -83,9 +83,11 @@ def render_trace_report(
             autoescape=select_autoescape(["html", "j2"]),
             trim_blocks=True,
             lstrip_blocks=True,
+            undefined=StrictUndefined,
         )
         html = env.get_template("trace_report.html.j2").render(**ctx)
-        report_path.write_text(html, encoding="utf-8")
+        from recupero._common import atomic_write_text
+        atomic_write_text(report_path, html)
         return report_path
     except Exception as exc:  # noqa: BLE001
         log.warning("trace report render failed: %s", exc)
@@ -165,7 +167,7 @@ def _compute_stats(case: Case) -> dict[str, Any]:
     total_usd = Decimal(0)
     destinations: set[str] = set()
     for t in transfers:
-        if t.usd_value_at_tx:
+        if t.usd_value_at_tx is not None:
             total_usd += t.usd_value_at_tx
         destinations.add(_ck(t.to_address))
     # Drop the seed itself from the destinations count if it appears.

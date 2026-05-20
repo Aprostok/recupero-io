@@ -177,7 +177,9 @@ def _extract_primary_chain(case: Case) -> str:
         "base": "Base",
         "polygon": "Polygon",
         "solana": "Solana",
+        "tron": "Tron",
         "bitcoin": "Bitcoin",
+        "hyperliquid": "Hyperliquid",
     }
     return chain_display.get(case.chain.value, case.chain.value.capitalize())
 

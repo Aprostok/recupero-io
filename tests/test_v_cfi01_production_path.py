@@ -282,3 +282,222 @@ def test_prod_total_loss_is_3_6m(production_run):
     assert "3,600,000" in total, (
         f"TOTAL_LOSS_USD={total!r}, expected to contain '3,600,000'."
     )
+
+
+def test_prod_victim_summary_is_recoverable_variant(production_run):
+    """victim_summary must use the 'recoverable' template variant for V-CFI01.
+
+    R14-E MEDIUM: test_prod_victim_summary_written only asserts the file
+    exists — a misclassified case (UNRECOVERABLE) would still pass.
+    This test additionally verifies the correct variant was chosen.
+    """
+    briefs_dir = production_run["briefs_dir"]
+    summaries = list(briefs_dir.glob("victim_summary_*.html"))
+    assert summaries, "victim_summary_*.html not found"
+    for path in summaries:
+        assert "unrecoverable" not in path.stem, (
+            f"V-CFI01 case was classified as UNRECOVERABLE but should be "
+            f"RECOVERABLE (4 freezable issuers present). File: {path.name}"
+        )
+        assert "recoverable" in path.stem, (
+            f"Expected 'recoverable' in victim summary filename, got: {path.name}"
+        )
+
+
+def test_prod_total_freezable_excludes_dai(production_run):
+    """TOTAL_FREEZABLE_USD must not count Sky Protocol / DAI (freeze_capability=no).
+
+    R14-E MEDIUM: assert total freezable is < total loss (Sky DAI is excluded).
+    """
+    from decimal import Decimal
+    brief = production_run["brief_data"]
+    total_loss = brief.get("TOTAL_LOSS_USD", "")
+    total_freezable = brief.get("TOTAL_FREEZABLE_USD", "")
+    # V-CFI01: $3.6M total loss, but Sky DAI (~$655K) is unrecoverable.
+    # Freezable should be less than total loss.
+    assert total_freezable, "TOTAL_FREEZABLE_USD is missing from brief_data"
+    # Both are formatted strings like "$3,549,001.40" — confirm freezable < loss
+    # by checking that loss amount contains 3,600,000 but freezable does not.
+    assert "3,600,000" not in total_freezable, (
+        f"TOTAL_FREEZABLE_USD={total_freezable!r} equals TOTAL_LOSS_USD — "
+        "Sky Protocol DAI should be excluded from freezable total."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unit tests for private helpers (R14-E HIGH)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_has_actionable_holding_all_unrecoverable():
+    """_has_actionable_holding must return False when every holding is UNRECOVERABLE.
+
+    R14-E HIGH: this is the guard that prevents generating a freeze letter
+    to Sky Protocol. Without a direct test, a regression (returning True
+    for all-UNRECOVERABLE) would silently generate a nonsense letter.
+    """
+    from recupero.worker._deliverables import _has_actionable_holding
+
+    all_unrecoverable = {
+        "issuer": "Sky Protocol",
+        "holdings": [
+            {"status": "UNRECOVERABLE", "address": "0xAAA"},
+            {"status": "UNRECOVERABLE", "address": "0xBBB"},
+        ],
+    }
+    assert not _has_actionable_holding(all_unrecoverable), (
+        "_has_actionable_holding returned True for all-UNRECOVERABLE entry"
+    )
+
+
+def test_has_actionable_holding_mixed():
+    """_has_actionable_holding must return True when any holding is FREEZABLE."""
+    from recupero.worker._deliverables import _has_actionable_holding
+
+    mixed = {
+        "issuer": "Circle",
+        "holdings": [
+            {"status": "UNRECOVERABLE", "address": "0xAAA"},
+            {"status": "FREEZABLE", "address": "0xBBB"},
+        ],
+    }
+    assert _has_actionable_holding(mixed)
+
+
+def test_has_actionable_holding_empty_holdings():
+    """_has_actionable_holding must return False for an entry with no holdings."""
+    from recupero.worker._deliverables import _has_actionable_holding
+
+    assert not _has_actionable_holding({"issuer": "Orphan", "holdings": []})
+    assert not _has_actionable_holding({"issuer": "Orphan"})  # missing holdings key
+
+
+def test_issuer_info_for_non_midas_contact_email():
+    """_issuer_info_for must resolve contact_email from the freeze_brief entry.
+
+    R14-E HIGH: a regression (reading wrong key) would produce freeze letters
+    with blank contact emails — Circle's compliance team would receive 'Dear ()'
+    with no routing address. Previously was reading 'primary_contact' instead
+    of 'contact_email'.
+    """
+    from recupero.worker._deliverables import _issuer_info_for
+
+    entry = {
+        "issuer": "Circle Internet Financial",
+        "contact_email": "compliance@circle.com",
+        "primary_contact": "old-key@circle.com",
+    }
+    info = _issuer_info_for("Circle Internet Financial", entry)
+    assert info.contact_email == "compliance@circle.com", (
+        f"Expected 'compliance@circle.com' from contact_email key, "
+        f"got {info.contact_email!r}. Key lookup may be wrong."
+    )
+
+
+def test_issuer_info_for_falls_back_to_primary_contact():
+    """_issuer_info_for falls back to primary_contact if contact_email absent."""
+    from recupero.worker._deliverables import _issuer_info_for
+
+    entry = {
+        "issuer": "SomeNewIssuer",
+        "primary_contact": "fallback@issuer.com",
+    }
+    info = _issuer_info_for("SomeNewIssuer", entry)
+    assert info.contact_email == "fallback@issuer.com", (
+        f"Expected fallback to primary_contact, got {info.contact_email!r}."
+    )
+
+
+def test_issuer_info_for_empty_contact():
+    """_issuer_info_for returns empty contact_email rather than crashing when both keys absent."""
+    from recupero.worker._deliverables import _issuer_info_for
+
+    info = _issuer_info_for("UnknownIssuer", {})
+    assert info.contact_email == "", (
+        f"Expected empty string when neither key present, got {info.contact_email!r}."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# All-issuers-fail resilience path (R14-E HIGH)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_all_issuers_fail_pipeline_still_writes_trace_report():
+    """build_all_deliverables must write trace_report.html even if every
+    generate_briefs() call raises.
+
+    R14-E HIGH: the try/except around generate_briefs is claimed to be
+    silent-swallow. This test directly verifies the claim — if the guard
+    were removed or broken, the stage would raise and no trace report
+    would be written, leaving the admin UI with no primary artifact.
+    """
+    import tempfile
+    from pathlib import Path
+    from unittest.mock import patch
+
+    from tests.test_v_cfi01_full_render import (
+        _build_editorial,
+        _build_freeze_asks_dict,
+        _build_issuer_metadata,
+        _build_v_cfi01_case,
+        VICTIM,
+    )
+    from recupero.reports.brief import InvestigatorInfo
+    from recupero.reports.emit_brief import emit_brief
+    from recupero.reports.victim import VictimInfo
+    from recupero.worker._deliverables import build_all_deliverables
+
+    case = _build_v_cfi01_case()
+    editorial = _build_editorial()
+    freeze_asks = _build_freeze_asks_dict()
+    issuer_metadata = _build_issuer_metadata()
+
+    victim = VictimInfo(
+        name="Resilience Test Victim",
+        wallet_address=VICTIM,
+        state="CA",
+        country="US",
+    )
+    investigator = InvestigatorInfo(
+        name="Test Investigator",
+        organization="Recupero Forensics Ltd.",
+        email="investigator@test.com",
+    )
+
+    brief_data = emit_brief(
+        case=case,
+        victim=victim,
+        editorial=editorial,
+        freeze_asks=freeze_asks,
+        issuer_metadata=issuer_metadata,
+    )
+
+    with tempfile.TemporaryDirectory(prefix="v_cfi01_fail_") as tmpdir:
+        case_dir = Path(tmpdir)
+        # Patch generate_briefs to always raise
+        with patch(
+            "recupero.worker._deliverables.generate_briefs",
+            side_effect=RuntimeError("Simulated generate_briefs failure"),
+        ):
+            # Must NOT raise
+            build_all_deliverables(
+                case=case,
+                victim=victim,
+                freeze_brief=brief_data,
+                case_dir=case_dir,
+                investigator=investigator,
+                skip_freeze_briefs=False,
+            )
+
+        briefs_dir = case_dir / "briefs"
+        # trace_report must still be written despite all generate_briefs failures
+        trace_reports = list(briefs_dir.glob("trace_report_*.html"))
+        assert trace_reports, (
+            "trace_report_*.html was NOT written after all generate_briefs() calls "
+            "raised — the silent-swallow guard is broken or trace_report rendering "
+            "depends on generate_briefs output."
+        )
+        # No freeze letters should exist (all failed)
+        freeze_letters = list(briefs_dir.glob("freeze_request_*.html"))
+        assert not freeze_letters, (
+            f"freeze_request letters unexpectedly present after all-fail: {freeze_letters}"
+        )

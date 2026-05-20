@@ -271,10 +271,16 @@ def render_victim_summary(
         summary_id = uuid4().hex[:8]
         variant = "recoverable" if is_recoverable else "unrecoverable"
         out_path = briefs_dir / f"victim_summary_{variant}_{summary_id}.html"
-        out_path.write_text(html, encoding="utf-8")
+        from recupero._common import atomic_write_text
+        atomic_write_text(out_path, html)
         return out_path
     except Exception as exc:  # noqa: BLE001
-        log.warning("victim summary render failed: %s", exc)
+        # v0.20.10 (R14-C LOW): log at ERROR with full traceback so
+        # StrictUndefined template regressions are visible in Railway
+        # logs rather than buried as WARNING-level noise.
+        # The caller's try/except in _deliverables.py ensures this
+        # exception does NOT propagate and kill the build stage.
+        log.error("victim summary render failed: %s", exc, exc_info=True)
         return None
 
 

@@ -245,8 +245,18 @@ def canonical_address_key(addr: str | None) -> str:
     s = addr.strip()
     if not s:
         return ""
+    # v0.20.10 (R14-D/R14-E LOW): validate that the 40 characters after
+    # the 0x prefix are genuinely hex before returning the lowercased
+    # canonical form. A 42-char string starting with 0x but containing
+    # non-hex characters (e.g., spaces, letters G-Z) falls through to
+    # `return s` (pass-through, verbatim) rather than being silently
+    # keyed as if it were a valid EVM address.
     if s.startswith("0x") and len(s) == 42:
-        return s.lower()
+        suffix = s[2:]
+        # Inline check avoids importing re at module level; only affects
+        # the rare malformed-input path.
+        if all(c in "0123456789abcdefABCDEF" for c in suffix):
+            return s.lower()
     return s
 
 

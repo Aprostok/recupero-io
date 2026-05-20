@@ -122,21 +122,31 @@ class FreezeAsk:
     observed_transfer_count: int = 1
 
     def __post_init__(self) -> None:
-        """Guard against impossible negative amounts that would produce
-        freeze letters saying 'freeze -$47,320' — embarrassing and rejected.
-        A malformed chain-adapter response (negative RPC balance) would
+        """Guard against impossible negative, NaN, or Infinite amounts that
+        would produce freeze letters saying 'freeze -$47,320' or 'freeze
+        $Infinity' — rejected by compliance teams and a pipeline sign error.
+        A malformed chain-adapter response (negative/NaN RPC balance) would
         silently propagate without this check.
         """
-        if self.holding_decimal_amount < 0:
-            raise ValueError(
-                f"FreezeAsk.holding_decimal_amount must be >= 0, "
-                f"got {self.holding_decimal_amount!r}"
-            )
-        if self.holding_usd_value is not None and self.holding_usd_value < 0:
-            raise ValueError(
-                f"FreezeAsk.holding_usd_value must be >= 0 or None, "
-                f"got {self.holding_usd_value!r}"
-            )
+        # v0.20.10 (R14-D LOW): guard against NaN / Infinity in addition to
+        # negatives. Decimal NaN raises InvalidOperation on comparison;
+        # Decimal Infinity passes `>= 0` silently, rendering as "$Infinity"
+        # on legal documents.
+        for _field, _val in (
+            ("holding_decimal_amount", self.holding_decimal_amount),
+            ("holding_usd_value", self.holding_usd_value),
+        ):
+            if _val is None:
+                continue
+            if not _val.is_finite():
+                raise ValueError(
+                    f"FreezeAsk.{_field} must be a finite Decimal, "
+                    f"got {_val!r}"
+                )
+            if _val < 0:
+                raise ValueError(
+                    f"FreezeAsk.{_field} must be >= 0, got {_val!r}"
+                )
 
     def short_summary(self) -> str:
         usd = f"${self.holding_usd_value:,.2f}" if self.holding_usd_value else "?"

@@ -881,8 +881,18 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
     # If the subprocess succeeded the tmp file is complete. Atomic
     # rename onto the final path. If it didn't succeed,
     # _render_pdf_in_subprocess already raised — we never reach here.
+    # v0.20.10 (R14-C MEDIUM): wrap os.replace in try/finally so the
+    # .pdf.tmp file is always cleaned up even if the rename itself fails
+    # (e.g., cross-device rename, permissions error, disk-full).
+    # Matches the _svg_to_pdf pattern added in v0.20.8.
     import os as _os
-    _os.replace(str(tmp_path), str(pdf_path))
+    try:
+        _os.replace(str(tmp_path), str(pdf_path))
+    finally:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:

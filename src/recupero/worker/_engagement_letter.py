@@ -142,7 +142,8 @@ def render_engagement_letter(
         briefs_dir.mkdir(parents=True, exist_ok=True)
         letter_id = uuid4().hex[:8]
         out_path = briefs_dir / f"engagement_letter_{letter_id}.html"
-        out_path.write_text(html, encoding="utf-8")
+        from recupero._common import atomic_write_text
+        atomic_write_text(out_path, html)
         return out_path
     except Exception as exc:  # noqa: BLE001
         log.warning("engagement letter render failed: %s", exc)

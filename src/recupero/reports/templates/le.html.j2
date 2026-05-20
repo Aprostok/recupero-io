@@ -101,7 +101,7 @@
     {% if victim.citizenship %}(citizen of {{ victim.citizenship }}){% endif %}.
     The token is issued by {{ issuer.name }}{% if issuer.jurisdiction %},
     a {{ issuer.jurisdiction }} entity{% endif %}.
-    {% if issuer.secondary_party %}
+    {% if issuer.secondary_party and issuer.secondary_role %}
     Its underlying strategy is operated by {{ issuer.secondary_party }}
     ({{ issuer.secondary_role }}).
     {% endif %}
@@ -345,7 +345,7 @@
   <tr><th>Token contract address</th> <td>{% if asset_contract_explorer_url %}<a class="mono" href="{{ asset_contract_explorer_url }}">{{ asset.contract }}</a>{% else %}<span class="mono">{{ asset.contract }}</span>{% endif %}</td></tr>
   <tr><th>Issuer (legal entity)</th>  <td>{{ asset.issuer }}</td></tr>
   {% if issuer.jurisdiction %}<tr><th>Issuer jurisdiction</th><td>{{ issuer.jurisdiction }}</td></tr>{% endif %}
-  {% if issuer.secondary_party %}<tr><th>Underlying strategy operator</th><td>{{ issuer.secondary_party }} ({{ issuer.secondary_role }})</td></tr>{% endif %}
+  {% if issuer.secondary_party and issuer.secondary_role %}<tr><th>Underlying strategy operator</th><td>{{ issuer.secondary_party }} ({{ issuer.secondary_role }})</td></tr>{% endif %}
   <tr><th>Asset description</th>      <td>{{ asset.description }}</td></tr>
   {# v0.20.2 (audit-round-3 R3-3): evidence table rolls up to the
      full multi-event total when applicable; the narrative above
@@ -557,7 +557,7 @@
     {% endif %}
     {% endif %}
   </li>
-  {% if issuer.secondary_party %}
+  {% if issuer.secondary_party and issuer.secondary_role %}
   <li>
     Copy {{ issuer.secondary_party }}, who manages the underlying
     {{ issuer.secondary_role }} the wrapper represents. They are the
@@ -711,7 +711,7 @@
     {% endif %}
     <td>{{ issuer.contact_email }} (request escalation to compliance)</td>
   </tr>
-  {% if issuer.secondary_party %}
+  {% if issuer.secondary_party and issuer.secondary_role %}
   <tr>
     <td>{{ issuer.secondary_party }}</td>
     <td>{{ issuer.secondary_role|capitalize }}</td>

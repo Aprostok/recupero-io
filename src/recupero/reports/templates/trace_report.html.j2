@@ -88,7 +88,7 @@
     </div>
     <div class="cover-meta-item">
       <dt>Traced Wallet</dt>
-      <dd><a class="mono" href="{{ wallet_explorer_url }}">{{ wallet_address }}</a></dd>
+      <dd>{% if wallet_explorer_url %}<a class="mono" href="{{ wallet_explorer_url }}">{{ wallet_address }}</a>{% else %}<span class="mono">{{ wallet_address }}</span>{% endif %}</dd>
     </div>
     <div class="cover-meta-item">
       <dt>Chain</dt>
@@ -267,7 +267,7 @@ notification).</p>
     <tr>
       <td class="small">{{ h.block_time }}</td>
       <td>{{ h.bridge_name }}<br/><span class="small secondary">{{ h.bridge_protocol }}</span></td>
-      <td class="mono"><a href="{{ h.tx_explorer_url }}">{{ h.source_address[:10] }}…</a></td>
+      <td class="mono">{% if h.tx_explorer_url %}<a href="{{ h.tx_explorer_url }}">{{ h.source_address[:10] }}…</a>{% else %}<span>{{ h.source_address[:10] }}…</span>{% endif %}</td>
       <td class="amount">{{ h.amount_usd or h.amount_decimal }}</td>
       <td>{{ h.token_symbol }}</td>
       <td class="small">{{ h.destination_chain_candidates | join(', ') if h.destination_chain_candidates else '(see bridge explorer)' }}</td>

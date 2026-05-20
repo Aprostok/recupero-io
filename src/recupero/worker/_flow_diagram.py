@@ -247,6 +247,7 @@ def _entity_badge(identity: str | None) -> tuple[str, str, str] | None:
 # flow diagrams on those chains silently lost link-outs.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _EXPLORER_BY_CHAIN,
+    atomic_write_text as _atomic_write_text,
     short_addr as _short_addr,
 )
 
@@ -1107,7 +1108,7 @@ def _write_placeholder_svg(path: Path, message: str) -> None:
         fill="#78350F" text-anchor="middle">{_escape(message)}</text>
 </svg>
 """
-    path.write_text(svg, encoding="utf-8")
+    _atomic_write_text(path, svg)
 
 
 # ----- SVG polish (post-processing Graphviz output) ----- #
@@ -1197,7 +1198,7 @@ def _polish_svg(path: Path) -> None:
     #    Forensics's logo treatment.
     raw = _inject_letter_mark_badges(raw)
 
-    path.write_text(raw, encoding="utf-8")
+    _atomic_write_text(path, raw)
 
 
 def _inject_letter_mark_badges(svg: str) -> str:

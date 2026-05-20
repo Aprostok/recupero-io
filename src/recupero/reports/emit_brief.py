@@ -162,12 +162,6 @@ def usd(v: Decimal | float | int | None) -> str:
     return f"${d:,.2f}"
 
 
-def iso_to_display_date(iso: str) -> str:
-    """'2026-04-19T14:22:17Z' -> 'April 19, 2026'."""
-    dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-    return dt.strftime("%B %d, %Y").replace(" 0", " ")
-
-
 def _extract_primary_chain(case: Case) -> str:
     """Pick a human-readable chain label from the case."""
     chain_display = {

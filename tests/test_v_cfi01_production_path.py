@@ -501,3 +501,110 @@ def test_all_issuers_fail_pipeline_still_writes_trace_report():
         assert not freeze_letters, (
             f"freeze_request letters unexpectedly present after all-fail: {freeze_letters}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Unit tests for emit_brief helpers (R16-E)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_issuer_sort_key_freezable_before_unrecoverable():
+    """_issuer_sort_key must return 0 for FREEZABLE/INVESTIGATE and 1 for LOW/NO.
+
+    R16-E: the sort determines LE Section 4.2 table order — actionable entries
+    must always precede unrecoverable-only entries regardless of insertion order.
+    """
+    from recupero.reports.emit_brief import _issuer_sort_key
+
+    assert _issuer_sort_key({"freeze_capability": "YES"}) == 0
+    assert _issuer_sort_key({"freeze_capability": "HIGH"}) == 0
+    assert _issuer_sort_key({"freeze_capability": "INVESTIGATE"}) == 0
+    assert _issuer_sort_key({"freeze_capability": "MEDIUM"}) == 0
+    # LOW and NO are the only cases that should be ordered last
+    assert _issuer_sort_key({"freeze_capability": "LOW"}) == 1
+    assert _issuer_sort_key({"freeze_capability": "NO"}) == 1
+    # Case-insensitive: "no" from freeze_asks.json should also sort last
+    assert _issuer_sort_key({"freeze_capability": "no"}) == 1
+    # Missing key defaults to 0 (actionable)
+    assert _issuer_sort_key({}) == 0
+
+
+def test_issuer_sort_key_sorts_sky_protocol_last():
+    """Sky Protocol (freeze_capability=no) must sort after all actionable issuers."""
+    from recupero.reports.emit_brief import _issuer_sort_key
+
+    entries = [
+        {"issuer": "Sky Protocol", "freeze_capability": "no"},
+        {"issuer": "Tether", "freeze_capability": "YES"},
+        {"issuer": "Circle", "freeze_capability": "YES"},
+    ]
+    sorted_entries = sorted(entries, key=_issuer_sort_key)
+    assert sorted_entries[0]["issuer"] in ("Tether", "Circle"), (
+        "Sky Protocol sorted before actionable issuers"
+    )
+    assert sorted_entries[-1]["issuer"] == "Sky Protocol", (
+        "Sky Protocol did not sort last"
+    )
+
+
+def test_count_theft_events_single_event():
+    """_count_theft_events must return 1 for a simple single-transfer case.
+
+    Uses SimpleNamespace so this test stays decoupled from the Transfer
+    model's required-field list — _count_theft_events only reads
+    `from_address` and `usd_value_at_tx` from each transfer.
+    """
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from recupero.reports.emit_brief import _count_theft_events
+
+    victim = "0xvictim000000000000000000000000000000001"
+    perp   = "0xperp0000000000000000000000000000000002"
+    case = SimpleNamespace(
+        seed_address=victim,
+        transfers=[
+            SimpleNamespace(from_address=victim, usd_value_at_tx=Decimal("1000")),
+            # downstream hop — from_address is perp, must not count
+            SimpleNamespace(from_address=perp, usd_value_at_tx=Decimal("1000")),
+        ],
+    )
+    assert _count_theft_events(case) == 1
+
+
+def test_count_theft_events_multi_event():
+    """_count_theft_events must return 6 for the V-CFI01-shape 6-drain case."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from recupero.reports.emit_brief import _count_theft_events
+
+    victim = "0xvictim000000000000000000000000000000001"
+    perp   = "0xperp0000000000000000000000000000000002"
+
+    theft_transfers = [
+        SimpleNamespace(from_address=victim, usd_value_at_tx=Decimal("600000"))
+        for _ in range(6)
+    ]
+    # A transfer where victim is NOT the sender must not be counted
+    non_theft = SimpleNamespace(from_address=perp, usd_value_at_tx=Decimal("600000"))
+    case = SimpleNamespace(
+        seed_address=victim,
+        transfers=theft_transfers + [non_theft],
+    )
+    assert _count_theft_events(case) == 6
+
+
+def test_count_theft_events_excludes_none_usd():
+    """_count_theft_events must not count transfers with usd_value_at_tx=None."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from recupero.reports.emit_brief import _count_theft_events
+
+    victim = "0xvictim000000000000000000000000000000001"
+    case = SimpleNamespace(
+        seed_address=victim,
+        transfers=[
+            SimpleNamespace(from_address=victim, usd_value_at_tx=Decimal("1000")),
+            # unpriced transfer — must NOT be counted even though from victim
+            SimpleNamespace(from_address=victim, usd_value_at_tx=None),
+        ],
+    )
+    assert _count_theft_events(case) == 1

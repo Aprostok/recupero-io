@@ -64,15 +64,3 @@ def write_victim(case_dir: Path, victim: VictimInfo) -> Path:
     path = case_dir / "victim.json"
     path.write_text(victim.model_dump_json(indent=2), encoding="utf-8")
     return path
-
-
-def example_victim() -> VictimInfo:
-    """Sample for documentation / tests."""
-    return VictimInfo(
-        name="Jane Doe",
-        citizenship="USA",
-        address="1234 Example St, Springfield, IL 62701",
-        email="jane@example.com",
-        wallet_address="0x0000000000000000000000000000000000000001",
-        incident_summary="Wallet drain on 2025-01-01.",
-    )

@@ -389,6 +389,10 @@ def build_all_deliverables(
                     all_issuers_freezable=freeze_brief.get("ALL_ISSUER_HOLDINGS") or None,
                     ic3_case_id=_ic3_case_id,
                     live_status=_live_status,
+                    # v0.21.0: surface recovery probability on the LE
+                    # handoff cover. Computed by emit_brief via the
+                    # scorer; lives in freeze_brief.RECOVERY_ESTIMATE.
+                    recovery_estimate=freeze_brief.get("RECOVERY_ESTIMATE") or None,
                     draft=_draft,
                     draft_label=_draft_label,
                 )

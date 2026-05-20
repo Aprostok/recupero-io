@@ -300,6 +300,12 @@ def generate_briefs(
     # first-render path immediately after emit_brief), the template
     # renders a "pending issuer outreach" empty-state branch.
     live_status: Any = None,
+    # v0.21.0: recovery estimate dict (from brief["RECOVERY_ESTIMATE"]).
+    # Surfaces in the LE handoff cover-meta + Section 5.5 aggregate so
+    # the document leads with "$X.YM estimated recoverable" — a number
+    # the AUSA / FBI agent uses to weigh case priority before reading
+    # any of the per-issuer detail. None = not computed (older briefs).
+    recovery_estimate: dict | None = None,
     draft: bool = False,
     draft_label: str | None = None,
 ) -> BriefBundle:
@@ -692,6 +698,21 @@ def generate_briefs(
         # state branch. Populated on re-renders after the operator
         # has run send-freeze-letters + recorded outcomes.
         "live_status": live_status,
+        # v0.21.0: recovery estimate from brief["RECOVERY_ESTIMATE"].
+        # Surfaces in the LE handoff cover so the AUSA / FBI agent
+        # has a headline "estimated recoverable USD" before reading
+        # any per-issuer detail. Shape (from RecoveryEstimate.to_json_safe):
+        #   {
+        #     "expected_recovered_usd": "$1,200,000.00",
+        #     "expected_recovered_low_usd": "$800,000.00",
+        #     "expected_recovered_high_usd": "$1,600,000.00",
+        #     "probability_any_recovery_90d": 0.62,
+        #     "recommendation": "recommend",
+        #     "headline_summary": "Likely partial recovery within 90d.",
+        #     ...
+        #   }
+        # None when the scorer failed or the brief pre-dates v0.14.1.
+        "recovery_estimate": recovery_estimate,
     }
 
     env = Environment(

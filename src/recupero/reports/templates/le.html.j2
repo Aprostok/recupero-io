@@ -66,6 +66,18 @@
          specific tx). #}
       <dd>USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>
     </div>
+    {# v0.21.0: recovery probability surfaced on the cover. AUSAs /
+       FBI agents weigh case priority on this number before reading
+       any per-issuer detail. Hidden when the scorer wasn't run
+       (older briefs) or returned no estimate. Field names match
+       RecoveryEstimate.to_json_safe(). Uses .get() so missing keys
+       under StrictUndefined degrade gracefully rather than raising. #}
+    {% if recovery_estimate and recovery_estimate.get('expected_recovered_usd') %}
+    <div class="cover-meta-item">
+      <dt>Estimated Recoverable</dt>
+      <dd>{{ recovery_estimate.get('expected_recovered_usd') }}<span class="secondary">range {{ recovery_estimate.get('expected_recovered_low_usd') or '—' }} – {{ recovery_estimate.get('expected_recovered_high_usd') or '—' }} (95% CI){% if recovery_estimate.get('probability_any_recovery_90d') %} · {{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }} probability of any recovery within 90d{% endif %}</span></dd>
+    </div>
+    {% endif %}
     <div class="cover-meta-item">
       <dt>Asset Issuer</dt>
       <dd>{{ issuer.name }}{% if issuer.jurisdiction %}<span class="secondary">{{ issuer.jurisdiction }}</span>{% endif %}</dd>

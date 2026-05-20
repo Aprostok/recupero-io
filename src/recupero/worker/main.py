@@ -528,6 +528,19 @@ def _run_watch_tick_once(*, limit: int | None) -> int:
         log.error("SUPABASE_DB_URL is not set; cannot run watch-tick")
         return 2
 
+    # v0.21.0: refresh per-issuer freeze priors nightly. Piggy-backs
+    # on the existing watch-tick Railway cron so we don't add another
+    # schedule. ~10s on a realistic dataset; non-fatal on failure.
+    # The recovery scorer reads issuer_freeze_priors when computing
+    # RECOVERY_ESTIMATE, so this keeps the LE handoff's recovery
+    # probability number current.
+    try:
+        from recupero.freeze_learning.recorder import refresh_priors
+        n_priors = refresh_priors(dsn)
+        log.info("watch-tick: refreshed %d per-issuer priors", n_priors)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning("watch-tick: refresh_priors failed (non-fatal): %s", exc)
+
     log.info("watch-tick: starting; limit=%s", limit if limit else "none")
     report = run_watch_tick(
         dsn=dsn, config=cfg, env=env, limit=limit,

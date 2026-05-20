@@ -109,6 +109,10 @@ def test_ctx_basic_shape_locked() -> None:
     assert set(out.keys()) == {
         "token", "freeze_capability",
         "total_usd_freezable", "total_usd_suspected",
+        # v0.20.5 (audit-round-5 F5): UNRECOVERABLE-only issuers expose
+        # total_excluded_usd so templates can reference it without going
+        # through the outer all_issuers_freezable wrapper.
+        "total_excluded_usd",
         "holdings", "freezable_holdings", "investigate_holdings",
         "has_freezable", "has_investigate",
         "freezable_count", "investigate_count", "total_count",

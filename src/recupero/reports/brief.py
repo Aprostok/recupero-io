@@ -1345,6 +1345,11 @@ def _build_issuer_freezable_ctx(
         "freeze_capability": raw.get("freeze_capability") or "UNKNOWN",
         "total_usd_freezable": _ensure_usd_prefix(raw.get("total_usd")),
         "total_usd_suspected": _ensure_usd_prefix(raw.get("total_suspected_usd")),
+        # v0.20.5 (audit-round-5 F5): UNRECOVERABLE-only issuers (freeze_capability=no)
+        # have total_usd=$0 but total_excluded_usd holds the seized/unreachable amount.
+        # Expose here so any template can reference issuer_freezable.total_excluded_usd
+        # without going through the outer wrapper in generate_briefs().
+        "total_excluded_usd": _ensure_usd_prefix(raw.get("total_excluded_usd")),
         "holdings": holdings_out,
         "freezable_holdings": freezable,
         "investigate_holdings": investigate,

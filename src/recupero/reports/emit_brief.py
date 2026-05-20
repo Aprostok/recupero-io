@@ -1398,7 +1398,17 @@ def emit_brief(
     # including Sky Protocol / DAI at $655K (seizure target, no
     # issuer-level freeze pathway). The FREEZABLE list (for letters)
     # is kept clean; this key is the LE-only comprehensive view.
-    all_issuer_holdings = _extract_freezable(freeze_asks, issuer_metadata, editorial_notes, keep_all=True)
+    # v0.20.5 (audit-round-5 F7): sort so FREEZABLE-capable issuers (total_usd > $0)
+    # precede UNRECOVERABLE-only ones in Section 4.2. Legal documents must lead
+    # with actionable freeze targets regardless of insertion order in freeze_asks.json.
+    _all_raw = _extract_freezable(freeze_asks, issuer_metadata, editorial_notes, keep_all=True)
+
+    def _sort_issuer_key(entry: dict) -> int:
+        """FREEZABLE/INVESTIGATE-capable issuers first (0), UNRECOVERABLE-only last (1)."""
+        cap = (entry.get("freeze_capability") or "").upper()
+        return 1 if cap in ("LOW", "NO") else 0
+
+    all_issuer_holdings = sorted(_all_raw, key=_sort_issuer_key)
 
     # --- Unrecoverable list ---
     unrecoverable = [

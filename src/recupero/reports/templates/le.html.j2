@@ -405,7 +405,7 @@
         <span class="label-pill" style="color:#6B7280;">{{ h.status or 'UNKNOWN' }}</span>
         {% endif %}
       </td>
-      <td class="mono"><a href="{{ h.explorer_url }}">{{ h.address }}</a></td>
+      <td class="mono">{% if h.explorer_url %}<a href="{{ h.explorer_url }}">{{ h.address }}</a>{% else %}{{ h.address }}{% endif %}</td>
       <td class="amount mono">{{ h.amount }}</td>
       <td class="amount mono">{{ h.usd }}</td>
     </tr>
@@ -506,7 +506,7 @@
   </tr>
   {% for w in identified_wallets %}
   <tr class="{{ w.row_class }}">
-    <td class="mono"><a href="{{ w.explorer_url }}">{{ w.address }}</a></td>
+    <td class="mono">{% if w.explorer_url %}<a href="{{ w.explorer_url }}">{{ w.address }}</a>{% else %}{{ w.address }}{% endif %}</td>
     <td>{{ w.role }}</td>
     <td>{{ w.type }}</td>
     <td>{{ w.notes }}</td>

@@ -391,7 +391,7 @@
         <span class="label-pill" style="color:#1E40AF;">current</span>
         {% endif %}
       </td>
-      <td class="mono"><a href="{{ h.explorer_url }}">{{ h.address }}</a></td>
+      <td class="mono">{% if h.explorer_url %}<a href="{{ h.explorer_url }}">{{ h.address }}</a>{% else %}{{ h.address }}{% endif %}</td>
       <td class="amount mono">{{ h.amount }}</td>
       <td class="amount mono">{{ h.usd }}</td>
     </tr>

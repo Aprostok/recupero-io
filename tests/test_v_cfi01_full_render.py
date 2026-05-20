@@ -558,6 +558,24 @@ def test_no_jinja_undefined_in_output(rendered):
         assert "Undefined" not in html, (
             f"{letter_name}: 'Undefined' in rendered output — context variable missing"
         )
+        # Python None leaking as literal "None" in rendered output
+        # (Jinja2 renders Python None objects as the string "None").
+        # Exclude the word "None" that may legitimately appear inside legal prose
+        # by checking for ">None<" (tag-wrapped) and ": None" / " None " patterns
+        # that would only appear from unguarded template variables.
+        import re as _re
+        none_leaks = _re.findall(r'(?<![a-zA-Z])None(?![a-zA-Z])', html)
+        # Allow "None" inside HTML comments and script/style blocks (audit tooling)
+        # but reject it appearing as rendered text content
+        html_text_only = _re.sub(r'<!--.*?-->', '', html, flags=_re.DOTALL)
+        html_text_only = _re.sub(r'<style[^>]*>.*?</style>', '', html_text_only, flags=_re.DOTALL)
+        html_text_only = _re.sub(r'<script[^>]*>.*?</script>', '', html_text_only, flags=_re.DOTALL)
+        assert '>None<' not in html_text_only, (
+            f"{letter_name}: literal '>None<' in rendered output — template variable is None (not guarded)"
+        )
+        assert 'href="None"' not in html_text_only, (
+            f"{letter_name}: href=\"None\" in rendered output — URL field is None (not guarded)"
+        )
 
 
 def test_no_todo_placeholders_in_output(rendered):
@@ -633,18 +651,18 @@ def test_issuer_letter_contains_msyrup_amount(rendered):
     """Midas freeze-request letter must mention the $3.12M mSyrupUSDp amount."""
     html = rendered["issuer_html"]
     # The amount should appear somewhere in the letter
-    assert "3,119,023" in html or "3.1" in html or "3,119" in html, (
-        "Midas freeze letter does not contain the mSyrupUSDp dollar amount. "
-        "Section 4 / holdings table may be missing."
+    assert "3,119,023" in html, (
+        "Midas freeze letter does not contain the mSyrupUSDp dollar amount ($3,119,023). "
+        "Section 4 / holdings table may be missing or amount not formatted correctly."
     )
 
 
 def test_le_html_contains_theft_event_total(rendered):
     """LE handoff must mention $3,600,000 (total across all 6 theft events)."""
     html = rendered["le_html"]
-    assert "3,600,000" in html or "3.6" in html, (
-        "LE handoff does not show the $3.6M total theft. "
-        "Multi-event rollup may be missing."
+    assert "3,600,000" in html, (
+        "LE handoff does not show the $3,600,000 total theft. "
+        "Multi-event rollup ($600K × 6 events) may be missing from LE context."
     )
 
 

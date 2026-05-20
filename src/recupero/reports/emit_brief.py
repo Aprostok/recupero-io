@@ -963,6 +963,261 @@ def _extract_exchanges(freeze_asks: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+# ---- Section builders (v0.20.0 Phase C decomposition) ----
+#
+# Pre-v0.20.0 `emit_brief()` inlined 9 sub-section builds, each
+# wrapped in its own ``try / except Exception as _exc`` block with
+# a sub-section-specific empty-fallback dict. The function was ~400
+# lines, the failure-mode docstrings were buried at the call site,
+# and adding a new section meant grafting another 10-15 line block
+# onto an already-overloaded orchestrator.
+#
+# Each helper below:
+#   * Has a single responsibility (one brief sub-section)
+#   * Catches all exceptions + logs a structured warning naming the
+#     section that failed (Jacob's WARNING-grep pattern catches it)
+#   * Returns the empty fallback shape that downstream templates
+#     expect (no Optional wrapping required at the call site)
+
+
+def _build_cross_chain_handoffs_section(case: Case) -> list[dict[str, Any]]:
+    """v0.8.1: scan the case for transfers landing at known bridge
+    contracts. Returned list shapes for the brief template's
+    CROSS_CHAIN_HANDOFFS section."""
+    try:
+        from recupero.trace.cross_chain import (
+            handoffs_to_brief_section,
+            identify_cross_chain_handoffs,
+        )
+        handoffs = identify_cross_chain_handoffs(case)
+        return handoffs_to_brief_section(handoffs)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: cross-chain handoffs section build failed: "
+            "%s — falling back to empty", exc,
+        )
+        return []
+
+
+def _build_entity_clusters_section(
+    case: Case, freezable: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """v0.9.0: group addresses that appear to belong to the same actor.
+    v0.18.0: cluster-member dedup keys use canonical_address_key so
+    Solana / Tron / Bitcoin base58 addresses don't silently mismatch."""
+    try:
+        from recupero._common import canonical_address_key as _ck
+        from recupero.trace.clustering import (
+            cluster_addresses,
+            clusters_to_brief_section,
+        )
+        address_balances: dict[str, Decimal] = {}
+        for entry in freezable:
+            for holding in entry.get("holdings") or []:
+                addr = _ck(holding.get("address") or "")
+                if not addr:
+                    continue
+                bal = _parse_usd_string(holding.get("usd"))
+                address_balances[addr] = (
+                    address_balances.get(addr, Decimal("0")) + bal
+                )
+        clusters, unclustered = cluster_addresses(case, address_balances)
+        return clusters_to_brief_section(clusters, unclustered)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: entity clusters section build failed: %s — "
+            "falling back to empty", exc,
+        )
+        return {"clusters": [], "unclustered_addresses": []}
+
+
+def _build_risk_assessment_section(
+    case: Case,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """v0.9.1 / v0.10.0: direct + indirect exposure scoring.
+    Returns ``(risk_assessment, high_risk_db)`` because downstream
+    sections (indirect_exposure, drainer_detection) need the loaded
+    high_risk_db dict; loading it twice would burn extra I/O."""
+    try:
+        from recupero.trace.risk_scoring import (
+            load_high_risk_db,
+            risk_scores_to_brief_section,
+            score_addresses,
+        )
+        high_risk_db = load_high_risk_db()
+        risk_scores = score_addresses(case, high_risk_db=high_risk_db)
+        return risk_scores_to_brief_section(risk_scores), high_risk_db
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: risk assessment section build failed: %s — "
+            "falling back to empty", exc,
+        )
+        return (
+            {
+                "addresses": {},
+                "summary": {
+                    "addresses_assessed": 0,
+                    "ofac_exposed_count": 0,
+                    "mixer_exposed_count": 0,
+                    "highest_score": 0,
+                    "highest_score_address": None,
+                },
+            },
+            {},
+        )
+
+
+def _build_indirect_exposure_section(
+    case: Case, high_risk_db: dict[str, Any],
+) -> dict[str, Any]:
+    """v0.10.0: N-hop graph traversal with decay factor. Catches the
+    "funds 2-3 hops from Lazarus" case that direct-only scoring misses."""
+    try:
+        from recupero.trace.indirect_exposure import (
+            compute_indirect_exposure,
+            indirect_exposure_to_brief_section,
+        )
+        indirect_results = compute_indirect_exposure(case, high_risk_db)
+        return indirect_exposure_to_brief_section(indirect_results)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: indirect exposure section build failed: %s — "
+            "falling back to empty", exc,
+        )
+        return {
+            "addresses": {},
+            "summary": {
+                "addresses_with_indirect_exposure": 0,
+                "indirect_ofac_exposed_count": 0,
+                "highest_indirect_usd": "$0.00",
+                "highest_indirect_address": None,
+            },
+        }
+
+
+def _build_incident_classification_section(
+    case: Case, high_risk_db: dict[str, Any],
+) -> tuple[dict[str, Any], Any]:
+    """v0.10.1: drainer / approval-signature detection. Returns
+    ``(incident_classification, drainer_findings)`` because the
+    correlation pass downstream consumes the raw findings, not just
+    the brief-section view."""
+    try:
+        from recupero.trace.drainer_detection import (
+            detect_drainer_pattern,
+            drainer_findings_to_brief_section,
+        )
+        drainer_findings = detect_drainer_pattern(case, high_risk_db=high_risk_db)
+        return drainer_findings_to_brief_section(drainer_findings), drainer_findings
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: drainer/incident classification section "
+            "build failed: %s — falling back to empty", exc,
+        )
+        return (
+            {
+                "is_drainer_case": False,
+                "drainer_attribution": None,
+                "classification_confidence": "low",
+                "signals": [],
+            },
+            None,
+        )
+
+
+def _build_dex_swaps_section(case: Case) -> list[dict[str, Any]]:
+    """v0.10.2: DEX-router input/output unwrap so a trace doesn't dead-end
+    at the router contract."""
+    try:
+        from recupero.trace.dex_swaps import (
+            detect_dex_swaps,
+            dex_swaps_to_brief_section,
+        )
+        dex_swap_records = detect_dex_swaps(case)
+        return dex_swaps_to_brief_section(dex_swap_records)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: dex swaps section build failed: %s — falling "
+            "back to empty", exc,
+        )
+        return []
+
+
+def _build_cross_case_correlation_section(
+    case: Case,
+    editorial: dict[str, Any],
+    risk_assessment: dict[str, Any],
+    drainer_findings: Any,
+    freeze_targets_by_addr: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], Any]:
+    """v0.11.0: per-address recidivist lookup against the cumulative
+    public.address_observations index. Returns ``(correlation_section,
+    case_uuid)`` so the downstream class-action pass can reuse the
+    parsed case UUID without re-parsing."""
+    case_uuid = None
+    try:
+        from uuid import UUID as _UUID
+        cid_raw = getattr(case, "case_id", None) or editorial.get("CASE_ID")
+        if cid_raw and isinstance(cid_raw, str):
+            try:
+                case_uuid = _UUID(cid_raw)
+            except (ValueError, TypeError):
+                case_uuid = None
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from recupero.trace.correlation import run_correlation_pass
+        section = run_correlation_pass(
+            case,
+            case_id=case_uuid,
+            investigation_id=None,
+            risk_assessment=risk_assessment,
+            drainer_findings=drainer_findings,
+            freeze_targets_by_addr=freeze_targets_by_addr,
+        )
+        return section, case_uuid
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: cross-case correlation section build failed: "
+            "%s — falling back to empty", exc,
+        )
+        return (
+            {
+                "addresses": {},
+                "summary": {
+                    "recidivist_address_count": 0,
+                    "ofac_recidivist_count": 0,
+                    "drainer_recidivist_count": 0,
+                    "highest_prior_case_count": 0,
+                    "highest_prior_case_address": None,
+                },
+            },
+            case_uuid,
+        )
+
+
+def _build_class_action_section(case: Case, case_uuid: Any) -> dict[str, Any]:
+    """v0.14.3: cross-victim class-action opportunity surfacing.
+    Triggered when the current case's perp infra overlaps prior cases
+    in qualifying roles (perpetrator_hub / drainer_contract / etc.)."""
+    try:
+        from recupero.trace.class_action import run_class_action_pass
+        return run_class_action_pass(case, current_case_id=case_uuid)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: class action opportunity section build "
+            "failed: %s — falling back to empty", exc,
+        )
+        return {
+            "triggered": False,
+            "potential_co_victim_case_count": 0,
+            "qualifying_share_count": 0,
+            "estimated_combined_loss": "$0.00",
+            "shared_addresses": [],
+            "investigator_note": "",
+        }
+
+
 def emit_brief(
     case: Case,
     victim: VictimInfo,
@@ -1027,212 +1282,46 @@ def emit_brief(
     # contracts caught in the trace expansion — e.g. the Lido stETH contract).
     totals = _compute_totals(case, freezable, unrecoverable)
 
-    # --- Cross-chain handoffs (v0.8.1) ---
-    # Scan the case for transfers landing at known bridge contracts.
-    # Surfaced as a structured CROSS_CHAIN_HANDOFFS section so a
-    # downstream investigator can follow the money to other chains
-    # without having to manually identify the bridge each time.
-    try:
-        from recupero.trace.cross_chain import (
-            handoffs_to_brief_section,
-            identify_cross_chain_handoffs,
-        )
-        handoffs = identify_cross_chain_handoffs(case)
-        cross_chain_handoffs = handoffs_to_brief_section(handoffs)
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: cross-chain handoffs section build failed: %s — falling back to empty", _exc)
-        cross_chain_handoffs = []
+    # --- Cross-chain handoffs (v0.8.1) --- v0.20.0 Phase C: extracted
+    cross_chain_handoffs = _build_cross_chain_handoffs_section(case)
 
-    # --- Entity clustering (v0.9.0) ---
-    # Group addresses that appear to belong to the same actor.
-    # Helps the investigator subpoena the full set, not just the
-    # one address the victim's funds touched.
-    try:
-        from recupero.trace.clustering import (
-            cluster_addresses,
-            clusters_to_brief_section,
-        )
-        # Build address-balance lookup from the freezable list
-        # so clusters can report their total exposure.
-        # v0.18.0 (round-11 forensic-HIGH-001): canonical-key the
-        # address. Pre-v0.18.0 this was `.lower()` — fine for EVM, but
-        # `clusters_to_brief_section` keys cluster members via
-        # canonical_address_key (which preserves base58 case for
-        # Solana / Tron / Bitcoin). The mismatch silently returned
-        # $0.00 for every base58 cluster's `total_balance_usd`, sorting
-        # them to the bottom of the brief and burying the largest
-        # exposures.
-        from recupero._common import canonical_address_key as _ck
-        address_balances: dict[str, Decimal] = {}
-        for entry in freezable:
-            for holding in entry.get("holdings") or []:
-                addr = _ck(holding.get("address") or "")
-                if not addr:
-                    continue
-                bal = _parse_usd_string(holding.get("usd"))
-                address_balances[addr] = (
-                    address_balances.get(addr, Decimal("0")) + bal
-                )
-        clusters, unclustered = cluster_addresses(case, address_balances)
-        entity_clusters = clusters_to_brief_section(clusters, unclustered)
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: entity clusters section build failed: %s — falling back to empty", _exc)
-        entity_clusters = {"clusters": [], "unclustered_addresses": []}
+    # --- Entity clustering (v0.9.0) --- v0.20.0 Phase C: extracted
+    entity_clusters = _build_entity_clusters_section(case, freezable)
 
-    # --- Risk scoring (v0.9.1 + v0.10.0) ---
-    # Direct exposure (v0.9.1): OFAC + mixer + darknet contact
-    #   triggers SANCTIONED verdict regardless of numeric score.
-    # Indirect exposure (v0.10.0): N-hop graph traversal with
-    #   decay factor + amount-share normalization. Catches the
-    #   "funds 2-3 hops from Lazarus" cases that direct-only
-    #   scoring misses.
-    try:
-        from recupero.trace.risk_scoring import (
-            load_high_risk_db,
-            risk_scores_to_brief_section,
-            score_addresses,
-        )
-        high_risk_db = load_high_risk_db()
-        risk_scores = score_addresses(case, high_risk_db=high_risk_db)
-        risk_assessment = risk_scores_to_brief_section(risk_scores)
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: risk assessment section build failed: %s — falling back to empty", _exc)
-        high_risk_db = {}
-        risk_assessment = {
-            "addresses": {},
-            "summary": {
-                "addresses_assessed": 0,
-                "ofac_exposed_count": 0,
-                "mixer_exposed_count": 0,
-                "highest_score": 0,
-                "highest_score_address": None,
-            },
-        }
+    # --- Risk scoring (v0.9.1 + v0.10.0) --- v0.20.0 Phase C: extracted.
+    # high_risk_db is returned alongside risk_assessment because the
+    # next two subsystems (indirect_exposure, drainer_detection) need
+    # the already-loaded DB; double-loading would burn extra I/O.
+    risk_assessment, high_risk_db = _build_risk_assessment_section(case)
 
-    try:
-        from recupero.trace.indirect_exposure import (
-            compute_indirect_exposure,
-            indirect_exposure_to_brief_section,
-        )
-        indirect_results = compute_indirect_exposure(case, high_risk_db)
-        indirect_exposure = indirect_exposure_to_brief_section(indirect_results)
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: indirect exposure section build failed: %s — falling back to empty", _exc)
-        indirect_exposure = {
-            "addresses": {},
-            "summary": {
-                "addresses_with_indirect_exposure": 0,
-                "indirect_ofac_exposed_count": 0,
-                "highest_indirect_usd": "$0.00",
-                "highest_indirect_address": None,
-            },
-        }
+    # --- Indirect exposure (v0.10.0) --- v0.20.0 Phase C: extracted
+    indirect_exposure = _build_indirect_exposure_section(case, high_risk_db)
 
-    # --- Drainer / approval signature detection (v0.10.1) ---
-    drainer_findings = None  # exposed to cross-case correlation below
-    try:
-        from recupero.trace.drainer_detection import (
-            detect_drainer_pattern,
-            drainer_findings_to_brief_section,
-        )
-        drainer_findings = detect_drainer_pattern(case, high_risk_db=high_risk_db)
-        incident_classification = drainer_findings_to_brief_section(drainer_findings)
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: drainer/incident classification section build failed: %s — falling back to empty", _exc)
-        incident_classification = {
-            "is_drainer_case": False,
-            "drainer_attribution": None,
-            "classification_confidence": "low",
-            "signals": [],
-        }
+    # --- Drainer / incident classification (v0.10.1) --- v0.20.0 Phase C
+    # Returns the brief-section view + the raw drainer_findings (the
+    # downstream correlation pass consumes the raw findings, not the
+    # section view).
+    incident_classification, drainer_findings = (
+        _build_incident_classification_section(case, high_risk_db)
+    )
 
-    # --- DEX swap unwrapping (v0.10.2) ---
-    # When perpetrator funds pass through a DEX router, surfaces
-    # the input/output so the investigator can continue tracing
-    # from the output address rather than dead-ending at the
-    # router.
-    try:
-        from recupero.trace.dex_swaps import (
-            detect_dex_swaps,
-            dex_swaps_to_brief_section,
-        )
-        dex_swap_records = detect_dex_swaps(case)
-        dex_swaps = dex_swaps_to_brief_section(dex_swap_records)
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: dex swaps section build failed: %s — falling back to empty", _exc)
-        dex_swaps = []
+    # --- DEX swap unwrapping (v0.10.2) --- v0.20.0 Phase C: extracted
+    dex_swaps = _build_dex_swaps_section(case)
 
-    # --- Cross-case correlation (v0.11.0) ---
-    # Look up every address in THIS case against the cumulative
-    # public.address_observations index. Addresses that appeared in
-    # prior cases get a recidivist flag with the prior case IDs,
-    # prior roles, and prior OFAC/mixer/drainer exposure counts.
-    # This is the compounding-moat capability — every case the
-    # worker traces adds to the index, so the Nth case automatically
-    # benefits from sightings in cases 1..N-1.
-    #
-    # DB-unavailable → empty section (best-effort). Doesn't break
-    # CLI users running emit_brief without Supabase.
-    try:
-        from recupero.trace.correlation import run_correlation_pass
-        # Try to pull a case_id / investigation_id from the case
-        # so observations get tagged with the right FK. Pre-Phase-2
-        # cases (CLI-only) may not have these — that's fine, the
-        # recorder accepts NULL case_id.
-        _case_uuid = None
-        _inv_uuid = None
-        try:
-            from uuid import UUID as _UUID
-            cid_raw = getattr(case, "case_id", None) or editorial.get("CASE_ID")
-            if cid_raw and isinstance(cid_raw, str):
-                try:
-                    _case_uuid = _UUID(cid_raw)
-                except (ValueError, TypeError):
-                    _case_uuid = None
-        except Exception:  # noqa: BLE001
-            pass
-        cross_case_correlation = run_correlation_pass(
-            case,
-            case_id=_case_uuid,
-            investigation_id=_inv_uuid,
-            risk_assessment=risk_assessment,
-            drainer_findings=drainer_findings,
-            freeze_targets_by_addr=freeze_targets_by_addr,
-        )
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: cross-case correlation section build failed: %s — falling back to empty", _exc)
-        cross_case_correlation = {
-            "addresses": {},
-            "summary": {
-                "recidivist_address_count": 0,
-                "ofac_recidivist_count": 0,
-                "drainer_recidivist_count": 0,
-                "highest_prior_case_count": 0,
-                "highest_prior_case_address": None,
-            },
-        }
+    # --- Cross-case correlation (v0.11.0) --- v0.20.0 Phase C: extracted
+    # The recidivist-lookup against the cumulative
+    # public.address_observations index. Returns the section + the
+    # parsed case UUID so the next sub-section (class_action) can reuse it.
+    cross_case_correlation, _case_uuid = _build_cross_case_correlation_section(
+        case=case,
+        editorial=editorial,
+        risk_assessment=risk_assessment,
+        drainer_findings=drainer_findings,
+        freeze_targets_by_addr=freeze_targets_by_addr,
+    )
 
-    # --- Class-action / cross-victim correlation (v0.14.3) ---
-    # When the current case's perp infra overlaps with prior cases
-    # in qualifying roles (perpetrator_hub / drainer_contract /
-    # high_risk_destination), surface the combined-loss figure +
-    # multi-victim action recommendation.
-    try:
-        from recupero.trace.class_action import run_class_action_pass
-        class_action_opportunity = run_class_action_pass(
-            case,
-            current_case_id=_case_uuid,
-        )
-    except Exception as _exc:  # noqa: BLE001 — non-fatal
-        log.warning("emit_brief: class action opportunity section build failed: %s — falling back to empty", _exc)
-        class_action_opportunity = {
-            "triggered": False,
-            "potential_co_victim_case_count": 0,
-            "qualifying_share_count": 0,
-            "estimated_combined_loss": "$0.00",
-            "shared_addresses": [],
-            "investigator_note": "",
-        }
+    # --- Class-action / cross-victim correlation (v0.14.3) --- v0.20.0 Phase C
+    class_action_opportunity = _build_class_action_section(case, _case_uuid)
 
     # --- Final assembly ---
     brief = {

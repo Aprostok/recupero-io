@@ -175,6 +175,54 @@ class BriefBundle:
     brief_id: str
 
 
+# ---- Small generate_briefs helpers (v0.20.0 Phase C decomposition) ---- #
+
+
+def _resolve_render_time() -> datetime:
+    """Resolve the wall-clock-or-pinned render timestamp.
+
+    Honors ``SOURCE_DATE_EPOCH`` for reproducible-builds workflows.
+    On parse failure, falls back to ``datetime.now(UTC)``. v0.20.0
+    Phase C extraction: previously inlined ~15 lines inside
+    generate_briefs() with two ad-hoc imports; clarified into a
+    single pure helper.
+    """
+    import os
+    src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    if src_epoch:
+        try:
+            return datetime.fromtimestamp(int(src_epoch), tz=UTC)
+        except (ValueError, TypeError):
+            log.warning(
+                "SOURCE_DATE_EPOCH=%r is not a valid integer epoch; "
+                "falling back to wall-clock", src_epoch,
+            )
+    return datetime.now(UTC)
+
+
+def _make_brief_id(case_id: str, theft_tx_hash: str) -> str:
+    """Deterministic brief identifier.
+
+    v0.16.7 (round-9 output-artifacts CRIT): pre-v0.16.7 brief_id was
+    `f"BRIEF-{wall_clock}-{uuid4().hex[:6]}"`, which made PDFs and
+    HTML artifacts non-reproducible — re-running the same case
+    produced different bytes (filename, cover-page text, footer code).
+    Chain-of-custody hash verification was therefore impossible.
+
+    The fix: derive brief_id deterministically from case content
+    (case_id + earliest theft_transfer hash). Two renders of the same
+    case → same brief_id → byte-reproducible artifacts.
+
+    v0.20.0 Phase C extraction: moved out of generate_briefs() body
+    into a pure helper so the rationale lives next to the algorithm
+    instead of as a 17-line inline comment block in an orchestrator.
+    """
+    import hashlib
+    seed = f"{case_id}|{theft_tx_hash}"
+    suffix = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:6]
+    return f"BRIEF-{case_id[:8]}-{suffix}"
+
+
 def generate_briefs(
     *,
     primary_case: Case,
@@ -260,40 +308,12 @@ def generate_briefs(
     # Identify wallets across all cases for the LE summary table
     identified_wallets = _build_identified_wallets(primary_case, linked_cases, victim, current_holder_addr)
 
-    # Common context.
-    #
-    # v0.16.7 (round-9 output-artifacts CRIT): the prior code generated
-    # brief_id as `f"BRIEF-{wall_clock}-{uuid4().hex[:6]}"`, which made
-    # PDFs and HTML artifacts non-reproducible — re-running the same case
-    # produced different bytes (different filename, different cover-page
-    # text, different footer code). Chain-of-custody hash verification
-    # was therefore impossible; the artifact stage was effectively
-    # "trust us we re-ran it."
-    #
-    # The fix: derive brief_id deterministically from the case content
-    # (case_id + earliest theft_transfer hash). Two renders of the same
-    # case → same brief_id → byte-reproducible artifacts. `generated_at`
-    # remains wall-clock (it's documenting WHEN this render happened),
-    # but it's now also overridable via the SOURCE_DATE_EPOCH env var so
-    # reproducible-builds workflows can pin the entire render.
-    import hashlib
-    import os
-    src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
-    if src_epoch:
-        try:
-            now = datetime.fromtimestamp(int(src_epoch), tz=UTC)
-        except (ValueError, TypeError):
-            now = datetime.now(UTC)
-    else:
-        now = datetime.now(UTC)
-    # Stable suffix: case_id + the theft-transfer tx_hash gives a unique
-    # 6-hex suffix that's deterministic across re-renders without
-    # leaking sensitive content into the filename.
-    _brief_seed = f"{primary_case.case_id}|{theft_transfer.tx_hash}"
-    brief_id = (
-        f"BRIEF-{primary_case.case_id[:8]}-"
-        f"{hashlib.sha256(_brief_seed.encode('utf-8')).hexdigest()[:6]}"
-    )
+    # Common context. v0.20.0 Phase C: render-time + deterministic
+    # brief-id resolution extracted to small pure helpers above. The
+    # rationale + reproducible-builds contract live with the helpers
+    # so the orchestrator can read as orchestration.
+    now = _resolve_render_time()
+    brief_id = _make_brief_id(primary_case.case_id, theft_transfer.tx_hash)
 
     ctx: dict[str, Any] = {
         "case_id": primary_case.case_id,

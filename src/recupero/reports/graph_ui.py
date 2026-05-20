@@ -57,7 +57,7 @@ from typing import TYPE_CHECKING, Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from recupero._common import short_addr as _short_addr
+from recupero._common import atomic_write_text as _atomic_write_text, short_addr as _short_addr
 
 if TYPE_CHECKING:  # pragma: no cover
     from recupero.models import Case
@@ -281,7 +281,7 @@ def render_graph_html(
         graph_data_json=safe_json,
         meta=graph_data["meta"],
     )
-    output_path.write_text(html, encoding="utf-8")
+    _atomic_write_text(output_path, html)
     log.info(
         "rendered interactive graph: %s (%d nodes, %d edges, %d bytes)",
         output_path,

@@ -377,13 +377,30 @@ def _build_context(
 
 
 def _count_unique_addresses(case: Case) -> int:
-    """Count unique addresses across all transfers (incl. seed)."""
-    addrs: set[str] = {case.seed_address}
+    """Count unique destinations in the trace (excluding the victim
+    wallet).
+
+    v0.20.1 (Jacob V-CFI01 residual #8): pre-v0.20.1 this counted ALL
+    addresses including the seed, producing a number off-by-one from
+    the trace report's "destinations identified" stat. The customer-
+    facing victim summary read "16 addresses" while the operator's
+    trace report said "15 destinations" for the same case.
+
+    Also canonical-keys the set so mixed-case + lowercase forms of
+    the same on-chain address don't inflate the count.
+    """
+    from recupero._common import canonical_address_key as _ck
+    seed_canon = _ck(case.seed_address)
+    addrs: set[str] = set()
     for t in case.transfers:
         if t.from_address:
-            addrs.add(t.from_address)
+            canon = _ck(t.from_address)
+            if canon and canon != seed_canon:
+                addrs.add(canon)
         if t.to_address:
-            addrs.add(t.to_address)
+            canon = _ck(t.to_address)
+            if canon and canon != seed_canon:
+                addrs.add(canon)
     return len(addrs)
 
 

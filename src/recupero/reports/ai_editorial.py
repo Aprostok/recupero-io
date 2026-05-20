@@ -1298,6 +1298,11 @@ def build_editorial_dict(
     editorial["CASE_ID"] = case_id if case_id else "TODO: assign case ID (e.g. RCP-2026-0427)"
     editorial["REPORT_DATE"] = today_human
     editorial["INCIDENT_DATE"] = case_summary.get("incident_date_human", "TODO: incident date")
+    # v0.20.13 (R17-E): keep in sync with brief._PRIMARY_CHAIN_DISPLAY,
+    # emit_brief._extract_primary_chain, and _victim_summary._CHAIN_DISPLAY.
+    # Previously missing "tron" and "hyperliquid"; `.capitalize()` fallback
+    # returns "Tron"/"Hyperliquid" correctly but "bsc" → "Bsc" (not "BNB Chain"),
+    # so an explicit dict is required for all supported chains.
     editorial["PRIMARY_CHAIN"] = {
         "ethereum": "Ethereum",
         "arbitrum": "Arbitrum",
@@ -1306,6 +1311,8 @@ def build_editorial_dict(
         "polygon": "Polygon",
         "solana": "Solana",
         "bitcoin": "Bitcoin",
+        "tron": "Tron",
+        "hyperliquid": "Hyperliquid",
     }.get(case_summary.get("primary_chain", ""), case_summary.get("primary_chain", "Ethereum").capitalize())
 
     # Try to derive victim address lines from the victim object the case carries

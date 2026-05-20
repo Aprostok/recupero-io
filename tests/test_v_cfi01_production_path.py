@@ -592,8 +592,14 @@ def test_count_theft_events_multi_event():
     assert _count_theft_events(case) == 6
 
 
-def test_count_theft_events_excludes_none_usd():
-    """_count_theft_events must not count transfers with usd_value_at_tx=None."""
+def test_count_theft_events_includes_unpriced():
+    """_count_theft_events must count ALL outbound transfers from seed, priced or not.
+
+    v0.20.13 (R17-E): previously filtered by `usd_value_at_tx is not None`,
+    which caused THEFT_EVENT_COUNT=0 for unpriced drains while the template
+    context produced is_multi_event=True — contradictory signals for AI editorial.
+    Aligns with _find_theft_events which includes all outbound transfers.
+    """
     from decimal import Decimal
     from types import SimpleNamespace
     from recupero.reports.emit_brief import _count_theft_events
@@ -603,8 +609,8 @@ def test_count_theft_events_excludes_none_usd():
         seed_address=victim,
         transfers=[
             SimpleNamespace(from_address=victim, usd_value_at_tx=Decimal("1000")),
-            # unpriced transfer — must NOT be counted even though from victim
+            # unpriced transfer — MUST be counted (v0.20.13 behaviour change)
             SimpleNamespace(from_address=victim, usd_value_at_tx=None),
         ],
     )
-    assert _count_theft_events(case) == 1
+    assert _count_theft_events(case) == 2

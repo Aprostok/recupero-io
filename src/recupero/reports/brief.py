@@ -42,7 +42,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Single source of truth for the freeze_brief.json schema version.
 # Imported by emit_brief.py + the worker synthesizer so a future bump
 # only happens here.
-BRIEF_SCHEMA_VERSION = "0.20.12"
+BRIEF_SCHEMA_VERSION = "0.20.13"
 
 # Earliest version that wrote ALL the fields the current rendering
 # chain expects (evidence_type, evidence_mode, etc.). Briefs from
@@ -665,13 +665,19 @@ def generate_briefs(
         # transactions (e.g. 6 × $600K = $3.6M total), and using the
         # primary alone routed the case to the wrong tier and
         # understated severity in the LE handoff narrative.
+        # v0.20.13 (R17-A): replace `sum(...) or fallback` — Decimal(0) is
+        # falsy so a $0-priced multi-event drain silently fell back to the
+        # primary-event value, routing the case to the wrong LE tier.
+        # Use the `any(... is not None)` guard instead (same pattern as
+        # asset.total_usd_value_at_theft fixed in R15-A).
         "le_routing": _build_le_routing_ctx(
             victim,
             sum(
                 (t.usd_value_at_tx for t in theft_events
                  if t.usd_value_at_tx is not None),
                 start=Decimal(0),
-            ) or theft_transfer.usd_value_at_tx,
+            ) if any(t.usd_value_at_tx is not None for t in theft_events)
+            else theft_transfer.usd_value_at_tx,
         ),
     }
 

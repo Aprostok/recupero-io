@@ -837,10 +837,15 @@ def _count_theft_events(case: Case) -> int:
     cases (multi-event drain: 6 × $600K = $3.6M) this correctly returns 6;
     for single-event cases it returns 1.
     """
+    # v0.20.13 (R17-E): drop the `usd_value_at_tx is not None` filter so the
+    # count matches _find_theft_events (which includes unpriced outbound
+    # transfers). Previously an unpriced drain event (token not in CoinGecko)
+    # would be counted here as 0 but appear in the template context as
+    # is_multi_event=True — contradictory signals for the AI editorial.
     seed_lower = _ck(case.seed_address)
     return sum(
         1 for t in case.transfers
-        if _ck(t.from_address) == seed_lower and t.usd_value_at_tx is not None
+        if _ck(t.from_address) == seed_lower
     )
 
 
@@ -1004,7 +1009,10 @@ def write_editorial_template(case_dir: Path) -> Path:
         return path
     # v0.17.3: call factory so investigator-* env-var rotation takes
     # effect without a worker restart.
-    path.write_text(json.dumps(_editorial_template(), indent=2), encoding="utf-8")
+    # v0.20.13 (R17-C): atomic write — if the worker is killed mid-write,
+    # the truncated file must not survive (the `if path.exists()` guard on
+    # line 1003 prevents the next run from overwriting it).
+    atomic_write_text(path, json.dumps(_editorial_template(), indent=2))
     return path
 
 

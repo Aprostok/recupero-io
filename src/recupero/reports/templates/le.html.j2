@@ -226,7 +226,7 @@
   {% if victim.address %}<dt>Residential address:</dt><dd>{{ victim.address }}</dd>{% endif %}
   {% if victim.email %}<dt>Email:</dt>      <dd>{{ victim.email }}</dd>{% endif %}
   {% if victim.phone %}<dt>Phone:</dt>      <dd>{{ victim.phone }}</dd>{% endif %}
-  <dt>Affected wallet:</dt>     <dd><a class="mono" href="{{ victim_wallet_explorer_url }}">{{ victim.wallet_address }}</a></dd>
+  <dt>Affected wallet:</dt>     <dd>{% if victim_wallet_explorer_url %}<a class="mono" href="{{ victim_wallet_explorer_url }}">{{ victim.wallet_address }}</a>{% else %}<span class="mono">{{ victim.wallet_address }}</span>{% endif %}</dd>
   {% if victim.legal_counsel %}
   <dt>Legal counsel:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
   {% endif %}
@@ -257,18 +257,18 @@
       {{ ev.amount_human }} {{ ev.symbol }}
       {% if ev.usd_value and ev.usd_value != '(unknown)' %}(USD {{ ev.usd_value }}){% endif %}
       transferred from
-      <a class="mono" href="{{ ev.from_explorer_url }}">{{ ev.from_address }}</a>
-      to <a class="mono" href="{{ ev.to_explorer_url }}">{{ ev.to_address }}</a>.
-      Tx: <span class="mono"><a href="{{ ev.explorer_url }}">{{ ev.tx_hash }}</a></span>
+      {% if ev.from_explorer_url %}<a class="mono" href="{{ ev.from_explorer_url }}">{{ ev.from_address }}</a>{% else %}<span class="mono">{{ ev.from_address }}</span>{% endif %}
+      to {% if ev.to_explorer_url %}<a class="mono" href="{{ ev.to_explorer_url }}">{{ ev.to_address }}</a>{% else %}<span class="mono">{{ ev.to_address }}</span>{% endif %}.
+      Tx: <span class="mono">{% if ev.explorer_url %}<a href="{{ ev.explorer_url }}">{{ ev.tx_hash }}</a>{% else %}{{ ev.tx_hash }}{% endif %}</span>
     </div>
     {% endfor %}
   {% else %}
   <div class="timeline-event theft">
     <time>{{ theft_event.timestamp_human }}</time> &nbsp;—&nbsp;
     <strong>Initial theft.</strong> {{ asset.amount_human }} {{ asset.symbol }} transferred
-    from victim wallet <a class="mono" href="{{ theft_event.from_explorer_url }}">{{ theft_event.from_address }}</a>
-    to perpetrator wallet <a class="mono" href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a>.
-    Tx: <span class="mono"><a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a></span>
+    from victim wallet {% if theft_event.from_explorer_url %}<a class="mono" href="{{ theft_event.from_explorer_url }}">{{ theft_event.from_address }}</a>{% else %}<span class="mono">{{ theft_event.from_address }}</span>{% endif %}
+    to perpetrator wallet {% if theft_event.to_explorer_url %}<a class="mono" href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a>{% else %}<span class="mono">{{ theft_event.to_address }}</span>{% endif %}.
+    Tx: <span class="mono">{% if theft_event.explorer_url %}<a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a>{% else %}{{ theft_event.tx_hash }}{% endif %}</span>
   </div>
   {% endif %}
   {% for hop in hops %}
@@ -276,9 +276,9 @@
     <time>{{ hop.timestamp_human }}</time> &nbsp;—&nbsp;
     <strong>Hop {{ loop.index }}.</strong>
     {{ hop.amount_human }} {{ hop.symbol }} transferred from
-    <a class="mono" href="{{ hop.from_explorer_url }}">{{ hop.from_address }}</a>
-    to <a class="mono" href="{{ hop.to_explorer_url }}">{{ hop.to_address }}</a>.
-    Tx: <span class="mono"><a href="{{ hop.explorer_url }}">{{ hop.tx_hash }}</a></span>
+    {% if hop.from_explorer_url %}<a class="mono" href="{{ hop.from_explorer_url }}">{{ hop.from_address }}</a>{% else %}<span class="mono">{{ hop.from_address }}</span>{% endif %}
+    to {% if hop.to_explorer_url %}<a class="mono" href="{{ hop.to_explorer_url }}">{{ hop.to_address }}</a>{% else %}<span class="mono">{{ hop.to_address }}</span>{% endif %}.
+    Tx: <span class="mono">{% if hop.explorer_url %}<a href="{{ hop.explorer_url }}">{{ hop.tx_hash }}</a>{% else %}{{ hop.tx_hash }}{% endif %}</span>
   </div>
   {% endfor %}
   <div class="timeline-event current">

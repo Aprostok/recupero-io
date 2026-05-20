@@ -208,7 +208,7 @@
   {% if victim.address %}<dt>Address:</dt><dd>{{ victim.address }}</dd>{% endif %}
   {% if victim.email %}<dt>Email:</dt>      <dd>{{ victim.email }}</dd>{% endif %}
   {% if victim.phone %}<dt>Phone:</dt>      <dd>{{ victim.phone }}</dd>{% endif %}
-  <dt>Affected wallet:</dt> <dd><a class="mono" href="{{ victim_wallet_explorer_url }}">{{ victim.wallet_address }}</a></dd>
+  <dt>Affected wallet:</dt> <dd>{% if victim_wallet_explorer_url %}<a class="mono" href="{{ victim_wallet_explorer_url }}">{{ victim.wallet_address }}</a>{% else %}<span class="mono">{{ victim.wallet_address }}</span>{% endif %}</dd>
   {% if victim.legal_counsel %}
   <dt>Legal counsel:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
   {% endif %}
@@ -246,9 +246,9 @@
 <table class="evidence">
   <tr><th>Date / time (UTC)</th><td class="mono">{{ theft_event.timestamp_human }}</td></tr>
   <tr><th>Block</th>             <td class="mono">{{ theft_event.block_number }}</td></tr>
-  <tr><th>Transaction hash</th>  <td class="mono"><a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a></td></tr>
-  <tr><th>From (victim)</th>     <td class="mono victim-row"><a href="{{ theft_event.from_explorer_url }}">{{ theft_event.from_address }}</a></td></tr>
-  <tr><th>To (perpetrator)</th>  <td class="mono perp-row"><a href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a></td></tr>
+  <tr><th>Transaction hash</th>  <td class="mono">{% if theft_event.explorer_url %}<a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a>{% else %}{{ theft_event.tx_hash }}{% endif %}</td></tr>
+  <tr><th>From (victim)</th>     <td class="mono victim-row">{% if theft_event.from_explorer_url %}<a href="{{ theft_event.from_explorer_url }}">{{ theft_event.from_address }}</a>{% else %}{{ theft_event.from_address }}{% endif %}</td></tr>
+  <tr><th>To (perpetrator)</th>  <td class="mono perp-row">{% if theft_event.to_explorer_url %}<a href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a>{% else %}{{ theft_event.to_address }}{% endif %}</td></tr>
   <tr><th>Asset</th>             <td>{{ asset.symbol }} <span class="small">(contract: {% if asset_contract_explorer_url %}<a class="mono" href="{{ asset_contract_explorer_url }}">{{ asset.contract }}</a>{% else %}<span class="mono">{{ asset.contract }}</span>{% endif %})</span></td></tr>
   {# v0.20.2 (audit-round-3 R3-3): aggregate-across-events. #}
   <tr><th>Amount{% if asset.is_multi_event %} (total across {{ asset.theft_event_count }} events){% endif %}</th>            <td class="amount">{{ asset.total_amount_human if asset.is_multi_event else asset.amount_human }} {{ asset.symbol }}</td></tr>
@@ -270,9 +270,9 @@
   <tr>
     <td>{{ loop.index }}</td>
     <td class="mono">{{ hop.timestamp_human }}</td>
-    <td class="mono"><a href="{{ hop.explorer_url }}">{{ hop.tx_hash[:14] }}…</a></td>
-    <td class="mono perp-row"><a href="{{ hop.from_explorer_url }}">{{ hop.from_address }}</a></td>
-    <td class="mono perp-row"><a href="{{ hop.to_explorer_url }}">{{ hop.to_address }}</a></td>
+    <td class="mono">{% if hop.explorer_url %}<a href="{{ hop.explorer_url }}">{{ hop.tx_hash[:14] }}…</a>{% else %}{{ hop.tx_hash[:14] }}…{% endif %}</td>
+    <td class="mono perp-row">{% if hop.from_explorer_url %}<a href="{{ hop.from_explorer_url }}">{{ hop.from_address }}</a>{% else %}{{ hop.from_address }}{% endif %}</td>
+    <td class="mono perp-row">{% if hop.to_explorer_url %}<a href="{{ hop.to_explorer_url }}">{{ hop.to_address }}</a>{% else %}{{ hop.to_address }}{% endif %}</td>
     <td class="amount">{{ hop.amount_human }} {{ hop.symbol }}</td>
   </tr>
   {% endfor %}

@@ -513,6 +513,108 @@
   {% endfor %}
 </table>
 
+{# v0.21.0 — Section 5.5: Live Filing Status.
+   When `live_status` is provided (re-render after letters have been
+   mailed), shows real-time outcomes per freeze letter + monitoring
+   counters. On the first render (immediately after emit_brief, no
+   letters yet) renders the pending-state branch. #}
+<h2>5.5 Live Filing Status</h2>
+{% if live_status and not live_status.is_empty %}
+<p class="small">
+  Real-time status of every freeze letter dispatched for this case,
+  joined to the live wallet-monitoring subscriptions. Reflects the
+  database state at the moment this document was rendered
+  ({{ generated_at }} UTC) — issuer responses received after this
+  timestamp will appear in subsequent revisions.
+</p>
+
+{# Aggregate roll-up panel #}
+<div class="summary-box">
+  <p style="margin:0">
+    <strong>Aggregate.</strong>
+    {{ live_status.aggregate.letters_with_response }} of
+    {{ live_status.aggregate.total_letters }} issuer{{ "s" if live_status.aggregate.total_letters != 1 else "" }}
+    {{ "have" if live_status.aggregate.letters_with_response != 1 else "has" }} responded.
+    <strong>{{ live_status.aggregate.total_confirmed_frozen_usd_human }}</strong>
+    confirmed frozen of
+    <strong>{{ live_status.aggregate.total_requested_usd_human }}</strong>
+    requested
+    ({{ live_status.aggregate.freeze_percentage }}%).
+  </p>
+</div>
+
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Issuer</th>
+      <th>Target wallet</th>
+      <th>Asset</th>
+      <th>Requested</th>
+      <th>Days since</th>
+      <th>Status</th>
+      <th>Frozen</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for L in live_status.letters %}
+    <tr>
+      <td><strong>{{ L.issuer }}</strong></td>
+      <td class="mono small">{{ L.target_address[:10] }}…{{ L.target_address[-6:] }}</td>
+      <td>{{ L.asset_symbol }}</td>
+      <td class="amount">{{ L.requested_freeze_usd_human }}</td>
+      <td>{{ L.days_since_sent }}d ({{ L.sent_at_human }})</td>
+      <td><strong>{{ L.status_badge }}</strong></td>
+      <td class="amount">{{ L.frozen_usd_human }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{# Monitoring snapshot #}
+<h3>Active monitoring</h3>
+<p class="small">
+  {% if live_status.monitoring.active_subscriptions > 0 %}
+  This case has <strong>{{ live_status.monitoring.active_subscriptions }}</strong>
+  active wallet-monitoring subscription{{ "s" if live_status.monitoring.active_subscriptions != 1 else "" }}
+  registered with Recupero. Since the brief was generated,
+  <strong>{{ live_status.monitoring.alerts_fired_since_brief }}</strong>
+  alert{{ "s" if live_status.monitoring.alerts_fired_since_brief != 1 else "" }}
+  {{ "have" if live_status.monitoring.alerts_fired_since_brief != 1 else "has" }}
+  fired{% if live_status.monitoring.last_alert_at %}
+  (most recent: {{ live_status.monitoring.last_alert_at.strftime("%Y-%m-%d %H:%M") }} UTC){% endif %}.
+  Any movement on a monitored wallet is captured in real time and
+  alerts the investigator within seconds, allowing for prompt
+  re-engagement with downstream issuers / exchanges.
+  {% else %}
+  No active monitoring subscriptions are currently registered for
+  this case. Subscriptions are auto-created at brief generation
+  when the investigator has provided a contact email; if the count
+  is zero, the brief may have been generated outside the worker
+  pipeline (e.g. a local CLI run).
+  {% endif %}
+</p>
+{% else %}
+{# Empty state — no letters mailed yet (first render after emit_brief) #}
+<p class="small">
+  <em>Pending issuer outreach.</em> No freeze letters have been
+  transmitted yet at the time of this report's generation. The
+  status of each request will be populated automatically on
+  subsequent revisions of this document after the operator runs
+  <code>recupero-ops send-freeze-letters</code> and as issuer
+  responses are recorded via
+  <code>recupero-ops record-freeze-outcome</code> or the
+  <code>POST /v1/freeze-outcomes</code> webhook endpoint.
+</p>
+<p class="small">
+  Real-time monitoring of perpetrator-controlled wallets is
+  configured automatically when the brief is generated through the
+  Recupero worker pipeline. The next revision of this document
+  will surface monitoring counters (active subscriptions, alerts
+  fired since brief generation) alongside the issuer-response
+  table above.
+</p>
+{% endif %}
+
 <h2>6. Recommended Actions</h2>
 
 <h3>Immediate</h3>

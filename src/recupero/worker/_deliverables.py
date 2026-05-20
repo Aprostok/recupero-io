@@ -349,6 +349,25 @@ def build_all_deliverables(
         _draft = bool(freeze_brief.get("DRAFT") or freeze_brief.get("draft"))
         _draft_label = freeze_brief.get("DRAFT_LABEL") or freeze_brief.get("draft_label")
 
+        # v0.21.0: fetch live filing status once (per case, not per
+        # issuer) so the LE handoff Section 5.5 renders the current
+        # state of every freeze letter dispatched for this case. On
+        # the FIRST render (immediately after emit_brief, no letters
+        # mailed yet) this returns an empty LiveFilingStatus and the
+        # template renders the "Pending issuer outreach" branch.
+        _live_status = None
+        try:
+            import os as _os
+            _dsn = _os.environ.get("SUPABASE_DB_URL", "").strip() or None
+            if _dsn and getattr(case, "case_id", None):
+                from recupero.freeze_learning.status import fetch_live_filing_status
+                _live_status = fetch_live_filing_status(case.case_id, dsn=_dsn)
+        except Exception as _exc:  # noqa: BLE001 — non-fatal
+            log.warning(
+                "fetch_live_filing_status failed (non-fatal, "
+                "template falls back to pending branch): %s", _exc,
+            )
+
         for issuer_name, issuer_info in issuers_seen.items():
             try:
                 bundle = generate_briefs(
@@ -369,6 +388,7 @@ def build_all_deliverables(
                     # did). Now wired through from freeze_brief directly.
                     all_issuers_freezable=freeze_brief.get("ALL_ISSUER_HOLDINGS") or None,
                     ic3_case_id=_ic3_case_id,
+                    live_status=_live_status,
                     draft=_draft,
                     draft_label=_draft_label,
                 )

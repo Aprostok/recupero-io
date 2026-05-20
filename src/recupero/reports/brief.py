@@ -293,6 +293,13 @@ def generate_briefs(
     # so FBI can cross-reference the IC3 record; pre-v0.18.6 the
     # handoff dropped it entirely.
     ic3_case_id: str | None = None,
+    # v0.21.0: live filing status — Section 5.5 of the LE handoff.
+    # When provided, the template renders a real-time view of every
+    # freeze letter's current outcome (FROZEN / ACKNOWLEDGED / NO
+    # RESPONSE) joined to monitoring counters. When None (the typical
+    # first-render path immediately after emit_brief), the template
+    # renders a "pending issuer outreach" empty-state branch.
+    live_status: Any = None,
     draft: bool = False,
     draft_label: str | None = None,
 ) -> BriefBundle:
@@ -679,6 +686,12 @@ def generate_briefs(
             ) if any(t.usd_value_at_tx is not None for t in theft_events)
             else theft_transfer.usd_value_at_tx,
         ),
+        # v0.21.0: live filing status. None on first render
+        # (immediately after emit_brief, no letters mailed yet) → the
+        # LE template renders the "Pending issuer outreach" empty-
+        # state branch. Populated on re-renders after the operator
+        # has run send-freeze-letters + recorded outcomes.
+        "live_status": live_status,
     }
 
     env = Environment(

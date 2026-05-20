@@ -50,6 +50,8 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from recupero._common import atomic_write_text
+
 log = logging.getLogger(__name__)
 
 
@@ -125,7 +127,7 @@ def render_legal_request(
         # Filename: <type>_<exchange-safe>.html
         safe_exchange = target["exchange_name"].lower().replace(" ", "_")
         out_path = output_dir / f"{request_type}_{safe_exchange}.html"
-        out_path.write_text(html, encoding="utf-8")
+        atomic_write_text(out_path, html)
         log.info(
             "rendered legal request: %s (%d bytes)",
             out_path, out_path.stat().st_size,
@@ -558,7 +560,7 @@ def _render_exchange_subpoena_requests(
         html = template.render(**ctx)
         safe_exchange = exchange_name.lower().replace(" ", "_").replace(".", "")
         out_path = output_dir / f"exchange_subpoena_{safe_exchange}.html"
-        out_path.write_text(html, encoding="utf-8")
+        atomic_write_text(out_path, html)
         renders.append(LegalRequestRender(
             request_type="exchange-subpoena",
             exchange_name=exchange_name,

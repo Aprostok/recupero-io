@@ -131,8 +131,8 @@ on the public blockchain.
   <tbody>
     {% for flow in flows %}
     <tr>
-      <td class="mono"><a href="{{ flow.upstream_explorer_url }}">{{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }}</a></td>
-      <td class="mono"><a href="{{ flow.cex_explorer_url }}">{{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }}</a></td>
+      <td class="mono">{% if flow.upstream_explorer_url %}<a href="{{ flow.upstream_explorer_url }}">{{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }}</a>{% else %}<span>{{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }}</span>{% endif %}</td>
+      <td class="mono">{% if flow.cex_explorer_url %}<a href="{{ flow.cex_explorer_url }}">{{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }}</a>{% else %}<span>{{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }}</span>{% endif %}</td>
       <td>{{ flow.token_symbol }}</td>
       <td class="amount mono">{{ flow.flow_usd_value }}</td>
       <td class="amount mono">{{ flow.transfer_count }}</td>

@@ -153,7 +153,13 @@ def run_monitor_tick(
         SELECT
             id, address, chain, trigger_type, threshold_usd,
             webhook_url, webhook_secret, last_observed_tx_hash,
-            last_polled_at
+            last_polled_at,
+            -- v0.21.0: multi-channel + case-linkage columns. The
+            -- COALESCE on alert_channels keeps pre-migration deploys
+            -- working (NULL → ['webhook']).
+            COALESCE(alert_channels, ARRAY['webhook']::TEXT[]) AS alert_channels,
+            alert_email,
+            case_id, investigation_id
           FROM public.monitoring_subscriptions
          WHERE status = 'active'
            AND (expires_at IS NULL OR expires_at > NOW())
@@ -250,20 +256,39 @@ def run_monitor_tick(
 
 def _row_to_subscription(row: dict[str, Any]) -> Any:
     """Convert a monitoring_subscriptions row dict to a
-    poller.Subscription dataclass."""
+    poller.Subscription dataclass.
+
+    v0.21.0: surfaces alert_channels / alert_email / case_id /
+    investigation_id so dispatch_all_channels can fan out the alert
+    across webhook + email and the email body can deep-link to the
+    case dashboard.
+    """
     from recupero.monitoring.poller import Subscription
     threshold = row.get("threshold_usd")
     if threshold is not None and not isinstance(threshold, Decimal):
         threshold = Decimal(str(threshold))
+    # alert_channels arrives as a Python list from psycopg's array
+    # decoder. Freeze it into a tuple so the dataclass stays
+    # hashable / immutable. Default ('webhook',) handles pre-v0.21.0
+    # rows that haven't been migrated.
+    raw_channels = row.get("alert_channels") or ["webhook"]
+    if isinstance(raw_channels, str):
+        # Tolerant of a CSV string in case the DB driver decodes
+        # the TEXT[] as a literal string on some adapter versions.
+        raw_channels = [c.strip() for c in raw_channels.strip("{}").split(",") if c.strip()]
     return Subscription(
         subscription_id=row["id"],
         address=row["address"],
         chain=row["chain"],
         trigger_type=row["trigger_type"],
         threshold_usd=threshold,
-        webhook_url=row["webhook_url"],
+        webhook_url=row.get("webhook_url"),
         webhook_secret=row.get("webhook_secret"),
         last_observed_tx_hash=row.get("last_observed_tx_hash"),
+        alert_channels=tuple(raw_channels),
+        alert_email=row.get("alert_email"),
+        case_id=row.get("case_id"),
+        investigation_id=row.get("investigation_id"),
     )
 
 
@@ -420,10 +445,18 @@ def _dispatch_alert_for_activity(
     activity: Any,
     dsn: str,
 ) -> bool:
-    """Fire the webhook + record the audit row. Returns True on 2xx."""
+    """Fire all configured channels (webhook + email) + record one
+    combined audit row. Returns True iff every attempted channel
+    succeeded.
+
+    v0.21.0: uses dispatch_all_channels instead of the legacy
+    webhook-only dispatch_alert. Pre-v0.21.0 subscriptions
+    (alert_channels=['webhook']) continue to behave identically —
+    only the webhook columns of the audit row get populated.
+    """
     from recupero.monitoring.dispatcher import (
         AlertPayload,
-        dispatch_alert,
+        dispatch_all_channels,
         record_alert_attempt,
     )
 
@@ -439,14 +472,16 @@ def _dispatch_alert_for_activity(
         counterparty_label=activity.counterparty_label,
         explorer_url=activity.explorer_url,
     )
-    result = dispatch_alert(
+    portal_base_url = os.environ.get("RECUPERO_PORTAL_BASE_URL", "").strip() or None
+    combined = dispatch_all_channels(
         payload,
-        webhook_url=sub.webhook_url,
-        webhook_secret=sub.webhook_secret,
+        subscription=sub,
+        dsn=dsn,
+        portal_base_url=portal_base_url,
     )
     # Audit-log the attempt regardless of success/failure.
-    record_alert_attempt(dsn=dsn, payload=payload, result=result)
-    return result.succeeded
+    record_alert_attempt(dsn=dsn, payload=payload, result=combined)
+    return combined.succeeded
 
 
 # ---- CLI ---- #

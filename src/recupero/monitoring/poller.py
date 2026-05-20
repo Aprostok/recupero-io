@@ -33,15 +33,32 @@ VALID_TRIGGERS = frozenset([
 
 @dataclass(frozen=True)
 class Subscription:
-    """In-memory shape of a monitoring_subscriptions row."""
+    """In-memory shape of a monitoring_subscriptions row.
+
+    v0.21.0 extends this with per-subscription fan-out:
+      * alert_channels — tuple of {'webhook', 'email'} (default
+        ('webhook',) preserves pre-v0.21.0 behavior).
+      * alert_email — recipient when the email channel is active.
+      * case_id / investigation_id — surface the linkage so the
+        email body can deep-link back to the case dashboard.
+
+    ``webhook_url`` is now str | None so email-only subscriptions
+    are representable; the DB CHECK constraint
+    ``monitor_sub_channel_targets_present`` guarantees that at
+    least one channel has its target set.
+    """
     subscription_id: UUID
     address: str
     chain: str
     trigger_type: str
     threshold_usd: Decimal | None
-    webhook_url: str
+    webhook_url: str | None
     webhook_secret: str | None
     last_observed_tx_hash: str | None
+    alert_channels: tuple[str, ...] = ("webhook",)
+    alert_email: str | None = None
+    case_id: UUID | None = None
+    investigation_id: UUID | None = None
 
 
 @dataclass(frozen=True)

@@ -919,9 +919,19 @@ def _stage_emit_brief(
     case_dir: Path,
     bucket: SupabaseCaseStore,
 ) -> None:
+    # v0.21.0: thread investigation_id + DSN through so emit_brief
+    # can auto-subscribe perp wallets to live monitoring. The
+    # subscriber module guards every DB op so a Supabase outage
+    # cannot break brief emission.
+    import os as _os
     from recupero.reports.emit_brief import run_emit_brief
 
-    run_emit_brief(case_id=case_id_str, case_store=local_store)
+    run_emit_brief(
+        case_id=case_id_str,
+        case_store=local_store,
+        investigation_id=inv.id,
+        dsn=_os.environ.get("SUPABASE_DB_URL", "").strip() or None,
+    )
     upload_case_dir(case_dir, bucket)
 
 

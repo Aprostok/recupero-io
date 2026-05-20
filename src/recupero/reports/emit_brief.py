@@ -40,6 +40,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from recupero._common import (
     aggregate_evidence_mode_from_holdings,
@@ -1632,10 +1633,24 @@ def emit_brief(
     return brief
 
 
-def run_emit_brief(case_id: str, case_store: CaseStore) -> tuple[Path, dict[str, Any]]:
+def run_emit_brief(
+    case_id: str,
+    case_store: CaseStore,
+    *,
+    investigation_id: UUID | None = None,
+    dsn: str | None = None,
+) -> tuple[Path, dict[str, Any]]:
     """Top-level orchestration: load files, validate, assemble, write.
 
     Returns (output_path, brief_dict). Raises if preconditions missing.
+
+    v0.21.0: optional ``investigation_id`` + ``dsn`` enable
+    auto-subscription of perp wallets to live monitoring. When both
+    are provided (worker pipeline path), every freezable destination
+    + the perp hub get a monitoring_subscriptions row seeded with
+    the investigator's email as the alert channel. When either is
+    omitted (local CLI path), the brief is still emitted; only the
+    monitoring bookkeeping is skipped.
     """
     case_dir = case_store.case_dir(case_id)
 
@@ -1669,4 +1684,30 @@ def run_emit_brief(case_id: str, case_store: CaseStore) -> tuple[Path, dict[str,
     # Atomic write so a concurrent reader (bucket uploader, portal) can't
     # pick up a half-written JSON.
     atomic_write_text(out_path, json.dumps(brief, indent=2))
+
+    # 7. v0.21.0: auto-subscribe perp wallets to live monitoring.
+    # Best-effort — a Supabase outage here must not break the brief
+    # emission. The investigator can re-seed via the ops CLI if needed.
+    if dsn:
+        try:
+            from recupero.monitoring.subscriber import auto_subscribe_from_brief
+            inserted, skipped = auto_subscribe_from_brief(
+                brief,
+                case_id=case_id,
+                investigation_id=investigation_id,
+                investigator_email=brief.get("INVESTIGATOR_EMAIL") or None,
+                dsn=dsn,
+            )
+            if inserted or skipped:
+                log.info(
+                    "emit_brief auto-subscribed perp wallets: "
+                    "inserted=%d skipped=%d (case=%s)",
+                    inserted, skipped, case_id,
+                )
+        except Exception as _exc:  # noqa: BLE001 — non-fatal
+            log.warning(
+                "emit_brief auto-subscribe step failed (non-fatal): %s",
+                _exc,
+            )
+
     return out_path, brief

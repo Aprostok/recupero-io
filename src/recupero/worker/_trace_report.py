@@ -108,7 +108,11 @@ def _build_context(
     # Pre-v0.16.10 the bare "2026-05-18 04:22:17" rendering was
     # locale-ambiguous on the trace-report cover page; an LE reader
     # 6 months later couldn't tell whether the time was UTC or local.
-    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # v0.20.8 (final-audit template-LOW-4): strip the trailing "Z" from the
+    # format string — the template appends " UTC" itself, so the pre-fix
+    # output was "2026-05-18T17:00:00Z UTC" (double timezone suffix).
+    # Matches the pattern used in brief.py's generated_at field.
+    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
     wallet_addr = case.seed_address
 
     stats = _compute_stats(case)

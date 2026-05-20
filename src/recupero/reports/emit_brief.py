@@ -223,7 +223,6 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
                 # matches the earliest on-chain reference for that
                 # address.
                 per_addr_display[to_canon] = to_raw
-            per_addr_display.setdefault(to_canon, to_raw)
 
     if not per_addr_usd:
         # Victim never sent anything? Fall back to first outflow counterparty.
@@ -934,7 +933,7 @@ def _compute_totals(case: Case, freezable: list[dict[str, Any]], unrecoverable: 
     if total_loss > 0:
         pct = (total_freezable / total_loss) * 100
         pct = min(pct, Decimal("100"))
-        freezable_pct = f"{int(pct)}%"
+        freezable_pct = f"{round(pct)}%"
     elif total_freezable > 0:
         # Edge case: no recorded loss but we found freezable. Show "—" rather than divide-by-zero.
         freezable_pct = "—"
@@ -949,7 +948,7 @@ def _compute_totals(case: Case, freezable: list[dict[str, Any]], unrecoverable: 
     recoverable_pct = "0%"
     if total_loss > 0:
         pct = (max_recoverable / total_loss) * 100
-        recoverable_pct = f"{int(pct)}%"
+        recoverable_pct = f"{round(pct)}%"
 
     # Gross perpetrator-controlled holdings — the v0.7.4 headline
     # number. Larger than TOTAL_LOSS_USD on Zigha-shape cases

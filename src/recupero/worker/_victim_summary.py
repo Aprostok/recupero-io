@@ -52,7 +52,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from recupero.models import Case
 from recupero.reports.brief import InvestigatorInfo
@@ -263,6 +263,7 @@ def render_victim_summary(
             autoescape=select_autoescape(["html", "j2"]),
             trim_blocks=True,
             lstrip_blocks=True,
+            undefined=StrictUndefined,
         )
         html = env.get_template(template_name).render(**ctx)
 
@@ -383,6 +384,12 @@ def _build_context(
         "generated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
         "verified_at": now.strftime("%Y-%m-%d"),
         "software_version": software_version or "0.2.x",
+        # draft/draft_label: always provided so StrictUndefined templates
+        # don't raise. Victim summary drafts are not currently supported
+        # through this path (only LE handoffs and freeze letters use DRAFT
+        # mode), but the template guards are present for future use.
+        "draft": False,
+        "draft_label": "DRAFT",
     }
 
 

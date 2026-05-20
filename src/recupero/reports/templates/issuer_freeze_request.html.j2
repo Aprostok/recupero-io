@@ -545,9 +545,12 @@
 <p>
   Every fact in this brief is drawn from public on-chain data and is
   independently verifiable. Each transaction hash links to its
-  {{ primary_chain_explorer_name }} record. As of {{ verified_at }} UTC, the recipient wallet shows
+  {{ primary_chain_explorer_name }} record.
+  {% if not issuer_freezable %}
+  As of {{ verified_at }} UTC, the recipient wallet shows
   {{ outbound_count_of_stolen_asset }} outbound transfers of
   {{ asset.symbol }}.
+  {% endif %}
 </p>
 <p class="small">
   Sources: {{ primary_chain_explorer_name }} API; CoinGecko historical pricing; our internal

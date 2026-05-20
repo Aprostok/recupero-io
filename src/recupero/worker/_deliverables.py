@@ -121,12 +121,11 @@ def build_all_deliverables(
     freezable = freeze_brief.get("FREEZABLE") or []
 
     # Build the set of unique issuers from FREEZABLE. Each issuer becomes one
-    # freeze-request brief addressed to that entity. The LE handoff template
-    # is tailored to one issuer at a time too (le.html.j2 references issuer
-    # heavily), so when there are multiple matches, the last iteration's
-    # le_handoff_*.html overwrites earlier ones with that issuer's framing.
-    # That's a known minor quirk of generate_briefs; multi-issuer LE
-    # production is a follow-up.
+    # freeze-request brief AND one per-issuer LE handoff, both named with
+    # the issuer slug (e.g. le_handoff_circle_<id>.html) so they do NOT
+    # overwrite each other. Every LE handoff carries the full Section 4.2
+    # all-issuers inventory (all_issuers_freezable) so LE can see the
+    # complete picture in any one of the N per-issuer letters.
     #
     # Filter: skip issuers where every holding is UNRECOVERABLE. Lido staking
     # contracts are the canonical example — we surface them in the trace
@@ -255,11 +254,21 @@ def build_all_deliverables(
     total_freezable_usd = Decimal(0)
     total_suspected_usd = Decimal(0)
     if not skip_freeze_briefs:
+        # CRIT-2 fix: classification runs in its own try/except so the
+        # engagement-letter decision is never silently suppressed by a
+        # victim-summary rendering failure. Pre-fix, a Jinja error in
+        # render_victim_summary would leave is_recoverable=False and
+        # skip the engagement letter even on a fully recoverable case.
         try:
-            from recupero.worker._victim_summary import (
-                classify_recovery_prospects,
-                render_victim_summary,
+            from recupero.worker._victim_summary import classify_recovery_prospects
+            is_recoverable, total_freezable_usd, total_suspected_usd = (
+                classify_recovery_prospects(freeze_brief)
             )
+        except Exception as e:  # noqa: BLE001
+            log.warning("classify_recovery_prospects failed (using defaults): %s", e)
+
+        try:
+            from recupero.worker._victim_summary import render_victim_summary
             briefs_dir = case_dir / "briefs"
             briefs_dir.mkdir(parents=True, exist_ok=True)
             victim_summary_path = render_victim_summary(
@@ -274,14 +283,8 @@ def build_all_deliverables(
                 written.append(victim_summary_path)
                 html_paths.append(victim_summary_path)
                 log.info("wrote victim summary: %s", victim_summary_path.name)
-            # Capture the classification for the engagement-letter
-            # decision below — same recoverability call should drive
-            # both decisions for consistency.
-            is_recoverable, total_freezable_usd, total_suspected_usd = (
-                classify_recovery_prospects(freeze_brief)
-            )
         except Exception as e:  # noqa: BLE001
-            log.warning("victim summary generation failed (continuing): %s", e)
+            log.error("victim summary generation failed (continuing): %s", e)
 
     # Tier-2 engagement letter — the legal contract the customer
     # signs to engage active recovery. Pre-generated for every
@@ -472,7 +475,11 @@ def _maybe_auto_send_victim_summary(
         )
         return
 
-    # Find the rendered victim_summary HTML
+    # Find the rendered victim_summary HTML.
+    # Use the most-recently-modified file when multiple exist (e.g. on a
+    # re-run) so the Pay-Now banner detection (filename-based) picks the
+    # correct variant. glob() returns paths in filesystem order which is
+    # non-deterministic; picking [0] blindly could choose the wrong variant.
     briefs_dir = case_dir / "briefs"
     summary_htmls = list(briefs_dir.glob("victim_summary_*.html"))
     if not summary_htmls:
@@ -481,7 +488,12 @@ def _maybe_auto_send_victim_summary(
             investigation_id,
         )
         return
-    summary_html_path = summary_htmls[0]
+    if len(summary_htmls) > 1:
+        log.warning(
+            "found %d victim_summary HTML files for inv=%s; using most recent",
+            len(summary_htmls), investigation_id,
+        )
+    summary_html_path = max(summary_htmls, key=lambda p: p.stat().st_mtime)
 
     # Build attachment list — customer-relevant PDFs only
     attachment_globs = [
@@ -900,6 +912,11 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
     ) as tmp:
         tmp.write(html_shell)
         shell_path = Path(tmp.name)
+    # v0.20.8 (final-audit pipeline-CRIT-3): atomic write — render to a
+    # sibling .tmp file then os.replace() onto the final path so a
+    # SIGTERM / OOM mid-render can't leave a truncated PDF. Mirrors the
+    # v0.18.4 fix applied to _html_to_pdf that was never backported here.
+    tmp_pdf_path = pdf_path.with_suffix(pdf_path.suffix + ".tmp")
     try:
         # v0.18.2 (round-11 sec-HIGH-008): same SSRF lockdown as the
         # HTML→PDF path. SVG documents can carry <image href="http://...">
@@ -923,12 +940,18 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
                 "HTML(filename=sys.argv[1], base_url=sys.argv[3], url_fetcher=_no_net)"
                 ".write_pdf(sys.argv[2])"
             ),
-            args=[str(shell_path), str(pdf_path), str(svg_path.parent)],
+            args=[str(shell_path), str(tmp_pdf_path), str(svg_path.parent)],
             label=svg_path.name,
         )
+        os.replace(str(tmp_pdf_path), str(pdf_path))
     finally:
         try:
             shell_path.unlink()
+        except OSError:
+            pass
+        # Clean up partial tmp PDF if subprocess failed or rename raised
+        try:
+            tmp_pdf_path.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -1162,7 +1185,7 @@ def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:
     """True if at least one holding in the entry is not UNRECOVERABLE.
 
     The freeze_brief writer (emit_brief.py) classifies each holding's
-    ``status`` as ``RECOVERABLE`` (high-confidence freeze target),
+    ``status`` as ``FREEZABLE`` (high-confidence freeze target),
     ``INVESTIGATE`` (worth asking about), or ``UNRECOVERABLE`` (technically
     held by issuer's token but not freezable — e.g. funds at a Lido
     staking contract). If every holding is UNRECOVERABLE we have no

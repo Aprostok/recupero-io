@@ -422,9 +422,8 @@
   targets for an immediate preservation request.
   {% if issuer_freezable.has_investigate %}
   <strong>INVESTIGATE</strong> positions
-  ({{ issuer_freezable.investigate_count }} addresses,
-  representing additional funds in
-  {{ issuer_freezable.total_usd_suspected }} (INVESTIGATE-tier only) require KYC verification at
+  ({{ issuer_freezable.investigate_count }} addresses representing
+  {{ issuer_freezable.total_usd_suspected }} INVESTIGATE-tier) require KYC verification at
   {{ issuer.short_name }} before status can be confirmed.
   {% endif %}
   Freeze capability assessment: <strong>{{ issuer_freezable.freeze_capability }}</strong>.

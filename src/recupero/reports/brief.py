@@ -17,16 +17,18 @@ Design notes:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import os
+import re as _re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
 from recupero import __version__
 from recupero.models import Case, Chain, Transfer
@@ -40,7 +42,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Single source of truth for the freeze_brief.json schema version.
 # Imported by emit_brief.py + the worker synthesizer so a future bump
 # only happens here.
-BRIEF_SCHEMA_VERSION = "0.16.4"
+BRIEF_SCHEMA_VERSION = "0.20.8"
 
 # Earliest version that wrote ALL the fields the current rendering
 # chain expects (evidence_type, evidence_mode, etc.). Briefs from
@@ -96,6 +98,7 @@ def check_brief_schema_version(brief: dict[str, Any]) -> str | None:
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
     atomic_write_text,
+    canonical_address_key as _ck,
     explorer_name_for_chain as _common_explorer_name_for_chain,
     short_addr as _short_addr,
 )
@@ -197,7 +200,6 @@ def _resolve_theft_asset_issuer_name(
     the issuer DB.
     """
     try:
-        from recupero._common import canonical_address_key as _ck
         from recupero.freeze.asks import load_issuer_db
         contract = theft_transfer.token.contract
         if not contract:
@@ -227,7 +229,6 @@ def _resolve_render_time() -> datetime:
     generate_briefs() with two ad-hoc imports; clarified into a
     single pure helper.
     """
-    import os
     src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
     if src_epoch:
         try:
@@ -671,6 +672,10 @@ def generate_briefs(
         autoescape=select_autoescape(["html", "j2"]),
         trim_blocks=True,
         lstrip_blocks=True,
+        # StrictUndefined turns template typos into render-time exceptions
+        # (caught by the caller's try/except + logged) instead of silently
+        # rendering as empty strings that look like missing data.
+        undefined=StrictUndefined,
     )
     # v0.17.2 (output polish POLISH-4): pluralization filter so
     # templates can write `{{ n }} {{ n | pluralize("transfer") }}`
@@ -700,7 +705,13 @@ def generate_briefs(
 
     briefs_dir = case_dir / "briefs"
     briefs_dir.mkdir(parents=True, exist_ok=True)
-    issuer_slug = (issuer.short_name or "issuer").lower().replace(" ", "_")
+    # Security: strip any path-traversal characters from the slug.
+    # Path.__truediv__ does NOT sanitize, so "../../etc/shadow" would
+    # escape case_dir without this guard. Allow only alphanumeric + underscore.
+    issuer_slug = _re.sub(
+        r"[^a-z0-9_]", "_",
+        (issuer.short_name or "issuer").lower()
+    )[:64]
     maple_path = briefs_dir / f"freeze_request_{issuer_slug}_{brief_id}.html"
     # Include the issuer slug in the LE handoff filename too — the LE
     # template references issuer.name / issuer.short_name extensively
@@ -725,7 +736,6 @@ def generate_briefs(
     # the bytes from the bucket — a chain-of-custody verifier can read
     # manifest.json, hash the local files, and compare. Hex-encoded
     # SHA256 (64 chars) per file.
-    import hashlib
     maple_hash = hashlib.sha256(maple_html.encode("utf-8")).hexdigest()
     le_hash = hashlib.sha256(le_html.encode("utf-8")).hexdigest()
 
@@ -835,7 +845,6 @@ def _find_theft_events(
     if not case.transfers:
         return []
 
-    from recupero._common import canonical_address_key as _ck
     seed_lower = _ck(case.seed_address)
 
     # Outbound transfers from the victim
@@ -1104,8 +1113,6 @@ def _build_identified_wallets(
     # _address_explorer_url, so the dispatcher renders the right
     # block explorer for each row.
     primary_chain = primary.chain
-
-    from recupero._common import canonical_address_key as _ck
 
     def _add(
         addr: str, role: str, type_str: str, notes: str,

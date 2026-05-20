@@ -42,6 +42,12 @@ from pathlib import Path
 from typing import Any
 
 from recupero._common import (
+    aggregate_evidence_mode_from_holdings,
+    atomic_write_text,
+    canonical_address_key as _ck,
+    capability_blocks_freeze,
+    capability_display,
+    capability_is_freezable,
     investigator_defaults as _investigator_defaults,
     short_addr,
 )
@@ -197,7 +203,6 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
     # could lose its "largest outflow" crown to a smaller, single-
     # case-variant destination. We still keep the original display
     # address (first occurrence) for the return value.
-    from recupero._common import canonical_address_key as _ck
     per_addr_usd: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_addr_first_seen: dict[str, datetime] = {}
     per_addr_display: dict[str, str] = {}
@@ -296,7 +301,6 @@ def _extract_destinations(
     # the inflow USD, and the freeze one with $0 inflow but FREEZABLE
     # role. Now: key all internal dicts on canonical form, keep a
     # display-case map for output. One canonical → one row.
-    from recupero._common import canonical_address_key as _ck
     per_addr_received: dict[str, Decimal] = defaultdict(lambda: Decimal("0"))
     per_addr_label_name: dict[str, str | None] = {}
     per_addr_category: dict[str, str | None] = {}
@@ -471,10 +475,6 @@ def _mechanical_destination_note(
         # contradicts itself. Route through the shared
         # capability_is_freezable / capability_blocks_freeze
         # helpers so the taxonomy is consistent across the codebase.
-        from recupero._common import (
-            capability_blocks_freeze,
-            capability_is_freezable,
-        )
         capability_raw = freeze_info.get("freeze_capability")
         capability_l = (capability_raw or "").lower()
         if capability_l in ("yes", "high"):
@@ -630,9 +630,8 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
     # FREEZABLE → operator's intentional INVESTIGATE tag was overridden
     # and the position landed in `TOTAL_FREEZABLE_USD` despite the
     # operator's review classifying it otherwise.
-    from recupero._common import canonical_address_key as _ck_ed
     editorial_notes_by_canon: dict[str, str] = {
-        _ck_ed(k): v for k, v in editorial_notes.items() if _ck_ed(k)
+        _ck(k): v for k, v in editorial_notes.items() if _ck(k)
     }
     freezable = []
 
@@ -655,7 +654,7 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             # v0.20.2 (audit-round-2 finding #1): look up the editorial
             # status by canonical key, not by raw addr — the operator's
             # tags are now respected regardless of address casing.
-            addr_canon = _ck_ed(addr)
+            addr_canon = _ck(addr)
             status = _classify_address_status(addr_canon, editorial_notes_by_canon)
 
             # Status policy:
@@ -666,10 +665,6 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             #   UNKNOWN status + freezable cap     → rescue to
             #     FREEZABLE so AI-editorial-failure / cost-limit cases
             #     don't silently route to unrecoverable
-            from recupero._common import (
-                capability_blocks_freeze,
-                capability_is_freezable,
-            )
             ask_capability = a.get("freeze_capability")
             if status == "FREEZABLE" and capability_blocks_freeze(ask_capability):
                 status = "UNRECOVERABLE"
@@ -708,10 +703,6 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
 
         # Map raw freeze_capability ("yes"/"limited"/"no") → display
         # form ("HIGH"/"MEDIUM"/"LOW"). Centralized in _common.
-        from recupero._common import (
-            aggregate_evidence_mode_from_holdings,
-            capability_display,
-        )
         cap_display = capability_display(capability)
 
         # Look up extras from issuer_metadata if present
@@ -805,6 +796,17 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
     return filtered
 
 
+def _issuer_sort_key(entry: dict) -> int:
+    """Sort key: FREEZABLE/INVESTIGATE-capable issuers (0) before UNRECOVERABLE-only (1).
+
+    Used by emit_brief() to order ALL_ISSUER_HOLDINGS so that actionable freeze
+    targets always precede seizure-only entries in the LE Section 4.2 table,
+    regardless of insertion order in freeze_asks.json.
+    """
+    cap = (entry.get("freeze_capability") or "").upper()
+    return 1 if cap in ("LOW", "NO") else 0
+
+
 def _count_theft_events(case: Case) -> int:
     """Count the number of individual theft transfers leaving the seed wallet.
 
@@ -814,7 +816,6 @@ def _count_theft_events(case: Case) -> int:
     cases (multi-event drain: 6 × $600K = $3.6M) this correctly returns 6;
     for single-event cases it returns 1.
     """
-    from recupero._common import canonical_address_key as _ck
     seed_lower = _ck(case.seed_address)
     return sum(
         1 for t in case.transfers
@@ -830,7 +831,6 @@ def _compute_total_drained(case: Case) -> Decimal:
     headline numbers, NOT a sum of current freezable + unrecoverable balances
     (which can be inflated by bystander wallets caught in graph expansion).
     """
-    from recupero._common import canonical_address_key as _ck
     seed_lower = _ck(case.seed_address)
     total = Decimal("0")
     for t in case.transfers:
@@ -1122,7 +1122,6 @@ def _build_entity_clusters_section(
     v0.18.0: cluster-member dedup keys use canonical_address_key so
     Solana / Tron / Bitcoin base58 addresses don't silently mismatch."""
     try:
-        from recupero._common import canonical_address_key as _ck
         from recupero.trace.clustering import (
             cluster_addresses,
             clusters_to_brief_section,
@@ -1375,10 +1374,9 @@ def emit_brief(
     # row from the trace AND the lowercase row from freeze_asks. Now:
     # key freeze_targets by canonical form so the destination merge
     # dedups by single canonical identity.
-    from recupero._common import canonical_address_key as _ck_targets
     for issuer, asks in freeze_asks.get("by_issuer", {}).items():
         for ask in asks:
-            canon = _ck_targets(ask["address"])
+            canon = _ck(ask["address"])
             freeze_targets_by_addr[canon] = {**ask, "issuer": issuer}
 
     editorial_notes = editorial.get("DESTINATION_NOTES", {}) or {}
@@ -1402,13 +1400,7 @@ def emit_brief(
     # precede UNRECOVERABLE-only ones in Section 4.2. Legal documents must lead
     # with actionable freeze targets regardless of insertion order in freeze_asks.json.
     _all_raw = _extract_freezable(freeze_asks, issuer_metadata, editorial_notes, keep_all=True)
-
-    def _sort_issuer_key(entry: dict) -> int:
-        """FREEZABLE/INVESTIGATE-capable issuers first (0), UNRECOVERABLE-only last (1)."""
-        cap = (entry.get("freeze_capability") or "").upper()
-        return 1 if cap in ("LOW", "NO") else 0
-
-    all_issuer_holdings = sorted(_all_raw, key=_sort_issuer_key)
+    all_issuer_holdings = sorted(_all_raw, key=_issuer_sort_key)
 
     # --- Unrecoverable list ---
     unrecoverable = [
@@ -1647,6 +1639,5 @@ def run_emit_brief(case_id: str, case_store: CaseStore) -> tuple[Path, dict[str,
     out_path = case_dir / "freeze_brief.json"
     # Atomic write so a concurrent reader (bucket uploader, portal) can't
     # pick up a half-written JSON.
-    from recupero._common import atomic_write_text
     atomic_write_text(out_path, json.dumps(brief, indent=2))
     return out_path, brief

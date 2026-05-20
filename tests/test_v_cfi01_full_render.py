@@ -560,16 +560,11 @@ def test_no_jinja_undefined_in_output(rendered):
         )
         # Python None leaking as literal "None" in rendered output
         # (Jinja2 renders Python None objects as the string "None").
-        # Exclude the word "None" that may legitimately appear inside legal prose
-        # by checking for ">None<" (tag-wrapped) and ": None" / " None " patterns
-        # that would only appear from unguarded template variables.
-        import re as _re
-        none_leaks = _re.findall(r'(?<![a-zA-Z])None(?![a-zA-Z])', html)
-        # Allow "None" inside HTML comments and script/style blocks (audit tooling)
-        # but reject it appearing as rendered text content
-        html_text_only = _re.sub(r'<!--.*?-->', '', html, flags=_re.DOTALL)
-        html_text_only = _re.sub(r'<style[^>]*>.*?</style>', '', html_text_only, flags=_re.DOTALL)
-        html_text_only = _re.sub(r'<script[^>]*>.*?</script>', '', html_text_only, flags=_re.DOTALL)
+        # Strip HTML comments and style/script blocks first so "None"
+        # in CSS comments or audit tooling doesn't give a false positive.
+        html_text_only = re.sub(r'<!--.*?-->', '', html, flags=re.DOTALL)
+        html_text_only = re.sub(r'<style[^>]*>.*?</style>', '', html_text_only, flags=re.DOTALL)
+        html_text_only = re.sub(r'<script[^>]*>.*?</script>', '', html_text_only, flags=re.DOTALL)
         assert '>None<' not in html_text_only, (
             f"{letter_name}: literal '>None<' in rendered output — template variable is None (not guarded)"
         )

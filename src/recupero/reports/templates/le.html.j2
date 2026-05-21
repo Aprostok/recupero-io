@@ -111,12 +111,25 @@
     transaction) was removed without authorization from
     {{ victim.name }}'s wallet
     {% if victim.citizenship %}(citizen of {{ victim.citizenship }}){% endif %}.
-    The token is issued by {{ issuer.name }}{% if issuer.jurisdiction %},
-    a {{ issuer.jurisdiction }} entity{% endif %}.
-    {% if issuer.secondary_party and issuer.secondary_role %}
-    Its underlying strategy is operated by {{ issuer.secondary_party }}
-    ({{ issuer.secondary_role }}).
-    {% endif %}
+    {# JACOB-2 fix: this sentence narrates the ORIGINAL stolen asset's
+       issuer (Tether for USDT, Midas for mSyrupUSDp). Pre-fix it
+       echoed `issuer.name` — the FREEZE-TARGET issuer — so a Circle
+       freeze letter for a USDT theft read "USDT was removed... The
+       token is issued by Circle." Now uses `asset.issuer`, which is
+       resolved via `_resolve_theft_asset_issuer_name()` from the
+       theft transfer's contract address. The freeze-target issuer
+       still appears throughout the rest of the letter (the
+       `issuer_freezable` paragraphs below, Section 3, etc.) where
+       they correctly describe whom we're asking to act.
+       The jurisdiction + secondary-party clauses were ALSO keyed on
+       `issuer` (the freeze-target). They've been removed from this
+       sentence — they were always wrong for cross-issuer letters
+       (e.g., Coinbase letter saying USDT is "a Coinbase entity" was
+       nonsense) and right only for the rare self-issuer case (Midas
+       letter about mSyrupUSDp). Section 2 of this same LE handoff
+       still surfaces the freeze-target's jurisdiction in the
+       "Issuer (legal entity)" row, so no fact is lost. #}
+    The token is issued by {{ asset.issuer }}.
   </p>
   {% if issuer_freezable %}
   {# Executive summary branches on evidence_mode — historical_only

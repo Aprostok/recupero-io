@@ -214,41 +214,56 @@ def test_build_profile_aggregates_response_and_freeze_rates():
     """Happy-path aggregation: 4 letters, 3 responded (1 full_freeze,
     1 partial_freeze, 1 declined), 1 silent. Expected rates:
     response_rate=0.75, full_freeze_rate=0.25, declined_rate=0.25,
-    silence_rate=0.25."""
+    silence_rate=0.25.
+
+    v0.24.1: SQL now returns flat per-row results (one row per
+    letter × outcome combination, with NULL outcome columns for
+    letters that have no outcomes yet) instead of the array_agg
+    ROW composite (which CRIT-1 broke in production).
+    """
     now = datetime.now(UTC)
+    # Each row is one (letter, outcome) tuple — letters with no
+    # outcomes get a single row with NULL outcome columns
+    # (LEFT JOIN behavior).
     fake_rows = [
-        # Letter 1: full_freeze after 24h
+        # Letter 1: acknowledged at 12h then full_freeze at 24h
         {
             "letter_id": "L1",
             "sent_at": now - timedelta(days=10),
-            "outcomes": [
-                ("acknowledged", now - timedelta(days=10) + timedelta(hours=12), None),
-                ("full_freeze", now - timedelta(days=10) + timedelta(hours=24), Decimal("100000")),
-            ],
+            "outcome_type": "acknowledged",
+            "observed_at": now - timedelta(days=10) + timedelta(hours=12),
+            "frozen_usd": None,
         },
-        # Letter 2: partial_freeze after 48h
+        {
+            "letter_id": "L1",
+            "sent_at": now - timedelta(days=10),
+            "outcome_type": "full_freeze",
+            "observed_at": now - timedelta(days=10) + timedelta(hours=24),
+            "frozen_usd": Decimal("100000"),
+        },
+        # Letter 2: partial_freeze at 48h
         {
             "letter_id": "L2",
             "sent_at": now - timedelta(days=8),
-            "outcomes": [
-                ("partial_freeze", now - timedelta(days=8) + timedelta(hours=48), Decimal("50000")),
-            ],
+            "outcome_type": "partial_freeze",
+            "observed_at": now - timedelta(days=8) + timedelta(hours=48),
+            "frozen_usd": Decimal("50000"),
         },
-        # Letter 3: declined after 72h
+        # Letter 3: declined at 72h
         {
             "letter_id": "L3",
             "sent_at": now - timedelta(days=6),
-            "outcomes": [
-                ("declined", now - timedelta(days=6) + timedelta(hours=72), None),
-            ],
+            "outcome_type": "declined",
+            "observed_at": now - timedelta(days=6) + timedelta(hours=72),
+            "frozen_usd": None,
         },
-        # Letter 4: silent (only silence_30d outcome — counts as silent)
+        # Letter 4: only silence_30d (counts as silent)
         {
             "letter_id": "L4",
             "sent_at": now - timedelta(days=35),
-            "outcomes": [
-                ("silence_30d", now - timedelta(days=5), None),
-            ],
+            "outcome_type": "silence_30d",
+            "observed_at": now - timedelta(days=5),
+            "frozen_usd": None,
         },
     ]
 
@@ -277,12 +292,135 @@ def test_build_profile_aggregates_response_and_freeze_rates():
     assert profile.partial_freeze_rate == 0.25
     assert profile.declined_rate == 0.25
     assert profile.silence_rate == 0.25
-    # Total frozen: 100000 (full) + 50000 (partial) = 150000
+    # v0.24.1 (audit-fix CRIT-3): pick strongest positive outcome per
+    # letter, not sum. L1 strongest=full_freeze=$100K; L2=partial=$50K;
+    # L3 no positive; L4 silent → total=$150K (unchanged in this test
+    # because no letter has multiple positive outcomes — see the
+    # dedicated double-counting regression test below).
     assert profile.total_frozen_usd == Decimal("150000")
-    # Median of response hours [24, 48, 72] = 48
-    assert profile.median_response_hours == 48.0
-    assert profile.has_confident_profile is True   # n_letters >= 3
-    assert profile.is_black_hole is False           # had responses
+    # v0.24.1 (audit-fix HIGH-1): median is over time-to-first-FREEZE,
+    # not time-to-first-engagement. L1 freeze at 24h, L2 freeze at
+    # 48h, L3 no freeze action (only declined). Median over [24, 48]
+    # = 36.
+    assert profile.median_response_hours == 36.0
+    assert profile.has_confident_profile is True
+    assert profile.is_black_hole is False
+
+
+def test_build_profile_picks_strongest_outcome_for_total_frozen():
+    """v0.24.1 (audit-fix CRIT-3): a letter that progresses
+    partial_freeze ($500K) → full_freeze ($1M) → returned_to_victim
+    ($1M) must contribute $1M to total_frozen, NOT $2.5M. The
+    documented happy-path outcome chain per migration 013."""
+    now = datetime.now(UTC)
+    fake_rows = [
+        {
+            "letter_id": "L1",
+            "sent_at": now - timedelta(days=10),
+            "outcome_type": "partial_freeze",
+            "observed_at": now - timedelta(days=10) + timedelta(hours=24),
+            "frozen_usd": Decimal("500000"),
+        },
+        {
+            "letter_id": "L1",
+            "sent_at": now - timedelta(days=10),
+            "outcome_type": "full_freeze",
+            "observed_at": now - timedelta(days=10) + timedelta(hours=48),
+            "frozen_usd": Decimal("1000000"),
+        },
+        {
+            "letter_id": "L1",
+            "sent_at": now - timedelta(days=10),
+            "outcome_type": "returned_to_victim",
+            "observed_at": now - timedelta(days=10) + timedelta(hours=120),
+            "frozen_usd": Decimal("1000000"),
+        },
+    ]
+
+    class _StubCursor:
+        def execute(self, sql, params): pass
+        def fetchall(self):
+            return fake_rows
+        def fetchone(self):
+            return None
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    class _StubConn:
+        def cursor(self): return _StubCursor()
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    with patch("recupero._common.db_connect", return_value=_StubConn()):
+        profile = build_cooperation_profile("Tether", dsn="postgres://fake")
+
+    # Strongest outcome is returned_to_victim ($1M) — NOT the sum
+    # ($2.5M, which pre-v0.24.1 produced).
+    assert profile.total_frozen_usd == Decimal("1000000"), (
+        f"Expected $1M (strongest outcome); pre-v0.24.1 bug would sum "
+        f"to $2.5M; got {profile.total_frozen_usd}"
+    )
+
+
+def test_recommend_does_not_route_russia_to_fincen_314b():
+    """v0.24.1 (audit-fix CRIT-2): the pre-v0.24.1 substring match
+    `"us" not in jurisdiction_lc` caught Russia (contains 'us').
+    Low-cooperation issuers in Russia got routed to FinCEN 314(b) —
+    a US-only instrument with no force in Russia. The correct
+    routing is MLAT via DOJ-OIA."""
+    profile = _profile(
+        issuer="RussianExchange", n_letters=8,
+        response_rate=0.10, has_confident_profile=True,
+    )
+    rec = recommend_legal_instrument(profile, jurisdiction="Russia")
+    assert rec.instrument == INSTRUMENT_MLAT, (
+        f"Russia must route to MLAT, not {rec.instrument} "
+        "(CRIT-2: substring-match bug pre-v0.24.1)"
+    )
+    # Other countries containing "us" substring
+    for jur in ("Belarus", "Cyprus", "Mauritius", "Australia"):
+        rec_j = recommend_legal_instrument(profile, jurisdiction=jur)
+        assert rec_j.instrument == INSTRUMENT_MLAT, (
+            f"{jur} must route to MLAT, not {rec_j.instrument} "
+            "(CRIT-2 substring trap)"
+        )
+
+
+def test_recommend_medium_response_does_not_claim_insufficient_sample():
+    """v0.24.1 (audit-fix HIGH-2): a confident profile with
+    medium response rate (0.30 ≤ rate < 0.50) previously fell
+    through to the precedence-6 'insufficient sample' branch,
+    producing reason text that contradicted itself."""
+    profile = _profile(
+        issuer="Coinbase", n_letters=10,
+        response_rate=0.40, has_confident_profile=True,
+    )
+    rec = recommend_legal_instrument(profile, jurisdiction="United States")
+    assert "insufficient sample" not in rec.reason.lower(), (
+        "Medium-response confident profile must NOT claim "
+        "insufficient sample (HIGH-2 fix)"
+    )
+    assert "40%" in rec.reason
+    assert "moderate" in rec.reason.lower()
+
+
+def test_recommend_le_backed_handles_missing_median():
+    """v0.24.1 (audit-fix MED-1): a confident high-cooperation
+    profile with median_response_hours=None must NOT crash the
+    f-string format. Pre-v0.24.1 this raised TypeError."""
+    profile = _profile(
+        issuer="Tether", n_letters=20,
+        response_rate=0.85, median_hours=None,  # explicitly None
+        has_confident_profile=True,
+    )
+    # Must not raise.
+    rec = recommend_legal_instrument(
+        profile, jurisdiction="BVI",
+        ic3_case_id="I-2026-12345",
+    )
+    assert rec.instrument == INSTRUMENT_LE_BACKED
+    # Reason text uses the graceful fallback phrase, not a stack trace.
+    assert "unknown response time" in rec.reason
 
 
 def test_build_profile_black_hole_detection():

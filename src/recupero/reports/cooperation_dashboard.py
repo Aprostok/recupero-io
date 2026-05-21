@@ -91,7 +91,20 @@ def render_cooperation_dashboard(
         recommend_legal_instrument,
     )
 
-    profiles_by_issuer = build_all_profiles(dsn)
+    # v0.24.1 (audit-fix HIGH-3): wrap the bulk-profile build so an
+    # unhandled exception in the SQL layer doesn't crash the CLI
+    # with a stack trace. build_all_profiles already catches the
+    # distinct-issuer query error and (after v0.24.1) per-issuer
+    # errors; this outer wrap is defense-in-depth.
+    try:
+        profiles_by_issuer = build_all_profiles(dsn)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "render_cooperation_dashboard: build_all_profiles failed: %s",
+            exc,
+        )
+        return None
+
     if not profiles_by_issuer:
         log.info(
             "render_cooperation_dashboard: no issuers with letter "

@@ -53,3 +53,8 @@ scripts/_smoke_deliverables_out/
 scripts/_smoke_flow_out/
 scripts/_smoke_trace_report_out/
 scripts/_validation_download/
+
+# Jacob v0.20.15 validation artifacts (operator-local tooling)
+_jacob_v0_20_15_artifacts/
+_jacob_validation_run.py
+v0_20_15_validation_artifacts.zip

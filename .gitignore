@@ -58,3 +58,8 @@ scripts/_validation_download/
 _jacob_v0_20_15_artifacts/
 _jacob_validation_run.py
 v0_20_15_validation_artifacts.zip
+
+# Jacob post-validator validation artifacts (operator-local)
+_jacob_postvalidator_artifacts/
+_jacob_postvalidator_run.py
+jacob_postvalidator_artifacts.zip

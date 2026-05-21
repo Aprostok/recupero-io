@@ -629,6 +629,13 @@ class BulkScreenRequest(BaseModel):
     "/v1/monitor/subscribe",
     tags=["monitoring"],
     summary="Subscribe an address to webhook alerts (v0.27.0)",
+    # PUNISH-A v0.27 fix: REST convention for resource-creation
+    # endpoints is 201 Created. Pre-fix returned 200, which is
+    # technically wrong (200 = "request succeeded, no new resource").
+    # Partner integrations that branch on status_code (typical SDK
+    # pattern: `if 200 <= status < 300: parse_body()`) would still
+    # work, but 201 is the correct signal that a new row was made.
+    status_code=status.HTTP_201_CREATED,
 )
 async def monitor_subscribe_endpoint(
     req: MonitorSubscribeRequest,

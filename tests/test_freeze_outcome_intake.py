@@ -150,8 +150,14 @@ def api_client(monkeypatch):
 
     Auth scheme: RECUPERO_API_KEYS is a comma list of name:secret
     pairs. The X-Recupero-API-Key header carries the SECRET.
+
+    v0.28.0 (S-1): the test key is granted admin authorization so
+    legacy tests (which pre-date the multi-tenant gate) still pass.
+    New tests that exercise the gate use a separate fixture that
+    omits the admin grant.
     """
     monkeypatch.setenv("RECUPERO_API_KEYS", "tester:secret-test-token-xyz")
+    monkeypatch.setenv("RECUPERO_API_KEY_ADMINS", "tester")
     monkeypatch.setenv("SUPABASE_DB_URL", "postgres://fake")
     from recupero.api.app import app
     return TestClient(app)
@@ -187,10 +193,17 @@ def test_api_freeze_outcome_201_on_happy_path(api_client):
 
 
 def test_api_freeze_outcome_404_when_letter_not_found(api_client):
-    """LetterNotFoundError → 404."""
+    """LetterNotFoundError → 404. v0.28.0 (S-1): the detail is now
+    generic ('freeze outcome not recorded') instead of echoing the
+    LetterNotFoundError message, which previously leaked the
+    submitted (case_id, issuer, target_address) triple back via
+    a body-diff oracle. Auditing path verified: the response body
+    is byte-identical to the unauthorized-access body, so a probing
+    attacker can no longer distinguish missing-letter from
+    not-authorized."""
     with patch(
         "recupero.freeze_learning.recorder.record_outcome_by_target",
-        side_effect=LetterNotFoundError("no match"),
+        side_effect=LetterNotFoundError("no match (case=X issuer=Y target=Z)"),
     ):
         resp = _post_outcome(api_client, {
             "case_id": str(CASE_ID),
@@ -199,7 +212,11 @@ def test_api_freeze_outcome_404_when_letter_not_found(api_client):
             "outcome_type": "acknowledged",
         })
     assert resp.status_code == 404
-    assert "no match" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    # Generic message; MUST NOT echo any input/internal detail.
+    assert detail == "freeze outcome not recorded"
+    assert "case=" not in detail
+    assert "target=" not in detail
 
 
 def test_api_freeze_outcome_422_on_invalid_outcome_type(api_client):

@@ -139,6 +139,96 @@ def _load_rate_limits() -> dict[str, float]:
     return out
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.28.0 — Multi-tenant authorization for /v1/freeze-outcomes (S-1)
+#
+# The pre-v0.28 surface required only a valid API key to write into
+# freeze_outcomes for ANY case/issuer. This was the most dangerous
+# multi-tenant gap in the platform: a single leaked partner key
+# corrupted cooperation priors + law-firm dashboards + leaked the
+# existence of internal letters via a 201-vs-404 enumeration oracle.
+#
+# Two env vars now gate /v1/freeze-outcomes:
+#
+#   RECUPERO_API_KEY_ISSUERS
+#     key_name:Issuer1|Issuer2,key2:Issuer3
+#     Whitelist of issuer names each partner key is allowed to write
+#     outcomes for. Per-key issuers are case-insensitive (matched
+#     after .strip().lower()).
+#
+#   RECUPERO_API_KEY_ADMINS
+#     key_name,key2
+#     Comma-separated list of operator/admin key names that get
+#     universal write access (no per-issuer restriction). Use this
+#     for the ops team's own keys; never grant to a partner.
+#
+# Default behavior: a key that appears in NEITHER list is denied.
+# This is deny-by-default — explicit allow-list required.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _load_api_key_issuers() -> dict[str, frozenset[str]]:
+    """Parse RECUPERO_API_KEY_ISSUERS env var into
+    ``{key_name: frozenset(issuer_lower)}`` map. Empty / unset → {}."""
+    raw = os.environ.get("RECUPERO_API_KEY_ISSUERS", "").strip()
+    if not raw:
+        return {}
+    out: dict[str, frozenset[str]] = {}
+    # Format: "key_name:Issuer1|Issuer2,key2:Issuer3"
+    # Comma separates pairs; colon splits name from pipe-list of
+    # issuers; case-insensitive comparison.
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        name, _, issuers_str = pair.partition(":")
+        name = name.strip()
+        issuers = frozenset(
+            i.strip().lower() for i in issuers_str.split("|")
+            if i.strip()
+        )
+        if name and issuers:
+            out[name] = issuers
+    return out
+
+
+def _load_api_key_admins() -> frozenset[str]:
+    """Parse RECUPERO_API_KEY_ADMINS into a frozenset of key names
+    that get universal write access. Empty / unset → empty set
+    (deny-by-default)."""
+    raw = os.environ.get("RECUPERO_API_KEY_ADMINS", "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(
+        n.strip() for n in raw.split(",") if n.strip()
+    )
+
+
+def is_authorized_to_record_outcome(
+    *, api_key_name: str, issuer: str,
+) -> bool:
+    """v0.28.0 (S-1): return True when ``api_key_name`` is allowed to
+    write a freeze_outcome for ``issuer``.
+
+    Authorization sources:
+      1. The key appears in RECUPERO_API_KEY_ADMINS → universal write.
+      2. The key appears in RECUPERO_API_KEY_ISSUERS with the issuer
+         in its allow-list → permitted.
+      3. Optional-auth mode (``_is_optional_auth() == True``) → permit
+         everything (the auth bypass is already gated against
+         production by `_is_production_environment`).
+      4. Otherwise → denied.
+    """
+    if _is_optional_auth():
+        return True
+    admins = _load_api_key_admins()
+    if api_key_name in admins:
+        return True
+    issuers_map = _load_api_key_issuers()
+    issuers_lc = issuers_map.get(api_key_name, frozenset())
+    return issuer.strip().lower() in issuers_lc
+
+
 def _is_production_environment() -> bool:
     """Best-effort detection of a production deploy.
 

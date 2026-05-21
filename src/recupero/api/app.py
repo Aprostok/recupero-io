@@ -409,6 +409,31 @@ async def record_freeze_outcome_endpoint(
             detail="freeze-outcome intake unavailable",
         )
 
+    # v0.28.0 (S-1): multi-tenant authorization gate. Pre-v0.28 ANY
+    # valid API key could write outcomes against ANY case/issuer.
+    # Now the key must either be in RECUPERO_API_KEY_ADMINS (operator
+    # keys) OR have the requested issuer in its
+    # RECUPERO_API_KEY_ISSUERS allow-list. Default is deny.
+    from recupero.api.auth import is_authorized_to_record_outcome
+    if not is_authorized_to_record_outcome(
+        api_key_name=api_key_name, issuer=req.issuer,
+    ):
+        # Mirror the 404 path's response shape so an unauthorized
+        # caller can't distinguish "you don't own this issuer" from
+        # "this letter doesn't exist" — both surface as 404 with the
+        # same generic detail. Prevents enumeration of valid
+        # (case_id, issuer, target_address) triples via response-code
+        # oracle.
+        log.warning(
+            "/v1/freeze-outcomes DENIED for api_key=%s issuer=%s "
+            "(missing admin/issuer allow-list entry)",
+            api_key_name, req.issuer,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="freeze outcome not recorded",
+        )
+
     try:
         case_uuid = UUID(req.case_id)
     except (TypeError, ValueError):
@@ -424,9 +449,14 @@ async def record_freeze_outcome_endpoint(
             record_outcome_by_target,
         )
     except ImportError as e:
+        # v0.28.0 (S-1 hardening): do not echo ImportError {e} into
+        # the wire body — its string may contain file paths.
+        log.warning(
+            "/v1/freeze-outcomes recorder import failed: %s", e,
+        )
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"recorder unavailable: {e}",
+            detail="freeze-outcome intake unavailable",
         ) from e
 
     if req.outcome_type not in VALID_OUTCOME_TYPES:
@@ -452,9 +482,21 @@ async def record_freeze_outcome_endpoint(
             dsn=dsn,
         )
     except LetterNotFoundError as e:
+        # v0.28.0 (S-1): do not echo LetterNotFoundError detail
+        # which contains the supplied (case_id, issuer, target_address)
+        # triple. A response body that repeats the caller's input
+        # lets a probing attacker confirm valid combinations via
+        # response-body diff (vs an authorization-denied response).
+        # Generic "freeze outcome not recorded" matches the
+        # unauthorized branch above — indistinguishable from outside.
+        log.info(
+            "/v1/freeze-outcomes letter not found (api_key=%s "
+            "case=%s issuer=%s): %s",
+            api_key_name, req.case_id, req.issuer, e,
+        )
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=str(e),
+            detail="freeze outcome not recorded",
         ) from None
     except ValueError as e:  # outcome_type invalid (defense-in-depth)
         raise HTTPException(

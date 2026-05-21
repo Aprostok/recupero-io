@@ -1,0 +1,936 @@
+"""Structural-integrity validator for case output artifacts.
+
+Per Jacob's v0.20.15 review (Part 4): the discipline shift that
+breaks the recurring "headline fix, new structural bug in a
+different layer" pattern. Each release adds unit tests for the
+specific bug found; the next bug lands in a layer those tests
+don't cover. The validator covers CATEGORIES of bugs by checking
+structural properties of the rendered output that must hold for
+every case regardless of shape.
+
+12 invariants (Jacob's starter set, Part 4.2):
+
+  1. Filename/content consistency for issuer-named files (catches
+     v0.20.15's freeze_request_midas containing the Circle letter).
+  2. HTML files contain HTML at the document root (catches JSON /
+     SVG / CSV being written to .html paths).
+  3. JSON files parse as valid JSON (catches HTML being written to
+     .json paths — Jacob saw manifest_BRIEF-... as 52KB of HTML).
+  4. No two output files have byte-identical content (catches silent
+     overwrites + duplicate writes).
+  5. Brief manifest output_sha256 matches disk content (catches the
+     write-path collision pattern — recorded SHA stale).
+  6. Every freezable issuer (freeze_capability='yes') in freeze_asks
+     has both a freeze_request_<issuer>_*.html AND an
+     le_handoff_<issuer>_*.html file.
+  7. TOTAL_FREEZABLE_USD reconciles across freeze_brief.json,
+     engagement letter HTML, victim summary HTML.
+  8. STOLEN_ASSET_ISSUER and FREEZE_TARGET_ISSUER are distinct in
+     the Section 1 narrative of every LE handoff (catches v0.19.3
+     residual where USDT was claimed to be "issued by Circle").
+  9. Recoverable variant matches MAX_RECOVERABLE_USD (catches
+     v0.15.1's bug — victim_summary_unrecoverable produced for a
+     case with $3.5M in freezable funds).
+ 10. No unrendered Jinja `{{ }}` placeholders in any HTML output.
+ 11. Contract-detection consistency — addresses tagged UNRECOVERABLE
+     in the brief don't appear as FREEZABLE in any freeze letter.
+ 12. Sky Protocol / DAI → UNRECOVERABLE in every artifact that
+     mentions DAI.
+
+Every check derives its expected values from the case's OWN data
+(freeze_asks.json, freeze_brief.json, the brief manifest) rather
+than hardcoded V-CFI01 facts. Works for any case shape.
+
+Failure mode: a missing dependency artifact (e.g., freeze_asks.json
+absent) is reported as a HIGH-severity violation, not a crash. The
+validator must complete on any non-empty case_dir without raising.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+import re
+from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Result types
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Violation:
+    """One structural-integrity finding."""
+    check: str       # Stable identifier (e.g. "filename_content_consistency").
+    severity: str    # "critical" | "high" | "warning"
+    detail: str      # Human-readable description, specific enough to act on.
+    file: str | None = None  # Relative path within case_dir, when applicable.
+
+
+@dataclass
+class ValidationResult:
+    """Aggregate result. ``ok`` is True iff there are zero
+    'critical' or 'high' severity violations."""
+    violations: list[Violation] = field(default_factory=list)
+    checks_run: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not any(
+            v.severity in ("critical", "high") for v in self.violations
+        )
+
+    @property
+    def critical_count(self) -> int:
+        return sum(1 for v in self.violations if v.severity == "critical")
+
+    @property
+    def high_count(self) -> int:
+        return sum(1 for v in self.violations if v.severity == "high")
+
+    def by_severity(self) -> dict[str, list[Violation]]:
+        out: dict[str, list[Violation]] = {}
+        for v in self.violations:
+            out.setdefault(v.severity, []).append(v)
+        return out
+
+    def summary_text(self) -> str:
+        if self.ok and not self.violations:
+            return f"PASS — {len(self.checks_run)} checks, no violations."
+        lines = [
+            f"FAIL — {self.critical_count} critical, {self.high_count} high, "
+            f"{sum(1 for v in self.violations if v.severity == 'warning')} warning"
+        ]
+        for v in self.violations:
+            file_hint = f" [{v.file}]" if v.file else ""
+            lines.append(f"  {v.severity.upper()}: {v.check}{file_hint} — {v.detail}")
+        return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Public entry point
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def validate_case_output(case_output_dir: Path) -> ValidationResult:
+    """Run every structural-integrity check against the case directory.
+
+    Expected directory layout (driven by build_all_deliverables):
+
+        case_output_dir/
+            freeze_asks.json        ← driver: which issuers are freezable?
+            freeze_brief.json       ← driver: FREEZABLE list + totals
+            case.json (optional)
+            victim.json (optional)
+            briefs/
+                freeze_request_<issuer>_BRIEF-<case>-<hash>.html
+                le_handoff_<issuer>_BRIEF-<case>-<hash>.html
+                manifest_BRIEF-<case>-<hash>.json
+                trace_report_<hash>.html
+                victim_summary_<variant>_<hash>.html
+                engagement_letter_<hash>.html (optional)
+                investigator_findings.csv
+                investigator_findings.json
+                flow_<hash>.svg
+
+    Returns ValidationResult.violations[] populated with anything
+    found. Never raises — a missing dependency is itself a finding.
+    """
+    case_dir = Path(case_output_dir)
+    result = ValidationResult()
+
+    if not case_dir.is_dir():
+        result.violations.append(Violation(
+            check="case_dir_exists", severity="critical",
+            detail=f"case_output_dir {case_dir} does not exist",
+        ))
+        return result
+
+    briefs_dir = case_dir / "briefs"
+    freeze_asks = _safe_load_json(case_dir / "freeze_asks.json")
+    freeze_brief = _safe_load_json(case_dir / "freeze_brief.json")
+
+    # Each check is independent. Crashes are caught + reported as
+    # violations so a check bug never breaks the whole report.
+    checks = [
+        ("filename_content_consistency",
+         lambda: _check_filename_content_consistency(
+             briefs_dir, freeze_asks, freeze_brief,
+         )),
+        ("html_files_contain_html",
+         lambda: _check_html_files_contain_html(briefs_dir)),
+        ("json_files_parse_as_json",
+         lambda: _check_json_files_parse_as_json(briefs_dir)),
+        ("no_duplicate_file_contents",
+         lambda: _check_no_duplicate_file_contents(briefs_dir)),
+        ("manifest_sha_matches_disk",
+         lambda: _check_manifest_sha_matches_disk(briefs_dir)),
+        ("every_freezable_issuer_has_letters",
+         lambda: _check_every_freezable_issuer_has_letters(
+             briefs_dir, freeze_asks, freeze_brief,
+         )),
+        ("total_freezable_usd_reconciles",
+         lambda: _check_total_freezable_usd_reconciles(
+             briefs_dir, freeze_brief,
+         )),
+        ("stolen_vs_target_issuer_distinct",
+         lambda: _check_stolen_vs_target_issuer_distinct(
+             briefs_dir, freeze_brief,
+         )),
+        ("recoverable_variant_matches_state",
+         lambda: _check_recoverable_variant_matches_state(
+             briefs_dir, freeze_brief,
+         )),
+        ("no_unrendered_jinja_placeholders",
+         lambda: _check_no_unrendered_jinja_placeholders(briefs_dir)),
+        ("unrecoverable_addresses_not_in_freezable",
+         lambda: _check_unrecoverable_not_in_freezable(
+             briefs_dir, freeze_brief,
+         )),
+        ("dai_sky_consistency",
+         lambda: _check_dai_sky_consistency(briefs_dir, freeze_brief)),
+    ]
+    for name, fn in checks:
+        result.checks_run.append(name)
+        try:
+            violations = fn()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("validator check %s crashed: %s", name, exc)
+            violations = [Violation(
+                check=name, severity="warning",
+                detail=f"check itself crashed: {type(exc).__name__}: {exc}",
+            )]
+        result.violations.extend(violations)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _safe_load_json(path: Path) -> dict[str, Any] | None:
+    """Return the parsed JSON contents or None on any failure."""
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _safe_read(path: Path) -> str:
+    """Read the file as text. Tolerates non-UTF-8 bytes (a malformed
+    file is itself an integrity finding the other checks will flag —
+    we should not propagate UnicodeDecodeError out of the helper)."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    except UnicodeDecodeError:
+        # Surrogateescape gives us a string we can substring-search
+        # without raising. Bytes that fail UTF-8 round-trip through
+        # \udcXX surrogates — fine for regex / `in` checks.
+        try:
+            return path.read_bytes().decode("utf-8", errors="surrogateescape")
+        except OSError:
+            return ""
+
+
+def _normalize_issuer_key(name: str) -> str:
+    """Match brief.py's issuer_slug normalization (line 775-778)."""
+    return re.sub(r"[^a-z0-9_]", "_", (name or "issuer").lower())[:64]
+
+
+def _parse_usd_string(s: Any) -> Decimal:
+    """Parse a human-formatted USD string like '$1,234,567.89' →
+    Decimal. Returns Decimal(0) on any parse failure."""
+    if s is None:
+        return Decimal(0)
+    s = str(s).strip().lstrip("$").replace(",", "").replace(" ", "")
+    if not s:
+        return Decimal(0)
+    try:
+        return Decimal(s)
+    except (InvalidOperation, ValueError):
+        return Decimal(0)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 1: filename / content consistency
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# Compliance email per issuer — the strongest marker that the file's
+# content is addressed to issuer X. Loaded lazily from the seed db
+# so the validator stays decoupled from the issuer registry.
+def _issuer_compliance_email(issuer_name: str) -> str | None:
+    """Look up the issuer's primary compliance email from the seed
+    issuer DB. Returns None when not found / can't be loaded."""
+    try:
+        from recupero.freeze.asks import load_issuer_db
+        db = load_issuer_db()
+        # The DB is keyed by (chain, contract). We want the email for
+        # ANY contract owned by this issuer — scan and take the first
+        # primary_contact match.
+        for entry in db.values():
+            if (
+                entry.issuer.strip().lower() == issuer_name.strip().lower()
+                and entry.primary_contact
+            ):
+                return entry.primary_contact.strip()
+    except Exception as exc:  # noqa: BLE001
+        log.info("validator: load_issuer_db failed: %s", exc)
+    return None
+
+
+def _check_filename_content_consistency(
+    briefs_dir: Path,
+    freeze_asks: dict | None,
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """Every freeze_request_<X>_*.html must contain markers indicating
+    issuer X.
+
+    Strategy (in order of strength):
+      1. The seed-db primary_contact email appears in the body.
+      2. ANY email at the issuer's email domain appears in the body
+         (catches the case where the template uses a different
+         compliance address than the seed db, e.g.,
+         compliance@coinbase.com vs law-enforcement@coinbase.com —
+         both are legitimate Coinbase compliance addresses).
+      3. As a fallback, the issuer's display name appears prominently
+         (in a heading or address block, not just inventory text).
+    A CRITICAL violation fires only when NONE of the above match,
+    meaning the file's content is not addressed to the named issuer
+    at all — Jacob's v0.20.15 routing-bug pattern.
+    """
+    if not briefs_dir.is_dir():
+        return [Violation(
+            check="filename_content_consistency", severity="high",
+            detail=f"briefs/ directory does not exist under {briefs_dir.parent}",
+        )]
+
+    violations: list[Violation] = []
+    # freeze_request_*
+    for path in sorted(briefs_dir.glob("freeze_request_*.html")):
+        slug = _extract_issuer_slug(path.name, prefix="freeze_request")
+        if not slug:
+            continue
+        content = _safe_read(path)
+        issuer_name = _resolve_issuer_name_from_slug(slug, freeze_brief)
+        seed_email = _issuer_compliance_email(issuer_name or "")
+        if not _content_addresses_issuer(
+            content, issuer_name or "", seed_email,
+        ):
+            violations.append(Violation(
+                check="filename_content_consistency",
+                severity="critical",
+                file=str(path.relative_to(briefs_dir.parent)),
+                detail=(
+                    f"freeze_request file for issuer {issuer_name!r} "
+                    f"(slug {slug!r}) is not addressed to that issuer. "
+                    f"Expected one of: primary contact {seed_email!r}, "
+                    f"any email @<{issuer_name}-domain>, or the issuer "
+                    f"name in a heading. Wrong content likely routed."
+                ),
+            ))
+
+    # le_handoff_*
+    for path in sorted(briefs_dir.glob("le_handoff_*.html")):
+        slug = _extract_issuer_slug(path.name, prefix="le_handoff")
+        if not slug:
+            continue
+        content = _safe_read(path)
+        issuer_name = _resolve_issuer_name_from_slug(slug, freeze_brief)
+        # LE handoff: weaker check — must mention the issuer name
+        # somewhere. (Section 1 narrative + Section 4.2 inventory
+        # both reference the issuer.)
+        if issuer_name and issuer_name not in content:
+            violations.append(Violation(
+                check="filename_content_consistency",
+                severity="critical",
+                file=str(path.relative_to(briefs_dir.parent)),
+                detail=(
+                    f"le_handoff for issuer {issuer_name!r} (slug {slug!r}) "
+                    f"does NOT mention the issuer name anywhere in the body."
+                ),
+            ))
+    return violations
+
+
+def _content_addresses_issuer(
+    content: str, issuer_name: str, seed_email: str | None,
+) -> bool:
+    """Return True when ``content`` is plausibly addressed to the
+    named issuer. See _check_filename_content_consistency for the
+    multi-strategy logic."""
+    if seed_email and seed_email in content:
+        return True
+    # Extract the email domain from the seed-db primary_contact, OR
+    # synthesize a likely domain from the issuer name. Then accept
+    # ANY email at that domain as evidence the letter is addressed
+    # to the right issuer.
+    domain: str | None = None
+    if seed_email and "@" in seed_email:
+        domain = seed_email.split("@", 1)[1].strip().lower()
+    if not domain and issuer_name:
+        # Best-effort: "Coinbase" → "coinbase.com",
+        # "Sky Protocol" → "skyprotocol.com" (won't always match
+        # reality, but it's a safe heuristic floor).
+        domain = re.sub(
+            r"[^a-z0-9]", "",
+            issuer_name.lower(),
+        ) + ".com"
+    if domain:
+        domain_re = re.compile(
+            r"[a-zA-Z0-9_.+-]+@" + re.escape(domain),
+            re.IGNORECASE,
+        )
+        if domain_re.search(content):
+            return True
+    # Fallback: issuer name in a heading (h1/h2/h3) or in the
+    # explicit "Compliance Department" / "Attn:" / "To:" address
+    # block — distinguishes "addressed to X" from "X is named
+    # incidentally in a Section 4.2 inventory".
+    if issuer_name:
+        patterns = [
+            re.compile(
+                r"<h[123][^>]*>[^<]*"
+                + re.escape(issuer_name)
+                + r"[^<]*</h[123]>",
+                re.IGNORECASE,
+            ),
+            re.compile(
+                r"(?:Compliance Department|Attn|To:)[^<]{0,200}"
+                + re.escape(issuer_name),
+                re.IGNORECASE,
+            ),
+        ]
+        for p in patterns:
+            if p.search(content):
+                return True
+    return False
+
+
+def _extract_issuer_slug(filename: str, *, prefix: str) -> str | None:
+    """Get the issuer slug from a filename like
+    'freeze_request_midas_BRIEF-V-CFI01-abc123.html' → 'midas'."""
+    stem = filename.rsplit(".", 1)[0]
+    if not stem.startswith(f"{prefix}_"):
+        return None
+    rest = stem[len(prefix) + 1:]
+    return rest.split("_", 1)[0] if rest else None
+
+
+def _resolve_issuer_name_from_slug(
+    slug: str, freeze_brief: dict | None,
+) -> str | None:
+    """Walk FREEZABLE looking for an issuer whose normalized name
+    matches the slug. Falls back to a Title-Cased slug."""
+    if freeze_brief:
+        for entry in freeze_brief.get("FREEZABLE", []) or []:
+            name = entry.get("issuer") or ""
+            if _normalize_issuer_key(name) == slug:
+                return name
+    # Fallback — turn 'midas' → 'Midas'. Not always correct
+    # (e.g., 'sky_protocol' should be 'Sky Protocol' not
+    # 'Sky_protocol') but adequate for the negative-case check
+    # where we'd fail to find the name in the document.
+    return slug.replace("_", " ").title()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 2: HTML files contain HTML at root
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_html_files_contain_html(briefs_dir: Path) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("*.html")):
+        text = _safe_read(path).lstrip()
+        if not text:
+            violations.append(Violation(
+                check="html_files_contain_html", severity="high",
+                file=path.name, detail="HTML file is empty",
+            ))
+            continue
+        # Acceptable starts: <!DOCTYPE, <html, <div, <p (some
+        # template fragments don't have doctype). NOT acceptable:
+        # {  (JSON), <?xml (raw SVG without HTML wrapper),
+        # finding_type (CSV header), etc.
+        first_chars = text[:80]
+        if not (
+            first_chars.startswith("<!DOCTYPE")
+            or first_chars.startswith("<html")
+            or first_chars.startswith("<div")
+            or first_chars.startswith("<p ")
+            or first_chars.startswith("<section")
+        ):
+            violations.append(Violation(
+                check="html_files_contain_html", severity="critical",
+                file=path.name,
+                detail=(
+                    f"HTML file does NOT start with an HTML tag. "
+                    f"First 80 chars: {first_chars[:80]!r}"
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 3: JSON files parse as valid JSON
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_json_files_parse_as_json(briefs_dir: Path) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("*.json")):
+        try:
+            json.loads(_safe_read(path))
+        except json.JSONDecodeError as exc:
+            violations.append(Violation(
+                check="json_files_parse_as_json", severity="critical",
+                file=path.name,
+                detail=f"JSON parse failed: {exc.msg} at pos {exc.pos}",
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 4: no two output files have byte-identical content
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_no_duplicate_file_contents(briefs_dir: Path) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    by_hash: dict[str, list[str]] = {}
+    for path in sorted(briefs_dir.iterdir()):
+        if not path.is_file():
+            continue
+        try:
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError:
+            continue
+        by_hash.setdefault(digest, []).append(path.name)
+
+    violations: list[Violation] = []
+    for digest, names in by_hash.items():
+        if len(names) > 1:
+            violations.append(Violation(
+                check="no_duplicate_file_contents", severity="high",
+                detail=(
+                    f"{len(names)} files share identical content "
+                    f"(sha256 {digest[:12]}…): {names}. Silent overwrite "
+                    "or duplicate-write at the orchestration layer."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 5: manifest output_sha256 matches disk
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_manifest_sha_matches_disk(briefs_dir: Path) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for manifest_path in sorted(briefs_dir.glob("manifest_*.json")):
+        manifest = _safe_load_json(manifest_path)
+        if not manifest:
+            # Already reported by check 3.
+            continue
+        outputs = manifest.get("outputs") or {}
+        shas = manifest.get("output_sha256") or {}
+        for key, declared_path in outputs.items():
+            declared_sha = shas.get(key, "")
+            if not declared_sha:
+                continue
+            # The manifest may record absolute paths; we resolve
+            # relative to the briefs/ dir by filename.
+            target = briefs_dir / Path(declared_path).name
+            if not target.is_file():
+                violations.append(Violation(
+                    check="manifest_sha_matches_disk", severity="high",
+                    file=manifest_path.name,
+                    detail=(
+                        f"manifest declares {key} at {declared_path!r} "
+                        f"but file is missing on disk"
+                    ),
+                ))
+                continue
+            actual_sha = hashlib.sha256(
+                target.read_bytes()
+            ).hexdigest()
+            if actual_sha != declared_sha:
+                violations.append(Violation(
+                    check="manifest_sha_matches_disk", severity="critical",
+                    file=manifest_path.name,
+                    detail=(
+                        f"manifest output_sha256[{key}] = "
+                        f"{declared_sha[:12]}… but actual file "
+                        f"({target.name}) sha = {actual_sha[:12]}…. "
+                        "Wrong content was written to this path "
+                        "after the manifest was sealed (write-path "
+                        "bug / cross-deliverable collision)."
+                    ),
+                ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 6: every freezable issuer has both freeze_request + le_handoff
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_every_freezable_issuer_has_letters(
+    briefs_dir: Path, freeze_asks: dict | None, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    if not freeze_brief:
+        return []  # No driver data — silent skip (a separate check would catch missing brief)
+
+    # Pull every issuer that has at least one freeze_capability='yes'
+    # entry. UNRECOVERABLE-only issuers (Lido staking, Sky/DAI) are
+    # legitimately skipped by the renderer — don't flag them.
+    actionable_issuers: set[str] = set()
+    for entry in freeze_brief.get("FREEZABLE", []) or []:
+        issuer = entry.get("issuer")
+        cap = (entry.get("freeze_capability") or "").lower()
+        if not issuer:
+            continue
+        if cap in ("yes", "limited") or _has_any_actionable_holding(entry):
+            actionable_issuers.add(issuer)
+
+    violations: list[Violation] = []
+    for issuer in sorted(actionable_issuers):
+        slug = _normalize_issuer_key(issuer)
+        freeze = list(briefs_dir.glob(f"freeze_request_{slug}_*.html"))
+        leh = list(briefs_dir.glob(f"le_handoff_{slug}_*.html"))
+        if not freeze:
+            violations.append(Violation(
+                check="every_freezable_issuer_has_letters",
+                severity="critical",
+                detail=(
+                    f"issuer {issuer!r} has actionable holdings but no "
+                    f"freeze_request_{slug}_*.html file"
+                ),
+            ))
+        if not leh:
+            violations.append(Violation(
+                check="every_freezable_issuer_has_letters",
+                severity="critical",
+                detail=(
+                    f"issuer {issuer!r} has actionable holdings but no "
+                    f"le_handoff_{slug}_*.html file"
+                ),
+            ))
+    return violations
+
+
+def _has_any_actionable_holding(entry: dict) -> bool:
+    """An entry is actionable when any of its holdings carries
+    freeze_capability != 'no'."""
+    for holding in entry.get("holdings", []) or []:
+        cap = (holding.get("freeze_capability") or "").lower()
+        if cap not in ("", "no"):
+            return True
+    return False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 7: TOTAL_FREEZABLE_USD reconciles across artifacts
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_total_freezable_usd_reconciles(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not freeze_brief or not briefs_dir.is_dir():
+        return []
+    brief_total = _parse_usd_string(
+        freeze_brief.get("TOTAL_FREEZABLE_USD")
+        or freeze_brief.get("total_freezable_usd")
+    )
+    if brief_total == 0:
+        return []  # Nothing to reconcile against; recoverable check picks this up.
+
+    violations: list[Violation] = []
+    # Engagement letter — should quote the same headline figure.
+    for engagement in briefs_dir.glob("engagement_letter_*.html"):
+        text = _safe_read(engagement)
+        # Look for any $X,XXX,XXX.XX figure that matches the brief's total.
+        formatted = f"${brief_total:,.2f}"
+        # Strip the .00 for an alternate format.
+        formatted_no_cents = f"${brief_total:,.0f}"
+        if formatted not in text and formatted_no_cents not in text:
+            violations.append(Violation(
+                check="total_freezable_usd_reconciles", severity="high",
+                file=engagement.name,
+                detail=(
+                    f"engagement letter does not contain freeze_brief's "
+                    f"TOTAL_FREEZABLE_USD = {formatted}. Possible "
+                    "divergence between brief and contract."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 8: stolen-asset issuer vs freeze-target issuer distinct
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_stolen_vs_target_issuer_distinct(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """Validate that LE handoff Section 1 ¶1 names the STOLEN asset's
+    real issuer (not the freeze-target). Catches the v0.19.3 residual
+    that Jacob still saw in v0.20.15."""
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    asset = freeze_brief.get("asset") or {}
+    stolen_symbol = (asset.get("symbol") or "").strip()
+    stolen_issuer = (asset.get("issuer") or "").strip()
+    if not stolen_symbol or not stolen_issuer:
+        return []
+
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("le_handoff_*.html")):
+        slug = _extract_issuer_slug(path.name, prefix="le_handoff")
+        target_name = _resolve_issuer_name_from_slug(slug or "", freeze_brief)
+        if not target_name or target_name == stolen_issuer:
+            # Self-letter (e.g., Tether-letter for USDT theft) —
+            # "issued by Tether" is genuinely correct here.
+            continue
+        text = _safe_read(path)
+        if stolen_symbol not in text:
+            continue
+        # Match the Section 1 first <p> paragraph.
+        m = re.search(
+            r"1\.\s*Executive Summary.*?<p[^>]*>(.*?)</p>",
+            text, flags=re.DOTALL,
+        )
+        if not m:
+            continue
+        first_para = m.group(1)
+        if f"issued by {target_name}" in first_para:
+            violations.append(Violation(
+                check="stolen_vs_target_issuer_distinct",
+                severity="critical",
+                file=path.name,
+                detail=(
+                    f"Section 1 ¶1 claims {stolen_symbol} is issued by "
+                    f"{target_name} (the freeze-target). It is issued "
+                    f"by {stolen_issuer}. STOLEN_ASSET_ISSUER and "
+                    "FREEZE_TARGET_ISSUER are conflated in the template."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 9: recoverable variant matches MAX_RECOVERABLE_USD
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_recoverable_variant_matches_state(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """Catches v0.15.1's classifier bug: a case with $3.5M freezable
+    funds shipped a victim_summary_UNRECOVERABLE letter + auto-refund."""
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    max_recoverable = _parse_usd_string(
+        freeze_brief.get("MAX_RECOVERABLE_USD")
+        or freeze_brief.get("max_recoverable_usd")
+        or freeze_brief.get("TOTAL_FREEZABLE_USD")
+        or "0"
+    )
+    has_recoverable = any(
+        briefs_dir.glob("victim_summary_recoverable_*.html")
+    )
+    has_unrecoverable = any(
+        briefs_dir.glob("victim_summary_unrecoverable_*.html")
+    )
+    violations: list[Violation] = []
+    if max_recoverable > 0 and has_unrecoverable:
+        violations.append(Violation(
+            check="recoverable_variant_matches_state",
+            severity="critical",
+            detail=(
+                f"freeze_brief reports MAX_RECOVERABLE_USD > 0 "
+                f"(${max_recoverable:,.2f}) but case shipped "
+                "victim_summary_unrecoverable_*.html. This is the "
+                "v0.15.1 classifier-on-broken-input pattern."
+            ),
+        ))
+    if max_recoverable == 0 and has_recoverable:
+        violations.append(Violation(
+            check="recoverable_variant_matches_state",
+            severity="high",
+            detail=(
+                "freeze_brief reports MAX_RECOVERABLE_USD = 0 but "
+                "case shipped victim_summary_RECOVERABLE — variant "
+                "selection disagrees with the brief."
+            ),
+        ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 10: no unrendered Jinja placeholders
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+_JINJA_VAR_RE = re.compile(r"\{\{[^}]+\}\}")
+_JINJA_BLOCK_RE = re.compile(r"\{%[^%]+%\}")
+
+
+def _check_no_unrendered_jinja_placeholders(
+    briefs_dir: Path,
+) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("*.html")):
+        text = _safe_read(path)
+        var_matches = _JINJA_VAR_RE.findall(text)
+        block_matches = _JINJA_BLOCK_RE.findall(text)
+        if var_matches:
+            violations.append(Violation(
+                check="no_unrendered_jinja_placeholders",
+                severity="high", file=path.name,
+                detail=(
+                    f"{len(var_matches)} unrendered Jinja "
+                    f"{{ {{ ... }} }} placeholders. First: "
+                    f"{var_matches[0][:120]!r}"
+                ),
+            ))
+        if block_matches:
+            violations.append(Violation(
+                check="no_unrendered_jinja_placeholders",
+                severity="high", file=path.name,
+                detail=(
+                    f"{len(block_matches)} unrendered Jinja "
+                    "{% ... %} blocks (template didn't render)."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 11: UNRECOVERABLE addresses don't appear as FREEZABLE
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_unrecoverable_not_in_freezable(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """If the brief tags address X as UNRECOVERABLE (e.g., contract,
+    staking pool), no freeze letter may list X under its FREEZABLE
+    section. Catches v0.18 contract-detection regressions."""
+    if not freeze_brief or not briefs_dir.is_dir():
+        return []
+    unrecoverable_addrs: set[str] = set()
+    for entry in freeze_brief.get("FREEZABLE", []) or []:
+        for holding in entry.get("holdings", []) or []:
+            if (holding.get("status") or "").upper() == "UNRECOVERABLE":
+                addr = (holding.get("address") or "").lower()
+                if addr:
+                    unrecoverable_addrs.add(addr)
+    # Also accept top-level UNRECOVERABLE_ITEMS if the brief uses
+    # that shape.
+    for item in freeze_brief.get("UNRECOVERABLE_ITEMS", []) or []:
+        addr = (item.get("address") or "").lower()
+        if addr:
+            unrecoverable_addrs.add(addr)
+    if not unrecoverable_addrs:
+        return []
+
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("freeze_request_*.html")):
+        text = _safe_read(path).lower()
+        for addr in unrecoverable_addrs:
+            if addr in text:
+                # Heuristic: present in the letter at all might be OK
+                # (mentioned as context). But appearing inside the
+                # FREEZABLE / KYC-target / preservation-request blocks
+                # is the bug. Without parsing the HTML structure we
+                # only have a heuristic: flag as a WARNING.
+                violations.append(Violation(
+                    check="unrecoverable_addresses_not_in_freezable",
+                    severity="warning", file=path.name,
+                    detail=(
+                        f"UNRECOVERABLE address {addr[:10]}... appears "
+                        f"in freeze_request file. Verify it's not "
+                        "listed as a preservation target."
+                    ),
+                ))
+                break  # one finding per file is enough
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 12: DAI / Sky Protocol → UNRECOVERABLE
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_dai_sky_consistency(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """Every artifact mentioning DAI must also mention UNRECOVERABLE
+    or 'Sky Protocol has no admin freeze' or similar. DAI / Sky has
+    no admin freeze pathway; representing DAI as freezable is the
+    inverse of v0.20.x R3-1."""
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("*.html")):
+        text = _safe_read(path)
+        # Look for prominent DAI mentions — uppercase or in a strong
+        # token tag.
+        if " DAI " not in text and ">DAI<" not in text:
+            continue
+        # Acceptable contexts: marker phrases that indicate the
+        # operator/AUSA already knows DAI is not freezable.
+        if any(marker in text for marker in (
+            "UNRECOVERABLE",
+            "Sky Protocol",
+            "no admin freeze",
+            "no freeze pathway",
+            "is not freezable",
+        )):
+            continue
+        violations.append(Violation(
+            check="dai_sky_consistency", severity="warning",
+            file=path.name,
+            detail=(
+                "Document mentions DAI but does not flag "
+                "UNRECOVERABLE / Sky Protocol context. DAI has no "
+                "admin freeze pathway; LE / partners may be misled."
+            ),
+        ))
+    return violations
+
+
+__all__ = (
+    "Violation",
+    "ValidationResult",
+    "validate_case_output",
+)

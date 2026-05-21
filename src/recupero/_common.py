@@ -293,11 +293,27 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
     separate process / thread may read concurrently (the bucket uploader
     reads files after the worker writes them; without atomicity it can
     pick up a half-written truncated JSON).
+
+    v0.28.0 (JACOB-3 validator finding): newline translation is
+    DISABLED. Python's default text-mode write applies platform-
+    specific newline translation (LF → CRLF on Windows). The brief
+    manifest hashes the in-memory string then writes via this
+    helper; the on-disk bytes are then larger than the hashed
+    bytes on Windows, so the recorded SHA256 is stale the moment
+    the file lands. The output_integrity validator's
+    manifest_sha_matches_disk check now catches this on every
+    build. Force LF-only writes everywhere — manifest SHAs match,
+    and the HTML on Linux/Mac/Windows is byte-identical so the
+    rendered output is deterministic across platforms (which the
+    `3x determinism` regression also depends on).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     try:
-        tmp_path.write_text(content, encoding=encoding)
+        # newline="" disables universal-newline translation on
+        # write — bytes go to disk exactly as supplied.
+        with open(tmp_path, "w", encoding=encoding, newline="") as f:
+            f.write(content)
         os.replace(tmp_path, path)
     except Exception:
         # Best-effort cleanup of the tempfile if write succeeded but

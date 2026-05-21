@@ -1,0 +1,482 @@
+"""Tests for recupero.validators.output_integrity (JACOB-3).
+
+Each invariant gets:
+  * A positive test (a well-formed case directory passes the check)
+  * A negative test (a deliberately-broken case directory triggers
+    the check with a critical/high severity)
+
+End-to-end test runs the full V-CFI01 build through the validator
+and asserts result.ok == True.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import tempfile
+from pathlib import Path
+
+import pytest
+
+from recupero.validators.output_integrity import (
+    ValidationResult,
+    Violation,
+    validate_case_output,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers: build small synthetic case directories
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _write_lf(path: Path, content: str) -> None:
+    """Write content with LF-only line endings — matches the
+    production atomic_write_text behavior so manifest SHAs computed
+    in tests match the on-disk SHAs on Windows + POSIX alike."""
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        f.write(content)
+
+
+def _build_minimal_good_case(tmp_path: Path) -> Path:
+    """Create a small, well-formed case directory that passes every
+    invariant. Used as the baseline that negative tests then mutate."""
+    case_dir = tmp_path / "case"
+    briefs = case_dir / "briefs"
+    briefs.mkdir(parents=True)
+
+    # Drivers. NOTE: write LF-only so the manifest's SHA hashes
+    # (computed against the in-memory string) match the on-disk bytes
+    # on Windows. atomic_write_text() in production does the same.
+    _write_lf(case_dir / "freeze_asks.json", json.dumps({
+        "by_issuer": {
+            "Tether": [{"freeze_capability": "yes", "token": "USDT"}],
+        }
+    }))
+    freeze_brief = {
+        "CASE_ID": "TEST",
+        "TOTAL_FREEZABLE_USD": "$1,000.00",
+        "MAX_RECOVERABLE_USD": "$1,000.00",
+        "asset": {
+            "symbol": "USDT",
+            "issuer": "Tether",
+        },
+        "FREEZABLE": [
+            {
+                "issuer": "Tether",
+                "token": "USDT",
+                "freeze_capability": "yes",
+                "holdings": [
+                    {"address": "0xaaa", "freeze_capability": "yes",
+                     "status": "FREEZABLE"},
+                ],
+            },
+        ],
+    }
+    _write_lf(case_dir / "freeze_brief.json", json.dumps(freeze_brief))
+
+    # Issuer-named freeze_request + le_handoff — both reference the
+    # Tether compliance email so the filename/content check passes.
+    freeze_html = (
+        "<!DOCTYPE html>\n<html><body>"
+        "<h1>Freeze Request — Tether</h1>"
+        "<p>To: compliance@tether.to</p>"
+        "<p>USDT freeze request.</p>"
+        "</body></html>"
+    )
+    _write_lf(briefs / "freeze_request_tether_BRIEF-TEST-1.html", freeze_html)
+
+    le_html = (
+        "<!DOCTYPE html>\n<html><body>"
+        "<h1>LE Handoff — Tether</h1>"
+        "<h2>1. Executive Summary</h2>"
+        "<div><p>USDT theft. The token is issued by Tether.</p></div>"
+        "<h2>2. Asset</h2><p>Tether</p>"
+        "</body></html>"
+    )
+    _write_lf(briefs / "le_handoff_tether_BRIEF-TEST-1.html", le_html)
+
+    # Manifest with valid SHA references.
+    freeze_sha = hashlib.sha256(freeze_html.encode()).hexdigest()
+    le_sha = hashlib.sha256(le_html.encode()).hexdigest()
+    _write_lf(briefs / "manifest_BRIEF-TEST-1.json", json.dumps({
+        "outputs": {
+            "issuer_freeze_request": "freeze_request_tether_BRIEF-TEST-1.html",
+            "le_handoff": "le_handoff_tether_BRIEF-TEST-1.html",
+        },
+        "output_sha256": {
+            "issuer_freeze_request": freeze_sha,
+            "le_handoff": le_sha,
+        },
+    }))
+
+    # Other deliverables.
+    _write_lf(briefs / "trace_report_abc123.html",
+        "<!DOCTYPE html>\n<html><body>Trace report</body></html>"
+    )
+    _write_lf(briefs / "victim_summary_recoverable_def456.html",
+        "<!DOCTYPE html>\n<html><body>$1,000.00 freezable</body></html>"
+    )
+    _write_lf(briefs / "engagement_letter_ghi789.html",
+        "<!DOCTYPE html>\n<html><body>Engagement letter $1,000.00</body></html>"
+    )
+    return case_dir
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Result types
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_validation_result_ok_when_no_critical_or_high():
+    r = ValidationResult(violations=[
+        Violation("x", "warning", "ignore"),
+    ])
+    assert r.ok is True
+    assert r.critical_count == 0
+
+
+def test_validation_result_not_ok_on_critical():
+    r = ValidationResult(violations=[
+        Violation("x", "critical", "bad"),
+    ])
+    assert r.ok is False
+
+
+def test_validation_result_summary_text():
+    r = ValidationResult(
+        violations=[Violation("x", "critical", "boom", file="f.html")],
+        checks_run=["x"],
+    )
+    text = r.summary_text()
+    assert "FAIL" in text
+    assert "CRITICAL" in text
+    assert "f.html" in text
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Smoke + happy-path
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_missing_case_dir_critical(tmp_path):
+    result = validate_case_output(tmp_path / "nonexistent")
+    assert not result.ok
+    assert any(v.check == "case_dir_exists" for v in result.violations)
+
+
+def test_minimal_good_case_passes(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    result = validate_case_output(case_dir)
+    # The minimal case may produce warnings (e.g., DAI not mentioned
+    # at all → no DAI check trips). It must NOT produce critical or
+    # high severity violations.
+    crits = [v for v in result.violations if v.severity == "critical"]
+    highs = [v for v in result.violations if v.severity == "high"]
+    assert not crits, f"critical violations: {crits}"
+    assert not highs, f"high violations: {highs}"
+    assert result.ok
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 1: filename / content consistency
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_freeze_request_with_wrong_issuer_content_fails(tmp_path):
+    """The v0.20.15 routing bug: freeze_request_tether_*.html should
+    contain the Tether letter but instead contains Circle content."""
+    case_dir = _build_minimal_good_case(tmp_path)
+    # Overwrite the Tether freeze letter with Circle content.
+    bad_path = case_dir / "briefs" / "freeze_request_tether_BRIEF-TEST-1.html"
+    _write_lf(bad_path,
+        "<!DOCTYPE html>\n<html><body>"
+        "<h1>Freeze Request - Circle</h1>"
+        "<p>To: compliance@circle.com</p>"
+        "</body></html>"
+    )
+    result = validate_case_output(case_dir)
+    assert not result.ok
+    assert any(
+        v.check == "filename_content_consistency" and v.severity == "critical"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 2: HTML files contain HTML
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_html_file_containing_json_fails(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    bad = case_dir / "briefs" / "engagement_letter_ghi789.html"
+    bad.write_text('{"this_is_json": true}')
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "html_files_contain_html" and v.severity == "critical"
+        for v in result.violations
+    )
+
+
+def test_html_file_containing_svg_fails(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    bad = case_dir / "briefs" / "trace_report_abc123.html"
+    bad.write_text('<?xml version="1.0"?><svg></svg>')
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "html_files_contain_html" and v.severity == "critical"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 3: JSON files parse as JSON
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_json_file_containing_html_fails(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    bad = case_dir / "briefs" / "manifest_BRIEF-TEST-1.json"
+    bad.write_text("<!DOCTYPE html><html>not json</html>")
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "json_files_parse_as_json" and v.severity == "critical"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 4: no duplicate file contents
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_duplicate_file_contents_flagged(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    a = case_dir / "briefs" / "trace_report_abc123.html"
+    b = case_dir / "briefs" / "victim_summary_recoverable_def456.html"
+    a.write_text("<!DOCTYPE html><html>same content</html>")
+    b.write_text("<!DOCTYPE html><html>same content</html>")
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "no_duplicate_file_contents"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 5: manifest SHA matches disk
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_stale_manifest_sha_flagged(tmp_path):
+    """If the freeze_request file gets rewritten after the manifest
+    was sealed, the recorded SHA no longer matches — the exact
+    forensic Jacob suggested to localize the routing bug."""
+    case_dir = _build_minimal_good_case(tmp_path)
+    bad = case_dir / "briefs" / "freeze_request_tether_BRIEF-TEST-1.html"
+    bad.write_text(
+        "<!DOCTYPE html>\n<html><body>"
+        "<h1>Tether</h1>"
+        "<p>To: compliance@tether.to (replaced after manifest sealed)</p>"
+        "</body></html>"
+    )
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "manifest_sha_matches_disk" and v.severity == "critical"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 6: every freezable issuer has letters
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_missing_freeze_request_for_freezable_issuer_flagged(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    # Add a Circle issuer to FREEZABLE without producing the letter.
+    fb_path = case_dir / "freeze_brief.json"
+    fb = json.loads(fb_path.read_text())
+    fb["FREEZABLE"].append({
+        "issuer": "Circle",
+        "token": "USDC",
+        "freeze_capability": "yes",
+        "holdings": [{
+            "address": "0xbbb", "freeze_capability": "yes",
+            "status": "FREEZABLE",
+        }],
+    })
+    fb_path.write_text(json.dumps(fb))
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "every_freezable_issuer_has_letters"
+        and v.severity == "critical"
+        and "Circle" in v.detail
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 8: stolen-asset issuer vs freeze-target issuer
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_stolen_asset_issuer_conflation_flagged(tmp_path):
+    """Section 1 ¶1 of a Circle LE handoff claiming USDT is 'issued by
+    Circle' triggers the v0.19.3-residual / JACOB-2 check."""
+    case_dir = _build_minimal_good_case(tmp_path)
+    # Add a Circle handoff with the conflation.
+    bad = case_dir / "briefs" / "le_handoff_circle_BRIEF-TEST-1.html"
+    bad.write_text(
+        "<!DOCTYPE html>\n<html><body>"
+        "<h2>1. Executive Summary</h2>"
+        "<div><p>USDT was removed. The token is issued by Circle.</p></div>"
+        "</body></html>"
+    )
+    # Also need to add Circle to FREEZABLE so the resolver finds it.
+    fb_path = case_dir / "freeze_brief.json"
+    fb = json.loads(fb_path.read_text())
+    fb["FREEZABLE"].append({
+        "issuer": "Circle", "token": "USDC", "freeze_capability": "yes",
+        "holdings": [{"address": "0xb", "freeze_capability": "yes",
+                      "status": "FREEZABLE"}],
+    })
+    fb_path.write_text(json.dumps(fb))
+    # Add the corresponding Circle freeze_request so check 6 is happy.
+    (case_dir / "briefs" / "freeze_request_circle_BRIEF-TEST-1.html").write_text(
+        "<!DOCTYPE html><html><body><p>compliance@circle.com</p></body></html>"
+    )
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "stolen_vs_target_issuer_distinct"
+        and v.severity == "critical"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 9: recoverable variant matches MAX_RECOVERABLE_USD
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_unrecoverable_variant_with_positive_max_recoverable_flagged(tmp_path):
+    """v0.15.1 bug: case with $3.5M freezable shipped UNRECOVERABLE
+    summary + auto-refund."""
+    case_dir = _build_minimal_good_case(tmp_path)
+    # Replace the recoverable variant with unrecoverable.
+    (case_dir / "briefs" / "victim_summary_recoverable_def456.html").unlink()
+    (case_dir / "briefs" / "victim_summary_unrecoverable_def456.html").write_text(
+        "<!DOCTYPE html><html><body>No funds recoverable</body></html>"
+    )
+    # Brief still says $1,000 recoverable.
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "recoverable_variant_matches_state"
+        and v.severity == "critical"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 10: no unrendered Jinja placeholders
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_unrendered_jinja_var_flagged(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    bad = case_dir / "briefs" / "trace_report_abc123.html"
+    _write_lf(bad,
+        "<!DOCTYPE html><html><body>"
+        "<p>Hello {{ victim.name }} - your case</p>"
+        "</body></html>"
+    )
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "no_unrendered_jinja_placeholders"
+        and v.severity == "high"
+        for v in result.violations
+    )
+
+
+def test_unrendered_jinja_block_flagged(tmp_path):
+    case_dir = _build_minimal_good_case(tmp_path)
+    bad = case_dir / "briefs" / "trace_report_abc123.html"
+    bad.write_text(
+        "<!DOCTYPE html><html><body>"
+        "{% if foo %}<p>x</p>{% endif %}"
+        "</body></html>"
+    )
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "no_unrendered_jinja_placeholders"
+        for v in result.violations
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# End-to-end: run V-CFI01 production path through the validator
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture(scope="module")
+def v_cfi01_case_dir() -> Path:
+    """Build the V-CFI01 case end-to-end via build_all_deliverables
+    and return the case_dir path. Shared across the e2e tests."""
+    from tests.test_v_cfi01_production_path import (  # type: ignore
+        _build_v_cfi01_case,
+        _build_editorial,
+        _build_freeze_asks_dict,
+        _build_issuer_metadata,
+        VICTIM,
+    )
+    from recupero.reports.brief import InvestigatorInfo
+    from recupero.reports.emit_brief import emit_brief
+    from recupero.reports.victim import VictimInfo
+    from recupero.worker._deliverables import build_all_deliverables
+
+    case = _build_v_cfi01_case()
+    editorial = _build_editorial()
+    freeze_asks = _build_freeze_asks_dict()
+    metadata = _build_issuer_metadata()
+    victim = VictimInfo(
+        name="V-CFI01 Test Victim", wallet_address=VICTIM,
+        state="NY", country="US", email="victim@test.com",
+    )
+    inv = InvestigatorInfo(
+        name="Test Investigator",
+        organization="Recupero Forensics Ltd.",
+        email="investigator@test.com",
+    )
+    brief = emit_brief(
+        case=case, victim=victim, editorial=editorial,
+        freeze_asks=freeze_asks, issuer_metadata=metadata,
+    )
+    tmp = Path(tempfile.mkdtemp(prefix="validator_e2e_"))
+    # Drop freeze_brief.json into the case_dir for the validator to
+    # find — build_all_deliverables writes it into briefs/ in some
+    # codepaths; we write the canonical location explicitly.
+    (tmp / "freeze_brief.json").write_text(
+        json.dumps(brief, default=str), encoding="utf-8",
+    )
+    (tmp / "freeze_asks.json").write_text(
+        json.dumps(freeze_asks, default=str), encoding="utf-8",
+    )
+    build_all_deliverables(
+        case=case, victim=victim, freeze_brief=brief,
+        case_dir=tmp, investigator=inv, skip_freeze_briefs=False,
+    )
+    return tmp
+
+
+def test_v_cfi01_e2e_passes_validator(v_cfi01_case_dir):
+    """The whole V-CFI01 production path must pass every structural
+    invariant. If this fails, Jacob's eyeball check would also fail."""
+    result = validate_case_output(v_cfi01_case_dir)
+    # Print the summary on failure so the test output shows the
+    # specific violation list — exactly what Jacob would want to see.
+    if not result.ok:
+        print("\n" + result.summary_text())
+    assert result.ok, (
+        f"validator found violations:\n{result.summary_text()}"
+    )

@@ -331,6 +331,25 @@ def cli() -> None:
              "missing). Default: ./law-firm-dashboards/",
     )
 
+    # ----- validate-output (v0.28.0 / JACOB-3) ----- #
+    p_val = sub.add_parser(
+        "validate-output",
+        help="Run the output-integrity validator against a case "
+             "directory. Checks 12 structural invariants (filename / "
+             "content consistency, manifest SHA, freezable-issuer "
+             "letter coverage, etc.) per Jacob's v0.20.15 review "
+             "Part 4 spec. Exits 0 on PASS, 1 on FAIL with the "
+             "violation list on stdout.",
+    )
+    p_val.add_argument(
+        "case_dir",
+        help="Path to the case output directory (e.g. cases/V-CFI01/).",
+    )
+    p_val.add_argument(
+        "--json", action="store_true",
+        help="Emit the full digest as JSON (for CI piping).",
+    )
+
     # ----- nightly-audit (v0.28.0) ----- #
     p_nightly = sub.add_parser(
         "nightly-audit",
@@ -769,6 +788,30 @@ def cli() -> None:
             sys.exit(2)
         print(f"Rendered law-firm dashboard to {out_path}")
         sys.exit(0)
+
+    if args.command == "validate-output":
+        from pathlib import Path as _Path
+        from recupero.validators.output_integrity import validate_case_output
+        case_dir = _Path(args.case_dir)
+        result = validate_case_output(case_dir)
+        if args.json:
+            import json as _json
+            print(_json.dumps({
+                "ok": result.ok,
+                "critical_count": result.critical_count,
+                "high_count": result.high_count,
+                "checks_run": result.checks_run,
+                "violations": [
+                    {
+                        "check": v.check, "severity": v.severity,
+                        "detail": v.detail, "file": v.file,
+                    }
+                    for v in result.violations
+                ],
+            }, indent=2))
+        else:
+            print(result.summary_text())
+        sys.exit(0 if result.ok else 1)
 
     if args.command == "nightly-audit":
         # Delegate to scripts/nightly_audit.py — keep the orchestrator

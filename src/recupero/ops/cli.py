@@ -331,6 +331,33 @@ def cli() -> None:
              "missing). Default: ./law-firm-dashboards/",
     )
 
+    # ----- nightly-audit (v0.28.0) ----- #
+    p_nightly = sub.add_parser(
+        "nightly-audit",
+        help="Run the daily codebase health audit. Aggregates pytest "
+             "/ ruff / mypy / git / TODO / lazy-import / file-growth "
+             "/ test-coverage / migration checks into a single JSON "
+             "digest + human-readable summary. Designed for a Railway "
+             "cron schedule.",
+    )
+    p_nightly.add_argument(
+        "--out-json", default="nightly_audit.json",
+        help="JSON digest output path. Default: ./nightly_audit.json",
+    )
+    p_nightly.add_argument(
+        "--baseline", default=None,
+        help="Previous digest file for delta computation.",
+    )
+    p_nightly.add_argument(
+        "--skip", default="",
+        help="Comma-separated check names to skip.",
+    )
+    p_nightly.add_argument(
+        "--llm-review", action="store_true",
+        help="Append an LLM narrative review (requires "
+             "ANTHROPIC_API_KEY).",
+    )
+
     # ----- api-key-mint (v0.27.0) ----- #
     p_mint = sub.add_parser(
         "api-key-mint",
@@ -742,6 +769,34 @@ def cli() -> None:
             sys.exit(2)
         print(f"Rendered law-firm dashboard to {out_path}")
         sys.exit(0)
+
+    if args.command == "nightly-audit":
+        # Delegate to scripts/nightly_audit.py — keep the orchestrator
+        # in a single place so the cron-driven path and the ops-CLI
+        # path produce identical digests.
+        from pathlib import Path as _Path
+        script = (
+            _Path(__file__).resolve().parents[3] / "scripts" / "nightly_audit.py"
+        )
+        if not script.exists():
+            print(
+                f"ERROR: nightly_audit.py not found at {script}",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        forward = [
+            sys.executable, str(script),
+            "--out-json", args.out_json,
+        ]
+        if args.baseline:
+            forward += ["--baseline", args.baseline]
+        if args.skip:
+            forward += ["--skip", args.skip]
+        if args.llm_review:
+            forward.append("--llm-review")
+        import subprocess as _sp
+        rc = _sp.call(forward)
+        sys.exit(rc)
 
     if args.command == "api-key-mint":
         import re as _re

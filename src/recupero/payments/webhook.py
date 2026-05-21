@@ -103,6 +103,16 @@ def verify_and_parse(
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise WebhookVerifyError(f"body is not valid JSON: {exc}") from exc
 
+    # RIGOR-5 (caught by hypothesis): a body of `b'0'`, `b'"x"'`,
+    # `b'null'`, `b'[]'` etc. is VALID JSON but NOT a JSON object.
+    # Calling .get() on the non-dict result raises AttributeError —
+    # the webhook handler crashed with a 500 + stack trace. Now we
+    # reject non-dict payloads cleanly.
+    if not isinstance(payload, dict):
+        raise WebhookVerifyError(
+            f"body is not a JSON object (got {type(payload).__name__})"
+        )
+
     event_id = payload.get("id")
     event_type = payload.get("type")
     if not isinstance(event_id, str) or not event_id.startswith("evt_"):

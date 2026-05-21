@@ -166,25 +166,50 @@ def render_all_law_firm_dashboards(
     dsn: str | None,
 ) -> list[Path]:
     """Render dashboards for every active firm. Returns the list of
-    paths actually written."""
+    paths actually written.
+
+    v0.26.1 (HIGH-2): the previous implementation called
+    ``build_all_firm_portfolios`` and then for each result called
+    ``render_law_firm_dashboard`` — which itself calls
+    ``build_firm_portfolio`` again, fully re-running every SQL query
+    and every cooperation-enrich connection. With N firms × 5 top
+    issuers, that's 1500+ redundant DB ops per --all invocation.
+    The corrected flow enumerates active firm slugs once via a single
+    SQL query and lets ``render_law_firm_dashboard`` do the only
+    build per firm.
+    """
     if not dsn:
         return []
-    from recupero.monitoring.law_firm_dashboard import build_all_firm_portfolios
+    try:
+        import psycopg  # noqa: F401
+    except ImportError:  # pragma: no cover
+        return []
+
+    from recupero._common import db_connect
+    from psycopg.rows import dict_row
 
     try:
-        portfolios = build_all_firm_portfolios(dsn=dsn)
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT slug
+                  FROM public.law_firms
+                 WHERE status = 'active'
+                 ORDER BY slug ASC
+                """
+            )
+            active_slugs = [r["slug"] for r in cur.fetchall()]
     except Exception as exc:  # noqa: BLE001
         log.warning(
-            "render_all_law_firm_dashboards: bulk build failed: %s", exc,
+            "render_all_law_firm_dashboards: list active firms "
+            "failed: %s", exc,
         )
         return []
 
     written: list[Path] = []
-    for portfolio in portfolios:
-        if portfolio.firm_id is None:
-            continue
+    for slug in active_slugs:
         path = render_law_firm_dashboard(
-            portfolio.firm_slug, output_dir=output_dir, dsn=dsn,
+            slug, output_dir=output_dir, dsn=dsn,
         )
         if path is not None:
             written.append(path)

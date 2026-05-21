@@ -145,6 +145,20 @@ def build_firm_portfolio(
                 portfolio.firm_name = firm_row["name"]
                 portfolio.firm_status = firm_row.get("status") or "active"
 
+                # v0.26.1 (MED-3): refuse to populate aggregates for a
+                # paused/closed/archived firm. The caller can still
+                # see the firm_status field (the dashboard renderer
+                # uses it to bail with a "STATUS: NOT ACTIVE" banner
+                # rather than producing a wrongly-fresh-looking
+                # statement for an off-boarded partner).
+                if portfolio.firm_status != "active":
+                    log.info(
+                        "build_firm_portfolio: skipping aggregate "
+                        "build for firm slug=%s status=%s",
+                        portfolio.firm_slug, portfolio.firm_status,
+                    )
+                    return portfolio
+
                 _populate_volume_and_money(cur, portfolio)
                 _populate_throughput(cur, portfolio)
                 _populate_top_issuers(cur, portfolio, dsn=dsn)
@@ -223,19 +237,34 @@ def _resolve_firm_row(cur: Any, firm_key: str) -> dict[str, Any] | None:
 
 
 def _populate_volume_and_money(cur: Any, portfolio: LawFirmPortfolio) -> None:
-    """Volume + money rollup. Reads from case_referrals JOIN cases."""
+    """Volume + money rollup. Reads from case_referrals JOIN cases.
+
+    v0.26.1 (CRIT-1): "Completed Traces" was previously filtered on
+    `cases.status IN ('completed', 'closed', 'archived')` and "In Queue"
+    on `cases.status IN ('intake', 'tracing', 'pending', 'in_progress')`
+    — none of which are values ever actually set on a cases row in this
+    codebase. The canonical "trace is done" signal lives on
+    `investigations.status = 'complete'` (per worker/state.py). Derive
+    n_completed_traces from the existence of any 'complete'
+    investigation on the case, and n_in_queue as the complement.
+    """
     cur.execute(
         """
+        WITH per_case AS (
+            SELECT cr.case_id,
+                   cr.referred_at,
+                   bool_or(i.status = 'complete') AS has_complete_inv
+              FROM public.case_referrals cr
+              LEFT JOIN public.investigations i ON i.case_id = cr.case_id
+             WHERE cr.law_firm_id = %s
+             GROUP BY cr.case_id, cr.referred_at
+        )
         SELECT
-            COUNT(*)                                     AS n_referred,
-            COUNT(*) FILTER (WHERE c.status IN
-                ('completed', 'closed', 'archived'))     AS n_completed,
-            COUNT(*) FILTER (WHERE c.status IN
-                ('intake', 'tracing', 'pending', 'in_progress')) AS n_in_queue,
-            MAX(cr.referred_at)::text                    AS latest_referral_at
-          FROM public.case_referrals cr
-          JOIN public.cases c ON c.id = cr.case_id
-         WHERE cr.law_firm_id = %s
+            COUNT(*)                                          AS n_referred,
+            COUNT(*) FILTER (WHERE has_complete_inv)          AS n_completed,
+            COUNT(*) FILTER (WHERE has_complete_inv IS NOT TRUE) AS n_in_queue,
+            MAX(referred_at)::text                            AS latest_referral_at
+          FROM per_case
         """,
         (str(portfolio.firm_id),),
     )
@@ -290,6 +319,7 @@ def _populate_volume_and_money(cur: Any, portfolio: LawFirmPortfolio) -> None:
             SELECT fo.letter_id,
                    fo.outcome_type,
                    fo.frozen_usd,
+                   fo.returned_usd,
                    ROW_NUMBER() OVER (
                        PARTITION BY fo.letter_id
                        ORDER BY
@@ -310,8 +340,16 @@ def _populate_volume_and_money(cur: Any, portfolio: LawFirmPortfolio) -> None:
             COALESCE(SUM(frozen_usd) FILTER (WHERE
                 outcome_type IN ('partial_freeze', 'full_freeze',
                                  'returned_to_victim')), 0)::numeric AS frozen,
-            COALESCE(SUM(frozen_usd) FILTER (WHERE
-                outcome_type = 'returned_to_victim'), 0)::numeric    AS returned
+            -- v0.26.1 (HIGH-1): use the dedicated returned_usd
+            -- column (migration 013) instead of frozen_usd. When an
+            -- operator records 'returned_to_victim', they fill in
+            -- returned_usd and may leave frozen_usd NULL — funds are
+            -- no longer frozen, they're back with the victim. Falling
+            -- back to frozen_usd preserves the right answer for
+            -- legacy rows where only frozen_usd was recorded.
+            COALESCE(SUM(COALESCE(returned_usd, frozen_usd)) FILTER (
+                WHERE outcome_type = 'returned_to_victim'
+            ), 0)::numeric                                            AS returned
           FROM strongest_outcomes
          WHERE rn = 1
         """,
@@ -445,6 +483,14 @@ def _populate_top_issuers(
     """Top 5 issuers across the firm's caseload, sorted by letter
     volume. Each row optionally enriched with cross-firm cooperation
     rates from cooperation_intelligence."""
+    # v0.26.1 (CRIT-2): the previous "strongest_per_letter" CTE was
+    # mis-named — it SUMmed frozen_usd across ALL positive outcomes
+    # for each letter, re-introducing the v0.24.1-CRIT-3 double-count
+    # pattern (a partial→full→returned chain billed each outcome's
+    # frozen_usd separately, inflating per-letter totals 2-3×).
+    # The corrected query picks the strongest outcome per letter via
+    # ROW_NUMBER() and only counts that one row's frozen_usd, matching
+    # the volume-rollup query in _populate_volume_and_money.
     cur.execute(
         """
         WITH firm_cases AS (
@@ -457,22 +503,38 @@ def _populate_top_issuers(
               JOIN public.investigations i ON i.id = fl.investigation_id
               JOIN firm_cases fc ON fc.case_id = i.case_id
         ),
+        ranked_outcomes AS (
+            SELECT fo.letter_id,
+                   fo.outcome_type,
+                   fo.frozen_usd,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY fo.letter_id
+                       ORDER BY
+                           CASE fo.outcome_type
+                               WHEN 'returned_to_victim' THEN 3
+                               WHEN 'full_freeze'         THEN 2
+                               WHEN 'partial_freeze'      THEN 1
+                               ELSE 0
+                           END DESC,
+                           fo.observed_at DESC
+                   ) AS rn
+              FROM public.freeze_outcomes fo
+              JOIN firm_letters fl ON fl.letter_id = fo.letter_id
+             WHERE fo.outcome_type IN
+                ('partial_freeze', 'full_freeze', 'returned_to_victim')
+        ),
         strongest_per_letter AS (
             SELECT fl.issuer,
                    fl.letter_id,
-                   COALESCE(SUM(fo.frozen_usd) FILTER (WHERE
-                       fo.outcome_type IN
-                           ('partial_freeze', 'full_freeze',
-                            'returned_to_victim')), 0) AS frozen
+                   COALESCE(ro.frozen_usd, 0) AS frozen
               FROM firm_letters fl
-              LEFT JOIN public.freeze_outcomes fo
-                     ON fo.letter_id = fl.letter_id
-             GROUP BY fl.issuer, fl.letter_id
+              LEFT JOIN ranked_outcomes ro
+                ON ro.letter_id = fl.letter_id AND ro.rn = 1
         )
         SELECT issuer,
-               COUNT(*)                          AS n_letters,
+               COUNT(*)                           AS n_letters,
                COUNT(*) FILTER (WHERE frozen > 0) AS n_freezes,
-               COALESCE(SUM(frozen), 0)::numeric AS total_frozen
+               COALESCE(SUM(frozen), 0)::numeric  AS total_frozen
           FROM strongest_per_letter
          GROUP BY issuer
          ORDER BY n_letters DESC, issuer ASC

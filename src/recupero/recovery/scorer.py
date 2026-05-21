@@ -152,14 +152,25 @@ class IssuerRecoveryRow:
     each issuer's expected_recovered_usd with the base prior, the
     historical-receipt evidence discount, and a flag for whether the
     prior was learned from real outcomes or fell back to heuristic.
+
+    v0.22.1 (audit-fix H4): ``base_prior_before_override`` captures
+    the heuristic/learned prior BEFORE the freeze_capability override
+    forces it to 0 (for capability='no') or caps it at 0.5
+    (capability='limited'). The template displays this so an LE
+    reader doesn't see "Tether base prior 0%" on a capability=no
+    holding and conclude Tether's track record is zero — the
+    capability override is a property of the specific holding, not
+    of the issuer's history.
     """
     issuer: str
     requested_usd: Decimal           # what we're asking the issuer to freeze
-    base_prior: float                # P(any freeze | the request)
+    base_prior: float                # P(any freeze | the request) — post-override
+    base_prior_before_override: float  # heuristic/learned prior; pre-override
+    capability_override_applied: bool  # True iff override changed the prior
     evidence_discount: float         # 1.0 = current balance, 0.5 = historical-only
     evidence_mode: str               # 'current_balance_only' / 'historical_only' / 'mixed'
     effective_prior: float           # base_prior * evidence_discount
-    expected_recovered_usd: Decimal  # requested_usd * effective_prior (pre-jur)
+    expected_recovered_usd: Decimal  # requested_usd * effective_prior * jur * sanctions
     is_learned_prior: bool           # True if from learned_priors DB; else heuristic
 
 
@@ -204,7 +215,14 @@ class RecoveryEstimate:
             {
                 "issuer": r.issuer,
                 "requested_usd_human": f"${r.requested_usd:,.2f}",
-                "base_prior_pct": f"{r.base_prior * 100:.0f}%",
+                # v0.22.1 (audit-fix H4): expose BOTH the heuristic/learned
+                # prior (issuer's actual track record) AND the post-override
+                # prior used in the recovery math. Templates render the
+                # pre-override value as "Base prior" and surface a note
+                # when the capability override changed it.
+                "base_prior_pct": f"{r.base_prior_before_override * 100:.0f}%",
+                "base_prior_post_override_pct": f"{r.base_prior * 100:.0f}%",
+                "capability_override_applied": r.capability_override_applied,
                 "evidence_discount_pct": f"{r.evidence_discount * 100:.0f}%",
                 "evidence_mode": r.evidence_mode,
                 "effective_prior_pct": f"{r.effective_prior * 100:.0f}%",
@@ -300,6 +318,11 @@ def score_recovery(
         if prior is None:
             prior = _lookup_issuer_prior(issuer)
             is_learned = False
+        # v0.22.1 (audit-fix H4): snapshot the pre-override prior so the
+        # template can show "Tether base prior 73% — overridden to 0%
+        # because freeze_capability=no" instead of misleadingly showing
+        # "Tether base prior 0%".
+        base_prior_before_override = float(prior)
         # Freeze capability override. The brief produces both forms
         # depending on which layer: emit_brief maps yes/limited/no →
         # HIGH/MEDIUM/LOW for display, but the raw freeze_asks.json
@@ -356,13 +379,21 @@ def score_recovery(
         )
         # v0.22.0: structured per-issuer row exposed on RecoveryEstimate
         # for the LE handoff + victim summary "Recovery Forecast" tables.
+        # v0.22.1 (audit-fixes H4 + M1): preserve base prior pre-override
+        # AND use Decimal math for effective_prior to avoid the binary-
+        # float noise the contribution computation already guards against.
+        _effective_prior_dec = Decimal(str(prior)) * evidence_discount
         per_issuer_rows.append(IssuerRecoveryRow(
             issuer=issuer,
             requested_usd=issuer_usd,
             base_prior=float(prior),
+            base_prior_before_override=base_prior_before_override,
+            capability_override_applied=(
+                base_prior_before_override != float(prior)
+            ),
             evidence_discount=float(evidence_discount),
             evidence_mode=ev_mode,
-            effective_prior=float(prior) * float(evidence_discount),
+            effective_prior=float(_effective_prior_dec),
             expected_recovered_usd=_round_money(contribution),
             is_learned_prior=is_learned,
         ))
@@ -442,6 +473,22 @@ def score_recovery(
     combined_mult = jur_mult * sanctions_mult
 
     expected_recovered = expected_freezable * Decimal(str(combined_mult))
+
+    # v0.22.1 (audit-fix C1 CRITICAL): apply the same jurisdiction +
+    # sanctions multipliers to each per-issuer row's
+    # `expected_recovered_usd`. Pre-v0.22.1 the per-issuer rows carried
+    # the pre-multiplier contribution, so the LE Section 5.4 table
+    # could show "Tether expected $850K" while the headline read
+    # "$38K" (Russia jurisdiction + OFAC overlay = 0.045x). The LE
+    # explanatory prose claimed "both are jurisdiction-adjusted" —
+    # was false. Now: rescale each row's expected_recovered_usd by
+    # combined_mult so the per-issuer table sums to the headline.
+    if per_issuer_rows:
+        _combined_mult_decimal = Decimal(str(combined_mult))
+        for _row in per_issuer_rows:
+            _row.expected_recovered_usd = _round_money(
+                _row.expected_recovered_usd * _combined_mult_decimal
+            )
 
     if jur_mult < 0.9:
         drivers.append(RecoveryDriver(

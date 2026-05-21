@@ -106,22 +106,59 @@
   </span>
 </div>
 
-{# Headline: estimated net to victim. #}
+{# v0.22.1 (audit-fix C2 CRITICAL): label + value branch on whether
+   the net is positive. For 'reject' / 'discourage' recommendations
+   the expected_net_to_victim is often negative (recovery less than
+   Recupero fees) — pre-v0.22.1 the snapshot rendered a literal
+   "Projected net recovery to victim $-7,970.25" which is
+   incomprehensible to a non-technical audience. Now: detect the
+   leading '-' and switch to "Estimated net cost if engaged"; for
+   'reject' specifically, hide the dollar figure entirely (the
+   recommendation pill conveys the message). The 90% CI label
+   below corrects an "always 95%" misstatement (audit-fix H1).
+#}
+{% set _net_raw = recovery_estimate.get('expected_net_to_victim_usd') or '$0' %}
+{% set _net_negative = _net_raw.startswith('$-') %}
+{% set _rec = recovery_estimate.get('recommendation') or 'caveat' %}
 <div class="snapshot-headline">
-  <p class="snapshot-headline-label">Projected net recovery to victim</p>
-  <p class="snapshot-headline-amount">
-    {{ recovery_estimate.get('expected_net_to_victim_usd') or '$0' }}
+  {% if _rec == 'reject' %}
+  <p class="snapshot-headline-label">Engagement recommendation</p>
+  <p class="snapshot-headline-amount" style="font-size:22px">
+    Recovery is not advised for this case
   </p>
   <p class="snapshot-headline-range">
-    95% confidence range:
+    The forensic trace did not surface freezable holdings of
+    sufficient value, or jurisdictional friction is too severe, to
+    justify the engagement fee. Detail below.
+  </p>
+  {% elif _net_negative %}
+  <p class="snapshot-headline-label">Estimated net cost if engaged</p>
+  <p class="snapshot-headline-amount" style="color:#7f1d1d">
+    {{ _net_raw }}
+  </p>
+  <p class="snapshot-headline-range">
+    The probability-weighted recovery is less than Recupero's
+    projected fees on this case. See the per-issuer breakdown and
+    drivers below for the specific factors driving this estimate.
+    {% if recovery_estimate.get('probability_any_recovery_90d') is not none %}
+    Probability of any recovery within 90 days:
+    {{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }}.
+    {% endif %}
+  </p>
+  {% else %}
+  <p class="snapshot-headline-label">Projected net recovery to victim</p>
+  <p class="snapshot-headline-amount">{{ _net_raw }}</p>
+  <p class="snapshot-headline-range">
+    90% confidence range:
     {{ recovery_estimate.get('expected_net_low_usd') or '—' }}
     –
     {{ recovery_estimate.get('expected_net_high_usd') or '—' }}
+    {% if recovery_estimate.get('probability_any_recovery_90d') is not none %}
     &nbsp;·&nbsp;
-    {% if recovery_estimate.get('probability_any_recovery_90d') %}
     {{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }} probability of any recovery within 90 days
     {% endif %}
   </p>
+  {% endif %}
 </div>
 
 <p>{{ recovery_estimate.get('headline_summary') or '' }}</p>

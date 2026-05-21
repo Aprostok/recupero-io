@@ -562,6 +562,13 @@ def _maybe_auto_send_victim_summary(
         "flow_*.pdf",
         "victim_summary_*.pdf",
         "engagement_letter_*.pdf",
+        # v0.22.1 (audit-fix H2): the Recovery Snapshot is the
+        # pre-engagement decision-support deliverable. The whole point
+        # is for the victim to see it BEFORE paying — so it MUST be
+        # attached to the victim summary email alongside the other
+        # PDFs. Pre-v0.22.1 the snapshot was generated to disk but
+        # never delivered.
+        "recovery_snapshot_*.pdf",
     ]
     attachments: list[Path] = []
     for pattern in attachment_globs:

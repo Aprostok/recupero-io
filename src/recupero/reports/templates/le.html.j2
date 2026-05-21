@@ -75,7 +75,7 @@
     {% if recovery_estimate and recovery_estimate.get('expected_recovered_usd') %}
     <div class="cover-meta-item">
       <dt>Estimated Recoverable</dt>
-      <dd>{{ recovery_estimate.get('expected_recovered_usd') }}<span class="secondary">range {{ recovery_estimate.get('expected_recovered_low_usd') or '—' }} – {{ recovery_estimate.get('expected_recovered_high_usd') or '—' }} (95% CI){% if recovery_estimate.get('probability_any_recovery_90d') %} · {{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }} probability of any recovery within 90d{% endif %}</span></dd>
+      <dd>{{ recovery_estimate.get('expected_recovered_usd') }}<span class="secondary">range {{ recovery_estimate.get('expected_recovered_low_usd') or '—' }} – {{ recovery_estimate.get('expected_recovered_high_usd') or '—' }} (90% CI){% if recovery_estimate.get('probability_any_recovery_90d') is not none %} · {{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }} probability of any recovery within 90d{% endif %}</span></dd>
     </div>
     {% endif %}
     <div class="cover-meta-item">
@@ -557,7 +557,12 @@
     <tr>
       <td><strong>{{ row.issuer }}</strong></td>
       <td class="amount">{{ row.requested_usd_human }}</td>
-      <td>{{ row.base_prior_pct }}</td>
+      <td>
+        {{ row.base_prior_pct }}
+        {% if row.get('capability_override_applied') %}
+        <br/><span class="small secondary">overridden to {{ row.get('base_prior_post_override_pct') }} by reported freeze_capability</span>
+        {% endif %}
+      </td>
       <td>
         {% if row.evidence_mode == 'historical_only' %}
         historical receipt (×{{ row.evidence_discount_pct }})
@@ -626,8 +631,22 @@
    renders even when per_issuer is empty. Lawyers / AUSAs /
    financial-recovery counsel weigh case priority on the net dollars
    actually reaching the victim after fees, not the gross recovery
-   figure. This block makes that conversion explicit. #}
+   figure. This block makes that conversion explicit.
+
+   v0.22.1 (audit-fix C2 CRITICAL + H1 + H3):
+     * Negative net → label reframes as "Estimated net cost if engaged"
+       (the headline value is still rendered, but the label tells the
+       truth about its sign — pre-v0.22.1 we labeled negative
+       dollars as "net recovery", which read as a bug to anyone
+       skimming).
+     * "95% confidence interval" → "90% confidence interval" to match
+       the actual Beta posterior level=0.90 the scorer uses.
+     * Probability rows use `is not none` so a true 0.0 ("no chance")
+       still surfaces — most informative signal on a reject case.
+#}
 {% if recovery_estimate and recovery_estimate.get('expected_net_to_victim_usd') %}
+{% set _net_raw_le = recovery_estimate.get('expected_net_to_victim_usd') %}
+{% set _net_negative_le = _net_raw_le.startswith('$-') %}
 <h3>Net to victim</h3>
 <p class="small">
   After Recupero's diagnostic + engagement fees and any
@@ -636,12 +655,14 @@
 </p>
 <table class="evidence">
   <tr>
-    <th>Projected net recovery (mid)</th>
-    <td class="amount"><strong>{{ recovery_estimate.get('expected_net_to_victim_usd') }}</strong></td>
+    <th>
+      {% if _net_negative_le %}Estimated net cost if engaged (mid){% else %}Projected net recovery (mid){% endif %}
+    </th>
+    <td class="amount"><strong{% if _net_negative_le %} style="color:#7f1d1d"{% endif %}>{{ _net_raw_le }}</strong></td>
   </tr>
   {% if recovery_estimate.get('expected_net_low_usd') and recovery_estimate.get('expected_net_high_usd') %}
   <tr>
-    <th>95% confidence interval</th>
+    <th>90% confidence interval</th>
     <td class="amount">
       {{ recovery_estimate.get('expected_net_low_usd') }}
       &nbsp;–&nbsp;
@@ -655,7 +676,7 @@
     <td class="amount small">{{ recovery_estimate.get('expected_recupero_revenue_usd') }}</td>
   </tr>
   {% endif %}
-  {% if recovery_estimate.get('probability_pays_back_engagement_180d') %}
+  {% if recovery_estimate.get('probability_pays_back_engagement_180d') is not none %}
   <tr>
     <th>Probability case pays back engagement fee within 180d</th>
     <td class="amount">

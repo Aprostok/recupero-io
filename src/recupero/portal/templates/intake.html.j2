@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Recupero — Recover Stolen Crypto</title>
+<style>
+  /* Mobile-first intake form. Designed to be submittable on a phone
+     within 90 seconds of landing — victims often hit this URL minutes
+     after realizing they've been drained, on whatever device is in
+     their hand. */
+  :root {
+    --ink: #0A0A0A;
+    --ink-soft: #1F2937;
+    --ink-muted: #4B5563;
+    --ink-quiet: #6B7280;
+    --paper: #FFFFFF;
+    --paper-tint: #FAFAFA;
+    --rule: #E5E7EB;
+    --gold: #A88B5C;
+    --error: #B91C1C;
+    --error-bg: #FEF2F2;
+    --primary: #1E3A8A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+      "Helvetica Neue", Arial, sans-serif;
+    margin: 0; padding: 0;
+    background: var(--paper-tint); color: var(--ink);
+    line-height: 1.55;
+  }
+  .container {
+    max-width: 560px; margin: 0 auto;
+    padding: 32px 22px 80px;
+  }
+  .brand {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--ink-quiet);
+    margin: 0 0 8px;
+  }
+  h1 {
+    font-size: 28px; font-weight: 700; line-height: 1.15;
+    margin: 0 0 14px; color: var(--ink);
+  }
+  .lede {
+    font-size: 16px; color: var(--ink-soft); margin: 0 0 24px;
+  }
+  form {
+    background: var(--paper); border: 1px solid var(--rule);
+    border-radius: 8px; padding: 24px; margin: 24px 0;
+  }
+  .field { margin: 0 0 18px; }
+  .field:last-child { margin-bottom: 0; }
+  label {
+    display: block; font-weight: 600; font-size: 14px;
+    color: var(--ink-soft); margin: 0 0 6px;
+  }
+  .hint {
+    display: block; font-size: 13px; color: var(--ink-quiet);
+    margin: 0 0 6px;
+  }
+  input[type="text"], input[type="email"], input[type="date"],
+  select, textarea {
+    width: 100%; padding: 10px 12px;
+    border: 1px solid var(--rule); border-radius: 4px;
+    font-size: 15px; font-family: inherit;
+    background: var(--paper); color: var(--ink);
+  }
+  input[type="text"].mono, textarea.mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+  }
+  textarea { min-height: 100px; resize: vertical; }
+  .button-row {
+    margin-top: 26px; display: flex; flex-direction: column; gap: 10px;
+  }
+  button.primary {
+    background: var(--primary); color: #fff; border: none;
+    padding: 14px 22px; border-radius: 6px;
+    font-size: 16px; font-weight: 600; cursor: pointer;
+    width: 100%;
+  }
+  button.primary:hover { background: #1A337A; }
+  .price-line {
+    font-size: 13px; color: var(--ink-quiet); text-align: center;
+  }
+  .error-banner {
+    background: var(--error-bg); border-left: 3px solid var(--error);
+    padding: 14px 16px; border-radius: 4px; margin: 0 0 22px;
+    color: var(--error);
+  }
+  .error-banner strong { display: block; margin-bottom: 4px; }
+  .small { font-size: 13px; color: var(--ink-quiet); }
+  hr { border: none; border-top: 1px solid var(--rule); margin: 28px 0; }
+  .reassurance {
+    background: var(--paper-tint); padding: 18px 20px;
+    border-radius: 6px; margin: 28px 0;
+  }
+  .reassurance h3 {
+    font-size: 14px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink-quiet); margin: 0 0 10px;
+  }
+  .reassurance li { margin: 6px 0; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <p class="brand">Recupero · Investigation Services</p>
+  <h1>Crypto stolen? Let's trace it.</h1>
+  <p class="lede">
+    Submit your wallet address and a brief description of what
+    happened. Within 24 hours of payment we will trace your funds
+    on-chain, identify where they currently sit, and tell you
+    exactly which exchanges or token issuers we can ask to freeze
+    them — and what your realistic recovery probability is.
+  </p>
+
+  {% if error %}
+  <div class="error-banner">
+    <strong>{{ error.field | replace('_', ' ') | title }}</strong>
+    {{ error.detail }}
+  </div>
+  {% endif %}
+
+  <form method="POST" action="/v1/intake" autocomplete="on">
+    <div class="field">
+      <label for="client_name">Your full legal name</label>
+      <span class="hint">Required for the engagement letter if you proceed.</span>
+      <input type="text" id="client_name" name="client_name"
+             value="{{ form.client_name or '' }}"
+             required maxlength="200" autocomplete="name">
+    </div>
+
+    <div class="field">
+      <label for="client_email">Email address</label>
+      <span class="hint">We'll send your case status and updates here.</span>
+      <input type="email" id="client_email" name="client_email"
+             value="{{ form.client_email or '' }}"
+             required maxlength="320" autocomplete="email">
+    </div>
+
+    <div class="field">
+      <label for="chain">Blockchain</label>
+      <span class="hint">Which chain were the funds on when they were stolen?</span>
+      <select id="chain" name="chain" required>
+        <option value="">— select —</option>
+        <option value="ethereum"{% if form.chain == 'ethereum' %} selected{% endif %}>Ethereum</option>
+        <option value="arbitrum"{% if form.chain == 'arbitrum' %} selected{% endif %}>Arbitrum</option>
+        <option value="base"{% if form.chain == 'base' %} selected{% endif %}>Base</option>
+        <option value="polygon"{% if form.chain == 'polygon' %} selected{% endif %}>Polygon</option>
+        <option value="bsc"{% if form.chain == 'bsc' %} selected{% endif %}>BNB Chain</option>
+        <option value="solana"{% if form.chain == 'solana' %} selected{% endif %}>Solana</option>
+        <option value="tron"{% if form.chain == 'tron' %} selected{% endif %}>Tron</option>
+        <option value="bitcoin"{% if form.chain == 'bitcoin' %} selected{% endif %}>Bitcoin</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="seed_address">Your wallet address</label>
+      <span class="hint">The wallet that was drained. Copy-paste the full address.</span>
+      <input type="text" id="seed_address" name="seed_address"
+             class="mono"
+             value="{{ form.seed_address or '' }}"
+             required maxlength="80" autocomplete="off"
+             placeholder="0x… or bc1… or T… etc.">
+    </div>
+
+    <div class="field">
+      <label for="incident_date">Date of theft</label>
+      <span class="hint">Approximate is OK if you're not sure.</span>
+      <input type="date" id="incident_date" name="incident_date"
+             value="{{ form.incident_date or '' }}"
+             required>
+    </div>
+
+    <div class="field">
+      <label for="country">Your country (optional)</label>
+      <span class="hint">Helps us route to the right law-enforcement channel.</span>
+      <input type="text" id="country" name="country"
+             value="{{ form.country or '' }}"
+             maxlength="100" autocomplete="country-name">
+    </div>
+
+    <div class="field">
+      <label for="description">What happened?</label>
+      <span class="hint">One or two sentences. We'll ask more if needed.</span>
+      <textarea id="description" name="description"
+                required maxlength="2000"
+                placeholder="e.g. Phishing site drained my wallet on May 5; I signed what I thought was a routine swap…">{{ form.description or '' }}</textarea>
+    </div>
+
+    <div class="button-row">
+      <button type="submit" class="primary">
+        Continue to payment ($499)
+      </button>
+      <p class="price-line">
+        $499 forensic diagnostic · refundable if no recoverable
+        funds identified.
+      </p>
+    </div>
+  </form>
+
+  <div class="reassurance">
+    <h3>What you get for $499</h3>
+    <ul>
+      <li>Full on-chain forensic trace of where your funds went</li>
+      <li>Identified destinations: which exchanges or token issuers hold them now</li>
+      <li>Recovery probability score with per-issuer breakdown</li>
+      <li>If recoverable, an engagement option to send formal freeze requests on your behalf</li>
+      <li>If not recoverable, a full refund and an honest reason why</li>
+    </ul>
+  </div>
+
+  <hr>
+
+  <p class="small">
+    Recupero is an investigation service. We are not a law firm
+    and we do not provide legal advice. If your case requires
+    legal representation we will refer you to a cooperating attorney.
+    Submitting this form does not create an attorney-client
+    relationship and does not guarantee any specific outcome.
+  </p>
+
+</div>
+</body>
+</html>

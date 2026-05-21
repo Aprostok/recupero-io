@@ -15,7 +15,8 @@ import logging
 import time
 from typing import Any
 
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from recupero.api.auth import require_api_key
@@ -483,6 +484,176 @@ async def record_freeze_outcome_endpoint(
         "outcome_type": req.outcome_type,
         "recorded_at": time.time(),
     }
+
+
+# ---- v0.25.0: public victim intake form ---- #
+
+
+def _render_intake_html(
+    form: dict[str, Any] | None = None,
+    error: dict[str, str] | None = None,
+) -> str:
+    """Render the intake form via Jinja. ``form`` repopulates fields
+    on validation failure; ``error`` shows the inline error banner.
+
+    Pulled into a helper so the GET and POST routes share the same
+    template path and the test suite can render the form directly.
+    """
+    from pathlib import Path
+    from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+    templates_dir = (
+        Path(__file__).resolve().parent.parent / "portal" / "templates"
+    )
+    env = Environment(
+        loader=FileSystemLoader(str(templates_dir)),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    return env.get_template("intake.html.j2").render(
+        form=form or {},
+        error=error,
+    )
+
+
+@app.get(
+    "/v1/intake",
+    response_class=HTMLResponse,
+    tags=["intake"],
+    summary="Self-service victim intake form (v0.25.0).",
+)
+async def intake_form_get() -> HTMLResponse:
+    """Public-facing victim intake form. No auth required — this is
+    the top of the funnel.
+
+    Submitting the form (POST /v1/intake) creates a `cases` row
+    with status='intake' and returns the diagnostic Stripe Checkout
+    URL. After payment, the existing Stripe webhook dispatcher
+    creates the `investigations` row that the worker picks up.
+    """
+    return HTMLResponse(content=_render_intake_html())
+
+
+@app.post(
+    "/v1/intake",
+    tags=["intake"],
+    summary="Submit the intake form (v0.25.0).",
+)
+async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately explicit
+    request: Request,
+    client_name: str = Form(...),
+    client_email: str = Form(...),
+    chain: str = Form(...),
+    seed_address: str = Form(...),
+    incident_date: str = Form(...),
+    description: str = Form(...),
+    country: str = Form(default=""),
+) -> Any:
+    """Validate the intake form + create the `cases` row + return the
+    diagnostic Payment Link URL.
+
+    Validation errors re-render the form with the bad field flagged.
+    DB / config errors return a generic 5xx.
+
+    The dispatcher (payments/dispatcher.py) handles the payment-side
+    side-effects when the webhook fires; v0.25.0 only owns the
+    pre-payment intake.
+    """
+    import os
+    from recupero.portal.intake import (
+        IntakeValidationError,
+        create_case_from_intake,
+        validate_intake_payload,
+    )
+    from recupero.payments.payment_links import (
+        PaymentLinkConfigError,
+        build_diagnostic_link,
+    )
+
+    raw_form = {
+        "client_name": client_name,
+        "client_email": client_email,
+        "chain": chain,
+        "seed_address": seed_address,
+        "incident_date": incident_date,
+        "description": description,
+        "country": country,
+    }
+
+    # 1. Validate.
+    try:
+        payload = validate_intake_payload(raw_form)
+    except IntakeValidationError as e:
+        # Re-render the form with the bad field flagged. Status 422
+        # so the form's POST flow gets a structured error response
+        # that can be machine-read; HTML body for the human flow.
+        return HTMLResponse(
+            content=_render_intake_html(
+                form=raw_form,
+                error={"field": e.field, "detail": e.detail},
+            ),
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        )
+
+    # 2. Create the case row.
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        log.warning("/v1/intake POST: SUPABASE_DB_URL unset; cannot create case")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Intake temporarily unavailable. Please try again shortly.",
+        )
+
+    try:
+        case_id = create_case_from_intake(payload, dsn=dsn)
+    except RuntimeError as e:
+        log.warning(
+            "/v1/intake POST: case creation failed (email=%s): %s",
+            payload.client_email, e,
+        )
+        # Don't leak DSN / SQL detail in the response.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Something went wrong creating your case. Please try again.",
+        ) from None
+
+    # 3. Build the diagnostic Stripe Checkout URL.
+    try:
+        checkout_url = build_diagnostic_link(
+            case_id=case_id,
+            chain=payload.chain,
+            seed_address=payload.seed_address,
+            prefilled_email=payload.client_email,
+        )
+    except (PaymentLinkConfigError, ValueError) as e:
+        log.warning(
+            "/v1/intake POST: payment link build failed for case %s: %s",
+            case_id, e,
+        )
+        # The case row is already created — operator can manually
+        # send a payment link from the admin UI. Surface a clear
+        # error to the victim so they don't pay twice.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                "We've recorded your intake but our payment system is "
+                "temporarily unavailable. We'll email you a payment link "
+                "shortly."
+            ),
+        ) from None
+
+    log.info(
+        "/v1/intake POST: case created (case_id=%s email=%s chain=%s); "
+        "redirecting to Stripe Checkout",
+        case_id, payload.client_email, payload.chain,
+    )
+
+    # 4. 303 redirect to Stripe Checkout. 303 (See Other) is the
+    # correct status for a POST → GET redirect — preserves the POST
+    # semantics but forces the browser to GET the checkout URL.
+    return RedirectResponse(
+        url=checkout_url,
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
 
 
 # ---- Uvicorn entry point ---- #

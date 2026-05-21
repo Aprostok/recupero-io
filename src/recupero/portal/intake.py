@@ -1,0 +1,311 @@
+"""Self-service victim intake (v0.25.0).
+
+The pre-v0.25.0 funnel required Jacob to create every case manually
+in the admin UI before any trace could run. That puts the operator
+in the critical path of every intake — a real bottleneck for the
+$99 diagnostic product where margins don't justify operator-touch
+on every customer.
+
+This module is the entry point that removes the operator. The flow
+becomes:
+
+  victim → fills public intake form (wallet, name, email)
+        → form POST creates a `cases` row with status='intake'
+        → form returns the diagnostic Stripe Checkout URL
+        → victim pays
+        → existing Stripe webhook dispatcher (payments/dispatcher.py)
+          parses `client_reference_id=diag:<case>:<chain>:<seed>`
+          and INSERTs an investigations row with status='pending'
+        → existing worker claim loop picks it up next tick
+        → existing trace pipeline → emit_brief → deliverables
+
+The new surface this module owns:
+
+  * ``IntakePayload`` — validated form fields with helpful error
+    messages
+  * ``validate_intake_payload`` — pure function; raises
+    ``IntakeValidationError`` with the specific bad field on
+    invalid input
+  * ``create_case_from_intake`` — INSERTs the cases row + returns
+    the new case_id, then the caller builds the diagnostic
+    payment link
+
+Failure mode: any DB error during case creation surfaces as a
+typed exception the FastAPI route handler turns into a 5xx, with
+a generic detail string so DSN / password info doesn't leak.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Any
+from uuid import UUID, uuid4
+
+log = logging.getLogger(__name__)
+
+
+# Chains the intake form accepts. Must match what the trace pipeline
+# can actually handle — recupero.models.Chain enum values.
+_SUPPORTED_CHAINS = frozenset({
+    "ethereum", "arbitrum", "base", "polygon", "bsc",
+    "solana", "tron", "bitcoin", "hyperliquid",
+})
+
+# Address shape validation per chain. Cheap pre-flight before the
+# trace pipeline runs — bad addresses get rejected at the form
+# stage rather than burning a Stripe checkout session that resolves
+# to a non-existent wallet.
+_EVM_CHAINS = frozenset({"ethereum", "arbitrum", "base", "polygon", "bsc", "hyperliquid"})
+
+# Plausible-Ethereum-address regex. The trace pipeline does a
+# stricter checksum check downstream; this is a "form-level
+# obvious typo" filter.
+_EVM_ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+# Solana base58 — variable length but typically 32-44 chars. Cheap
+# shape check; the trace pipeline validates further.
+_SOL_ADDR_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+
+# Tron base58check — addresses begin with 'T' and are 34 chars.
+_TRON_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+
+# Bitcoin: P2PKH (1...), P2SH (3...), bech32 (bc1...). We accept
+# any of these shapes.
+_BTC_ADDR_RE = re.compile(r"^(bc1[0-9a-zA-Z]{8,87}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$")
+
+# Minimal email validation. Not RFC 5321 — just enough to reject
+# obvious typos so the operator's inbox doesn't fill up with
+# undeliverable confirmation emails.
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class IntakeValidationError(ValueError):
+    """Raised when an intake form submission has a field-level
+    validation error. ``field`` is the form field name; ``detail``
+    is a human-readable explanation suitable for the form UI."""
+
+    def __init__(self, field: str, detail: str) -> None:
+        super().__init__(f"{field}: {detail}")
+        self.field = field
+        self.detail = detail
+
+
+@dataclass(frozen=True)
+class IntakePayload:
+    """Validated intake form submission, ready for DB insert."""
+    client_name: str
+    client_email: str
+    seed_address: str
+    chain: str
+    incident_date_iso: str   # ISO date (YYYY-MM-DD) — when the theft happened
+    description: str         # free-text victim story (truncated to 2000 chars)
+    country: str | None = None   # ISO country code or full name; optional
+
+
+def validate_intake_payload(form: dict[str, Any]) -> IntakePayload:
+    """Validate raw form input. Raises ``IntakeValidationError`` on the
+    first failing field with a UI-suitable message.
+
+    Pure function — no DB access. Callers should run this BEFORE
+    opening any DB transaction so a bad form doesn't burn a
+    cases row.
+    """
+    name = (form.get("client_name") or "").strip()
+    if not name:
+        raise IntakeValidationError(
+            "client_name",
+            "Please enter your full legal name as it appears on your ID.",
+        )
+    if len(name) > 200:
+        raise IntakeValidationError(
+            "client_name",
+            "Name is too long (200 character limit).",
+        )
+
+    email = (form.get("client_email") or "").strip().lower()
+    if not email:
+        raise IntakeValidationError(
+            "client_email",
+            "Please enter the email address where you'd like updates sent.",
+        )
+    if not _EMAIL_RE.match(email):
+        raise IntakeValidationError(
+            "client_email",
+            "That doesn't look like a valid email address.",
+        )
+    if len(email) > 320:  # RFC 5321 max
+        raise IntakeValidationError(
+            "client_email",
+            "Email is too long.",
+        )
+
+    chain = (form.get("chain") or "").strip().lower()
+    if not chain:
+        raise IntakeValidationError(
+            "chain",
+            "Please select which blockchain the stolen funds were on.",
+        )
+    if chain not in _SUPPORTED_CHAINS:
+        raise IntakeValidationError(
+            "chain",
+            f"We don't yet support {chain!r}. Supported chains: "
+            f"{', '.join(sorted(_SUPPORTED_CHAINS))}.",
+        )
+
+    seed_address = (form.get("seed_address") or "").strip()
+    if not seed_address:
+        raise IntakeValidationError(
+            "seed_address",
+            "Please enter your wallet address — the one that was drained.",
+        )
+    if not _validate_address_shape(seed_address, chain):
+        raise IntakeValidationError(
+            "seed_address",
+            f"That doesn't look like a valid {chain} wallet address. "
+            "Please double-check and paste the full address.",
+        )
+
+    # v0.25.0: incident_date is required for the LE filing later (the
+    # theft timestamp is the anchor for the 30-day freeze-window
+    # response timeline). We accept any ISO-shaped date.
+    incident_date = (form.get("incident_date") or "").strip()
+    if not incident_date:
+        raise IntakeValidationError(
+            "incident_date",
+            "Please enter the date the theft happened, even if "
+            "approximate.",
+        )
+    if not _is_valid_iso_date(incident_date):
+        raise IntakeValidationError(
+            "incident_date",
+            "Please enter the date in YYYY-MM-DD format.",
+        )
+
+    # Description is required for the operator to triage; rejecting
+    # empty descriptions is the cheapest filter against spam intake.
+    description = (form.get("description") or "").strip()
+    if not description:
+        raise IntakeValidationError(
+            "description",
+            "Please describe what happened — even one sentence helps "
+            "us understand the case.",
+        )
+    if len(description) > 2000:
+        description = description[:2000]
+
+    country = (form.get("country") or "").strip() or None
+    if country and len(country) > 100:
+        country = country[:100]
+
+    return IntakePayload(
+        client_name=name,
+        client_email=email,
+        seed_address=seed_address,
+        chain=chain,
+        incident_date_iso=incident_date,
+        description=description,
+        country=country,
+    )
+
+
+def _validate_address_shape(address: str, chain: str) -> bool:
+    """Cheap shape check per chain. False on obvious typos; True
+    when the address could plausibly be valid (the trace pipeline
+    runs the strict check downstream).
+    """
+    if chain in _EVM_CHAINS:
+        return bool(_EVM_ADDR_RE.match(address))
+    if chain == "solana":
+        return bool(_SOL_ADDR_RE.match(address))
+    if chain == "tron":
+        return bool(_TRON_ADDR_RE.match(address))
+    if chain == "bitcoin":
+        return bool(_BTC_ADDR_RE.match(address))
+    # Unknown chain — let the chain validator above catch it; if
+    # somehow we get here, be permissive.
+    return True
+
+
+def _is_valid_iso_date(s: str) -> bool:
+    """ISO YYYY-MM-DD validator. Accepts trailing 'Z' / time-of-day
+    (e.g. '2026-04-19T12:00:00Z') but only validates the date part.
+    """
+    from datetime import date
+    try:
+        # Take the first 10 chars and parse as YYYY-MM-DD
+        date.fromisoformat(s[:10])
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def create_case_from_intake(
+    payload: IntakePayload,
+    *,
+    dsn: str,
+) -> UUID:
+    """Insert a ``cases`` row from the validated intake payload.
+    Returns the new case_id (UUID) the caller uses to build the
+    diagnostic Payment Link.
+
+    Raises:
+        RuntimeError: any DB error. The caller should turn this
+            into a 5xx with a generic detail (don't leak DSN).
+    """
+    try:
+        import psycopg  # noqa: F401
+    except ImportError:  # pragma: no cover
+        raise RuntimeError("psycopg not installed") from None
+
+    from recupero._common import db_connect
+
+    new_case_id = uuid4()
+    sql = """
+        INSERT INTO public.cases (
+            id, case_number, client_name, client_email, country,
+            description, incident_date, chain, seed_address,
+            created_at, status
+        ) VALUES (
+            %(id)s, %(case_number)s, %(name)s, %(email)s, %(country)s,
+            %(description)s, %(incident)s, %(chain)s, %(seed)s,
+            NOW(), 'intake'
+        )
+        RETURNING id
+    """
+    # Generate a friendly case_number derived from the UUID — useful
+    # for the operator UI and customer-facing references.
+    case_number = f"RCP-INTAKE-{str(new_case_id)[:8]}"
+
+    try:
+        with db_connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(sql, {
+                "id": str(new_case_id),
+                "case_number": case_number,
+                "name": payload.client_name,
+                "email": payload.client_email,
+                "country": payload.country,
+                "description": payload.description,
+                "incident": payload.incident_date_iso[:10],
+                "chain": payload.chain,
+                "seed": payload.seed_address,
+            })
+            row = cur.fetchone()
+            if not row:
+                raise RuntimeError("INSERT returned no row")
+            return row[0] if isinstance(row[0], UUID) else UUID(str(row[0]))
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "create_case_from_intake failed (email=%s, chain=%s): %s",
+            payload.client_email, payload.chain, exc,
+        )
+        raise RuntimeError("case creation failed") from None
+
+
+__all__ = (
+    "IntakePayload",
+    "IntakeValidationError",
+    "validate_intake_payload",
+    "create_case_from_intake",
+)

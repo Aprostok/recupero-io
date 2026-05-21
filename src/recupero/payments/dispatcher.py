@@ -208,6 +208,55 @@ def dispatch(*, event: StripeEvent, dsn: str) -> DispatchResult:
             )
         conn.commit()
 
+    # v0.25.0 (intake portal): after the investigation row is
+    # committed, run the post-payment side effects out-of-band so a
+    # failed email or token mint cannot roll back the transaction.
+    # Only fires on the new-investigation path (diagnostic payment);
+    # engagement payments don't need a fresh portal token (the victim
+    # already has one from intake).
+    if action == "investigation_created" and case_uuid and dispatched_inv_uuid:
+        try:
+            from recupero.portal.intake_notifications import (
+                send_intake_confirmation,
+            )
+            confirm = send_intake_confirmation(
+                case_id=case_uuid,
+                investigation_id=dispatched_inv_uuid,
+                dsn=dsn,
+            )
+            if confirm.success:
+                # Append a small breadcrumb to the existing notes so
+                # the payments-row audit reflects the full side-effect
+                # chain. Best-effort — failure here is logged not raised.
+                try:
+                    with psycopg.connect(
+                        dsn, autocommit=True, connect_timeout=5,
+                    ) as _conn2, _conn2.cursor() as _cur2:
+                        _cur2.execute(
+                            "UPDATE public.payments SET notes = COALESCE(notes,'') || %s WHERE id = %s",
+                            (
+                                f" | intake confirmation sent ({confirm.portal_url})",
+                                str(payment_id),
+                            ),
+                        )
+                except Exception as _e:  # noqa: BLE001
+                    log.warning(
+                        "dispatcher: notes-append after intake confirm failed: %s",
+                        _e,
+                    )
+            else:
+                log.warning(
+                    "dispatcher: intake confirmation failed for "
+                    "case=%s investigation=%s: %s",
+                    case_uuid, dispatched_inv_uuid, confirm.error,
+                )
+        except Exception as exc:  # noqa: BLE001 — never propagate
+            log.warning(
+                "dispatcher: post-commit intake notification crashed "
+                "for case=%s investigation=%s: %s",
+                case_uuid, dispatched_inv_uuid, exc,
+            )
+
     return DispatchResult(
         duplicate=False,
         action=action,

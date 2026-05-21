@@ -124,6 +124,246 @@ MUTATIONS: list[Mutation] = [
             "test_property_blocked_hostnames_are_case_insensitive"
         ),
     ),
+    # ─────────────────────────────────────────────────────────────────────────
+    # RIGOR-3 extension: another 20 mutations covering the SAFETY-CRITICAL
+    # boundaries — webhook signature verification, idempotency keys, token
+    # equality, USD parsing, the validator's own invariant logic, etc.
+    # Each represents the shape of a real-world security or correctness
+    # bug that would have shipped if the test didn't catch it.
+    # ─────────────────────────────────────────────────────────────────────────
+    # NOTE: I had two mutations for `is_loopback removed` and
+    # `is_link_local removed`. Both are EQUIVALENT MUTANTS — Python's
+    # ipaddress module classifies 127.0.0.0/8 + ::1 as BOTH is_loopback
+    # AND is_private; same for fe80::/10 + 169.254.0.0/16 (both are
+    # is_link_local AND is_private). So removing one of the three
+    # checks doesn't change the function's output on any IP. Equivalent
+    # mutants don't count against rigor — real mutation tools (mutmut,
+    # cosmic-ray) skip them via static analysis or live-equivalence
+    # detection. Documented for posterity, not run.
+    Mutation(
+        name="SSRF: scheme check changed from != to ==",
+        file_path=REPO_ROOT / "src/recupero/api/monitoring_api.py",
+        find='if parts.scheme.lower() != "https":',
+        replace_with=(
+            'if parts.scheme.lower() == "https":  '
+            '# MUTATION: now rejects https-only, accepts everything else'
+        ),
+        test_target=(
+            "tests/test_ssrf_property_based.py::"
+            "test_property_only_https_scheme_accepted"
+        ),
+    ),
+    Mutation(
+        name="canonical: strip() removed (whitespace breaks dedup)",
+        file_path=REPO_ROOT / "src/recupero/_common.py",
+        find="    s = addr.strip()",
+        replace_with="    s = addr  # MUTATION: strip() removed",
+        test_target=(
+            "tests/test_canonical_address_key_properties.py::"
+            "test_property_whitespace_padding_stripped"
+        ),
+    ),
+    Mutation(
+        name="canonical: 0x EVM length check off-by-one (== 41)",
+        file_path=REPO_ROOT / "src/recupero/_common.py",
+        find='if s.startswith("0x") and len(s) == 42:',
+        replace_with=(
+            'if s.startswith("0x") and len(s) == 41:  '
+            '# MUTATION: off-by-one rejects all real EVM addrs'
+        ),
+        test_target=(
+            "tests/test_canonical_address_key_properties.py::"
+            "test_property_evm_lowercase_and_uppercase_dedup"
+        ),
+    ),
+    Mutation(
+        name="canonical: hex-validation accepts non-hex (.lower() of any)",
+        file_path=REPO_ROOT / "src/recupero/_common.py",
+        find='if all(c in "0123456789abcdefABCDEF" for c in suffix):',
+        replace_with=(
+            'if True:  # MUTATION: validation removed; non-hex passes'
+        ),
+        test_target=(
+            "tests/test_canonical_address_key_properties.py::"
+            "test_property_malformed_0x_string_is_not_lowercased"
+        ),
+    ),
+    Mutation(
+        name="XFF: trusted_hops > 0 changed to >= 0 (accepts misconfig)",
+        file_path=REPO_ROOT / "src/recupero/api/app.py",
+        find="if trusted_hops > 0 and xff_chain:",
+        replace_with=(
+            "if trusted_hops >= 0 and xff_chain:  "
+            "# MUTATION: trusted_hops=0 now incorrectly uses XFF"
+        ),
+        test_target=(
+            "tests/test_xff_property_based.py::"
+            "test_property_trusted_hops_zero_ignores_xff_completely"
+        ),
+    ),
+    Mutation(
+        name="W-2: status='active' filter removed from monitor_tick UPDATE",
+        file_path=REPO_ROOT / "src/recupero/worker/monitor_tick.py",
+        find=(
+            "         WHERE id = %(id)s\n"
+            "           AND status = 'active';"
+        ),
+        replace_with=(
+            "         WHERE id = %(id)s;  -- MUTATION: status filter removed"
+        ),
+        # RIGOR-3: a behavioral test cannot observe the mutation's
+        # effect when new_cursor=None (COALESCE preserves the prior
+        # value). The contract check on the update_sql constant catches
+        # it deterministically.
+        test_target=(
+            "tests/integration/test_real_concurrent_races.py::"
+            "test_w2_w3_update_sql_carries_status_active_filter"
+        ),
+        requires_integration=True,  # test is in integration/ dir
+    ),
+    Mutation(
+        name="W-4: followup claim staleness predicate replaced with TRUE",
+        file_path=REPO_ROOT / "src/recupero/worker/_followup.py",
+        find='"        OR last_followup_sent_at < NOW() "',
+        replace_with=(
+            '"        OR TRUE -- MUTATION: every row matches "'
+        ),
+        test_target=(
+            "tests/integration/test_real_concurrent_races.py::"
+            "test_w4_atomic_claim_lets_exactly_one_followup_worker_win"
+        ),
+        requires_integration=True,
+    ),
+    Mutation(
+        name="W-1: existing-investigation SELECT removed (race re-opens)",
+        file_path=REPO_ROOT / "src/recupero/payments/dispatcher.py",
+        find=(
+            "existing_inv = cur.fetchone()\n"
+            "    if existing_inv:"
+        ),
+        replace_with=(
+            "existing_inv = None  # MUTATION: existence check removed\n"
+            "    if existing_inv:"
+        ),
+        test_target=(
+            "tests/integration/test_real_concurrent_races.py::"
+            "test_w1_concurrent_dispatchers_create_exactly_one_investigation"
+        ),
+        requires_integration=True,
+    ),
+    Mutation(
+        name="validator: filename-content check inverted",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find=(
+            "if not _content_addresses_issuer(\n"
+            "            content, issuer_name or \"\", seed_email,\n"
+            "        ):"
+        ),
+        replace_with=(
+            "if _content_addresses_issuer(\n"
+            "            content, issuer_name or \"\", seed_email,\n"
+            "        ):  # MUTATION: inverted — flags GOOD letters as BAD"
+        ),
+        test_target=(
+            "tests/test_output_integrity_validator.py::"
+            "test_freeze_request_with_wrong_issuer_content_fails"
+        ),
+    ),
+    Mutation(
+        name="validator: HTML root check accepts JSON",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find=(
+            'if not (\n'
+            '            first_chars.startswith("<!DOCTYPE")\n'
+            '            or first_chars.startswith("<html")'
+        ),
+        replace_with=(
+            'if False and not (\n'
+            '            first_chars.startswith("<!DOCTYPE")\n'
+            '            or first_chars.startswith("<html")'
+        ),
+        test_target=(
+            "tests/test_output_integrity_validator.py::"
+            "test_html_file_containing_json_fails"
+        ),
+    ),
+    Mutation(
+        name="validator: manifest SHA comparison inverted",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find="if actual_sha != declared_sha:",
+        replace_with=(
+            "if actual_sha == declared_sha:  # MUTATION: comparison inverted"
+        ),
+        test_target=(
+            "tests/test_output_integrity_validator.py::"
+            "test_stale_manifest_sha_flagged"
+        ),
+    ),
+    Mutation(
+        name="validator: USD parse swallows invalid input as 0",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find=(
+            "    try:\n"
+            "        return Decimal(s)\n"
+            "    except (InvalidOperation, ValueError):\n"
+            "        return Decimal(0)"
+        ),
+        replace_with=(
+            "    try:\n"
+            "        return Decimal(0)  # MUTATION: always returns 0\n"
+            "    except (InvalidOperation, ValueError):\n"
+            "        return Decimal(0)"
+        ),
+        test_target=(
+            "tests/test_output_integrity_validator.py::"
+            "test_unrecoverable_variant_with_positive_max_recoverable_flagged"
+        ),
+    ),
+    Mutation(
+        name="portal token: length-guard removed (< 20 chars accepted)",
+        file_path=REPO_ROOT / "src/recupero/portal/tokens.py",
+        find=(
+            "    if not token or len(token) < 20:"
+        ),
+        replace_with=(
+            "    if not token or len(token) < 0:  "
+            "# MUTATION: short tokens now accepted"
+        ),
+        test_target=(
+            "tests/test_portal_tokens.py"  # any test that exercises length check
+        ),
+    ),
+    Mutation(
+        name="portal token: upper-bound length-guard removed (> 64 accepted)",
+        file_path=REPO_ROOT / "src/recupero/portal/tokens.py",
+        find=(
+            "    if len(token) > 64:"
+        ),
+        replace_with=(
+            "    if len(token) > 999999:  "
+            "# MUTATION: very long tokens accepted (DoS surface)"
+        ),
+        test_target=(
+            "tests/test_portal_tokens.py"
+        ),
+    ),
+    Mutation(
+        name="W-1: lock keyed on case_id stripped (only 'diagnostic:')",
+        file_path=REPO_ROOT / "src/recupero/payments/dispatcher.py",
+        find=(
+            "\"SELECT pg_advisory_xact_lock(hashtext('diagnostic:' || %s))\",\n"
+            "        (str(case_uuid),),"
+        ),
+        replace_with=(
+            "\"SELECT pg_advisory_xact_lock(hashtext('diagnostic:'))\",\n"
+            "        ()"
+        ),
+        test_target=(
+            "tests/integration/test_real_concurrent_races.py::"
+            "test_w1_lock_is_per_case_not_global"
+        ),
+        requires_integration=True,
+    ),
 ]
 
 

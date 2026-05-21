@@ -304,19 +304,41 @@ def test_duplicate_file_contents_flagged(tmp_path):
 def test_stale_manifest_sha_flagged(tmp_path):
     """If the freeze_request file gets rewritten after the manifest
     was sealed, the recorded SHA no longer matches — the exact
-    forensic Jacob suggested to localize the routing bug."""
+    forensic Jacob suggested to localize the routing bug.
+
+    RIGOR-3 tightening: the violation MUST be on the freeze_request
+    file specifically (the one we modified). Pre-tightening the test
+    accepted ANY manifest_sha_matches_disk violation, which let a
+    mutation that inverted the SHA comparator pass — the inverted
+    comparator fired the violation on the LE handoff (whose SHA still
+    matched) instead of on the freeze_request (whose SHA didn't),
+    masking the bug. Now we pin the FILE the violation is on."""
     case_dir = _build_minimal_good_case(tmp_path)
-    bad = case_dir / "briefs" / "freeze_request_tether_BRIEF-TEST-1.html"
-    bad.write_text(
+    bad_path = case_dir / "briefs" / "freeze_request_tether_BRIEF-TEST-1.html"
+    bad_path.write_text(
         "<!DOCTYPE html>\n<html><body>"
         "<h1>Tether</h1>"
         "<p>To: compliance@tether.to (replaced after manifest sealed)</p>"
         "</body></html>"
     )
     result = validate_case_output(case_dir)
-    assert any(
-        v.check == "manifest_sha_matches_disk" and v.severity == "critical"
-        for v in result.violations
+    # The violation must reference the file we modified, with critical
+    # severity. A mutation that inverts `actual_sha != declared_sha`
+    # to `==` would fire the violation on a DIFFERENT file (LE
+    # handoff, whose SHA still matches). The bad-content file's name
+    # appears in the violation's `detail` (the validator stores the
+    # MANIFEST filename in `.file` and the wrong-content target in
+    # the detail string).
+    relevant = [
+        v for v in result.violations
+        if v.check == "manifest_sha_matches_disk"
+        and v.severity == "critical"
+        and bad_path.name in (v.detail or "")
+    ]
+    assert relevant, (
+        f"expected a manifest_sha_matches_disk critical violation "
+        f"referencing {bad_path.name!r}; got: "
+        f"{[(v.check, v.severity, v.detail[:80]) for v in result.violations]}"
     )
 
 

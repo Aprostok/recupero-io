@@ -489,6 +489,62 @@ async def record_freeze_outcome_endpoint(
 # ---- v0.25.0: public victim intake form ---- #
 
 
+# v0.25.1 (CRIT D-1): IP-based rate limit for the unauthenticated
+# intake endpoint. Without this, a bot can POST tens of thousands
+# of plausible-looking submissions per minute, each creating a
+# `public.cases` row that an operator must triage manually —
+# operator-time DoS plus database pollution.
+#
+# In-memory fixed-window counter is intentionally simple: the API
+# is single-process on Railway (uvicorn behind a single replica),
+# and the cost of upgrading to Redis is not justified for this
+# attack model. If the API scales to N replicas the counter
+# becomes per-replica (N× higher effective limit) — still
+# acceptable; the absolute floor remains finite.
+#
+# Limit: 5 submissions per 60-second window per source IP. A real
+# victim retries 1-2 times tops; 5/min leaves headroom for the
+# accidental double-click + immediate validation-error retry.
+_INTAKE_RL_WINDOW_S = 60
+_INTAKE_RL_MAX = 5
+_intake_rl_state: dict[str, tuple[float, int]] = {}
+
+
+def _intake_rl_client_ip(request: Request) -> str:
+    """Resolve the client IP, preferring `X-Forwarded-For` (Railway
+    + Cloudflare both populate this). Falls back to the socket peer."""
+    fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if fwd:
+        return fwd
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _intake_rl_check(ip: str) -> bool:
+    """Token-bucket-ish fixed-window counter. Returns True when the
+    request is within budget, False when over.
+    """
+    import time as _time
+    now = _time.time()
+    entry = _intake_rl_state.get(ip)
+    if entry is None or now - entry[0] >= _INTAKE_RL_WINDOW_S:
+        _intake_rl_state[ip] = (now, 1)
+        # Trim stale entries periodically to bound memory under
+        # broad scanning.
+        if len(_intake_rl_state) > 1024:
+            cutoff = now - _INTAKE_RL_WINDOW_S
+            for k, v in list(_intake_rl_state.items()):
+                if v[0] < cutoff:
+                    _intake_rl_state.pop(k, None)
+        return True
+    window_start, count = entry
+    if count >= _INTAKE_RL_MAX:
+        return False
+    _intake_rl_state[ip] = (window_start, count + 1)
+    return True
+
+
 def _render_intake_html(
     form: dict[str, Any] | None = None,
     error: dict[str, str] | None = None,
@@ -568,6 +624,22 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
         PaymentLinkConfigError,
         build_diagnostic_link,
     )
+
+    # v0.25.1 (CRIT D-1): rate-limit by client IP BEFORE touching the
+    # DB. The unauthenticated /v1/intake endpoint is otherwise free
+    # to flood — an attacker could create 10k garbage cases that
+    # operators must triage. Failing closed here costs the legitimate
+    # double-clicker nothing (5 req / 60s budget).
+    client_ip = _intake_rl_client_ip(request)
+    if not _intake_rl_check(client_ip):
+        log.info("/v1/intake POST: rate-limit hit for ip=%s", client_ip)
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Too many submissions from your network. Please wait a "
+                "minute before trying again."
+            ),
+        )
 
     raw_form = {
         "client_name": client_name,

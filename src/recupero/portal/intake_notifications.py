@@ -111,12 +111,14 @@ def send_intake_confirmation(
         )
 
     # 2. Mint a portal token for the case.
+    token_id_for_cleanup: UUID | None = None
     try:
         from recupero.portal.tokens import generate_token, public_portal_url
         _token_id, token, _expires_at = generate_token(
             case_id=case_id, dsn=dsn,
             label="intake-confirmation",
         )
+        token_id_for_cleanup = _token_id
         portal_url = public_portal_url(token=token)
     except Exception as exc:  # noqa: BLE001
         log.warning(
@@ -157,9 +159,28 @@ def send_intake_confirmation(
             "send_intake_confirmation: send_email crashed for case %s: %s",
             case_id, exc,
         )
+        # v0.25.1 (HIGH C-2): orphaned token cleanup — the bearer
+        # credential is in the DB but the victim never received it.
+        # Revoke so it can't be brute-forced from logs / DB leaks.
+        _revoke_orphan_token(token_id_for_cleanup, dsn)
         return IntakeConfirmationResult(
             success=False, portal_url=portal_url, email_sent=False,
             error="send_email crashed",
+        )
+
+    # v0.25.1 (HIGH E-1): in dev / CI (`RECUPERO_DISABLE_EMAIL=1`),
+    # send_email returns `success=False, skipped=True`. Treat that as
+    # a clean no-op rather than a failure — otherwise every CI smoke
+    # test logs WARN and pollutes monitoring with false positives.
+    if not result.success and getattr(result, "skipped", False):
+        log.info(
+            "send_intake_confirmation: email skipped "
+            "(RECUPERO_DISABLE_EMAIL) for case=%s; portal_url=%s",
+            case_id, portal_url,
+        )
+        return IntakeConfirmationResult(
+            success=True, portal_url=portal_url, email_sent=False,
+            error=None,
         )
 
     if not result.success:
@@ -167,6 +188,8 @@ def send_intake_confirmation(
             "send_intake_confirmation: send_email failed for case %s: %s",
             case_id, result.error,
         )
+        # v0.25.1 (HIGH C-2): see above.
+        _revoke_orphan_token(token_id_for_cleanup, dsn)
         return IntakeConfirmationResult(
             success=False, portal_url=portal_url, email_sent=False,
             error=result.error,
@@ -181,6 +204,30 @@ def send_intake_confirmation(
         success=True, portal_url=portal_url, email_sent=True,
         error=None,
     )
+
+
+def _revoke_orphan_token(token_id: UUID | None, dsn: str) -> None:
+    """v0.25.1 (HIGH C-2): best-effort cleanup of a portal token that
+    was minted but whose confirmation email never reached the victim.
+    The unrevoked token is a valid bearer credential the victim
+    doesn't have — revoke it so a DB leak or log-scrape can't yield
+    a working portal link.
+    """
+    if token_id is None:
+        return
+    try:
+        from recupero.portal.tokens import revoke_token
+        revoke_token(token_id=token_id, dsn=dsn)
+        log.info(
+            "send_intake_confirmation: revoked orphan token %s after "
+            "email failure",
+            token_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "send_intake_confirmation: failed to revoke orphan "
+            "token %s: %s", token_id, exc,
+        )
 
 
 def _build_confirmation_html(

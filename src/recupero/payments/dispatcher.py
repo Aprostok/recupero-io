@@ -486,6 +486,44 @@ def _handle_diagnostic(
             "before the investigation can run"
         )
 
+    # v0.25.1 (CRIT C-1): Stripe emits multiple webhook events for the
+    # same successful Checkout Session (`checkout.session.completed`,
+    # `payment_intent.succeeded`, `charge.succeeded`), each with its
+    # own event_id. The top-level idempotency check is keyed on
+    # `stripe_event_id` and so does NOT dedup these.
+    #
+    # Pre-v0.25.1 we unconditionally INSERTed a new investigation on
+    # every diagnostic webhook. With v0.25.0's post-commit hook this
+    # surfaces customer-side: the victim receives 2-3 confirmation
+    # emails minutes apart, each with a different portal URL — visible
+    # customer harm. Check for an existing diagnostic investigation
+    # on this case BEFORE INSERTing.
+    cur.execute(
+        """
+        SELECT id FROM public.investigations
+         WHERE case_id = %s
+           AND label LIKE 'diagnostic-%%'
+         ORDER BY triggered_at DESC
+         LIMIT 1
+        """,
+        (str(case_uuid),),
+    )
+    existing_inv = cur.fetchone()
+    if existing_inv:
+        existing_inv_id = (
+            existing_inv["id"]
+            if isinstance(existing_inv, dict)
+            else existing_inv[0]
+        )
+        return "audit_only", (
+            existing_inv_id if isinstance(existing_inv_id, UUID)
+            else UUID(str(existing_inv_id))
+        ), (
+            f"diagnostic webhook re-delivery for case "
+            f"{case_row['case_number']}; investigation "
+            f"{existing_inv_id} already exists (no-op)"
+        )
+
     new_inv_id = uuid4()
     cur.execute(
         """

@@ -141,10 +141,16 @@ def test_validate_description_required():
     assert exc.value.field == "description"
 
 
-def test_validate_description_truncated_to_2000_chars():
+def test_validate_description_too_long_raises():
+    """v0.25.1 (A-3): a >2000-char description must surface as a
+    validation error so the victim can trim, rather than silently
+    chopping off the end of their narrative (could drop critical
+    info like '...I sent it to 0xabc...')."""
     long_desc = "x" * 5000
-    payload = validate_intake_payload(_good_form(description=long_desc))
-    assert len(payload.description) == 2000
+    with pytest.raises(IntakeValidationError) as exc:
+        validate_intake_payload(_good_form(description=long_desc))
+    assert exc.value.field == "description"
+    assert "2000" in exc.value.detail
 
 
 def test_validate_country_is_optional():

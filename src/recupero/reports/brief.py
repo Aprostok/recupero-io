@@ -42,7 +42,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Single source of truth for the freeze_brief.json schema version.
 # Imported by emit_brief.py + the worker synthesizer so a future bump
 # only happens here.
-BRIEF_SCHEMA_VERSION = "0.25.0"
+BRIEF_SCHEMA_VERSION = "0.25.1"
 
 # Earliest version that wrote ALL the fields the current rendering
 # chain expects (evidence_type, evidence_mode, etc.). Briefs from

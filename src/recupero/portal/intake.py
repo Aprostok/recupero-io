@@ -180,7 +180,8 @@ def validate_intake_payload(form: dict[str, Any]) -> IntakePayload:
     if not _is_valid_iso_date(incident_date):
         raise IntakeValidationError(
             "incident_date",
-            "Please enter the date in YYYY-MM-DD format.",
+            "Please enter the date in YYYY-MM-DD format. The date "
+            "must be in the past 10 years and not in the future.",
         )
 
     # Description is required for the operator to triage; rejecting
@@ -192,8 +193,15 @@ def validate_intake_payload(form: dict[str, Any]) -> IntakePayload:
             "Please describe what happened — even one sentence helps "
             "us understand the case.",
         )
+    # v0.25.1 (A-3): never silently truncate the narrative — that
+    # risks chopping off a critical sentence ("...I sent to 0xabc...")
+    # without warning the victim. Make the user trim instead so we
+    # get a clean, complete story for triage.
     if len(description) > 2000:
-        description = description[:2000]
+        raise IntakeValidationError(
+            "description",
+            "Description is too long (2000 character limit). Please trim.",
+        )
 
     country = (form.get("country") or "").strip() or None
     if country and len(country) > 100:
@@ -231,14 +239,26 @@ def _validate_address_shape(address: str, chain: str) -> bool:
 def _is_valid_iso_date(s: str) -> bool:
     """ISO YYYY-MM-DD validator. Accepts trailing 'Z' / time-of-day
     (e.g. '2026-04-19T12:00:00Z') but only validates the date part.
+
+    v0.25.1 (A-1): bound the parsed date to ``[today - 10 years, today]``.
+    Without bounds the field accepts implausible values (1900-01-01,
+    9999-12-31, future dates) that downstream poison the freeze-window
+    timeline computations in worker/_followup.py (72h/7d/14d offsets
+    from incident_date), permanently mis-classifying the case.
     """
-    from datetime import date
+    from datetime import date, timedelta
     try:
         # Take the first 10 chars and parse as YYYY-MM-DD
-        date.fromisoformat(s[:10])
-        return True
+        parsed = date.fromisoformat(s[:10])
     except (ValueError, TypeError):
         return False
+    today = date.today()
+    # Reject future dates and anything older than 10 years.
+    if parsed > today:
+        return False
+    if parsed < today - timedelta(days=10 * 365):
+        return False
+    return True
 
 
 def create_case_from_intake(
@@ -261,7 +281,6 @@ def create_case_from_intake(
 
     from recupero._common import db_connect
 
-    new_case_id = uuid4()
     sql = """
         INSERT INTO public.cases (
             id, case_number, client_name, client_email, country,
@@ -274,33 +293,64 @@ def create_case_from_intake(
         )
         RETURNING id
     """
-    # Generate a friendly case_number derived from the UUID — useful
-    # for the operator UI and customer-facing references.
-    case_number = f"RCP-INTAKE-{str(new_case_id)[:8]}"
 
-    try:
-        with db_connect(dsn) as conn, conn.cursor() as cur:
-            cur.execute(sql, {
-                "id": str(new_case_id),
-                "case_number": case_number,
-                "name": payload.client_name,
-                "email": payload.client_email,
-                "country": payload.country,
-                "description": payload.description,
-                "incident": payload.incident_date_iso[:10],
-                "chain": payload.chain,
-                "seed": payload.seed_address,
-            })
-            row = cur.fetchone()
-            if not row:
-                raise RuntimeError("INSERT returned no row")
-            return row[0] if isinstance(row[0], UUID) else UUID(str(row[0]))
-    except Exception as exc:  # noqa: BLE001
-        log.warning(
-            "create_case_from_intake failed (email=%s, chain=%s): %s",
-            payload.client_email, payload.chain, exc,
-        )
-        raise RuntimeError("case creation failed") from None
+    # v0.25.1 (A-2): the previous build used a fixed 8-char UUID
+    # prefix which hits the birthday-paradox boundary near 80k cases
+    # (~1% collision at 10k). At scale a UniqueViolation on
+    # `cases.case_number` would surface as a generic 503 the victim
+    # cannot recover from. We now retry with a fresh UUID up to 3
+    # times. The case_number includes the current year for human-
+    # readable grouping ("RCP-INTAKE-2026-<8 hex>"); year+8 chars
+    # ≈ 4B per-year combinations, well past any realistic load.
+    from datetime import date as _date
+    from psycopg import errors as _pg_errors  # type: ignore[import-not-found]
+
+    year = _date.today().year
+    last_exc: Exception | None = None
+    for _attempt in range(3):
+        new_case_id = uuid4()
+        case_number = f"RCP-INTAKE-{year}-{str(new_case_id)[:8]}"
+        try:
+            with db_connect(dsn) as conn, conn.cursor() as cur:
+                cur.execute(sql, {
+                    "id": str(new_case_id),
+                    "case_number": case_number,
+                    "name": payload.client_name,
+                    "email": payload.client_email,
+                    "country": payload.country,
+                    "description": payload.description,
+                    "incident": payload.incident_date_iso[:10],
+                    "chain": payload.chain,
+                    "seed": payload.seed_address,
+                })
+                row = cur.fetchone()
+                if not row:
+                    raise RuntimeError("INSERT returned no row")
+                return row[0] if isinstance(row[0], UUID) else UUID(str(row[0]))
+        except _pg_errors.UniqueViolation as exc:
+            # Collision on case_number — retry with a fresh UUID. Log
+            # at INFO since this is a rare-but-expected branch.
+            log.info(
+                "create_case_from_intake: case_number collision on %r; "
+                "retrying with fresh UUID (attempt %d/3)",
+                case_number, _attempt + 1,
+            )
+            last_exc = exc
+            continue
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "create_case_from_intake failed (email=%s, chain=%s): %s",
+                payload.client_email, payload.chain, exc,
+            )
+            raise RuntimeError("case creation failed") from None
+
+    # All 3 retries hit collisions — vanishingly unlikely with full UUID.
+    log.warning(
+        "create_case_from_intake: 3 consecutive case_number collisions "
+        "(email=%s); last error: %s",
+        payload.client_email, last_exc,
+    )
+    raise RuntimeError("case creation failed") from None
 
 
 __all__ = (

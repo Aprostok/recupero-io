@@ -846,6 +846,77 @@
 </ol>
 {% endif %}
 
+{# v0.24.0 — Section 5.7: Per-Issuer Cooperation Profile. For each
+   issuer in the freeze ask list, surface their cross-case
+   cooperation history (response rate, median response hours,
+   full_freeze_rate) + recommended legal instrument. Hidden when
+   cooperation_profiles is empty (no DSN / no prior history). #}
+{% if cooperation_profiles and cooperation_profiles.items() | list %}
+<h2>5.7 Issuer Cooperation Profile</h2>
+<p class="small">
+  Cross-case cooperation history for each issuer named in the
+  freeze ask list, aggregated from Recupero's full freeze-letter
+  history. Each row shows whether informal freeze requests have
+  historically produced results for this specific issuer, the median
+  time to first response, and the recommended legal instrument given
+  the cooperation profile + jurisdiction + sanctions exposure.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Issuer</th>
+      <th>Letters on file</th>
+      <th>Response rate</th>
+      <th>Median response</th>
+      <th>Full freeze rate</th>
+      <th>Recommended instrument</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for issuer_name, prof in cooperation_profiles.items() %}
+    <tr{% if prof.get('is_black_hole') %} style="background:#fef2f2"{% endif %}>
+      <td><strong>{{ issuer_name }}</strong>
+        {% if prof.get('is_black_hole') %}
+        <br/><span class="small" style="color:#991b1b;font-weight:600">⚠ BLACK HOLE</span>
+        {% endif %}
+      </td>
+      <td>{{ prof.get('n_letters_sent') or 0 }}</td>
+      <td>
+        {% if prof.get('has_confident_profile') %}
+        {{ "%.0f%%"|format((prof.get('response_rate') or 0) * 100) }}
+        {% else %}
+        <span class="small secondary">insufficient sample</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if prof.get('median_response_hours') is not none %}
+        {{ "%.0f"|format(prof.get('median_response_hours')) }}h
+        {% else %}—{% endif %}
+      </td>
+      <td>
+        {% if prof.get('has_confident_profile') %}
+        {{ "%.0f%%"|format((prof.get('full_freeze_rate') or 0) * 100) }}
+        {% else %}—{% endif %}
+      </td>
+      <td><strong>{{ prof.get('recommended_instrument') or 'standard' }}</strong>
+        {% if prof.get('recommended_instrument_reason') %}
+        <br/><span class="small secondary">{{ prof.get('recommended_instrument_reason') }}</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="small">
+  <strong>BLACK HOLE</strong> indicates an issuer that has received
+  three or more informal freeze requests across prior Recupero cases
+  with zero responses of any kind — direct letters demonstrably do
+  not produce results, and the recommendation is to skip the
+  informal channel and proceed directly to a grand jury subpoena
+  via the cooperating AUSA.
+</p>
+{% endif %}
+
 <h2>6. Recommended Actions</h2>
 
 <h3>Immediate</h3>

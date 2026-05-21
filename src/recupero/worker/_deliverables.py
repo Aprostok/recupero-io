@@ -404,6 +404,60 @@ def build_all_deliverables(
                 "template falls back to pending branch): %s", _exc,
             )
 
+        # v0.24.0: cross-case cooperation profiles for every issuer in
+        # the freeze ask list. Surfaces in LE Section 5.7 with a
+        # recommended legal instrument per issuer. Best-effort —
+        # failure returns empty dict (template hides Section 5.7).
+        _cooperation_profiles: dict = {}
+        try:
+            import os as _os
+            _dsn = _os.environ.get("SUPABASE_DB_URL", "").strip() or None
+            if _dsn and issuers_seen:
+                from recupero.monitoring.cooperation_intelligence import (
+                    build_cooperation_profile,
+                    recommend_legal_instrument,
+                )
+                # Pull OFAC + IC3 signals for the instrument recommender.
+                _ofac_exposed = bool(
+                    (freeze_brief.get("RISK_ASSESSMENT") or {}).get("ofac_exposure")
+                )
+                _ic3_case_id_for_rec = (
+                    (freeze_brief.get("IC3_CASE_ID") or "").strip() or None
+                )
+                for _iss_name, _iss_info in issuers_seen.items():
+                    _prof = build_cooperation_profile(_iss_name, dsn=_dsn)
+                    _rec = recommend_legal_instrument(
+                        _prof,
+                        jurisdiction=getattr(_iss_info, "jurisdiction", None),
+                        ofac_exposed=_ofac_exposed,
+                        ic3_case_id=_ic3_case_id_for_rec,
+                    )
+                    # Flatten to a template-friendly dict (the template
+                    # uses .get(key) so missing keys degrade cleanly).
+                    _cooperation_profiles[_iss_name] = {
+                        "issuer": _prof.issuer,
+                        "n_letters_sent": _prof.n_letters_sent,
+                        "n_responded": _prof.n_responded,
+                        "n_silent": _prof.n_silent,
+                        "response_rate": _prof.response_rate,
+                        "full_freeze_rate": _prof.full_freeze_rate,
+                        "partial_freeze_rate": _prof.partial_freeze_rate,
+                        "declined_rate": _prof.declined_rate,
+                        "silence_rate": _prof.silence_rate,
+                        "median_response_hours": _prof.median_response_hours,
+                        "avg_response_hours": _prof.avg_response_hours,
+                        "is_black_hole": _prof.is_black_hole,
+                        "has_confident_profile": _prof.has_confident_profile,
+                        "recommended_instrument": _rec.instrument,
+                        "recommended_instrument_reason": _rec.reason,
+                        "estimated_response_days": _rec.estimated_response_days,
+                    }
+        except Exception as _exc:  # noqa: BLE001 — non-fatal
+            log.warning(
+                "build cooperation_profiles failed (non-fatal, "
+                "LE Section 5.7 will be hidden): %s", _exc,
+            )
+
         for issuer_name, issuer_info in issuers_seen.items():
             try:
                 bundle = generate_briefs(
@@ -433,6 +487,8 @@ def build_all_deliverables(
                     # Populated by cluster_builder at emit_brief tail; None
                     # for cases with no cross-case perp overlap.
                     cluster_membership=freeze_brief.get("CLUSTER_MEMBERSHIP") or None,
+                    # v0.24.0: per-issuer cooperation profiles (Section 5.7).
+                    cooperation_profiles=_cooperation_profiles,
                     draft=_draft,
                     draft_label=_draft_label,
                 )

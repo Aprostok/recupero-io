@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Issuer Cooperation Dashboard — Recupero</title>
+{% include "_styles.html.j2" %}
+<style>
+  /* Cooperation dashboard — operator-facing overview of every
+     issuer's cross-case freeze-letter history. Designed to live in
+     the operator's pinned tabs as the strategy reference document. */
+  .dash-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin: 24px 0 32px;
+  }
+  .dash-stat {
+    background: #fafafa;
+    border-left: 3px solid var(--gold-accent);
+    padding: 14px 18px;
+    border-radius: 4px;
+  }
+  .dash-stat-label {
+    display: block;
+    font-size: var(--type-tiny);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-quiet);
+    margin: 0 0 4px;
+  }
+  .dash-stat-value {
+    display: block;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1.1;
+  }
+  .instrument-pill {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: var(--type-tiny);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+  }
+  .instrument-pill.standard   { background: #DCFCE7; color: #14532D; }
+  .instrument-pill.le_backed  { background: #DBEAFE; color: #1E3A8A; }
+  .instrument-pill.fincen_314b { background: #FEF3C7; color: #5C2D0F; }
+  .instrument-pill.mlat       { background: #FED7AA; color: #5C1F09; }
+  .instrument-pill.subpoena   { background: #FECACA; color: #7F1D1D; }
+  .black-hole-row { background: #fef2f2; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Operator Intelligence</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Internal · Operator Reference</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Cross-case strategy reference</div>
+    <h1>Issuer Cooperation<br/>Dashboard</h1>
+    <p class="cover-subtitle">
+      Aggregated freeze-letter history across every Recupero case
+      to date. Each row records the issuer's actual response patterns
+      and the recommended legal instrument for the next case naming
+      that issuer. Refresh by re-running
+      <span class="mono">recupero-ops cooperation-dashboard</span>.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+</section>
+
+<div class="dash-stat-grid">
+  <div class="dash-stat">
+    <span class="dash-stat-label">Issuers tracked</span>
+    <span class="dash-stat-value">{{ stats.n_issuers }}</span>
+  </div>
+  <div class="dash-stat">
+    <span class="dash-stat-label">Letters on file</span>
+    <span class="dash-stat-value">{{ stats.n_letters_total }}</span>
+  </div>
+  <div class="dash-stat">
+    <span class="dash-stat-label">Total frozen (USD)</span>
+    <span class="dash-stat-value">{{ stats.total_frozen_usd_human }}</span>
+  </div>
+  <div class="dash-stat">
+    <span class="dash-stat-label">Black-hole issuers</span>
+    <span class="dash-stat-value">{{ stats.n_black_holes }}</span>
+  </div>
+</div>
+
+<h2>Per-issuer cooperation profile</h2>
+<p class="small">
+  Sorted by letter volume DESC. Issuers below the confidence threshold
+  (&lt;3 letters) appear at the bottom with their numbers suppressed.
+  The "Recommended instrument" column is the suggested legal channel
+  for the next freeze request to that issuer, derived from cooperation
+  history + jurisdiction + sanctions exposure (the recommender does
+  NOT know whether the next case is OFAC-exposed — that signal layers
+  on at the per-case LE handoff Section 5.7 level).
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Issuer</th>
+      <th>Letters</th>
+      <th>Response rate</th>
+      <th>Median response</th>
+      <th>Full freeze rate</th>
+      <th>Total frozen</th>
+      <th>Recommended instrument</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for prof in profiles %}
+    <tr{% if prof.is_black_hole %} class="black-hole-row"{% endif %}>
+      <td><strong>{{ prof.issuer }}</strong>
+        {% if prof.is_black_hole %}
+        <br/><span class="small" style="color:#991b1b;font-weight:600">⚠ BLACK HOLE</span>
+        {% endif %}
+      </td>
+      <td>{{ prof.n_letters_sent }}</td>
+      <td>
+        {% if prof.has_confident_profile %}
+        {{ "%.0f%%"|format(prof.response_rate * 100) }}
+        {% else %}<span class="small secondary">n/a</span>{% endif %}
+      </td>
+      <td>
+        {% if prof.median_response_hours is not none %}
+        {{ "%.0f"|format(prof.median_response_hours) }}h
+        {% else %}—{% endif %}
+      </td>
+      <td>
+        {% if prof.has_confident_profile %}
+        {{ "%.0f%%"|format(prof.full_freeze_rate * 100) }}
+        {% else %}—{% endif %}
+      </td>
+      <td class="amount">{{ prof.total_frozen_usd_human }}</td>
+      <td>
+        <span class="instrument-pill {{ prof.recommended_instrument }}">
+          {{ prof.recommended_instrument }}
+        </span>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+{% if stats.n_black_holes > 0 %}
+<h2>Black-hole issuers</h2>
+<p>
+  These issuers have received three or more informal freeze requests
+  across prior cases with zero responses of any kind. For future
+  cases naming these issuers, the recommendation is to skip the
+  informal channel entirely and proceed directly to a grand jury
+  subpoena via the cooperating AUSA.
+</p>
+<ul>
+  {% for prof in profiles if prof.is_black_hole %}
+  <li>
+    <strong>{{ prof.issuer }}</strong> —
+    {{ prof.n_letters_sent }} letters, 0 responses
+    {% if prof.latest_letter_sent_at %}
+    (most recent: {{ prof.latest_letter_sent_at[:10] }})
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}
+
+<h2>Methodology notes</h2>
+<p class="small">
+  <strong>Response rate</strong> is the share of letters that produced
+  at least one non-silence outcome (acknowledged / declined /
+  partial_freeze / full_freeze / etc.) — it measures whether the
+  issuer engages at all, not whether the engagement was favorable.
+  <strong>Full freeze rate</strong> is the share of letters that
+  produced a <code>full_freeze</code> or <code>returned_to_victim</code>
+  outcome. <strong>Median response</strong> is the time-to-first-
+  response across letters that received a response (silent letters
+  excluded from the timing aggregate).
+</p>
+<p class="small">
+  The <strong>confidence threshold</strong> for surfacing per-issuer
+  percentages is three letters. Below that, the response_rate /
+  full_freeze_rate columns show "n/a" rather than a misleadingly
+  precise figure derived from a sample of one or two.
+</p>
+<p class="small">
+  This dashboard is generated from
+  <code>public.freeze_letters_sent</code> joined to
+  <code>public.freeze_outcomes</code> — the same data substrate that
+  feeds Section 5.7 of each per-case LE handoff. Refresh after any
+  significant batch of new outcomes lands.
+</p>
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Operator Intelligence</div>
+  <div class="footer-meta">
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Internal Operator Reference.</span>
+    Not for distribution to issuer compliance teams, victims, or
+    counterparties. The numbers in this document are derived from
+    Recupero's full case history and would compromise the strategic
+    advantage that history provides if shared externally.
+  </div>
+</footer>
+
+</body>
+</html>

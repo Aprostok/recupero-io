@@ -292,6 +292,21 @@ def cli() -> None:
              "freeze_outcomes table. Recommended cadence: nightly cron.",
     )
 
+    # ----- cooperation-dashboard (v0.24.0) ----- #
+    p_coop = sub.add_parser(
+        "cooperation-dashboard",
+        help="Render the cross-case issuer cooperation dashboard — "
+             "operator-facing HTML aggregating every issuer's "
+             "freeze-letter response history + recommended legal "
+             "instrument for the next case. Refresh after batches "
+             "of new outcomes land.",
+    )
+    p_coop.add_argument(
+        "--output-dir", type=str, default="cooperation-dashboard",
+        help="Directory to write the rendered HTML (created if "
+             "missing). Default: ./cooperation-dashboard/",
+    )
+
     # ----- render-cluster (v0.23.0) ----- #
     p_cluster = sub.add_parser(
         "render-cluster",
@@ -611,6 +626,26 @@ def cli() -> None:
         from recupero.freeze_learning.recorder import refresh_priors
         n = refresh_priors(_require_dsn())
         print(f"Refreshed {n} per-issuer prior(s) in issuer_freeze_priors.")
+        sys.exit(0)
+
+    if args.command == "cooperation-dashboard":
+        from pathlib import Path as _Path
+        from recupero.reports.cooperation_dashboard import (
+            render_cooperation_dashboard,
+        )
+        out_dir = _Path(args.output_dir)
+        out_path = render_cooperation_dashboard(
+            output_dir=out_dir,
+            dsn=_require_dsn(),
+        )
+        if out_path is None:
+            print(
+                "ERROR: cooperation dashboard render failed — no issuers "
+                "with freeze-letter history on file yet, or DB unreachable.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(f"Rendered cooperation dashboard to {out_path}")
         sys.exit(0)
 
     if args.command == "render-cluster":

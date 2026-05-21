@@ -132,6 +132,40 @@ def find_followups_due(*, dsn: str) -> list[FollowupCandidate]:
     return out
 
 
+def _try_claim_followup_slot(
+    *, investigation_id, dsn: str,
+) -> bool:
+    """PUNISH-B W-4: atomic-claim-then-send. UPDATE ... RETURNING
+    on investigations.last_followup_sent_at gated by the staleness
+    predicate. Returns True only when THIS caller's UPDATE actually
+    advanced the timestamp — second concurrent caller's UPDATE
+    matches zero rows and returns False.
+
+    Pre-fix the weekly-engagement cron did SELECT → render → send →
+    UPDATE. Two overlapping cron instances both saw the candidate,
+    both rendered, both sent, both UPDATEd. Victim received the
+    same weekly recap twice. Now the claim happens BEFORE the
+    email render, so the second caller exits early without sending.
+
+    Trade-off: if the email send fails, last_followup_sent_at is
+    already advanced and the victim misses one week's recap. That
+    failure mode is strictly better than duplicate sends — silent
+    success of the wrong work is the worse outcome.
+    """
+    sql = (
+        "UPDATE public.investigations "
+        "   SET last_followup_sent_at = NOW() "
+        " WHERE id = %s "
+        "   AND (last_followup_sent_at IS NULL "
+        "        OR last_followup_sent_at < NOW() "
+        "            - make_interval(days => %s)) "
+        "RETURNING id"
+    )
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, (str(investigation_id), _FOLLOWUP_CADENCE_DAYS))
+        return cur.fetchone() is not None
+
+
 def send_followup(
     *,
     candidate: FollowupCandidate,
@@ -150,9 +184,26 @@ def send_followup(
     operator running Recupero under a different identity needed an
     extra step to override per call, and an unconfigured deploy
     signed the dev's name on every follow-up.
+
+    PUNISH-B W-4: atomic-claim guard at the top. Two overlapping
+    cron instances now race for the claim — only the winner
+    proceeds past it.
     """
     from recupero._common import investigator_defaults
     from recupero.worker._email import send_email
+
+    # PUNISH-B W-4: claim the followup slot FIRST. If the UPDATE
+    # didn't return a row (a concurrent cron just advanced the
+    # timestamp), exit without rendering or sending.
+    if not _try_claim_followup_slot(
+        investigation_id=candidate.investigation_id, dsn=dsn,
+    ):
+        log.info(
+            "followup skipped: another cron instance claimed "
+            "inv=%s (W-4 race-guard)",
+            candidate.investigation_id,
+        )
+        return False
 
     if investigator_name is None or investigator_email is None:
         _inv = investigator_defaults()
@@ -236,23 +287,18 @@ def send_followup(
     )
 
     if result.success:
-        # Stamp last_followup_sent_at
-        try:
-            with db_connect(dsn) as conn, conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE public.investigations "
-                    "   SET last_followup_sent_at = NOW() "
-                    " WHERE id = %s",
-                    (str(candidate.investigation_id),),
-                )
-            log.info(
-                "sent followup-w%d to=%s inv=%s message_id=%s",
-                week_number, candidate.victim_email,
-                candidate.investigation_id, result.message_id,
-            )
-        except Exception as e:  # noqa: BLE001
-            log.warning("followup stamp failed for inv=%s: %s",
-                        candidate.investigation_id, e)
+        # PUNISH-B W-4: timestamp already advanced inside
+        # _try_claim_followup_slot at the top of this function —
+        # no second UPDATE needed. Pre-W-4 this stamped here AFTER
+        # the send (and a second concurrent caller could send + try
+        # to stamp the same timestamp). Now the claim is the only
+        # write to last_followup_sent_at and it happened BEFORE
+        # we touched any email-rendering code.
+        log.info(
+            "sent followup-w%d to=%s inv=%s message_id=%s",
+            week_number, candidate.victim_email,
+            candidate.investigation_id, result.message_id,
+        )
         return True
 
     if result.skipped:

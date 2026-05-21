@@ -148,7 +148,20 @@ def run_monitor_tick(
         result.errors.append("psycopg not installed")
         return result
 
-    # Pull active subscriptions in poll-priority order.
+    # PUNISH-B W-2: SELECT must use FOR UPDATE SKIP LOCKED so two
+    # overlapping cron instances don't both pull the same N rows
+    # and both dispatch the same webhook+email. The lock auto-
+    # releases at txn end. SKIP LOCKED lets the second cron move
+    # past contended rows rather than block — both ticks complete
+    # quickly with non-overlapping work.
+    #
+    # PUNISH-B W-3: the UPDATE filters status='active' AND
+    # case_id-stability so a partner DELETE-mid-poll (status →
+    # 'deleted') doesn't get its last_polled_at rewritten by a
+    # worker still finishing the in-flight tick. The dispatch
+    # itself already happened by then (the partner gets one
+    # stale alert at worst), but the cursor advance must not
+    # resurrect the deleted row for the next tick.
     select_sql = """
         SELECT
             id, address, chain, trigger_type, threshold_usd,
@@ -164,14 +177,16 @@ def run_monitor_tick(
          WHERE status = 'active'
            AND (expires_at IS NULL OR expires_at > NOW())
          ORDER BY last_polled_at NULLS FIRST, created_at ASC
-         LIMIT %(cap)s;
+         LIMIT %(cap)s
+         FOR UPDATE SKIP LOCKED;
     """
     update_sql = """
         UPDATE public.monitoring_subscriptions
            SET last_observed_tx_hash = %(cursor)s,
                last_polled_at        = NOW(),
                last_alerted_at       = COALESCE(%(alerted)s, last_alerted_at)
-         WHERE id = %(id)s;
+         WHERE id = %(id)s
+           AND status = 'active';
     """
 
     try:

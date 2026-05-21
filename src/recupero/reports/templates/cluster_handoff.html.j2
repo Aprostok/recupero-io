@@ -148,7 +148,14 @@
       </td>
       <td>{{ m.role }}</td>
       <td class="mono small">
-        {{ m.joined_via_address[:10] }}…{{ m.joined_via_address[-6:] if m.joined_via_address else '—' }}
+        {# v0.23.1 (audit-fix HIGH-1): full None-guard, not just on the
+           tail slice. Pre-v0.23.1 m.joined_via_address[:10] raised
+           TypeError on None — caught by render_cluster_handoff's
+           try/except and surfaced as "cluster not found or render
+           failed", which is incorrect (the cluster exists). #}
+        {% if m.joined_via_address %}
+        {{ m.joined_via_address[:10] }}…{{ m.joined_via_address[-6:] }}
+        {% else %}—{% endif %}
       </td>
       <td class="amount">
         {% if m.case_total_loss_usd %}${{ "{:,.2f}".format(m.case_total_loss_usd|float) }}{% else %}—{% endif %}

@@ -1294,11 +1294,21 @@ def _build_cross_case_correlation_section(
     risk_assessment: dict[str, Any],
     drainer_findings: Any,
     freeze_targets_by_addr: dict[str, dict[str, Any]],
+    investigation_id: UUID | None = None,
 ) -> tuple[dict[str, Any], Any]:
     """v0.11.0: per-address recidivist lookup against the cumulative
     public.address_observations index. Returns ``(correlation_section,
     case_uuid)`` so the downstream class-action pass can reuse the
-    parsed case UUID without re-parsing."""
+    parsed case UUID without re-parsing.
+
+    v0.23.1 (audit-fix CRIT-1): ``investigation_id`` now flows through
+    to ``run_correlation_pass`` so address_observations rows are
+    written with the investigation UUID populated. Pre-v0.23.1 every
+    row was written with investigation_id=NULL, which made the
+    cluster_builder's prior-overlap query (which excludes NULL rows)
+    return zero results — multi-victim cluster detection was inert
+    in production despite the v0.23.0 plumbing existing.
+    """
     case_uuid = None
     try:
         from uuid import UUID as _UUID
@@ -1315,7 +1325,9 @@ def _build_cross_case_correlation_section(
         section = run_correlation_pass(
             case,
             case_id=case_uuid,
-            investigation_id=None,
+            # v0.23.1 (audit-fix CRIT-1): pass the actual
+            # investigation_id through (was hardcoded None).
+            investigation_id=investigation_id,
             risk_assessment=risk_assessment,
             drainer_findings=drainer_findings,
             freeze_targets_by_addr=freeze_targets_by_addr,
@@ -1369,8 +1381,17 @@ def emit_brief(
     editorial: dict[str, Any],
     freeze_asks: dict[str, Any],
     issuer_metadata: dict[str, dict[str, Any]] | None = None,
+    investigation_id: UUID | None = None,
 ) -> dict[str, Any]:
-    """Assemble the final freeze_brief.json dict that build_triage.js consumes."""
+    """Assemble the final freeze_brief.json dict that build_triage.js consumes.
+
+    v0.23.1: ``investigation_id`` (audit-fix CRIT-1) — when provided,
+    flows through to cross-case correlation so address_observations
+    rows are written with the investigation UUID populated. That
+    unlocks the v0.23.0 multi-victim cluster detection (the cluster
+    builder filters out NULL-investigation rows). Without this, the
+    cluster feature is inert in production.
+    """
     issuer_metadata = issuer_metadata or {}
 
     # --- Basic fields ---
@@ -1484,6 +1505,7 @@ def emit_brief(
         risk_assessment=risk_assessment,
         drainer_findings=drainer_findings,
         freeze_targets_by_addr=freeze_targets_by_addr,
+        investigation_id=investigation_id,
     )
 
     # --- Class-action / cross-victim correlation (v0.14.3) --- v0.20.0 Phase C
@@ -1676,8 +1698,14 @@ def run_emit_brief(
         )
     editorial = load_editorial(case_dir)
 
-    # 5. Assemble
-    brief = emit_brief(case=case, victim=victim, editorial=editorial, freeze_asks=freeze_asks)
+    # 5. Assemble — v0.23.1 (audit-fix CRIT-1): pass investigation_id so
+    # cross-case correlation writes address_observations rows with the
+    # UUID populated, enabling cluster detection to fire in production.
+    brief = emit_brief(
+        case=case, victim=victim, editorial=editorial,
+        freeze_asks=freeze_asks,
+        investigation_id=investigation_id,
+    )
 
     # 6. Write
     out_path = case_dir / "freeze_brief.json"

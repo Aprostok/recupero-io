@@ -100,16 +100,25 @@ def _extract_perp_wallets_from_brief(
     perp-controlled wallet in this case's brief — the hub + any
     freezable holding addresses + any UNRECOVERABLE holding addresses
     (Sky DAI etc.) — that we want to use as cluster-bridge candidates.
+
+    v0.23.1 (audit-fix HIGH-2): use the canonical_address_key helper
+    so addresses with trailing whitespace, mixed case on EVM, or
+    future canonicalization rules match what address_observations
+    stored. Pre-v0.23.1 the parallel lowercase-only normalization
+    drifted from the rest of the codebase.
     """
+    from recupero._common import canonical_address_key
+
     primary_chain = (brief.get("PRIMARY_CHAIN") or "ethereum").lower()
     pairs: set[tuple[str, str]] = set()
 
     hub = brief.get("PERP_HUB") or {}
     hub_addr = hub.get("address")
     if hub_addr:
-        canon = hub_addr.lower() if hub_addr.startswith("0x") else hub_addr
-        chain = (hub.get("chain") or primary_chain).lower()
-        pairs.add((canon, chain))
+        canon = canonical_address_key(hub_addr)
+        if canon:
+            chain = (hub.get("chain") or primary_chain).lower()
+            pairs.add((canon, chain))
 
     for entry in brief.get("ALL_ISSUER_HOLDINGS") or []:
         if not isinstance(entry, dict):
@@ -120,7 +129,9 @@ def _extract_perp_wallets_from_brief(
             addr = holding.get("address")
             if not addr:
                 continue
-            canon = addr.lower() if addr.startswith("0x") else addr
+            canon = canonical_address_key(addr)
+            if not canon:
+                continue
             chain = (holding.get("chain") or primary_chain).lower()
             pairs.add((canon, chain))
 
@@ -183,15 +194,26 @@ def _find_prior_overlap_cases(
 
 
 def _parse_usd(s: Any) -> Decimal:
-    """Parse a formatted USD string like '$3,600,000.00' into Decimal."""
+    """Parse a formatted USD string like '$3,600,000.00' into Decimal.
+
+    v0.23.1 (audit-fix HIGH-4): clamps negative inputs to 0. A
+    typo / sign-flip in TOTAL_LOSS_USD could otherwise inject a
+    negative loss into the cluster aggregate, producing misleading
+    Section 5.6 totals and potentially flipping the OFAC/$5M
+    threshold language. Loss is non-negative by definition.
+    """
     if isinstance(s, (int, float, Decimal)):
-        return Decimal(str(s))
-    if not s:
+        val = Decimal(str(s))
+    elif not s:
         return Decimal(0)
-    try:
-        return Decimal(str(s).replace("$", "").replace(",", "").strip() or "0")
-    except Exception:  # noqa: BLE001
-        return Decimal(0)
+    else:
+        try:
+            val = Decimal(
+                str(s).replace("$", "").replace(",", "").strip() or "0"
+            )
+        except Exception:  # noqa: BLE001
+            return Decimal(0)
+    return val if val > 0 else Decimal(0)
 
 
 def build_or_update_cluster_for_case(
@@ -246,24 +268,49 @@ def build_or_update_cluster_for_case(
         return None  # no overlap → no cluster
 
     # Pick the (address, chain) with the most prior cases as the
-    # cluster seed. Ties broken by lexicographic address (stable).
+    # cluster seed. v0.23.1 (audit-fix HIGH-3): ties broken by full
+    # lexicographic (address, chain) tuple so the choice is fully
+    # deterministic. Pre-v0.23.1 the tiebreaker used `-ord(first_char)`
+    # which is identical for every EVM address (all start with '0')
+    # and reduced to "whichever showed up first in dict iteration"
+    # — non-deterministic across runs, could flip the cluster's
+    # public_id between re-emits.
     counts: dict[tuple[str, str], int] = {}
     for _inv, _case, addr, chain in prior:
         counts[(addr, chain)] = counts.get((addr, chain), 0) + 1
     seed_addr, seed_chain = max(
-        counts.items(), key=lambda kv: (kv[1], -ord(kv[0][0][0]) if kv[0][0] else 0),
+        counts.items(),
+        key=lambda kv: (kv[1], kv[0][0], kv[0][1]),
     )[0]
 
     public_id = _gen_cluster_public_id(seed_addr, seed_chain)
     this_loss = _parse_usd(brief.get("TOTAL_LOSS_USD"))
 
-    # Atomic upsert: get-or-create the cluster, then bridge this case.
+    # v0.23.1 (audit-fix CRIT-4): explicit transaction with SELECT FOR
+    # UPDATE on the cluster row so concurrent emit_briefs on different
+    # cases sharing the same perp wallet serialize their joins. Pre-
+    # v0.23.1 the steps ran under autocommit=True — two concurrent
+    # writers could both observe member_case_count=0 and both tag
+    # their case role='originator', producing a degenerate cluster.
     from recupero._common import db_connect
 
+    # Collect the distinct (investigation_id, case_id) tuples of every
+    # prior case that overlaps with this one. CRIT-2 requires us to
+    # bridge these into the cluster when we create it — otherwise the
+    # FIRST victim is invisible to the cluster.
+    prior_investigations: dict[UUID, UUID | None] = {}
+    for prior_inv, prior_case, _addr, _chain in prior:
+        # Preserve the FIRST case_id we see for each investigation
+        # (typically there's only one; this is defense-in-depth).
+        if prior_inv not in prior_investigations:
+            prior_investigations[prior_inv] = prior_case
+
     try:
-        with db_connect(dsn) as conn:
+        with db_connect(dsn, autocommit=False) as conn:
             with conn.cursor() as cur:
-                # 1. Get or create cluster row.
+                # 1. Get or create cluster row, then LOCK it for the
+                # rest of the transaction (CRIT-4 — serialize concurrent
+                # joins on the same cluster).
                 cur.execute(
                     """
                     INSERT INTO public.case_clusters
@@ -275,9 +322,7 @@ def build_or_update_cluster_for_case(
                             0, 0, 'active', NOW(), NOW())
                     ON CONFLICT (seed_perp_address, seed_perp_chain)
                     DO UPDATE SET updated_at = NOW()
-                    RETURNING id, public_id, shared_perp_addresses,
-                              shared_perp_chains, member_case_count,
-                              total_loss_usd
+                    RETURNING id, public_id
                     """,
                     (
                         public_id, seed_addr, seed_chain,
@@ -289,29 +334,87 @@ def build_or_update_cluster_for_case(
                     log.warning(
                         "cluster_builder: cluster upsert returned no row"
                     )
+                    conn.rollback()
                     return None
-                cluster_id, public_id_db, _shared_addrs, _shared_chains, prev_count, prev_loss = row
-                is_new = (prev_count == 0)
+                cluster_id, public_id_db = row[0], row[1]
 
-                # 2. Bridge this case into the cluster (PK prevents dup).
+                # Acquire the row lock for the rest of the transaction.
+                cur.execute(
+                    "SELECT id FROM public.case_clusters WHERE id = %s FOR UPDATE",
+                    (cluster_id,),
+                )
+
+                # Determine whether the cluster is brand-new (no prior
+                # members) — derived from the LOCKED row's current
+                # member_case_count, which serializes properly under
+                # concurrent writers thanks to the FOR UPDATE.
+                cur.execute(
+                    "SELECT COUNT(*) FROM public.case_cluster_members "
+                    "WHERE cluster_id = %s",
+                    (cluster_id,),
+                )
+                existing_count_row = cur.fetchone()
+                existing_member_count = (
+                    existing_count_row[0] if existing_count_row else 0
+                )
+                is_new = (existing_member_count == 0)
+
+                # 2. Bridge the PRIOR cases first (CRIT-2 — pre-v0.23.1
+                # the originator case was never bridged because the
+                # priors-empty branch returned None at line 246 before
+                # ever opening this transaction). When this cluster is
+                # newly created, we must explicitly insert bridge rows
+                # for every prior investigation we identified — the
+                # FIRST such prior becomes the role='originator'.
+                prior_inv_ids_sorted = sorted(prior_investigations.keys(), key=str)
+                if is_new and prior_inv_ids_sorted:
+                    originator_inv = prior_inv_ids_sorted[0]
+                    for idx, prior_inv in enumerate(prior_inv_ids_sorted):
+                        prior_case_id = prior_investigations.get(prior_inv)
+                        cur.execute(
+                            """
+                            INSERT INTO public.case_cluster_members
+                                (cluster_id, case_id, investigation_id,
+                                 role, case_total_loss_usd,
+                                 joined_via_address, joined_via_chain,
+                                 joined_at)
+                            VALUES (%s, %s, %s, %s, 0, %s, %s, NOW())
+                            ON CONFLICT (cluster_id, investigation_id)
+                            DO NOTHING
+                            """,
+                            (
+                                cluster_id,
+                                str(prior_case_id) if prior_case_id else None,
+                                str(prior_inv),
+                                "originator" if prior_inv == originator_inv else "joined",
+                                seed_addr, seed_chain,
+                            ),
+                        )
+
+                # 3. Bridge THIS case. When the cluster was newly
+                # created, this case is 'joined' (one of the priors is
+                # the originator). When the cluster already existed,
+                # this case is also 'joined'.
                 cur.execute(
                     """
                     INSERT INTO public.case_cluster_members
                         (cluster_id, case_id, investigation_id, role,
                          case_total_loss_usd, joined_via_address,
                          joined_via_chain, joined_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                    VALUES (%s, %s, %s, 'joined', %s, %s, %s, NOW())
                     ON CONFLICT (cluster_id, investigation_id) DO UPDATE
-                       SET case_total_loss_usd = EXCLUDED.case_total_loss_usd,
-                           joined_via_address = EXCLUDED.joined_via_address,
-                           joined_via_chain = EXCLUDED.joined_via_chain
+                       SET case_total_loss_usd = EXCLUDED.case_total_loss_usd
+                       -- v0.23.1 (audit-fix HIGH-6): preserve the
+                       -- historic joined_via_address; do NOT overwrite
+                       -- on re-emit. The forensic audit trail "this
+                       -- case joined because of wallet W on date D"
+                       -- stays stable.
                     RETURNING (xmax = 0) AS inserted
                     """,
                     (
                         cluster_id,
                         str(case_id) if case_id else None,
                         str(investigation_id),
-                        "originator" if is_new else "joined",
                         this_loss,
                         seed_addr, seed_chain,
                     ),
@@ -319,24 +422,33 @@ def build_or_update_cluster_for_case(
                 bridge_row = cur.fetchone()
                 bridge_inserted = bool(bridge_row and bridge_row[0])
 
-                # 3. Maintain cluster aggregates. Recompute from the
-                #    members table so a re-emit with a different loss
-                #    figure properly replaces (not double-counts) the
-                #    case's contribution.
+                # 4. Maintain cluster aggregates. v0.23.1 (audit-fix
+                # CRIT-3): the prior UNION-of-array_agg scalar subquery
+                # would return 2 rows the moment any member had a
+                # joined_via_address different from the seed — Postgres
+                # raises 21000. Replaced with ARRAY(... UNION ALL ...)
+                # which flattens to a single text[]. Also recompute
+                # member_case_count from the bridge table to absorb the
+                # CRIT-2 prior-bridge inserts above.
                 cur.execute(
                     """
                     UPDATE public.case_clusters
                        SET member_case_count = sub.cnt,
                            total_loss_usd    = sub.tot,
                            shared_perp_addresses = (
-                               SELECT array_agg(DISTINCT seed_perp_address)
-                                 FROM public.case_clusters cc2
-                                WHERE cc2.id = %(cid)s
-                               UNION
-                               SELECT array_agg(DISTINCT joined_via_address)
-                                 FROM public.case_cluster_members
-                                WHERE cluster_id = %(cid)s
-                                  AND joined_via_address IS NOT NULL
+                               SELECT ARRAY(
+                                   SELECT DISTINCT a FROM (
+                                       SELECT seed_perp_address AS a
+                                         FROM public.case_clusters
+                                        WHERE id = %(cid)s
+                                       UNION ALL
+                                       SELECT joined_via_address
+                                         FROM public.case_cluster_members
+                                        WHERE cluster_id = %(cid)s
+                                          AND joined_via_address IS NOT NULL
+                                   ) u
+                                  WHERE a IS NOT NULL
+                               )
                            ),
                            updated_at = NOW()
                       FROM (
@@ -353,6 +465,8 @@ def build_or_update_cluster_for_case(
                 agg = cur.fetchone()
                 final_count = agg[0] if agg else 0
                 final_loss = Decimal(str(agg[1])) if agg and agg[1] is not None else Decimal(0)
+                # All three statements committed atomically.
+                conn.commit()
 
         log.info(
             "cluster_builder: case %s %s cluster %s "

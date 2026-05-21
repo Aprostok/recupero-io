@@ -307,6 +307,30 @@ def cli() -> None:
              "missing). Default: ./cooperation-dashboard/",
     )
 
+    # ----- law-firm-dashboard (v0.26.0) ----- #
+    p_firm = sub.add_parser(
+        "law-firm-dashboard",
+        help="Render a partner law firm's portfolio dashboard — "
+             "aggregate state of all cases the firm has referred. "
+             "Pass --firm <slug-or-uuid> for one firm, or --all to "
+             "render every active firm.",
+    )
+    p_firm.add_argument(
+        "--firm", dest="firm_key", default=None,
+        help="law_firms.slug or law_firms.id of the firm to render. "
+             "Required unless --all is set.",
+    )
+    p_firm.add_argument(
+        "--all", dest="all_firms", action="store_true",
+        help="Render dashboards for every active firm. Mutually "
+             "exclusive with --firm.",
+    )
+    p_firm.add_argument(
+        "--output-dir", type=str, default="law-firm-dashboards",
+        help="Directory to write the rendered HTML (created if "
+             "missing). Default: ./law-firm-dashboards/",
+    )
+
     # ----- render-cluster (v0.23.0) ----- #
     p_cluster = sub.add_parser(
         "render-cluster",
@@ -646,6 +670,58 @@ def cli() -> None:
             )
             sys.exit(2)
         print(f"Rendered cooperation dashboard to {out_path}")
+        sys.exit(0)
+
+    if args.command == "law-firm-dashboard":
+        from pathlib import Path as _Path
+        from recupero.reports.law_firm_dashboard import (
+            render_law_firm_dashboard,
+            render_all_law_firm_dashboards,
+        )
+        out_dir = _Path(args.output_dir)
+        # --firm and --all are mutually exclusive at the argparse layer
+        # (we enforce here rather than via add_mutually_exclusive_group
+        # to keep --all opt-in not required).
+        if args.all_firms and args.firm_key:
+            print(
+                "ERROR: --firm and --all are mutually exclusive.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if not args.all_firms and not args.firm_key:
+            print(
+                "ERROR: pass --firm <slug-or-uuid> for one firm, or "
+                "--all to render every active firm.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+
+        if args.all_firms:
+            paths = render_all_law_firm_dashboards(
+                output_dir=out_dir, dsn=_require_dsn(),
+            )
+            if not paths:
+                print(
+                    "ERROR: no firms rendered — none are active, or DB "
+                    "unreachable.",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            for p in paths:
+                print(f"Rendered {p}")
+            sys.exit(0)
+
+        out_path = render_law_firm_dashboard(
+            args.firm_key, output_dir=out_dir, dsn=_require_dsn(),
+        )
+        if out_path is None:
+            print(
+                f"ERROR: dashboard render failed for firm "
+                f"{args.firm_key!r} — firm not found, or DB unreachable.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(f"Rendered law-firm dashboard to {out_path}")
         sys.exit(0)
 
     if args.command == "render-cluster":

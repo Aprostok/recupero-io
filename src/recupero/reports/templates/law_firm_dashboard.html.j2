@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Portfolio Dashboard — {{ portfolio.firm_name }}</title>
+{% include "_styles.html.j2" %}
+<style>
+  /* Law-firm dashboard — partner-facing portfolio statement.
+     Audience: recovery counsel reviewing the aggregate state of
+     their referred caseload. Shown monthly or on-demand. */
+  .dash-stat-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin: 24px 0 32px;
+  }
+  .dash-stat {
+    background: #fafafa;
+    border-left: 3px solid var(--gold-accent);
+    padding: 14px 18px;
+    border-radius: 4px;
+  }
+  .dash-stat-label {
+    display: block;
+    font-size: var(--type-tiny);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-quiet);
+    margin: 0 0 4px;
+  }
+  .dash-stat-value {
+    display: block;
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1.1;
+  }
+  .throughput-card {
+    background: #f8fafc;
+    border-left: 3px solid #1e3a8a;
+    padding: 18px 22px;
+    margin: 0 0 28px;
+    border-radius: 4px;
+  }
+  .throughput-row { display: flex; gap: 32px; flex-wrap: wrap; }
+  .throughput-row .num {
+    font-size: 28px; font-weight: 700; line-height: 1.0;
+    color: #1e3a8a;
+  }
+  .insufficient-data {
+    color: var(--ink-quiet);
+    font-style: italic;
+    margin: 0;
+  }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Partner Portfolio</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Confidential · For {{ portfolio.firm_name }}</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Referred caseload statement</div>
+    <h1>{{ portfolio.firm_name }}<br/>Portfolio Dashboard</h1>
+    <p class="cover-subtitle">
+      Aggregate state of every case {{ portfolio.firm_name }} has referred
+      to Recupero. Numbers reflect Recupero's books of record as of the
+      timestamp above; the underlying per-case briefs are linked in
+      your normal handoff stream.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+</section>
+
+<section class="page">
+  <h2>Caseload at a Glance</h2>
+
+  <div class="dash-stat-grid">
+    <div class="dash-stat">
+      <span class="dash-stat-label">Cases Referred</span>
+      <span class="dash-stat-value">{{ portfolio.n_referred_cases }}</span>
+    </div>
+    <div class="dash-stat">
+      <span class="dash-stat-label">Completed Traces</span>
+      <span class="dash-stat-value">{{ portfolio.n_completed_traces }}</span>
+    </div>
+    <div class="dash-stat">
+      <span class="dash-stat-label">In Queue</span>
+      <span class="dash-stat-value">{{ portfolio.n_in_queue }}</span>
+    </div>
+    <div class="dash-stat">
+      <span class="dash-stat-label">With Letters Sent</span>
+      <span class="dash-stat-value">{{ portfolio.n_with_letters_sent }}</span>
+    </div>
+  </div>
+
+  <h2>Portfolio Outcomes</h2>
+
+  <div class="dash-stat-grid">
+    <div class="dash-stat">
+      <span class="dash-stat-label">Total Reported Loss</span>
+      <span class="dash-stat-value">{{ portfolio.total_loss_usd_human }}</span>
+    </div>
+    <div class="dash-stat">
+      <span class="dash-stat-label">Total Frozen To Date</span>
+      <span class="dash-stat-value">{{ portfolio.total_frozen_usd_human }}</span>
+    </div>
+    <div class="dash-stat">
+      <span class="dash-stat-label">Returned To Victims</span>
+      <span class="dash-stat-value">{{ portfolio.total_returned_to_victim_usd_human }}</span>
+    </div>
+    <div class="dash-stat">
+      <span class="dash-stat-label">Latest Referral</span>
+      <span class="dash-stat-value" style="font-size: 14px; font-weight: 500">
+        {{ portfolio.latest_referral_at or "—" }}
+      </span>
+    </div>
+  </div>
+
+  <h2>Throughput</h2>
+
+  {% if portfolio.has_confident_throughput %}
+    <div class="throughput-card">
+      <div class="throughput-row">
+        <div>
+          <div class="dash-stat-label">Median Intake → First Letter</div>
+          <div class="num">
+            {% if portfolio.median_hours_intake_to_first_letter is not none %}
+              {{ "%.0f"|format(portfolio.median_hours_intake_to_first_letter) }} h
+            {% else %}—{% endif %}
+          </div>
+        </div>
+        <div>
+          <div class="dash-stat-label">Median Letter → First Freeze</div>
+          <div class="num">
+            {% if portfolio.median_hours_letter_to_first_freeze is not none %}
+              {{ "%.0f"|format(portfolio.median_hours_letter_to_first_freeze) }} h
+            {% else %}—{% endif %}
+          </div>
+        </div>
+      </div>
+      <p style="margin: 14px 0 0; font-size: var(--type-small); color: var(--ink-quiet)">
+        Median measured across all your referred cases that have reached
+        each stage. Means are intentionally not reported; medians are
+        more robust to single-outlier outliers.
+      </p>
+    </div>
+  {% else %}
+    <p class="insufficient-data">
+      Throughput medians require at least 3 referred cases past each
+      stage. Once the portfolio crosses that threshold the throughput
+      card unlocks automatically.
+    </p>
+  {% endif %}
+
+  <h2>Top Issuers Across Your Portfolio</h2>
+
+  {% if portfolio.top_issuers %}
+    <table class="ledger-table">
+      <thead>
+        <tr>
+          <th>Issuer</th>
+          <th>Letters Sent</th>
+          <th>Freezes Observed</th>
+          <th>$ Frozen on Your Cases</th>
+          <th>Cross-Firm Response Rate</th>
+          <th>Cross-Firm Full-Freeze Rate</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in portfolio.top_issuers %}
+          <tr>
+            <td><strong>{{ row.issuer }}</strong></td>
+            <td>{{ row.n_letters_sent }}</td>
+            <td>{{ row.n_freezes_observed }}</td>
+            <td>{{ row.total_frozen_usd_human }}</td>
+            <td>{{ row.cross_firm_response_rate_pct or "—" }}</td>
+            <td>{{ row.cross_firm_full_freeze_rate_pct or "—" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p style="font-size: var(--type-small); color: var(--ink-quiet); margin: 10px 0 0">
+      Cross-firm rates draw on Recupero's aggregate freeze-letter
+      history across every partner. They're context for "how does this
+      issuer behave at scale," not per-firm conclusions. Issuers with
+      fewer than 3 letters on file system-wide show "—".
+    </p>
+  {% else %}
+    <p class="insufficient-data">
+      No issuer letters have been sent on your referred cases yet.
+      This card will populate as the worker stage produces its first
+      freeze asks.
+    </p>
+  {% endif %}
+
+  <h2>About this dashboard</h2>
+  <p style="font-size: var(--type-small); color: var(--ink-quiet)">
+    Generated automatically from Recupero's books of record. Numbers
+    update each time the dashboard is re-rendered; the underlying
+    per-case briefs and any individual freeze-letter copies remain
+    available via your usual handoff stream. For corrections,
+    contact your Recupero liaison.
+  </p>
+
+  <div class="footer">
+    Recupero · Confidential · For {{ portfolio.firm_name }} · {{ generated_at }} UTC ·
+    pipeline v{{ software_version }}
+  </div>
+</section>
+
+</body>
+</html>

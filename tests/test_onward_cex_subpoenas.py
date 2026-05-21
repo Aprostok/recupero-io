@@ -9,11 +9,8 @@ linkage records.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-
-import pytest
 
 from recupero.freeze.asks import (
     OnwardCEXFlow,
@@ -29,7 +26,6 @@ from recupero.models import (
     TokenRef,
     Transfer,
 )
-
 
 VICTIM = "0x" + "a" * 40
 FREEZABLE_DEST = "0x" + "b" * 40   # holds USDT — upstream freeze target
@@ -50,7 +46,7 @@ def _label(addr: str, *, category: LabelCategory, name: str,
         exchange=exchange,
         source="test",
         confidence="high",
-        added_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        added_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
@@ -64,7 +60,7 @@ def _mk_transfer(
     block_time: datetime | None = None,
     token_symbol: str = "USDT",
 ) -> Transfer:
-    block_time = block_time or datetime(2025, 10, 14, tzinfo=timezone.utc)
+    block_time = block_time or datetime(2025, 10, 14, tzinfo=UTC)
     tx_hash = tx_hash or "0x" + "1" * 64
     return Transfer(
         transfer_id=f"ethereum:{tx_hash}:1",
@@ -96,9 +92,9 @@ def _mk_case(transfers: list[Transfer]) -> Case:
         case_id="V-CFI01-test",
         seed_address=VICTIM,
         chain=Chain.ethereum,
-        incident_time=datetime(2025, 10, 9, tzinfo=timezone.utc),
+        incident_time=datetime(2025, 10, 9, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 5, 18, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 5, 18, tzinfo=UTC),
         software_version="test",
         config_used={},
     )
@@ -239,7 +235,7 @@ def test_aggregates_multiple_transfers_to_same_cex() -> None:
             from_addr=FREEZABLE_DEST, to_addr=BINANCE_HOT,
             counterparty_label=binance_label,
             usd=Decimal("10000"), tx_hash=f"0xtx{i}",
-            block_time=datetime(2025, 10, 14 + i, tzinfo=timezone.utc),
+            block_time=datetime(2025, 10, 14 + i, tzinfo=UTC),
         )
         for i in range(3)
     ]
@@ -256,8 +252,8 @@ def test_aggregates_multiple_transfers_to_same_cex() -> None:
     assert flow.transfer_count == 3
     assert len(flow.tx_hashes) == 3
     # First / last flow times reflect the temporal spread.
-    assert flow.first_flow_at == datetime(2025, 10, 14, tzinfo=timezone.utc)
-    assert flow.last_flow_at == datetime(2025, 10, 16, tzinfo=timezone.utc)
+    assert flow.first_flow_at == datetime(2025, 10, 14, tzinfo=UTC)
+    assert flow.last_flow_at == datetime(2025, 10, 16, tzinfo=UTC)
 
 
 def test_multiple_cex_destinations_emit_separately() -> None:
@@ -375,7 +371,7 @@ def test_exchange_name_parsed_from_label_when_no_exchange_field() -> None:
         exchange=None,
         source="test",
         confidence="high",
-        added_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        added_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     transfers = [
         _mk_transfer(
@@ -404,8 +400,8 @@ def test_group_by_exchange() -> None:
         token_symbol="USDT", flow_usd_value=Decimal("10000"),
         flow_amount_decimal=Decimal("10000"),
         transfer_count=1,
-        first_flow_at=datetime(2025, 10, 14, tzinfo=timezone.utc),
-        last_flow_at=datetime(2025, 10, 14, tzinfo=timezone.utc),
+        first_flow_at=datetime(2025, 10, 14, tzinfo=UTC),
+        last_flow_at=datetime(2025, 10, 14, tzinfo=UTC),
         upstream_explorer_url="", cex_explorer_url="",
         tx_hashes=["0x1"],
     )
@@ -416,8 +412,8 @@ def test_group_by_exchange() -> None:
         token_symbol="USDT", flow_usd_value=Decimal("5000"),
         flow_amount_decimal=Decimal("5000"),
         transfer_count=1,
-        first_flow_at=datetime(2025, 10, 14, tzinfo=timezone.utc),
-        last_flow_at=datetime(2025, 10, 14, tzinfo=timezone.utc),
+        first_flow_at=datetime(2025, 10, 14, tzinfo=UTC),
+        last_flow_at=datetime(2025, 10, 14, tzinfo=UTC),
         upstream_explorer_url="", cex_explorer_url="",
         tx_hashes=["0x2"],
     )
@@ -438,8 +434,8 @@ def test_short_summary_includes_essentials() -> None:
         token_symbol="USDT", flow_usd_value=Decimal("45000"),
         flow_amount_decimal=Decimal("45000"),
         transfer_count=3,
-        first_flow_at=datetime(2025, 10, 14, tzinfo=timezone.utc),
-        last_flow_at=datetime(2025, 10, 16, tzinfo=timezone.utc),
+        first_flow_at=datetime(2025, 10, 14, tzinfo=UTC),
+        last_flow_at=datetime(2025, 10, 16, tzinfo=UTC),
         upstream_explorer_url="", cex_explorer_url="",
         tx_hashes=["0x1", "0x2", "0x3"],
     )

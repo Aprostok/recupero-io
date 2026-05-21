@@ -20,7 +20,6 @@ Configuration is via env vars (loaded from .env):
 
 from __future__ import annotations
 
-from recupero._common import db_connect
 import argparse
 import logging
 import os
@@ -33,6 +32,7 @@ from typing import Final
 
 from dotenv import load_dotenv
 
+from recupero._common import db_connect
 from recupero.config import load_config
 from recupero.logging_setup import setup_logging
 from recupero.storage.supabase_case_store import SupabaseCaseStore
@@ -408,11 +408,9 @@ def _run_checks(verbose: bool = True) -> tuple[bool, dict[str, str]]:
         return False, details
 
     try:
-        import psycopg
-        with db_connect(db_url) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1;")
-                cur.fetchone()
+        with db_connect(db_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1;")
+            cur.fetchone()
         details["db"] = "ok"
         if verbose:
             log.info("db  [OK]    connected to SUPABASE_DB_URL")
@@ -622,6 +620,7 @@ def _run_watch_tick_once(*, limit: int | None) -> int:
 def _count_active_watchlist(dsn: str) -> int:
     """Total active rows in public.watchlist (irrespective of cooldown)."""
     import psycopg as _psy
+
     from recupero._common import pooled_dsn as _pooled_dsn
     pooled = _pooled_dsn(dsn)
     try:

@@ -442,8 +442,9 @@ def create_subscription(
     except ImportError:  # pragma: no cover
         raise RuntimeError("psycopg not installed") from None
 
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
+
+    from recupero._common import db_connect
 
     created_by = created_by_for_api_key(api_key_name)
     new_id = uuid4()
@@ -518,8 +519,9 @@ def list_subscriptions(
     except ImportError:  # pragma: no cover
         return []
 
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
+
+    from recupero._common import db_connect
 
     created_by = created_by_for_api_key(api_key_name)
     sql = """
@@ -564,8 +566,9 @@ def get_subscription(
     except ImportError:  # pragma: no cover
         return None
 
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
+
+    from recupero._common import db_connect
 
     created_by = created_by_for_api_key(api_key_name)
     sql = """

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from recupero.chains.hyperliquid.client import (
     HyperliquidLedgerEvent,
@@ -17,7 +17,6 @@ from recupero.chains.hyperliquid.scraper import (
 )
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Chain
-
 
 USER = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
 PERP = "0xF4bE227b268e191b79097Daad0AcCcD9a7A7FAD2"
@@ -158,7 +157,7 @@ class TestScrapeHyperliquidCase:
             case = scrape_hyperliquid_case(
                 user_address=USER,
                 case_id="TEST-HL",
-                incident_time=datetime(2025, 10, 9, tzinfo=timezone.utc),
+                incident_time=datetime(2025, 10, 9, tzinfo=UTC),
                 config=cfg,
                 env=env,
             )

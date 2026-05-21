@@ -14,7 +14,7 @@ one place.
 from __future__ import annotations
 
 import urllib.parse
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -27,7 +27,6 @@ from recupero.payments.payment_links import (
     build_diagnostic_link,
     build_engagement_link,
 )
-
 
 # ---- _parse_client_reference_id ---- #
 

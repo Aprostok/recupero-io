@@ -23,25 +23,22 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
-from uuid import UUID, uuid4
-
-import pytest
+from uuid import uuid4
 
 
 def test_v0_21_emit_brief_produces_recovery_estimate_and_auto_subscribes():
     """v0.21.0 contract: emit_brief on V-CFI01 produces a brief with
     RECOVERY_ESTIMATE present, AND when called with a DSN +
     investigation_id, auto-subscribes the perp-wallet set."""
+    from recupero.reports.emit_brief import emit_brief
+    from recupero.reports.victim import VictimInfo
     from tests.test_v_cfi01_full_render import (
+        VICTIM,
         _build_editorial,
         _build_freeze_asks_dict,
         _build_issuer_metadata,
         _build_v_cfi01_case,
-        VICTIM,
     )
-    from recupero.reports.emit_brief import emit_brief
-    from recupero.reports.victim import VictimInfo
 
     case = _build_v_cfi01_case()
     editorial = _build_editorial()
@@ -117,12 +114,12 @@ def test_v0_21_le_handoff_renders_with_recovery_and_empty_status():
       * Show Estimated Recoverable on the cover
       * Show Section 5.5 'Pending issuer outreach' empty-state
     """
-    from tests.test_v_cfi01_full_render import (
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(
@@ -169,10 +166,6 @@ def test_v0_21_le_handoff_renders_with_populated_status_after_outcomes_recorded(
     outcomes — Section 5.5 shows the per-issuer table, aggregate
     roll-up, and monitoring snapshot.
     """
-    from tests.test_v_cfi01_full_render import (
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.freeze_learning.status import (
         AggregateStatus,
         LetterStatus,
@@ -181,6 +174,10 @@ def test_v0_21_le_handoff_renders_with_populated_status_after_outcomes_recorded(
     )
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(
@@ -281,16 +278,16 @@ def test_v0_21_end_to_end_smoke_no_dsn_path():
     refresh_priors) all degrades to no-op rather than breaking
     deliverable generation.
     """
+    from recupero.reports.brief import InvestigatorInfo, generate_briefs
+    from recupero.reports.emit_brief import emit_brief
+    from recupero.reports.victim import VictimInfo
     from tests.test_v_cfi01_full_render import (
+        VICTIM,
         _build_editorial,
         _build_freeze_asks_dict,
         _build_issuer_metadata,
         _build_v_cfi01_case,
-        VICTIM,
     )
-    from recupero.reports.brief import InvestigatorInfo, generate_briefs
-    from recupero.reports.emit_brief import emit_brief
-    from recupero.reports.victim import VictimInfo
 
     case = _build_v_cfi01_case()
     editorial = _build_editorial()

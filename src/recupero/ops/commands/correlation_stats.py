@@ -21,10 +21,10 @@ Output:
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import logging
 from typing import Any
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 
@@ -42,10 +42,9 @@ def run(*, dsn: str) -> int:
     print()
 
     try:
-        with db_connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                # 1. Aggregate counts.
-                cur.execute("""
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            # 1. Aggregate counts.
+            cur.execute("""
                     SELECT
                         COUNT(*)                              AS total_rows,
                         COUNT(DISTINCT (address, chain))      AS distinct_addresses,
@@ -55,10 +54,10 @@ def run(*, dsn: str) -> int:
                         COUNT(*) FILTER (WHERE is_drainer_attributed) AS drainer_observations
                       FROM public.address_observations;
                 """)
-                summary = cur.fetchone() or {}
+            summary = cur.fetchone() or {}
 
-                # 2. Recidivist addresses (appeared in 2+ cases).
-                cur.execute("""
+            # 2. Recidivist addresses (appeared in 2+ cases).
+            cur.execute("""
                     SELECT
                         address, chain,
                         COUNT(DISTINCT case_id) AS prior_cases,
@@ -73,10 +72,10 @@ def run(*, dsn: str) -> int:
                      ORDER BY prior_cases DESC, total_usd DESC NULLS LAST
                      LIMIT 10;
                 """)
-                top_recidivists: list[dict[str, Any]] = list(cur.fetchall())
+            top_recidivists: list[dict[str, Any]] = list(cur.fetchall())
 
-                # 3. Recidivist counts.
-                cur.execute("""
+            # 3. Recidivist counts.
+            cur.execute("""
                     SELECT COUNT(*) AS recidivist_count
                       FROM (
                           SELECT address, chain
@@ -86,7 +85,7 @@ def run(*, dsn: str) -> int:
                           HAVING COUNT(DISTINCT case_id) >= 2
                       ) AS r;
                 """)
-                rec_row = cur.fetchone() or {}
+            rec_row = cur.fetchone() or {}
     except Exception as exc:  # noqa: BLE001
         print(f"ERROR: DB query failed — {exc}")
         return 1

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 from recupero.chains.base import ChainAdapter
 from recupero.chains.solana.adapter import (
-    SolanaAdapter,
     USDC_SOLANA_MINT,
+    SolanaAdapter,
     _symbol_from_mint,
 )
 from recupero.config import RecuperoConfig, RecuperoEnv
@@ -47,7 +47,7 @@ class TestBlockAtOrBefore:
     def test_returns_unix_timestamp(self):
         """On Solana we use unix ts as start_block proxy."""
         adapter = _make_adapter()
-        ts = datetime(2025, 10, 9, 0, 0, 0, tzinfo=timezone.utc)
+        ts = datetime(2025, 10, 9, 0, 0, 0, tzinfo=UTC)
         # 2025-10-09T00:00:00Z = unix 1759968000
         assert adapter.block_at_or_before(ts) == 1759968000
 

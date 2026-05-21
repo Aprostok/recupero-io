@@ -51,7 +51,6 @@ import logging
 import statistics
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -191,8 +190,9 @@ def build_cooperation_profile(
     except ImportError:  # pragma: no cover
         return profile
 
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
+
+    from recupero._common import db_connect
 
     # v0.24.1 (audit-fix CRIT-1): replaced `array_agg(ROW(...))` with
     # a flat LEFT JOIN. Pre-v0.24.1 psycopg's default text-mode

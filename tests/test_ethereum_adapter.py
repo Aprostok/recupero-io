@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -29,7 +29,7 @@ class TestEthereumAdapter:
         respx.get("https://api.etherscan.io/v2/api").mock(
             return_value=httpx.Response(200, json=_ok("19000000"))
         )
-        when = datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+        when = datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC)
         block = adapter.block_at_or_before(when)
         assert block == 19000000
 

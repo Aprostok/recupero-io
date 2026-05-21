@@ -14,8 +14,6 @@ import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 
 def test_watch_tick_calls_refresh_priors_before_run():
     """The nightly watch-tick must call refresh_priors at the START,
@@ -122,12 +120,12 @@ def test_le_template_renders_recovery_estimate_row():
     """When recovery_estimate is passed to generate_briefs, the LE
     handoff cover-meta surfaces the Estimated Recoverable row with
     the headline USD figure + 90d probability."""
-    from tests.test_v_cfi01_full_render import (
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(
@@ -174,12 +172,12 @@ def test_le_template_hides_recovery_row_when_estimate_missing():
     """When recovery_estimate is None / has no expected_recovered_usd,
     the cover row is omitted — the document still renders cleanly
     (older briefs that pre-date v0.14.1 produce no estimate)."""
-    from tests.test_v_cfi01_full_render import (
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(
@@ -207,12 +205,12 @@ def test_le_template_hides_recovery_row_when_estimate_missing():
 def test_le_template_hides_recovery_row_when_expected_usd_is_empty():
     """A recovery_estimate dict missing the expected_recovered_usd
     field (degraded scorer output) also hides the row."""
-    from tests.test_v_cfi01_full_render import (
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(

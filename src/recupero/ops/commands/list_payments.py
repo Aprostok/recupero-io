@@ -35,15 +35,22 @@ operator triage clarity.
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import logging
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-import psycopg
+# RIGOR-2: tests patch `recupero.ops.commands.list_payments.psycopg.connect`
+# via unittest.mock.patch — so `psycopg` MUST be a top-level module
+# attribute even though we don't reference it by name directly (we
+# use db_connect() from _common.py). Removing this import (ruff F401
+# auto-fix did) breaks every test that mocks DB connections via this
+# patch point. The pattern is intentional; not a real unused-import.
+import psycopg  # noqa: F401
+
 from psycopg.rows import dict_row
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 

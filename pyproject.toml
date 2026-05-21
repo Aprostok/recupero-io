@@ -83,6 +83,17 @@ dependencies = [
     # asymmetric signatures.
     "cryptography>=42,<45",
 
+    # RIGOR-2a: defusedxml is the ONLY safe XML parser for untrusted
+    # input. ofac_sync.py reads the OFAC SDN feed (external untrusted
+    # source — MITM-able CDN, potential supply-chain attack). Stdlib
+    # xml.etree.ElementTree is vulnerable to billion-laughs / XXE
+    # / external-entity attacks. Pre-RIGOR-2a defusedxml was an
+    # optional fallback with a runtime WARNING; that "soft" pattern
+    # was indistinguishable from "not installed in prod" because
+    # nobody checks deploy-time warnings. Hard-required as of this
+    # version; ofac_sync refuses to run without it.
+    "defusedxml>=0.7,<1.0",
+
     # FastAPI service surface (v0.15.1). The REST endpoints for
     # wallet screening / token-risk / monitoring are exposed via
     # FastAPI so exchanges + compliance teams can integrate against
@@ -129,6 +140,19 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "RET", "SIM"]
 ignore = ["E501"]   # line length handled by formatter
+
+[tool.ruff.lint.per-file-ignores]
+# CLI files use typer's Option/Argument-in-default pattern by design;
+# typer relies on those defaults to register the CLI flags. Suppressing
+# B008 here is correct — replacing them would break typer's registration.
+"src/recupero/cli.py" = ["B008"]
+"src/recupero/ops/cli.py" = ["B008"]
+"src/recupero/ops/commands/*.py" = ["B008"]
+"src/recupero/api/app.py" = ["B008"]   # FastAPI uses the same pattern (Depends, Query, etc.)
+# Tests pre-date several modern conventions; allow specific exceptions
+# rather than churn 800+ tests.
+"tests/test_v7.py" = ["N802"]   # test_ethereum_DOES_*: deliberate uppercase to mirror the
+                                # naming of the chain-adapter behavior being asserted
 
 [tool.mypy]
 python_version = "3.11"

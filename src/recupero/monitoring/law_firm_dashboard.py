@@ -126,42 +126,42 @@ def build_firm_portfolio(
     except ImportError:  # pragma: no cover
         return portfolio
 
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
 
+    from recupero._common import db_connect
+
     try:
-        with db_connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                firm_row = _resolve_firm_row(cur, firm_key)
-                if not firm_row:
-                    log.info(
-                        "build_firm_portfolio: no law_firms row "
-                        "matches key=%r", firm_key,
-                    )
-                    return portfolio
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            firm_row = _resolve_firm_row(cur, firm_key)
+            if not firm_row:
+                log.info(
+                    "build_firm_portfolio: no law_firms row "
+                    "matches key=%r", firm_key,
+                )
+                return portfolio
 
-                portfolio.firm_id = _as_uuid(firm_row["id"])
-                portfolio.firm_slug = firm_row["slug"]
-                portfolio.firm_name = firm_row["name"]
-                portfolio.firm_status = firm_row.get("status") or "active"
+            portfolio.firm_id = _as_uuid(firm_row["id"])
+            portfolio.firm_slug = firm_row["slug"]
+            portfolio.firm_name = firm_row["name"]
+            portfolio.firm_status = firm_row.get("status") or "active"
 
-                # v0.26.1 (MED-3): refuse to populate aggregates for a
-                # paused/closed/archived firm. The caller can still
-                # see the firm_status field (the dashboard renderer
-                # uses it to bail with a "STATUS: NOT ACTIVE" banner
-                # rather than producing a wrongly-fresh-looking
-                # statement for an off-boarded partner).
-                if portfolio.firm_status != "active":
-                    log.info(
-                        "build_firm_portfolio: skipping aggregate "
-                        "build for firm slug=%s status=%s",
-                        portfolio.firm_slug, portfolio.firm_status,
-                    )
-                    return portfolio
+            # v0.26.1 (MED-3): refuse to populate aggregates for a
+            # paused/closed/archived firm. The caller can still
+            # see the firm_status field (the dashboard renderer
+            # uses it to bail with a "STATUS: NOT ACTIVE" banner
+            # rather than producing a wrongly-fresh-looking
+            # statement for an off-boarded partner).
+            if portfolio.firm_status != "active":
+                log.info(
+                    "build_firm_portfolio: skipping aggregate "
+                    "build for firm slug=%s status=%s",
+                    portfolio.firm_slug, portfolio.firm_status,
+                )
+                return portfolio
 
-                _populate_volume_and_money(cur, portfolio)
-                _populate_throughput(cur, portfolio)
-                _populate_top_issuers(cur, portfolio, dsn=dsn)
+            _populate_volume_and_money(cur, portfolio)
+            _populate_throughput(cur, portfolio)
+            _populate_top_issuers(cur, portfolio, dsn=dsn)
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "build_firm_portfolio(%r) failed: %s", firm_key, exc,
@@ -181,8 +181,9 @@ def build_all_firm_portfolios(*, dsn: str | None) -> list[LawFirmPortfolio]:
     except ImportError:  # pragma: no cover
         return []
 
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
+
+    from recupero._common import db_connect
 
     portfolios: list[LawFirmPortfolio] = []
     try:

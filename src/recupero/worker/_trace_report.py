@@ -45,6 +45,8 @@ _TEMPLATES_DIR = Path(__file__).parent.parent / "reports" / "templates"
 # Chain explorer prefixes — centralized in src/recupero/_common.py.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+)
+from recupero._common import (
     short_addr as _short_addr,
 )
 
@@ -205,8 +207,12 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
     # v0.17.10: canonical address keying for the destinations table
     # so base58 destinations on Solana / Tron / Bitcoin are counted
     # against their on-chain canonical case.
+    #
+    # RIGOR-2 (F841): removed `chain_str = case.chain.value` — the
+    # variable was assigned but never used after v0.20.2's per-row
+    # chain refactor below (line ~232 uses t.chain.value per
+    # transfer). Pre-cleanup it was dead code.
     from recupero._common import canonical_address_key as _ck
-    chain_str = case.chain.value
     seed = _ck(case.seed_address or "")
     by_addr: dict[str, dict[str, Any]] = {}
     for t in case.transfers or []:

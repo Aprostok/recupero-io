@@ -55,7 +55,9 @@ def init_sentry() -> bool:
 
     try:
         import sentry_sdk  # type: ignore[import-not-found]
-        from sentry_sdk.integrations.logging import LoggingIntegration  # type: ignore[import-not-found]
+        from sentry_sdk.integrations.logging import (
+            LoggingIntegration,  # type: ignore[import-not-found]
+        )
     except ImportError:
         log.warning(
             "SENTRY_DSN set but sentry-sdk not installed; "

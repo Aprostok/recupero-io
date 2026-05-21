@@ -15,11 +15,9 @@ Tests run in <50ms total, zero network, zero DB.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
-
-import pytest
 
 from recupero.worker.investigations_api import (
     _compute_duration_secs,
@@ -30,7 +28,6 @@ from recupero.worker.investigations_api import (
     _render_detail_row,
     _render_list_row,
 )
-
 
 # ---- _render_list_row ---- #
 
@@ -44,9 +41,9 @@ def _make_row(**overrides) -> dict:
         "seed_address": "0x" + "a" * 40,
         "label": "test-row",
         "triggered_by": "alec@recupero.io",
-        "triggered_at": datetime(2026, 5, 15, 15, 0, tzinfo=timezone.utc),
-        "claimed_at": datetime(2026, 5, 15, 15, 0, 0, tzinfo=timezone.utc),
-        "completed_at": datetime(2026, 5, 15, 15, 0, 12, tzinfo=timezone.utc),
+        "triggered_at": datetime(2026, 5, 15, 15, 0, tzinfo=UTC),
+        "claimed_at": datetime(2026, 5, 15, 15, 0, 0, tzinfo=UTC),
+        "completed_at": datetime(2026, 5, 15, 15, 0, 12, tzinfo=UTC),
         "failed_at": None,
         "max_depth": 2,
         "skip_editorial": True,
@@ -100,8 +97,8 @@ def test_list_row_null_datetimes_stay_null() -> None:
 def test_detail_row_has_duration_for_completed() -> None:
     """A completed row has duration_seconds = completed_at - claimed_at."""
     row = _make_row(
-        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 5, 15, 15, 0, 12, tzinfo=timezone.utc),
+        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 5, 15, 15, 0, 12, tzinfo=UTC),
     )
     out = _render_detail_row(row)
     assert out["duration_seconds"] == 12.0
@@ -110,9 +107,9 @@ def test_detail_row_has_duration_for_completed() -> None:
 def test_detail_row_has_duration_for_failed() -> None:
     """A failed row uses failed_at, not completed_at."""
     row = _make_row(
-        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=timezone.utc),
+        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=UTC),
         completed_at=None,
-        failed_at=datetime(2026, 5, 15, 15, 5, 8, tzinfo=timezone.utc),
+        failed_at=datetime(2026, 5, 15, 15, 5, 8, tzinfo=UTC),
         status="failed",
     )
     out = _render_detail_row(row)
@@ -130,7 +127,7 @@ def test_detail_row_pending_has_no_duration() -> None:
 def test_detail_row_running_has_no_duration() -> None:
     """A claimed-but-not-terminal row has duration=None."""
     row = _make_row(
-        claimed_at=datetime(2026, 5, 15, 15, 0, tzinfo=timezone.utc),
+        claimed_at=datetime(2026, 5, 15, 15, 0, tzinfo=UTC),
         completed_at=None, failed_at=None, status="tracing",
     )
     out = _render_detail_row(row)
@@ -145,7 +142,7 @@ def test_detail_row_carries_error_context_on_failure() -> None:
         error_stage="claim_validation_failed",
         error_message="ValidationError: incident_time is required",
         completed_at=None,
-        failed_at=datetime(2026, 5, 15, 15, 0, 10, tzinfo=timezone.utc),
+        failed_at=datetime(2026, 5, 15, 15, 0, 10, tzinfo=UTC),
     )
     out = _render_detail_row(row)
     assert out["error_stage"] == "claim_validation_failed"
@@ -219,9 +216,9 @@ def test_issuer_from_slug_no_hash_fallback() -> None:
 
 def test_duration_for_failed_uses_failed_at() -> None:
     row = _make_row(
-        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=timezone.utc),
+        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=UTC),
         completed_at=None,
-        failed_at=datetime(2026, 5, 15, 15, 1, 30, tzinfo=timezone.utc),
+        failed_at=datetime(2026, 5, 15, 15, 1, 30, tzinfo=UTC),
     )
     assert _compute_duration_secs(row) == 90.0
 
@@ -230,9 +227,9 @@ def test_duration_completed_overrides_failed() -> None:
     """If both completed_at and failed_at are set (shouldn't happen
     in practice but defensive), completed_at wins."""
     row = _make_row(
-        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 5, 15, 15, 0, 5, tzinfo=timezone.utc),
-        failed_at=datetime(2026, 5, 15, 15, 1, 0, tzinfo=timezone.utc),
+        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 5, 15, 15, 0, 5, tzinfo=UTC),
+        failed_at=datetime(2026, 5, 15, 15, 1, 0, tzinfo=UTC),
     )
     assert _compute_duration_secs(row) == 5.0
 
@@ -241,8 +238,8 @@ def test_duration_subsecond_precision() -> None:
     """Sub-second durations round to 2 decimals so the UI can show
     'completed in 0.12s'."""
     row = _make_row(
-        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=timezone.utc),
-        completed_at=datetime(2026, 5, 15, 15, 0, 0, 123456, tzinfo=timezone.utc),
+        claimed_at=datetime(2026, 5, 15, 15, 0, 0, tzinfo=UTC),
+        completed_at=datetime(2026, 5, 15, 15, 0, 0, 123456, tzinfo=UTC),
     )
     assert _compute_duration_secs(row) == 0.12
 

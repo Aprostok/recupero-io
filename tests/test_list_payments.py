@@ -11,11 +11,9 @@ canary verification at release time.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
-
-import pytest
 
 from recupero.ops.commands.list_payments import (
     _action_label,
@@ -26,7 +24,6 @@ from recupero.ops.commands.list_payments import (
 from recupero.worker.dashboard_summary import (
     _empty_payments,
 )
-
 
 # ---- _fmt_usd_cents ---- #
 
@@ -63,7 +60,7 @@ def test_fmt_usd_cents_non_usd_shows_currency() -> None:
 
 def test_fmt_datetime_aware() -> None:
     """A timezone-aware datetime renders in UTC."""
-    dt = datetime(2026, 5, 17, 14, 32, 0, tzinfo=timezone.utc)
+    dt = datetime(2026, 5, 17, 14, 32, 0, tzinfo=UTC)
     assert _fmt_datetime(dt) == "2026-05-17 14:32 UTC"
 
 
@@ -148,8 +145,8 @@ def _mk_payment_row(**overrides):
     """Sparse row from public.payments + joined cases."""
     base = {
         "id": uuid4(),
-        "received_at": datetime(2026, 5, 17, 14, 0, tzinfo=timezone.utc),
-        "processed_at": datetime(2026, 5, 17, 14, 0, 1, tzinfo=timezone.utc),
+        "received_at": datetime(2026, 5, 17, 14, 0, tzinfo=UTC),
+        "processed_at": datetime(2026, 5, 17, 14, 0, 1, tzinfo=UTC),
         "amount_type": "diagnostic",
         "amount_cents": 49900,
         "currency": "usd",

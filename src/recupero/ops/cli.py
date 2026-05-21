@@ -719,6 +719,7 @@ def cli() -> None:
 
     if args.command == "cooperation-dashboard":
         from pathlib import Path as _Path
+
         from recupero.reports.cooperation_dashboard import (
             render_cooperation_dashboard,
         )
@@ -739,9 +740,10 @@ def cli() -> None:
 
     if args.command == "law-firm-dashboard":
         from pathlib import Path as _Path
+
         from recupero.reports.law_firm_dashboard import (
-            render_law_firm_dashboard,
             render_all_law_firm_dashboards,
+            render_law_firm_dashboard,
         )
         out_dir = _Path(args.output_dir)
         # --firm and --all are mutually exclusive at the argparse layer
@@ -791,6 +793,7 @@ def cli() -> None:
 
     if args.command == "validate-output":
         from pathlib import Path as _Path
+
         from recupero.validators.output_integrity import validate_case_output
         case_dir = _Path(args.case_dir)
         result = validate_case_output(case_dir)
@@ -894,6 +897,7 @@ def cli() -> None:
 
     if args.command == "render-cluster":
         from pathlib import Path as _Path
+
         from recupero.reports.cluster_handoff import render_cluster_handoff
         out_dir = _Path(args.output_dir)
         out_path = render_cluster_handoff(

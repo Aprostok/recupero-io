@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 from recupero.token_risk.scorer import (
-    TokenRiskAssessment,
-    TokenRiskSignal,
     score_token,
 )
-
 
 # ---- Bytecode pattern detection ---- #
 

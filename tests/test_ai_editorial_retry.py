@@ -32,7 +32,6 @@ from recupero.reports.ai_editorial import (
     _call_messages_with_retry,
 )
 
-
 # ---- Synthetic exception types (mirror anthropic SDK shape) ---- #
 
 
@@ -140,12 +139,11 @@ def test_retry_attempts_count_matches_constant() -> None:
     attempts so adding a wait doesn't silently change the budget."""
     failures = [_FakeAPIStatusError(529) for _ in range(_ANTHROPIC_RETRY_MAX_ATTEMPTS)]
     client = _mk_client(failures)
-    with patch("recupero.reports.ai_editorial.time.sleep"):
-        with pytest.raises(_FakeAPIStatusError):
-            _call_messages_with_retry(
-                client=client, system_blocks=[], user_content_blocks=[],
-                transient_excs=(_FakeAPIStatusError,),
-            )
+    with patch("recupero.reports.ai_editorial.time.sleep"), pytest.raises(_FakeAPIStatusError):
+        _call_messages_with_retry(
+            client=client, system_blocks=[], user_content_blocks=[],
+            transient_excs=(_FakeAPIStatusError,),
+        )
     assert client.messages.create.call_count == _ANTHROPIC_RETRY_MAX_ATTEMPTS
 
 

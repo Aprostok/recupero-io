@@ -17,7 +17,6 @@ from unittest.mock import patch
 from uuid import UUID
 
 import httpx
-import pytest
 import respx
 
 from recupero.monitoring.dispatcher import (
@@ -30,7 +29,6 @@ from recupero.monitoring.dispatcher import (
     dispatch_email_alert,
 )
 from recupero.monitoring.poller import Subscription
-
 
 SUB_ID = UUID("22222222-2222-2222-2222-222222222222")
 CASE_ID = UUID("33333333-3333-3333-3333-333333333333")

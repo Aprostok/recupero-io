@@ -12,14 +12,12 @@ that must be present.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
-from recupero.models import Case, Chain, TokenRef, Transfer, Counterparty
+from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.reports.brief import InvestigatorInfo
 from recupero.reports.victim import VictimInfo
 from recupero.worker._engagement_letter import render_engagement_letter
@@ -30,13 +28,13 @@ def _make_case() -> Case:
         case_id="test-engagement",
         seed_address="0x" + "a" * 40,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=[Transfer(
             transfer_id="ethereum:0xtheft:0",
             chain=Chain.ethereum,
             tx_hash="0x" + "f" * 64,
             block_number=12345,
-            block_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            block_time=datetime(2026, 1, 2, tzinfo=UTC),
             from_address="0x" + "a" * 40,
             to_address="0x" + "b" * 40,
             counterparty=Counterparty(address="0x" + "b" * 40, label=None, is_contract=False),
@@ -46,11 +44,11 @@ def _make_case() -> Case:
             amount_decimal=Decimal("1"),
             usd_value_at_tx=Decimal("3000"),
             hop_depth=0,
-            fetched_at=datetime(2026, 1, 2, 0, 1, tzinfo=timezone.utc),
+            fetched_at=datetime(2026, 1, 2, 0, 1, tzinfo=UTC),
             explorer_url="https://etherscan.io/tx/0xtheft",
         )],
-        trace_started_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
-        trace_completed_at=datetime(2026, 1, 2, 0, 5, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 2, tzinfo=UTC),
+        trace_completed_at=datetime(2026, 1, 2, 0, 5, tzinfo=UTC),
         software_version="test",
     )
 

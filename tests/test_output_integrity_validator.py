@@ -24,7 +24,6 @@ from recupero.validators.output_integrity import (
     validate_case_output,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers: build small synthetic case directories
 # ─────────────────────────────────────────────────────────────────────────────
@@ -456,17 +455,17 @@ def test_unrendered_jinja_block_flagged(tmp_path):
 def v_cfi01_case_dir() -> Path:
     """Build the V-CFI01 case end-to-end via build_all_deliverables
     and return the case_dir path. Shared across the e2e tests."""
-    from tests.test_v_cfi01_production_path import (  # type: ignore
-        _build_v_cfi01_case,
-        _build_editorial,
-        _build_freeze_asks_dict,
-        _build_issuer_metadata,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo
     from recupero.reports.emit_brief import emit_brief
     from recupero.reports.victim import VictimInfo
     from recupero.worker._deliverables import build_all_deliverables
+    from tests.test_v_cfi01_production_path import (  # type: ignore
+        VICTIM,
+        _build_editorial,
+        _build_freeze_asks_dict,
+        _build_issuer_metadata,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     editorial = _build_editorial()

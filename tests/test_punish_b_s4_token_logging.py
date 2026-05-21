@@ -19,11 +19,8 @@ from __future__ import annotations
 
 import logging
 import re
-from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
-
-import pytest
-
+from unittest.mock import patch
+from uuid import UUID
 
 CASE_ID = UUID("11111111-1111-1111-1111-111111111111")
 INV_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -188,6 +185,7 @@ def test_dispatcher_notes_append_does_not_write_portal_url():
     — the URL must not land there. Source-level guard since the
     integration test requires a real DB."""
     import inspect
+
     from recupero.payments import dispatcher
     src = inspect.getsource(dispatcher.dispatch)
     # Locate the notes-append block (UPDATE public.payments SET notes).

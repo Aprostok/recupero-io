@@ -14,14 +14,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import re
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 _API_SECRET = "secret-test-token-xyz"
 _KEY_NAME = "tester"
@@ -386,7 +384,7 @@ def test_webhook_body_is_deterministic():
     with patch(
         "recupero.monitoring.dispatcher.datetime"
     ) as fake_dt:
-        from datetime import datetime, UTC
+        from datetime import UTC, datetime
         fake_dt.now.return_value = datetime(2026, 5, 20, 12, 0, 0, tzinfo=UTC)
         fake_dt.UTC = UTC
         body1 = build_webhook_body(p)
@@ -411,7 +409,8 @@ def test_webhook_signature_verifies():
     compute_signature returns. Partners doing their own HMAC must
     get a matching digest."""
     from recupero.monitoring.dispatcher import (
-        build_webhook_body, compute_signature,
+        build_webhook_body,
+        compute_signature,
     )
     body = build_webhook_body(_make_payload())
     secret = "very-secret-32-character-string!"

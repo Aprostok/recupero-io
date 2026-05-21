@@ -38,7 +38,7 @@ def test_diagnostic_fee_is_499_usd() -> None:
     """Diagnostic fee = $499. Changing this requires updating the
     Stripe diagnostic Payment Link in the Dashboard + every piece
     of customer-facing copy that references the $499 figure."""
-    assert DIAGNOSTIC_FEE_USD == Decimal("499")
+    assert Decimal("499") == DIAGNOSTIC_FEE_USD
     assert DIAGNOSTIC_FEE_CENTS == 49900
 
 
@@ -47,7 +47,7 @@ def test_engagement_fee_is_10000_usd() -> None:
     diagnostic). Changing this requires updating the Stripe
     engagement Payment Link in the Dashboard + the engagement
     letter copy + the Pay-Now banner copy."""
-    assert ENGAGEMENT_FEE_USD == Decimal("10000")
+    assert Decimal("10000") == ENGAGEMENT_FEE_USD
     assert ENGAGEMENT_FEE_CENTS == 1_000_000
 
 
@@ -70,8 +70,8 @@ def test_recoverable_floor_is_4x_engagement() -> None:
 def test_cents_match_usd() -> None:
     """The cents constants must equal int(usd * 100). Catches
     accidentally setting one without the other."""
-    assert DIAGNOSTIC_FEE_CENTS == int(DIAGNOSTIC_FEE_USD * 100)
-    assert ENGAGEMENT_FEE_CENTS == int(ENGAGEMENT_FEE_USD * 100)
+    assert int(DIAGNOSTIC_FEE_USD * 100) == DIAGNOSTIC_FEE_CENTS
+    assert int(ENGAGEMENT_FEE_USD * 100) == ENGAGEMENT_FEE_CENTS
 
 
 # ---- Formatters ---- #

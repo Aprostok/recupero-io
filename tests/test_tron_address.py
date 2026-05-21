@@ -27,7 +27,6 @@ from recupero.chains.tron.address import (
     normalize_tron_address,
 )
 
-
 # ---- hex_to_base58 ---- #
 
 

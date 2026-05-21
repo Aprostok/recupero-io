@@ -16,8 +16,6 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-import pytest
-
 # Load deploy_to_production.py as a module (it's not in src/ — it's a
 # script). Import via spec so test discovery finds it. The module
 # MUST be registered in sys.modules BEFORE exec_module so dataclass
@@ -209,7 +207,6 @@ def test_run_smoke_checks_handles_missing_script() -> None:
 
 def test_check_deployed_health_success() -> None:
     """A 200 response with a version field passes."""
-    import httpx
     from unittest.mock import MagicMock
 
     def _mock_get(url, timeout):

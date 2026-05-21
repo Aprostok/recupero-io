@@ -26,7 +26,6 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
-
 CASE_ID = UUID("11111111-1111-1111-1111-111111111111")
 TARGET = "0x" + "a" * 40
 OUTCOME_ID = UUID("22222222-2222-2222-2222-222222222222")
@@ -237,6 +236,7 @@ def test_endpoint_source_invokes_authorization_gate():
     `is_authorized_to_record_outcome` would silently re-open the
     vulnerability. Pin the call site at source level."""
     import inspect
+
     from recupero.api import app as app_mod
     src = inspect.getsource(app_mod.record_freeze_outcome_endpoint)
     assert "is_authorized_to_record_outcome" in src

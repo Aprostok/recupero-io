@@ -11,7 +11,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-
 # ---- Aggregator gating ---- #
 
 
@@ -102,6 +101,7 @@ def test_has_identifiable_victim_boosts_rank(monkeypatch) -> None:
     """The marketing-priority kicker: an event with a named victim
     must outrank an identical event without one (all else equal)."""
     from datetime import UTC, datetime
+
     from recupero.hack_tracker.aggregator import _rank_key
     from recupero.hack_tracker.models import (
         HackEvent,

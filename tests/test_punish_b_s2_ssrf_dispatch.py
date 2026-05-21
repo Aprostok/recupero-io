@@ -19,7 +19,6 @@ softening any assertion.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import patch
 from uuid import UUID
@@ -111,8 +110,8 @@ def test_dispatcher_rejects_blocked_url_without_posting(blocked_url):
 def test_dispatcher_allows_public_https_url():
     """Regression guard: real public URLs MUST still dispatch.
     The SSRF defense must not block legitimate webhooks."""
+
     from recupero.monitoring.dispatcher import dispatch_alert
-    import httpx
 
     payload = _make_payload()
     # Use respx-style mock by patching the Client.post to return 200.

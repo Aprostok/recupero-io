@@ -91,8 +91,8 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                 # CRITICAL): the payload exposes case counts, totals,
                 # and recent-error labels — operator-internal, not for
                 # public eyes.
-                import os as _os
                 import hmac
+                import os as _os
                 expected = _os.environ.get(
                     "RECUPERO_ADMIN_KEY", "",
                 ).strip()
@@ -146,8 +146,8 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                 self._respond(404, {"error": "not found"}, write_body=write_body)
 
         def _handle_investigations(self, *, write_body: bool) -> None:
-            import os as _os
             import hmac
+            import os as _os
             from urllib.parse import parse_qs, urlsplit
             from uuid import UUID
 
@@ -442,7 +442,7 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
                 from recupero.observability.metrics import metrics_endpoint_text
                 body = metrics_endpoint_text().encode("utf-8")
             except Exception as e:  # noqa: BLE001
-                body = f"# metrics renderer failed: {e}\n".encode("utf-8")
+                body = f"# metrics renderer failed: {e}\n".encode()
             self.send_response(200)
             self.send_header(
                 "Content-Type",

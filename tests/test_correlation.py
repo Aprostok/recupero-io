@@ -12,7 +12,7 @@ The DB I/O is mocked — these tests verify:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -33,7 +33,6 @@ from recupero.trace.correlation import (
     correlations_to_brief_section,
 )
 
-
 # ---- Fixtures ---- #
 
 
@@ -44,7 +43,7 @@ def _mk_label(addr: str, *, category: LabelCategory, name: str = "TestLabel") ->
         category=category,
         source="test",
         confidence="high",
-        added_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        added_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
@@ -57,7 +56,7 @@ def _mk_transfer(
     counterparty_label: Label | None = None,
     chain: Chain = Chain.ethereum,
 ) -> Transfer:
-    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, tzinfo=UTC)
     tx_hash = tx_hash or ("0x" + "1" * 64)
     return Transfer(
         transfer_id=f"{chain.value}:{tx_hash}:1",
@@ -89,9 +88,9 @@ def _mk_case(transfers: list[Transfer], seed: str = "0x" + "a" * 40) -> Case:
         case_id="test",
         seed_address=seed,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
         software_version="test",
         config_used={},
     )
@@ -390,6 +389,8 @@ def test_address_observation_is_frozen_dataclass() -> None:
         is_mixer_exposed=False,
         is_drainer_attributed=False,
     )
+    import dataclasses
+
     import pytest
-    with pytest.raises(Exception):  # frozen dataclass → FrozenInstanceError
+    with pytest.raises(dataclasses.FrozenInstanceError):
         obs.address = "0xdef"  # type: ignore[misc]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -25,7 +25,6 @@ from recupero.models import (
 )
 from recupero.pricing.coingecko import PriceResult
 
-
 VICTIM = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
 PERP_DORMANT_DAI = "0x3daFC6a860334d4feB0467a3D58C3687E9E921B6"
 PERP_DORMANT_DAI_2 = "0x415D8D075CAcB5A61Ae854A8e5ea53DF3A76F688"
@@ -47,7 +46,7 @@ def _make_transfer(from_addr: str, to_addr: str, usd: Decimal, tx_hash: str = "0
         chain=Chain.ethereum,
         tx_hash=tx_hash,
         block_number=23000000,
-        block_time=datetime(2025, 10, 9, tzinfo=timezone.utc),
+        block_time=datetime(2025, 10, 9, tzinfo=UTC),
         from_address=from_addr,
         to_address=to_addr,
         counterparty=Counterparty(address=to_addr, label=None, is_contract=False),
@@ -58,7 +57,7 @@ def _make_transfer(from_addr: str, to_addr: str, usd: Decimal, tx_hash: str = "0
         pricing_source="stablecoin_par",
         pricing_error=None,
         hop_depth=0,
-        fetched_at=datetime.now(timezone.utc),
+        fetched_at=datetime.now(UTC),
         explorer_url=f"https://etherscan.io/tx/{tx_hash}",
     )
 
@@ -68,9 +67,9 @@ def _make_case(transfers: list[Transfer]) -> Case:
         case_id="TEST",
         seed_address=VICTIM,
         chain=Chain.ethereum,
-        incident_time=datetime(2025, 10, 9, tzinfo=timezone.utc),
-        trace_started_at=datetime.now(timezone.utc),
-        trace_completed_at=datetime.now(timezone.utc),
+        incident_time=datetime(2025, 10, 9, tzinfo=UTC),
+        trace_started_at=datetime.now(UTC),
+        trace_completed_at=datetime.now(UTC),
         transfers=transfers,
     )
 
@@ -263,8 +262,8 @@ class TestNonEthereumChain:
         case = Case(
             case_id="TEST", seed_address="SOLADDR",
             chain=Chain.solana,
-            incident_time=datetime(2025, 10, 9, tzinfo=timezone.utc),
-            trace_started_at=datetime.now(timezone.utc),
+            incident_time=datetime(2025, 10, 9, tzinfo=UTC),
+            trace_started_at=datetime.now(UTC),
             transfers=[],
         )
         candidates = find_dormant_in_case(

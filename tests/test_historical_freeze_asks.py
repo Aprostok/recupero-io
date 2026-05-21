@@ -12,7 +12,7 @@ FreezeAsk records regardless of current balance.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from recupero.freeze.asks import (
@@ -27,7 +27,6 @@ from recupero.models import (
     TokenRef,
     Transfer,
 )
-
 
 # ---- Real mainnet contract addresses for the test fixtures ---- #
 
@@ -73,7 +72,7 @@ def _mk_transfer(
     tx_hash: str = "0x" + "1" * 64,
     block_time: datetime | None = None,
 ) -> Transfer:
-    block_time = block_time or datetime(2025, 10, 9, 0, 29, tzinfo=timezone.utc)
+    block_time = block_time or datetime(2025, 10, 9, 0, 29, tzinfo=UTC)
     return Transfer(
         transfer_id=f"ethereum:{tx_hash}:1",
         chain=Chain.ethereum,
@@ -100,9 +99,9 @@ def _mk_case(transfers: list[Transfer]) -> Case:
         case_id="V-CFI01-test",
         seed_address=VICTIM,
         chain=Chain.ethereum,
-        incident_time=datetime(2025, 10, 9, 0, 29, tzinfo=timezone.utc),
+        incident_time=datetime(2025, 10, 9, 0, 29, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 5, 18, tzinfo=timezone.utc),  # 7 months later
+        trace_started_at=datetime(2026, 5, 18, tzinfo=UTC),  # 7 months later
         software_version="test",
         config_used={},
     )
@@ -467,7 +466,7 @@ def test_short_summary_marks_historical_evidence() -> None:
 def test_freezeask_default_evidence_type_is_current_balance() -> None:
     """Backward compat: existing call sites that construct FreezeAsk
     without evidence_type get the previous 'current_balance' semantics."""
-    from recupero.freeze.asks import FreezeAsk, IssuerEntry
+    from recupero.freeze.asks import IssuerEntry
     issuer = IssuerEntry(
         chain=Chain.ethereum, contract=USDT_CONTRACT,
         symbol="USDT", issuer="Tether",

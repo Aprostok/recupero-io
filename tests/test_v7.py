@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from recupero.chains.evm.adapter import EvmAdapter, _profile_for
+from recupero.chains.evm.adapter import EvmAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Chain
 

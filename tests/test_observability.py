@@ -5,9 +5,6 @@ from __future__ import annotations
 import json
 import logging
 
-import pytest
-
-
 # ---- run_context + JSON formatter ---- #
 
 
@@ -106,7 +103,12 @@ def test_init_sentry_returns_false_when_sdk_missing(monkeypatch):
     import sys
 
     real_modules = sys.modules.copy()
-    sys.modules["sentry_sdk"] = None  # noqa: ignore[assignment]
+    # Setting a sys.modules entry to None is the documented way to
+    # simulate "module not importable" without uninstalling it — see
+    # https://docs.python.org/3/reference/import.html#submodules
+    # The annotation conflict (`sys.modules` value type is ModuleType
+    # not None) is intentional here; suppress mypy only.
+    sys.modules["sentry_sdk"] = None  # type: ignore[assignment]
     try:
         from recupero.observability.sentry import init_sentry
         result = init_sentry()
@@ -123,7 +125,10 @@ def test_init_sentry_returns_false_when_sdk_missing(monkeypatch):
 
 def test_metrics_endpoint_text_includes_recorded_counters():
     from recupero.observability.metrics import (
-        METRICS, metrics_endpoint_text, record_claim, record_stage_duration,
+        METRICS,
+        metrics_endpoint_text,
+        record_claim,
+        record_stage_duration,
     )
     # Reset state so the test is hermetic.
     METRICS.claims_total._values.clear()  # noqa: SLF001

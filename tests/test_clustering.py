@@ -11,14 +11,11 @@ clustering signal).
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-
-import pytest
 
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.trace.clustering import (
-    Cluster,
     cluster_addresses,
     clusters_to_brief_section,
 )
@@ -63,9 +60,9 @@ def _mk_case(transfers: list[Transfer], seed: str = "0x" + "a" * 40) -> Case:
         case_id="test",
         seed_address=seed,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
         software_version="test",
         config_used={},
     )
@@ -88,7 +85,7 @@ def test_single_transfer_no_cluster() -> None:
         _mk_transfer(
             from_addr="0x" + "a" * 40, to_addr="0x" + "b" * 40,
             usd=Decimal("10000"),
-            block_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            block_time=datetime(2026, 1, 1, tzinfo=UTC),
         ),
     ])
     clusters, unclustered = cluster_addresses(case)
@@ -104,7 +101,7 @@ def test_h1_common_funding_clusters_two_addresses() -> None:
     funder = "0x" + "f" * 40  # the perpetrator's funding wallet
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(
             from_addr=funder, to_addr=addr_a,
@@ -136,7 +133,7 @@ def test_h1_outside_window_no_cluster() -> None:
     funder = "0x" + "f" * 40
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(from_addr=funder, to_addr=addr_a,
                      usd=Decimal("10000"), block_time=t0),
@@ -153,7 +150,7 @@ def test_h1_three_addresses_same_funder_within_window() -> None:
     window → one cluster of three."""
     funder = "0x" + "f" * 40
     addrs = ["0x" + str(i) * 40 for i in range(1, 4)]
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(from_addr=funder, to_addr=addrs[0],
                      usd=Decimal("10000"), block_time=t0),
@@ -178,7 +175,7 @@ def test_h2_common_withdrawal_clusters() -> None:
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
     hub = "0x" + "h" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(from_addr=addr_a, to_addr=hub,
                      usd=Decimal("10000"), block_time=t0),
@@ -199,7 +196,7 @@ def test_h2_outside_window_no_cluster() -> None:
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
     hub = "0x" + "h" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(from_addr=addr_a, to_addr=hub,
                      usd=Decimal("10000"), block_time=t0),
@@ -225,7 +222,7 @@ def test_shared_infra_not_used_as_signal() -> None:
     shared funder is shared infrastructure."""
     cex = "0x" + "c" * 40
     addrs = ["0x" + f"{i:040x}" for i in range(10)]
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(
             from_addr=cex, to_addr=addr,
@@ -249,7 +246,7 @@ def test_below_minimum_usd_filtered() -> None:
     funder = "0x" + "f" * 40
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(from_addr=funder, to_addr=addr_a,
                      usd=Decimal("5"), block_time=t0),
@@ -273,7 +270,7 @@ def test_multiple_heuristics_combine_via_union_find() -> None:
     addr_b = "0x" + "2" * 40
     addr_c = "0x" + "3" * 40
     hub = "0x" + "h" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         # H1: funder funds A and B
         _mk_transfer(from_addr=funder, to_addr=addr_a,
@@ -303,7 +300,7 @@ def test_brief_section_shape() -> None:
     funder = "0x" + "f" * 40
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(from_addr=funder, to_addr=addr_a,
                      usd=Decimal("10000"), block_time=t0),
@@ -331,7 +328,7 @@ def test_brief_section_includes_balances_when_provided() -> None:
     funder = "0x" + "f" * 40
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
-    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     case = _mk_case([
         _mk_transfer(from_addr=funder, to_addr=addr_a,
                      usd=Decimal("10000"), block_time=t0),

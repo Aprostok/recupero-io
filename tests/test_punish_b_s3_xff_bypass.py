@@ -28,7 +28,7 @@ def client(monkeypatch):
     # Default to 1 trusted proxy hop — matches a typical Railway
     # deploy (one CDN/edge in front of the app).
     monkeypatch.setenv("RECUPERO_TRUSTED_PROXY_HOPS", "1")
-    from recupero.api.app import app, _intake_rl_state
+    from recupero.api.app import _intake_rl_state, app
     _intake_rl_state.clear()
     return TestClient(app)
 

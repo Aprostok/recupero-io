@@ -21,23 +21,19 @@ to ensure the templates work against actual data.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
-from recupero.models import Case, Chain, TokenRef, Transfer, Counterparty
+from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.reports.brief import InvestigatorInfo
 from recupero.reports.victim import VictimInfo
 from recupero.worker._victim_summary import (
-    _RECOVERABLE_FLOOR_USD,
     _parse_usd_string,
     classify_recovery_prospects,
     render_victim_summary,
 )
-
 
 # ---- classify_recovery_prospects ---- #
 
@@ -169,7 +165,7 @@ def _make_minimal_case(num_transfers: int = 3) -> Case:
             chain=Chain.ethereum,
             tx_hash="0x" + f"{i:064x}",
             block_number=12345 + i,
-            block_time=datetime(2026, 1, 2, i, 0, tzinfo=timezone.utc),
+            block_time=datetime(2026, 1, 2, i, 0, tzinfo=UTC),
             from_address="0x" + "1" * 40,
             to_address="0x" + f"{i+2:040x}",
             counterparty=Counterparty(
@@ -184,16 +180,16 @@ def _make_minimal_case(num_transfers: int = 3) -> Case:
             amount_decimal=Decimal(str(i + 1)),
             usd_value_at_tx=Decimal("3000") * (i + 1),
             hop_depth=0,
-            fetched_at=datetime(2026, 1, 2, 0, 1, tzinfo=timezone.utc),
+            fetched_at=datetime(2026, 1, 2, 0, 1, tzinfo=UTC),
             explorer_url=f"https://etherscan.io/tx/0x{i:064x}",
         ))
     return Case(
         case_id="test-case",
         seed_address="0x" + "1" * 40,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 2, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 2, tzinfo=UTC),
         software_version="test",
         config_used={"trace": {"max_depth": 3}},
     )

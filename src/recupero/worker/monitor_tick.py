@@ -62,15 +62,15 @@ Out of scope for v0.14.6
 
 from __future__ import annotations
 
-from recupero._common import db_connect
 import logging
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 
@@ -148,52 +148,69 @@ def run_monitor_tick(
         result.errors.append("psycopg not installed")
         return result
 
-    # PUNISH-B W-2: SELECT must use FOR UPDATE SKIP LOCKED so two
-    # overlapping cron instances don't both pull the same N rows
-    # and both dispatch the same webhook+email. The lock auto-
-    # releases at txn end. SKIP LOCKED lets the second cron move
-    # past contended rows rather than block — both ticks complete
-    # quickly with non-overlapping work.
+    # PUNISH-B W-2 + RIGOR-1: atomic claim via UPDATE-FROM-SELECT-FOR-
+    # UPDATE-SKIP-LOCKED-RETURNING. Pre-RIGOR-1 the SELECT carried
+    # FOR UPDATE SKIP LOCKED, but the row-lock was released as soon
+    # as the SELECT's transaction closed (just one statement later);
+    # dispatch + cursor UPDATE happened in subsequent SHORT
+    # transactions, by which time the lock was gone and a second
+    # cron instance could re-claim the same rows. The source-level
+    # guard ("FOR UPDATE SKIP LOCKED in source") was true; the race
+    # was not closed. tests/integration/test_real_concurrent_races.py
+    # caught it under 2-4 thread contention.
     #
-    # PUNISH-B W-3: the UPDATE filters status='active' AND
-    # case_id-stability so a partner DELETE-mid-poll (status →
-    # 'deleted') doesn't get its last_polled_at rewritten by a
-    # worker still finishing the in-flight tick. The dispatch
-    # itself already happened by then (the partner gets one
-    # stale alert at worst), but the cursor advance must not
-    # resurrect the deleted row for the next tick.
-    select_sql = """
-        SELECT
-            id, address, chain, trigger_type, threshold_usd,
-            webhook_url, webhook_secret, last_observed_tx_hash,
-            last_polled_at,
-            -- v0.21.0: multi-channel + case-linkage columns. The
-            -- COALESCE on alert_channels keeps pre-migration deploys
-            -- working (NULL → ['webhook']).
-            COALESCE(alert_channels, ARRAY['webhook']::TEXT[]) AS alert_channels,
-            alert_email,
-            case_id, investigation_id
-          FROM public.monitoring_subscriptions
-         WHERE status = 'active'
-           AND (expires_at IS NULL OR expires_at > NOW())
-         ORDER BY last_polled_at NULLS FIRST, created_at ASC
-         LIMIT %(cap)s
-         FOR UPDATE SKIP LOCKED;
+    # New shape: a single statement atomically locks, advances
+    # last_polled_at to NOW() (the "claim mark"), and RETURNs the
+    # claimed rows. A second concurrent cron sees those rows now
+    # have a recent last_polled_at and the WHERE filter
+    # (last_polled_at < NOW() - INTERVAL '30 seconds') excludes
+    # them. The 30-second claim TTL is the worker-death recovery
+    # window — if this tick crashes mid-dispatch, the next cron
+    # picks the row up after 30s.
+    #
+    # PUNISH-B W-3: the post-dispatch update_sql still filters
+    # status='active' so a partner DELETE-mid-poll (status →
+    # 'deleted') doesn't get its cursor rewritten. The
+    # test_real_concurrent_races.py W-3 test exercises this
+    # against real Postgres.
+    claim_sql = """
+        UPDATE public.monitoring_subscriptions s
+           SET last_polled_at = NOW()
+          FROM (
+            SELECT id FROM public.monitoring_subscriptions
+             WHERE status = 'active'
+               AND (expires_at IS NULL OR expires_at > NOW())
+               AND (last_polled_at IS NULL
+                    OR last_polled_at < NOW() - INTERVAL '30 seconds')
+             ORDER BY last_polled_at NULLS FIRST, created_at ASC
+             LIMIT %(cap)s
+             FOR UPDATE SKIP LOCKED
+          ) c
+         WHERE s.id = c.id
+        RETURNING
+            s.id, s.address, s.chain, s.trigger_type, s.threshold_usd,
+            s.webhook_url, s.webhook_secret, s.last_observed_tx_hash,
+            s.last_polled_at,
+            COALESCE(s.alert_channels, ARRAY['webhook']::TEXT[]) AS alert_channels,
+            s.alert_email,
+            s.case_id, s.investigation_id;
     """
+    # NOTE: last_polled_at is set by the claim above. The
+    # post-dispatch UPDATE only records the cursor + last_alerted_at.
+    # COALESCE on cursor: keep prior value when this tick produced
+    # no new cursor (no activities to evaluate).
     update_sql = """
         UPDATE public.monitoring_subscriptions
-           SET last_observed_tx_hash = %(cursor)s,
-               last_polled_at        = NOW(),
+           SET last_observed_tx_hash = COALESCE(%(cursor)s, last_observed_tx_hash),
                last_alerted_at       = COALESCE(%(alerted)s, last_alerted_at)
          WHERE id = %(id)s
            AND status = 'active';
     """
 
     try:
-        with db_connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute(select_sql, {"cap": cap})
-                rows = list(cur.fetchall())
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute(claim_sql, {"cap": cap})
+            rows = list(cur.fetchall())
     except Exception as exc:  # noqa: BLE001
         result.errors.append(f"subscription fetch failed: {exc}")
         return result
@@ -237,7 +254,7 @@ def run_monitor_tick(
                 result.alerts_fired += 1
                 if fired:
                     result.alerts_succeeded += 1
-                    last_alerted_at = datetime.now(timezone.utc)
+                    last_alerted_at = datetime.now(UTC)
                 else:
                     result.alerts_failed += 1
 
@@ -245,13 +262,12 @@ def run_monitor_tick(
             # when every alert dispatch failed — so the next tick
             # doesn't re-evaluate the same history.
             try:
-                with db_connect(dsn) as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(update_sql, {
-                            "cursor": new_cursor or None,
-                            "alerted": last_alerted_at,
-                            "id": sub_id,
-                        })
+                with db_connect(dsn) as conn, conn.cursor() as cur:
+                    cur.execute(update_sql, {
+                        "cursor": new_cursor or None,
+                        "alerted": last_alerted_at,
+                        "id": sub_id,
+                    })
             except Exception as upd_exc:  # noqa: BLE001
                 result.errors.append(
                     f"sub {sub_id} cursor update failed: {upd_exc}"

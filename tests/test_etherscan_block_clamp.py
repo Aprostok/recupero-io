@@ -26,7 +26,6 @@ don't need to mock httpx.
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import patch
 
 import pytest

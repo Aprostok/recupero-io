@@ -71,7 +71,6 @@ from uuid import UUID
 # via the worker module. Canonical definition lives in reports.brief.
 from recupero.reports.brief import BRIEF_SCHEMA_VERSION  # noqa: F401
 
-
 _CHAIN_GENESIS_TIMESTAMPS: dict[str, datetime] = {
     "ethereum":    datetime(2015, 7, 30, 15, 26, 13, tzinfo=UTC),
     "polygon":     datetime(2020, 5, 30,  6, 23, 35, tzinfo=UTC),
@@ -924,6 +923,7 @@ def _stage_emit_brief(
     # subscriber module guards every DB op so a Supabase outage
     # cannot break brief emission.
     import os as _os
+
     from recupero.reports.emit_brief import run_emit_brief
 
     run_emit_brief(

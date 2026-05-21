@@ -98,9 +98,17 @@ def check_brief_schema_version(brief: dict[str, Any]) -> str | None:
 # src/recupero/_common.py.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+)
+from recupero._common import (
     atomic_write_text,
+)
+from recupero._common import (
     canonical_address_key as _ck,
+)
+from recupero._common import (
     explorer_name_for_chain as _common_explorer_name_for_chain,
+)
+from recupero._common import (
     short_addr as _short_addr,
 )
 
@@ -1255,6 +1263,7 @@ def _fmt_decimal(d: Decimal | None) -> str:
 # "USD " prefix around the value, so the bare-format variant is
 # correct here. Fallback "(unknown)" preserves the prior contract.
 from recupero._pricing import fmt_usd_bare_or as _fmt_usd_bare_or
+
 
 def _fmt_usd(d: Decimal | None) -> str:
     return _fmt_usd_bare_or(d, fallback="(unknown)")

@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 from recupero.dormant.finder import DormantCandidate, TokenHolding
 from recupero.labels.store import LabelStore
@@ -151,7 +152,7 @@ class FreezeAsk:
     def short_summary(self) -> str:
         usd = f"${self.holding_usd_value:,.2f}" if self.holding_usd_value else "?"
         suffix = (
-            f" [HISTORICAL — observed in trace]"
+            " [HISTORICAL — observed in trace]"
             if self.evidence_type == "historical_inflow" else ""
         )
         return (
@@ -247,7 +248,7 @@ def synthesize_onward_cex_subpoenas(
     case: Case,
     *,
     upstream_freeze_target_addresses: set[str],
-    label_store: "LabelStore | None" = None,
+    label_store: LabelStore | None = None,
     min_flow_usd: Decimal = Decimal("1000"),
 ) -> list[OnwardCEXFlow]:
     """Detect flows from freeze-target addresses to CEX deposit

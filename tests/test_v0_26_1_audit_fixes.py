@@ -21,7 +21,6 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
-
 FIRM_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 FIRM_SLUG = "demo-firm"
 
@@ -131,19 +130,18 @@ def test_high2_render_all_does_not_double_build():
     conn.__enter__ = MagicMock(return_value=conn)
     conn.__exit__ = MagicMock(return_value=False)
 
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
 
-    with tempfile.TemporaryDirectory() as tmp:
-        with patch(
-            "recupero.monitoring.law_firm_dashboard.build_firm_portfolio",
-            side_effect=_fake_build,
-        ), patch(
-            "recupero._common.db_connect", return_value=conn,
-        ):
-            renderer.render_all_law_firm_dashboards(
-                output_dir=Path(tmp), dsn="postgres://x",
-            )
+    with tempfile.TemporaryDirectory() as tmp, patch(
+        "recupero.monitoring.law_firm_dashboard.build_firm_portfolio",
+        side_effect=_fake_build,
+    ), patch(
+        "recupero._common.db_connect", return_value=conn,
+    ):
+        renderer.render_all_law_firm_dashboards(
+            output_dir=Path(tmp), dsn="postgres://x",
+        )
 
     # Exactly 3 build calls (one per firm) — NOT 6 (the pre-fix bug).
     assert len(build_calls) == 3, (

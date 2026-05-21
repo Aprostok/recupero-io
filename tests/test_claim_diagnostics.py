@@ -28,10 +28,7 @@ Railway).
 from __future__ import annotations
 
 import logging
-import threading
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from recupero.worker.db import Investigation
 from recupero.worker.main import _try_claim

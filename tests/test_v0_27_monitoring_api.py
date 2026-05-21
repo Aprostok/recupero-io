@@ -14,10 +14,9 @@ from __future__ import annotations
 
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # created_by_for_api_key
@@ -26,7 +25,8 @@ import pytest
 
 def test_created_by_uses_api_prefix():
     from recupero.api.monitoring_api import (
-        API_CREATED_BY_PREFIX, created_by_for_api_key,
+        API_CREATED_BY_PREFIX,
+        created_by_for_api_key,
     )
     assert API_CREATED_BY_PREFIX == "api:"
     assert created_by_for_api_key("exchange-acme") == "api:exchange-acme"
@@ -50,7 +50,8 @@ def test_two_api_keys_get_distinct_created_by():
 
 def test_validate_rejects_empty_address():
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -64,7 +65,8 @@ def test_validate_rejects_empty_address():
 
 def test_validate_rejects_unknown_trigger():
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -79,7 +81,8 @@ def test_validate_rejects_unknown_trigger():
 
 def test_validate_requires_threshold_for_movement_above_usd():
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -94,7 +97,8 @@ def test_validate_requires_threshold_for_movement_above_usd():
 
 def test_validate_rejects_negative_threshold():
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -109,7 +113,8 @@ def test_validate_rejects_negative_threshold():
 
 def test_validate_rejects_non_http_webhook_url():
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -322,14 +327,16 @@ def test_subscription_record_to_json_safe_decimal_to_str():
 
 def test_bulk_screen_request_caps_at_100():
     """The Pydantic model enforces max 100 addresses per request."""
-    from recupero.api.app import BulkScreenRequest
     from pydantic import ValidationError
+
+    from recupero.api.app import BulkScreenRequest
     with pytest.raises(ValidationError):
         BulkScreenRequest(addresses=["0x" + "a" * 40] * 101)
 
 
 def test_bulk_screen_request_requires_at_least_one():
-    from recupero.api.app import BulkScreenRequest
     from pydantic import ValidationError
+
+    from recupero.api.app import BulkScreenRequest
     with pytest.raises(ValidationError):
         BulkScreenRequest(addresses=[])

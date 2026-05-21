@@ -14,10 +14,8 @@ hub) is exercised by the canary verification at release time.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-
-import pytest
 
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.trace.perpetrator_trace import (
@@ -26,7 +24,6 @@ from recupero.trace.perpetrator_trace import (
     is_pass2_enabled,
     merge_perpetrator_findings,
 )
-
 
 # ---- _parse_usd ---- #
 
@@ -82,7 +79,7 @@ def _mk_transfer(
 ) -> Transfer:
     """Build a valid Transfer with the v0.7+ Case model schema."""
     tx_hash = "0x" + tx_suffix * 64
-    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, tzinfo=UTC)
     return Transfer(
         transfer_id=f"{chain.value}:{tx_hash}:{block}",
         chain=chain,
@@ -110,9 +107,9 @@ def _mk_case(*, seed: str, transfers: list[Transfer]) -> Case:
         case_id="test",
         seed_address=seed,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
         software_version="test",
         config_used={},
     )

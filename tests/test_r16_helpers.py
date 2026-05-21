@@ -13,7 +13,6 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # _svg_to_pdf — atomic rename + cleanup contract  (R16-C MEDIUM)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,6 +101,7 @@ def test_svg_to_pdf_cleans_html_shell():
     up in the finally block even when the subprocess fails.
     """
     import glob
+
     from recupero.worker._deliverables import _svg_to_pdf
 
     with tempfile.TemporaryDirectory(prefix="svg_pdf_shell_") as tmpdir:

@@ -44,6 +44,8 @@ _TEMPLATES_DIR = Path(__file__).parent.parent / "reports" / "templates"
 # watchlist digests for those chains silently dropped explorer links.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _ADDRESS_EXPLORER_BY_CHAIN,
+)
+from recupero._common import (
     short_addr as _short_addr,
 )
 
@@ -108,6 +110,7 @@ def generate_daily_digest(
     try:
         import subprocess
         import sys
+
         # v0.17.7 (round-10 PDF/Output security HIGH): strip secrets
         # from the env handed to WeasyPrint. Same rationale as
         # worker._deliverables._subprocess_safe_env — render

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from recupero.models import (
@@ -17,7 +17,7 @@ from recupero.trace.policies import TracePolicy
 
 
 def _now() -> datetime:
-    return datetime(2025, 1, 15, tzinfo=timezone.utc)
+    return datetime(2025, 1, 15, tzinfo=UTC)
 
 
 def _transfer(usd: Decimal | None, label_cat: LabelCategory | None = None, hop_depth: int = 0) -> Transfer:

@@ -20,8 +20,6 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-import pytest
-
 from recupero.worker._pdf_links import (
     _AnchorExtractor,
     _build_address_to_url_map,

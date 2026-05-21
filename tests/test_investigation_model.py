@@ -28,7 +28,7 @@ in a wallet-trace shape. They run in <10ms and don't touch the DB.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -48,7 +48,7 @@ def _minimal_wallet_trace_row() -> dict:
         "case_id": None,
         "status": "pending",
         "triggered_by": "alec@recupero.io",
-        "triggered_at": datetime.now(timezone.utc),
+        "triggered_at": datetime.now(UTC),
         "worker_id": None,
         "claimed_at": None,
         "last_heartbeat_at": None,
@@ -93,7 +93,7 @@ def test_legacy_case_driven_row_still_validates() -> None:
     row = _minimal_wallet_trace_row()
     row.update({
         "case_id": uuid4(),
-        "incident_time": datetime(2024, 6, 15, 14, 30, tzinfo=timezone.utc),
+        "incident_time": datetime(2024, 6, 15, 14, 30, tzinfo=UTC),
         "skip_editorial": False,
         "skip_freeze_briefs": False,
     })

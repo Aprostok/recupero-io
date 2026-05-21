@@ -31,7 +31,6 @@ from recupero.payments.webhook import (
     verify_and_parse,
 )
 
-
 _SECRET = "whsec_test_secret"
 
 

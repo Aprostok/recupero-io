@@ -26,15 +26,13 @@ won't need this.
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import logging
 import os
 from uuid import UUID
 
-import psycopg
 from psycopg.rows import dict_row
 
+from recupero._common import db_connect
 from recupero.portal.tokens import generate_token, public_portal_url
 
 log = logging.getLogger(__name__)

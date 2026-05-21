@@ -37,7 +37,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-scoped fixture: run the full V-CFI01 pipeline ONCE.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -47,17 +46,18 @@ import pytest
 def artifacts() -> dict:
     """Build V-CFI01 end-to-end and return paths + parsed brief."""
     import tempfile
-    from tests.test_v_cfi01_production_path import (  # type: ignore
-        _build_v_cfi01_case,
-        _build_editorial,
-        _build_freeze_asks_dict,
-        _build_issuer_metadata,
-        VICTIM,
-    )
+
     from recupero.reports.brief import InvestigatorInfo
     from recupero.reports.emit_brief import emit_brief
     from recupero.reports.victim import VictimInfo
     from recupero.worker._deliverables import build_all_deliverables
+    from tests.test_v_cfi01_production_path import (  # type: ignore
+        VICTIM,
+        _build_editorial,
+        _build_freeze_asks_dict,
+        _build_issuer_metadata,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     editorial = _build_editorial()

@@ -24,18 +24,17 @@ from pathlib import Path
 
 import pytest
 
-from tests.test_v_cfi01_full_render import (
-    _build_editorial,
-    _build_freeze_asks_dict,
-    _build_issuer_metadata,
-    _build_v_cfi01_case,
-    VICTIM,
-)
 from recupero.reports.brief import InvestigatorInfo
 from recupero.reports.emit_brief import emit_brief
 from recupero.reports.victim import VictimInfo
 from recupero.worker._deliverables import build_all_deliverables
-
+from tests.test_v_cfi01_full_render import (
+    VICTIM,
+    _build_editorial,
+    _build_freeze_asks_dict,
+    _build_issuer_metadata,
+    _build_v_cfi01_case,
+)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-scoped fixture: run the full production path ONCE, share results
@@ -309,7 +308,6 @@ def test_prod_total_freezable_excludes_dai(production_run):
 
     R14-E MEDIUM: assert total freezable is < total loss (Sky DAI is excluded).
     """
-    from decimal import Decimal
     brief = production_run["brief_data"]
     total_loss = brief.get("TOTAL_LOSS_USD", "")
     total_freezable = brief.get("TOTAL_FREEZABLE_USD", "")
@@ -434,17 +432,17 @@ def test_all_issuers_fail_pipeline_still_writes_trace_report():
     from pathlib import Path
     from unittest.mock import patch
 
-    from tests.test_v_cfi01_full_render import (
-        _build_editorial,
-        _build_freeze_asks_dict,
-        _build_issuer_metadata,
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo
     from recupero.reports.emit_brief import emit_brief
     from recupero.reports.victim import VictimInfo
     from recupero.worker._deliverables import build_all_deliverables
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_editorial,
+        _build_freeze_asks_dict,
+        _build_issuer_metadata,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     editorial = _build_editorial()
@@ -555,6 +553,7 @@ def test_count_theft_events_single_event():
     """
     from decimal import Decimal
     from types import SimpleNamespace
+
     from recupero.reports.emit_brief import _count_theft_events
 
     victim = "0xvictim000000000000000000000000000000001"
@@ -574,6 +573,7 @@ def test_count_theft_events_multi_event():
     """_count_theft_events must return 6 for the V-CFI01-shape 6-drain case."""
     from decimal import Decimal
     from types import SimpleNamespace
+
     from recupero.reports.emit_brief import _count_theft_events
 
     victim = "0xvictim000000000000000000000000000000001"
@@ -602,6 +602,7 @@ def test_count_theft_events_includes_unpriced():
     """
     from decimal import Decimal
     from types import SimpleNamespace
+
     from recupero.reports.emit_brief import _count_theft_events
 
     victim = "0xvictim000000000000000000000000000000001"

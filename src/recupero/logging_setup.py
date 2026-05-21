@@ -32,15 +32,30 @@ from uuid import uuid4
 
 from rich.logging import RichHandler
 
-
 # v0.17.0: per-request context. Stores a dict of correlation fields
 # (investigation_id, case_id, stage, request_id) that the JSON
 # formatter merges into every log record emitted inside the context.
-# Async-safe via contextvars (each asyncio task / thread inherits a
-# copy on creation; mutations don't leak out).
-_LOG_CONTEXT: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar(
-    "_LOG_CONTEXT", default={},
+# Async-safe via contextvars: each asyncio task / thread sees its own
+# binding once `.set()` has been called inside that task.
+#
+# IMPORTANT: default is `None`, not `{}`. A mutable `{}` default is
+# SHARED across all contexts that never call `.set()` — anyone who
+# mutates the value (e.g., `ctx["foo"] = "bar"` instead of `dict(ctx)
+# | {"foo": "bar"}`) would leak the mutation everywhere. Using None
+# forces every caller through `current_log_context()`, which copies
+# defensively. Ruff B039 ("mutable contextvar default") catches this.
+_LOG_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "_LOG_CONTEXT", default=None,
 )
+
+
+def _current_raw_context() -> dict[str, Any]:
+    """Internal: read the contextvar, treating an unset/None binding
+    as an empty dict. Callers MUST NOT mutate the returned dict
+    in-place — use `dict(_current_raw_context())` if you need to
+    derive a new one."""
+    ctx = _LOG_CONTEXT.get()
+    return ctx if ctx is not None else {}
 
 
 @contextlib.contextmanager
@@ -58,7 +73,7 @@ def run_context(**fields: Any):
 
     A fresh `request_id` UUID is auto-generated when not provided.
     """
-    parent = _LOG_CONTEXT.get()
+    parent = _current_raw_context()
     merged = dict(parent)
     if "request_id" not in fields and "request_id" not in merged:
         merged["request_id"] = uuid4().hex[:12]
@@ -76,7 +91,7 @@ def current_log_context() -> dict[str, Any]:
     """Return a snapshot of the current log context. Used by Sentry
     integration to tag events without reaching into the contextvar
     directly."""
-    return dict(_LOG_CONTEXT.get())
+    return dict(_current_raw_context())
 
 
 class _ContextInjectingFilter(logging.Filter):
@@ -87,7 +102,7 @@ class _ContextInjectingFilter(logging.Filter):
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        ctx = _LOG_CONTEXT.get()
+        ctx = _current_raw_context()
         for k, v in ctx.items():
             if not hasattr(record, k):
                 setattr(record, k, v)

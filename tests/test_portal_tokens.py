@@ -16,9 +16,9 @@ against the canary.
 from __future__ import annotations
 
 import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 
@@ -29,7 +29,6 @@ from recupero.portal.tokens import (
     revoke_token,
     verify_token,
 )
-
 
 # ---- public_portal_url ---- #
 
@@ -114,7 +113,7 @@ def test_generate_token_returns_url_safe_token() -> None:
     assert all(c.isalnum() or c in "-_" for c in token)
     assert expires_at is not None
     # Expiry should be ~90 days out
-    delta = expires_at - datetime.now(timezone.utc)
+    delta = expires_at - datetime.now(UTC)
     assert timedelta(days=89) < delta <= timedelta(days=90)
 
 
@@ -190,7 +189,7 @@ def _mk_token_row(**overrides):
     base = {
         "token_id": uuid4(),
         "case_id": uuid4(),
-        "expires_at": datetime.now(timezone.utc) + timedelta(days=30),
+        "expires_at": datetime.now(UTC) + timedelta(days=30),
         "revoked_at": None,
         "label": None,
         "last_used_at": None,
@@ -285,7 +284,7 @@ def test_verify_token_rejects_revoked_token() -> None:
     """revoked_at IS NOT NULL → return None even if expires_at
     hasn't been reached. Operator's kill switch."""
     long_token = secrets.token_urlsafe(32)
-    row = _mk_token_row(revoked_at=datetime.now(timezone.utc))
+    row = _mk_token_row(revoked_at=datetime.now(UTC))
     with patch("recupero.portal.tokens.psycopg.connect") as mock_connect:
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = row
@@ -302,7 +301,7 @@ def test_verify_token_rejects_expired_token() -> None:
     """expires_at < now → return None. Even if the operator never
     revoked it, the customer should re-request a fresh link."""
     long_token = secrets.token_urlsafe(32)
-    row = _mk_token_row(expires_at=datetime.now(timezone.utc) - timedelta(days=1))
+    row = _mk_token_row(expires_at=datetime.now(UTC) - timedelta(days=1))
     with patch("recupero.portal.tokens.psycopg.connect") as mock_connect:
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = row
@@ -369,7 +368,7 @@ def test_verify_token_bumps_last_used_only_after_interval() -> None:
     matters under traffic — every portal page load would
     otherwise rewrite the row."""
     long_token = secrets.token_urlsafe(32)
-    fresh_bump = datetime.now(timezone.utc) - timedelta(minutes=5)
+    fresh_bump = datetime.now(UTC) - timedelta(minutes=5)
     row = _mk_token_row(last_used_at=fresh_bump)
     inv = _mk_inv_row()
     with patch("recupero.portal.tokens.psycopg.connect") as mock_connect:

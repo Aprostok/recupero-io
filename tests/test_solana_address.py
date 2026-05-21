@@ -22,7 +22,6 @@ from recupero.chains.solana.address import (
     normalize_solana_address,
 )
 
-
 USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 WSOL_MINT = "So11111111111111111111111111111111111111112"
 JITOSOL_MINT = "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"

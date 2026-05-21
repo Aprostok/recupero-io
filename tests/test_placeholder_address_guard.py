@@ -17,10 +17,7 @@ Tests run in <50ms total, no DB / no network.
 
 from __future__ import annotations
 
-import pytest
-
 from recupero.worker.pipeline import _is_obvious_placeholder_address
-
 
 # ---- known placeholder patterns ---- #
 

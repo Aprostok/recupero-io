@@ -7,16 +7,12 @@ core orchestration logic without hitting any network.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
-
 from recupero.monitoring.poller import (
     ObservedActivity,
-    Subscription,
 )
 from recupero.worker.monitor_tick import (
     MonitorTickResult,
@@ -302,6 +298,7 @@ def test_main_returns_1_when_no_dsn() -> None:
     """`recupero-worker --monitor-tick` without SUPABASE_DB_URL set
     must exit 1 (cron alerts on non-zero)."""
     import os
+
     from recupero.worker.monitor_tick import main
     original = os.environ.pop("SUPABASE_DB_URL", None)
     try:

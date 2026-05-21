@@ -12,7 +12,6 @@ Covers:
 
 from __future__ import annotations
 
-import os
 from unittest.mock import patch
 from uuid import UUID
 
@@ -24,7 +23,6 @@ from recupero.portal.intake import (
     IntakeValidationError,
     validate_intake_payload,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # validate_intake_payload — pure function

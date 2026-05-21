@@ -398,10 +398,9 @@ async def record_freeze_outcome_endpoint(
       * 422 — invalid outcome_type (Pydantic + recorder validation)
       * 503 — DB unavailable
     """
+    import os
     from decimal import Decimal
     from uuid import UUID
-
-    import os
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
     if not dsn:
         raise HTTPException(
@@ -444,8 +443,8 @@ async def record_freeze_outcome_endpoint(
 
     try:
         from recupero.freeze_learning.recorder import (
-            LetterNotFoundError,
             VALID_OUTCOME_TYPES,
+            LetterNotFoundError,
             record_outcome_by_target,
         )
     except ImportError as e:
@@ -648,8 +647,10 @@ async def monitor_subscribe_endpoint(
     """
     import os
     from decimal import Decimal
+
     from recupero.api.monitoring_api import (
-        MonitoringApiError, create_subscription,
+        MonitoringApiError,
+        create_subscription,
     )
 
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
@@ -714,8 +715,10 @@ async def monitor_list_endpoint(
     way to see another key's subscriptions through this endpoint.
     """
     import os
+
     from recupero.api.monitoring_api import (
-        MonitoringDbError, list_subscriptions,
+        MonitoringDbError,
+        list_subscriptions,
     )
 
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
@@ -759,8 +762,10 @@ async def monitor_get_endpoint(
     a 403 would leak the existence of the row to a probing attacker)."""
     import os
     from uuid import UUID as _UUID
+
     from recupero.api.monitoring_api import (
-        MonitoringDbError, get_subscription,
+        MonitoringDbError,
+        get_subscription,
     )
 
     try:
@@ -812,8 +817,10 @@ async def monitor_delete_endpoint(
     behavior as get, deliberately, to avoid leaking existence."""
     import os
     from uuid import UUID as _UUID
+
     from recupero.api.monitoring_api import (
-        MonitoringDbError, soft_delete_subscription,
+        MonitoringDbError,
+        soft_delete_subscription,
     )
 
     try:
@@ -1034,6 +1041,7 @@ def _render_intake_html(
     template path and the test suite can render the form directly.
     """
     from pathlib import Path
+
     from jinja2 import Environment, FileSystemLoader, select_autoescape
 
     templates_dir = (
@@ -1093,14 +1101,15 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
     pre-payment intake.
     """
     import os
+
+    from recupero.payments.payment_links import (
+        PaymentLinkConfigError,
+        build_diagnostic_link,
+    )
     from recupero.portal.intake import (
         IntakeValidationError,
         create_case_from_intake,
         validate_intake_payload,
-    )
-    from recupero.payments.payment_links import (
-        PaymentLinkConfigError,
-        build_diagnostic_link,
     )
 
     # v0.25.1 (CRIT D-1): rate-limit by client IP BEFORE touching the
@@ -1213,6 +1222,7 @@ def main() -> None:  # pragma: no cover
     """``recupero-api`` console-script entry. Runs the app via
     uvicorn on host/port from env vars."""
     import os
+
     import uvicorn
     host = os.environ.get("RECUPERO_API_HOST", "0.0.0.0")
     port = int(os.environ.get("RECUPERO_API_PORT", "8000"))

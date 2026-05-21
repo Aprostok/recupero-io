@@ -49,13 +49,15 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from recupero._common import canonical_address_key as _ck
+
 # v0.17.5 (round-10 forensic HIGH): canonical address keying.
 # EVM → lower, base58 → preserve case. Pre-v0.17.5 every site here
 # called ``addr.lower()`` directly, mangling Solana / Tron / Bitcoin
 # entries written into address_observations. A correlation lookup
 # from a future case that pastes the canonical mixed-case form
 # would miss every prior sighting.
-from recupero._common import db_connect, canonical_address_key as _ck
+from recupero._common import db_connect
 
 if TYPE_CHECKING:  # pragma: no cover
     from recupero.models import Case
@@ -488,13 +490,12 @@ def lookup_correlations(
          LIMIT 10000;
     """
     try:
-        with db_connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, {
-                    "addresses": queries,
-                    "exclude_case": exclude_case_id,
-                })
-                rows = cur.fetchall()
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute(sql, {
+                "addresses": queries,
+                "exclude_case": exclude_case_id,
+            })
+            rows = cur.fetchall()
     except Exception as exc:  # noqa: BLE001
         log.warning("correlation lookup failed: %s", exc)
         return {}

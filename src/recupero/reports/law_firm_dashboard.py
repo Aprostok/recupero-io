@@ -185,8 +185,9 @@ def render_all_law_firm_dashboards(
     except ImportError:  # pragma: no cover
         return []
 
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
+
+    from recupero._common import db_connect
 
     try:
         with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:

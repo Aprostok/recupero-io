@@ -25,15 +25,14 @@ from pathlib import Path
 
 import pytest
 
-
 # Reuse the heavy fixture builder from the existing production-path test.
 # This module is symlinked / colocated so the import works.
 from tests.test_v_cfi01_production_path import (  # type: ignore[import-not-found]
-    _build_v_cfi01_case,
+    VICTIM,
     _build_editorial,
     _build_freeze_asks_dict,
     _build_issuer_metadata,
-    VICTIM,
+    _build_v_cfi01_case,
 )
 
 
@@ -159,13 +158,12 @@ def test_le_handoff_content_matches_filename(deliverables_dir):
     for slug, path in files.items():
         content = path.read_text(encoding="utf-8")
         markers = _ISSUER_MARKERS.get(slug, [])
-        negatives = _ISSUER_NEGATIVE_MARKERS.get(slug, [])
-        # The LE handoff content mentions every issuer in Section 4.2
-        # (all_issuers_freezable inventory). So we CANNOT use negative
-        # checks the same way as the freeze letter. Instead: just
-        # verify the NAMED issuer appears prominently (in title, in
-        # "Asset Issuer: " line, or compliance email if present).
-        # Positive check is sufficient.
+        # RIGOR-2 (F841): removed `negatives` lookup — Section 4.2 of
+        # the LE handoff legitimately mentions every issuer in the
+        # all_issuers_freezable inventory, so negative-marker
+        # exclusion (which works on freeze_request letters) is wrong
+        # here. Positive marker check is the right discipline. Pre-
+        # cleanup the variable was assigned but never used.
         for m in markers:
             if m not in content:
                 failures.append(

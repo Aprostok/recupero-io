@@ -13,7 +13,6 @@ import importlib
 
 import pytest
 
-
 # ---- Orphan-module CLI registration ---- #
 
 
@@ -27,6 +26,7 @@ def test_ops_cli_has_command(command: str) -> None:
     If `recupero-ops --help` doesn't list it, the operator can't
     invoke it from the CLI even though the underlying code exists."""
     import argparse
+
     from recupero.ops.cli import cli
 
     # Patch parse_args to a no-op so cli() returns without invoking
@@ -96,6 +96,7 @@ def test_recovery_scorer_accepts_auto_load_priors_flag() -> None:
     the brief assembler can opt into DB-backed learned priors without
     explicitly calling load_learned_priors()."""
     import inspect
+
     from recupero.recovery.scorer import score_recovery
     sig = inspect.signature(score_recovery)
     assert "auto_load_priors" in sig.parameters
@@ -106,6 +107,7 @@ def test_recovery_scorer_default_auto_load_is_true() -> None:
     """auto_load_priors should default True so callers get the
     learning behavior without having to think about it."""
     import inspect
+
     from recupero.recovery.scorer import score_recovery
     sig = inspect.signature(score_recovery)
     assert sig.parameters["auto_load_priors"].default is True
@@ -115,6 +117,7 @@ def test_recovery_scorer_handles_no_dsn_gracefully() -> None:
     """If SUPABASE_DB_URL is unset, auto_load_priors must NOT raise.
     The scorer should fall back to heuristic priors silently."""
     import os
+
     from recupero.recovery.scorer import score_recovery
 
     # Temporarily unset the DSN to simulate a fresh CLI user.

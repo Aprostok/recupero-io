@@ -24,7 +24,7 @@ Test runs in ~50ms; uses a tempdir, no DB or network.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -40,13 +40,13 @@ def _make_empty_case() -> Case:
         case_id="test-empty-trace",
         seed_address="0x" + "a" * 40,
         chain=Chain.ethereum,
-        incident_time=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2024, 1, 1, tzinfo=UTC),
         transfers=[],
         exchange_endpoints=[],
         unlabeled_counterparties=[],
         software_version="test",
-        trace_started_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
-        trace_completed_at=datetime(2024, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2024, 1, 1, tzinfo=UTC),
+        trace_completed_at=datetime(2024, 1, 1, tzinfo=UTC),
     )
 
 

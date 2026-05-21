@@ -28,13 +28,13 @@ through to the rendered output.
 
 from __future__ import annotations
 
+from datetime import UTC
 from decimal import Decimal
 
 from recupero.reports.emit_brief import (
     _compute_perpetrator_holdings,
     _compute_totals,
 )
-
 
 # ---- _compute_perpetrator_holdings ---- #
 
@@ -180,15 +180,16 @@ def test_perpetrator_holdings_unrecoverable_amount_extraction() -> None:
 
 def _stub_case():
     """Build a minimal Case stub for _compute_totals."""
+    from datetime import datetime
+
     from recupero.models import Case, Chain
-    from datetime import datetime, timezone
     return Case(
         case_id="test-case",
         seed_address="0x" + "a" * 40,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=[],
-        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
         software_version="test",
         config_used={},
     )

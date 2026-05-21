@@ -19,12 +19,10 @@ from __future__ import annotations
 
 import subprocess
 import sys
-from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CRIT-1 — SSRF defense
@@ -54,7 +52,8 @@ import pytest
 ])
 def test_crit1_blocked_webhook_urls_rejected(url):
     from recupero.api.monitoring_api import (
-        MonitoringApiError, assert_webhook_url_safe,
+        MonitoringApiError,
+        assert_webhook_url_safe,
     )
     with pytest.raises(MonitoringApiError) as exc:
         assert_webhook_url_safe(url)
@@ -74,7 +73,8 @@ def test_crit1_ssrf_check_invoked_from_subscription_validator():
     """Validation chain MUST run assert_webhook_url_safe — not only
     the regex match (which the audit found accepts loopback)."""
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -94,8 +94,9 @@ def test_crit1_ssrf_check_invoked_from_subscription_validator():
 def test_crit2_bulk_screen_rejects_oversized_address():
     """A single 129-char element should fail validation. Otherwise
     a partner could POST 100 × 16MB strings as a memory DoS."""
-    from recupero.api.app import BulkScreenRequest
     from pydantic import ValidationError
+
+    from recupero.api.app import BulkScreenRequest
     huge = "0x" + "a" * 200  # 202 chars > 128 cap
     with pytest.raises(ValidationError):
         BulkScreenRequest(addresses=["0x" + "b" * 40, huge])
@@ -103,8 +104,9 @@ def test_crit2_bulk_screen_rejects_oversized_address():
 
 def test_crit2_bulk_screen_rejects_empty_string_element():
     """Empty strings in the list must fail validation."""
-    from recupero.api.app import BulkScreenRequest
     from pydantic import ValidationError
+
+    from recupero.api.app import BulkScreenRequest
     with pytest.raises(ValidationError):
         BulkScreenRequest(addresses=["0x" + "a" * 40, ""])
 
@@ -126,6 +128,7 @@ def test_crit3_bulk_screen_source_catches_broad_exception():
     doesn't 500 the whole batch (contract documented in the
     docstring at v0.27.0)."""
     import inspect
+
     from recupero.api import app as app_mod
     src = inspect.getsource(app_mod.screen_bulk_endpoint)
     # Must have a `except Exception` clause (not only TypeError /
@@ -142,7 +145,8 @@ def test_crit3_bulk_screen_source_catches_broad_exception():
 
 def test_high1_short_webhook_secret_rejected():
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -158,7 +162,8 @@ def test_high1_empty_webhook_secret_rejected():
     """Empty-string secret is the silent-downgrade bug from the
     audit — must fail validation."""
     from recupero.api.monitoring_api import (
-        MonitoringApiError, _validate_subscription_input,
+        MonitoringApiError,
+        _validate_subscription_input,
     )
     with pytest.raises(MonitoringApiError) as exc:
         _validate_subscription_input(
@@ -268,7 +273,8 @@ def test_high5_list_subscriptions_raises_on_db_error():
     the API layer surfaces this as 503. Pre-fix code returned []
     and the partner saw "no subscriptions" which is misleading."""
     from recupero.api.monitoring_api import (
-        MonitoringDbError, list_subscriptions,
+        MonitoringDbError,
+        list_subscriptions,
     )
 
     def _boom(*a, **kw):
@@ -287,7 +293,8 @@ def test_high5_soft_delete_raises_on_db_error():
     surface as a misleading 404). Must raise so the API returns 503
     with retry semantics."""
     from recupero.api.monitoring_api import (
-        MonitoringDbError, soft_delete_subscription,
+        MonitoringDbError,
+        soft_delete_subscription,
     )
 
     def _boom(*a, **kw):
@@ -305,7 +312,8 @@ def test_high5_soft_delete_raises_on_db_error():
 def test_high5_get_subscription_raises_on_db_error():
     """Same contract for get."""
     from recupero.api.monitoring_api import (
-        MonitoringDbError, get_subscription,
+        MonitoringDbError,
+        get_subscription,
     )
 
     def _boom(*a, **kw):

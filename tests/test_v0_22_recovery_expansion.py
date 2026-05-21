@@ -14,12 +14,7 @@ Covers:
 from __future__ import annotations
 
 import tempfile
-from decimal import Decimal
 from pathlib import Path
-from uuid import uuid4
-
-import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Scorer per_issuer + IssuerRecoveryRow
@@ -29,7 +24,7 @@ import pytest
 def test_score_recovery_populates_per_issuer_breakdown():
     """v0.22.0: every freezable entry in the brief produces an
     IssuerRecoveryRow on the returned RecoveryEstimate."""
-    from recupero.recovery.scorer import score_recovery, IssuerRecoveryRow
+    from recupero.recovery.scorer import IssuerRecoveryRow, score_recovery
 
     brief = {
         "TOTAL_LOSS_USD": "$3,000,000",
@@ -60,8 +55,8 @@ def test_score_recovery_per_issuer_marks_learned_vs_heuristic():
     "industry heuristic" annotation — material to the defensibility
     of the recovery number.
     """
-    from recupero.recovery.scorer import score_recovery
     from recupero.freeze_learning.recorder import IssuerPrior
+    from recupero.recovery.scorer import score_recovery
 
     learned = {
         "Tether": IssuerPrior(
@@ -119,9 +114,9 @@ def test_score_recovery_to_json_safe_includes_per_issuer():
 def _v_cfi01_le_render(*, recovery_estimate=None):
     """Render the LE handoff on the V-CFI01 fixture with a given
     recovery_estimate dict."""
-    from tests.test_v_cfi01_full_render import _build_v_cfi01_case, VICTIM
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import VICTIM, _build_v_cfi01_case
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(

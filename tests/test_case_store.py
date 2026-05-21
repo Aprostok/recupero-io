@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
@@ -22,7 +22,7 @@ from recupero.storage.case_store import CaseStore
 
 
 def _now() -> datetime:
-    return datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+    return datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC)
 
 
 def _sample_case() -> Case:

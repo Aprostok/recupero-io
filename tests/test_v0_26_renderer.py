@@ -10,10 +10,8 @@ expected stats / sections.
 from __future__ import annotations
 
 from decimal import Decimal
-from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID
-
 
 FIRM_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 FIRM_SLUG = "demo-firm"
@@ -23,7 +21,8 @@ def _make_portfolio_confident():
     """A portfolio with full confidence — throughput card unlocks,
     every issuer enriched with cooperation rates."""
     from recupero.monitoring.law_firm_dashboard import (
-        FirmIssuerSummary, LawFirmPortfolio,
+        FirmIssuerSummary,
+        LawFirmPortfolio,
     )
     return LawFirmPortfolio(
         firm_id=FIRM_ID,

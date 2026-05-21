@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
 from recupero.models import (
-    Case, Chain, Counterparty, Label, LabelCategory, TokenRef, Transfer,
+    Case,
+    Chain,
+    Counterparty,
+    Label,
+    LabelCategory,
+    TokenRef,
+    Transfer,
 )
 from recupero.reports.brief import (
-    InvestigatorInfo, IssuerInfo, MIDAS_ISSUER, generate_briefs,
-    _build_hops, _find_theft_transfer,
+    InvestigatorInfo,
+    IssuerInfo,
+    _build_hops,
+    _find_theft_transfer,
+    generate_briefs,
 )
 from recupero.reports.victim import VictimInfo, load_victim, write_victim
-
 
 VICTIM = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
 PERP1 = "0xF4bE227b268e191b79097Daad0AcCcD9a7A7FAD2"
@@ -23,7 +31,7 @@ TOKEN_CONTRACT = "0x2fE058CcF29f123f9dd2aEC0418AA66a877d8E50"
 
 
 def _now():
-    return datetime(2025, 10, 9, 1, 13, 47, tzinfo=timezone.utc)
+    return datetime(2025, 10, 9, 1, 13, 47, tzinfo=UTC)
 
 
 def _msyrup() -> TokenRef:
@@ -47,7 +55,7 @@ def _transfer(
     return Transfer(
         transfer_id=f"ethereum:{tx_hash}:0",
         chain=Chain.ethereum, tx_hash=tx_hash, block_number=block,
-        block_time=datetime.fromtimestamp(1759972427 + block, tz=timezone.utc),
+        block_time=datetime.fromtimestamp(1759972427 + block, tz=UTC),
         from_address=from_addr, to_address=to_addr,
         counterparty=Counterparty(address=to_addr, label=label, is_contract=False),
         token=_msyrup(),
@@ -155,10 +163,15 @@ class TestBriefHelpers:
         from datetime import UTC, datetime
         from decimal import Decimal
         from uuid import uuid4
-        from recupero.reports.brief import _build_hop_tree
+
         from recupero.models import (
-            Case, Chain, Counterparty, TokenRef, Transfer,
+            Case,
+            Chain,
+            Counterparty,
+            TokenRef,
+            Transfer,
         )
+        from recupero.reports.brief import _build_hop_tree
 
         token = TokenRef(
             chain=Chain.ethereum,

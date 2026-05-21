@@ -16,10 +16,8 @@ outbound-from-victim transfers exist, and the backward-compat
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-
-import pytest
 
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.reports.brief import (
@@ -68,9 +66,9 @@ def _case(transfers: list[Transfer], seed: str = "0x" + "a" * 40) -> Case:
         case_id="multi-event-test",
         seed_address=seed,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 2, tzinfo=UTC),
         software_version="test",
     )
 
@@ -87,7 +85,7 @@ def test_single_event_returned_as_primary_only() -> None:
         tx_hash="0x" + "1" * 64,
         from_addr=victim, to_addr=perp,
         amount=Decimal("10"), usd=Decimal("30000"),
-        block_time=datetime(2026, 1, 5, tzinfo=timezone.utc),
+        block_time=datetime(2026, 1, 5, tzinfo=UTC),
     )]
     events = _find_theft_events(_case(transfers, seed=victim))
     assert len(events) == 1
@@ -102,10 +100,10 @@ def test_find_theft_transfer_backward_compat() -> None:
     transfers = [
         _xfer(tx_hash="0x" + "1" * 64, from_addr=victim, to_addr=perp,
               amount=Decimal("1"), usd=Decimal("3000"),
-              block_time=datetime(2026, 1, 5, tzinfo=timezone.utc)),
+              block_time=datetime(2026, 1, 5, tzinfo=UTC)),
         _xfer(tx_hash="0x" + "2" * 64, from_addr=victim, to_addr=perp,
               amount=Decimal("10"), usd=Decimal("30000"),
-              block_time=datetime(2026, 1, 6, tzinfo=timezone.utc)),
+              block_time=datetime(2026, 1, 6, tzinfo=UTC)),
     ]
     primary = _find_theft_transfer(_case(transfers, seed=victim))
     assert primary is not None
@@ -120,7 +118,7 @@ def test_multi_event_within_window_clustered() -> None:
     """Three drain events within a 7-day window all return."""
     victim = "0x" + "a" * 40
     perp = "0x" + "b" * 40
-    base_time = datetime(2026, 1, 5, tzinfo=timezone.utc)
+    base_time = datetime(2026, 1, 5, tzinfo=UTC)
     transfers = [
         # Day 1: $10k
         _xfer(tx_hash="0x" + "1" * 64, from_addr=victim, to_addr=perp,
@@ -146,7 +144,7 @@ def test_event_outside_window_excluded() -> None:
     7-day window and excluded from the cluster."""
     victim = "0x" + "a" * 40
     perp = "0x" + "b" * 40
-    base_time = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    base_time = datetime(2026, 2, 1, tzinfo=UTC)
     transfers = [
         # 30 days before — OUTSIDE the 7-day default window
         _xfer(tx_hash="0x" + "1" * 64, from_addr=victim, to_addr=perp,
@@ -172,7 +170,7 @@ def test_custom_window_includes_more_events() -> None:
     """A 30-day window catches the older event."""
     victim = "0x" + "a" * 40
     perp = "0x" + "b" * 40
-    base_time = datetime(2026, 2, 1, tzinfo=timezone.utc)
+    base_time = datetime(2026, 2, 1, tzinfo=UTC)
     transfers = [
         _xfer(tx_hash="0x" + "1" * 64, from_addr=victim, to_addr=perp,
               amount=Decimal("100"), usd=Decimal("300000"),
@@ -210,7 +208,7 @@ def test_no_outbound_from_victim_falls_back_to_all() -> None:
     transfers = [
         _xfer(tx_hash="0x" + "1" * 64, from_addr=other_a, to_addr=other_b,
               amount=Decimal("10"), usd=Decimal("30000"),
-              block_time=datetime(2026, 1, 5, tzinfo=timezone.utc)),
+              block_time=datetime(2026, 1, 5, tzinfo=UTC)),
     ]
     # seed_address doesn't appear as from_address in any transfer
     events = _find_theft_events(_case(transfers, seed="0x" + "a" * 40))
@@ -226,10 +224,10 @@ def test_no_usd_pricing_falls_back_to_amount() -> None:
     transfers = [
         _xfer(tx_hash="0x" + "1" * 64, from_addr=victim, to_addr=perp,
               amount=Decimal("5"), usd=None,
-              block_time=datetime(2026, 1, 5, tzinfo=timezone.utc)),
+              block_time=datetime(2026, 1, 5, tzinfo=UTC)),
         _xfer(tx_hash="0x" + "2" * 64, from_addr=victim, to_addr=perp,
               amount=Decimal("20"), usd=None,
-              block_time=datetime(2026, 1, 6, tzinfo=timezone.utc)),
+              block_time=datetime(2026, 1, 6, tzinfo=UTC)),
     ]
     events = _find_theft_events(_case(transfers, seed=victim))
     assert len(events) == 2
@@ -247,11 +245,11 @@ def test_inbound_transfers_excluded() -> None:
         # Outbound (theft)
         _xfer(tx_hash="0x" + "1" * 64, from_addr=victim, to_addr=perp,
               amount=Decimal("10"), usd=Decimal("30000"),
-              block_time=datetime(2026, 1, 5, tzinfo=timezone.utc)),
+              block_time=datetime(2026, 1, 5, tzinfo=UTC)),
         # Inbound — someone sent victim funds; not a theft
         _xfer(tx_hash="0x" + "2" * 64, from_addr=other, to_addr=victim,
               amount=Decimal("100"), usd=Decimal("300000"),
-              block_time=datetime(2026, 1, 5, 1, tzinfo=timezone.utc)),
+              block_time=datetime(2026, 1, 5, 1, tzinfo=UTC)),
     ]
     events = _find_theft_events(_case(transfers, seed=victim))
     # Only the outbound counts
@@ -268,7 +266,7 @@ def test_phishing_drain_5_transactions_3_days() -> None:
     monitoring thresholds). All cluster as theft events."""
     victim = "0x" + "a" * 40
     perp = "0x" + "b" * 40
-    base_time = datetime(2026, 3, 15, tzinfo=timezone.utc)
+    base_time = datetime(2026, 3, 15, tzinfo=UTC)
     transfers = []
     for i in range(5):
         transfers.append(_xfer(
@@ -291,7 +289,7 @@ def test_slow_drain_over_12_days_excludes_oldest() -> None:
     transfers (more than 7 days from primary)."""
     victim = "0x" + "a" * 40
     perp = "0x" + "b" * 40
-    base_time = datetime(2026, 3, 1, tzinfo=timezone.utc)
+    base_time = datetime(2026, 3, 1, tzinfo=UTC)
     transfers = []
     # Day 0: small drain (will be far from primary)
     transfers.append(_xfer(

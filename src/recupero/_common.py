@@ -18,7 +18,6 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-
 # ---- freeze_capability mapping ---- #
 
 # `IssuerEntry.freeze_capability` raw values come from issuers.json.

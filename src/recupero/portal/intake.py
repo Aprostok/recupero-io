@@ -303,6 +303,7 @@ def create_case_from_intake(
     # readable grouping ("RCP-INTAKE-2026-<8 hex>"); year+8 chars
     # ≈ 4B per-year combinations, well past any realistic load.
     from datetime import date as _date
+
     from psycopg import errors as _pg_errors  # type: ignore[import-not-found]
 
     year = _date.today().year

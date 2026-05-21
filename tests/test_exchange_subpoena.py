@@ -5,8 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
 from recupero.reports.legal_requests import (
     LEGAL_REQUEST_TYPES,
     render_legal_request,

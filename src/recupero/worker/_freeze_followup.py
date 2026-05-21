@@ -34,7 +34,6 @@ partial index).
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -372,7 +371,7 @@ def _render_followup_html(
     )
     now = datetime.now(UTC)
     days_since_sent = max(0, (now - candidate.sent_at).days)
-    requested_human = "{:,.2f}".format(float(candidate.requested_freeze_usd or 0))
+    requested_human = f"{float(candidate.requested_freeze_usd or 0):,.2f}"
 
     ctx = {
         "case_id": str(candidate.case_id or candidate.letter_id),

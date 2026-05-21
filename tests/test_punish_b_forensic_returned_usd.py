@@ -33,11 +33,10 @@ from __future__ import annotations
 
 import inspect
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from uuid import UUID
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # F-1: cooperation_intelligence — issuer's total_frozen_usd must
@@ -72,11 +71,11 @@ def test_f1_cooperation_returned_outcome_counted_via_returned_usd():
     one full_freeze (frozen_usd=$X) and one returned_to_victim
     (returned_usd=$Y, frozen_usd=NULL). The profile's
     total_frozen_usd must be $X + $Y, not just $X."""
-    from recupero.monitoring import cooperation_intelligence as ci
-
     # Two letters with two outcomes — feed flat rows via the SQL
     # shape build_cooperation_profile expects.
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime
+
+    from recupero.monitoring import cooperation_intelligence as ci
     letter_id_1 = UUID("11111111-1111-1111-1111-111111111111")
     letter_id_2 = UUID("22222222-2222-2222-2222-222222222222")
     sent_1 = datetime(2026, 4, 1, 10, 0, tzinfo=UTC)
@@ -138,8 +137,9 @@ def test_f3_priors_exclude_unresponded_letters_from_denominator():
     without an outcome as a failure — so 20 fresh letters + 5
     resolved with 4 freezes → p_freeze = 4/(4+20) = 17% instead
     of the operationally correct 4/(4+5) = 80%."""
+    from datetime import UTC, datetime
+
     from recupero.freeze_learning import recorder
-    from datetime import datetime, UTC
 
     # `compute_priors_from_outcomes` expects list[dict[str, Any]] —
     # the row shape produced by the LEFT JOIN at recorder.py:431-437.

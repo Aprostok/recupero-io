@@ -18,16 +18,11 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
-import pytest
-
 from recupero.monitoring.cluster_builder import (
-    ClusterMembership,
     _extract_perp_wallets_from_brief,
     _gen_cluster_public_id,
     build_or_update_cluster_for_case,
-    fetch_cluster_summary,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure-function helpers
@@ -243,9 +238,9 @@ def test_build_cluster_noop_when_table_missing():
 def _render_le_with_cluster(cluster_membership):
     """Render the LE handoff on the V-CFI01 fixture with a given
     cluster_membership dict."""
-    from tests.test_v_cfi01_full_render import _build_v_cfi01_case, VICTIM
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import VICTIM, _build_v_cfi01_case
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(
@@ -356,6 +351,7 @@ def test_render_cluster_handoff_writes_full_document():
     renders, the file lands on disk with the cluster public_id +
     aggregate stats."""
     from datetime import UTC, datetime
+
     from recupero.reports.cluster_handoff import render_cluster_handoff
 
     fake_cluster = {
@@ -427,6 +423,7 @@ def test_render_cluster_handoff_sanitizes_unsafe_public_id_in_filename():
     """Defense-in-depth: a public_id with unsafe chars (path-traversal,
     NUL bytes) is sanitized in the output filename."""
     from datetime import UTC, datetime
+
     from recupero.reports.cluster_handoff import render_cluster_handoff
 
     fake_cluster = {

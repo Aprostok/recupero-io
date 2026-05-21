@@ -16,7 +16,7 @@ tests verify:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,7 +24,6 @@ import pytest
 from recupero.chains.tron.adapter import TronAdapter
 from recupero.chains.tron.client import TronGridError
 from recupero.models import Chain
-
 
 # Real Tron mainnet addresses (all base58check):
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
@@ -91,7 +90,7 @@ def test_fetch_outflows_normalizes_basic() -> None:
     assert "tronscan.org" in rec["explorer_url"]
     # 1_750_000_000_000 ms = 1_750_000_000 s = 2025-06-15 15:06:40 UTC
     assert rec["block_time"] == datetime(
-        2025, 6, 15, 15, 6, 40, tzinfo=timezone.utc,
+        2025, 6, 15, 15, 6, 40, tzinfo=UTC,
     )
 
 
@@ -222,7 +221,7 @@ def test_block_at_or_before_returns_unix_timestamp() -> None:
     fetch path can use directly.
     """
     adapter = _mk_adapter()
-    ts = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    ts = datetime(2025, 1, 1, 12, 0, 0, tzinfo=UTC)
     result = adapter.block_at_or_before(ts)
     assert isinstance(result, int)
     assert result == int(ts.timestamp())

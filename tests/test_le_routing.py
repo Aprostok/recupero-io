@@ -20,18 +20,15 @@ from decimal import Decimal
 import pytest
 
 from recupero.worker._le_routing import (
+    FBI_VAU,
     GENERIC_STATE_AG,
     IC3,
-    FBI_VAU,
     INTERNATIONAL_FALLBACK,
-    LEContact,
-    LERoutingPlan,
     SECRET_SERVICE_ECTF,
+    LERoutingPlan,
     _normalize_state,
-    _STATE_LE_CONTACTS,
     recommend_le_routes,
 )
-
 
 # ---- recommend_le_routes: country / state / loss decision logic ---- #
 
@@ -192,7 +189,8 @@ def test_routing_plan_empty_lists_independent() -> None:
 def test_le_contact_immutable() -> None:
     """LEContact is frozen — contacts shouldn't be mutated after
     construction (they're shared module-level constants)."""
-    with pytest.raises(Exception):
+    import dataclasses
+    with pytest.raises(dataclasses.FrozenInstanceError):
         IC3.name = "modified"  # type: ignore[misc]
 
 

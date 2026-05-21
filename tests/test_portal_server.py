@@ -13,17 +13,17 @@ release-time dry-run.
 from __future__ import annotations
 
 import urllib.parse
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 
 from recupero.portal.server import (
+    _PORTAL_ARTIFACTS,
     _coerce_utc,
     _engagement_dict,
-    _PORTAL_ARTIFACTS,
     _portal_artifact_list,
     handle_portal,
 )
@@ -45,7 +45,7 @@ def _mk_verified(**overrides) -> VerifiedToken:
         "engagement_started_at": None,
         "engagement_closed_at": None,
         "engagement_fee_paid_usd": None,
-        "expires_at": datetime.now(timezone.utc) + timedelta(days=30),
+        "expires_at": datetime.now(UTC) + timedelta(days=30),
         "label": None,
     }
     base.update(overrides)
@@ -65,12 +65,12 @@ def test_coerce_utc_naive_assumed_utc() -> None:
     naive = datetime(2026, 1, 1, 12, 0, 0)
     out = _coerce_utc(naive)
     assert out is not None
-    assert out.tzinfo is timezone.utc
+    assert out.tzinfo is UTC
 
 
 def test_coerce_utc_passes_aware_through() -> None:
     """An already-tz-aware datetime passes through unchanged."""
-    aware = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    aware = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
     assert _coerce_utc(aware) is aware
 
 
@@ -89,7 +89,7 @@ def test_engagement_dict_not_engaged() -> None:
 def test_engagement_dict_active() -> None:
     """Started but not closed, less than 30 days → 'active' +
     days_remaining = 30 - days_since_start."""
-    started = datetime.now(timezone.utc) - timedelta(days=5)
+    started = datetime.now(UTC) - timedelta(days=5)
     out = _engagement_dict(_mk_verified(engagement_started_at=started))
     assert out["status"] == "active"
     assert out["days_since_start"] == 5
@@ -99,8 +99,8 @@ def test_engagement_dict_active() -> None:
 def test_engagement_dict_closed_short_circuits() -> None:
     """engagement_closed_at set → 'closed' regardless of how long ago.
     days_remaining is None (not applicable to closed engagements)."""
-    started = datetime.now(timezone.utc) - timedelta(days=10)
-    closed = datetime.now(timezone.utc) - timedelta(days=2)
+    started = datetime.now(UTC) - timedelta(days=10)
+    closed = datetime.now(UTC) - timedelta(days=2)
     out = _engagement_dict(_mk_verified(
         engagement_started_at=started,
         engagement_closed_at=closed,
@@ -114,7 +114,7 @@ def test_engagement_dict_expired_after_30_days() -> None:
     'expired' + days_remaining = 0. Mirrors the engagement-API
     helper's behavior so the portal + admin UI tell the same
     story."""
-    started = datetime.now(timezone.utc) - timedelta(days=35)
+    started = datetime.now(UTC) - timedelta(days=35)
     out = _engagement_dict(_mk_verified(engagement_started_at=started))
     assert out["status"] == "expired"
     assert out["days_remaining"] == 0
@@ -340,7 +340,7 @@ def test_handle_portal_sign_submit_redirects_if_already_engaged() -> None:
     to the status page, NOT create a duplicate engagement_signatures
     row."""
     verified = _mk_verified(
-        engagement_started_at=datetime.now(timezone.utc) - timedelta(days=2),
+        engagement_started_at=datetime.now(UTC) - timedelta(days=2),
     )
     form = urllib.parse.urlencode({
         "signature_name": "Alex Smith", "agree": "on",
@@ -400,8 +400,8 @@ def test_handle_portal_sign_submit_rejects_closed_engagement() -> None:
     """v0.16.7 (round-9 security HIGH): closed engagements can't be
     re-signed via the same portal token."""
     verified = _mk_verified(
-        engagement_started_at=datetime.now(timezone.utc) - timedelta(days=60),
-        engagement_closed_at=datetime.now(timezone.utc) - timedelta(days=5),
+        engagement_started_at=datetime.now(UTC) - timedelta(days=60),
+        engagement_closed_at=datetime.now(UTC) - timedelta(days=5),
     )
     form = urllib.parse.urlencode({
         "signature_name": "Alex Smith", "agree": "on",
@@ -427,7 +427,7 @@ def test_handle_portal_sign_submit_strips_ua_crlf() -> None:
     form = urllib.parse.urlencode({
         "signature_name": "Alex Smith", "agree": "on",
     })
-    signed_at = datetime.now(timezone.utc)
+    signed_at = datetime.now(UTC)
     with patch("recupero.portal.server.verify_token", return_value=verified), \
          patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
          patch("recupero.portal.server._persist_signature",
@@ -457,7 +457,7 @@ def test_handle_portal_sign_submit_rejects_garbage_ip() -> None:
     form = urllib.parse.urlencode({
         "signature_name": "Alex Smith", "agree": "on",
     })
-    signed_at = datetime.now(timezone.utc)
+    signed_at = datetime.now(UTC)
     with patch("recupero.portal.server.verify_token", return_value=verified), \
          patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
          patch("recupero.portal.server._persist_signature",
@@ -491,7 +491,7 @@ def test_handle_portal_sign_submit_happy_path() -> None:
     form = urllib.parse.urlencode({
         "signature_name": "Alex Q. Smith", "agree": "on",
     })
-    signed_at = datetime.now(timezone.utc)
+    signed_at = datetime.now(UTC)
     with patch("recupero.portal.server.verify_token", return_value=verified), \
          patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
          patch("recupero.portal.server._persist_signature",
@@ -534,7 +534,7 @@ def test_handle_portal_sign_submit_xff_with_trusted_hops() -> None:
     form = urllib.parse.urlencode({
         "signature_name": "Alex Q. Smith", "agree": "on",
     })
-    signed_at = datetime.now(timezone.utc)
+    signed_at = datetime.now(UTC)
     with patch.dict(os.environ, {"RECUPERO_TRUSTED_PROXY_HOPS": "1"}), \
          patch("recupero.portal.server.verify_token", return_value=verified), \
          patch("recupero.portal.server._get_dsn", return_value="fake-dsn"), \
@@ -567,7 +567,7 @@ def test_handle_portal_sign_submit_xff_ignored_without_trusted_hops() -> None:
     form = urllib.parse.urlencode({
         "signature_name": "Alex Q. Smith", "agree": "on",
     })
-    signed_at = datetime.now(timezone.utc)
+    signed_at = datetime.now(UTC)
     # Ensure env var is unset for this test (the trusted-hops fixture
     # above runs in its own patch.dict scope so it doesn't leak here,
     # but other tests in the same process could).

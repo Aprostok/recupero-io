@@ -25,9 +25,6 @@ investigation row is created.
 from __future__ import annotations
 
 import inspect
-from uuid import UUID
-
-import pytest
 
 
 def test_handle_diagnostic_uses_concurrency_safe_insert():

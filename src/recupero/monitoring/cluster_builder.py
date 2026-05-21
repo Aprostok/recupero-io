@@ -88,7 +88,7 @@ def _gen_cluster_public_id(seed_address: str, seed_chain: str) -> str:
     builds the same id, which is the desired property.
     """
     h = hashlib.sha256(
-        f"{seed_address.lower()}|{seed_chain.lower()}".encode("utf-8"),
+        f"{seed_address.lower()}|{seed_chain.lower()}".encode(),
     ).hexdigest()
     return f"CL-{h[:6].upper()}"
 
@@ -306,13 +306,12 @@ def build_or_update_cluster_for_case(
             prior_investigations[prior_inv] = prior_case
 
     try:
-        with db_connect(dsn, autocommit=False) as conn:
-            with conn.cursor() as cur:
-                # 1. Get or create cluster row, then LOCK it for the
-                # rest of the transaction (CRIT-4 — serialize concurrent
-                # joins on the same cluster).
-                cur.execute(
-                    """
+        with db_connect(dsn, autocommit=False) as conn, conn.cursor() as cur:
+            # 1. Get or create cluster row, then LOCK it for the
+            # rest of the transaction (CRIT-4 — serialize concurrent
+            # joins on the same cluster).
+            cur.execute(
+                """
                     INSERT INTO public.case_clusters
                         (public_id, seed_perp_address, seed_perp_chain,
                          shared_perp_addresses, shared_perp_chains,
@@ -324,55 +323,55 @@ def build_or_update_cluster_for_case(
                     DO UPDATE SET updated_at = NOW()
                     RETURNING id, public_id
                     """,
-                    (
-                        public_id, seed_addr, seed_chain,
-                        [seed_addr], [seed_chain],
-                    ),
+                (
+                    public_id, seed_addr, seed_chain,
+                    [seed_addr], [seed_chain],
+                ),
+            )
+            row = cur.fetchone()
+            if not row:
+                log.warning(
+                    "cluster_builder: cluster upsert returned no row"
                 )
-                row = cur.fetchone()
-                if not row:
-                    log.warning(
-                        "cluster_builder: cluster upsert returned no row"
-                    )
-                    conn.rollback()
-                    return None
-                cluster_id, public_id_db = row[0], row[1]
+                conn.rollback()
+                return None
+            cluster_id, public_id_db = row[0], row[1]
 
-                # Acquire the row lock for the rest of the transaction.
-                cur.execute(
-                    "SELECT id FROM public.case_clusters WHERE id = %s FOR UPDATE",
-                    (cluster_id,),
-                )
+            # Acquire the row lock for the rest of the transaction.
+            cur.execute(
+                "SELECT id FROM public.case_clusters WHERE id = %s FOR UPDATE",
+                (cluster_id,),
+            )
 
-                # Determine whether the cluster is brand-new (no prior
-                # members) — derived from the LOCKED row's current
-                # member_case_count, which serializes properly under
-                # concurrent writers thanks to the FOR UPDATE.
-                cur.execute(
-                    "SELECT COUNT(*) FROM public.case_cluster_members "
-                    "WHERE cluster_id = %s",
-                    (cluster_id,),
-                )
-                existing_count_row = cur.fetchone()
-                existing_member_count = (
-                    existing_count_row[0] if existing_count_row else 0
-                )
-                is_new = (existing_member_count == 0)
+            # Determine whether the cluster is brand-new (no prior
+            # members) — derived from the LOCKED row's current
+            # member_case_count, which serializes properly under
+            # concurrent writers thanks to the FOR UPDATE.
+            cur.execute(
+                "SELECT COUNT(*) FROM public.case_cluster_members "
+                "WHERE cluster_id = %s",
+                (cluster_id,),
+            )
+            existing_count_row = cur.fetchone()
+            existing_member_count = (
+                existing_count_row[0] if existing_count_row else 0
+            )
+            is_new = (existing_member_count == 0)
 
-                # 2. Bridge the PRIOR cases first (CRIT-2 — pre-v0.23.1
-                # the originator case was never bridged because the
-                # priors-empty branch returned None at line 246 before
-                # ever opening this transaction). When this cluster is
-                # newly created, we must explicitly insert bridge rows
-                # for every prior investigation we identified — the
-                # FIRST such prior becomes the role='originator'.
-                prior_inv_ids_sorted = sorted(prior_investigations.keys(), key=str)
-                if is_new and prior_inv_ids_sorted:
-                    originator_inv = prior_inv_ids_sorted[0]
-                    for idx, prior_inv in enumerate(prior_inv_ids_sorted):
-                        prior_case_id = prior_investigations.get(prior_inv)
-                        cur.execute(
-                            """
+            # 2. Bridge the PRIOR cases first (CRIT-2 — pre-v0.23.1
+            # the originator case was never bridged because the
+            # priors-empty branch returned None at line 246 before
+            # ever opening this transaction). When this cluster is
+            # newly created, we must explicitly insert bridge rows
+            # for every prior investigation we identified — the
+            # FIRST such prior becomes the role='originator'.
+            prior_inv_ids_sorted = sorted(prior_investigations.keys(), key=str)
+            if is_new and prior_inv_ids_sorted:
+                originator_inv = prior_inv_ids_sorted[0]
+                for idx, prior_inv in enumerate(prior_inv_ids_sorted):
+                    prior_case_id = prior_investigations.get(prior_inv)
+                    cur.execute(
+                        """
                             INSERT INTO public.case_cluster_members
                                 (cluster_id, case_id, investigation_id,
                                  role, case_total_loss_usd,
@@ -382,21 +381,21 @@ def build_or_update_cluster_for_case(
                             ON CONFLICT (cluster_id, investigation_id)
                             DO NOTHING
                             """,
-                            (
-                                cluster_id,
-                                str(prior_case_id) if prior_case_id else None,
-                                str(prior_inv),
-                                "originator" if prior_inv == originator_inv else "joined",
-                                seed_addr, seed_chain,
-                            ),
-                        )
+                        (
+                            cluster_id,
+                            str(prior_case_id) if prior_case_id else None,
+                            str(prior_inv),
+                            "originator" if prior_inv == originator_inv else "joined",
+                            seed_addr, seed_chain,
+                        ),
+                    )
 
-                # 3. Bridge THIS case. When the cluster was newly
-                # created, this case is 'joined' (one of the priors is
-                # the originator). When the cluster already existed,
-                # this case is also 'joined'.
-                cur.execute(
-                    """
+            # 3. Bridge THIS case. When the cluster was newly
+            # created, this case is 'joined' (one of the priors is
+            # the originator). When the cluster already existed,
+            # this case is also 'joined'.
+            cur.execute(
+                """
                     INSERT INTO public.case_cluster_members
                         (cluster_id, case_id, investigation_id, role,
                          case_total_loss_usd, joined_via_address,
@@ -411,27 +410,27 @@ def build_or_update_cluster_for_case(
                        -- stays stable.
                     RETURNING (xmax = 0) AS inserted
                     """,
-                    (
-                        cluster_id,
-                        str(case_id) if case_id else None,
-                        str(investigation_id),
-                        this_loss,
-                        seed_addr, seed_chain,
-                    ),
-                )
-                bridge_row = cur.fetchone()
-                bridge_inserted = bool(bridge_row and bridge_row[0])
+                (
+                    cluster_id,
+                    str(case_id) if case_id else None,
+                    str(investigation_id),
+                    this_loss,
+                    seed_addr, seed_chain,
+                ),
+            )
+            bridge_row = cur.fetchone()
+            bridge_inserted = bool(bridge_row and bridge_row[0])
 
-                # 4. Maintain cluster aggregates. v0.23.1 (audit-fix
-                # CRIT-3): the prior UNION-of-array_agg scalar subquery
-                # would return 2 rows the moment any member had a
-                # joined_via_address different from the seed — Postgres
-                # raises 21000. Replaced with ARRAY(... UNION ALL ...)
-                # which flattens to a single text[]. Also recompute
-                # member_case_count from the bridge table to absorb the
-                # CRIT-2 prior-bridge inserts above.
-                cur.execute(
-                    """
+            # 4. Maintain cluster aggregates. v0.23.1 (audit-fix
+            # CRIT-3): the prior UNION-of-array_agg scalar subquery
+            # would return 2 rows the moment any member had a
+            # joined_via_address different from the seed — Postgres
+            # raises 21000. Replaced with ARRAY(... UNION ALL ...)
+            # which flattens to a single text[]. Also recompute
+            # member_case_count from the bridge table to absorb the
+            # CRIT-2 prior-bridge inserts above.
+            cur.execute(
+                """
                     UPDATE public.case_clusters
                        SET member_case_count = sub.cnt,
                            total_loss_usd    = sub.tot,
@@ -460,13 +459,13 @@ def build_or_update_cluster_for_case(
                      WHERE id = %(cid)s
                     RETURNING member_case_count, total_loss_usd
                     """,
-                    {"cid": cluster_id},
-                )
-                agg = cur.fetchone()
-                final_count = agg[0] if agg else 0
-                final_loss = Decimal(str(agg[1])) if agg and agg[1] is not None else Decimal(0)
-                # All three statements committed atomically.
-                conn.commit()
+                {"cid": cluster_id},
+            )
+            agg = cur.fetchone()
+            final_count = agg[0] if agg else 0
+            final_loss = Decimal(str(agg[1])) if agg and agg[1] is not None else Decimal(0)
+            # All three statements committed atomically.
+            conn.commit()
 
         log.info(
             "cluster_builder: case %s %s cluster %s "
@@ -540,8 +539,9 @@ def fetch_cluster_summary(public_id: str, *, dsn: str) -> dict[str, Any] | None:
         import psycopg  # noqa: F401
     except ImportError:  # pragma: no cover
         return None
-    from recupero._common import db_connect
     from psycopg.rows import dict_row
+
+    from recupero._common import db_connect
 
     try:
         with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:

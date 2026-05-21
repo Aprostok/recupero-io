@@ -24,8 +24,8 @@ Layering:
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -63,13 +63,36 @@ def integration_dsn() -> Iterator[str]:
             "No RECUPERO_INTEGRATION_DSN or SUPABASE_DB_URL set. "
             "Integration DB tests need a TEST postgres."
         )
-    # Safety guard
-    lowered = raw.lower()
-    if "/postgres" in lowered or "test" not in lowered and "_int" not in lowered:
+    # Safety guard. Pre-RIGOR-1 this fixture had TWO bugs:
+    #   1. Operator-precedence: `if "/postgres" in lowered or "test"
+    #      not in lowered and "_int" not in lowered` parsed as
+    #      `("/postgres" in lowered) or (("test" not in lowered) and
+    #      ("_int" not in lowered))` — meaning a DB named `recupero_test`
+    #      that lived on a server hosting "postgres" would skip.
+    #   2. `/postgres` substring match also tripped on the URL's user
+    #      portion: `postgresql://postgres:password@...` always contained
+    #      `/postgres` because `postgresql:` has a slash before the user
+    #      `postgres`. Every local-dev DSN got skipped.
+    # Fix: extract the DB name properly (after the LAST `/`, before any
+    # `?` query string) and refuse production-shaped names.
+    from urllib.parse import urlparse
+    parsed = urlparse(raw)
+    db_name = (parsed.path or "").lstrip("/").lower()
+    if not db_name:
         pytest.skip(
-            "Refusing to run integration DB tests against a DSN whose "
-            "db name doesn't contain 'test' or '_int'. Point "
-            "RECUPERO_INTEGRATION_DSN at a dedicated test DB."
+            f"DSN has no database name in the path: {raw!r}"
+        )
+    # Strict allow-list discipline: db name MUST contain 'test' or
+    # '_int' to be considered safe for destructive integration tests.
+    # A bare 'postgres' (the default db) is the production-shape name
+    # we explicitly refuse.
+    if db_name == "postgres" or (
+        "test" not in db_name and "_int" not in db_name
+    ):
+        pytest.skip(
+            f"Refusing to run integration DB tests against DB {db_name!r}. "
+            "Point RECUPERO_INTEGRATION_DSN at a DB whose name contains "
+            "'test' or '_int' (e.g., 'recupero_int_test')."
         )
     yield raw
 

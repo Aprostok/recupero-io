@@ -31,21 +31,26 @@ from __future__ import annotations
 
 import re
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
 import pytest
 
 from recupero.models import (
-    Case, Chain, Counterparty, TokenRef, Transfer,
+    Case,
+    Chain,
+    Counterparty,
+    TokenRef,
+    Transfer,
 )
 from recupero.reports.brief import (
-    InvestigatorInfo, IssuerInfo, generate_briefs,
+    InvestigatorInfo,
+    IssuerInfo,
+    generate_briefs,
 )
 from recupero.reports.emit_brief import emit_brief
 from recupero.reports.victim import VictimInfo
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # V-CFI01 fixture constants (real addresses from Jacob's bug report)
@@ -66,7 +71,7 @@ CBBTC_CONTRACT  = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
 MSYRUP_CONTRACT = "0x2fE058CcF29f123f9dd2aEC0418AA66a877d8E50"
 DAI_CONTRACT    = "0x6B175474E89094C44Da98b954EedeAC495271d0F"
 
-INCIDENT_TIME = datetime(2025, 10, 9, 0, 29, tzinfo=timezone.utc)
+INCIDENT_TIME = datetime(2025, 10, 9, 0, 29, tzinfo=UTC)
 
 
 def _mk_token(contract: str, symbol: str, decimals: int = 6) -> TokenRef:
@@ -187,7 +192,7 @@ def _build_v_cfi01_case() -> Case:
         chain=Chain.ethereum,
         incident_time=INCIDENT_TIME,
         transfers=transfers,
-        trace_started_at=datetime(2026, 5, 18, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 5, 18, tzinfo=UTC),
         software_version="0.20.2",
         config_used={"trace": {"max_depth": 2}},
     )

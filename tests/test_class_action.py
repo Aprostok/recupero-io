@@ -2,16 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-import pytest
-
 from recupero.models import Case, Chain
 from recupero.trace.class_action import (
-    ClassActionOpportunity,
-    SharedAddress,
     compute_class_action_opportunity,
 )
 from recupero.trace.correlation import (
@@ -25,9 +21,9 @@ def _make_case() -> Case:
         case_id="V-CFI-099",
         seed_address="0x" + "a" * 40,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 4, 1, tzinfo=UTC),
         transfers=[],
-        trace_started_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 4, 1, tzinfo=UTC),
         software_version="test",
         config_used={},
     )

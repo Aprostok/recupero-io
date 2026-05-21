@@ -13,20 +13,16 @@ end-to-end smoke against the live DB (operator runs
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-import pytest
-
 from recupero.worker._followup import (
+    _ENGAGEMENT_WINDOW_DAYS,
+    _FOLLOWUP_CADENCE_DAYS,
     FollowupCandidate,
     _build_next_steps,
     _build_status_summary,
     _describe_email_action,
-    _ENGAGEMENT_WINDOW_DAYS,
-    _FOLLOWUP_CADENCE_DAYS,
 )
 
 
@@ -36,7 +32,7 @@ def _candidate(
     last_followup_days_ago: int | None = None,
     freezable_issuers: list[str] | None = None,
 ) -> FollowupCandidate:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return FollowupCandidate(
         investigation_id=uuid4(),
         case_id=uuid4(),
@@ -243,7 +239,7 @@ def test_candidate_required_fields() -> None:
 def test_candidate_freezable_issuers_optional() -> None:
     """freezable_issuers is nullable for cases that didn't populate
     that column."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     c = FollowupCandidate(
         investigation_id=uuid4(),
         case_id=None,

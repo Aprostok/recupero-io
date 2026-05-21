@@ -32,9 +32,7 @@ import logging
 from typing import Any
 from uuid import UUID
 
-import psycopg
 from recupero._common import db_connect
-
 from recupero.models import Case, LabelCategory
 
 log = logging.getLogger(__name__)

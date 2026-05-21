@@ -20,9 +20,7 @@ row's `notes` column, so a failed notification is auditable.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 log = logging.getLogger(__name__)

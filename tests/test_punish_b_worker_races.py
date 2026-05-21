@@ -20,9 +20,6 @@ from __future__ import annotations
 
 import inspect
 
-import pytest
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # W-2: monitor_tick must use FOR UPDATE SKIP LOCKED on the select
 # ─────────────────────────────────────────────────────────────────────────────

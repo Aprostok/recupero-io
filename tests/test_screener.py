@@ -10,12 +10,10 @@ from decimal import Decimal
 
 from recupero.screen.screener import (
     ScreeningCorrelation,
-    ScreeningLabel,
     ScreeningResult,
     screen_address,
 )
 from recupero.trace.risk_scoring import HighRiskEntry
-
 
 # ---- Seed-driven verdicts ---- #
 
@@ -102,7 +100,9 @@ def test_clean_address_is_clean() -> None:
 def test_ofac_in_prior_case_is_high_risk() -> None:
     """No seed hit but the address appeared in a prior case that
     had OFAC exposure → verdict HIGH (indirect exposure)."""
-    addr = "0x" + "6" * 40
+    # RIGOR-2 (F841): removed unused `addr = "0x" + "6" * 40` — the
+    # test pivoted to calling _verdict_for() directly with the
+    # correlation object, never used the address.
     correlation = ScreeningCorrelation(
         prior_case_count=2,
         prior_ofac_exposed_count=1,

@@ -19,10 +19,9 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # A-1 — ISO date bounds
@@ -89,6 +88,7 @@ def test_a2_case_number_includes_year_and_uuid_prefix():
     # We can't easily test the DB INSERT, but we can verify the
     # case_number format in the constructed string. Read the source:
     import inspect
+
     from recupero.portal import intake as _mod
     src = inspect.getsource(_mod.create_case_from_intake)
     # The format string must include the year prefix.
@@ -424,6 +424,7 @@ def test_f1_dispatcher_call_site_only_fires_on_investigation_created():
     moves this hook MUST keep the guard — otherwise victims get
     spam emails on duplicate / audit_only paths."""
     import inspect
+
     from recupero.payments import dispatcher
 
     src = inspect.getsource(dispatcher.dispatch)

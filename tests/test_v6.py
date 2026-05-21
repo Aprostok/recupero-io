@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from recupero.chains.base import ChainAdapter
@@ -13,7 +13,7 @@ from recupero.reports.aggregate import aggregate_stolen
 
 
 def _now():
-    return datetime(2025, 10, 9, 1, 13, 47, tzinfo=timezone.utc)
+    return datetime(2025, 10, 9, 1, 13, 47, tzinfo=UTC)
 
 
 def _transfer(*, from_addr, to_addr, symbol, amount_usd, tx) -> Transfer:

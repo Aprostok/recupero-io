@@ -10,7 +10,7 @@ v12 scopes stablecoin canonicals and contract-id caches by (chain, address).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
@@ -18,9 +18,9 @@ from unittest.mock import patch
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Chain, TokenRef
 from recupero.pricing.coingecko import (
-    CoinGeckoClient,
     _CANONICAL_STABLECOIN_CONTRACTS,
     _CHAIN_TO_CG_PLATFORM,
+    CoinGeckoClient,
 )
 
 
@@ -30,7 +30,7 @@ def _make_client(tmp_path: Path) -> CoinGeckoClient:
     return CoinGeckoClient(cfg, env, tmp_path / "prices_cache")
 
 
-WHEN = datetime(2025, 10, 9, 0, 0, 0, tzinfo=timezone.utc)
+WHEN = datetime(2025, 10, 9, 0, 0, 0, tzinfo=UTC)
 
 
 class TestArbitrumStablecoinsPriceCorrectly:

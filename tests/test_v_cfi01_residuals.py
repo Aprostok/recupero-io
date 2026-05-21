@@ -33,7 +33,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-
 # ---- Residual #1: msyrupUSDp contract in issuers.json ---- #
 
 
@@ -164,6 +163,7 @@ def test_forwarding_observed_when_downstream_destinations_exist() -> None:
     in the integration test suite.)
     """
     import inspect
+
     from recupero.reports import brief
     src = inspect.getsource(brief.generate_briefs)
     assert "forwarding_observed" in src, (
@@ -191,8 +191,8 @@ def test_match_freeze_asks_skips_above_100m_cap() -> None:
     address is overwhelmingly a protocol/pool contract, not a wallet.
     Pre-v0.20.1 the Lido wstETH contract's $8.8B stETH custody was
     emitted as a freeze_ask; now it's skipped at synthesis."""
-    from recupero.freeze.asks import match_freeze_asks
     from recupero.dormant.finder import DormantCandidate, TokenHolding
+    from recupero.freeze.asks import match_freeze_asks
     from recupero.models import Chain, TokenRef
 
     # Build a candidate holding $8.8B of stETH
@@ -232,8 +232,8 @@ def test_match_freeze_asks_keeps_freeze_capability_no_holdings() -> None:
     freeze_asks.json noise it was trying to clean up. The
     `capability_blocks_freeze` filter at letter-generation time
     correctly prevents pointless letters."""
-    from recupero.freeze.asks import match_freeze_asks
     from recupero.dormant.finder import DormantCandidate, TokenHolding
+    from recupero.freeze.asks import match_freeze_asks
     from recupero.models import Chain, TokenRef
 
     holding = TokenHolding(
@@ -269,6 +269,7 @@ def test_flow_diagram_only_promotes_freezable_status() -> None:
     holdings (the brief's contract-detection classification) must
     NOT visually cluster as "<Issuer> holding"."""
     import inspect
+
     from recupero.worker import _flow_diagram
     src = inspect.getsource(_flow_diagram._promote_freezable_holdings)
     assert 'status' in src and 'FREEZABLE' in src, (
@@ -285,10 +286,13 @@ def test_asset_issuer_resolves_to_stolen_token_issuer() -> None:
     letter's Section 2 "Asset issuer" cell must read "Midas" (the
     actual mSyrupUSDp issuer), not "Tether" (the freeze-target
     issuer). Both facts coexist; neither overwrites the other."""
-    from recupero.reports.brief import _resolve_theft_asset_issuer_name
     from recupero.models import (
-        Chain, Counterparty, TokenRef, Transfer,
+        Chain,
+        Counterparty,
+        TokenRef,
+        Transfer,
     )
+    from recupero.reports.brief import _resolve_theft_asset_issuer_name
     msyrup = TokenRef(
         chain=Chain.ethereum,
         contract="0x2fE058CcF29f123f9dd2aEC0418AA66a877d8E50",
@@ -351,6 +355,7 @@ def test_synthesize_freeze_brief_buckets_match_emit_brief_convention() -> None:
     needs psycopg + Supabase, not feasible at unit scope. The
     integration test suite covers end-to-end."""
     import inspect
+
     from recupero.worker import pipeline
     src = inspect.getsource(pipeline._synthesize_freeze_brief_from_asks)
     # The per-token suspected_only branch must use elif INVESTIGATE, not
@@ -378,6 +383,7 @@ def test_victim_summary_per_issuer_uses_suspected_directly() -> None:
     On V-CFI01-shape cases the subtraction always went negative,
     so the column displayed "—" on every row."""
     import inspect
+
     from recupero.worker import _victim_summary
     src = inspect.getsource(_victim_summary._build_context)
     # The subtraction line is gone.
@@ -398,6 +404,7 @@ def test_le_routing_uses_sum_of_theft_events_usd() -> None:
     we passed only the primary event's USD, so the LE handoff routed
     to a lower tier than the actual case warranted."""
     import inspect
+
     from recupero.reports import brief
     src = inspect.getsource(brief.generate_briefs)
     # The construction of le_routing must sum theft_events.usd_value_at_tx.
@@ -418,6 +425,7 @@ def test_flow_diagram_promotion_uses_canonical_key() -> None:
     of a holding address that doesn't match the trace's case-variant
     would mean the holding never gets promoted to a labeled cluster."""
     import inspect
+
     from recupero.worker import _flow_diagram
     src = inspect.getsource(_flow_diagram._promote_freezable_holdings)
     assert 'canonical_address_key' in src, (
@@ -440,6 +448,7 @@ def test_identified_wallets_dedup_by_canonical_key() -> None:
     addresses still collapse case variants; base58 case is preserved
     (it's significant on-chain)."""
     import inspect
+
     from recupero.reports import brief
     src = inspect.getsource(brief._build_identified_wallets)
     # The _ck import + use must be inside _build_identified_wallets so
@@ -464,6 +473,7 @@ def test_extract_perp_hub_buckets_by_canonical_key() -> None:
     USD total (which could let a smaller single-case-variant
     destination steal the "largest outflow" crown)."""
     import inspect
+
     from recupero.reports import emit_brief
     src = inspect.getsource(emit_brief._extract_perp_hub)
     # The dict must be keyed by _ck(t.to_address), not raw t.to_address.
@@ -489,6 +499,7 @@ def test_trace_report_freezable_row_uses_per_holding_chain() -> None:
     Ethereum-seeded case) would otherwise link to
     ``etherscan.io/address/<base58>`` → 404 on every click."""
     import inspect
+
     from recupero.worker import _trace_report
     src = inspect.getsource(_trace_report._build_freezable_table)
     assert 'row_chain = h.get("chain")' in src, (
@@ -513,6 +524,7 @@ def test_le_template_branches_per_status_label() -> None:
     and EXCHANGE deposit addresses — the LE reader is expected to
     route those differently from genuine investigative leads."""
     from pathlib import Path
+
     from recupero.reports import brief
     tmpl = (
         Path(brief.__file__).resolve().parent / "templates" / "le.html.j2"
@@ -535,6 +547,7 @@ def test_dormant_finder_canonical_address_tokens_keys() -> None:
     via canonical_address_key, so this is safe across multi-chain
     dispatch."""
     import inspect
+
     from recupero.dormant import finder
     src = inspect.getsource(finder.find_dormant_in_case)
     # The canonical dest_key must be used as the dict-key.
@@ -560,6 +573,7 @@ def test_flow_diagram_aggregate_uses_canonical_keys() -> None:
     _EdgeAttrs.src/dst so rendered text matches the on-chain
     canonical form."""
     import inspect
+
     from recupero.worker import _flow_diagram
     src = inspect.getsource(_flow_diagram._aggregate)
     # Canonicalisation imports + applies.

@@ -15,15 +15,14 @@ on the cli for the full row + extra detail.
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import sys
 from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-import psycopg
 from psycopg.rows import dict_row
+
+from recupero._common import db_connect
 
 
 def run(*, investigation_id: UUID, dsn: str) -> int:

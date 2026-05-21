@@ -24,19 +24,19 @@ v0.21.0:
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import hashlib
 import hmac
 import json
 import logging
 import os
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
 
 import httpx
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 
@@ -224,7 +224,8 @@ def dispatch_alert(
     fired_at = datetime.now(UTC)
     try:
         from recupero.api.monitoring_api import (
-            MonitoringApiError, assert_webhook_url_safe,
+            MonitoringApiError,
+            assert_webhook_url_safe,
         )
         assert_webhook_url_safe(webhook_url)
     except MonitoringApiError as exc:

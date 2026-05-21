@@ -738,7 +738,7 @@ def _query_payments(conn) -> dict[str, Any]:
 #
 # v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
 # this was duplicated verbatim in 4 worker modules).
-from recupero._common import db_connect, pooled_dsn as _pooled_dsn  # noqa: E402
-
+from recupero._common import db_connect  # noqa: E402
+from recupero._common import pooled_dsn as _pooled_dsn
 
 __all__ = ("build_dashboard_summary",)

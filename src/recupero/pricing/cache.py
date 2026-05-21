@@ -27,14 +27,14 @@ without requiring a live DB.
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import json
-import os
 import logging
+import os
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 

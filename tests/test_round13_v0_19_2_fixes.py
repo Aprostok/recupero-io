@@ -10,11 +10,9 @@ that fix + the rest of the round-13 CRIT/HIGH closures.
 
 from __future__ import annotations
 
-import os
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
-
 
 # ---- Code-quality CRIT-1: emit_brief.log is bound ---- #
 
@@ -64,6 +62,7 @@ def test_dormant_finder_uses_canonical_key_for_token_bucket() -> None:
     merged silently. Validate by reading the module source for the
     canonical reference (no easy unit fixture without a full BFS run)."""
     from pathlib import Path
+
     import recupero.dormant.finder as finder_mod
     src = Path(finder_mod.__file__).read_text(encoding="utf-8")
     # The two bucket-key sites both reference canonical_address_key.
@@ -98,6 +97,7 @@ def test_skip_editorial_brief_keeps_loss_distinct_from_suspected() -> None:
     # Here we just pin the contract via a string-source inspection,
     # which is robust to renames of the integration-test path.
     import inspect
+
     from recupero.worker import pipeline
     src = inspect.getsource(pipeline._synthesize_freeze_brief_from_asks)
     assert "TOTAL_LOSS_USD" in src
@@ -164,6 +164,7 @@ def test_digest_always_send_accepts_truthy_variants(monkeypatch) -> None:
     digest_email module. Pre-v0.19.2 `RECUPERO_DIGEST_ALWAYS_SEND=true`
     silently fell through to "skip — no material changes." """
     import inspect
+
     from recupero.worker import digest_email
     src = inspect.getsource(digest_email.maybe_send_digest_email)
     assert "env_truthy" in src, (
@@ -183,6 +184,7 @@ def test_screen_request_rejects_unknown_chain() -> None:
     `chain="foobar"` and failed deep in the screener; now Pydantic
     returns 422 with the allowed list."""
     from pydantic import ValidationError
+
     from recupero.api.app import ScreenRequest
 
     # Valid chains succeed.
@@ -205,6 +207,7 @@ def test_screen_request_caps_address_length() -> None:
     """v0.19.2: max_length cap on `address` so an authenticated caller
     can't POST a 16MB string and force downstream lookups to walk it."""
     from pydantic import ValidationError
+
     from recupero.api.app import ScreenRequest
 
     # 128 chars OK; 129 rejected.
@@ -223,6 +226,7 @@ def test_screen_request_caps_address_length() -> None:
 def test_recupero_cli_has_version_flag() -> None:
     """`recupero --version` exits 0 and prints a version string."""
     from typer.testing import CliRunner
+
     from recupero.cli import app
     runner = CliRunner()
     result = runner.invoke(app, ["--version"])

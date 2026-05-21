@@ -23,7 +23,6 @@ from recupero.portal.intake_notifications import (
     send_intake_confirmation,
 )
 
-
 CASE_ID = UUID("11111111-1111-1111-1111-111111111111")
 INV_ID = UUID("22222222-2222-2222-2222-222222222222")
 TOKEN_ID = UUID("33333333-3333-3333-3333-333333333333")
@@ -222,6 +221,7 @@ def test_intake_confirmation_result_dataclass_shape():
         error=None,
     )
     assert r.success is True
-    with pytest.raises(Exception):
+    import dataclasses
+    with pytest.raises(dataclasses.FrozenInstanceError):
         # frozen=True — assignment must raise
         r.success = False  # type: ignore[misc]

@@ -22,7 +22,6 @@ from recupero.chains.tron.client import (
     TronGridError,
 )
 
-
 # A real-shape Tron base58 address (USDT-TRC20 contract).
 USDT_CONTRACT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 

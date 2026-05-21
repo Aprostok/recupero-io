@@ -17,8 +17,6 @@ LE handoff twice to the same officer is a no-op.
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import json
 import logging
 import os
@@ -29,8 +27,9 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import psycopg
 from psycopg.rows import dict_row
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 
@@ -295,10 +294,9 @@ def _already_sent_to(
     dsn: str,
 ) -> bool:
     try:
-        with db_connect(dsn, connect_timeout=5) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with db_connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     SELECT 1 FROM public.emails_sent
                      WHERE investigation_id = %s
                        AND email_type = %s
@@ -306,9 +304,9 @@ def _already_sent_to(
                        AND error_message IS NULL
                      LIMIT 1
                     """,
-                    (str(investigation_id), email_type, to_address),
-                )
-                return cur.fetchone() is not None
+                (str(investigation_id), email_type, to_address),
+            )
+            return cur.fetchone() is not None
     except Exception as e:  # noqa: BLE001
         log.warning("per-recipient idempotency check failed: %s", e)
         return False

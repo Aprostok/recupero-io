@@ -9,7 +9,6 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from recupero.labels.validator import (
-    ValidationReport,
     validate_seed_files,
 )
 

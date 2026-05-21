@@ -11,8 +11,6 @@ Tests run in <50ms, zero network.
 
 from __future__ import annotations
 
-import pytest
-
 from recupero.worker.investigations_api import (
     _extract_brief_timestamp,
     _filter_to_latest_briefs,

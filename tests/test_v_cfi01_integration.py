@@ -36,11 +36,10 @@ where available so the issuer DB lookup mirrors production.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from recupero.freeze.asks import (
-    FreezeAsk,
     IssuerEntry,
     synthesize_historical_freeze_asks,
 )
@@ -53,7 +52,6 @@ from recupero.models import (
 )
 from recupero.reports.investigator_export import build_findings, write_csv
 from recupero.worker._victim_summary import classify_recovery_prospects
-
 
 # ---- Real mainnet contract addresses (lowercase per issuer DB convention) ---- #
 
@@ -101,7 +99,7 @@ def _mk_transfer(
 ) -> Transfer:
     if tx_hash is None:
         tx_hash = "0x" + str(hash((from_addr, to_addr, token.symbol)) % (10**60))[:64].zfill(64)
-    block_time = datetime(2025, 10, 9, 0, 29, tzinfo=timezone.utc)
+    block_time = datetime(2025, 10, 9, 0, 29, tzinfo=UTC)
     return Transfer(
         transfer_id=f"ethereum:{tx_hash}:1",
         chain=Chain.ethereum,
@@ -190,9 +188,9 @@ def _v_cfi01_case() -> Case:
         case_id="V-CFI01",
         seed_address=VICTIM,
         chain=Chain.ethereum,
-        incident_time=datetime(2025, 10, 9, 0, 29, tzinfo=timezone.utc),
+        incident_time=datetime(2025, 10, 9, 0, 29, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 5, 18, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 5, 18, tzinfo=UTC),
         software_version="0.16.0",
         config_used={"trace": {"max_depth": 2}},
     )
@@ -863,6 +861,7 @@ def test_v_cfi01_skip_editorial_brief_synthesizer_honors_capability(tmp_path) ->
     """
     import json
     from unittest.mock import MagicMock
+
     from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
 
     case_dir = tmp_path / "case_X"
@@ -992,6 +991,7 @@ def test_v_cfi01_brief_synthesizer_status_policy(
     """
     import json
     from unittest.mock import MagicMock
+
     from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
 
     case_dir = tmp_path / "case_Y"
@@ -1167,8 +1167,6 @@ def test_v_cfi01_end_to_end_historical_inflow_routes_to_recoverable(
       6. The rendered HTML uses 'received at' language (not
          'currently held') because aggregate_evidence_mode=historical_only.
     """
-    from pathlib import Path
-    from recupero.models import Case, Chain
     from recupero.reports.brief import InvestigatorInfo
     from recupero.reports.emit_brief import _extract_freezable
     from recupero.reports.victim import VictimInfo
@@ -1537,13 +1535,14 @@ def test_v_cfi01_brief_carries_schema_version() -> None:
     fall back to safe defaults rather than silently rendering
     wrong language for pre-evidence_mode brief shapes."""
     import json
+    import tempfile
     from pathlib import Path as _Path
     from unittest.mock import MagicMock
+
     from recupero.worker.pipeline import (
         BRIEF_SCHEMA_VERSION,
         _synthesize_freeze_brief_from_asks,
     )
-    import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         case_dir = _Path(tmp) / "case_X"
         case_dir.mkdir()
@@ -1564,10 +1563,11 @@ def test_v_cfi01_skip_editorial_synthesizer_includes_contact_email() -> None:
     info, so send-freeze-letters silently SKIPPED every issuer entry
     on any worker case that hit the skip_editorial path."""
     import json
+    import tempfile
     from pathlib import Path as _Path
     from unittest.mock import MagicMock
+
     from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
-    import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         case_dir = _Path(tmp) / "case_X"
         case_dir.mkdir()
@@ -1696,10 +1696,11 @@ def test_v_cfi01_synthesizer_excludes_unrecoverable_from_max_recoverable() -> No
     reported MAX_RECOVERABLE_USD=$655K even though Sky Protocol
     can't freeze."""
     import json
+    import tempfile
     from pathlib import Path as _Path
     from unittest.mock import MagicMock
+
     from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
-    import tempfile
     with tempfile.TemporaryDirectory() as tmp:
         case_dir = _Path(tmp) / "case_X"
         case_dir.mkdir()
@@ -1840,6 +1841,7 @@ def test_v_cfi01_brief_render_refuses_maple_fallback() -> None:
     surfaces the missing-template error so the operator can fix the
     deploy config instead of silently shipping wrong language."""
     import inspect
+
     from recupero.reports.brief import generate_briefs
     src = inspect.getsource(generate_briefs)
     # The function source must contain a RuntimeError raise on missing
@@ -1885,6 +1887,7 @@ def test_v0_16_5_missing_freeze_asks_stub_has_schema_version(tmp_path) -> None:
     import json
     from pathlib import Path as _Path
     from unittest.mock import MagicMock
+
     from recupero.worker.pipeline import (
         BRIEF_SCHEMA_VERSION,
         _synthesize_freeze_brief_from_asks,
@@ -1906,9 +1909,10 @@ def test_v0_16_5_exchange_deposit_explorer_url_per_chain() -> None:
     per-chain prefix instead of a hardcoded etherscan URL. Solana /
     Bitcoin / Tron CEX deposits previously 404'd on operator
     click-throughs."""
-    from datetime import datetime, timezone
+    from datetime import datetime
     from decimal import Decimal
-    from recupero.freeze.asks import detect_exchange_deposits, ExchangeDeposit
+
+    from recupero.freeze.asks import detect_exchange_deposits
     from recupero.labels.store import LabelStore
     from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
     # Build a synthetic Solana case with a Solana CEX deposit.
@@ -1918,7 +1922,7 @@ def test_v0_16_5_exchange_deposit_explorer_url_per_chain() -> None:
             chain=Chain.solana,
             tx_hash="0xabc",
             block_number=1,
-            block_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            block_time=datetime(2026, 1, 1, tzinfo=UTC),
             from_address="solanafrom",
             to_address="solanaCEXdest",
             counterparty=Counterparty(
@@ -1931,20 +1935,21 @@ def test_v0_16_5_exchange_deposit_explorer_url_per_chain() -> None:
             amount_raw="1000000000", amount_decimal=Decimal("1"),
             usd_value_at_tx=Decimal("5000"),
             hop_depth=1,
-            fetched_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            fetched_at=datetime(2026, 1, 1, tzinfo=UTC),
             explorer_url="https://solscan.io/tx/0xabc",
         ),
     ]
     case = Case(
         case_id="solana-test", seed_address="solanafrom",
         chain=Chain.solana,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
         software_version="test", config_used={},
     )
     # Inject the CEX label via a MagicMock label_store.
     from unittest.mock import MagicMock
+
     from recupero.models import Label, LabelCategory
     fake_label = Label(
         address="solanaCEXdest",
@@ -1954,7 +1959,7 @@ def test_v0_16_5_exchange_deposit_explorer_url_per_chain() -> None:
         source="test",
         confidence="high",
         notes="test",
-        added_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        added_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     label_store = MagicMock(spec=LabelStore)
     label_store.lookup = MagicMock(return_value=fake_label)
@@ -1979,6 +1984,7 @@ def test_v0_16_5_freezable_entry_schema_parity() -> None:
     import json
     from pathlib import Path as _Path
     from unittest.mock import MagicMock
+
     from recupero.worker.pipeline import _synthesize_freeze_brief_from_asks
     case_dir = _Path("/tmp" if not hasattr(__builtins__, "WindowsPath") else "")
     # Use the tmp_path-style approach.
@@ -2059,22 +2065,20 @@ def test_jacobs_eight_original_bugs_all_fixed_in_current_code() -> None:
     If this test passes, Jacob's deploy is the problem (his artifacts
     show software_version='0.1.0' which is pre-v0.16.0). His deploy
     needs to be updated to whatever v0.16.5 ships."""
-    from recupero.reports.investigator_export import (
-        _findings_from_freezable,
-        _findings_from_destinations,
-    )
-    from recupero.reports.brief import _build_issuer_freezable_ctx
-    from recupero.worker._victim_summary import (
-        classify_recovery_prospects,
-        _unrecoverable_emit_allowed,
-    )
-    from recupero._common import capability_blocks_freeze
-    import os
-
     # ---- Bug 1: freeze_asks generated from V-CFI01-shape inflow ----
     # (covered by test_v_cfi01_real_artifacts_jacob_run_post_v0_16
     # below). Sanity-check the synthesizer is wired into the worker.
     import inspect
+    import os
+
+    from recupero._common import capability_blocks_freeze
+    from recupero.reports.investigator_export import (
+        _findings_from_destinations,
+        _findings_from_freezable,
+    )
+    from recupero.worker._victim_summary import (
+        _unrecoverable_emit_allowed,
+    )
     from recupero.worker.pipeline import _stage_list_freeze_targets
     src = inspect.getsource(_stage_list_freeze_targets)
     assert "synthesize_historical_freeze_asks" in src, (
@@ -2083,7 +2087,7 @@ def test_jacobs_eight_original_bugs_all_fixed_in_current_code() -> None:
     )
 
     # ---- Bug 2: AI prompt has balance_verified_on_chain instruction ----
-    from recupero.reports.ai_editorial import SYSTEM_PROMPT, _summarize_case_for_ai
+    from recupero.reports.ai_editorial import SYSTEM_PROMPT
     assert "balance_verified_on_chain" in SYSTEM_PROMPT, (
         "Bug 2: SYSTEM_PROMPT must instruct the AI on confirmed-balance "
         "framing (was hedging 'if the balance remains' on known balances)."
@@ -2222,7 +2226,8 @@ def test_v_cfi01_real_artifacts_jacob_run_post_v0_16() -> None:
     (the artifacts he posted show software_version='0.1.0' and lack
     onward_cex_flows + evidence_type fields — both added in v0.16.0).
     If this test FAILS, the fix needs more work."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from recupero.freeze.asks import synthesize_historical_freeze_asks
     from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 
@@ -2241,7 +2246,7 @@ def test_v_cfi01_real_artifacts_jacob_run_post_v0_16() -> None:
     CBBTC_CONTRACT_J = "0xcbb7c0006f23900c38eb856149f799620fcb8a4a"
     MSYRUP_CONTRACT_J = "0x2fe058ccf29f123f9dd2aec0418aa66a877d8e50"
 
-    incident_time = datetime(2025, 10, 9, 0, 29, tzinfo=timezone.utc)
+    incident_time = datetime(2025, 10, 9, 0, 29, tzinfo=UTC)
 
     def _mk_t(from_a, to_a, contract, symbol, decimals, usd, tx_hash):
         return Transfer(
@@ -2292,7 +2297,7 @@ def test_v_cfi01_real_artifacts_jacob_run_post_v0_16() -> None:
         chain=Chain.ethereum,
         incident_time=incident_time,
         transfers=pass1_transfers + pass2_transfers,
-        trace_started_at=datetime(2026, 5, 18, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 5, 18, tzinfo=UTC),
         software_version="0.16.5",
         config_used={"trace": {"max_depth": 2}},
     )

@@ -25,14 +25,11 @@ This file pins the new behavior:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-
-import pytest
 
 from recupero.models import Case, Chain, Counterparty, Label, LabelCategory, TokenRef, Transfer
 from recupero.reports.emit_brief import _extract_destinations
-
 
 # ---- Fixtures ---- #
 
@@ -53,7 +50,7 @@ def _label(addr: str, *, category: LabelCategory, name: str = "Test") -> Label:
         category=category,
         source="test",
         confidence="high",
-        added_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        added_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
 
 
@@ -66,7 +63,7 @@ def _transfer(
     counterparty_label: Label | None = None,
     tx_hash: str | None = None,
 ) -> Transfer:
-    ts = datetime(2026, 4, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 4, 1, tzinfo=UTC)
     tx_hash = tx_hash or "0x" + "1" * 64
     return Transfer(
         transfer_id=f"ethereum:{tx_hash}:1",
@@ -102,9 +99,9 @@ def _case(transfers: list[Transfer]) -> Case:
         case_id="V-CFI01",
         seed_address=VICTIM,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 4, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 4, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 4, 1, tzinfo=UTC),
         software_version="v0.13.4",
         config_used={},
     )

@@ -107,7 +107,9 @@ def test_retry_uses_full_wait_sequence_then_raises() -> None:
             _resend_send_with_retry(_mk_req())
     waits = [c.args[0] for c in sleep.call_args_list]
     assert len(waits) == len(_RESEND_RETRY_WAITS_SEC)
-    for actual, base in zip(waits, _RESEND_RETRY_WAITS_SEC):
+    # strict=True: raises if waits and _RESEND_RETRY_WAITS_SEC differ in
+    # length — silent truncation would let a wrong retry count pass.
+    for actual, base in zip(waits, _RESEND_RETRY_WAITS_SEC, strict=True):
         assert base * 0.75 <= actual <= base * 1.25, (
             f"jittered wait {actual} outside ±25% band of base {base}"
         )

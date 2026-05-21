@@ -11,13 +11,9 @@ into the brief assembly in a follow-up.
 
 from __future__ import annotations
 
-import pytest
-
 from recupero.trace.bridge_calldata import (
-    BridgeDecodeResult,
     decode_bridge_calldata,
 )
-
 
 # ---- Empty / malformed input ---- #
 

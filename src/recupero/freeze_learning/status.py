@@ -38,7 +38,6 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
 from uuid import UUID
 
 log = logging.getLogger(__name__)
@@ -308,69 +307,68 @@ def fetch_live_filing_status(
     now = datetime.now(UTC)
 
     try:
-        with db_connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                # Letters table
-                cur.execute(letters_sql, (letter_filter_value,))
-                for row in cur.fetchall():
-                    sent_at = row["sent_at"]
-                    days_since = max(0, (now - sent_at).days)
-                    requested = row["requested_freeze_usd"] or Decimal(0)
-                    if not isinstance(requested, Decimal):
-                        requested = Decimal(str(requested))
-                    frozen = row.get("frozen_usd")
-                    if frozen is not None and not isinstance(frozen, Decimal):
-                        frozen = Decimal(str(frozen))
-                    peak = row.get("peak_frozen_usd")
-                    if peak is not None and not isinstance(peak, Decimal):
-                        peak = Decimal(str(peak))
-                    outcome_type = row.get("outcome_type")
-                    followup_stage = row.get("followup_stage") or "initial"
-                    # Display the PEAK frozen amount in the per-letter
-                    # cell so the table tells the truth even when the
-                    # latest outcome is non-financial (acknowledged etc.)
-                    display_frozen = peak if peak is not None else frozen
-                    status.letters.append(LetterStatus(
-                        letter_id=row["letter_id"],
-                        issuer=row["issuer"],
-                        target_address=row["target_address"],
-                        chain=row["chain"],
-                        asset_symbol=row["asset_symbol"],
-                        requested_freeze_usd=requested,
-                        requested_freeze_usd_human=_fmt_usd(requested),
-                        sent_at=sent_at,
-                        sent_at_human=sent_at.strftime("%Y-%m-%d"),
-                        days_since_sent=days_since,
-                        status_badge=_badge_for_letter(
-                            outcome_type=outcome_type,
-                            days_since_sent=days_since,
-                            followup_stage=followup_stage,
-                        ),
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            # Letters table
+            cur.execute(letters_sql, (letter_filter_value,))
+            for row in cur.fetchall():
+                sent_at = row["sent_at"]
+                days_since = max(0, (now - sent_at).days)
+                requested = row["requested_freeze_usd"] or Decimal(0)
+                if not isinstance(requested, Decimal):
+                    requested = Decimal(str(requested))
+                frozen = row.get("frozen_usd")
+                if frozen is not None and not isinstance(frozen, Decimal):
+                    frozen = Decimal(str(frozen))
+                peak = row.get("peak_frozen_usd")
+                if peak is not None and not isinstance(peak, Decimal):
+                    peak = Decimal(str(peak))
+                outcome_type = row.get("outcome_type")
+                followup_stage = row.get("followup_stage") or "initial"
+                # Display the PEAK frozen amount in the per-letter
+                # cell so the table tells the truth even when the
+                # latest outcome is non-financial (acknowledged etc.)
+                display_frozen = peak if peak is not None else frozen
+                status.letters.append(LetterStatus(
+                    letter_id=row["letter_id"],
+                    issuer=row["issuer"],
+                    target_address=row["target_address"],
+                    chain=row["chain"],
+                    asset_symbol=row["asset_symbol"],
+                    requested_freeze_usd=requested,
+                    requested_freeze_usd_human=_fmt_usd(requested),
+                    sent_at=sent_at,
+                    sent_at_human=sent_at.strftime("%Y-%m-%d"),
+                    days_since_sent=days_since,
+                    status_badge=_badge_for_letter(
                         outcome_type=outcome_type,
-                        frozen_usd=display_frozen,
-                        frozen_usd_human=_fmt_usd(display_frozen),
-                        last_followup_sent_at=row.get("last_followup_sent_at"),
+                        days_since_sent=days_since,
                         followup_stage=followup_stage,
-                        peak_frozen_usd=peak,
-                    ))
+                    ),
+                    outcome_type=outcome_type,
+                    frozen_usd=display_frozen,
+                    frozen_usd_human=_fmt_usd(display_frozen),
+                    last_followup_sent_at=row.get("last_followup_sent_at"),
+                    followup_stage=followup_stage,
+                    peak_frozen_usd=peak,
+                ))
 
-                # Monitoring snapshot — the subscriber.py auto-subscribe
-                # writes created_by = f"emit_brief:<case_id>", where
-                # <case_id> is the string brief identifier (NOT the
-                # investigations.id UUID). When the caller only supplied
-                # investigation_id, the monitoring snapshot stays at
-                # zeros — a future revision can resolve the case_id
-                # from the investigation row.
-                if case_id:
-                    created_by = f"emit_brief:{case_id}"
-                    cur.execute(monitoring_sql, {"created_by": created_by})
-                    mon_row = cur.fetchone()
-                    if mon_row:
-                        status.monitoring = MonitoringSnapshot(
-                            active_subscriptions=mon_row.get("active_subs") or 0,
-                            alerts_fired_since_brief=mon_row.get("alerts_fired") or 0,
-                            last_alert_at=mon_row.get("last_alert_at"),
-                        )
+            # Monitoring snapshot — the subscriber.py auto-subscribe
+            # writes created_by = f"emit_brief:<case_id>", where
+            # <case_id> is the string brief identifier (NOT the
+            # investigations.id UUID). When the caller only supplied
+            # investigation_id, the monitoring snapshot stays at
+            # zeros — a future revision can resolve the case_id
+            # from the investigation row.
+            if case_id:
+                created_by = f"emit_brief:{case_id}"
+                cur.execute(monitoring_sql, {"created_by": created_by})
+                mon_row = cur.fetchone()
+                if mon_row:
+                    status.monitoring = MonitoringSnapshot(
+                        active_subscriptions=mon_row.get("active_subs") or 0,
+                        alerts_fired_since_brief=mon_row.get("alerts_fired") or 0,
+                        last_alert_at=mon_row.get("last_alert_at"),
+                    )
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "fetch_live_filing_status failed for case %s — "

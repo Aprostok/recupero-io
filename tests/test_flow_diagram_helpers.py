@@ -17,7 +17,6 @@ Tests run in <100ms total.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -25,8 +24,8 @@ import pytest
 from recupero.worker._flow_diagram import (
     _edge_label,
     _edge_penwidth,
-    _entity_badge,
     _EdgeAttrs,
+    _entity_badge,
     _escape,
     _explorer_url,
     _fmt_usd_compact,
@@ -36,7 +35,6 @@ from recupero.worker._flow_diagram import (
     _slug,
     _soft_wrap,
 )
-
 
 # ---- _short_addr ---- #
 

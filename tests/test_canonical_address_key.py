@@ -16,7 +16,6 @@ from __future__ import annotations
 
 from recupero._common import canonical_address_key as _ck
 
-
 # ---- EVM lowercase ---- #
 
 

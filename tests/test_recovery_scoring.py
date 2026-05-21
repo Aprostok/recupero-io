@@ -4,11 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 from recupero.recovery.scorer import (
-    RecoveryDriver,
-    RecoveryEstimate,
     score_recovery,
 )
 
@@ -232,7 +228,7 @@ def test_dispersed_funds_negative_driver() -> None:
     brief = _brief(
         total_loss="$1,000,000",
         freezable=[
-            {"issuer": f"Tether", "total_usd": "$50,000",
+            {"issuer": "Tether", "total_usd": "$50,000",
              "freeze_capability": "yes"} for _ in range(4)
         ] + [
             {"issuer": "Tether", "total_usd": "$100,000",

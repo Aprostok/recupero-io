@@ -46,16 +46,15 @@ N engagements.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import psycopg
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from psycopg.rows import dict_row
+
 from recupero._common import db_connect
 
 log = logging.getLogger(__name__)

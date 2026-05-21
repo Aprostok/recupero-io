@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 from recupero.api.app import app
 from recupero.api.auth import reset_buckets_for_tests
 
-
 # ---- Fixtures ---- #
 
 

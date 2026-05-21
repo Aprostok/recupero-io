@@ -10,12 +10,12 @@ verification against the live DB).
 
 from __future__ import annotations
 
+from datetime import UTC
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-
 
 # ---- _parse_uuid + _confirm ---- #
 
@@ -100,7 +100,8 @@ def test_mark_engaged_missing_investigation_returns_1() -> None:
 def test_mark_engaged_idempotent_on_already_active() -> None:
     """Running mark-engaged on an already-active engagement is a
     no-op (preserves the original start time)."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from recupero.ops.commands import mark_engaged
     with patch("recupero.ops.commands.mark_engaged.psycopg.connect") as mock_connect:
         mock_cursor = MagicMock()
@@ -108,7 +109,7 @@ def test_mark_engaged_idempotent_on_already_active() -> None:
         mock_cursor.fetchone.return_value = {
             "id": uuid4(),
             "status": "complete",
-            "engagement_started_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "engagement_started_at": datetime(2026, 1, 1, tzinfo=UTC),
             "engagement_closed_at": None,
         }
         mock_conn = MagicMock()
@@ -154,14 +155,15 @@ def test_mark_closed_errors_if_no_engagement() -> None:
 def test_mark_closed_idempotent_on_already_closed(capsys) -> None:
     """Running mark-closed on an already-closed engagement returns
     0 without modifying state."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from recupero.ops.commands import mark_closed
     with patch("recupero.ops.commands.mark_closed.psycopg.connect") as mock_connect:
         mock_cursor = MagicMock()
         mock_cursor.fetchone.return_value = {
             "id": uuid4(),
-            "engagement_started_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
-            "engagement_closed_at": datetime(2026, 2, 1, tzinfo=timezone.utc),
+            "engagement_started_at": datetime(2026, 1, 1, tzinfo=UTC),
+            "engagement_closed_at": datetime(2026, 2, 1, tzinfo=UTC),
             "change_summary": "prior",
         }
         mock_conn = MagicMock()
@@ -291,7 +293,8 @@ def test_followup_now_requires_active_engagement() -> None:
 def test_followup_now_requires_victim_email() -> None:
     """Engaged investigation without cases.client_email can't be
     sent — error."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from recupero.ops.commands import followup_now
     with patch("recupero.ops.commands.followup_now.psycopg.connect") as mock_connect:
         mock_cursor = MagicMock()
@@ -300,7 +303,7 @@ def test_followup_now_requires_victim_email() -> None:
             "case_id": uuid4(),
             "chain": "ethereum",
             "seed_address": "0x" + "a" * 40,
-            "engagement_started_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "engagement_started_at": datetime(2026, 1, 1, tzinfo=UTC),
             "last_followup_sent_at": None,
             "freezable_issuers": None,
             "victim_email": None,  # missing
@@ -319,7 +322,8 @@ def test_followup_now_requires_victim_email() -> None:
 def test_followup_now_user_cancels_returns_1(capsys) -> None:
     """If the operator types 'n' at the confirmation prompt, the
     command exits 1 without sending."""
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from recupero.ops.commands import followup_now
     with patch("recupero.ops.commands.followup_now.psycopg.connect") as mock_connect:
         mock_cursor = MagicMock()
@@ -328,7 +332,7 @@ def test_followup_now_user_cancels_returns_1(capsys) -> None:
             "case_id": uuid4(),
             "chain": "ethereum",
             "seed_address": "0x" + "a" * 40,
-            "engagement_started_at": datetime(2026, 1, 1, tzinfo=timezone.utc),
+            "engagement_started_at": datetime(2026, 1, 1, tzinfo=UTC),
             "last_followup_sent_at": None,
             "freezable_issuers": None,
             "victim_email": "x@example.com",

@@ -1186,7 +1186,12 @@ def _patch_pdf_links_subprocess(
         "print(f'patched {n}')"
     )
 
-    stderr_file = tempfile.NamedTemporaryFile(
+    # SIM115 doesn't apply here: we MUST hold the file open past the
+    # `with`-block boundary so subprocess can write to it from another
+    # process, then we read it back after .wait(). `delete=False` is
+    # required so the path persists across the close in the OS-level
+    # cleanup below.
+    stderr_file = tempfile.NamedTemporaryFile(  # noqa: SIM115
         mode="w+b", delete=False, prefix="recupero-patcher-stderr-",
     )
     try:
@@ -1276,7 +1281,10 @@ def _render_pdf_in_subprocess(
     import time
     cmd = [sys.executable, "-c", script, *args]
 
-    stderr_file = tempfile.NamedTemporaryFile(
+    # SIM115 doesn't apply: same rationale as the patcher above — the
+    # subprocess writes to this file from another process; we need the
+    # path to persist across .close() and be readable after .wait().
+    stderr_file = tempfile.NamedTemporaryFile(  # noqa: SIM115
         mode="w+b", delete=False, prefix="recupero-render-stderr-",
     )
     try:

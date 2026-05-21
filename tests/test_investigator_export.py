@@ -14,8 +14,6 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
 from recupero.reports.investigator_export import (
     _CSV_COLUMNS,
     InvestigatorFinding,
@@ -298,7 +296,7 @@ def test_csv_column_order_locked() -> None:
         "amount_usd", "tx_hash", "explorer_url", "timestamp_iso",
         "follow_up_url", "notes",
     )
-    assert _CSV_COLUMNS == expected
+    assert expected == _CSV_COLUMNS
 
 
 # ---- JSON write ---- #

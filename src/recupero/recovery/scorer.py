@@ -24,9 +24,14 @@ log = logging.getLogger(__name__)
 # scoring math in lockstep.
 from recupero._pricing import (  # noqa: E402  (logical placement, after stdlib imports)
     CONTINGENCY_PCT as _CONTINGENCY_PCT_INT,
+)
+from recupero._pricing import (
     DIAGNOSTIC_FEE_USD as _DIAGNOSTIC_FEE_USD,
+)
+from recupero._pricing import (
     ENGAGEMENT_FEE_USD as _ENGAGEMENT_FEE_USD,
 )
+
 _CONTINGENCY_PCT = Decimal(_CONTINGENCY_PCT_INT)
 
 

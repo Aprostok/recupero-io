@@ -19,14 +19,12 @@ in or not?" and that's testable without the timing harness.
 from __future__ import annotations
 
 import httpx
-import pytest
 
 from recupero.storage.supabase_case_store import (
     PayloadTooLargeError,
-    _StorageTransient,
     _is_storage_transient,
+    _StorageTransient,
 )
-
 
 # ---- _is_storage_transient discriminator ---- #
 

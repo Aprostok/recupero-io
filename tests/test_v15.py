@@ -6,8 +6,6 @@ from decimal import Decimal
 
 from recupero.dormant.finder import DormantCandidate, TokenHolding
 from recupero.freeze.asks import (
-    FreezeAsk,
-    IssuerEntry,
     group_by_issuer,
     load_issuer_db,
     match_freeze_asks,

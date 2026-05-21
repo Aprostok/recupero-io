@@ -45,12 +45,16 @@ from uuid import UUID
 from recupero._common import (
     aggregate_evidence_mode_from_holdings,
     atomic_write_text,
-    canonical_address_key as _ck,
     capability_blocks_freeze,
     capability_display,
     capability_is_freezable,
-    investigator_defaults as _investigator_defaults,
     short_addr,
+)
+from recupero._common import (
+    canonical_address_key as _ck,
+)
+from recupero._common import (
+    investigator_defaults as _investigator_defaults,
 )
 from recupero.models import Case, LabelCategory
 from recupero.reports.brief import BRIEF_SCHEMA_VERSION as _BRIEF_SCHEMA_VERSION
@@ -362,12 +366,12 @@ def _extract_destinations(
     }
     # freeze_targets_by_addr keys are already canonical post-v0.20.1.
     candidate_addrs.update(freeze_targets_by_addr.keys())
-    for a in freeze_targets_by_addr.keys():
+    for a in freeze_targets_by_addr:
         per_addr_display.setdefault(a, a)
     # Editorial notes may carry mixed-case keys (operator hand-edited
     # the JSON). Canonical-key them too, but preserve the operator's
     # display-form when no other source has provided one.
-    for ed_addr in editorial_notes.keys():
+    for ed_addr in editorial_notes:
         canon_ed = _ck(ed_addr)
         if canon_ed:
             candidate_addrs.add(canon_ed)

@@ -7,10 +7,8 @@ normalization (mixing penalty).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-
-import pytest
 
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.trace.indirect_exposure import (
@@ -30,7 +28,7 @@ def _mk_transfer(
     chain: Chain = Chain.ethereum,
 ) -> Transfer:
     tx_hash = "0x" + (tx_suffix * 64)[:64]
-    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, tzinfo=UTC)
     return Transfer(
         transfer_id=f"{chain.value}:{tx_hash}:1",
         chain=chain,
@@ -58,9 +56,9 @@ def _mk_case(transfers: list[Transfer]) -> Case:
         case_id="test",
         seed_address="0x" + "a" * 40,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
         software_version="test",
         config_used={},
     )

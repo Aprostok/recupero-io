@@ -16,10 +16,9 @@ Modules covered:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
-
 
 # ---- labels/store.py (round-11 tests-CRIT-003) ---- #
 
@@ -45,6 +44,7 @@ def test_high_risk_db_load_preserves_solana_case() -> None:
     must land in the dict with its canonical case-preserved key.
     Pre-v0.17.5 the loader lowercased every key, breaking lookups."""
     import json as _json
+
     from recupero.trace.risk_scoring import load_high_risk_db
 
     with TemporaryDirectory() as td:
@@ -99,16 +99,22 @@ def test_score_addresses_matches_base58_high_risk_entry() -> None:
     sanctioned wallet; score_addresses must produce a non-zero
     score (= the high_risk DB entry matched on canonical key)."""
     from decimal import Decimal
+
     from recupero.models import (
-        Case, Chain, Counterparty, TokenRef, Transfer,
+        Case,
+        Chain,
+        Counterparty,
+        TokenRef,
+        Transfer,
     )
     from recupero.trace.risk_scoring import (
-        HighRiskEntry, score_addresses,
+        HighRiskEntry,
+        score_addresses,
     )
 
     sanctioned = "BcrW1fJRwSoNYRBn5UxbVKsKsXdNRwGsQbf5KAcDuwfV"
     victim = "9JBJYgT6Wp6JE9LZ6yTd2dgcr5JKHcGcDYr6mP7vXt8d"
-    now = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 1, tzinfo=UTC)
 
     transfer = Transfer(
         transfer_id="solana:tx1:0",

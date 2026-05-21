@@ -25,7 +25,7 @@ in ~0.2s real time). Zero network, zero DB.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC
 from decimal import Decimal
 
 import pytest
@@ -37,7 +37,6 @@ from recupero.chains.hyperliquid.client import (
     _parse_ledger_event,
     _RateLimiter,
 )
-
 
 # ---- HyperliquidLedgerEvent dataclass ---- #
 
@@ -68,7 +67,7 @@ def test_ledger_event_when_property() -> None:
         usdc_delta=Decimal("0"), destination=None, raw={},
     )
     when = ev.when
-    assert when.tzinfo is timezone.utc
+    assert when.tzinfo is UTC
     assert when.year == 2023
     assert when.month == 11
 

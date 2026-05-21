@@ -8,22 +8,18 @@ DEX swap unwrapping continues the trace past router contracts.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
-from recupero.trace.drainer_detection import (
-    DrainerFindings,
-    detect_drainer_pattern,
-    drainer_findings_to_brief_section,
-)
 from recupero.trace.dex_swaps import (
-    DEXSwap,
     detect_dex_swaps,
     dex_swaps_to_brief_section,
     load_dex_routers,
+)
+from recupero.trace.drainer_detection import (
+    detect_drainer_pattern,
+    drainer_findings_to_brief_section,
 )
 from recupero.trace.risk_scoring import HighRiskEntry
 
@@ -39,7 +35,7 @@ def _mk_transfer(
     amount: Decimal = Decimal("1000"),
     chain: Chain = Chain.ethereum,
 ) -> Transfer:
-    ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    ts = datetime(2026, 1, 1, tzinfo=UTC)
     return Transfer(
         transfer_id=f"{chain.value}:{tx_hash}:1",
         chain=chain,
@@ -69,9 +65,9 @@ def _mk_case(transfers: list[Transfer], seed: str = "0x" + "a" * 40) -> Case:
         case_id="test",
         seed_address=seed,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
         transfers=transfers,
-        trace_started_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
         software_version="test",
         config_used={},
     )

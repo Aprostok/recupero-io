@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -20,7 +20,7 @@ from recupero.models import (
 
 
 def _now() -> datetime:
-    return datetime(2025, 1, 15, 12, 0, 0, tzinfo=timezone.utc)
+    return datetime(2025, 1, 15, 12, 0, 0, tzinfo=UTC)
 
 
 def _eth_token() -> TokenRef:
@@ -91,7 +91,8 @@ class TestModels:
             )
 
     def test_extra_fields_forbidden(self) -> None:
-        with pytest.raises(Exception):
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
             Label(
                 address="0xa",
                 name="x",

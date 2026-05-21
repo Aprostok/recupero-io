@@ -15,18 +15,14 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
-
-import pytest
+from uuid import UUID
 
 from recupero.worker._freeze_followup import (
     FreezeFollowupCandidate,
-    FreezeFollowupResult,
     _compute_next_transition,
     _render_followup_html,
     run_freeze_followup_cron,
 )
-
 
 LETTER_ID = UUID("66666666-6666-6666-6666-666666666666")
 CASE_ID = UUID("77777777-7777-7777-7777-777777777777")

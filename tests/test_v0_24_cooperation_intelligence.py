@@ -14,8 +14,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
-import pytest
-
 from recupero.monitoring.cooperation_intelligence import (
     INSTRUMENT_DIRECT_REQUEST,
     INSTRUMENT_FINCEN_314B,
@@ -27,7 +25,6 @@ from recupero.monitoring.cooperation_intelligence import (
     build_cooperation_profile,
     recommend_legal_instrument,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # recommend_legal_instrument — precedence chain

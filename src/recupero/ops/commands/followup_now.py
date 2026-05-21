@@ -21,8 +21,12 @@ import logging
 from collections.abc import Callable
 from uuid import UUID
 
-import psycopg
+# RIGOR-2: tests patch `recupero.ops.commands.followup_now.psycopg.connect`
+# via unittest.mock.patch — module-level psycopg attribute IS the
+# test-mock seam. F401 false-positive; do not remove.
+import psycopg  # noqa: F401
 from psycopg.rows import dict_row
+
 from recupero._common import db_connect
 
 log = logging.getLogger(__name__)

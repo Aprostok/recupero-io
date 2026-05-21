@@ -19,7 +19,6 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Fixtures
 # ─────────────────────────────────────────────────────────────────────────────
@@ -36,7 +35,7 @@ def api_client(monkeypatch):
     rate limit is right in production, just needs test isolation.)
     """
     monkeypatch.setenv("SUPABASE_DB_URL", "postgres://fake")
-    from recupero.api.app import app, _intake_rl_state
+    from recupero.api.app import _intake_rl_state, app
     _intake_rl_state.clear()
     return TestClient(app)
 

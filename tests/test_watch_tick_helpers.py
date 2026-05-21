@@ -16,11 +16,9 @@ Tests run in <50ms total, zero network, zero DB.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import uuid4
-
-import pytest
 
 from recupero.worker.watch_tick import (
     MaterialChange,
@@ -28,7 +26,6 @@ from recupero.worker.watch_tick import (
     _env_decimal,
     _env_int,
 )
-
 
 # ---- _env_decimal ---- #
 
@@ -125,10 +122,10 @@ def test_material_change_required_fields() -> None:
         is_freezeable=True,
         issuer="Circle",
         asset_symbol="USDC",
-        prior_taken_at=datetime(2026, 5, 14, tzinfo=timezone.utc),
+        prior_taken_at=datetime(2026, 5, 14, tzinfo=UTC),
         prior_usd=Decimal("10000"),
         prior_tx_count=5,
-        new_taken_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+        new_taken_at=datetime(2026, 5, 15, tzinfo=UTC),
         new_usd=Decimal("9500"),
         new_tx_count=8,
         delta_usd=Decimal("-500"),
@@ -156,7 +153,7 @@ def test_material_change_nullable_fields() -> None:
         prior_taken_at=None,
         prior_usd=None,
         prior_tx_count=None,
-        new_taken_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+        new_taken_at=datetime(2026, 5, 15, tzinfo=UTC),
         new_usd=Decimal("250"),
         new_tx_count=1,
         delta_usd=None,
@@ -174,8 +171,8 @@ def test_watch_tick_report_default_lists_empty() -> None:
     """Errors and material_changes default to empty lists (not None)
     so the digest renderer can iterate without null-checking."""
     rpt = WatchTickReport(
-        started_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
-        finished_at=datetime(2026, 5, 15, 0, 5, tzinfo=timezone.utc),
+        started_at=datetime(2026, 5, 15, tzinfo=UTC),
+        finished_at=datetime(2026, 5, 15, 0, 5, tzinfo=UTC),
         candidates=100,
         snapshotted=95,
         skipped_cooldown=4,
@@ -191,14 +188,14 @@ def test_watch_tick_report_default_lists_independent() -> None:
     ``field(default_factory=list)``, which shares one list across
     every instance. Verify this isn't broken."""
     a = WatchTickReport(
-        started_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
-        finished_at=datetime(2026, 5, 15, 0, 5, tzinfo=timezone.utc),
+        started_at=datetime(2026, 5, 15, tzinfo=UTC),
+        finished_at=datetime(2026, 5, 15, 0, 5, tzinfo=UTC),
         candidates=1, snapshotted=1, skipped_cooldown=0,
         skipped_unsupported_chain=0,
     )
     b = WatchTickReport(
-        started_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
-        finished_at=datetime(2026, 5, 16, 0, 5, tzinfo=timezone.utc),
+        started_at=datetime(2026, 5, 16, tzinfo=UTC),
+        finished_at=datetime(2026, 5, 16, 0, 5, tzinfo=UTC),
         candidates=2, snapshotted=2, skipped_cooldown=0,
         skipped_unsupported_chain=0,
     )

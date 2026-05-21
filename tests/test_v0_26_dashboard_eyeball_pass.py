@@ -18,9 +18,6 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID
 
-import pytest
-
-
 _FIRM_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 _FIRM_SLUG = "demo-firm"
 
@@ -30,7 +27,8 @@ def _make_confident_portfolio():
     stat tile, the throughput card, and a 2-issuer top-issuer table.
     """
     from recupero.monitoring.law_firm_dashboard import (
-        FirmIssuerSummary, LawFirmPortfolio,
+        FirmIssuerSummary,
+        LawFirmPortfolio,
     )
     return LawFirmPortfolio(
         firm_id=_FIRM_ID,

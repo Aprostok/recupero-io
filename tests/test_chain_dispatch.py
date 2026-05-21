@@ -30,11 +30,9 @@ Etherscan).
 
 from __future__ import annotations
 
-import pytest
-
-from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.chains.base import ChainAdapter
 from recupero.chains.evm.adapter import EvmAdapter, _profile_for
+from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Chain
 
 

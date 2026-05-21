@@ -50,7 +50,7 @@ def run(*, hours: int = 24, output_format: str = "text") -> int:
 def _print_text(digest: DailyDigest) -> None:
     """Human-readable digest. Header → top-20 events → per-source counts."""
     print("=" * 78)
-    print(f"RECUPERO HACK-TRACKER DAILY DIGEST")
+    print("RECUPERO HACK-TRACKER DAILY DIGEST")
     print(f"Generated: {digest.generated_at.isoformat()}")
     print(
         f"Window:    {digest.window_start.isoformat()} → "

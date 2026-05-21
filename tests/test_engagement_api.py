@@ -15,18 +15,15 @@ The two helpers under test:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
-
-import pytest
 
 from recupero.worker.investigations_api import (
     _build_engagement_summary,
     _fetch_emails_summary,
 )
-
 
 # ---- _build_engagement_summary ---- #
 
@@ -57,7 +54,7 @@ def test_engagement_not_engaged() -> None:
 def test_engagement_active_fresh() -> None:
     """engagement_started_at set + no closed, less than 30 days
     in → 'active' status."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = _build_engagement_summary(_row(
         engagement_started_at=now - timedelta(days=5),
         engagement_fee_paid_usd=Decimal("1500"),
@@ -70,7 +67,7 @@ def test_engagement_active_fresh() -> None:
 
 def test_engagement_closed() -> None:
     """engagement_closed_at set → 'closed' regardless of how long ago."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = _build_engagement_summary(_row(
         engagement_started_at=now - timedelta(days=10),
         engagement_closed_at=now - timedelta(days=2),
@@ -83,7 +80,7 @@ def test_engagement_expired_uncloseed_after_30_days() -> None:
     """Active engagement (no closed_at) past day 30 → 'expired'.
     The operator should run mark-closed on these — but the API
     surfaces the state so the UI can show a "needs closing" alert."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = _build_engagement_summary(_row(
         engagement_started_at=now - timedelta(days=35),
     ))
@@ -97,7 +94,7 @@ def test_needs_followup_when_never_sent() -> None:
     """Active engagement with no last_followup_sent_at →
     needs_followup True. The daily cron will pick this up
     on its next run."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = _build_engagement_summary(_row(
         engagement_started_at=now - timedelta(days=1),
         last_followup_sent_at=None,
@@ -109,7 +106,7 @@ def test_needs_followup_when_never_sent() -> None:
 def test_needs_followup_when_stale() -> None:
     """Active engagement, last followup more than 6 days ago →
     needs_followup True (matches the cron's 6-day cadence)."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = _build_engagement_summary(_row(
         engagement_started_at=now - timedelta(days=15),
         last_followup_sent_at=now - timedelta(days=7),
@@ -120,7 +117,7 @@ def test_needs_followup_when_stale() -> None:
 
 def test_does_not_need_followup_when_recent() -> None:
     """Recently sent followup → needs_followup False."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = _build_engagement_summary(_row(
         engagement_started_at=now - timedelta(days=15),
         last_followup_sent_at=now - timedelta(days=3),
@@ -132,7 +129,7 @@ def test_does_not_need_followup_when_recent() -> None:
 def test_closed_engagement_never_needs_followup() -> None:
     """Even if the followup is stale, a closed engagement should
     not flag needs_followup — the cron correctly excludes these."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     summary = _build_engagement_summary(_row(
         engagement_started_at=now - timedelta(days=15),
         engagement_closed_at=now - timedelta(days=1),
@@ -201,7 +198,7 @@ def test_emails_summary_empty_log() -> None:
 def test_emails_summary_with_sends() -> None:
     """Mixed success + failure rows aggregate correctly."""
     inv_id = str(uuid4())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     with patch("recupero.worker.investigations_api.psycopg.connect") as mock_connect:
         mock_cursor = MagicMock()
         mock_cursor.fetchone.side_effect = [

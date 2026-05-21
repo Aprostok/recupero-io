@@ -71,18 +71,22 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-# v0.17.6 (round-10 security HIGH): prefer defusedxml when available
-# to harden the SDN parse against billion-laughs / XXE attacks. Even
-# though we trust Treasury as the source, an MITM or compromised CDN
-# could inject hostile XML; defusedxml refuses entity-expansion bombs
-# that the stdlib ElementTree happily processes. Falls back to stdlib
-# with a one-time WARNING when defusedxml isn't installed (test envs).
-try:
-    from defusedxml import ElementTree as ET  # type: ignore[no-redef]
-    _XML_PARSER_HARDENED = True
-except ImportError:
-    from xml.etree import ElementTree as ET  # type: ignore[no-redef]
-    _XML_PARSER_HARDENED = False
+# RIGOR-2a: defusedxml is a hard dependency. The OFAC SDN feed is an
+# external untrusted input (MITM-able CDN, supply-chain risk). Stdlib
+# xml.etree is vulnerable to billion-laughs / XXE / external-entity
+# attacks; a hostile feed could expand a small XML file into a
+# multi-gigabyte memory bomb that crashes the sync process (or worse,
+# leaks files via XXE).
+#
+# Pre-RIGOR-2a this module had a try/except fallback to stdlib with a
+# runtime WARNING. The "soft" pattern was indistinguishable from
+# "defusedxml not in prod" because nobody monitors deploy-time WARN
+# logs. Now we fail-closed at import — if defusedxml is missing, the
+# sync simply cannot run.
+from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
+# Compatibility alias retained for any downstream code reading the
+# old flag (always True now). Will be removed in a future cleanup.
+_XML_PARSER_HARDENED = True
 
 log = logging.getLogger(__name__)
 
@@ -99,9 +103,9 @@ DEFAULT_OFAC_CSV_PATH = (
     Path(__file__).parent.parent / "labels" / "seeds" / "ofac_crypto_live.csv"
 )
 
-# Module-level flag so the defusedxml-fallback WARN fires at most once
-# per process even when the sync is invoked repeatedly.
-_PARSER_HARDENING_WARNED = False
+# RIGOR-2a: removed _PARSER_HARDENING_WARNED state. defusedxml is
+# now a hard dependency (see pyproject.toml + the top-of-file
+# import); the runtime WARN-fallback path no longer exists.
 
 # Chains we care about — the OFAC feed labels are like
 # "Digital Currency Address - ETH" or "Digital Currency Address - XBT".
@@ -324,17 +328,9 @@ def _extract_crypto_entries(xml_bytes: bytes) -> list[OFACCryptoEntry]:
     XML namespacing varies; we use .iter() to find elements
     regardless of namespace prefix.
     """
-    if not _XML_PARSER_HARDENED:
-        # WARN once per process — repeat WARNs every sync would spam logs.
-        global _PARSER_HARDENING_WARNED
-        if not _PARSER_HARDENING_WARNED:
-            log.warning(
-                "ofac_sync: defusedxml not installed — falling back to "
-                "stdlib xml.etree.ElementTree which is vulnerable to "
-                "billion-laughs/XXE if the OFAC feed is tampered with. "
-                "Install defusedxml in production: `pip install defusedxml`."
-            )
-            _PARSER_HARDENING_WARNED = True
+    # RIGOR-2a: defusedxml-only — fail-closed at import time, so by
+    # the time we reach here the parser is provably hardened against
+    # billion-laughs / XXE / external-entity expansion attacks.
     root = ET.fromstring(xml_bytes)
     entries: list[OFACCryptoEntry] = []
 

@@ -23,7 +23,6 @@ from recupero.payments.stripe_mode import (
     format_mismatch_warning,
 )
 
-
 # ---- classify_webhook_secret ---- #
 
 

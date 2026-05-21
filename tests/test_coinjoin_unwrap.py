@@ -14,19 +14,14 @@ always score HIGHER than multi-input loose-match.
 
 from __future__ import annotations
 
-import pytest
-
 from recupero.trace.coinjoin_unwrap import (
-    CoinJoinHypothesis,
     UTXOInput,
     UTXOOutput,
-    UnwrapResult,
     classify_coinjoin_pattern,
     detect_round_amounts,
     unwrap_coinjoin,
     unwrap_to_brief_section,
 )
-
 
 # ---- detect_round_amounts ---- #
 

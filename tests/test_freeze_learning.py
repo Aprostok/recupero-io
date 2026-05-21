@@ -8,7 +8,7 @@ scorer prefers learned priors when supplied.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -30,7 +30,7 @@ def _outcome_row(
     outcome_type="full_freeze",
     observed_at=None,
 ):
-    sent_at = sent_at or datetime(2026, 1, 1, tzinfo=timezone.utc)
+    sent_at = sent_at or datetime(2026, 1, 1, tzinfo=UTC)
     observed_at = observed_at or sent_at + timedelta(hours=12)
     return {
         "letter_id": letter_id or uuid4(),
@@ -202,7 +202,8 @@ def test_beta_credible_interval_bounds_sanity() -> None:
     """Beta credible interval must satisfy low <= mean <= high
     and the bounds must lie in [0, 1]."""
     from recupero.freeze_learning.recorder import (
-        _beta_posterior_mean, beta_credible_interval,
+        _beta_posterior_mean,
+        beta_credible_interval,
     )
     for wins, n in [(0, 1), (1, 1), (5, 10), (50, 100), (95, 100)]:
         low, high = beta_credible_interval(wins, n, level=0.90)
@@ -216,7 +217,7 @@ def test_beta_credible_interval_bounds_sanity() -> None:
 def test_response_time_computed_from_timestamps() -> None:
     """avg_response_hours = mean of (observed_at - sent_at) over
     non-silence outcomes."""
-    sent = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    sent = datetime(2026, 1, 1, tzinfo=UTC)
     rows = [
         _outcome_row(
             sent_at=sent,
@@ -236,7 +237,7 @@ def test_response_time_computed_from_timestamps() -> None:
 def test_silence_outcomes_excluded_from_response_time() -> None:
     """silence_30d / silence_90d outcomes shouldn't pollute the
     avg-response-hours metric."""
-    sent = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    sent = datetime(2026, 1, 1, tzinfo=UTC)
     rows = [
         _outcome_row(
             sent_at=sent,

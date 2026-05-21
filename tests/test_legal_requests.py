@@ -77,12 +77,11 @@ def test_exchange_filter_narrows_to_one() -> None:
 
 def test_invalid_request_type_raises() -> None:
     brief = _minimal_brief()
-    with TemporaryDirectory() as tmp:
-        with pytest.raises(ValueError, match="request_type must be"):
-            render_legal_request(
-                brief, request_type="bogus",
-                output_dir=Path(tmp),
-            )
+    with TemporaryDirectory() as tmp, pytest.raises(ValueError, match="request_type must be"):
+        render_legal_request(
+            brief, request_type="bogus",
+            output_dir=Path(tmp),
+        )
 
 
 @pytest.mark.parametrize("rtype", [

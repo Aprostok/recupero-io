@@ -247,7 +247,11 @@ def _entity_badge(identity: str | None) -> tuple[str, str, str] | None:
 # flow diagrams on those chains silently lost link-outs.
 from recupero._common import (
     ADDRESS_EXPLORER_BY_CHAIN as _EXPLORER_BY_CHAIN,
+)
+from recupero._common import (
     atomic_write_text as _atomic_write_text,
+)
+from recupero._common import (
     short_addr as _short_addr,
 )
 

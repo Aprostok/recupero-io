@@ -23,7 +23,6 @@ from decimal import Decimal
 
 from recupero.models import Address, LabelCategory, Transfer
 
-
 # Known burn / null sinks: funds reaching these are economically
 # destroyed. Lowercased EVM form; non-EVM equivalents (Solana
 # 11111111111111111111111111111111 system program, Tron T9yD…) get

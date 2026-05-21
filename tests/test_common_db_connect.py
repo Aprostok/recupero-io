@@ -11,7 +11,7 @@ must NOT raise.
 
 from __future__ import annotations
 
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 
 def test_db_connect_does_not_double_pass_kwargs() -> None:

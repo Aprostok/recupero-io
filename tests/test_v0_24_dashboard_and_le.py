@@ -15,12 +15,9 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
-
 from recupero.monitoring.cooperation_intelligence import (
     IssuerCooperationProfile,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Standalone cooperation_dashboard renderer
@@ -144,9 +141,9 @@ def test_dashboard_renders_full_document_with_profiles():
 def _render_le_with_cooperation(cooperation_profiles):
     """Render the LE handoff on the V-CFI01 fixture with a given
     cooperation_profiles dict."""
-    from tests.test_v_cfi01_full_render import _build_v_cfi01_case, VICTIM
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import VICTIM, _build_v_cfi01_case
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(

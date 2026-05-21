@@ -36,7 +36,10 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
-import psycopg
+# RIGOR-2: tests patch `recupero.worker.investigations_api.psycopg.connect`
+# via unittest.mock.patch (see tests/test_engagement_api.py). The module
+# attribute IS the test-mock seam; F401 false-positive otherwise.
+import psycopg  # noqa: F401
 from psycopg.rows import dict_row
 
 log = logging.getLogger(__name__)
@@ -442,11 +445,10 @@ def _fetch_emails_summary(
 
     pooled = _pooled_dsn(dsn)
     try:
-        with db_connect(pooled, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                # Aggregates first
-                cur.execute(
-                    """
+        with db_connect(pooled, row_factory=dict_row) as conn, conn.cursor() as cur:
+            # Aggregates first
+            cur.execute(
+                """
                     SELECT
                         COUNT(*)                                       AS total,
                         COUNT(*) FILTER (WHERE error_message IS NULL)  AS successful,
@@ -455,34 +457,34 @@ def _fetch_emails_summary(
                       FROM public.emails_sent
                      WHERE investigation_id = %s
                     """,
-                    (investigation_id,),
-                )
-                agg = cur.fetchone() or {}
-                out["total"] = int(agg.get("total") or 0)
-                out["successful"] = int(agg.get("successful") or 0)
-                out["failed"] = int(agg.get("failed") or 0)
-                out["last_sent_at"] = _iso(agg.get("last_sent_at"))
+                (investigation_id,),
+            )
+            agg = cur.fetchone() or {}
+            out["total"] = int(agg.get("total") or 0)
+            out["successful"] = int(agg.get("successful") or 0)
+            out["failed"] = int(agg.get("failed") or 0)
+            out["last_sent_at"] = _iso(agg.get("last_sent_at"))
 
-                # By-type counts (successful only — failures aren't
-                # categorized for the UI's "what's been sent" view)
-                cur.execute(
-                    """
+            # By-type counts (successful only — failures aren't
+            # categorized for the UI's "what's been sent" view)
+            cur.execute(
+                """
                     SELECT email_type, COUNT(*) AS n
                       FROM public.emails_sent
                      WHERE investigation_id = %s
                        AND error_message IS NULL
                      GROUP BY email_type
                     """,
-                    (investigation_id,),
-                )
-                out["by_type"] = {
-                    r["email_type"]: int(r["n"])
-                    for r in cur.fetchall()
-                }
+                (investigation_id,),
+            )
+            out["by_type"] = {
+                r["email_type"]: int(r["n"])
+                for r in cur.fetchall()
+            }
 
-                # Recent 10 sends, any status, newest first
-                cur.execute(
-                    """
+            # Recent 10 sends, any status, newest first
+            cur.execute(
+                """
                     SELECT sent_at, to_address, email_type, subject,
                            error_message
                       FROM public.emails_sent
@@ -490,19 +492,19 @@ def _fetch_emails_summary(
                      ORDER BY sent_at DESC
                      LIMIT 10
                     """,
-                    (investigation_id,),
-                )
-                out["recent"] = [
-                    {
-                        "sent_at": _iso(r["sent_at"]),
-                        "to_address": r["to_address"],
-                        "email_type": r["email_type"],
-                        "subject": r["subject"],
-                        "success": r["error_message"] is None,
-                        "error_message": r["error_message"],
-                    }
-                    for r in cur.fetchall()
-                ]
+                (investigation_id,),
+            )
+            out["recent"] = [
+                {
+                    "sent_at": _iso(r["sent_at"]),
+                    "to_address": r["to_address"],
+                    "email_type": r["email_type"],
+                    "subject": r["subject"],
+                    "success": r["error_message"] is None,
+                    "error_message": r["error_message"],
+                }
+                for r in cur.fetchall()
+            ]
     except Exception as exc:  # noqa: BLE001
         log.warning("emails summary fetch failed for inv=%s: %s",
                     investigation_id, exc)
@@ -896,7 +898,7 @@ def _build_summary(
 #
 # v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0
 # this was duplicated verbatim in 4 worker modules).
-from recupero._common import db_connect, pooled_dsn as _pooled_dsn  # noqa: E402
-
+from recupero._common import db_connect  # noqa: E402
+from recupero._common import pooled_dsn as _pooled_dsn
 
 __all__ = ("list_investigations", "get_investigation_detail")

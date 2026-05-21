@@ -24,8 +24,6 @@ handler bumps it once per (token, day) at most.
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import hashlib
 import hmac
 import logging
@@ -37,6 +35,8 @@ from uuid import UUID
 
 import psycopg
 from psycopg.rows import dict_row
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 

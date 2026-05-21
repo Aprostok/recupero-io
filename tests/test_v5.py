@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.pricing.coingecko import (
     _CANONICAL_STABLECOIN_CONTRACTS,
-    _PER_TRANSFER_USD_SANITY_CEILING,
     CoinGeckoClient,
 )
 from recupero.reports.aggregate import aggregate_stolen, format_aggregate_markdown
 
 
 def _now():
-    return datetime(2025, 10, 9, 1, 13, 47, tzinfo=timezone.utc)
+    return datetime(2025, 10, 9, 1, 13, 47, tzinfo=UTC)
 
 
 def _make_token(symbol: str, contract: str | None) -> TokenRef:

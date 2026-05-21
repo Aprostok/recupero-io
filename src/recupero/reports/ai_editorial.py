@@ -36,9 +36,10 @@ from pathlib import Path
 from typing import Any
 
 # anthropic is loaded lazily so module import doesn't fail without the package.
-
 from recupero._common import (
     investigator_defaults as _investigator_defaults,
+)
+from recupero._common import (
     short_addr as _short_addr,
 )
 

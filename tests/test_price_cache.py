@@ -7,7 +7,6 @@ parameters.
 
 from __future__ import annotations
 
-import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -18,7 +17,6 @@ from recupero.pricing.cache import (
     PriceCache,
     make_price_cache,
 )
-
 
 # ============================================================================
 # PriceCache (file-system, original)

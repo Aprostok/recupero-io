@@ -7,7 +7,7 @@ resolution, exchange endpoint computation, USD aggregation.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -18,7 +18,6 @@ from recupero.chains.base import ChainAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv, StorageParams, TraceParams
 from recupero.models import Chain, EvidenceReceipt, TokenRef
 from recupero.pricing.coingecko import PriceResult
-
 
 SEED = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
 MEXC = "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d"
@@ -52,11 +51,11 @@ class FakeAdapter(ChainAdapter):
             chain=Chain.ethereum,
             tx_hash=tx_hash,
             block_number=19000001,
-            block_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            block_time=datetime(2025, 1, 15, tzinfo=UTC),
             raw_transaction={"hash": tx_hash},
             raw_receipt={"status": "0x1"},
             raw_block_header={"number": "0x1221b81"},
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             fetched_from="fake",
             explorer_url=self.explorer_tx_url(tx_hash),
         )
@@ -95,7 +94,7 @@ def _native_row(tx_hash: str, to_addr: str, eth_amount: str, ts: int = 173694240
         "chain": Chain.ethereum,
         "tx_hash": tx_hash,
         "block_number": 19000001,
-        "block_time": datetime.fromtimestamp(ts, tz=timezone.utc),
+        "block_time": datetime.fromtimestamp(ts, tz=UTC),
         "log_index": None,
         "from": SEED,
         "to": to_addr,
@@ -130,7 +129,7 @@ class TestTracer:
         case = tracer_mod.run_trace(
             chain=Chain.ethereum,
             seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="TEST",
             config=config,
             env=env,
@@ -170,7 +169,7 @@ class TestTracer:
         case = tracer_mod.run_trace(
             chain=Chain.ethereum,
             seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="EMPTY",
             config=config,
             env=env,

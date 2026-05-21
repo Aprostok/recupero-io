@@ -16,8 +16,6 @@ import pytest
 
 from recupero.custody.chain import (
     GENESIS_PREV_HASH,
-    AttestedArtifact,
-    AttestationEntry,
     append_to_chain,
     chain_file_path,
     create_attestation,
@@ -30,7 +28,6 @@ from recupero.custody.chain import (
     public_key_fingerprint_b64,
     verify_chain,
 )
-
 
 # ---- Keypair generation ---- #
 

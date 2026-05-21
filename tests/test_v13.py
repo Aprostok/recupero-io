@@ -15,7 +15,7 @@ follows eligible destinations. Eligibility is governed by TracePolicy:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,6 @@ from recupero.chains.base import ChainAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv, StorageParams, TraceParams
 from recupero.models import Chain, EvidenceReceipt, TokenRef
 from recupero.pricing.coingecko import PriceResult
-
 
 # All addresses padded to 40 hex chars so to_checksum_address accepts them
 SEED  = "0x1111111111111111111111111111111111111111"
@@ -52,7 +51,7 @@ def _native_row(from_addr: str, to_addr: str, tx_hash: str, eth: str) -> dict[st
         "chain": Chain.ethereum,
         "tx_hash": tx_hash,
         "block_number": 19_000_000,
-        "block_time": datetime(2025, 1, 15, 12, 0, tzinfo=timezone.utc),
+        "block_time": datetime(2025, 1, 15, 12, 0, tzinfo=UTC),
         "log_index": None,
         "from": from_addr,
         "to": to_addr,
@@ -91,10 +90,10 @@ class GraphAdapter(ChainAdapter):
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
         return EvidenceReceipt(
             chain=Chain.ethereum, tx_hash=tx_hash, block_number=19_000_001,
-            block_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            block_time=datetime(2025, 1, 15, tzinfo=UTC),
             raw_transaction={"hash": tx_hash}, raw_receipt={"status": "0x1"},
             raw_block_header={"number": "0x1221b81"},
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             fetched_from="fake",
             explorer_url=f"https://etherscan.io/tx/{tx_hash}",
         )
@@ -152,7 +151,7 @@ class TestDepthOneBackwardCompat:
         case_dir = tmp_path / "cases" / "T1"; case_dir.mkdir(parents=True)
         case = tracer_mod.run_trace(
             chain=Chain.ethereum, seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="T1", config=config, env=env, case_dir=case_dir,
         )
         # Only one hop — only the seed→HOP1A transfer, not HOP1A→HOP2A
@@ -174,7 +173,7 @@ class TestDepthTwoRecursion:
         case_dir = tmp_path / "cases" / "T2"; case_dir.mkdir(parents=True)
         case = tracer_mod.run_trace(
             chain=Chain.ethereum, seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="T2", config=config, env=env, case_dir=case_dir,
         )
         # Two transfers: seed→HOP1A and HOP1A→HOP2A
@@ -203,7 +202,7 @@ class TestDepthTwoRecursion:
         case_dir = tmp_path / "cases" / "FAN"; case_dir.mkdir(parents=True)
         case = tracer_mod.run_trace(
             chain=Chain.ethereum, seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="FAN", config=config, env=env, case_dir=case_dir,
         )
         assert len(case.transfers) == 4
@@ -223,7 +222,7 @@ class TestCycleDetection:
         case_dir = tmp_path / "cases" / "CYC"; case_dir.mkdir(parents=True)
         case = tracer_mod.run_trace(
             chain=Chain.ethereum, seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="CYC", config=config, env=env, case_dir=case_dir,
         )
         # Seed visited once, CYCLE visited once. The CYCLE→SEED transfer IS recorded
@@ -246,7 +245,7 @@ class TestContractStop:
         case_dir = tmp_path / "cases" / "CON"; case_dir.mkdir(parents=True)
         case = tracer_mod.run_trace(
             chain=Chain.ethereum, seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="CON", config=config, env=env, case_dir=case_dir,
         )
         # Only seed→HOP1A recorded; HOP1A not further traced
@@ -276,7 +275,7 @@ class TestContractStop:
         case_dir = tmp_path / "cases" / "CACHE"; case_dir.mkdir(parents=True)
         tracer_mod.run_trace(
             chain=Chain.ethereum, seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="CACHE", config=config, env=env, case_dir=case_dir,
         )
         hop1a_checks = [a for a in adapter.is_contract_calls if a == HOP1A.lower()]
@@ -303,7 +302,7 @@ class TestDustAndLabelStops:
         case_dir = tmp_path / "cases" / "DUST"; case_dir.mkdir(parents=True)
         case = tracer_mod.run_trace(
             chain=Chain.ethereum, seed_address=SEED,
-            incident_time=datetime(2025, 1, 15, tzinfo=timezone.utc),
+            incident_time=datetime(2025, 1, 15, tzinfo=UTC),
             case_id="DUST", config=config, env=env, case_dir=case_dir,
         )
         # The dust transfer is filtered out by should_include, AND we don't follow.

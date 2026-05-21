@@ -9,20 +9,18 @@ Covers:
 
 from __future__ import annotations
 
-import os
 from decimal import Decimal
 from unittest.mock import patch
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
 
 from recupero.freeze_learning.recorder import (
-    LetterNotFoundError,
     VALID_OUTCOME_TYPES,
+    LetterNotFoundError,
     record_outcome_by_target,
 )
-
 
 CASE_ID = UUID("99999999-9999-9999-9999-999999999999")
 LETTER_ID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")

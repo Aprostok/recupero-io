@@ -11,7 +11,6 @@ The live network fetch is mocked — these tests verify:
 
 from __future__ import annotations
 
-import csv
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -20,14 +19,11 @@ from urllib.error import URLError
 import pytest
 
 from recupero.trace.ofac_sync import (
-    OFACCryptoEntry,
-    SyncResult,
     _extract_crypto_entries,
     _is_evm_address,
     load_ofac_csv,
     sync_ofac_sdn,
 )
-
 
 # Synthetic OFAC SDN XML matching Treasury's schema (simplified)
 _FAKE_SDN_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -162,8 +158,12 @@ def test_extract_usdt_chain_maps_to_ethereum() -> None:
 
 def test_extract_handles_malformed_xml_gracefully() -> None:
     """Invalid XML should raise (caller catches), not return empty.
-    The caller's handler logs + returns SyncResult(success=False)."""
-    with pytest.raises(Exception):  # ParseError or similar
+    The caller's handler logs + returns SyncResult(success=False).
+    Expected exception type depends on the runtime XML parser:
+    defusedxml falls through to xml.etree.ElementTree's ParseError;
+    both inherit from SyntaxError so we narrow to that union."""
+    from xml.etree.ElementTree import ParseError
+    with pytest.raises((ParseError, SyntaxError)):
         _extract_crypto_entries(b"<not><valid")
 
 

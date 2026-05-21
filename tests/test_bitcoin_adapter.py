@@ -8,15 +8,11 @@ mempool.space schemas.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import MagicMock
-
-import pytest
 
 from recupero.chains.bitcoin.adapter import BitcoinAdapter
 from recupero.chains.bitcoin.esplora import EsploraError
 from recupero.models import Chain
-
 
 VICTIM = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
 PERP = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"

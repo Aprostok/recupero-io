@@ -10,14 +10,13 @@ response or an exchange's compliance dashboard.
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import logging
 import os
 from dataclasses import asdict, dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from recupero._common import db_connect
 from recupero.trace.risk_scoring import HighRiskEntry, load_high_risk_db
 
 log = logging.getLogger(__name__)
@@ -267,10 +266,9 @@ def _lookup_correlation_for_address(
          WHERE address = %(addr)s
            AND chain = %(chain)s;
     """
-    with db_connect(dsn, row_factory=dict_row) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, {"addr": address, "chain": chain})
-            row = cur.fetchone() or {}
+    with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+        cur.execute(sql, {"addr": address, "chain": chain})
+        row = cur.fetchone() or {}
 
     return ScreeningCorrelation(
         prior_case_count=int(row.get("prior_case_count") or 0),

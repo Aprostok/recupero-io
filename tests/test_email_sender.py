@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
@@ -28,7 +27,6 @@ from recupero.worker._email import (
     has_been_sent,
     send_email,
 )
-
 
 # ---- Disable switch + missing API key ---- #
 
@@ -334,6 +332,8 @@ def test_has_been_sent_fails_closed_on_db_error() -> None:
 def test_email_result_immutable() -> None:
     """EmailResult is frozen — callers shouldn't mutate the outcome
     after the send (it's a value object, not state)."""
+    import dataclasses
+
     r = EmailResult(success=True, message_id="x", error=None)
-    with pytest.raises(Exception):
+    with pytest.raises(dataclasses.FrozenInstanceError):
         r.success = False  # type: ignore[misc]

@@ -66,8 +66,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-import psycopg
-
 log = logging.getLogger(__name__)
 
 
@@ -103,7 +101,15 @@ _RESEND_RETRY_WAITS_SEC = (5, 15, 30)
 # `RECUPERO_DISABLE_EMAIL=true` got email skipped on the trace pipeline
 # but emails still went out from the followup cron + send_le_handoff.
 # Partial mode is the hardest debug shape.
-from recupero._common import db_connect, env_truthy as _is_truthy_env  # noqa: E402
+# RIGOR-2: tests patch `recupero.worker._email.psycopg.connect` via
+# unittest.mock.patch (see tests/test_email_sender.py + test_round13_*).
+# psycopg MUST be a top-level module attribute even though we don't
+# reference it by name; the module attribute IS the test-mock seam.
+# Ruff F401 wants to remove it (no in-file reference); that breaks
+# every DB-mock test in the suite.
+import psycopg  # noqa: F401, E402
+from recupero._common import db_connect  # noqa: E402
+from recupero._common import env_truthy as _is_truthy_env
 
 
 def _resend_send_with_retry(req: urllib.request.Request) -> dict[str, Any]:
@@ -365,19 +371,18 @@ def has_been_sent(
         return False
 
     try:
-        with db_connect(dsn, connect_timeout=5) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with db_connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     SELECT 1 FROM public.emails_sent
                      WHERE investigation_id = %s
                        AND email_type = %s
                        AND error_message IS NULL
                      LIMIT 1
                     """,
-                    (str(investigation_id), email_type),
-                )
-                return cur.fetchone() is not None
+                (str(investigation_id), email_type),
+            )
+            return cur.fetchone() is not None
     except Exception as exc:  # noqa: BLE001
         # v0.19.2 (round-13 pipeline-HIGH-1): fail-CLOSED on audit-query
         # failure. Pre-v0.19.2 a transient pooler blip caused the
@@ -462,24 +467,23 @@ def _log_to_audit(
 
     inv_id_str = str(investigation_id) if investigation_id else None
     try:
-        with db_connect(dsn, connect_timeout=5) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
+        with db_connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
                     INSERT INTO public.emails_sent
                         (investigation_id, to_address, subject,
                          preview_text, email_type, message_id,
                          error_message, sent_by, attachments)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
-                    (
-                        inv_id_str, to_address, subject[:500],
-                        preview_text[:500] if preview_text else None,
-                        email_type, message_id,
-                        error_message[:4000] if error_message else None,
-                        sent_by, attachment_names or None,
-                    ),
-                )
+                (
+                    inv_id_str, to_address, subject[:500],
+                    preview_text[:500] if preview_text else None,
+                    email_type, message_id,
+                    error_message[:4000] if error_message else None,
+                    sent_by, attachment_names or None,
+                ),
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("audit log write failed: %s", exc)
 

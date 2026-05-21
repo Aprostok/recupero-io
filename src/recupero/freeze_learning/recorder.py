@@ -7,13 +7,13 @@ audit write fails (logged at WARN).
 
 from __future__ import annotations
 
-from recupero._common import db_connect
-
 import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
+
+from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
 
@@ -518,32 +518,31 @@ def load_learned_priors(dsn: str) -> dict[str, IssuerPrior]:
     """
     out: dict[str, IssuerPrior] = {}
     try:
-        with db_connect(dsn, row_factory=dict_row) as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, {
-                    "threshold": _MIN_SAMPLE_SIZE_FOR_LEARNED_PRIOR,
-                })
-                for row in cur.fetchall():
-                    # v0.16.10 (round-9 scoring LOW): clamp probabilities
-                    # to [0, 1] on load. A corrupt DB row carrying p=1.5
-                    # or p=-0.3 (data-import bug, manual SQL accident)
-                    # would otherwise propagate into the scorer and
-                    # produce out-of-bounds confidence intervals.
-                    out[row["issuer"]] = IssuerPrior(
-                        issuer=row["issuer"],
-                        letter_language=row["letter_language"],
-                        sample_size=row["sample_size"],
-                        p_any_freeze=_clamp01(row["p_any_freeze"] or 0),
-                        p_full_freeze=_clamp01(row["p_full_freeze"] or 0),
-                        p_returned_to_victim=_clamp01(
-                            row["p_returned_to_victim"] or 0
-                        ),
-                        avg_response_hours=float(row["avg_response_hours"])
-                        if row.get("avg_response_hours") is not None else None,
-                        median_response_hours=float(row["median_response_hours"])
-                        if row.get("median_response_hours") is not None else None,
-                        is_learned=True,
-                    )
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute(sql, {
+                "threshold": _MIN_SAMPLE_SIZE_FOR_LEARNED_PRIOR,
+            })
+            for row in cur.fetchall():
+                # v0.16.10 (round-9 scoring LOW): clamp probabilities
+                # to [0, 1] on load. A corrupt DB row carrying p=1.5
+                # or p=-0.3 (data-import bug, manual SQL accident)
+                # would otherwise propagate into the scorer and
+                # produce out-of-bounds confidence intervals.
+                out[row["issuer"]] = IssuerPrior(
+                    issuer=row["issuer"],
+                    letter_language=row["letter_language"],
+                    sample_size=row["sample_size"],
+                    p_any_freeze=_clamp01(row["p_any_freeze"] or 0),
+                    p_full_freeze=_clamp01(row["p_full_freeze"] or 0),
+                    p_returned_to_victim=_clamp01(
+                        row["p_returned_to_victim"] or 0
+                    ),
+                    avg_response_hours=float(row["avg_response_hours"])
+                    if row.get("avg_response_hours") is not None else None,
+                    median_response_hours=float(row["median_response_hours"])
+                    if row.get("median_response_hours") is not None else None,
+                    is_learned=True,
+                )
     except Exception as exc:  # noqa: BLE001
         log.warning("load_learned_priors failed: %s", exc)
     return out

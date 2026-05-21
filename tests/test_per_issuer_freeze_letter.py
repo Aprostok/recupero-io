@@ -27,21 +27,17 @@ Tests run in <100ms, no DB / no network.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
 from recupero.models import (
-    Address,
     Case,
     Chain,
-    EvidenceReceipt,
+    Counterparty,
     TokenRef,
     Transfer,
-    Counterparty,
 )
 from recupero.reports.brief import (
     InvestigatorInfo,
@@ -51,7 +47,6 @@ from recupero.reports.brief import (
     generate_briefs,
 )
 from recupero.reports.victim import VictimInfo
-
 
 # ---- _build_issuer_freezable_ctx ---- #
 
@@ -257,7 +252,7 @@ def _make_minimal_case() -> Case:
         chain=Chain.ethereum,
         tx_hash="0x" + "f" * 64,
         block_number=12345,
-        block_time=datetime(2026, 1, 2, 0, 0, tzinfo=timezone.utc),
+        block_time=datetime(2026, 1, 2, 0, 0, tzinfo=UTC),
         from_address="0x" + "1" * 40,
         to_address="0x" + "2" * 40,
         counterparty=Counterparty(
@@ -276,16 +271,16 @@ def _make_minimal_case() -> Case:
         amount_decimal=Decimal("130"),
         usd_value_at_tx=Decimal("385680.64"),
         hop_depth=0,
-        fetched_at=datetime(2026, 1, 2, 0, 1, tzinfo=timezone.utc),
+        fetched_at=datetime(2026, 1, 2, 0, 1, tzinfo=UTC),
         explorer_url="https://etherscan.io/tx/0xtheft",
     )
     return Case(
         case_id="test-e2e",
         seed_address="0x" + "1" * 40,
         chain=Chain.ethereum,
-        incident_time=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        incident_time=datetime(2026, 1, 2, tzinfo=UTC),
         transfers=[theft_xfer],
-        trace_started_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        trace_started_at=datetime(2026, 1, 2, tzinfo=UTC),
         software_version="test",
     )
 

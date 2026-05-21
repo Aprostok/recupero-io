@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -14,7 +12,6 @@ from recupero.config import RecuperoConfig, RecuperoEnv, StorageParams
 from recupero.inspect.inspector import inspect_address
 from recupero.labels.store import LabelStore
 from recupero.models import Chain, EvidenceReceipt
-
 
 SEED = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
 PERP = "0xF4bE227b268e191b79097Daad0AcCcD9a7A7FAD2"
@@ -61,9 +58,9 @@ class FakeAdapter(ChainAdapter):
     def fetch_evidence_receipt(self, tx_hash):
         return EvidenceReceipt(
             chain=Chain.ethereum, tx_hash=tx_hash, block_number=0,
-            block_time=datetime.now(timezone.utc),
+            block_time=datetime.now(UTC),
             raw_transaction={}, raw_receipt={}, raw_block_header={},
-            fetched_at=datetime.now(timezone.utc),
+            fetched_at=datetime.now(UTC),
             fetched_from="fake", explorer_url=self.explorer_tx_url(tx_hash),
         )
 
@@ -110,7 +107,7 @@ class TestInspector:
         from recupero.models import Label, LabelCategory
         store.add(Label(
             address=PERP, name="Test Perpetrator", category=LabelCategory.perpetrator,
-            source="test", confidence="high", added_at=datetime.now(timezone.utc),
+            source="test", confidence="high", added_at=datetime.now(UTC),
         ))
         profile = inspect_address(
             address=PERP, chain=Chain.ethereum, config=config, env=env, label_store=store,

@@ -14,15 +14,12 @@ from __future__ import annotations
 from unittest.mock import patch
 from uuid import UUID
 
-import pytest
-
 from recupero.monitoring.subscriber import (
     SubscriptionSeed,
     auto_subscribe_from_brief,
     derive_subscriptions_from_brief,
     persist_subscriptions,
 )
-
 
 CASE_ID = "RCP-2026-0427"
 INV_ID = UUID("55555555-5555-5555-5555-555555555555")

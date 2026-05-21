@@ -12,10 +12,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from unittest.mock import MagicMock, patch
-from uuid import UUID, uuid4
-
-import pytest
+from unittest.mock import patch
+from uuid import uuid4
 
 from recupero.freeze_learning.status import (
     AggregateStatus,
@@ -26,7 +24,6 @@ from recupero.freeze_learning.status import (
     _fmt_usd,
     fetch_live_filing_status,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # _badge_for_letter — per-letter status badge logic
@@ -262,15 +259,12 @@ def test_le_template_renders_empty_state_section_5_5():
     raise StrictUndefined."""
     # We render via generate_briefs to exercise the full ctx assembly.
     # The V-CFI01 fixture is the standard test shape.
-    from tests.test_v_cfi01_full_render import (
-        _build_editorial,
-        _build_freeze_asks_dict,
-        _build_issuer_metadata,
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(
@@ -311,12 +305,12 @@ def test_le_template_renders_empty_state_section_5_5():
 def test_le_template_renders_populated_section_5_5():
     """With a populated LiveFilingStatus, Section 5.5 renders the
     issuer table + aggregate + monitoring blocks."""
-    from tests.test_v_cfi01_full_render import (
-        _build_v_cfi01_case,
-        VICTIM,
-    )
     from recupero.reports.brief import InvestigatorInfo, generate_briefs
     from recupero.reports.victim import VictimInfo
+    from tests.test_v_cfi01_full_render import (
+        VICTIM,
+        _build_v_cfi01_case,
+    )
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(

@@ -15,8 +15,6 @@ rewrite — are worth locking down:
 
 from __future__ import annotations
 
-import pytest
-
 from recupero.worker.dashboard_summary import (
     _empty_cases,
     _empty_digest,
@@ -27,7 +25,6 @@ from recupero.worker.dashboard_summary import (
     _empty_watchlist,
     _pooled_dsn,
 )
-
 
 # ---- empty shapes (UI contract) ---- #
 

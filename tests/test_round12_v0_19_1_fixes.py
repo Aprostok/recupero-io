@@ -6,9 +6,8 @@ refactor can't silently re-open the bug. Tests grouped by domain.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
-
 
 # ---- PDF-CRIT-2: trace_report etherscan fallback removed ---- #
 

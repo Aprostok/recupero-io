@@ -33,7 +33,6 @@ from recupero.chains.bitcoin.address import (
     normalize_bitcoin_address,
 )
 
-
 # ---- P2PKH (1...) ---- #
 
 

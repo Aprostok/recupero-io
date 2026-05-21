@@ -26,7 +26,7 @@ explicitly, the default doesn't apply at all.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -36,7 +36,6 @@ from recupero.worker.pipeline import (
     _default_incident_time_for,
 )
 
-
 # ---- canonical genesis timestamps locked ---- #
 
 
@@ -44,31 +43,31 @@ def test_ethereum_genesis_is_block_1() -> None:
     """Ethereum's getblocknobytime answers from block 1, not block 0.
     Verified empirically — block 0 timestamp returns "no closest block
     found" because block 0 has a null timestamp."""
-    expected = datetime(2015, 7, 30, 15, 26, 13, tzinfo=timezone.utc)
+    expected = datetime(2015, 7, 30, 15, 26, 13, tzinfo=UTC)
     assert _CHAIN_GENESIS_TIMESTAMPS["ethereum"] == expected
 
 
 def test_polygon_genesis() -> None:
     """Polygon (formerly Matic) mainnet genesis."""
-    expected = datetime(2020, 5, 30, 6, 23, 35, tzinfo=timezone.utc)
+    expected = datetime(2020, 5, 30, 6, 23, 35, tzinfo=UTC)
     assert _CHAIN_GENESIS_TIMESTAMPS["polygon"] == expected
 
 
 def test_bsc_genesis() -> None:
     """BNB Smart Chain genesis."""
-    expected = datetime(2020, 8, 29, 3, 24, 14, tzinfo=timezone.utc)
+    expected = datetime(2020, 8, 29, 3, 24, 14, tzinfo=UTC)
     assert _CHAIN_GENESIS_TIMESTAMPS["bsc"] == expected
 
 
 def test_arbitrum_genesis() -> None:
     """Arbitrum One genesis."""
-    expected = datetime(2021, 8, 31, 22, 9, 39, tzinfo=timezone.utc)
+    expected = datetime(2021, 8, 31, 22, 9, 39, tzinfo=UTC)
     assert _CHAIN_GENESIS_TIMESTAMPS["arbitrum"] == expected
 
 
 def test_base_genesis() -> None:
     """Base mainnet genesis."""
-    expected = datetime(2023, 6, 15, 17, 0, 0, tzinfo=timezone.utc)
+    expected = datetime(2023, 6, 15, 17, 0, 0, tzinfo=UTC)
     assert _CHAIN_GENESIS_TIMESTAMPS["base"] == expected
 
 
@@ -76,13 +75,13 @@ def test_solana_genesis() -> None:
     """Solana mainnet-beta launch. Not used by run_trace (Solana has
     its own slot-based lookup), but locked for the fallback case if
     dispatch logic ever changes."""
-    expected = datetime(2020, 3, 16, 14, 0, 0, tzinfo=timezone.utc)
+    expected = datetime(2020, 3, 16, 14, 0, 0, tzinfo=UTC)
     assert _CHAIN_GENESIS_TIMESTAMPS["solana"] == expected
 
 
 def test_hyperliquid_launched() -> None:
     """Hyperliquid launch. Not used by run_trace — for completeness."""
-    expected = datetime(2024, 6, 1, 0, 0, 0, tzinfo=timezone.utc)
+    expected = datetime(2024, 6, 1, 0, 0, 0, tzinfo=UTC)
     assert _CHAIN_GENESIS_TIMESTAMPS["hyperliquid"] == expected
 
 
@@ -101,7 +100,7 @@ def test_default_returns_one_year_lookback_for_recent_now(chain: str, monkeypatc
     # Pin lookback to the default explicitly so the env var can't
     # change the test's expected math.
     monkeypatch.delenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", raising=False)
-    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out = _default_incident_time_for(chain, now=now)
     expected = now - timedelta(days=365)
     assert out == expected, (
@@ -120,7 +119,7 @@ def test_default_clamps_to_genesis_for_new_chain(monkeypatch) -> None:
     # Pick a 'now' close enough to Base's genesis that a 365-day
     # lookback predates it. Base genesis is 2023-06-15; pick now =
     # 2024-04-01 so candidate=2023-04-01 (before genesis).
-    now = datetime(2024, 4, 1, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2024, 4, 1, 12, 0, tzinfo=UTC)
     out = _default_incident_time_for("base", now=now)
     assert out == _CHAIN_GENESIS_TIMESTAMPS["base"], (
         f"expected genesis clamp, got {out.isoformat()}"
@@ -132,7 +131,7 @@ def test_env_var_override_lookback(monkeypatch) -> None:
     default. Set to a large value to effectively re-enable
     full-history tracing for an ops emergency."""
     monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "30")
-    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out = _default_incident_time_for("ethereum", now=now)
     assert out == now - timedelta(days=30)
 
@@ -142,7 +141,7 @@ def test_env_var_huge_value_falls_back_to_genesis(monkeypatch) -> None:
     escape hatch for "trace full history" — should fall back to the
     chain genesis after clamping."""
     monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "99999")
-    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out = _default_incident_time_for("ethereum", now=now)
     # 99999 days ago is well before Ethereum genesis → clamps.
     assert out == _CHAIN_GENESIS_TIMESTAMPS["ethereum"]
@@ -152,7 +151,7 @@ def test_env_var_invalid_falls_back_to_default(monkeypatch) -> None:
     """A garbled env var doesn't crash the worker — falls back to the
     365-day default."""
     monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "not-a-number")
-    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out = _default_incident_time_for("ethereum", now=now)
     assert out == now - timedelta(days=365)
 
@@ -163,7 +162,7 @@ def test_env_var_zero_or_negative_minimum_one_day(monkeypatch) -> None:
     so a misconfigured env doesn't silently produce empty traces."""
     for bad_value in ["0", "-5"]:
         monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", bad_value)
-        now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+        now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
         out = _default_incident_time_for("ethereum", now=now)
         assert out == now - timedelta(days=1), (
             f"lookback={bad_value!r}: expected 1-day clamp"
@@ -174,7 +173,7 @@ def test_case_insensitive_lookup(monkeypatch) -> None:
     """Chain names are normalized to lowercase before genesis lookup so
     a capitalization mismatch in the DB doesn't blow up the trace."""
     monkeypatch.delenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", raising=False)
-    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out_upper = _default_incident_time_for("ETHEREUM", now=now)
     out_mixed = _default_incident_time_for("Polygon", now=now)
     # Both should resolve to the 365-day default (post-genesis on both chains)
@@ -188,7 +187,7 @@ def test_unknown_chain_uses_fallback_genesis_as_floor(monkeypatch) -> None:
     worker — it'll just use a defensive earliest-known-good floor."""
     monkeypatch.delenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", raising=False)
     # 'now' well past Ethereum genesis — 365-day lookback wins.
-    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out = _default_incident_time_for("hypothetical_new_chain_v2", now=now)
     assert out == now - timedelta(days=365)
 
@@ -197,7 +196,7 @@ def test_unknown_chain_clamps_to_eth_genesis_floor(monkeypatch) -> None:
     """If the lookback would predate even Ethereum genesis (huge env
     var), the unknown-chain path still floors at Ethereum block 1."""
     monkeypatch.setenv("RECUPERO_WALLET_TRACE_LOOKBACK_DAYS", "99999")
-    now = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out = _default_incident_time_for("hypothetical_new_chain_v2", now=now)
     assert out == _FALLBACK_GENESIS
     assert out == _CHAIN_GENESIS_TIMESTAMPS["ethereum"]

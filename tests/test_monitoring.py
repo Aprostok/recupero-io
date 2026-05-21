@@ -7,10 +7,9 @@ from __future__ import annotations
 
 import json
 from decimal import Decimal
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
-import pytest
 import respx
 
 from recupero.monitoring.dispatcher import (
@@ -25,7 +24,6 @@ from recupero.monitoring.poller import (
     evaluate_all_activities,
     evaluate_trigger,
 )
-
 
 SUB_ID = UUID("11111111-1111-1111-1111-111111111111")
 

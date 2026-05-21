@@ -906,6 +906,7 @@ def _try_send_alert(*, subject: str, body_html: str) -> None:
     dispatcher's hot path.
     """
     import os
+
     # v0.19.0: final fallback resolves via the canonical investigator
     # identity (RECUPERO_INVESTIGATOR_EMAIL / compliance@recupero.io)
     # instead of the dev's email. Pre-v0.19.0 an unconfigured deploy

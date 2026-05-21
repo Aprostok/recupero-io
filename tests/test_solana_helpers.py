@@ -22,19 +22,18 @@ Tests run in <50ms, zero network, zero DB.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
 from recupero.chains.solana.adapter import (
+    _MINT_TO_COINGECKO_ID,
     USDC_SOLANA_MINT,
     USDT_SOLANA_MINT,
     WRAPPED_SOL_MINT,
     SolanaAdapter,
-    _MINT_TO_COINGECKO_ID,
     _symbol_from_mint,
 )
-
 
 # ---- _symbol_from_mint ---- #
 
@@ -151,7 +150,7 @@ def test_block_at_or_before_returns_unix_timestamp() -> None:
     "slot at timestamp" API) — locking it down so a future
     refactor doesn't accidentally change semantics."""
     a = _make_adapter()
-    ts = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    ts = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     out = a.block_at_or_before(ts)
     assert out == int(ts.timestamp())
     # Sanity: 2026-05-15 12:00 UTC = around 1.76 billion seconds.
@@ -164,7 +163,7 @@ def test_block_at_or_before_naive_datetime_assumed_utc() -> None:
     incident_times produced wrong block lookups."""
     a = _make_adapter()
     naive = datetime(2026, 5, 15, 12, 0)  # no tzinfo
-    aware = datetime(2026, 5, 15, 12, 0, tzinfo=timezone.utc)
+    aware = datetime(2026, 5, 15, 12, 0, tzinfo=UTC)
     assert a.block_at_or_before(naive) == a.block_at_or_before(aware)
 
 
@@ -172,7 +171,7 @@ def test_block_at_or_before_idempotent() -> None:
     """Same input → same output, every time. No clock drift
     (block_at_or_before isn't supposed to read NOW())."""
     a = _make_adapter()
-    ts = datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc)
+    ts = datetime(2024, 1, 1, 0, 0, tzinfo=UTC)
     assert a.block_at_or_before(ts) == a.block_at_or_before(ts)
 
 
@@ -181,8 +180,8 @@ def test_block_at_or_before_monotonic() -> None:
     Defensive sanity — if this ever regresses, the tracer's
     block-window filtering breaks."""
     a = _make_adapter()
-    early = datetime(2024, 1, 1, tzinfo=timezone.utc)
-    later = datetime(2026, 5, 15, tzinfo=timezone.utc)
+    early = datetime(2024, 1, 1, tzinfo=UTC)
+    later = datetime(2026, 5, 15, tzinfo=UTC)
     assert a.block_at_or_before(early) < a.block_at_or_before(later)
 
 

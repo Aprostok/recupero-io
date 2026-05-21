@@ -140,7 +140,20 @@ def render_engagement_letter(
         html = env.get_template("engagement_letter.html.j2").render(**ctx)
 
         briefs_dir.mkdir(parents=True, exist_ok=True)
-        letter_id = uuid4().hex[:8]
+        # RIGOR-3 (determinism): content-based hash so same case produces
+        # same engagement_letter filename across runs. Pre-RIGOR-3 used
+        # uuid4().hex[:8] — random per run.
+        import hashlib
+        case_id_for_hash = (
+            getattr(case, "case_id", None)
+            or getattr(case, "case_number", None)
+            or "no-case"
+        )
+        seed = (
+            f"engagement_letter|{case_id_for_hash}|"
+            f"{victim.name or ''}|{victim.wallet_address or ''}"
+        )
+        letter_id = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8]
         out_path = briefs_dir / f"engagement_letter_{letter_id}.html"
         from recupero._common import atomic_write_text
         atomic_write_text(out_path, html)

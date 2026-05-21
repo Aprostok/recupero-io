@@ -173,12 +173,30 @@ def build_all_deliverables(
     flow_filename: str | None = None
     flow_svg_path: Path | None = None
     try:
-        from uuid import uuid4
+        import hashlib
 
         from recupero.worker._flow_diagram import render_flow_diagram
         briefs_dir = case_dir / "briefs"
         briefs_dir.mkdir(parents=True, exist_ok=True)
-        candidate_path = briefs_dir / f"flow_{uuid4().hex[:8]}.svg"
+        # RIGOR-3: deterministic SVG filename via content-based hash.
+        # Pre-RIGOR-3 this was `flow_{uuid4().hex[:8]}.svg` — random
+        # per run, so two runs of the same case produced different
+        # filenames and non-byte-identical letters that referenced the
+        # SVG name. Jacob's `diff -r run_a/ run_b/` would catch it.
+        # The hash inputs are the case fixed identifiers + the
+        # transfer count + the seed_address; together these uniquely
+        # identify a case's flow graph regardless of when it runs.
+        case_id_for_hash = (
+            getattr(case, "case_id", None)
+            or getattr(case, "case_number", None)
+            or "no-case"
+        )
+        flow_hash_seed = (
+            f"{case_id_for_hash}|{case.seed_address or ''}|"
+            f"{len(case.transfers or [])}"
+        ).encode("utf-8")
+        flow_hex = hashlib.sha256(flow_hash_seed).hexdigest()[:8]
+        candidate_path = briefs_dir / f"flow_{flow_hex}.svg"
         # Pass freeze_brief so wallets in the FREEZABLE list get
         # promoted to "Circle holding (USDC)" / "Tether holding"
         # / etc. labeled circles in the diagram. The trace itself

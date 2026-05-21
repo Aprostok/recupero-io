@@ -268,8 +268,21 @@ def render_victim_summary(
         html = env.get_template(template_name).render(**ctx)
 
         briefs_dir.mkdir(parents=True, exist_ok=True)
-        summary_id = uuid4().hex[:8]
+        # RIGOR-3 (determinism): content-based hash so same case produces
+        # same victim_summary filename across runs. Pre-RIGOR-3 used
+        # uuid4().hex[:8] — random per run.
+        import hashlib
+        case_id_for_hash = (
+            getattr(case, "case_id", None)
+            or getattr(case, "case_number", None)
+            or "no-case"
+        )
         variant = "recoverable" if is_recoverable else "unrecoverable"
+        seed = (
+            f"victim_summary|{variant}|{case_id_for_hash}|"
+            f"{victim.name or ''}|{victim.wallet_address or ''}"
+        )
+        summary_id = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8]
         out_path = briefs_dir / f"victim_summary_{variant}_{summary_id}.html"
         from recupero._common import atomic_write_text
         atomic_write_text(out_path, html)

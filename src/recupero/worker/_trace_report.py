@@ -69,7 +69,21 @@ def render_trace_report(
     """
     try:
         briefs_dir.mkdir(parents=True, exist_ok=True)
-        report_id = uuid4().hex[:8]
+        # RIGOR-3 (determinism): derive report_id from case content
+        # (case_id + transfer count + seed_address) instead of uuid4().
+        # Same-case re-runs now produce byte-identical filenames.
+        import hashlib
+        case_id_for_hash = (
+            getattr(case, "case_id", None)
+            or getattr(case, "case_number", None)
+            or "no-case"
+        )
+        seed = (
+            f"trace_report|{case_id_for_hash}|"
+            f"{case.seed_address or ''}|"
+            f"{len(case.transfers or [])}"
+        )
+        report_id = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8]
         report_path = briefs_dir / f"trace_report_{report_id}.html"
 
         ctx = _build_context(

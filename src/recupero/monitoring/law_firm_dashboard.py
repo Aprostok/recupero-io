@@ -504,9 +504,20 @@ def _populate_top_issuers(
               JOIN firm_cases fc ON fc.case_id = i.case_id
         ),
         ranked_outcomes AS (
+            -- PUNISH-B F-4: SELECT returned_usd alongside frozen_usd.
+            -- For returned_to_victim outcomes the operator-canonical
+            -- workflow stores the $ amount in returned_usd and
+            -- leaves frozen_usd NULL — without this, the per-issuer
+            -- "$ Frozen on Your Cases" column on the partner
+            -- dashboard reports $0 for every fully-returned letter,
+            -- silently undercounting partner wins.
+            -- (The v0.26.1 HIGH-1 fix patched only the OUTER
+            -- `returned` aggregate in _populate_volume_and_money;
+            -- the inner top-issuers frozen aggregate was still wrong.)
             SELECT fo.letter_id,
                    fo.outcome_type,
                    fo.frozen_usd,
+                   fo.returned_usd,
                    ROW_NUMBER() OVER (
                        PARTITION BY fo.letter_id
                        ORDER BY
@@ -526,7 +537,12 @@ def _populate_top_issuers(
         strongest_per_letter AS (
             SELECT fl.issuer,
                    fl.letter_id,
-                   COALESCE(ro.frozen_usd, 0) AS frozen
+                   -- COALESCE(frozen_usd, returned_usd) so returned-
+                   -- to-victim entries contribute their dollar amount
+                   -- (which lives in returned_usd, not frozen_usd).
+                   COALESCE(
+                       ro.frozen_usd, ro.returned_usd, 0
+                   ) AS frozen
               FROM firm_letters fl
               LEFT JOIN ranked_outcomes ro
                 ON ro.letter_id = fl.letter_id AND ro.rn = 1

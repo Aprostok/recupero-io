@@ -328,13 +328,29 @@ def compute_priors_from_outcomes(
     }
 
     # Bucket outcomes by letter_id; track best outcome per letter.
+    #
+    # PUNISH-B F-3: skip rows where outcome_type is None. These come
+    # from the LEFT JOIN in refresh_priors (freeze_letters_sent
+    # LEFT JOIN freeze_outcomes) and represent letters that haven't
+    # produced any recorded outcome yet. Pre-fix the aggregator
+    # treated those as `_strength=0` and counted them toward `n`
+    # (the sample size), but contributed 0 to n_any_freeze /
+    # n_full / n_win. With 20 unresponded letters + 5 resolved
+    # (4 freezes) that produces p_freeze = 4/(4+20) = 17%, but the
+    # operationally correct prior is 4/5 = 80%. Tether's published
+    # freeze rate was deflating from ~73% to ~21% with backlog.
     by_letter: dict[Any, dict[str, Any]] = {}
     for row in outcomes:
         letter_id = row.get("letter_id")
         if letter_id is None:
             continue
+        outcome_type = row.get("outcome_type")
+        if outcome_type is None:
+            # Unmatured letter — neither a win nor a loss. Excluded
+            # from the prior until an outcome is recorded.
+            continue
         current = by_letter.get(letter_id)
-        outcome_strength = strength.get(row.get("outcome_type", ""), 0)
+        outcome_strength = strength.get(outcome_type, 0)
         if current is None or outcome_strength > current.get("_strength", -2):
             by_letter[letter_id] = {**row, "_strength": outcome_strength}
 

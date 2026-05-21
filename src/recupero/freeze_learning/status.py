@@ -258,7 +258,18 @@ def fetch_live_filing_status(
                -- a partial_freeze of $500K followed by a later
                -- request_more_info (frozen_usd=NULL) doesn't zero out
                -- the aggregate.
-               (SELECT MAX(fo2.frozen_usd) FROM public.freeze_outcomes fo2
+               -- PUNISH-B F-6: COALESCE(frozen_usd, returned_usd).
+               -- When a letter's progression is
+               -- partial_freeze($X) → full_freeze($Y) → returned_to_victim
+               -- (returned_usd=$Y, frozen_usd=NULL by operator convention),
+               -- MAX(frozen_usd) over the chain returns $Y (the full_freeze
+               -- step). But for a letter that went STRAIGHT to
+               -- returned_to_victim with frozen_usd=NULL, MAX returned NULL
+               -- and the LE handoff Section 5.5 reported "$0 confirmed
+               -- frozen" for a fully-successful case. COALESCE picks the
+               -- non-null money column on each row before the MAX.
+               (SELECT MAX(COALESCE(fo2.frozen_usd, fo2.returned_usd))
+                  FROM public.freeze_outcomes fo2
                  WHERE fo2.letter_id = fl.id
                    AND fo2.outcome_type IN
                        ('partial_freeze','full_freeze','returned_to_victim')

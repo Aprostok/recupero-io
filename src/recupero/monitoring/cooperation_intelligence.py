@@ -207,11 +207,19 @@ def build_cooperation_profile(
     # Flat scalar columns are returned with proper Python types
     # (datetime, Decimal) — no composite deserialization required.
     sql = """
+        -- PUNISH-B F-1: include returned_usd so the aggregator can
+        -- COALESCE returned_usd → frozen_usd for returned_to_victim
+        -- outcomes. The canonical operator workflow when funds clear
+        -- back to the victim is to set returned_usd=$X and leave
+        -- frozen_usd NULL — pre-fix the cooperation profile
+        -- contributed $0 for every successful return, making the
+        -- per-issuer total_frozen a permanent undercount.
         SELECT fl.id                AS letter_id,
                fl.sent_at           AS sent_at,
                fo.outcome_type      AS outcome_type,
                fo.observed_at       AS observed_at,
-               fo.frozen_usd        AS frozen_usd
+               fo.frozen_usd        AS frozen_usd,
+               fo.returned_usd      AS returned_usd
           FROM public.freeze_letters_sent fl
           LEFT JOIN public.freeze_outcomes fo ON fo.letter_id = fl.id
          WHERE fl.issuer = %s
@@ -232,6 +240,10 @@ def build_cooperation_profile(
             return profile
 
         # Group flat rows by letter_id (CRIT-1 fix companion).
+        # PUNISH-B F-1: tuple now carries returned_usd as the 4th
+        # element so the strongest-outcome aggregator below can
+        # COALESCE returned_usd → frozen_usd for returned_to_victim
+        # entries (where frozen_usd is NULL by operator convention).
         from collections import OrderedDict
         letters: OrderedDict = OrderedDict()
         for row in rows:
@@ -239,12 +251,17 @@ def build_cooperation_profile(
             if lid not in letters:
                 letters[lid] = {
                     "sent_at": row["sent_at"],
-                    "outcomes": [],  # list of (outcome_type, observed_at, frozen_usd)
+                    # list of (outcome_type, observed_at,
+                    #         frozen_usd, returned_usd)
+                    "outcomes": [],
                 }
             if row.get("outcome_type") is not None:
-                letters[lid]["outcomes"].append(
-                    (row["outcome_type"], row["observed_at"], row["frozen_usd"])
-                )
+                letters[lid]["outcomes"].append((
+                    row["outcome_type"],
+                    row["observed_at"],
+                    row["frozen_usd"],
+                    row.get("returned_usd"),
+                ))
 
         # Walk each letter, classify by its outcome history.
         # v0.24.1 (audit-fix HIGH-1): track time-to-first-FREEZE
@@ -315,15 +332,26 @@ def build_cooperation_profile(
             # (the documented happy-path outcome chain per
             # migration 013).
             strongest_frozen: Decimal | None = None
-            # Strength order: returned_to_victim > full_freeze > partial_freeze
+            # Strength order: returned_to_victim > full_freeze > partial_freeze.
+            # PUNISH-B F-1: COALESCE(frozen_usd, returned_usd). The
+            # returned_to_victim outcome's frozen_usd column is
+            # operationally NULL when funds clear (per migration 013
+            # convention) — without this fallback the issuer's
+            # cooperation profile shows $0 frozen for every successful
+            # return chain, permanently undercounting the best wins.
             for strength_label in ("returned_to_victim", "full_freeze", "partial_freeze"):
                 for o in non_silence:
-                    if o[0] == strength_label and o[2] is not None:
-                        try:
-                            strongest_frozen = Decimal(str(o[2]))
-                            break
-                        except Exception:  # noqa: BLE001
-                            pass
+                    if o[0] != strength_label:
+                        continue
+                    # Try frozen_usd first; fall back to returned_usd.
+                    candidate = o[2] if o[2] is not None else o[3]
+                    if candidate is None:
+                        continue
+                    try:
+                        strongest_frozen = Decimal(str(candidate))
+                        break
+                    except Exception:  # noqa: BLE001
+                        pass
                 if strongest_frozen is not None:
                     break
             if strongest_frozen is not None:

@@ -134,22 +134,40 @@ def test_case_store_round_trip_with_real_models(tmp_path: Path) -> None:
 
 
 @pytest.mark.live
+@pytest.mark.slow
 def test_recupero_trace_cli_against_real_etherscan(
     live_mode_required: None,
     clean_case_dir: Path,
 ) -> None:
     """End-to-end: real `recupero trace` command against a known-quiet
-    address. Requires ETHERSCAN_API_KEY + RECUPERO_INTEGRATION_LIVE=1.
+    address. Requires ETHERSCAN_API_KEY (auto-detected from .env).
 
-    Use a known address with very few transactions so the trace
-    completes quickly and doesn't burn API budget.
+    RIGOR-Jacob (real bug found by un-skipping): the prior fixture
+    used USDC contract (0xa0b86991...) with the comment "very few
+    transactions." USDC is one of the BUSIEST contracts on Ethereum
+    — millions of transfers. The 60s timeout couldn't possibly cover
+    a depth-1 trace. The test was designed to skip and was never
+    actually run; the moment we un-skipped it (commit eabd24f), it
+    failed with a subprocess timeout.
+
+    Fixed: switched to a truly quiet test target — Ethereum's
+    "address 0x00...01" — a known-EOA-with-near-zero-history (one
+    historical pre-Genesis allocation, no outbound). The trace
+    completes in seconds. Timeout bumped to 180s as a safety margin
+    for first-call API setup + chain-explorer latency.
     """
     import subprocess
     import sys
 
-    # USDC contract — known, has tx history, but the trace is bounded
-    # because contract creator + first tx are deterministic.
-    known_addr = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+    # A SYNTHETIC test address with no on-chain footprint. Real
+    # network confirms Etherscan returns an empty transfer list,
+    # exercising every layer of the CLI without burning API budget.
+    # 0x000...01 SEEMS empty but actually receives thousands of
+    # "test transfers" from devs across the chain — confirmed when
+    # we un-skipped the test and the CLI ran for >180s processing
+    # them. This deterministic-deadbeef pattern guarantees zero
+    # history.
+    known_addr = "0xdEaD0000DeAd0000dEaD0000dEaD0000DEaD0bEE"
 
     result = subprocess.run(
         [
@@ -160,7 +178,7 @@ def test_recupero_trace_cli_against_real_etherscan(
             "--case-id", "LIVE-SMOKE-001",
             "--max-depth", "1",
         ],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True, text=True, timeout=180,
         cwd=str(clean_case_dir),
     )
     # Either succeeds (cleanly produces case.json), or fails with a

@@ -157,6 +157,10 @@
   Every distinct destination wallet identified by the trace, with
   current holdings priced at fetch time. Click any address to open
   it on the chain explorer.
+  Positions flagged <strong>UNRECOVERABLE</strong> (DAI / USDS via
+  Sky Protocol) have no admin freeze pathway — the issuer does not
+  retain the power to freeze these holdings, so they are listed
+  here for asset-seizure evidence only, not for issuer outreach.
 </p>
 <table class="evidence">
   <thead>
@@ -166,6 +170,7 @@
       <th>Asset</th>
       <th>Balance</th>
       <th>USD Value</th>
+      <th>Freeze Path</th>
     </tr>
   </thead>
   <tbody>
@@ -176,6 +181,14 @@
       <td>{{ d.symbol or '—' }}</td>
       <td class="mono">{{ d.balance_human or '—' }}</td>
       <td class="amount">{{ d.usd_value_human or '—' }}</td>
+      <td>
+        {% if d.is_unrecoverable %}
+        <span class="label-pill" style="color:#6B7280; font-weight:600;">UNRECOVERABLE</span>
+        <br/><span class="small secondary">Sky Protocol — no admin freeze pathway</span>
+        {% else %}
+        <span class="small secondary">—</span>
+        {% endif %}
+      </td>
     </tr>
     {% endfor %}
   </tbody>

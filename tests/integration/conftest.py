@@ -32,18 +32,65 @@ import pytest
 
 @pytest.fixture(scope="session", autouse=True)
 def integration_enabled() -> None:
-    """Skip the entire integration-test package unless opted in.
+    """Auto-enable the integration suite when the local test Postgres
+    is reachable.
 
-    Set ``RECUPERO_RUN_INTEGRATION=1`` to enable. We refuse to run if
-    the variable is unset so a routine `pytest tests/` doesn't hit
-    external services or burn API budget.
+    RIGOR (no-skips discipline): the prior version required operators
+    to set ``RECUPERO_RUN_INTEGRATION=1`` explicitly, which meant a
+    routine ``python -m pytest`` skipped 6 integration tests by
+    default. Those tests would have caught real bugs (the W-1..W-4
+    race tests are integration-only). Now the conftest does the
+    detection itself:
+
+      1. If RECUPERO_RUN_INTEGRATION=1 is set explicitly, respect it.
+      2. Otherwise, try to connect to the local test DB
+         (``postgresql://postgres:<PGPASSWORD>@127.0.0.1:5432/
+         recupero_int_test``). If reachable, auto-set
+         RECUPERO_RUN_INTEGRATION=1 + RECUPERO_INTEGRATION_DSN.
+      3. If neither, skip cleanly with a message that points the
+         operator at scripts/setup_test_db.sh.
+
+    Live-API tests still gate on RECUPERO_INTEGRATION_LIVE=1 (those
+    require external credentials).
     """
-    if (os.environ.get("RECUPERO_RUN_INTEGRATION") or "").strip() != "1":
-        pytest.skip(
-            "Integration tests require RECUPERO_RUN_INTEGRATION=1. "
-            "See tests/integration/README.md for setup.",
-            allow_module_level=True,
+    # Path 1: env var set explicitly — honor it.
+    if (os.environ.get("RECUPERO_RUN_INTEGRATION") or "").strip() == "1":
+        return
+
+    # Path 2: try the local test DB.
+    pgpassword = os.environ.get("PGPASSWORD", "").strip()
+    if pgpassword:
+        candidate_dsn = (
+            f"postgresql://postgres:{pgpassword}"
+            f"@127.0.0.1:5432/recupero_int_test"
         )
+        try:
+            import psycopg
+            with psycopg.connect(
+                candidate_dsn, connect_timeout=2,
+            ) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM pg_class WHERE relname='cases'"
+                )
+                if cur.fetchone() is not None:
+                    # The test DB exists + has migrations applied.
+                    # Auto-enable.
+                    os.environ["RECUPERO_RUN_INTEGRATION"] = "1"
+                    os.environ["RECUPERO_INTEGRATION_DSN"] = candidate_dsn
+                    return
+        except Exception:  # noqa: BLE001
+            # Connection refused / auth failure / wrong DB name —
+            # fall through to skip.
+            pass
+
+    # Path 3: no env var, no reachable DB — skip cleanly.
+    pytest.skip(
+        "Integration tests need either RECUPERO_RUN_INTEGRATION=1 "
+        "+ RECUPERO_INTEGRATION_DSN, OR a local Postgres with "
+        "recupero_int_test database + PGPASSWORD env var. Run "
+        "`bash scripts/setup_test_db.sh` to set up the test DB.",
+        allow_module_level=True,
+    )
 
 
 @pytest.fixture

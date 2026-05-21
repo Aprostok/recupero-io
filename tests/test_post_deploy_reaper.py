@@ -212,18 +212,39 @@ def test_post_deploy_reaper_query_filters_active_statuses_only() -> None:
 # ---- Live integration smoke (opt-in) ---- #
 
 
-@pytest.mark.skipif(
-    os.environ.get("RECUPERO_RUN_DB_TESTS") != "1",
-    reason="set RECUPERO_RUN_DB_TESTS=1 to run live DB tests",
-)
 def test_post_deploy_reaper_against_canary() -> None:
     """Live smoke: confirm the reaper is idempotent and selective
-    against the real DB. Skipped unless ``RECUPERO_RUN_DB_TESTS=1``
-    is set in the environment (we don't want CI flapping on DB
-    availability)."""
-    dsn = os.environ.get("SUPABASE_DB_URL", "")
+    against the real DB.
+
+    RIGOR (no-skips): pre-fix this required RECUPERO_RUN_DB_TESTS=1.
+    Now it auto-detects the local test DB (same logic as
+    tests/integration/conftest.py::integration_enabled). Only skips
+    when no DB is reachable at all — which is a legitimate "this
+    machine has no Postgres" environment, not a CI-discipline gap.
+    """
+    dsn = (
+        os.environ.get("SUPABASE_DB_URL", "")
+        or os.environ.get("RECUPERO_INTEGRATION_DSN", "")
+    ).strip()
     if not dsn:
-        pytest.skip("SUPABASE_DB_URL not set")
+        # Auto-detect local test DB.
+        pgpassword = os.environ.get("PGPASSWORD", "").strip()
+        if pgpassword:
+            candidate = (
+                f"postgresql://postgres:{pgpassword}"
+                f"@127.0.0.1:5432/recupero_int_test"
+            )
+            try:
+                import psycopg
+                with psycopg.connect(candidate, connect_timeout=2):
+                    dsn = candidate
+            except Exception:  # noqa: BLE001
+                pass
+    if not dsn:
+        pytest.skip(
+            "No local Postgres detected. Run "
+            "`bash scripts/setup_test_db.sh` to set up the test DB."
+        )
     db = WorkerDB(dsn=dsn, worker_id="test-post-deploy-canary")
     # Running this against the real DB should NOT raise. If there
     # are genuinely-orphaned rows we'll see them in the return value;

@@ -720,16 +720,26 @@ def check_llm_review(digest: dict) -> CheckResult:
 
 
 # All checks the script knows about. Each runs in this order.
-ALL_CHECKS: list[tuple[str, callable]] = [
-    ("tests",          check_tests),
-    ("lint",           check_lint),
-    ("types",          check_types),
-    ("git_activity",   check_git_activity),
-    ("todo_inventory", check_todo_inventory),
-    ("lazy_imports",   check_lazy_imports),
-    ("large_files",    check_large_files),
-    ("test_coverage",  check_test_coverage),
-    ("migrations",     check_migrations),
+# RIGOR-3 (hang-fix): late-bound check dispatch. Pre-fix this list
+# captured function REFERENCES at module-load time. When tests used
+# `patch.object(audit_module, "check_tests", ...)`, the patch replaced
+# the module attribute but the captured reference in this list was
+# untouched — main() ran the ORIGINAL check_tests, which invoked
+# pytest as a subprocess WHILE WE WERE INSIDE A PYTEST RUN → recursive
+# pytest invocation → hang past the 60s test-timeout.
+#
+# Fix: store function NAMES; the dispatch loop in main() resolves
+# each name via globals() at call time so patches take effect.
+ALL_CHECKS: list[tuple[str, str]] = [
+    ("tests",          "check_tests"),
+    ("lint",           "check_lint"),
+    ("types",          "check_types"),
+    ("git_activity",   "check_git_activity"),
+    ("todo_inventory", "check_todo_inventory"),
+    ("lazy_imports",   "check_lazy_imports"),
+    ("large_files",    "check_large_files"),
+    ("test_coverage",  "check_test_coverage"),
+    ("migrations",     "check_migrations"),
 ]
 
 
@@ -780,7 +790,7 @@ def main(argv: list[str] | None = None) -> int:
     baseline = _load_baseline(args.baseline) if args.baseline else None
 
     results: list[CheckResult] = []
-    for name, fn in ALL_CHECKS:
+    for name, fn_name in ALL_CHECKS:
         if only and name not in only:
             continue
         if name in skip:
@@ -790,6 +800,10 @@ def main(argv: list[str] | None = None) -> int:
             ))
             continue
         try:
+            # Late-bind: resolve the check function via the module's
+            # globals so unittest.mock.patch.object(audit_module,
+            # "check_tests", ...) actually substitutes here.
+            fn = globals()[fn_name]
             kwargs: dict[str, Any] = {}
             if name in ("todo_inventory", "large_files"):
                 kwargs["baseline"] = baseline

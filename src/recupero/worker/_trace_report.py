@@ -217,16 +217,33 @@ def _compute_stats(case: Case) -> dict[str, Any]:
 
 def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
     """One row per distinct destination address. Aggregates totals
-    when an address appears in multiple transfers."""
+    when an address appears in multiple transfers.
+
+    RIGOR-3 (Jacob-class fix): rows now carry an `is_unrecoverable`
+    boolean populated when the destination's asset symbol is in the
+    documented UNRECOVERABLE set (DAI / Sky Protocol stable, USDS).
+    The template renders an UNRECOVERABLE badge so a Jacob-style
+    visual audit immediately sees "this $655K DAI position is not
+    freezable" without having to cross-reference Section 3 manually.
+
+    Pre-RIGOR-3 the destinations table listed DAI alongside
+    freezable USDT/USDC with no visual cue — the validator's
+    dai_sky_consistency check (warning-severity) caught it on the
+    V-CFI01 audit. Now it's annotated at the row level.
+    """
     # v0.17.10: canonical address keying for the destinations table
     # so base58 destinations on Solana / Tron / Bitcoin are counted
     # against their on-chain canonical case.
-    #
-    # RIGOR-2 (F841): removed `chain_str = case.chain.value` — the
-    # variable was assigned but never used after v0.20.2's per-row
-    # chain refactor below (line ~232 uses t.chain.value per
-    # transfer). Pre-cleanup it was dead code.
     from recupero._common import canonical_address_key as _ck
+
+    # Tokens that have NO admin freeze pathway by design:
+    #   * DAI — Sky Protocol stable; MakerDAO governance can't freeze
+    #   * USDS — Sky Protocol's rebrand of DAI; same constraint
+    # If this set grows (e.g., a new DEX-issued stable lacks a
+    # freeze function), add the symbol here and the validator's
+    # check 12 (dai_sky_consistency) will also accept that artifact.
+    _UNRECOVERABLE_SYMBOLS = frozenset({"DAI", "USDS"})
+
     seed = _ck(case.seed_address or "")
     by_addr: dict[str, dict[str, Any]] = {}
     for t in case.transfers or []:
@@ -248,6 +265,7 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
             # the explorer dispatcher can render the right
             # block-explorer URL.
             row_chain = t.chain.value if hasattr(t.chain, "value") else str(t.chain)
+            symbol = (t.token.symbol or "").upper()
             entry = {
                 "address": addr,
                 "address_short": _short_addr(addr),
@@ -258,6 +276,12 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
                 ),
                 "label": label.name if label else None,
                 "symbol": t.token.symbol,
+                # RIGOR-3: flag rows whose asset is documented-
+                # UNRECOVERABLE so the template can render a badge.
+                # Sky Protocol has no admin freeze pathway for DAI /
+                # USDS — listing them in a destinations table
+                # without context misleads the operator.
+                "is_unrecoverable": symbol in _UNRECOVERABLE_SYMBOLS,
                 "balance_human": _fmt_decimal(t.amount_decimal),
                 "usd_value_human": _fmt_usd(t.usd_value_at_tx),
                 # v0.20.11 (R15-A LOW): use explicit None check so a
@@ -272,6 +296,11 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
             t_usd = t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0)
             if t_usd > entry["_usd"]:
                 entry["symbol"] = t.token.symbol
+                # RIGOR-3: also refresh the unrecoverable flag when
+                # the dominant transfer's asset changes.
+                entry["is_unrecoverable"] = (
+                    (t.token.symbol or "").upper() in _UNRECOVERABLE_SYMBOLS
+                )
                 entry["balance_human"] = _fmt_decimal(t.amount_decimal)
                 entry["usd_value_human"] = _fmt_usd(t.usd_value_at_tx)
                 entry["_usd"] = t_usd

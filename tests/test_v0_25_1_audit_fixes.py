@@ -283,19 +283,67 @@ def test_d1_rate_limit_isolates_per_ip():
     assert _intake_rl_check("5.6.7.8") is True
 
 
-def test_d1_client_ip_prefers_x_forwarded_for():
-    """Railway + Cloudflare populate X-Forwarded-For; the real
-    client IP must be read from there, not request.client.host."""
+def test_d1_client_ip_uses_trusted_hop_not_leftmost(monkeypatch):
+    """PUNISH-B S-3 fix supersedes the original v0.25.1 D-1 behavior.
+
+    Pre-S-3: leftmost X-Forwarded-For was treated as "the real client"
+    — but Railway + Cloudflare PREPEND attacker-controlled values
+    to that header, so the leftmost is whatever the bot typed.
+    Bypass: rotate leftmost per request, evade the per-IP rate limit.
+
+    Post-S-3: honor RECUPERO_TRUSTED_PROXY_HOPS=N. The Nth-from-
+    rightmost element is what the trusted proxy layer added — THAT
+    is the real client. With hops=1 (single Railway edge), the LAST
+    element of the XFF chain is the client IP.
+    """
     from recupero.api.app import _intake_rl_client_ip
 
+    monkeypatch.setenv("RECUPERO_TRUSTED_PROXY_HOPS", "1")
     request = MagicMock()
-    request.headers = {"x-forwarded-for": "203.0.113.42, 10.0.0.1"}
+    # An attacker-controlled leftmost (10.x.x.x) and a real
+    # trusted-hop value at the right.
+    request.headers = {
+        "x-forwarded-for": "10.0.0.1, 203.0.113.42",
+    }
     request.client = MagicMock()
-    request.client.host = "10.0.0.1"
+    request.client.host = "203.0.113.42"
 
     ip = _intake_rl_client_ip(request)
-    # First IP in the X-Forwarded-For chain is the real client.
-    assert ip == "203.0.113.42"
+    # The RIGHTMOST (trusted-hop) IP is the client identity.
+    assert ip == "203.0.113.42", (
+        f"got {ip!r} — should be the trusted-hop rightmost entry, "
+        "not the attacker-controlled leftmost"
+    )
+
+
+def test_d1_client_ip_falls_back_to_x_real_ip_when_no_hops_configured(monkeypatch):
+    """With RECUPERO_TRUSTED_PROXY_HOPS unset, XFF is not trusted.
+    Fall back to x-real-ip (set by edge proxies after stripping XFF)."""
+    from recupero.api.app import _intake_rl_client_ip
+
+    monkeypatch.delenv("RECUPERO_TRUSTED_PROXY_HOPS", raising=False)
+    request = MagicMock()
+    request.headers = {
+        "x-forwarded-for": "10.0.0.1, 192.168.1.1",  # Distrusted.
+        "x-real-ip": "203.0.113.99",                  # Trusted.
+    }
+    request.client = MagicMock()
+    request.client.host = "127.0.0.1"
+    ip = _intake_rl_client_ip(request)
+    assert ip == "203.0.113.99"
+
+
+def test_d1_client_ip_falls_back_to_socket_peer_when_no_headers(monkeypatch):
+    """No XFF, no x-real-ip → request.client.host (socket peer)."""
+    from recupero.api.app import _intake_rl_client_ip
+
+    monkeypatch.delenv("RECUPERO_TRUSTED_PROXY_HOPS", raising=False)
+    request = MagicMock()
+    request.headers = {}
+    request.client = MagicMock()
+    request.client.host = "203.0.113.55"
+    ip = _intake_rl_client_ip(request)
+    assert ip == "203.0.113.55"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

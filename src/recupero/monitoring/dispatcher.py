@@ -205,6 +205,55 @@ def dispatch_alert(
 
     ``http_client`` injection point lets tests mock with respx.
     """
+    # PUNISH-B S-2: SSRF dispatch-time re-check. The v0.27.1 fix
+    # closed SSRF at subscription-CREATE time, but the dispatcher
+    # fires hours/days later. A partner who created a sub with a
+    # benign public-IP URL can flip their DNS to 169.254.169.254
+    # (or any private-range target) before the next monitor_tick
+    # — without this gate the worker would happily POST to internal
+    # infra, exfiltrating cloud-provider IAM credentials or scanning
+    # the local network.
+    #
+    # assert_webhook_url_safe runs the same validator chain used at
+    # create time: scheme==https, hostname not in deny-list (loopback,
+    # *.internal, *.local, metadata domains), and (defense in depth)
+    # the hostname's DNS resolution does not point at a blocked IP
+    # range. If any check fails we record a failed dispatch with a
+    # security-specific error_message + skip the HTTP request
+    # entirely.
+    fired_at = datetime.now(UTC)
+    try:
+        from recupero.api.monitoring_api import (
+            MonitoringApiError, assert_webhook_url_safe,
+        )
+        assert_webhook_url_safe(webhook_url)
+    except MonitoringApiError as exc:
+        return WebhookDispatchResult(
+            succeeded=False,
+            status_code=None,
+            response_body="",
+            error_message=f"url rejected by SSRF safety re-check: {exc.detail}",
+            attempt_number=attempt_number,
+            fired_at=fired_at,
+            delivered_at=None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        # A bug in the safety check itself should fail-closed, not
+        # silently allow the dispatch through.
+        log.warning(
+            "dispatch_alert: SSRF check crashed on %r — failing "
+            "the dispatch closed: %s", webhook_url, exc,
+        )
+        return WebhookDispatchResult(
+            succeeded=False,
+            status_code=None,
+            response_body="",
+            error_message=f"SSRF check error: {type(exc).__name__}",
+            attempt_number=attempt_number,
+            fired_at=fired_at,
+            delivered_at=None,
+        )
+
     body = build_webhook_body(payload)
     headers = {
         "Content-Type": "application/json",
@@ -212,7 +261,6 @@ def dispatch_alert(
     }
     if webhook_secret:
         headers["X-Recupero-Signature"] = compute_signature(body, webhook_secret)
-    fired_at = datetime.now(UTC)
     client = http_client or httpx.Client(timeout=timeout_seconds)
     owns_client = http_client is None
     try:

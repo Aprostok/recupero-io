@@ -950,11 +950,50 @@ _intake_rl_state: dict[str, tuple[float, int]] = {}
 
 
 def _intake_rl_client_ip(request: Request) -> str:
-    """Resolve the client IP, preferring `X-Forwarded-For` (Railway
-    + Cloudflare both populate this). Falls back to the socket peer."""
-    fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-    if fwd:
-        return fwd
+    """Resolve the client IP for rate-limit bucketing.
+
+    PUNISH-B S-3 fix: the pre-fix implementation read the LEFTMOST
+    X-Forwarded-For element as "the client IP". Railway + Cloudflare
+    both APPEND their own value to that header rather than strip it,
+    so the leftmost is whatever the upstream client typed. A bot
+    rotating leftmost-XFF per request would get unlimited submissions
+    despite the 5/min cap.
+
+    Correct pattern: honor RECUPERO_TRUSTED_PROXY_HOPS (number of
+    trusted proxies between the client and the worker). The
+    trusted-hop element is `xff_chain[-N]` — the address inserted
+    by the closest proxy to us. Mirrors portal/server.py's
+    `_extract_client_ip` (audited in v0.18.2).
+
+    Fallback chain when no/zero trusted hops configured:
+      1. `x-real-ip` (set by Railway/Fly's edge AFTER stripping XFF)
+      2. `request.client.host` (socket peer)
+      3. "unknown"
+    """
+    import os as _os
+    raw_xff = (request.headers.get("x-forwarded-for", "") or "").strip()
+    xff_chain = [p.strip() for p in raw_xff.split(",") if p.strip()]
+    try:
+        trusted_hops = int(_os.environ.get("RECUPERO_TRUSTED_PROXY_HOPS", "0"))
+    except (TypeError, ValueError):
+        trusted_hops = 0
+
+    if trusted_hops > 0 and xff_chain:
+        # Walk N hops back from the tail. If the chain is shorter
+        # than N, take the leftmost entry inside the trusted
+        # segment (don't fabricate trust by extrapolating).
+        idx = max(0, len(xff_chain) - trusted_hops)
+        candidate = xff_chain[idx]
+        if candidate:
+            return candidate
+
+    # x-real-ip is set by some edge proxies after XFF normalization.
+    # Still client-influenceable through misconfiguration, but a
+    # better default than leftmost-XFF.
+    real_ip = (request.headers.get("x-real-ip", "") or "").strip()
+    if real_ip:
+        return real_ip
+
     if request.client and request.client.host:
         return request.client.host
     return "unknown"

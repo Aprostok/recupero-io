@@ -228,6 +228,16 @@ def dispatch(*, event: StripeEvent, dsn: str) -> DispatchResult:
                 # Append a small breadcrumb to the existing notes so
                 # the payments-row audit reflects the full side-effect
                 # chain. Best-effort — failure here is logged not raised.
+                #
+                # PUNISH-B S-4 fix: the breadcrumb USED to interpolate
+                # `confirm.portal_url` — the raw bearer URL — directly
+                # into payments.notes. Anyone with `payments` SELECT
+                # could copy the URL and become the victim. We now
+                # write a status marker only; operators who need to
+                # correlate with the specific token row can join to
+                # case_tokens by case_id (token_id is also visible
+                # in the structured log alongside the
+                # send_intake_confirmation INFO line).
                 try:
                     with psycopg.connect(
                         dsn, autocommit=True, connect_timeout=5,
@@ -235,7 +245,7 @@ def dispatch(*, event: StripeEvent, dsn: str) -> DispatchResult:
                         _cur2.execute(
                             "UPDATE public.payments SET notes = COALESCE(notes,'') || %s WHERE id = %s",
                             (
-                                f" | intake confirmation sent ({confirm.portal_url})",
+                                " | intake confirmation sent",
                                 str(payment_id),
                             ),
                         )

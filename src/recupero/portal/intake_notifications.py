@@ -173,10 +173,14 @@ def send_intake_confirmation(
     # a clean no-op rather than a failure — otherwise every CI smoke
     # test logs WARN and pollutes monitoring with false positives.
     if not result.success and getattr(result, "skipped", False):
+        # PUNISH-B S-4 fix: log the case_tokens row UUID, not the raw
+        # bearer URL. token_id is a safe identifier; the URL holds
+        # the actual auth secret. See companion change at the
+        # happy-path log site below.
         log.info(
             "send_intake_confirmation: email skipped "
-            "(RECUPERO_DISABLE_EMAIL) for case=%s; portal_url=%s",
-            case_id, portal_url,
+            "(RECUPERO_DISABLE_EMAIL) for case=%s; token_id=%s",
+            case_id, token_id_for_cleanup,
         )
         return IntakeConfirmationResult(
             success=True, portal_url=portal_url, email_sent=False,
@@ -195,10 +199,16 @@ def send_intake_confirmation(
             error=result.error,
         )
 
+    # PUNISH-B S-4 fix: log the case_tokens DB row UUID, NOT the
+    # raw portal URL. The URL holds the bearer token — anyone with
+    # Railway log access can copy the URL straight from the log
+    # line and become the victim. token_id is a safe identifier
+    # the operator can correlate with case_tokens row INSPECT but
+    # is NOT replayable to verify_token.
     log.info(
         "send_intake_confirmation: confirmation sent for case=%s "
-        "(email=%s portal_url=%s)",
-        case_id, client_email, portal_url,
+        "(email=%s token_id=%s)",
+        case_id, client_email, token_id_for_cleanup,
     )
     return IntakeConfirmationResult(
         success=True, portal_url=portal_url, email_sent=True,

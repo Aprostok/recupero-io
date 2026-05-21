@@ -789,6 +789,63 @@
 </p>
 {% endif %}
 
+{# v0.23.0 — Section 5.6: Multi-Victim Cluster. When this case
+   is bound to a multi-victim cluster (via shared perp wallets
+   with prior cases), surface the cluster identifier + aggregated
+   loss + co-victim count. This is the signal that says "this is
+   not a one-off — coordinate the filing with the prior victims'
+   AUSAs." Hidden when no cluster overlap. #}
+{% if cluster_membership and cluster_membership.member_case_count and cluster_membership.member_case_count >= 2 %}
+<h2>5.6 Multi-Victim Cluster</h2>
+<div class="summary-box action">
+  <p style="margin:0">
+    <strong>This case is bound to cluster
+    {{ cluster_membership.public_id }}.</strong>
+    Aggregated across the cluster:
+    <strong>{{ cluster_membership.member_case_count }}</strong>
+    victim case{{ "s" if cluster_membership.member_case_count != 1 else "" }}
+    with combined losses of
+    <strong>{{ cluster_membership.total_loss_usd_human }}</strong>.
+    This case shares perpetrator infrastructure with
+    <strong>{{ cluster_membership.co_victim_count }}</strong>
+    other Recupero-traced victim{{ "s" if cluster_membership.co_victim_count != 1 else "" }}.
+  </p>
+</div>
+<p class="small">
+  The binding wallet (the perpetrator-controlled address that
+  appears across cases) is
+  <span class="mono">{{ cluster_membership.joined_via_address }}</span>
+  on {{ cluster_membership.joined_via_chain }}. Recupero detected
+  this overlap at brief-render time by querying our cross-case
+  address index against the perp wallets in this trace.
+</p>
+<h3>Recommended coordination</h3>
+<ol>
+  <li>
+    Cross-reference cluster <strong>{{ cluster_membership.public_id }}</strong>
+    with any open federal cases naming the binding wallet. Recupero
+    can supply the complete cluster member list (case identifiers,
+    AUSA contacts where on file, per-victim loss) on request.
+  </li>
+  <li>
+    Consider whether a consolidated multi-victim filing is
+    appropriate. Recupero's aggregated cluster handoff
+    deliverable (rendered via
+    <span class="mono">recupero-ops render-cluster {{ cluster_membership.public_id }}</span>)
+    produces a single LE-handoff document covering every victim
+    in the cluster.
+  </li>
+  <li>
+    If the binding wallet has not yet been added to an
+    enforcement watchlist, the consolidated cluster size
+    (<strong>{{ cluster_membership.total_loss_usd_human }}</strong>
+    aggregated loss) typically meets the threshold for OFAC
+    designation review under 31 CFR § 583 or for inclusion in
+    the FBI Cyber Division priority targets.
+  </li>
+</ol>
+{% endif %}
+
 <h2>6. Recommended Actions</h2>
 
 <h3>Immediate</h3>

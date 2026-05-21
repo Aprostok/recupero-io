@@ -1710,4 +1710,51 @@ def run_emit_brief(
                 _exc,
             )
 
+    # 8. v0.23.0: multi-victim cluster detection. Materializes the
+    # case_clusters row + bridge when this case's perp wallets overlap
+    # with prior cases. Surfaces the cluster summary onto the brief
+    # dict (CLUSTER_MEMBERSHIP) so the LE handoff template can render
+    # the "Multi-Victim Cluster" section. Best-effort; brief still
+    # writes even when cluster bookkeeping fails.
+    if dsn and investigation_id:
+        try:
+            from recupero.monitoring.cluster_builder import (
+                build_or_update_cluster_for_case,
+            )
+            membership = build_or_update_cluster_for_case(
+                brief,
+                investigation_id=investigation_id,
+                case_id=None,  # cases.id resolution lives in the worker
+                dsn=dsn,
+            )
+            if membership is not None:
+                # Re-write the brief JSON with the cluster info embedded.
+                brief["CLUSTER_MEMBERSHIP"] = {
+                    "cluster_id": str(membership.cluster_id) if membership.cluster_id else None,
+                    "public_id": membership.public_id,
+                    "is_new_cluster": membership.is_new_cluster,
+                    "member_case_count": membership.member_case_count,
+                    "co_victim_count": membership.co_victim_count,
+                    "total_loss_usd": str(membership.total_loss_usd),
+                    "total_loss_usd_human": (
+                        f"${membership.total_loss_usd:,.2f}"
+                        if membership.total_loss_usd is not None else "$0"
+                    ),
+                    "joined_via_address": membership.joined_via_address,
+                    "joined_via_chain": membership.joined_via_chain,
+                }
+                atomic_write_text(out_path, json.dumps(brief, indent=2))
+                log.info(
+                    "emit_brief: case joined cluster %s "
+                    "(members=%d co_victims=%d)",
+                    membership.public_id,
+                    membership.member_case_count,
+                    membership.co_victim_count,
+                )
+        except Exception as _exc:  # noqa: BLE001
+            log.warning(
+                "emit_brief cluster-build step failed (non-fatal): %s",
+                _exc,
+            )
+
     return out_path, brief

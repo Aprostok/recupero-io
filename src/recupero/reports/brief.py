@@ -42,7 +42,7 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 # Single source of truth for the freeze_brief.json schema version.
 # Imported by emit_brief.py + the worker synthesizer so a future bump
 # only happens here.
-BRIEF_SCHEMA_VERSION = "0.22.1"
+BRIEF_SCHEMA_VERSION = "0.23.0"
 
 # Earliest version that wrote ALL the fields the current rendering
 # chain expects (evidence_type, evidence_mode, etc.). Briefs from
@@ -306,6 +306,12 @@ def generate_briefs(
     # the AUSA / FBI agent uses to weigh case priority before reading
     # any of the per-issuer detail. None = not computed (older briefs).
     recovery_estimate: dict | None = None,
+    # v0.23.0: cluster membership dict (from brief["CLUSTER_MEMBERSHIP"]).
+    # Surfaces in the LE handoff "Multi-Victim Cluster" section so the
+    # AUSA sees "this case is part of cluster CL-AB12CD with 11 other
+    # victims and $42M aggregated loss" — the law-firm market unlock.
+    # None when no cross-case overlap exists or DSN unset.
+    cluster_membership: dict | None = None,
     draft: bool = False,
     draft_label: str | None = None,
 ) -> BriefBundle:
@@ -698,6 +704,8 @@ def generate_briefs(
         # state branch. Populated on re-renders after the operator
         # has run send-freeze-letters + recorded outcomes.
         "live_status": live_status,
+        # v0.23.0: cluster membership for the multi-victim section.
+        "cluster_membership": cluster_membership,
         # v0.21.0: recovery estimate from brief["RECOVERY_ESTIMATE"].
         # Surfaces in the LE handoff cover so the AUSA / FBI agent
         # has a headline "estimated recoverable USD" before reading

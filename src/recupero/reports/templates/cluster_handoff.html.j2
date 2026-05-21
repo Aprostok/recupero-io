@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Multi-Victim Cluster Handoff — {{ cluster.public_id }}</title>
+{% include "_styles.html.j2" %}
+<style>
+  /* Aggregated cluster handoff — one document covering N victims.
+     The intended audience is an AUSA / DOJ section chief weighing
+     whether to prioritize a multi-victim filing. Visual emphasis
+     therefore goes on the AGGREGATE numbers (combined loss, victim
+     count) before any per-victim detail. */
+  .cluster-headline {
+    background: #fafafa;
+    border-left: 4px solid var(--gold-accent);
+    padding: 22px 28px;
+    margin: 20px 0 28px;
+    border-radius: 4px;
+  }
+  .cluster-stat {
+    display: inline-block;
+    margin-right: 32px;
+    vertical-align: top;
+  }
+  .cluster-stat-label {
+    display: block;
+    font-size: var(--type-tiny);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink-quiet);
+    margin: 0 0 4px;
+  }
+  .cluster-stat-value {
+    display: block;
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--ink);
+    line-height: 1.1;
+  }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Multi-Victim Cluster Handoff</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Cluster {{ cluster.public_id }}</div>
+    <h1>Multi-Victim<br/>Cluster Handoff</h1>
+    <p class="cover-subtitle">
+      This deliverable consolidates {{ cluster.member_case_count }}
+      Recupero-traced cases that share perpetrator infrastructure
+      into a single law-enforcement filing. Each case retains its
+      own per-victim freeze brief and trace report; this document
+      surfaces the cluster-level facts that justify a consolidated
+      enforcement response.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+</section>
+
+<div class="cluster-headline">
+  <div class="cluster-stat">
+    <span class="cluster-stat-label">Cluster ID</span>
+    <span class="cluster-stat-value">{{ cluster.public_id }}</span>
+  </div>
+  <div class="cluster-stat">
+    <span class="cluster-stat-label">Victims represented</span>
+    <span class="cluster-stat-value">{{ cluster.member_case_count }}</span>
+  </div>
+  <div class="cluster-stat">
+    <span class="cluster-stat-label">Aggregate loss</span>
+    <span class="cluster-stat-value">{{ cluster.total_loss_usd_human }}</span>
+  </div>
+</div>
+
+<h2>1. Why these cases belong together</h2>
+<p>
+  Cross-case correlation against Recupero's cumulative address
+  index identifies a common perpetrator-controlled wallet that
+  appears in every member case. The seed binding wallet for this
+  cluster is:
+</p>
+<table class="evidence">
+  <tr>
+    <th>Seed address</th>
+    <td class="mono">{{ cluster.seed_perp_address }}</td>
+  </tr>
+  <tr>
+    <th>Chain</th>
+    <td>{{ cluster.seed_perp_chain }}</td>
+  </tr>
+  {% if cluster.shared_perp_addresses and cluster.shared_perp_addresses|length > 1 %}
+  <tr>
+    <th>Additional binding wallets</th>
+    <td class="small">
+      {% for addr in cluster.shared_perp_addresses %}
+      {% if addr != cluster.seed_perp_address %}
+      <span class="mono">{{ addr }}</span><br/>
+      {% endif %}
+      {% endfor %}
+    </td>
+  </tr>
+  {% endif %}
+  <tr>
+    <th>First observed</th>
+    <td>{{ cluster.created_at.strftime("%Y-%m-%d") if cluster.created_at else "—" }}</td>
+  </tr>
+  <tr>
+    <th>Latest case joined</th>
+    <td>{{ cluster.updated_at.strftime("%Y-%m-%d") if cluster.updated_at else "—" }}</td>
+  </tr>
+</table>
+
+<h2>2. Member cases</h2>
+<p class="small">
+  Cases sorted by the order in which they joined the cluster. The
+  "originator" is the first case Recupero observed for this
+  perpetrator infrastructure; subsequent cases "joined" via shared
+  wallets.
+</p>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Case identifier</th>
+      <th>Role</th>
+      <th>Joined via</th>
+      <th>Loss</th>
+      <th>Joined at</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for m in cluster.members %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td class="mono small">
+        {% if m.case_id %}{{ m.case_id }}{% else %}{{ m.investigation_id }}{% endif %}
+      </td>
+      <td>{{ m.role }}</td>
+      <td class="mono small">
+        {{ m.joined_via_address[:10] }}…{{ m.joined_via_address[-6:] if m.joined_via_address else '—' }}
+      </td>
+      <td class="amount">
+        {% if m.case_total_loss_usd %}${{ "{:,.2f}".format(m.case_total_loss_usd|float) }}{% else %}—{% endif %}
+      </td>
+      <td class="small">
+        {{ m.joined_at.strftime("%Y-%m-%d") if m.joined_at else "—" }}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>3. Recommended consolidated action</h2>
+<p>
+  The combined aggregate loss of
+  <strong>{{ cluster.total_loss_usd_human }}</strong> across
+  {{ cluster.member_case_count }} victims supports the case for a
+  coordinated multi-victim filing rather than individual victim
+  pursuits. Recommended next steps:
+</p>
+<ol>
+  <li>
+    <strong>Identify the assigned AUSA for each member case</strong>
+    (if any) and convene a cross-jurisdictional coordination call.
+    Per-case freeze briefs and trace reports are available in the
+    individual case folders; this document is the cluster-level
+    summary they share.
+  </li>
+  <li>
+    <strong>File a consolidated freeze request</strong> with the
+    issuers named across all member cases. The aggregate dollar
+    threshold typically commands faster compliance-team response
+    than the per-case requests on their own.
+  </li>
+  <li>
+    <strong>Pursue OFAC designation review</strong> for the
+    binding wallet(s) when the aggregate loss meets the
+    investigative threshold (typically $5M+). The consolidated
+    cluster materials are appropriate for that submission.
+  </li>
+  <li>
+    <strong>Engage FBI Cyber Division</strong>'s multi-victim
+    matter intake — clusters that meet a $10M aggregate threshold
+    and span ≥10 victims typically qualify for priority-target
+    status, which materially affects the speed of subpoena
+    issuance to non-cooperating exchanges.
+  </li>
+</ol>
+
+<h2>4. Per-case forensic deliverables</h2>
+<p class="small">
+  Every case in this cluster carries its own complete forensic
+  package — trace report, fund-flow diagram, per-issuer freeze
+  requests, and individual LE handoff. The cluster's case
+  identifiers above are the keys to retrieve those packages from
+  the Recupero case store. This consolidated handoff is intended
+  to support cross-case coordination, not to replace the
+  per-case records.
+</p>
+
+<footer class="brief-footer">
+  <div class="footer-brand">Recupero · Investigation Services</div>
+  <div class="footer-meta">
+    <code>{{ cluster.public_id }}</code><br/>
+    Generated {{ generated_at }} UTC · v{{ software_version }}<br/>
+    <span class="confidential">Strictly Confidential.</span>
+    Intended for the receiving federal agency / coordinating counsel.
+    Not for distribution to victims, defendants, or issuer
+    compliance teams — those audiences are served by the
+    per-case deliverables.
+  </div>
+</footer>
+
+</body>
+</html>

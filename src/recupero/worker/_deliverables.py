@@ -429,6 +429,10 @@ def build_all_deliverables(
                     # handoff cover. Computed by emit_brief via the
                     # scorer; lives in freeze_brief.RECOVERY_ESTIMATE.
                     recovery_estimate=freeze_brief.get("RECOVERY_ESTIMATE") or None,
+                    # v0.23.0: surface multi-victim cluster membership.
+                    # Populated by cluster_builder at emit_brief tail; None
+                    # for cases with no cross-case perp overlap.
+                    cluster_membership=freeze_brief.get("CLUSTER_MEMBERSHIP") or None,
                     draft=_draft,
                     draft_label=_draft_label,
                 )

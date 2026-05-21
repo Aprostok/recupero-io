@@ -292,6 +292,24 @@ def cli() -> None:
              "freeze_outcomes table. Recommended cadence: nightly cron.",
     )
 
+    # ----- render-cluster (v0.23.0) ----- #
+    p_cluster = sub.add_parser(
+        "render-cluster",
+        help="Render an aggregated multi-victim cluster handoff (one "
+             "document covering ALL victims sharing a perpetrator). "
+             "Produced for a cluster identifier (CL-XXXXXX) returned "
+             "by emit_brief when cross-case overlap is detected.",
+    )
+    p_cluster.add_argument(
+        "public_id",
+        help="Cluster public id (e.g. CL-AB12CD).",
+    )
+    p_cluster.add_argument(
+        "--output-dir", type=str, default="cluster-handoffs",
+        help="Directory to write the rendered handoff (created if "
+             "missing). Default: ./cluster-handoffs/",
+    )
+
     # ----- record-freeze-outcome (v0.14.2) ----- #
     p_outcome = sub.add_parser(
         "record-freeze-outcome",
@@ -593,6 +611,25 @@ def cli() -> None:
         from recupero.freeze_learning.recorder import refresh_priors
         n = refresh_priors(_require_dsn())
         print(f"Refreshed {n} per-issuer prior(s) in issuer_freeze_priors.")
+        sys.exit(0)
+
+    if args.command == "render-cluster":
+        from pathlib import Path as _Path
+        from recupero.reports.cluster_handoff import render_cluster_handoff
+        out_dir = _Path(args.output_dir)
+        out_path = render_cluster_handoff(
+            args.public_id,
+            output_dir=out_dir,
+            dsn=_require_dsn(),
+        )
+        if out_path is None:
+            print(
+                f"ERROR: cluster {args.public_id!r} not found or render failed "
+                "(see logs).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(f"Rendered cluster handoff to {out_path}")
         sys.exit(0)
 
     if args.command == "record-freeze-outcome":

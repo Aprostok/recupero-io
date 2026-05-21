@@ -1642,6 +1642,46 @@ def emit_brief(
         "SCHEMA_VERSION": _BRIEF_SCHEMA_VERSION,
     }
 
+    # JACOB-EYEBALL fix: surface the stolen-asset block at top-level
+    # so downstream readers (the output_integrity validator's check 8,
+    # post-hoc inspection scripts, the API surface that exposes
+    # freeze_brief to partners) can answer "what got stolen?" without
+    # having to dig into FREEZABLE / theft_events / the trace.
+    #
+    # Previously this dict lived ONLY inside the per-letter Jinja
+    # context built in generate_briefs(), so the validator's
+    # stolen-vs-target check silently no-op'd whenever it ran against
+    # the canonical brief JSON (the brief had no `asset` field). Now
+    # the same fields appear here, derived from the primary theft
+    # transfer + the issuer DB.
+    try:
+        from recupero.reports.brief import (
+            _find_theft_events,
+            _resolve_theft_asset_issuer_name,
+        )
+        theft_events = _find_theft_events(case)
+        if theft_events:
+            primary = theft_events[0]
+            brief["asset"] = {
+                "symbol": primary.token.symbol,
+                "contract": primary.token.contract or "(native)",
+                # Resolve the STOLEN-token issuer via contract DB lookup.
+                # Falls back to the symbol when the contract isn't in
+                # the seed DB (rare — only for non-listed assets).
+                "issuer": _resolve_theft_asset_issuer_name(
+                    primary, fallback=primary.token.symbol,
+                ),
+                "chain": getattr(primary, "chain", None) or _extract_primary_chain(case),
+            }
+        else:
+            brief["asset"] = None
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: stolen-asset block build failed: %s — "
+            "validator check 8 will silently skip", _exc,
+        )
+        brief["asset"] = None
+
     # v0.14.1: Recovery probability scoring + cost model. Computed
     # AFTER the brief dict is otherwise complete (reads FREEZABLE,
     # UNRECOVERABLE, etc.). Wrapped in try/except so a scoring

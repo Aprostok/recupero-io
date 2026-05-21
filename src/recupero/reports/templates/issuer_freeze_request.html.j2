@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Compliance Freeze Request — Case {{ case_id }}</title>
+<title>Compliance Freeze Request to {{ issuer.short_name }} — Case {{ case_id }}</title>
 {% include "_styles.html.j2" %}
 </head>
 <body{% if draft %} class="draft" data-draft-label="{{ draft_label | default('DRAFT') }}"{% endif %}>

@@ -130,6 +130,16 @@
 </div>
 {% endif %}
 <dl class="stat-grid">
+  {# JACOB-EYEBALL: surface TOTAL_LOSS_USD ("what was stolen
+     from the victim") as the lead figure. Operators reading the
+     trace report shouldn't have to compute this from FREEZABLE
+     deltas — it's the case's headline number. #}
+  {% if stats.total_loss_usd %}
+  <div>
+    <dt>Total drained from victim</dt>
+    <dd>{{ stats.total_loss_usd }}</dd>
+  </div>
+  {% endif %}
   <div><dt>Total transfers analyzed</dt><dd>{{ stats.total_transfers }}</dd></div>
   <div><dt>Max depth reached</dt><dd>{{ stats.max_depth_reached }}</dd></div>
   <div>

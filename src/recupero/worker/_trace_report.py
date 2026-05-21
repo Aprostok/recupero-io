@@ -126,6 +126,17 @@ def _build_context(
     stats["total_perpetrator_holdings_usd"] = (
         freeze_brief.get("TOTAL_PERPETRATOR_HOLDINGS_USD") or None
     )
+    # JACOB-EYEBALL: surface the total LOSS (what was drained from the
+    # victim) onto the trace report. Distinct from total_flow_usd
+    # (the trace's attributable USD across all hops, which can be
+    # much higher than the actual theft because of intermediate
+    # swaps), and distinct from total_perpetrator_holdings_usd (the
+    # value still controlled by the perp wallets after the drain).
+    # Operators reading the trace report need the "how much was
+    # stolen" headline regardless of recovery state.
+    stats["total_loss_usd"] = (
+        freeze_brief.get("TOTAL_LOSS_USD") or None
+    )
     destinations = _build_destinations_table(case)
     freezable_rows = _build_freezable_table(freeze_brief, chain_str)
 

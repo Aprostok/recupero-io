@@ -764,15 +764,33 @@ def cli() -> None:
             )
             sys.exit(2)
         secret = _secrets.token_hex(args.key_bytes)
-        print("# Generated API key (v0.27.0 partner onboarding)")
-        print(f"# Name:   {args.name}")
-        print(f"# Secret: {secret}")
+        # v0.27.1 (HIGH-3): emit the SECRET to stderr (not stdout)
+        # with a clear banner so operators piping `... | tee` or
+        # capturing CI logs don't accidentally persist the key.
+        # Stdout receives only the non-secret snippet with the
+        # secret REDACTED, so logs are safe.
+        print("=" * 64, file=sys.stderr)
+        print(
+            "DO NOT COPY THIS TO LOGS - STDERR ONLY",
+            file=sys.stderr,
+        )
+        print(f"  Name:   {args.name}", file=sys.stderr)
+        print(f"  Secret: {secret}", file=sys.stderr)
+        print(
+            "  Append to RECUPERO_API_KEYS env "
+            "(comma-separated pairs):",
+            file=sys.stderr,
+        )
+        print(f"  {args.name}:{secret}", file=sys.stderr)
+        print("=" * 64, file=sys.stderr)
+        # Stdout — safe to capture / log.
+        print(f"# Generated API key for partner: {args.name}")
+        print(f"# Secret printed to STDERR (length={len(secret)} hex chars).")
+        print("# Append to RECUPERO_API_KEYS env (REDACTED form shown):")
+        print(f"{args.name}:***")
         print()
-        print("# Append to RECUPERO_API_KEYS env (comma-separated pairs):")
-        print(f"{args.name}:{secret}")
-        print()
-        print("# Partner integration snippet:")
-        print(f"#   curl -H 'X-Recupero-API-Key: {secret}' \\")
+        print("# Partner integration snippet (substitute real secret):")
+        print("#   curl -H 'X-Recupero-API-Key: <SECRET>' \\")
         print("#        https://api.recupero.io/v1/health")
         sys.exit(0)
 

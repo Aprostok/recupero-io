@@ -17,7 +17,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from recupero.api.auth import require_api_key
 
@@ -545,6 +545,10 @@ class BulkScreenRequest(BaseModel):
     interactive flows, but a daily reconciliation against a
     sanctions list wants higher throughput per round-trip.
     """
+    # v0.27.1 (CRIT-2): per-element length validator. The list-level
+    # max_length=100 only caps the *list*; without a per-element cap
+    # a partner could POST 100 × ~16MB strings and exhaust process
+    # memory on parse + force pathological string ops downstream.
     addresses: list[str] = Field(
         ..., min_length=1, max_length=100,
         description=(
@@ -561,6 +565,22 @@ class BulkScreenRequest(BaseModel):
             "when needed."
         ),
     )
+
+    @field_validator("addresses")
+    @classmethod
+    def _validate_per_address_length(cls, v: list[str]) -> list[str]:
+        """v0.27.1 (CRIT-2): each address must fit within 128 chars
+        — parity with the single-address /v1/screen endpoint."""
+        for i, addr in enumerate(v):
+            if not addr or not addr.strip():
+                raise ValueError(
+                    f"addresses[{i}] is empty"
+                )
+            if len(addr) > 128:
+                raise ValueError(
+                    f"addresses[{i}] exceeds 128-character limit"
+                )
+        return v
 
 
 @app.post(
@@ -645,7 +665,9 @@ async def monitor_list_endpoint(
     way to see another key's subscriptions through this endpoint.
     """
     import os
-    from recupero.api.monitoring_api import list_subscriptions
+    from recupero.api.monitoring_api import (
+        MonitoringDbError, list_subscriptions,
+    )
 
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
     if not dsn:
@@ -653,11 +675,23 @@ async def monitor_list_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="monitoring lookup unavailable",
         )
-    records = list_subscriptions(
-        api_key_name=api_key_name, dsn=dsn, limit=limit,
-    )
+    try:
+        records = list_subscriptions(
+            api_key_name=api_key_name, dsn=dsn, limit=limit,
+        )
+    except MonitoringDbError:
+        # v0.27.1 (HIGH-5): surface DB blip as 503 instead of an
+        # empty list that the partner would misread as "no subs."
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monitoring lookup temporarily unavailable",
+        ) from None
+    # v0.27.1 (HIGH-4): list response masks the webhook URL to limit
+    # leak impact if the partner's API key is compromised.
     return {
-        "subscriptions": [r.to_json_safe() for r in records],
+        "subscriptions": [
+            r.to_json_safe(mask_webhook_url=True) for r in records
+        ],
         "count": len(records),
     }
 
@@ -676,7 +710,9 @@ async def monitor_get_endpoint(
     a 403 would leak the existence of the row to a probing attacker)."""
     import os
     from uuid import UUID as _UUID
-    from recupero.api.monitoring_api import get_subscription
+    from recupero.api.monitoring_api import (
+        MonitoringDbError, get_subscription,
+    )
 
     try:
         sub_uuid = _UUID(subscription_id)
@@ -692,17 +728,24 @@ async def monitor_get_endpoint(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="monitoring lookup unavailable",
         )
-    record = get_subscription(
-        api_key_name=api_key_name,
-        subscription_id=sub_uuid,
-        dsn=dsn,
-    )
+    try:
+        record = get_subscription(
+            api_key_name=api_key_name,
+            subscription_id=sub_uuid,
+            dsn=dsn,
+        )
+    except MonitoringDbError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monitoring lookup temporarily unavailable",
+        ) from None
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="subscription not found",
         )
-    return record.to_json_safe()
+    # v0.27.1 (HIGH-4): mask the webhook URL on read responses.
+    return record.to_json_safe(mask_webhook_url=True)
 
 
 @app.delete(
@@ -720,7 +763,9 @@ async def monitor_delete_endpoint(
     behavior as get, deliberately, to avoid leaking existence."""
     import os
     from uuid import UUID as _UUID
-    from recupero.api.monitoring_api import soft_delete_subscription
+    from recupero.api.monitoring_api import (
+        MonitoringDbError, soft_delete_subscription,
+    )
 
     try:
         sub_uuid = _UUID(subscription_id)
@@ -737,11 +782,20 @@ async def monitor_delete_endpoint(
             detail="monitoring delete unavailable",
         )
 
-    deleted = soft_delete_subscription(
-        api_key_name=api_key_name,
-        subscription_id=sub_uuid,
-        dsn=dsn,
-    )
+    try:
+        deleted = soft_delete_subscription(
+            api_key_name=api_key_name,
+            subscription_id=sub_uuid,
+            dsn=dsn,
+        )
+    except MonitoringDbError:
+        # v0.27.1 (HIGH-5): DB blip on delete → 503 with retry hint,
+        # not a misleading 404 that would lead the partner to assume
+        # the subscription is gone while the worker keeps polling it.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monitoring delete temporarily unavailable",
+        ) from None
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -779,6 +833,12 @@ async def screen_bulk_endpoint(
             detail=f"screener module unavailable: {e}",
         ) from e
 
+    # v0.27.1 (CRIT-3): broaden the exception handler so that
+    # ANY per-row failure (RuntimeError from a DB blip, KeyError
+    # from a malformed correlation row, etc.) is contained to that
+    # row instead of aborting the entire batch with a 500. The
+    # docstring already promised this contract; the implementation
+    # didn't honor it.
     results: list[dict[str, Any]] = []
     for addr in req.addresses:
         try:
@@ -788,13 +848,25 @@ async def screen_bulk_endpoint(
             )
             results.append(r.to_json_safe())
         except (TypeError, ValueError) as e:
-            # Per-address failure does NOT short-circuit the batch.
-            # Surface the error inline so the caller can fix the
-            # offending row and re-screen.
+            # Input-shape errors get the specific message so the
+            # caller can fix the bad row and re-screen.
             results.append({
                 "address": addr,
                 "chain": req.chain,
                 "error": str(e),
+            })
+        except Exception as e:  # noqa: BLE001
+            # Anything else (DB outage, network hiccup) gets a
+            # generic per-row error — no DSN / internal trace leaks
+            # to the partner.
+            log.warning(
+                "/v1/screen/bulk row failed (api_key=%s address=%s): %s",
+                api_key_name, addr, e,
+            )
+            results.append({
+                "address": addr,
+                "chain": req.chain,
+                "error": "screening failed for this address",
             })
 
     log.info(

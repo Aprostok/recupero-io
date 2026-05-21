@@ -125,13 +125,13 @@ def test_validate_rejects_non_http_webhook_url():
 def test_validate_accepts_any_movement_without_threshold():
     """The threshold-less triggers must not require threshold_usd."""
     from recupero.api.monitoring_api import _validate_subscription_input
-    # Should not raise.
+    # Should not raise. webhook_secret must be >=16 chars (v0.27.1).
     _validate_subscription_input(
         address="0x" + "a" * 40, chain="ethereum",
         trigger_type="any_movement",
         threshold_usd=None,
         webhook_url="https://example.com/hook", label="my label",
-        webhook_secret="secret-xyz",
+        webhook_secret="this-secret-is-32-chars-long-yes",
     )
 
 

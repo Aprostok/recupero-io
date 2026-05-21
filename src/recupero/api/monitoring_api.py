@@ -28,14 +28,60 @@ Surface:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
+import socket
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID, uuid4
 
 log = logging.getLogger(__name__)
+
+
+# v0.27.1 (CRIT-1) — SSRF defense: deny private / loopback / link-local
+# / metadata-service hosts when validating partner-supplied webhook
+# URLs. Without this an exchange could subscribe with
+# `webhook_url=http://169.254.169.254/latest/meta-data/iam/security-credentials/`
+# and use the worker's dispatcher to exfiltrate Recupero's cloud
+# instance credentials.
+#
+# This module enforces the check at VALIDATION time (rejecting the
+# subscription up-front) and the dispatcher enforces it again at
+# DISPATCH time (defends against DNS rebinding — an attacker
+# registers evil.example.com pointing at a public IP to pass
+# validation, then flips it to 169.254.169.254 between validation
+# and the worker's next poll).
+
+# Operator escape hatch (dev environments need to subscribe to
+# http://localhost:N for end-to-end testing). Comma-separated host
+# names that bypass the deny list. Production deployments must
+# leave this UNSET.
+_SSRF_ALLOWLIST_ENV = "RECUPERO_WEBHOOK_ALLOWLIST_HOSTS"
+
+# Hostnames we always block. These resolve to internal infrastructure
+# regardless of DNS.
+_BLOCKED_HOSTNAMES = frozenset({
+    "localhost",
+    "ip6-localhost",
+    "ip6-loopback",
+    "metadata.google.internal",
+    "metadata.aws.internal",
+    "metadata.azure.com",
+    "169.254.169.254",  # AWS / GCP / Azure IMDSv1
+    "fd00:ec2::254",    # AWS IMDSv2 IPv6
+})
+
+# Hostname suffixes blocked. These cover Railway's internal DNS
+# (*.railway.internal), Docker's *.docker.internal, and *.local.
+_BLOCKED_HOSTNAME_SUFFIXES = (
+    ".internal",
+    ".local",
+    ".consul",
+    ".cluster.local",
+)
 
 
 # The created_by prefix marks subscriptions originating from the
@@ -62,7 +108,13 @@ _THRESHOLD_REQUIRED_TRIGGERS = frozenset({
 _MAX_WEBHOOK_URL = 2048
 _MAX_LABEL = 200
 _MAX_WEBHOOK_SECRET = 256
-_WEBHOOK_URL_RE = re.compile(r"^https?://[^\s<>\"]{1,2046}$")
+# v0.27.1 (MED-3): require https:// only. Compliance webhooks
+# transport sensitive watch-list data; cleartext http isn't
+# defensible in 2026 (free Let's Encrypt certs).
+_WEBHOOK_URL_RE = re.compile(r"^https://[^\s<>\"]{1,2046}$")
+# v0.27.1 (HIGH-1): partner-supplied HMAC secrets must be long
+# enough that brute-force isn't seconds (128 bits min).
+_MIN_WEBHOOK_SECRET = 16
 
 
 class MonitoringApiError(ValueError):
@@ -73,6 +125,42 @@ class MonitoringApiError(ValueError):
         super().__init__(f"{field}: {detail}")
         self.field = field
         self.detail = detail
+
+
+# v0.27.1 (HIGH-5): sentinel exception so the API layer can
+# distinguish "DB query failed" (return 503) from "no row matches"
+# (return 404 / empty list). Previously list / delete swallowed
+# every error as [] / False — a partner whose subscriptions briefly
+# returned empty due to a Supabase blip would assume their data
+# vanished.
+class MonitoringDbError(RuntimeError):
+    """Raised when the DB layer fails. The endpoint catches this
+    and surfaces a 503 with a generic detail (no DSN leak)."""
+
+
+def _mask_webhook_url(url: str) -> str:
+    """v0.27.1 (HIGH-4): redact the webhook URL beyond scheme + host
+    + first path segment. Partners get the full URL on the create
+    response (they just posted it) but list / get responses return
+    only enough to identify which URL it is. Limits blast radius
+    if the partner's API key leaks."""
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "***"
+    scheme = parts.scheme or "https"
+    host = parts.hostname or "***"
+    port = f":{parts.port}" if parts.port else ""
+    # First path segment only — keep enough to distinguish multiple
+    # webhooks on the same host, drop any per-customer / per-secret
+    # tokens that often live deeper in the path.
+    path = parts.path or "/"
+    first_seg = ""
+    if path and path != "/":
+        segments = [s for s in path.split("/") if s]
+        if segments:
+            first_seg = "/" + segments[0]
+    return f"{scheme}://{host}{port}{first_seg}/…"
 
 
 @dataclass(frozen=True)
@@ -92,7 +180,15 @@ class SubscriptionRecord:
     last_alerted_at: str | None
     expires_at: str | None
 
-    def to_json_safe(self) -> dict[str, Any]:
+    def to_json_safe(self, *, mask_webhook_url: bool = False) -> dict[str, Any]:
+        # v0.27.1 (HIGH-4): list/get endpoints set mask_webhook_url
+        # True. The create response sends back the raw URL so the
+        # partner sees the round-trip confirmation, but every
+        # subsequent retrieval returns the masked form.
+        webhook = (
+            _mask_webhook_url(self.webhook_url) if mask_webhook_url
+            else self.webhook_url
+        )
         return {
             "id": str(self.id),
             "address": self.address,
@@ -102,13 +198,123 @@ class SubscriptionRecord:
                 str(self.threshold_usd)
                 if self.threshold_usd is not None else None
             ),
-            "webhook_url": self.webhook_url,
+            "webhook_url": webhook,
             "label": self.label,
             "status": self.status,
             "created_at": self.created_at,
             "last_alerted_at": self.last_alerted_at,
             "expires_at": self.expires_at,
         }
+
+
+def _ssrf_host_allowlist() -> frozenset[str]:
+    """Read the operator escape-hatch env var. Empty in production
+    (no host bypasses the deny list)."""
+    import os
+    raw = (os.environ.get(_SSRF_ALLOWLIST_ENV, "") or "").strip()
+    if not raw:
+        return frozenset()
+    return frozenset(
+        h.strip().lower() for h in raw.split(",") if h.strip()
+    )
+
+
+def _is_blocked_ip(ip_str: str) -> bool:
+    """True when ``ip_str`` parses as a private / loopback /
+    link-local / multicast / reserved IP. Defends against partners
+    pointing webhook_url at internal infra."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        # Not an IP literal — caller falls back to hostname check.
+        return False
+    return (
+        ip.is_loopback or ip.is_private or ip.is_link_local
+        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+    )
+
+
+def _is_blocked_host(host: str) -> bool:
+    """True when ``host`` should be rejected as a webhook target.
+
+    Checks (in order):
+      1. Operator allowlist override (RECUPERO_WEBHOOK_ALLOWLIST_HOSTS)
+      2. Exact-match blocked hostnames
+      3. Blocked hostname suffixes (.internal, .local, etc.)
+      4. IP-literal host falls in a private/loopback/link-local range
+    """
+    if not host:
+        return True
+    host = host.lower()
+    # Strip brackets from IPv6 literals: [::1] → ::1
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+
+    if host in _ssrf_host_allowlist():
+        return False
+
+    if host in _BLOCKED_HOSTNAMES:
+        return True
+    if any(host.endswith(suf) for suf in _BLOCKED_HOSTNAME_SUFFIXES):
+        return True
+    if _is_blocked_ip(host):
+        return True
+    return False
+
+
+def _resolves_to_blocked_ip(host: str) -> bool:
+    """True when DNS resolves ``host`` to ANY blocked IP. Used at
+    dispatch time to defend against DNS rebinding (attacker passes
+    URL validation with a public IP, then flips DNS to a private
+    target before the worker dispatches). Defensive only — failing
+    resolution returns False so the underlying request can produce
+    its own error.
+    """
+    if host in _ssrf_host_allowlist():
+        return False
+    try:
+        addrs = socket.getaddrinfo(host, None)
+    except (socket.gaierror, OSError):
+        return False
+    for family, _kind, _proto, _name, sockaddr in addrs:
+        ip = sockaddr[0]
+        if _is_blocked_ip(ip):
+            return True
+    return False
+
+
+def assert_webhook_url_safe(url: str) -> None:
+    """Raises MonitoringApiError when ``url`` resolves to internal
+    infra. Called at both validation time and dispatch time."""
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise MonitoringApiError(
+            "webhook_url", f"Could not parse webhook URL: {exc}",
+        ) from None
+    if parts.scheme.lower() != "https":
+        raise MonitoringApiError(
+            "webhook_url",
+            "webhook_url must use https:// (cleartext http is not "
+            "permitted for production webhooks).",
+        )
+    host = parts.hostname or ""
+    if _is_blocked_host(host):
+        raise MonitoringApiError(
+            "webhook_url",
+            "webhook_url host is not permitted (loopback, private, "
+            "link-local, or metadata-service targets are blocked).",
+        )
+    # Defense in depth: also resolve the hostname and reject if any
+    # answer points at a blocked range. Catches the case where
+    # ``host`` is a public-looking name with private DNS A records
+    # (cloud-internal services often do this).
+    if not _is_blocked_ip(host) and _resolves_to_blocked_ip(host):
+        raise MonitoringApiError(
+            "webhook_url",
+            "webhook_url resolves to a private / internal IP. "
+            "Use a publicly reachable host.",
+        )
 
 
 def _validate_subscription_input(
@@ -160,19 +366,33 @@ def _validate_subscription_input(
     if not _WEBHOOK_URL_RE.match(webhook_url):
         raise MonitoringApiError(
             "webhook_url",
-            "webhook_url must be a fully-qualified http(s):// URL.",
+            "webhook_url must be a fully-qualified https:// URL.",
         )
+    # v0.27.1 (CRIT-1): SSRF defense — block private / loopback /
+    # link-local / metadata hosts.
+    assert_webhook_url_safe(webhook_url)
 
     if label is not None and len(label) > _MAX_LABEL:
         raise MonitoringApiError(
             "label", f"label exceeds {_MAX_LABEL} character limit.",
         )
 
-    if webhook_secret is not None and len(webhook_secret) > _MAX_WEBHOOK_SECRET:
-        raise MonitoringApiError(
-            "webhook_secret",
-            f"webhook_secret exceeds {_MAX_WEBHOOK_SECRET} character limit.",
-        )
+    # v0.27.1 (HIGH-1): partner-supplied HMAC secret must be at
+    # least 16 chars when provided (or omitted entirely).
+    if webhook_secret is not None:
+        if len(webhook_secret) < _MIN_WEBHOOK_SECRET:
+            raise MonitoringApiError(
+                "webhook_secret",
+                f"webhook_secret must be at least {_MIN_WEBHOOK_SECRET} "
+                "characters when provided (HMAC over a shorter key is "
+                "brute-forceable).",
+            )
+        if len(webhook_secret) > _MAX_WEBHOOK_SECRET:
+            raise MonitoringApiError(
+                "webhook_secret",
+                f"webhook_secret exceeds {_MAX_WEBHOOK_SECRET} "
+                "character limit.",
+            )
 
 
 def created_by_for_api_key(api_key_name: str) -> str:
@@ -321,7 +541,10 @@ def list_subscriptions(
             "list_subscriptions failed (api_key=%s): %s",
             api_key_name, exc,
         )
-        return []
+        # v0.27.1 (HIGH-5): re-raise so the API layer can surface
+        # 503 instead of falsely returning [] (which a partner would
+        # read as "I have no subscriptions").
+        raise MonitoringDbError("subscription list failed") from None
     return [_row_to_record(r) for r in rows]
 
 
@@ -362,7 +585,8 @@ def get_subscription(
             "get_subscription failed (api_key=%s id=%s): %s",
             api_key_name, subscription_id, exc,
         )
-        return None
+        # v0.27.1 (HIGH-5): distinguish DB error from missing row.
+        raise MonitoringDbError("subscription lookup failed") from None
     if not row:
         return None
     return _row_to_record(row)
@@ -404,7 +628,9 @@ def soft_delete_subscription(
             "soft_delete_subscription failed (api_key=%s id=%s): %s",
             api_key_name, subscription_id, exc,
         )
-        return False
+        # v0.27.1 (HIGH-5): re-raise so the API layer can return 503
+        # instead of misleading the partner with a 404.
+        raise MonitoringDbError("subscription delete failed") from None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,7 +668,9 @@ def _row_to_record(row: Any) -> SubscriptionRecord:
 __all__ = (
     "API_CREATED_BY_PREFIX",
     "MonitoringApiError",
+    "MonitoringDbError",
     "SubscriptionRecord",
+    "assert_webhook_url_safe",
     "create_subscription",
     "list_subscriptions",
     "get_subscription",

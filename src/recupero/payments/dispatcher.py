@@ -496,18 +496,29 @@ def _handle_diagnostic(
             "before the investigation can run"
         )
 
-    # v0.25.1 (CRIT C-1): Stripe emits multiple webhook events for the
-    # same successful Checkout Session (`checkout.session.completed`,
-    # `payment_intent.succeeded`, `charge.succeeded`), each with its
-    # own event_id. The top-level idempotency check is keyed on
-    # `stripe_event_id` and so does NOT dedup these.
+    # v0.25.1 (CRIT C-1) — partially fixed Stripe's 2-3-events-per-
+    # Checkout pattern by adding a SELECT before INSERT. But that
+    # SELECT-then-INSERT pair is NOT atomic under READ COMMITTED:
+    # two concurrent dispatchers can both pass the existence check
+    # and both INSERT. Real-world: the victim receives 2-3 case-
+    # received emails with different portal URLs.
     #
-    # Pre-v0.25.1 we unconditionally INSERTed a new investigation on
-    # every diagnostic webhook. With v0.25.0's post-commit hook this
-    # surfaces customer-side: the victim receives 2-3 confirmation
-    # emails minutes apart, each with a different portal URL — visible
-    # customer harm. Check for an existing diagnostic investigation
-    # on this case BEFORE INSERTing.
+    # PUNISH-B W-1 hardening: serialize concurrent diagnostic
+    # dispatches on the same case_id via a Postgres transaction-
+    # scoped advisory lock. The lock is keyed on a stable hash of
+    # the case UUID (hashtext returns int4, fits the
+    # pg_advisory_xact_lock signature) and is released automatically
+    # at txn commit. Concurrent dispatchers serialize: the second
+    # one blocks here, then finds the just-committed investigation
+    # row, and returns 'audit_only' instead of inserting a duplicate.
+    #
+    # Advisory locks are advisory — they don't enforce against rows.
+    # The serialization is the discipline; the existing-investigation
+    # SELECT below remains the source of truth on whether to insert.
+    cur.execute(
+        "SELECT pg_advisory_xact_lock(hashtext('diagnostic:' || %s))",
+        (str(case_uuid),),
+    )
     cur.execute(
         """
         SELECT id FROM public.investigations

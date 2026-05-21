@@ -8,7 +8,7 @@ don't cover. The validator covers CATEGORIES of bugs by checking
 structural properties of the rendered output that must hold for
 every case regardless of shape.
 
-12 invariants (Jacob's starter set, Part 4.2):
+27 invariants (Jacob's Part 4.2 starter set + Part 5 audit expansion):
 
   1. Filename/content consistency for issuer-named files (catches
      v0.20.15's freeze_request_midas containing the Circle letter).
@@ -36,6 +36,39 @@ every case regardless of shape.
      in the brief don't appear as FREEZABLE in any freeze letter.
  12. Sky Protocol / DAI → UNRECOVERABLE in every artifact that
      mentions DAI.
+
+Part 5 expansion — per-artifact + cross-artifact invariants:
+
+ 13. freeze_request <title> tag contains the named issuer (the
+     v0.20.15 routing bug detectable at the title layer).
+ 14. freeze_request does NOT contain compliance emails belonging to
+     OTHER issuers (a Tether letter must never carry
+     compliance@circle.com — template cross-fill).
+ 15. LE handoff Section 4.2 enumerates every issuer present in
+     brief.ALL_ISSUER_HOLDINGS / brief.FREEZABLE (catches partial
+     inventory sync — AUSA can't serve a target that isn't listed).
+ 16. LE handoff body cites the brief's TOTAL_LOSS_USD figure (or
+     TOTAL_FREEZABLE_USD fallback) — LE without a $ figure is
+     unfileable.
+ 17. trace_report does NOT contain freeze-request language (catches
+     cross-template content leakage; trace_report is internal-use).
+ 18. engagement_letter exists iff MAX_RECOVERABLE_USD > 0 (extends
+     check 9 to the engagement artifact — no signup form when
+     nothing to recover).
+ 19. engagement_letter contains the victim's name.
+ 20. victim_summary contains the freezable/recoverable $ figure.
+ 21. victim_summary contains the victim's name.
+ 22. flow_*.svg files start with a valid <?xml / <svg root.
+ 23. investigator_findings.csv is well-formed (header + ≥1 row when
+     FREEZABLE is non-empty).
+ 24. CASE_ID is consistent across freeze_brief, manifest, freeze
+     requests, LE handoffs (catches cross-case content bleed).
+ 25. brief.asset.symbol matches the symbol referenced in trace_report
+     and LE handoffs (no USDC trace report on a USDT case).
+ 26. brief.victim.name matches the victim referenced in LE handoffs,
+     victim_summary, engagement_letter (no Bob Other on Alice's case).
+ 27. recovery_snapshot exists iff MAX_RECOVERABLE_USD > 0 (extends
+     check 9 / 18 to the standalone pre-engagement deliverable).
 
 Every check derives its expected values from the case's OWN data
 (freeze_asks.json, freeze_brief.json, the brief manifest) rather
@@ -196,6 +229,63 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          )),
         ("dai_sky_consistency",
          lambda: _check_dai_sky_consistency(briefs_dir, freeze_brief)),
+        # Part 5 expansion — 15 additional invariants.
+        ("freeze_request_title_contains_issuer",
+         lambda: _check_freeze_request_title_contains_issuer(
+             briefs_dir, freeze_brief,
+         )),
+        ("freeze_request_no_other_issuer_emails",
+         lambda: _check_freeze_request_no_other_issuer_emails(
+             briefs_dir, freeze_brief,
+         )),
+        ("le_handoff_section_42_lists_all_issuers",
+         lambda: _check_le_handoff_section_42_lists_all_issuers(
+             briefs_dir, freeze_brief,
+         )),
+        ("le_handoff_cites_total_loss",
+         lambda: _check_le_handoff_cites_total_loss(
+             briefs_dir, freeze_brief,
+         )),
+        ("trace_report_internal_marker",
+         lambda: _check_trace_report_internal_marker(briefs_dir)),
+        ("engagement_letter_exists_iff_recoverable",
+         lambda: _check_engagement_letter_exists_iff_recoverable(
+             briefs_dir, freeze_brief,
+         )),
+        ("engagement_letter_names_victim",
+         lambda: _check_engagement_letter_names_victim(
+             briefs_dir, freeze_brief,
+         )),
+        ("victim_summary_quotes_freezable_total",
+         lambda: _check_victim_summary_quotes_freezable_total(
+             briefs_dir, freeze_brief,
+         )),
+        ("victim_summary_names_victim",
+         lambda: _check_victim_summary_names_victim(
+             briefs_dir, freeze_brief,
+         )),
+        ("flow_svg_valid_root",
+         lambda: _check_flow_svg_valid_root(briefs_dir)),
+        ("investigator_findings_csv_well_formed",
+         lambda: _check_investigator_findings_csv_well_formed(
+             briefs_dir, freeze_brief,
+         )),
+        ("case_id_consistent_across_artifacts",
+         lambda: _check_case_id_consistent_across_artifacts(
+             briefs_dir, freeze_brief,
+         )),
+        ("asset_symbol_consistent_across_artifacts",
+         lambda: _check_asset_symbol_consistent_across_artifacts(
+             briefs_dir, freeze_brief,
+         )),
+        ("victim_name_consistent_across_artifacts",
+         lambda: _check_victim_name_consistent_across_artifacts(
+             briefs_dir, freeze_brief,
+         )),
+        ("recovery_snapshot_iff_recoverable",
+         lambda: _check_recovery_snapshot_iff_recoverable(
+             briefs_dir, freeze_brief,
+         )),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -927,6 +1017,795 @@ def _check_dai_sky_consistency(
             ),
         ))
     return violations
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Part 5 expansion: per-artifact + cross-artifact invariants (checks 13-27)
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared helpers for Part 5 checks
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# Well-known crypto symbols we will flag as "other asset" when a
+# trace_report or LE handoff names one of them while the brief's
+# asset.symbol is a different value. Kept short and conservative —
+# adding new symbols here trades false positives for sensitivity.
+_KNOWN_ASSET_SYMBOLS = {
+    "USDT", "USDC", "DAI", "USDS", "BUSD", "TUSD", "FRAX",
+    "ETH", "WETH", "BTC", "WBTC", "SOL", "MATIC",
+}
+
+
+# Map: well-known issuer display name → set of compliance email
+# domains belonging to that issuer. Used by check 14 as a backstop
+# when the issuer isn't in this case's freeze_brief (so the seed-db
+# lookup returns nothing, but the email is still clearly foreign).
+# Keep conservative — false positives on this check are costly.
+_KNOWN_ISSUER_DOMAINS: dict[str, set[str]] = {
+    "Tether": {"tether.to", "tether.io"},
+    "Circle": {"circle.com"},
+    "Coinbase": {"coinbase.com"},
+    "Binance": {"binance.com", "binance.us"},
+    "Midas": {"midas.app", "midas.fund"},
+    "Kraken": {"kraken.com"},
+    "Gemini": {"gemini.com"},
+    "OKX": {"okx.com", "ok.com"},
+    "Sky Protocol": {"sky.money", "makerdao.com"},
+}
+
+
+def _extract_title_text(html: str) -> str | None:
+    """Return the inner text of the first <title> tag, or None."""
+    m = re.search(
+        r"<title[^>]*>(.*?)</title>", html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return m.group(1).strip() if m else None
+
+
+def _extract_first_h1(html: str) -> str | None:
+    """Return the inner text of the first <h1> tag, or None."""
+    m = re.search(
+        r"<h1[^>]*>(.*?)</h1>", html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if not m:
+        return None
+    # Strip inner HTML tags to get plain text.
+    return re.sub(r"<[^>]+>", "", m.group(1)).strip()
+
+
+def _brief_freezable_issuers(freeze_brief: dict | None) -> list[str]:
+    """Names of every issuer in brief.FREEZABLE (de-duplicated, in
+    insertion order)."""
+    if not freeze_brief:
+        return []
+    seen: list[str] = []
+    for entry in freeze_brief.get("FREEZABLE", []) or []:
+        n = (entry.get("issuer") or "").strip()
+        if n and n not in seen:
+            seen.append(n)
+    return seen
+
+
+def _brief_all_issuers(freeze_brief: dict | None) -> list[str]:
+    """Names of every issuer that should appear in Section 4.2 of
+    the LE handoff: ALL_ISSUER_HOLDINGS preferred, FREEZABLE as
+    fallback."""
+    if not freeze_brief:
+        return []
+    seen: list[str] = []
+    for entry in freeze_brief.get("ALL_ISSUER_HOLDINGS", []) or []:
+        n = (entry.get("issuer") or "").strip()
+        if n and n not in seen:
+            seen.append(n)
+    if seen:
+        return seen
+    return _brief_freezable_issuers(freeze_brief)
+
+
+def _brief_victim_name(freeze_brief: dict | None) -> str | None:
+    """Return the brief's victim name. The brief is shipped in
+    multiple shapes — check the well-known keys."""
+    if not freeze_brief:
+        return None
+    victim = freeze_brief.get("victim") or freeze_brief.get("VICTIM")
+    if isinstance(victim, dict):
+        name = (victim.get("name") or victim.get("display_name") or "").strip()
+        if name:
+            return name
+    n = (freeze_brief.get("victim_name") or "").strip()
+    return n or None
+
+
+def _brief_case_id(freeze_brief: dict | None) -> str | None:
+    if not freeze_brief:
+        return None
+    return (
+        freeze_brief.get("CASE_ID")
+        or freeze_brief.get("case_id")
+        or None
+    )
+
+
+def _brief_asset_symbol(freeze_brief: dict | None) -> str | None:
+    if not freeze_brief:
+        return None
+    asset = freeze_brief.get("asset") or {}
+    return (asset.get("symbol") or "").strip() or None
+
+
+def _brief_total_loss_usd(freeze_brief: dict | None) -> Decimal:
+    if not freeze_brief:
+        return Decimal(0)
+    return _parse_usd_string(
+        freeze_brief.get("TOTAL_LOSS_USD")
+        or freeze_brief.get("total_loss_usd")
+        or freeze_brief.get("TOTAL_FREEZABLE_USD")
+        or "0"
+    )
+
+
+def _brief_max_recoverable_usd(freeze_brief: dict | None) -> Decimal:
+    if not freeze_brief:
+        return Decimal(0)
+    return _parse_usd_string(
+        freeze_brief.get("MAX_RECOVERABLE_USD")
+        or freeze_brief.get("max_recoverable_usd")
+        or freeze_brief.get("TOTAL_FREEZABLE_USD")
+        or "0"
+    )
+
+
+def _strip_html_to_text(html: str) -> str:
+    """Crude HTML→text: remove all tags. Sufficient for substring +
+    name checks without pulling in a real HTML parser."""
+    return re.sub(r"<[^>]+>", " ", html)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 13: freeze_request <title> contains the named issuer
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_freeze_request_title_contains_issuer(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("freeze_request_*.html")):
+        slug = _extract_issuer_slug(path.name, prefix="freeze_request")
+        if not slug:
+            continue
+        issuer_name = _resolve_issuer_name_from_slug(slug, freeze_brief)
+        if not issuer_name:
+            continue
+        text = _safe_read(path)
+        title = _extract_title_text(text)
+        h1 = _extract_first_h1(text)
+        # The issuer name must appear in the <title> OR the first
+        # <h1>. A letter with a generic "Compliance Freeze Request"
+        # title and a heading that omits the issuer is the v0.20.15
+        # bug detectable at the title layer.
+        in_title = title is not None and issuer_name in title
+        in_h1 = h1 is not None and issuer_name in h1
+        if not (in_title or in_h1):
+            violations.append(Violation(
+                check="freeze_request_title_contains_issuer",
+                severity="high", file=path.name,
+                detail=(
+                    f"freeze_request for issuer {issuer_name!r} has "
+                    f"neither <title> nor <h1> mentioning the issuer. "
+                    f"Found title={title!r}, h1={h1!r}. The recipient "
+                    "would not know who this letter is addressed to."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 14: freeze_request must not contain foreign-issuer emails
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_freeze_request_no_other_issuer_emails(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    # Build a map: issuer_name → set of compliance domains, merging
+    # (a) every issuer in this case's brief and (b) the well-known
+    # built-in registry. The built-in registry is what catches the
+    # cross-fill scenario where the foreign issuer isn't even in
+    # the current case's brief (e.g., a stale template grabbed the
+    # Circle contact from a previous case).
+    issuers = _brief_freezable_issuers(freeze_brief)
+    issuer_domains: dict[str, set[str]] = {
+        name: set(doms) for name, doms in _KNOWN_ISSUER_DOMAINS.items()
+    }
+    for name in issuers:
+        domains = issuer_domains.setdefault(name, set())
+        email = _issuer_compliance_email(name)
+        if email and "@" in email:
+            domains.add(email.split("@", 1)[1].strip().lower())
+        # Synthesize "<issuername>.com" as a likely floor.
+        slug = re.sub(r"[^a-z0-9]", "", name.lower())
+        if slug:
+            domains.add(f"{slug}.com")
+
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("freeze_request_*.html")):
+        slug = _extract_issuer_slug(path.name, prefix="freeze_request")
+        if not slug:
+            continue
+        my_issuer = _resolve_issuer_name_from_slug(slug, freeze_brief)
+        if not my_issuer:
+            continue
+        my_domains = issuer_domains.get(my_issuer, set())
+        text = _safe_read(path).lower()
+        # Find every email address in the body.
+        emails = re.findall(
+            r"[a-z0-9_.+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+",
+            text,
+        )
+        seen_violations: set[tuple[str, str]] = set()
+        for email in emails:
+            domain = email.split("@", 1)[1]
+            if domain in my_domains:
+                continue  # legitimate same-issuer email
+            # Match against any OTHER known issuer's domains.
+            for other_name, other_domains in issuer_domains.items():
+                if other_name == my_issuer:
+                    continue
+                if domain in other_domains:
+                    key = (other_name, domain)
+                    if key in seen_violations:
+                        break  # already reported this (other,domain) pair
+                    seen_violations.add(key)
+                    violations.append(Violation(
+                        check="freeze_request_no_other_issuer_emails",
+                        severity="critical", file=path.name,
+                        detail=(
+                            f"freeze_request for {my_issuer!r} contains "
+                            f"email {email!r} belonging to a different "
+                            f"issuer ({other_name!r}). Template cross-"
+                            "fill or routing bug. AUSA receiving this "
+                            "would cc the wrong company's compliance "
+                            "team and disclose the case."
+                        ),
+                    ))
+                    break  # one violation per email is enough
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 15: LE handoff Section 4.2 lists every issuer
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_le_handoff_section_42_lists_all_issuers(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    expected = _brief_all_issuers(freeze_brief)
+    if not expected:
+        return []
+
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("le_handoff_*.html")):
+        text = _safe_read(path)
+        # Section 4.2 — look for an h2 starting with "4.2" and capture
+        # everything until the next <h2> (next major section) or end
+        # of doc. We deliberately do NOT stop at h3 because the real
+        # le.html.j2 template uses h3 for per-issuer subsections inside
+        # 4.2 ({{ entry.issuer_name }} — {{ entry.token }}).
+        m = re.search(
+            r"<h2[^>]*>[^<]*4\.2[\s\S]*?</h2>([\s\S]*?)(?=<h2|$)",
+            text, flags=re.IGNORECASE,
+        )
+        if not m:
+            # No Section 4.2 in this handoff. Some templates may
+            # legitimately omit it (e.g., single-issuer cases) —
+            # report HIGH only when the brief has more than one
+            # issuer.
+            if len(expected) > 1:
+                violations.append(Violation(
+                    check="le_handoff_section_42_lists_all_issuers",
+                    severity="high", file=path.name,
+                    detail=(
+                        f"LE handoff has no Section 4.2 ALL_ISSUER_HOLDINGS "
+                        f"but the brief enumerates {len(expected)} "
+                        f"issuers ({expected}). AUSA cannot see the "
+                        "full inventory."
+                    ),
+                ))
+            continue
+        section_text = m.group(1)
+        missing = [n for n in expected if n not in section_text]
+        if missing:
+            violations.append(Violation(
+                check="le_handoff_section_42_lists_all_issuers",
+                severity="high", file=path.name,
+                detail=(
+                    f"Section 4.2 omits issuer(s) {missing} that the "
+                    f"brief lists in ALL_ISSUER_HOLDINGS. AUSA would "
+                    "not know there were freezable funds at those "
+                    "issuers and could not serve them."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 16: LE handoff cites TOTAL_LOSS_USD
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_le_handoff_cites_total_loss(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    total_loss = _brief_total_loss_usd(freeze_brief)
+    if total_loss == 0:
+        return []
+    formatted = f"${total_loss:,.2f}"
+    formatted_no_cents = f"${total_loss:,.0f}"
+
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("le_handoff_*.html")):
+        text = _safe_read(path)
+        if formatted in text or formatted_no_cents in text:
+            continue
+        violations.append(Violation(
+            check="le_handoff_cites_total_loss",
+            severity="high", file=path.name,
+            detail=(
+                f"LE handoff does not contain TOTAL_LOSS_USD = "
+                f"{formatted}. LE / AUSA without a quantified $ "
+                "figure cannot file a forfeiture warrant."
+            ),
+        ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 17: trace_report must not contain freeze-request language
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_trace_report_internal_marker(
+    briefs_dir: Path,
+) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    # Hot markers that should NEVER appear in an internal investigative
+    # document. Each is text that a compliance freeze letter sends.
+    freeze_letter_markers = [
+        "Compliance Freeze Request",
+        "Attn: Compliance Department",
+        "Attn: Compliance Team",
+    ]
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("trace_report_*.html")):
+        text = _safe_read(path)
+        hits = [m for m in freeze_letter_markers if m in text]
+        if hits:
+            violations.append(Violation(
+                check="trace_report_internal_marker",
+                severity="critical", file=path.name,
+                detail=(
+                    f"trace_report contains freeze-letter markers "
+                    f"{hits}. The internal investigative report has "
+                    "been cross-templated with a compliance freeze "
+                    "letter. An operator sharing this trace report "
+                    "would imply the recipient is a freeze target."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 18: engagement_letter exists iff MAX_RECOVERABLE_USD > 0
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_engagement_letter_exists_iff_recoverable(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    max_recoverable = _brief_max_recoverable_usd(freeze_brief)
+    has_engagement = any(briefs_dir.glob("engagement_letter_*.html"))
+    if max_recoverable == 0 and has_engagement:
+        return [Violation(
+            check="engagement_letter_exists_iff_recoverable",
+            severity="critical",
+            detail=(
+                "engagement_letter_*.html exists but "
+                "MAX_RECOVERABLE_USD == $0.00. The case has nothing "
+                "to engage on; victim would be charged a fee for "
+                "an unwinnable case (the v0.15.1 classifier-on-"
+                "broken-input pattern, this artifact)."
+            ),
+        )]
+    return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 19: engagement_letter names the victim
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_engagement_letter_names_victim(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    victim_name = _brief_victim_name(freeze_brief)
+    if not victim_name:
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("engagement_letter_*.html")):
+        text = _safe_read(path)
+        if victim_name not in text:
+            violations.append(Violation(
+                check="engagement_letter_names_victim",
+                severity="high", file=path.name,
+                detail=(
+                    f"engagement_letter does not contain the victim's "
+                    f"name {victim_name!r}. A contract that doesn't "
+                    "name the counter-party is unsigned and unenforceable."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 20: victim_summary quotes the freezable/recoverable figure
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_victim_summary_quotes_freezable_total(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    # Either MAX_RECOVERABLE_USD or TOTAL_FREEZABLE_USD should be cited.
+    targets = []
+    max_rec = _brief_max_recoverable_usd(freeze_brief)
+    if max_rec > 0:
+        targets.append(f"${max_rec:,.2f}")
+        targets.append(f"${max_rec:,.0f}")
+    total_frz = _parse_usd_string(
+        freeze_brief.get("TOTAL_FREEZABLE_USD")
+        or freeze_brief.get("total_freezable_usd")
+        or "0"
+    )
+    if total_frz > 0:
+        targets.append(f"${total_frz:,.2f}")
+        targets.append(f"${total_frz:,.0f}")
+    if not targets:
+        return []
+
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("victim_summary_*.html")):
+        # Unrecoverable variant legitimately quotes $0 / no figure —
+        # check 9 handles that classifier match.
+        if "_unrecoverable_" in path.name:
+            continue
+        text = _safe_read(path)
+        if any(t in text for t in targets):
+            continue
+        violations.append(Violation(
+            check="victim_summary_quotes_freezable_total",
+            severity="high", file=path.name,
+            detail=(
+                f"victim_summary does not quote any freezable / "
+                f"recoverable figure (looked for {targets}). The "
+                "victim can't see how much we recovered or what "
+                "their case is worth."
+            ),
+        ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 21: victim_summary names the victim
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_victim_summary_names_victim(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    victim_name = _brief_victim_name(freeze_brief)
+    if not victim_name:
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("victim_summary_*.html")):
+        text = _safe_read(path)
+        if victim_name not in text:
+            violations.append(Violation(
+                check="victim_summary_names_victim",
+                severity="high", file=path.name,
+                detail=(
+                    f"victim_summary does not contain the victim's "
+                    f"name {victim_name!r}. A summary that doesn't "
+                    "name the recipient may be the wrong file."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 22: flow_*.svg has a valid SVG root
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_flow_svg_valid_root(briefs_dir: Path) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("flow_*.svg")):
+        text = _safe_read(path).lstrip()
+        if not text:
+            violations.append(Violation(
+                check="flow_svg_valid_root", severity="high",
+                file=path.name, detail="SVG file is empty",
+            ))
+            continue
+        if not (
+            text.startswith("<?xml")
+            or text.startswith("<svg")
+            or text.startswith("<!DOCTYPE svg")
+        ):
+            violations.append(Violation(
+                check="flow_svg_valid_root", severity="critical",
+                file=path.name,
+                detail=(
+                    f"flow_*.svg does not start with <?xml / <svg root. "
+                    f"First 80 chars: {text[:80]!r}. Non-SVG content "
+                    "in an .svg path renders broken in the LE PDF."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 23: investigator_findings.csv well-formed
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_investigator_findings_csv_well_formed(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    csv_path = briefs_dir / "investigator_findings.csv"
+    if not csv_path.is_file():
+        return []  # csv is optional; missing is not by itself a finding
+    text = _safe_read(csv_path)
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return [Violation(
+            check="investigator_findings_csv_well_formed",
+            severity="high", file=csv_path.name,
+            detail="investigator_findings.csv is empty",
+        )]
+    header = lines[0]
+    # Heuristic: a header has at least 2 columns and contains a known
+    # column name (address / amount / status / chain / token /
+    # finding / sha / hash). A data row's leading column is usually
+    # an address (starts 0x...) or a number — never a column name.
+    expected_header_tokens = {
+        "address", "amount", "status", "chain", "token",
+        "finding", "sha", "hash", "tx", "type", "issuer",
+    }
+    header_low = header.lower()
+    header_cols = [c.strip() for c in header_low.split(",")]
+    if not any(tok in header_cols for tok in expected_header_tokens):
+        return [Violation(
+            check="investigator_findings_csv_well_formed",
+            severity="high", file=csv_path.name,
+            detail=(
+                f"investigator_findings.csv first row does not look "
+                f"like a header (no known column names in "
+                f"{header_cols[:4]}). Operators / external tooling "
+                "can't read this file."
+            ),
+        )]
+    data_rows = lines[1:]
+    # If FREEZABLE has holdings, expect at least 1 data row.
+    has_freezable_holdings = bool(
+        freeze_brief and freeze_brief.get("FREEZABLE")
+    )
+    if has_freezable_holdings and not data_rows:
+        return [Violation(
+            check="investigator_findings_csv_well_formed",
+            severity="high", file=csv_path.name,
+            detail=(
+                "investigator_findings.csv has a header but ZERO "
+                "data rows, while brief.FREEZABLE is non-empty. "
+                "The CSV is silently empty."
+            ),
+        )]
+    return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 24: CASE_ID consistent across artifacts
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_case_id_consistent_across_artifacts(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir():
+        return []
+    expected_id = _brief_case_id(freeze_brief)
+    if not expected_id:
+        return []
+    # Look for "CASE_ID: <something>" patterns in every artifact.
+    # The char class deliberately excludes "." so a sentence-ending
+    # period in "CASE_ID: V-CFI01." doesn't get captured as part of
+    # the ID. (Real case IDs use only alphanumerics, "_", and "-".)
+    case_id_re = re.compile(
+        r"CASE[_ ]?ID\s*[:=]\s*([A-Za-z0-9_\-]+)",
+        re.IGNORECASE,
+    )
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in (".html", ".json", ".csv", ".svg"):
+            continue
+        text = _safe_read(path)
+        # Only look at files that mention CASE_ID — silence is fine.
+        for m in case_id_re.finditer(text):
+            found = m.group(1).strip()
+            if found != expected_id:
+                violations.append(Violation(
+                    check="case_id_consistent_across_artifacts",
+                    severity="high", file=path.name,
+                    detail=(
+                        f"file references CASE_ID={found!r} but "
+                        f"brief.CASE_ID={expected_id!r}. Cross-case "
+                        "content bleed or stale template."
+                    ),
+                ))
+                break  # one finding per file is enough
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 25: asset symbol consistent across artifacts
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_asset_symbol_consistent_across_artifacts(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    expected_sym = _brief_asset_symbol(freeze_brief)
+    if not expected_sym:
+        return []
+    expected_upper = expected_sym.upper()
+    # Scan trace_report + LE handoffs. Look for any OTHER known-asset
+    # symbol mentioned more prominently than the expected one.
+    targets = list(briefs_dir.glob("trace_report_*.html")) + \
+              list(briefs_dir.glob("le_handoff_*.html"))
+    violations: list[Violation] = []
+    for path in sorted(targets):
+        text = _safe_read(path)
+        # Find each known symbol's count of mentions (word-boundary).
+        counts: dict[str, int] = {}
+        for sym in _KNOWN_ASSET_SYMBOLS:
+            pat = re.compile(rf"\b{re.escape(sym)}\b")
+            counts[sym] = len(pat.findall(text))
+        # If the expected symbol appears, we're fine — Section 4.2
+        # legitimately mentions other tokens for context.
+        if counts.get(expected_upper, 0) > 0:
+            continue
+        # Otherwise — is some OTHER asset symbol prominent?
+        others = [
+            s for s, c in counts.items()
+            if c > 0 and s != expected_upper
+        ]
+        if others:
+            violations.append(Violation(
+                check="asset_symbol_consistent_across_artifacts",
+                severity="high", file=path.name,
+                detail=(
+                    f"file references {others} but brief.asset.symbol "
+                    f"is {expected_upper!r}. Wrong asset symbol — "
+                    "this artifact was generated against a different "
+                    "case's asset or the template substituted wrong."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 26: victim name consistent across artifacts
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_victim_name_consistent_across_artifacts(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    expected_name = _brief_victim_name(freeze_brief)
+    if not expected_name:
+        return []
+    # Heuristic: each victim_summary / engagement_letter is expected
+    # to name the victim. We surface a finding when there's a clearly
+    # different "<First Last>" near the document title and the
+    # expected name does not appear in the file.
+    candidates = (
+        list(briefs_dir.glob("victim_summary_*.html"))
+        + list(briefs_dir.glob("engagement_letter_*.html"))
+    )
+    violations: list[Violation] = []
+    for path in sorted(candidates):
+        text = _safe_read(path)
+        if expected_name in text:
+            continue
+        # The expected victim name is missing. Is some other name
+        # present in a title/heading? Look for "Summary — <Name>" or
+        # "Engagement Letter — <Name>" forms.
+        title_re = re.compile(
+            r"(?:Summary|Engagement\s+Letter|Case\s+Summary)\s*[—\-]\s*"
+            r"([A-Z][a-z]+\s+[A-Z][a-z]+)",
+        )
+        m = title_re.search(text)
+        if m:
+            other_name = m.group(1).strip()
+            if other_name and other_name != expected_name:
+                violations.append(Violation(
+                    check="victim_name_consistent_across_artifacts",
+                    severity="high", file=path.name,
+                    detail=(
+                        f"file names victim {other_name!r} but "
+                        f"brief.victim.name = {expected_name!r}. "
+                        "Wrong victim — cross-case content bleed."
+                    ),
+                ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Check 27: recovery_snapshot exists iff MAX_RECOVERABLE_USD > 0
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_recovery_snapshot_iff_recoverable(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    if not briefs_dir.is_dir() or not freeze_brief:
+        return []
+    max_recoverable = _brief_max_recoverable_usd(freeze_brief)
+    has_snapshot = any(briefs_dir.glob("recovery_snapshot_*.html"))
+    if max_recoverable == 0 and has_snapshot:
+        return [Violation(
+            check="recovery_snapshot_iff_recoverable",
+            severity="high",
+            detail=(
+                "recovery_snapshot_*.html exists but MAX_RECOVERABLE_USD "
+                "== $0.00. Nothing to estimate — the pre-engagement "
+                "deliverable would mislead the victim about recovery "
+                "viability."
+            ),
+        )]
+    return []
 
 
 __all__ = (

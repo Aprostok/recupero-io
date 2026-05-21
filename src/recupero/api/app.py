@@ -486,6 +486,324 @@ async def record_freeze_outcome_endpoint(
     }
 
 
+# ---- v0.27.0: Exchange / compliance monitoring + bulk screening API ---- #
+
+
+class MonitorSubscribeRequest(BaseModel):
+    """Request body for POST /v1/monitor/subscribe.
+
+    Audience: exchange compliance teams + KYC providers that want
+    push notifications when an address moves. The supplied
+    webhook_url receives a JSON POST with HMAC-SHA256 signing if
+    webhook_secret is set.
+    """
+    address: str = Field(
+        ..., min_length=1, max_length=256,
+        description="Address to watch.",
+    )
+    chain: _SupportedChain = Field("ethereum")
+    trigger_type: str = Field(
+        ...,
+        description=(
+            "Trigger condition. One of: any_movement, "
+            "movement_above_usd, balance_drop, ofac_contact."
+        ),
+    )
+    threshold_usd: float | None = Field(
+        None, ge=0,
+        description=(
+            "Required for movement_above_usd and balance_drop "
+            "triggers. Ignored for any_movement / ofac_contact."
+        ),
+    )
+    webhook_url: str = Field(
+        ..., min_length=1, max_length=2048,
+        description=(
+            "Fully-qualified http(s)://… URL we POST to when the "
+            "trigger fires."
+        ),
+    )
+    label: str | None = Field(
+        None, max_length=200,
+        description="Friendly label for partner-side bookkeeping.",
+    )
+    webhook_secret: str | None = Field(
+        None, max_length=256,
+        description=(
+            "Optional shared secret. When set, every webhook "
+            "carries X-Recupero-Signature: hex(HMAC-SHA256(secret, "
+            "payload)) so the partner can verify authenticity."
+        ),
+    )
+
+
+class BulkScreenRequest(BaseModel):
+    """Request body for POST /v1/screen/bulk.
+
+    Compliance teams typically batch hundreds of addresses per
+    minute. The single-address /v1/screen endpoint is fine for
+    interactive flows, but a daily reconciliation against a
+    sanctions list wants higher throughput per round-trip.
+    """
+    addresses: list[str] = Field(
+        ..., min_length=1, max_length=100,
+        description=(
+            "List of addresses to screen, max 100 per request. "
+            "Larger batches: page through with multiple calls."
+        ),
+    )
+    chain: _SupportedChain = Field("ethereum")
+    use_correlation_db: bool = Field(
+        False,
+        description=(
+            "Set True to include cross-case correlation lookup "
+            "for each address. Adds DB hit per address; only enable "
+            "when needed."
+        ),
+    )
+
+
+@app.post(
+    "/v1/monitor/subscribe",
+    tags=["monitoring"],
+    summary="Subscribe an address to webhook alerts (v0.27.0)",
+)
+async def monitor_subscribe_endpoint(
+    req: MonitorSubscribeRequest,
+    api_key_name: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Create or update a monitoring subscription for the calling
+    API key. Subscriptions are isolated per API key: partners
+    cannot list / modify / delete subscriptions created by other
+    keys.
+    """
+    import os
+    from decimal import Decimal
+    from recupero.api.monitoring_api import (
+        MonitoringApiError, create_subscription,
+    )
+
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monitoring subscription unavailable",
+        )
+
+    threshold = (
+        Decimal(str(req.threshold_usd))
+        if req.threshold_usd is not None else None
+    )
+
+    try:
+        record = create_subscription(
+            api_key_name=api_key_name,
+            address=req.address,
+            chain=req.chain,
+            trigger_type=req.trigger_type,
+            threshold_usd=threshold,
+            webhook_url=req.webhook_url,
+            label=req.label,
+            webhook_secret=req.webhook_secret,
+            dsn=dsn,
+        )
+    except MonitoringApiError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{e.field}: {e.detail}",
+        ) from None
+    except RuntimeError as e:
+        log.warning(
+            "/v1/monitor/subscribe failed (api_key=%s): %s",
+            api_key_name, e,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="subscription create failed",
+        ) from None
+
+    log.info(
+        "/v1/monitor/subscribe api_key=%s subscription_id=%s "
+        "address=%s chain=%s trigger=%s",
+        api_key_name, record.id, record.address, record.chain,
+        record.trigger_type,
+    )
+    return record.to_json_safe()
+
+
+@app.get(
+    "/v1/monitor/subscriptions",
+    tags=["monitoring"],
+    summary="List subscriptions belonging to the calling API key (v0.27.0)",
+)
+async def monitor_list_endpoint(
+    api_key_name: str = Depends(require_api_key),
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Return the subscriptions created by this API key. The
+    multi-tenant boundary is enforced server-side — there is no
+    way to see another key's subscriptions through this endpoint.
+    """
+    import os
+    from recupero.api.monitoring_api import list_subscriptions
+
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monitoring lookup unavailable",
+        )
+    records = list_subscriptions(
+        api_key_name=api_key_name, dsn=dsn, limit=limit,
+    )
+    return {
+        "subscriptions": [r.to_json_safe() for r in records],
+        "count": len(records),
+    }
+
+
+@app.get(
+    "/v1/monitor/{subscription_id}",
+    tags=["monitoring"],
+    summary="Fetch one subscription by id (v0.27.0)",
+)
+async def monitor_get_endpoint(
+    subscription_id: str,
+    api_key_name: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Return the subscription with this id, ONLY if it was created
+    by the calling API key. Foreign keys see a 404 (not a 403 —
+    a 403 would leak the existence of the row to a probing attacker)."""
+    import os
+    from uuid import UUID as _UUID
+    from recupero.api.monitoring_api import get_subscription
+
+    try:
+        sub_uuid = _UUID(subscription_id)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subscription not found",
+        ) from None
+
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monitoring lookup unavailable",
+        )
+    record = get_subscription(
+        api_key_name=api_key_name,
+        subscription_id=sub_uuid,
+        dsn=dsn,
+    )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subscription not found",
+        )
+    return record.to_json_safe()
+
+
+@app.delete(
+    "/v1/monitor/{subscription_id}",
+    tags=["monitoring"],
+    summary="Soft-delete a subscription (v0.27.0)",
+)
+async def monitor_delete_endpoint(
+    subscription_id: str,
+    api_key_name: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Mark the subscription as deleted (status='deleted'). The
+    worker stops polling on the next claim cycle. Returns 404 when
+    the id doesn't exist OR doesn't belong to this api key — same
+    behavior as get, deliberately, to avoid leaking existence."""
+    import os
+    from uuid import UUID as _UUID
+    from recupero.api.monitoring_api import soft_delete_subscription
+
+    try:
+        sub_uuid = _UUID(subscription_id)
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subscription not found",
+        ) from None
+
+    dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+    if not dsn:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="monitoring delete unavailable",
+        )
+
+    deleted = soft_delete_subscription(
+        api_key_name=api_key_name,
+        subscription_id=sub_uuid,
+        dsn=dsn,
+    )
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="subscription not found",
+        )
+    log.info(
+        "/v1/monitor/delete api_key=%s subscription_id=%s",
+        api_key_name, sub_uuid,
+    )
+    return {"id": str(sub_uuid), "deleted": True}
+
+
+@app.post(
+    "/v1/screen/bulk",
+    tags=["screening"],
+    summary="Bulk wallet screening (max 100 per call) (v0.27.0)",
+)
+async def screen_bulk_endpoint(
+    req: BulkScreenRequest,
+    api_key_name: str = Depends(require_api_key),
+) -> dict[str, Any]:
+    """Batch screening. Returns a list of {address, verdict} results
+    in the same order as the request. Per-address screening is the
+    same pure-function as /v1/screen; this endpoint just amortizes
+    the HTTP round-trip cost for compliance-team batch flows.
+
+    The list cap (100) is enforced by the Pydantic model. Larger
+    batches: page client-side.
+    """
+    try:
+        from recupero.screen.screener import screen_address
+    except ImportError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"screener module unavailable: {e}",
+        ) from e
+
+    results: list[dict[str, Any]] = []
+    for addr in req.addresses:
+        try:
+            r = screen_address(
+                addr, chain=req.chain,
+                use_correlation_db=req.use_correlation_db,
+            )
+            results.append(r.to_json_safe())
+        except (TypeError, ValueError) as e:
+            # Per-address failure does NOT short-circuit the batch.
+            # Surface the error inline so the caller can fix the
+            # offending row and re-screen.
+            results.append({
+                "address": addr,
+                "chain": req.chain,
+                "error": str(e),
+            })
+
+    log.info(
+        "/v1/screen/bulk api_key=%s n_addresses=%d",
+        api_key_name, len(req.addresses),
+    )
+    return {"results": results, "count": len(results)}
+
+
 # ---- v0.25.0: public victim intake form ---- #
 
 

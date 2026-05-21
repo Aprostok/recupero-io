@@ -331,6 +331,25 @@ def cli() -> None:
              "missing). Default: ./law-firm-dashboards/",
     )
 
+    # ----- api-key-mint (v0.27.0) ----- #
+    p_mint = sub.add_parser(
+        "api-key-mint",
+        help="Generate a random API-key secret + emit a "
+             "RECUPERO_API_KEYS-compatible snippet the operator pastes "
+             "into the Railway env. v0.27.0 — used to onboard exchange / "
+             "compliance team partners.",
+    )
+    p_mint.add_argument(
+        "name",
+        help="Partner key name (e.g. 'exchange-acme'). Goes in the "
+             "RECUPERO_API_KEYS env as the part before the colon.",
+    )
+    p_mint.add_argument(
+        "--bytes", type=int, default=32, dest="key_bytes",
+        help="Random-secret length in bytes (default 32 → 64 hex "
+             "chars). Larger = stronger; smaller is rejected if < 16.",
+    )
+
     # ----- render-cluster (v0.23.0) ----- #
     p_cluster = sub.add_parser(
         "render-cluster",
@@ -722,6 +741,39 @@ def cli() -> None:
             )
             sys.exit(2)
         print(f"Rendered law-firm dashboard to {out_path}")
+        sys.exit(0)
+
+    if args.command == "api-key-mint":
+        import re as _re
+        import secrets as _secrets
+        # Validate the name shape — it goes into RECUPERO_API_KEYS
+        # which uses ',' as pair separator and ':' as name/secret
+        # separator. A name containing those breaks the parser.
+        if not _re.match(r"^[A-Za-z0-9][A-Za-z0-9_-]{1,63}$", args.name):
+            print(
+                "ERROR: name must be 2-64 chars, ASCII alphanumeric / "
+                "underscore / dash, starting with alphanumeric.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if args.key_bytes < 16:
+            print(
+                "ERROR: --bytes must be >= 16 (a 16-byte secret = "
+                "128-bit entropy; smaller is brute-forceable).",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        secret = _secrets.token_hex(args.key_bytes)
+        print("# Generated API key (v0.27.0 partner onboarding)")
+        print(f"# Name:   {args.name}")
+        print(f"# Secret: {secret}")
+        print()
+        print("# Append to RECUPERO_API_KEYS env (comma-separated pairs):")
+        print(f"{args.name}:{secret}")
+        print()
+        print("# Partner integration snippet:")
+        print(f"#   curl -H 'X-Recupero-API-Key: {secret}' \\")
+        print("#        https://api.recupero.io/v1/health")
         sys.exit(0)
 
     if args.command == "render-cluster":

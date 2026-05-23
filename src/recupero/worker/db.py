@@ -69,6 +69,22 @@ COL_MAX_RECOVERABLE = "max_recoverable_usd"
 COL_API_COSTS = "api_costs_usd"
 COL_FREEZABLE_ISSUERS = "freezable_issuers"
 
+# Explicit Investigation column list for SELECT / RETURNING.
+# v0.20.2 (worker-DB audit): `RETURNING *` and `SELECT *` are banned —
+# schema drift on Jacob's admin-UI side would otherwise silently
+# deliver columns the worker has never seen. The pydantic
+# `extra='ignore'` is a safety net, not a contract.
+_INVESTIGATION_COLS = (
+    COL_ID, COL_CASE_ID, COL_STATUS, COL_TRIGGERED_BY, COL_TRIGGERED_AT,
+    COL_WORKER_ID, COL_CLAIMED_AT, COL_HEARTBEAT, COL_STARTED_AT,
+    COL_COMPLETED_AT, COL_FAILED_AT, COL_ERROR_MESSAGE, COL_ERROR_STAGE,
+    COL_REVIEW_REQUIRED_AT, COL_CHAIN, COL_SEED_ADDRESS, COL_INCIDENT_TIME,
+    COL_MAX_DEPTH, COL_DUST_THRESHOLD,
+    # Phase-4 wallet-trace metadata.
+    "label", "skip_editorial", "skip_freeze_briefs",
+)
+
+
 # cases columns we read for victim info / narrative
 COL_CASE_NUMBER = "case_number"
 COL_CLIENT_NAME = "client_name"
@@ -87,6 +103,35 @@ COL_ADDRESS_LINE1 = "address_line1"
 COL_ADDRESS_LINE2 = "address_line2"
 COL_JURISDICTION = "jurisdiction"
 COL_IC3_CASE_ID = "ic3_case_id"
+
+
+# ----- Helpers ----- #
+
+
+def _require_uuid(value: Any, *, arg_name: str) -> UUID:
+    """Validate that ``value`` is a UUID at the Python boundary.
+
+    v0.20.2 (worker-DB audit, criterion 5): every WorkerDB method that
+    binds an investigation/case id to a UUID column runs the value
+    through this guard. Catching a non-UUID input here surfaces a
+    clean ``ValueError`` from Python rather than an opaque psycopg
+    ``DataError`` raised mid-connection. It also blocks the
+    pathological case where a caller hands in a status string by
+    mistake — the parameter is still safely bound, but the SQL would
+    fail with a confusing message about UUID parsing.
+    """
+    if isinstance(value, UUID):
+        return value
+    if isinstance(value, str):
+        try:
+            return UUID(value)
+        except (ValueError, AttributeError) as e:
+            raise ValueError(
+                f"{arg_name}: not a valid UUID (got {value!r})"
+            ) from e
+    raise TypeError(
+        f"{arg_name}: expected UUID or str, got {type(value).__name__}"
+    )
 
 
 # ----- Exceptions ----- #
@@ -285,6 +330,11 @@ class WorkerDB:
         not minutes.
         """
         claimable_list = ",".join(f"'{s}'" for s in sorted(S.CLAIMABLE_STATUSES))
+        # v0.20.2 (worker-DB audit, criterion 6): explicit column list
+        # in RETURNING — never `RETURNING *`. Drops the schema-drift
+        # surface where an admin-UI-side migration could leak unknown
+        # columns into the worker.
+        returning_cols = ", ".join(_INVESTIGATION_COLS)
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(claimed)s,
@@ -298,7 +348,7 @@ class WorkerDB:
                      LIMIT 1
                      FOR UPDATE SKIP LOCKED
                   )
-            RETURNING *;
+            RETURNING {returning_cols};
         """
         with psycopg.connect(self._dsn, autocommit=True, row_factory=dict_row, **self._PSYCOPG_KW) as conn:
             with conn.cursor() as cur:
@@ -476,6 +526,7 @@ class WorkerDB:
 
     def fetch_case(self, case_id: UUID) -> CaseData | None:
         """Look up the cases row referenced by an investigation."""
+        case_id = _require_uuid(case_id, arg_name="case_id")
         cols = [
             COL_ID, COL_CASE_NUMBER, COL_CLIENT_NAME, COL_CLIENT_EMAIL,
             COL_CLIENT_PHONE, COL_COUNTRY, COL_DESCRIPTION,
@@ -494,6 +545,7 @@ class WorkerDB:
         return CaseData.model_validate(row)
 
     def heartbeat(self, investigation_id: UUID) -> None:
+        investigation_id = _require_uuid(investigation_id, arg_name="investigation_id")
         sql = f"""
             UPDATE {T_INV}
                SET {COL_HEARTBEAT} = NOW()
@@ -505,12 +557,16 @@ class WorkerDB:
     def transition(self, investigation_id: UUID, *, status: str) -> None:
         """Move an investigation to a new status.
 
+        v0.20.2: investigation_id is validated as a UUID at the
+        Python boundary — see ``_require_uuid``.
+
         Refreshes heartbeat as a side effect, and stamps started_at the
         first time the worker writes a real stage status (anything past
         CLAIMED). The first stage is TRACING by convention; if a future
         flow starts somewhere else, this still works because COALESCE
         keeps any prior value.
         """
+        investigation_id = _require_uuid(investigation_id, arg_name="investigation_id")
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
@@ -556,6 +612,7 @@ class WorkerDB:
         a different worker, and we want to preserve the audit trail
         across that handoff.
         """
+        investigation_id = _require_uuid(investigation_id, arg_name="investigation_id")
         sql = f"""
             UPDATE {T_INV}
                SET {COL_API_COSTS} = COALESCE({COL_API_COSTS}, 0) + %(api)s
@@ -589,6 +646,7 @@ class WorkerDB:
         # already clears worker_id (v0.18.1 HIGH-005) so the
         # `worker_id = me` predicate normally protects this, but
         # belt-and-suspenders.
+        investigation_id = _require_uuid(investigation_id, arg_name="investigation_id")
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
@@ -633,6 +691,7 @@ class WorkerDB:
         ``mark_completed`` next.
         """
         # v0.18.1 (round-11 worker-HIGH-006): terminal-state guard.
+        investigation_id = _require_uuid(investigation_id, arg_name="investigation_id")
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
@@ -671,6 +730,7 @@ class WorkerDB:
         # v0.18.1 (round-11 worker-HIGH-006): terminal-state guard
         # prevents a zombie-worker race from flipping a reaped-failed
         # row to `complete`.
+        investigation_id = _require_uuid(investigation_id, arg_name="investigation_id")
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,
@@ -697,6 +757,7 @@ class WorkerDB:
         stage: str,
         error: str,
     ) -> None:
+        investigation_id = _require_uuid(investigation_id, arg_name="investigation_id")
         sql = f"""
             UPDATE {T_INV}
                SET {COL_STATUS} = %(status)s,

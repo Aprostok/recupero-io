@@ -8,6 +8,7 @@ decision-making is anchored on.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from decimal import ROUND_HALF_EVEN, Decimal
@@ -263,7 +264,17 @@ def score_recovery(
     is True, attempt to load per-issuer priors from the
     issuer_freeze_priors table (v0.14.2). If the DB is unavailable
     or no priors exist yet, falls back to heuristic priors.
+
+    Adversarial-input wave (v0.20.2): a non-dict ``brief`` (e.g., the
+    caller accidentally passed a string or None) used to crash with
+    AttributeError on the first `brief.get(...)`. Now: coerce to an
+    empty dict so the scorer returns a zero-recovery estimate
+    deterministically.
     """
+    if not isinstance(brief, dict):
+        log.warning("score_recovery: non-dict brief (%r); using empty",
+                    type(brief).__name__)
+        brief = {}
     drivers: list[RecoveryDriver] = []
 
     # Auto-load learned priors from the DB if not explicitly supplied.
@@ -318,8 +329,17 @@ def score_recovery(
         is_learned = False
         if learned_priors and issuer in learned_priors:
             lp = learned_priors[issuer]
-            prior = float(getattr(lp, "p_any_freeze", lp))
-            is_learned = True
+            try:
+                _lp_val = float(getattr(lp, "p_any_freeze", lp))
+                # Reject NaN/Inf/out-of-range learned priors — they
+                # would corrupt every downstream multiplication. Fall
+                # back to the heuristic if the learned-prior table
+                # contains garbage.
+                if math.isfinite(_lp_val) and 0.0 <= _lp_val <= 1.0:
+                    prior = _lp_val
+                    is_learned = True
+            except (TypeError, ValueError):
+                pass
         if prior is None:
             prior = _lookup_issuer_prior(issuer)
             is_learned = False
@@ -724,12 +744,36 @@ def score_recovery(
 
 
 def _parse_usd(s: Any) -> Decimal:
-    if isinstance(s, (int, float, Decimal)):
-        return Decimal(str(s))
-    s = str(s).replace("$", "").replace(",", "").strip()
-    if not s:
+    """Parse a USD-shaped input into a finite, non-negative Decimal.
+
+    Adversarial-input wave (v0.20.2): pre-fix this accepted "NaN",
+    "Infinity", "-Infinity" via ``Decimal()`` — those values then
+    propagated through the recovery math, producing nonsensical
+    NaN-quantized outputs in the legal letter. Now: reject every
+    non-finite Decimal and substitute zero (the conservative
+    fallback the rest of the scorer is built around).
+    """
+    if isinstance(s, Decimal):
+        d = s
+    elif isinstance(s, (int, float)):
+        if isinstance(s, float) and not math.isfinite(s):
+            return Decimal("0")
+        d = Decimal(str(s))
+    else:
+        s = str(s).replace("$", "").replace(",", "").strip()
+        if not s:
+            return Decimal("0")
+        # Decimal("NaN") / Decimal("Infinity") parse without raising;
+        # use is_finite() to filter both forms.
+        try:
+            d = Decimal(s)
+        except (ArithmeticError, ValueError):
+            return Decimal("0")
+    if not d.is_finite():
         return Decimal("0")
-    return Decimal(s)
+    if d < 0:
+        return Decimal("0")
+    return d
 
 
 # v0.17.1 (QUANT-4): default p_any calibration. These constants come
@@ -762,7 +806,16 @@ def _load_p_any_calibration() -> dict[str, float]:
         merged = dict(_P_ANY_DEFAULT_CALIBRATION)
         for k in merged:
             if k in parsed:
-                merged[k] = float(parsed[k])
+                try:
+                    val = float(parsed[k])
+                except (TypeError, ValueError):
+                    continue
+                # Reject NaN/Inf: max(0.0, NaN) returns NaN on CPython,
+                # which would poison the recovery math downstream. Fall
+                # back to the documented default for that key.
+                if not math.isfinite(val):
+                    continue
+                merged[k] = val
         # Sanity-clamp so a typo can't ship insane values.
         merged["floor"] = max(0.0, min(0.99, merged["floor"]))
         merged["cap"] = max(merged["floor"], min(0.99, merged["cap"]))
@@ -819,10 +872,31 @@ def _compute_recovery_ci(
         learned = (
             learned_priors.get(issuer) if learned_priors else None
         )
-        if learned is not None and beta_credible_interval is not None:
-            wins = int(round(learned.p_any_freeze * learned.sample_size))
-            n = int(learned.sample_size)
-            lo, hi = beta_credible_interval(wins, n, level=0.90)
+        # RIGOR-Wave5 hardening: even if a learned-prior row sneaks
+        # past the lookup-time validity gate (race with refresh, or
+        # an in-memory mutation), reject NaN/Inf/out-of-range
+        # p_any_freeze and non-positive sample_size HERE before
+        # feeding them to int(round(...)) — that conversion raises
+        # ValueError on NaN and the downstream beta CI math raises
+        # on negative posterior variance.
+        use_learned = (
+            learned is not None
+            and beta_credible_interval is not None
+        )
+        if use_learned:
+            try:
+                _lp_v = float(learned.p_any_freeze)
+                _lp_n = int(learned.sample_size)
+            except (TypeError, ValueError):
+                use_learned = False
+            else:
+                if (not math.isfinite(_lp_v)
+                        or _lp_v < 0.0 or _lp_v > 1.0
+                        or _lp_n <= 0):
+                    use_learned = False
+        if use_learned:
+            wins = int(round(_lp_v * _lp_n))
+            lo, hi = beta_credible_interval(wins, _lp_n, level=0.90)
         else:
             # Heuristic fallback (the old ±35% band, preserved for
             # cases with no learned prior). Width matches the

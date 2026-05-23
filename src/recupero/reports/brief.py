@@ -755,6 +755,13 @@ def generate_briefs(
     # The 2-arg form lets callers override the plural ending for
     # irregular nouns: `{{ n | pluralize("hop", "hops") }}`.
     env.filters["pluralize"] = _pluralize_filter
+    # XSS-audit defense-in-depth: register safe_url / safe_text
+    # filters so href / src attributes in templates can neuter any
+    # `javascript:` / `data:` / `vbscript:` URLs that slip through
+    # an upstream bug. Autoescape alone does NOT block these — it
+    # only escapes the quote character.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
 
     issuer_template = "issuer_freeze_request.html.j2"
     # The legacy maple.html.j2 hardcodes "is currently held in"
@@ -831,9 +838,15 @@ def generate_briefs(
             "le_handoff": le_hash,
         },
     }
-    manifest_path = briefs_dir / f"manifest_{brief_id}.json"
+    # Manifest filename includes the issuer slug so multi-issuer cases
+    # don't overwrite each other's manifests. Pre-fix, generate_briefs
+    # called N times with the same brief_id silently clobbered the
+    # previous manifest, leaving only the LAST issuer's outputs declared
+    # — the other N-1 issuers' freeze_request + le_handoff appeared as
+    # orphans to the chain-of-custody validator (Jacob audit finding).
+    manifest_path = briefs_dir / f"manifest_{issuer_slug}_{brief_id}.json"
     # Atomic — see comment on maple/le writes above.
-    atomic_write_text(manifest_path, json.dumps(manifest, indent=2))
+    atomic_write_text(manifest_path, json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False, ensure_ascii=False))
 
     log.info("wrote issuer freeze request: %s", maple_path)
     log.info("wrote LE handoff: %s", le_path)
@@ -1308,15 +1321,25 @@ def _ensure_usd_prefix(s: str | None) -> str:
         return "$0"
     s = str(s).strip()
     if s.startswith("$") or s.startswith("USD"):
+        # RIGOR-Jacob Z11: still need to gate "$NaN" / "$Infinity"
+        # strings that were prefixed by an upstream serializer.
+        lc = s.lower()
+        if "nan" in lc or "inf" in lc:
+            return "$0"
         return s
     # Bare numeric? Add the $ prefix. Anything else (already-
     # formatted strings like "—") passes through unchanged.
     try:
         # Strip any commas before testing.
-        Decimal(s.replace(",", ""))
-        return f"${s}"
+        d = Decimal(s.replace(",", ""))
     except Exception:  # noqa: BLE001
         return s
+    # RIGOR-Jacob Z11: reject NaN / Infinity (Decimal('NaN') and
+    # Decimal('Infinity') parse successfully but render as the
+    # literal text "NaN" / "Infinity" — would poison the LE cover).
+    if not d.is_finite():
+        return "$0"
+    return f"${s}"
 
 
 def _build_issuer_freezable_ctx(

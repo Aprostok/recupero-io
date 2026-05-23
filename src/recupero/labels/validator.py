@@ -98,6 +98,13 @@ _ALLOWED_CONFIDENCE = frozenset(["high", "medium", "low"])
 # asks (e.g., a "yes" issuer typo'd as "yse" would fall through to LOW).
 _ALLOWED_FREEZE_CAPABILITY = frozenset(["yes", "limited", "no"])
 
+# RIGOR-Jacob Z20: cap label-file size at 50MB. Real seed files top out
+# at <300KB; anything north of 50MB in seeds/ is an attack (someone
+# committed a quadrillion-entry mixers.json that would OOM the CI
+# validator) or an accident (binary blob mis-saved as .json). Refuse to
+# read past the cap rather than slurping arbitrary bytes into RAM.
+_MAX_LABEL_FILE_BYTES = 50 * 1024 * 1024
+
 
 @dataclass
 class ValidationIssue:
@@ -138,6 +145,29 @@ def validate_seed_files(seeds_dir: Path | None = None) -> ValidationReport:
             ))
             continue
         report.files_checked += 1
+        # RIGOR-Jacob Z20: size-cap before reading. A 60MB labels.json
+        # would otherwise be slurped into RAM, parsed into a list of
+        # ~1M Python dicts, and walked entry-by-entry — easy CI-OOM.
+        try:
+            file_size = path.stat().st_size
+        except OSError as e:
+            report.issues.append(ValidationIssue(
+                file=filename, entry_index=-1,
+                severity="error", field=None,
+                message=f"Could not stat file: {e}",
+            ))
+            continue
+        if file_size > _MAX_LABEL_FILE_BYTES:
+            report.issues.append(ValidationIssue(
+                file=filename, entry_index=-1,
+                severity="error", field=None,
+                message=(
+                    f"Label file size {file_size} bytes exceeds the "
+                    f"{_MAX_LABEL_FILE_BYTES}-byte cap. Real seed files "
+                    "are <1MB; refusing to parse to bound CI memory."
+                ),
+            ))
+            continue
         try:
             raw = json.loads(path.read_text(encoding="utf-8-sig"))
         except json.JSONDecodeError as e:
@@ -171,7 +201,25 @@ def validate_seed_files(seeds_dir: Path | None = None) -> ValidationReport:
                     ),
                 ))
                 continue
-            entries = raw.get("addresses", [])
+            # RIGOR-Jacob Z20: the value at `addresses` MUST itself be
+            # a list. Pre-Z20 the code did `raw.get("addresses", [])`
+            # and trusted the value, so {"addresses": null} /
+            # {"addresses": 42} / {"addresses": {"a": 1}} all leaked
+            # through and crashed inside `for entry in entries` with
+            # TypeError (NoneType / int not iterable) — one bad PR
+            # would OOM the CI gate.
+            addresses_value = raw["addresses"]
+            if not isinstance(addresses_value, list):
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=-1,
+                    severity="error", field="addresses",
+                    message=(
+                        f"'addresses' must be a JSON array, got "
+                        f"{type(addresses_value).__name__}"
+                    ),
+                ))
+                continue
+            entries = addresses_value
         elif spec["wrapping"] == "tokens":
             # issuers.json uses {"tokens": [...]}: a list of freezable-token
             # records keyed by (chain, contract). Top-level "_meta" sibling
@@ -183,7 +231,21 @@ def validate_seed_files(seeds_dir: Path | None = None) -> ValidationReport:
                     message="Expected object with 'tokens' key at top level",
                 ))
                 continue
-            entries = raw.get("tokens", [])
+            # RIGOR-Jacob Z20: same shape audit as `addresses` — without
+            # this guard {"tokens": null} / {"tokens": 42} crash the
+            # entry loop with an uncaught TypeError.
+            tokens_value = raw["tokens"]
+            if not isinstance(tokens_value, list):
+                report.issues.append(ValidationIssue(
+                    file=filename, entry_index=-1,
+                    severity="error", field="tokens",
+                    message=(
+                        f"'tokens' must be a JSON array, got "
+                        f"{type(tokens_value).__name__}"
+                    ),
+                ))
+                continue
+            entries = tokens_value
         else:
             entries = []
 
@@ -262,8 +324,15 @@ def _validate_entries(
 
         addr = entry.get("address")
         if isinstance(addr, str) and addr:
-            # Normalize for dup-detection.
-            addr_key = addr if addr.startswith("T") else addr.lower()
+            # Normalize for dup-detection. W13-09 fuzzer caught that the
+            # naive `addr.startswith("T") else addr.lower()` heuristic
+            # downcased Solana mints (base58 case-sensitive) and Bitcoin
+            # P2PKH addresses (Base58Check case-sensitive), letting an
+            # attacker slip a lowercased duplicate past the dup-check.
+            # `canonical_address_key` is chain-aware and only lowercases
+            # the `0x...` EVM form.
+            from recupero._common import canonical_address_key
+            addr_key = canonical_address_key(addr)
             if addr_key in seen_addresses:
                 # Duplicates are surfaced as WARNINGS rather than
                 # errors. The seed files have some pre-existing

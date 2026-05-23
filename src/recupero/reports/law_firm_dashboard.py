@@ -34,13 +34,56 @@ log = logging.getLogger(__name__)
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
+def _safe_slug_segment(slug: str | None, *, fallback: str = "unknown") -> str:
+    """Sanitize a firm slug into a path-safe filename segment.
+
+    Z7 hardening: ``portfolio.firm_slug`` sources from ``public.law_firms``
+    which is operator-writable (internal Recupero ops can insert rows).
+    An adversary with write access could insert a slug like
+    ``../../etc/passwd`` and have the renderer write outside the
+    operator's chosen output_dir; or insert an empty slug that produces
+    the degenerate filename ``law_firm_dashboard_.html``.
+    """
+    if not isinstance(slug, str):
+        slug = str(slug) if slug is not None else ""
+    cleaned = slug.replace("\\", "_").replace("/", "_")
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", "")
+    out_chars: list[str] = []
+    for ch in cleaned:
+        cp = ord(ch)
+        if cp == 0:
+            continue
+        if cp < 0x20 or cp == 0x7F or 0x80 <= cp <= 0x9F:
+            continue
+        if cp in (0x200E, 0x200F, 0x202A, 0x202B, 0x202C,
+                  0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069):
+            continue
+        if ch.isalnum() or ch in "-_":
+            out_chars.append(ch)
+        elif ch == " ":
+            out_chars.append("_")
+    safe = "".join(out_chars).strip("._-")[:64]
+    if not safe:
+        return fallback
+    return safe
+
+
 def _fmt_usd(d: Decimal | None) -> str:
+    """Z7: NaN / Infinity → $0.00 (no literal text leak into the firm-
+    facing dashboard headline)."""
     if d is None:
         return "$0.00"
     try:
-        return f"${d:,.2f}"
+        if isinstance(d, Decimal):
+            dd = d
+        else:
+            dd = Decimal(str(d))
     except Exception:  # noqa: BLE001
         return "$0.00"
+    if not dd.is_finite():
+        return "$0.00"
+    return f"${dd:,.2f}"
 
 
 def _fmt_pct(v: float | None) -> str | None:
@@ -133,6 +176,9 @@ def render_law_firm_dashboard(
         lstrip_blocks=True,
         undefined=StrictUndefined,
     )
+    # XSS defense-in-depth filters (safe_url / safe_text).
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
 
     try:
         from recupero import __version__ as software_version
@@ -155,7 +201,10 @@ def render_law_firm_dashboard(
         return None
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"law_firm_dashboard_{portfolio.firm_slug}.html"
+    # Z7: sanitize firm_slug — path traversal + empty slug must not
+    # escape output_dir / produce a degenerate filename.
+    safe_slug = _safe_slug_segment(portfolio.firm_slug)
+    out_path = output_dir / f"law_firm_dashboard_{safe_slug}.html"
     atomic_write_text(out_path, html)
     return out_path
 

@@ -32,8 +32,26 @@ log = logging.getLogger(__name__)
 
 def run(*, hours: int = 24, output_format: str = "text") -> int:
     """Run the daily digest. Returns 0 on success, 2 on configuration
-    errors (e.g., feature-flag not set in non-offline mode)."""
-    since = datetime.now(UTC) - timedelta(hours=hours)
+    errors (e.g., feature-flag not set in non-offline mode).
+
+    Adversarial-input hardening (v0.20.1):
+      * ``hours`` is clamped to ``[1, _MAX_HOURS_WINDOW]`` so neither
+        ``hours=-1`` (since=future) nor ``hours=10**18`` (timedelta
+        OverflowError) can blow up the digest.
+    """
+    # Clamp the lookback window. A negative value would compute a
+    # `since` in the future (no events would match). A huge value
+    # overflows `timedelta` with OverflowError.
+    try:
+        hours_int = int(hours)
+    except (TypeError, ValueError):
+        hours_int = 24
+    if hours_int < 1:
+        hours_int = 1
+    if hours_int > _MAX_HOURS_WINDOW:
+        hours_int = _MAX_HOURS_WINDOW
+
+    since = datetime.now(UTC) - timedelta(hours=hours_int)
     try:
         digest = run_daily_digest(since=since)
     except RuntimeError as exc:
@@ -43,8 +61,16 @@ def run(*, hours: int = 24, output_format: str = "text") -> int:
     if output_format == "json":
         _print_json(digest)
     else:
+        # Unknown formats fall back to text rather than crashing.
         _print_text(digest)
     return 0
+
+
+# Upper bound on the daily-digest lookback window. 10 years covers
+# every reasonable operator use case (typical use is hours=24, ad-hoc
+# investigations up to a month). Anything beyond this is almost
+# certainly attacker / accidental input.
+_MAX_HOURS_WINDOW = 24 * 365 * 10
 
 
 def _print_text(digest: DailyDigest) -> None:

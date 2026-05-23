@@ -1,3 +1,4 @@
+BEGIN;
 -- 005_emails_sent.sql
 --
 -- Audit log of every email the worker sends on a case's behalf:
@@ -91,3 +92,5 @@ CREATE INDEX IF NOT EXISTS emails_sent_by_time_idx
 COMMENT ON TABLE public.emails_sent IS
     'Audit log of emails sent by the worker on behalf of cases. '
     'Append-only; row per attempt, including failures.';
+
+COMMIT;

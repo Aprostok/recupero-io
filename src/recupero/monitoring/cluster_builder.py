@@ -203,7 +203,10 @@ def _parse_usd(s: Any) -> Decimal:
     threshold language. Loss is non-negative by definition.
     """
     if isinstance(s, (int, float, Decimal)):
-        val = Decimal(str(s))
+        try:
+            val = Decimal(str(s))
+        except Exception:  # noqa: BLE001
+            return Decimal(0)
     elif not s:
         return Decimal(0)
     else:
@@ -213,6 +216,10 @@ def _parse_usd(s: Any) -> Decimal:
             )
         except Exception:  # noqa: BLE001
             return Decimal(0)
+    # Reject NaN / Infinity — they poison every downstream aggregate
+    # and "NEVER raises" docs are violated by `val > 0` on a NaN.
+    if not val.is_finite():
+        return Decimal(0)
     return val if val > 0 else Decimal(0)
 
 

@@ -1,3 +1,4 @@
+BEGIN;
 -- 008_engagement_signatures.sql
 --
 -- Audit trail of electronic signatures captured through the
@@ -64,3 +65,5 @@ COMMENT ON TABLE public.engagement_signatures IS
     'Audit trail of electronic engagement-letter signatures '
     'captured through the customer portal. Existence + signed_at '
     '+ signature_name is the evidence of agreement.';
+
+COMMIT;

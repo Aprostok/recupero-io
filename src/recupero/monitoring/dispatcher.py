@@ -54,6 +54,17 @@ _EMAIL_QUOTA_PER_SUB_PER_DAY_DEFAULT = 5
 # the audit table healthy.
 _RESPONSE_BODY_MAX_BYTES = 4_000
 
+# RIGOR-Jacob Z19-1: Hard cap on the partner's response body the
+# dispatcher will materialize into memory. The audit row only keeps
+# the first _RESPONSE_BODY_MAX_BYTES anyway, but ``resp.text`` /
+# ``resp.content`` first buffers the WHOLE body. A malicious partner
+# advertising Content-Length: 50 GB (or actually streaming gigabytes)
+# would OOM the worker before truncation runs. We gate on the
+# Content-Length header BEFORE touching the body. 1 MB is generous
+# for verbose 5xx HTML; real webhook ACKs are usually a few hundred
+# bytes of JSON.
+_RESPONSE_BODY_HARD_CAP_BYTES = 1 * 1024 * 1024
+
 
 @dataclass(frozen=True)
 class AlertPayload:
@@ -273,6 +284,32 @@ def dispatch_alert(
                 status_code=None,
                 response_body="",
                 error_message=f"connection error: {e}",
+                attempt_number=attempt_number,
+                fired_at=fired_at,
+                delivered_at=None,
+            )
+        # RIGOR-Jacob Z19-1: gate on Content-Length BEFORE reading
+        # resp.text. A malicious partner can OOM the worker by
+        # advertising / sending a multi-GB body. The audit row caps
+        # stored text at _RESPONSE_BODY_MAX_BYTES, but the access path
+        # via resp.text materializes the full body first.
+        try:
+            content_length_header = resp.headers.get("content-length")
+        except Exception:  # noqa: BLE001
+            content_length_header = None
+        try:
+            content_length = int(content_length_header) if content_length_header else None
+        except (TypeError, ValueError):
+            content_length = None
+        if content_length is not None and content_length > _RESPONSE_BODY_HARD_CAP_BYTES:
+            return WebhookDispatchResult(
+                succeeded=False,
+                status_code=resp.status_code,
+                response_body="",
+                error_message=(
+                    f"response too large: Content-Length {content_length} "
+                    f"exceeds cap of {_RESPONSE_BODY_HARD_CAP_BYTES} bytes"
+                ),
                 attempt_number=attempt_number,
                 fired_at=fired_at,
                 delivered_at=None,

@@ -82,7 +82,19 @@ class EtherscanClient:
         self.api_base = api_base
         self.chain_id = chain_id
         self.limiter = _RateLimiter(requests_per_second)
-        self._client = httpx.Client(timeout=timeout_seconds)
+        # Split connect/read timeouts: a slow-DNS host must not block the
+        # worker for the full read window (60s). Connect cap = 10s — any
+        # public Etherscan endpoint resolves + handshakes well under that.
+        # Read uses `timeout_seconds` so whale-wallet queries still get
+        # their full per-call window.
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=timeout_seconds,
+                write=timeout_seconds,
+                pool=timeout_seconds,
+            )
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -184,6 +196,7 @@ class EtherscanClient:
         end_block: int,
         page: int,
         offset: int,
+        max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Drives page=1..N pagination for account txlist-style actions.
 
@@ -238,6 +251,14 @@ class EtherscanClient:
             if not rows:
                 break
             all_rows.extend(rows)
+            # RIGOR-Jacob A: short-circuit pagination once max_results
+            # is satisfied. Pre-fix the loop walked the full address
+            # history; for exchange hot wallets (1M+ tx) this meant
+            # ~1k API calls per BFS node before the post-fetch slice
+            # threw the data away. Cap is opt-in (default None = walk
+            # to natural end-of-data).
+            if max_results is not None and len(all_rows) >= max_results:
+                break
             # If the page wasn't full, we've reached the end.
             if len(rows) < offset:
                 break
@@ -256,12 +277,18 @@ class EtherscanClient:
         return all_rows
 
     def get_normal_transactions(
-        self, address: str, start_block: int, end_block: int = 99_999_999, page: int = 1, offset: int = 1000
+        self, address: str, start_block: int, end_block: int = 99_999_999,
+        page: int = 1, offset: int = 1000,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Module=account, action=txlist. Returns native-ETH transactions involving address.
 
         Auto-paginates to up to 10 pages (the Etherscan cap) when called with
         the default page=1. Pass page>1 for manual single-page paging.
+
+        ``max_results`` (RIGOR-Jacob A): short-circuit pagination
+        once that many rows are collected. Default None = walk to
+        natural end-of-data.
         """
         return self._paginate_account_action(
             action="txlist",
@@ -270,10 +297,13 @@ class EtherscanClient:
             end_block=end_block,
             page=page,
             offset=offset,
+            max_results=max_results,
         )
 
     def get_internal_transactions(
-        self, address: str, start_block: int, end_block: int = 99_999_999, page: int = 1, offset: int = 1000
+        self, address: str, start_block: int, end_block: int = 99_999_999,
+        page: int = 1, offset: int = 1000,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Module=account, action=txlistinternal. Catches contract-mediated value moves."""
         return self._paginate_account_action(
@@ -283,10 +313,13 @@ class EtherscanClient:
             end_block=end_block,
             page=page,
             offset=offset,
+            max_results=max_results,
         )
 
     def get_erc20_transfers(
-        self, address: str, start_block: int, end_block: int = 99_999_999, page: int = 1, offset: int = 1000
+        self, address: str, start_block: int, end_block: int = 99_999_999,
+        page: int = 1, offset: int = 1000,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Module=account, action=tokentx."""
         return self._paginate_account_action(
@@ -296,6 +329,7 @@ class EtherscanClient:
             end_block=end_block,
             page=page,
             offset=offset,
+            max_results=max_results,
         )
 
     def get_transaction_by_hash(self, tx_hash: str) -> dict[str, Any]:
@@ -370,7 +404,17 @@ class EtherscanClient:
         return data
 
     @staticmethod
-    def _coerce_list(data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _coerce_list(data: Any) -> list[dict[str, Any]]:
+        """Extract a row list from a (possibly malformed) Etherscan body.
+
+        RIGOR-Jacob U: pre-fix this signature took ``dict`` and called
+        ``data.get("result", [])`` unconditionally — a non-dict input
+        (Cloudflare HTML string, JSON array, None) raised
+        AttributeError into the adapter and killed the BFS hop. Now
+        we accept Any and fall back to [] on anything not dict-shaped.
+        """
+        if not isinstance(data, dict):
+            return []
         result = data.get("result", [])
         if isinstance(result, list):
             return result

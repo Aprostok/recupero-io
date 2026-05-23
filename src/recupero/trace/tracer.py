@@ -31,7 +31,7 @@ from recupero.models import (
     LabelCategory,
     Transfer,
 )
-from recupero.pricing.coingecko import CoinGeckoClient
+from recupero.pricing.coingecko import CoinGeckoClient, PriceResult
 from recupero.trace.evidence import write_evidence_receipt
 from recupero.trace.policies import TracePolicy
 
@@ -766,9 +766,43 @@ def _trace_one_hop(
         from_address, start_block, start_time.isoformat(),
     )
 
+    # RIGOR-Jacob A: thread ``max_transfers_per_address`` into the
+    # fetch layer with a 1.5x safety margin so an asymmetric split
+    # (e.g., 1500 native + 5 token) doesn't truncate one leg below
+    # the configured ceiling. ``max_transfers_per_address <= 0``
+    # disables the cap — pass None so adapters walk to the natural
+    # end of pagination.
+    _cap = config.trace.max_transfers_per_address
+    fetch_cap: int | None
+    if _cap and _cap > 0:
+        fetch_cap = int(_cap * 1.5)
+    else:
+        fetch_cap = None
+
+    def _fetch_with_cap(
+        fetch_fn: Any, from_addr: Address, sb: int, cap: int | None,
+    ) -> list[dict[str, Any]]:
+        """Call an adapter fetch_* method, threading max_results if
+        the method accepts it. Falls back to a positional-only call
+        for older adapters (e.g., test fakes) that don't take the
+        kwarg, preserving backward compatibility."""
+        try:
+            return fetch_fn(from_addr, sb, max_results=cap)
+        except TypeError:
+            # Adapter doesn't accept max_results — old interface.
+            return fetch_fn(from_addr, sb)
+
     raw_outflows: list[dict[str, Any]] = []
-    raw_outflows.extend(adapter.fetch_native_outflows(from_address, start_block))
-    raw_outflows.extend(adapter.fetch_erc20_outflows(from_address, start_block))
+    raw_outflows.extend(
+        _fetch_with_cap(
+            adapter.fetch_native_outflows, from_address, start_block, fetch_cap,
+        )
+    )
+    raw_outflows.extend(
+        _fetch_with_cap(
+            adapter.fetch_erc20_outflows, from_address, start_block, fetch_cap,
+        )
+    )
 
     log.info("fetched %d raw outflows", len(raw_outflows))
 
@@ -806,6 +840,28 @@ def _trace_one_hop(
         result = price_client.price_at(transfer.token, transfer.block_time)
         usd_value: Decimal | None = None
         pricing_error = result.error
+        # Wave-2 adversarial hardening: reject non-finite prices /
+        # amounts at the per-hop boundary BEFORE any arithmetic. The
+        # CoinGecko client filters at fetch, but a mocked / new /
+        # compromised pricing provider could leak Decimal('NaN') —
+        # `(NaN * amount).quantize(...)` raises InvalidOperation, the
+        # exception is swallowed by _process_wave's bare-except, and
+        # the ENTIRE hop's transfers are silently dropped. Treat
+        # non-finite as "no price" so the existing unpriced-transfer
+        # path (which still emits the audit-trail row with usd=None)
+        # is taken instead.
+        if result.usd_value is not None and (
+            not result.usd_value.is_finite()
+            or not transfer.amount_decimal.is_finite()
+        ):
+            pricing_error = (
+                f"non_finite_price_or_amount: price={result.usd_value} "
+                f"amount={transfer.amount_decimal} "
+                f"(symbol={transfer.token.symbol}) — rejected"
+            )
+            result = PriceResult(
+                usd_value=None, source=result.source, error=pricing_error,
+            )
         if result.usd_value is not None:
             usd_value = (result.usd_value * transfer.amount_decimal).quantize(Decimal("0.01"))
             # Defense-in-depth sanity check: any single transfer claiming more

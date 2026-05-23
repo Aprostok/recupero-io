@@ -88,8 +88,26 @@ def fmt_usd(amount: Decimal | int | float) -> str:
     email banner, the portal page, and the CLI all produce
     identical text — '$10,000.00' everywhere, not '$10000' on
     one surface and '$10,000.00' on another.
+
+    RIGOR-Jacob Z11: NaN / Infinity inputs are clamped to ``$0.00``
+    so a poisoned upstream Decimal can't render literal "$NaN" /
+    "$Infinity" into the LE handoff cover banner.
+
+    Round-14 deeper audit: negative values render as ``-$1,000.00``
+    (sign precedes currency symbol — accountant canonical), NOT
+    ``$-1,000.00`` (which Python's default Decimal __format__ would
+    produce, detaching the sign from the currency token and reading
+    as "dollar negative 1000" in customer copy).
     """
-    return f"${Decimal(amount):,.2f}"
+    try:
+        d = Decimal(amount) if isinstance(amount, Decimal) else Decimal(str(amount))
+    except Exception:  # noqa: BLE001
+        return "$0.00"
+    if not d.is_finite():
+        return "$0.00"
+    if d < 0:
+        return f"-${-d:,.2f}"
+    return f"${d:,.2f}"
 
 
 def fmt_usd_short(amount: Decimal | int | float) -> str:
@@ -146,11 +164,15 @@ def fmt_usd_bare_or(
         return fallback
     try:
         d = Decimal(str(amount))
-        if d == d.to_integral_value():
-            return f"{int(d):,}"
-        return f"{d:,.2f}"
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, Exception):  # noqa: BLE001
         return fallback
+    # RIGOR-Jacob Z11: NaN / Infinity must not render as the literal
+    # text "NaN" / "Infinity" — would poison the LE-bound cover page.
+    if not d.is_finite():
+        return fallback
+    if d == d.to_integral_value():
+        return f"{int(d):,}"
+    return f"{d:,.2f}"
 
 
 __all__ = (

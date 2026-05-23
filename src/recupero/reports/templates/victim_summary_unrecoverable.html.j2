@@ -204,7 +204,7 @@
 <h2>6. We're available for follow-up</h2>
 <p>
   For 30 days from the date of this report, we're available at
-  <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>
+  <a href="{{ ('mailto:' ~ investigator.email)|safe_url }}">{{ investigator.email }}</a>
   to answer clarification questions about the trace findings — for
   example, what to highlight when filing with IC3, or how to share
   the package with an attorney. No additional charge.

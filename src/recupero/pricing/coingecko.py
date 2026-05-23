@@ -257,6 +257,30 @@ _CONTRACT_TO_CG: dict[tuple[Chain, str], str] = {
 }
 
 
+def _safe_finite_nonneg_decimal(raw: object) -> Decimal | None:
+    """Parse an arbitrary upstream value (cache JSON, CoinGecko payload)
+    into a finite non-negative ``Decimal``, or ``None`` if it fails.
+
+    RIGOR-Jacob F: CoinGecko's API and the price cache are the source of
+    every USD value in case.json. A poisoned payload (``"NaN"`` /
+    ``"Infinity"`` / a negative number from a spoofed proxy) must NOT
+    propagate into transfer-USD math — non-finite Decimals bypass every
+    ``> ceiling`` check (NaN comparisons return False), and negative
+    prices render in freeze letters as ``"-$1,500.00 lost"``.
+    """
+    if raw is None:
+        return None
+    try:
+        value = Decimal(str(raw))
+    except (ArithmeticError, ValueError, TypeError):
+        return None
+    if not value.is_finite():
+        return None
+    if value < 0:
+        return None
+    return value
+
+
 @dataclass
 class PriceResult:
     usd_value: Decimal | None
@@ -332,7 +356,18 @@ class CoinGeckoClient:
         )
         self.limiter = _RateLimiter(config.pricing.requests_per_second)
         self._is_pro = (env.COINGECKO_TIER or "demo").lower() == "pro"
-        self._client = httpx.Client(timeout=30.0)
+        # Split connect vs read timeout: api.coingecko.com is rate-limited
+        # and occasionally slow-loris during burst. A 10s connect cap fails
+        # fast on hung-handshake so the next caller can proceed instead of
+        # waiting 30s for the full read window to drain.
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=30.0,
+                write=30.0,
+                pool=30.0,
+            )
+        )
         # Cache key is (chain, contract_lower) so Ethereum USDC and Arbitrum USDC
         # don't collide. Seeded from the static map.
         self._contract_id_cache: dict[tuple[Chain, str], str | None] = dict(_CONTRACT_TO_CG)
@@ -404,10 +439,30 @@ class CoinGeckoClient:
         cached = self.cache.get(key)
         if cached is not None and "usd" in cached:
             usd = cached["usd"]
-            return PriceResult(
-                usd_value=Decimal(str(usd)) if usd is not None else None,
-                source=key,
-                error=None if usd is not None else cached.get("error"),
+            # RIGOR-Jacob F: re-validate the cached value at read time.
+            # An attacker who corrupted the cache file with
+            # ``{"usd": "NaN"}`` (or a stale entry from a pre-hardening
+            # build of the fetcher) must not be able to short-circuit
+            # the fetch-side guard. Treat poison as "no cached value"
+            # so the fetch path runs and re-populates with a clean entry.
+            parsed = _safe_finite_nonneg_decimal(usd) if usd is not None else None
+            if usd is None:
+                return PriceResult(
+                    usd_value=None,
+                    source=key,
+                    error=cached.get("error"),
+                )
+            if parsed is not None:
+                return PriceResult(
+                    usd_value=parsed,
+                    source=key,
+                    error=None,
+                )
+            # Poisoned cache entry — log and fall through to refetch.
+            log.warning(
+                "coingecko cache for %s carried non-finite/negative usd=%r; "
+                "ignoring and refetching",
+                key, usd,
             )
 
         # Fetch
@@ -523,9 +578,27 @@ class CoinGeckoClient:
         data = resp.json()
         try:
             usd = data["market_data"]["current_price"]["usd"]
-            return Decimal(str(usd))
-        except (KeyError, TypeError):
+            price = Decimal(str(usd))
+        except (KeyError, TypeError, ArithmeticError):
             return None
+        # RIGOR-Jacob F: reject non-finite (NaN, Infinity) and negative
+        # prices at the parse boundary. CoinGecko's API is the source of
+        # every USD value in case.json. The tracer applies a $2B per-
+        # transfer sanity ceiling, but ``abs(NaN) > 2B`` is False (NaN
+        # comparisons always return False), so a poisoned ``{"usd": "NaN"}``
+        # response would slip past every downstream guard and land NaN
+        # in the LE handoff's "Total stolen" line. Negative prices render
+        # in freeze letters as "-$1,500.00 lost" — operationally
+        # nonsensical. Reject and return None so the "no price data"
+        # branch runs.
+        if not price.is_finite() or price < 0:
+            log.warning(
+                "coingecko %s on %s returned non-finite/negative price %r — "
+                "rejecting at parse boundary",
+                cg_id, d, usd,
+            )
+            return None
+        return price
 
     def price_now(self, token: TokenRef) -> PriceResult:
         """Returns current USD price for a TokenRef. Uses /simple/price endpoint
@@ -558,9 +631,26 @@ class CoinGeckoClient:
         cached = self.cache.get(cache_key)
         if cached is not None and "usd" in cached:
             usd = cached["usd"]
-            return PriceResult(
-                usd_value=Decimal(str(usd)) if usd is not None else None,
-                source=cache_key, error=None if usd is not None else cached.get("error"),
+            # RIGOR-Jacob F: same cache-poison defense as price_at —
+            # the price_now cache feeds dormant-wallet detection and a
+            # poisoned entry would render ``$Infinity`` in the brief.
+            parsed = _safe_finite_nonneg_decimal(usd) if usd is not None else None
+            if usd is None:
+                return PriceResult(
+                    usd_value=None,
+                    source=cache_key,
+                    error=cached.get("error"),
+                )
+            if parsed is not None:
+                return PriceResult(
+                    usd_value=parsed,
+                    source=cache_key,
+                    error=None,
+                )
+            log.warning(
+                "coingecko price_now cache for %s carried non-finite/negative "
+                "usd=%r; ignoring and refetching",
+                cache_key, usd,
             )
 
         try:
@@ -596,9 +686,19 @@ class CoinGeckoClient:
         resp.raise_for_status()
         data = resp.json()
         try:
-            return Decimal(str(data[cg_id]["usd"]))
+            raw = data[cg_id]["usd"]
         except (KeyError, TypeError):
             return None
+        # RIGOR-Jacob F: reject non-finite + negative at the parse boundary,
+        # same shape as _fetch_history.
+        parsed = _safe_finite_nonneg_decimal(raw)
+        if parsed is None:
+            log.warning(
+                "coingecko simple price for %s returned non-finite/negative "
+                "value %r — rejecting",
+                cg_id, raw,
+            )
+        return parsed
 
     def _base_url(self) -> str:
         return self.BASE_URL_PRO if self._is_pro else self.BASE_URL_PUBLIC

@@ -32,26 +32,60 @@ log = logging.getLogger(__name__)
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
+def _finite_decimal(v) -> Decimal:
+    """Coerce to a finite Decimal; NaN / Infinity → Decimal(0).
+
+    Z7 hardening: a single poisoned profile (NaN total_frozen_usd
+    from an upstream oracle / SQL glitch) silently propagated through
+    ``sum(...)`` and rendered ``$NaN`` in the operator dashboard.
+    """
+    if v is None:
+        return Decimal(0)
+    if isinstance(v, Decimal):
+        return v if v.is_finite() else Decimal(0)
+    try:
+        d = Decimal(str(v))
+    except Exception:  # noqa: BLE001
+        return Decimal(0)
+    return d if d.is_finite() else Decimal(0)
+
+
+def _finite_float(v, default: float = 0.0) -> float:
+    """Coerce to a finite float; NaN / Inf → ``default``.
+
+    Z7 hardening: ``float(Decimal('NaN'))`` renders as the JS-toxic
+    string ``'nan'`` in the percent cell of the dashboard, which
+    operators can see. Sanitize at the dataclass→template boundary.
+    """
+    import math
+    if v is None:
+        return default
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(f) or math.isinf(f):
+        return default
+    return f
+
+
 def _profile_to_template_dict(
     prof, instrument: str, instrument_reason: str,
 ) -> dict:
     """Flatten an IssuerCooperationProfile for the Jinja template,
     formatting decimals and computing display fields."""
-    total_frozen = prof.total_frozen_usd or Decimal(0)
-    try:
-        frozen_human = f"${total_frozen:,.2f}"
-    except Exception:  # noqa: BLE001
-        frozen_human = "$0"
+    total_frozen = _finite_decimal(prof.total_frozen_usd)
+    frozen_human = f"${total_frozen:,.2f}"
     return {
         "issuer": prof.issuer,
         "n_letters_sent": prof.n_letters_sent,
         "n_responded": prof.n_responded,
         "n_silent": prof.n_silent,
-        "response_rate": float(prof.response_rate),
-        "full_freeze_rate": float(prof.full_freeze_rate),
-        "partial_freeze_rate": float(prof.partial_freeze_rate),
-        "declined_rate": float(prof.declined_rate),
-        "silence_rate": float(prof.silence_rate),
+        "response_rate": _finite_float(prof.response_rate),
+        "full_freeze_rate": _finite_float(prof.full_freeze_rate),
+        "partial_freeze_rate": _finite_float(prof.partial_freeze_rate),
+        "declined_rate": _finite_float(prof.declined_rate),
+        "silence_rate": _finite_float(prof.silence_rate),
         "median_response_hours": prof.median_response_hours,
         "avg_response_hours": prof.avg_response_hours,
         "fastest_response_hours": prof.fastest_response_hours,
@@ -133,10 +167,14 @@ def render_cooperation_dashboard(
 
     # Aggregate stats panel.
     total_letters = sum(p.n_letters_sent for p in profiles_sorted)
+    # Z7: filter NaN / Infinity from the cross-issuer sum so one
+    # poisoned profile can't render ``$NaN`` in the headline stats.
     total_frozen = sum(
-        (p.total_frozen_usd for p in profiles_sorted),
+        (_finite_decimal(p.total_frozen_usd) for p in profiles_sorted),
         start=Decimal(0),
     )
+    if not total_frozen.is_finite():
+        total_frozen = Decimal(0)
     n_black_holes = sum(1 for p in profiles_sorted if p.is_black_hole)
     stats = {
         "n_issuers": len(profiles_sorted),
@@ -152,6 +190,9 @@ def render_cooperation_dashboard(
         lstrip_blocks=True,
         undefined=StrictUndefined,
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
 
     try:
         from recupero import __version__ as software_version

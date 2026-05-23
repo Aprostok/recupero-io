@@ -63,3 +63,9 @@ v0_20_15_validation_artifacts.zip
 _jacob_postvalidator_artifacts/
 _jacob_postvalidator_run.py
 jacob_postvalidator_artifacts.zip
+
+# Coverage data + operator-local zip staging dir
+.coverage
+.coverage.*
+htmlcov/
+tmp/

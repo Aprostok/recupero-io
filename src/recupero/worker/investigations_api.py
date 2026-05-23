@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
@@ -61,6 +62,43 @@ _MAX_LIST_LIMIT = 100
 # Storage bucket the worker writes to. Must match
 # ``SupabaseCaseStore``'s ``bucket`` default — keep them in sync.
 _BUCKET = "investigation-files"
+
+
+# W10: investigation_id is interpolated into bucket prefixes; reject
+# anything that could escape the per-investigation directory (slashes,
+# traversal segments, NUL). UUIDs + a defensive char allowlist.
+_INV_ID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def _assert_safe_investigation_id(inv_id: str) -> None:
+    """Reject investigation_ids that could escape their bucket prefix
+    (``..`` segments, slashes, NUL, empty). Defense-in-depth: callers
+    SHOULD already be passing UUIDs, but the path-prefix isolation
+    invariant must not depend on caller hygiene."""
+    if not inv_id or "/" in inv_id or "\\" in inv_id or "\x00" in inv_id \
+            or ".." in inv_id or not _INV_ID_PATTERN.match(inv_id):
+        raise ValueError(f"invalid investigation_id (traversal-unsafe): {inv_id!r}")
+
+
+def _assert_safe_object_path(object_path: str) -> None:
+    """Reject object paths containing ``..`` segments, NUL, or a
+    leading ``/``. urllib.parse.quote(..., safe='/') leaves these
+    intact so per-call defense is required."""
+    if not object_path or "\x00" in object_path or object_path.startswith("/"):
+        raise ValueError(f"invalid object_path: {object_path!r}")
+    for seg in object_path.split("/"):
+        if seg == ".." or seg == ".":
+            raise ValueError(f"object_path traversal segment rejected: {object_path!r}")
+
+
+def _redact(text: str, secret: str) -> str:
+    """Scrub a service-role token (and the literal Bearer header) from
+    an error/log payload before re-raising or logging."""
+    if not secret:
+        return text
+    out = text.replace(secret, "***REDACTED***")
+    out = out.replace(f"Bearer {secret}", "Bearer ***REDACTED***")
+    return out
 
 
 # Column projection for the list endpoint. Keep this tight — the
@@ -641,6 +679,9 @@ def _build_artifacts_map(
       * freeze_letters — per-issuer freeze requests + LE handoffs
                         (case-driven runs only — wallet traces emit []).
     """
+    # W10: investigation_id is interpolated into the bucket prefix;
+    # reject traversal-unsafe ids to preserve per-investigation isolation.
+    _assert_safe_investigation_id(investigation_id)
     prefix_root = f"investigations/{investigation_id}/"
     prefix_briefs = f"investigations/{investigation_id}/briefs/"
 
@@ -798,9 +839,16 @@ def _artifact_entry(
 
 
 def _list_bucket(supabase_url: str, service_role_key: str, prefix: str) -> list[dict[str, Any]]:
-    """POST /storage/v1/object/list/<bucket> with a prefix filter."""
+    """POST /storage/v1/object/list/<bucket> with a prefix filter.
+
+    W10: HTTPError bodies from Supabase have been observed echoing
+    the Authorization header in diagnostic mode. Catch + redact
+    before re-raising so the token cannot reach operator stdout.
+    Also validate the response shape — a non-list (e.g. error
+    envelope dict) is treated as a hard error rather than silently
+    iterated."""
     url = f"{supabase_url.rstrip('/')}/storage/v1/object/list/{_BUCKET}"
-    body = json.dumps({"prefix": prefix, "limit": 200, "offset": 0}).encode()
+    body = json.dumps({"prefix": prefix, "limit": 200, "offset": 0}, separators=(",", ":"), allow_nan=False).encode()
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={
@@ -809,8 +857,25 @@ def _list_bucket(supabase_url: str, service_role_key: str, prefix: str) -> list[
             "Content-Type": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        # Read & redact the body before re-raising so a token-echo
+        # diagnostic response can't reach operator logs.
+        try:
+            raw = exc.read().decode("utf-8", errors="replace") if exc.fp else ""
+        except Exception:  # noqa: BLE001
+            raw = ""
+        safe_body = _redact(raw, service_role_key)[:200]
+        raise RuntimeError(
+            f"Supabase list failed: status={exc.code} body[:200]={safe_body!r}"
+        ) from None
+    if not isinstance(payload, list):
+        raise RuntimeError(
+            f"Supabase list returned non-list shape: {type(payload).__name__}"
+        )
+    return payload
 
 
 def _sign_storage_url(
@@ -826,12 +891,15 @@ def _sign_storage_url(
     ``{"signedURL": "/object/sign/bucket/path?token=..."}``; the
     fully-qualified URL is ``{supabase_url}{signedURL}``.
     """
+    # W10: urllib.parse.quote(safe='/') leaves '..' intact — reject
+    # traversal before round-tripping into the signed-URL request.
+    _assert_safe_object_path(object_path)
     path_encoded = urllib.parse.quote(object_path, safe="/")
     url = (
         f"{supabase_url.rstrip('/')}/storage/v1/object/sign/"
         f"{_BUCKET}/{path_encoded}"
     )
-    body = json.dumps({"expiresIn": int(ttl_sec)}).encode()
+    body = json.dumps({"expiresIn": int(ttl_sec)}, separators=(",", ":"), allow_nan=False).encode()
     req = urllib.request.Request(
         url, data=body, method="POST",
         headers={
@@ -844,7 +912,16 @@ def _sign_storage_url(
         payload = json.loads(resp.read().decode("utf-8"))
     signed_path = payload.get("signedURL") or payload.get("signedUrl")
     if not signed_path:
-        raise RuntimeError(f"sign API returned no URL: {payload!r}")
+        # Adversarial-input wave: do NOT echo the full payload here.
+        # Supabase Storage error envelopes have been observed to contain
+        # the request's `Authorization` header echoed back in
+        # diagnostic-mode responses; the unique object_path component
+        # also identifies an investigation case-id that we don't want
+        # in operator stdout. Surface only the response status keys
+        # (top-level field names) so a misbehaving sign API is still
+        # debuggable without leaking the bearer token or case-id.
+        keys_only = sorted(payload.keys()) if isinstance(payload, dict) else type(payload).__name__
+        raise RuntimeError(f"sign API returned no URL (response keys: {keys_only})")
     return f"{supabase_url.rstrip('/')}/storage/v1{signed_path}"
 
 
@@ -868,6 +945,9 @@ def _build_summary(
         "unlabeled_counterparties": 0,
     }
     try:
+        # W10: reject traversal-unsafe ids before touching the network
+        # so a poisoned id can never fetch a sibling investigation's case.
+        _assert_safe_investigation_id(investigation_id)
         url = (
             f"{supabase_url.rstrip('/')}/storage/v1/object/{_BUCKET}/"
             f"investigations/{investigation_id}/case.json"

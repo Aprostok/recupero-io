@@ -300,6 +300,119 @@ class _EdgeAttrs:
     dst_chain: str = "ethereum"
 
 
+# Hard ceiling on the aggregator's working-set node dict. Above this,
+# subsequent unique addresses are silently dropped (with a single
+# warning log line) so a malicious / runaway case with 100k unique
+# counterparties can't OOM the renderer. The render-time cap
+# (_MAX_NODES = 36) only kicks in AFTER the dict is fully built —
+# without an aggregation-time cap we paid 100k _NodeAttrs of RAM for
+# a 36-node render. Sized at ~50x the render cap which is plenty of
+# headroom to pick TOP-N edges accurately.
+_AGGREGATE_NODE_HARD_CAP = 2000
+
+
+# Control characters + bidi overrides that must NOT appear in node
+# identity strings flowing into SVG <text> elements or the JSON blob
+# the D3 frontend parses. U+202E (RTL override) and friends visually
+# flip subsequent characters in the renderer — a malicious label
+# "Coinbase‮elbaniB" displays as "CoinbaseBinable" and spoofs
+# the entity name. NUL (0x00) terminates C-string parsers inside the
+# SVG toolchain. Other C0 control chars are similarly unsafe.
+_UNSAFE_LABEL_CHARS = frozenset(
+    [chr(c) for c in range(0x00, 0x20)]   # C0 controls
+    + [chr(0x7F)]                          # DEL
+    + [
+        "‎", "‏",                # LRM / RLM
+        "‪", "‫", "‬",      # LRE / RLE / PDF
+        "‭", "‮",                # LRO / RLO  — the spoof vector
+        "⁦", "⁧", "⁨", "⁩",  # LRI / RLI / FSI / PDI
+        "﻿",                          # BOM / zero-width no-break
+    ]
+)
+
+
+def _sanitize_label(text: str | None) -> str | None:
+    """Strip control characters, bidi overrides, and HTML/script-context
+    sequences from a label string before it flows into SVG <text> or
+    the interactive-graph JSON blob.
+
+    Adversarial-audit hardening:
+
+      * **Bidi overrides** (U+202E etc.) visually re-order subsequent
+        characters in the renderer. A label "Coinbase\\u202EelbaniB"
+        displays as "CoinbaseBinable" and impersonates Binance in the
+        rendered diagram.
+      * **NUL / C0 controls** can confuse SVG parsers downstream
+        (WeasyPrint, browser-side D3) and may truncate the label
+        when serialized through a C-string boundary.
+      * **`<script>` / `</script>`** substrings end up inside the
+        ``<script type="application/json">`` JSON block of
+        interactive_graph.html. graph_ui.py escapes ``</`` → ``<\\/``
+        as defense-in-depth at the template layer; sanitizing at the
+        data layer too means even a non-strict HTML parser can't be
+        tricked.
+
+    Returns None when ``text`` is None (callers test the field for
+    presence).  Empty-after-sanitization → returns the sentinel
+    ``"(label)"`` so the node still gets a non-empty identity for the
+    "labeled entity" code path."""
+    if text is None:
+        return None
+    if not text:
+        return text
+    out_chars = [c for c in text if c not in _UNSAFE_LABEL_CHARS]
+    cleaned = "".join(out_chars)
+    # Scrub script-context sequences (case-insensitive). We replace
+    # rather than reject so a partially-poisoned label still surfaces
+    # the legitimate prefix to the operator.
+    low = cleaned.lower()
+    while "<script" in low or "</script" in low:
+        # Replace the offending substring with a visible sentinel.
+        idx_open = low.find("<script")
+        idx_close = low.find("</script")
+        idx = min(i for i in (idx_open, idx_close) if i >= 0)
+        # Length of the marker — "<script" = 7, "</script" = 8.
+        marker_len = 8 if low[idx:idx+8] == "</script" else 7
+        cleaned = cleaned[:idx] + "[blocked]" + cleaned[idx+marker_len:]
+        low = cleaned.lower()
+    if not cleaned.strip():
+        return "(label)"
+    return cleaned
+
+
+def _safe_usd(v: Any) -> Decimal:
+    """Coerce a (maybe-Decimal) USD value to a finite, non-negative Decimal.
+
+    Adversarial-audit hardening: ``usd_value_at_tx`` may arrive as
+    ``Decimal('NaN')`` / ``Decimal('Infinity')`` from an upstream
+    price-oracle glitch (CoinGecko 4xx returns NaN, division by zero
+    in a TVL calc, etc.). Pre-fix:
+
+      * The Graphviz formatter ``_fmt_usd_compact(NaN)`` returns the
+        literal string ``"$nan"`` — visible nonsense in the static
+        SVG.
+      * ``_edge_penwidth(Inf)`` returns ``float('inf')`` which
+        Graphviz silently treats as 0pt — the highest-value edge
+        renders invisibly.
+      * ``totalUsdNumeric = float('nan')`` poisons the JSON blob
+        (``json.dumps(allow_nan=False)`` raises; downstream graph_ui
+        has a fallback but the bare ``_aggregate`` consumer crashes).
+    """
+    if v is None:
+        return Decimal(0)
+    if isinstance(v, Decimal):
+        if not v.is_finite():
+            return Decimal(0)
+        return v
+    try:
+        d = Decimal(str(v))
+    except Exception:  # noqa: BLE001
+        return Decimal(0)
+    if not d.is_finite():
+        return Decimal(0)
+    return d
+
+
 def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
     """Walk all transfers, collapse parallel edges, and compute per-node
     attributes.
@@ -318,10 +431,29 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
     text matches the on-chain canonical form. Pre-v0.20.2 a
     multi-source trace (e.g. Etherscan EIP-55 + Alchemy lowercase)
     produced visual duplicates.
+
+    Adversarial-input hardening (round-N):
+
+      * NaN/Inf in ``usd_value_at_tx`` is coerced to 0 via
+        ``_safe_usd`` before it can poison edge totals.
+      * Self-loop transfers (from_key == to_key) are skipped — a D3
+        force-layout treats them as zero-length links and the
+        simulation never settles.
+      * Working-set ``nodes`` dict is hard-capped at
+        ``_AGGREGATE_NODE_HARD_CAP`` so a runaway 100k-address case
+        can't OOM the renderer.
+      * Identity strings are sanitized via ``_sanitize_label`` to
+        strip bidi-overrides, NUL/control chars, and
+        ``<script>`` / ``</script>`` sequences.
+      * Missing (``None``) ``block_time`` on a transfer no longer
+        crashes the first/last comparison.
+      * Edge key includes the chain pair so two distinct chain legs
+        between the same (from, to) collapse into separate edges
+        instead of being clobbered.
     """
     from recupero._common import canonical_address_key
     nodes: dict[str, _NodeAttrs] = {}
-    edges: dict[tuple[str, str], _EdgeAttrs] = {}
+    edges: dict[tuple[str, str, str, str], _EdgeAttrs] = {}
 
     # Seed the victim node so it appears even if the case has no
     # transfers originating from it directly (rare but possible during
@@ -336,9 +468,35 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
         chain=seed_chain,
     )
 
+    cap_warned = False
     for t in case.transfers:
         from_key = canonical_address_key(t.from_address)
         to_key = canonical_address_key(t.to_address)
+        # Self-loop guard: a transfer X→X is either a contract self-
+        # call (no real fund movement) or a crafted poison input.
+        # Drop it at the source so neither renderer ever sees a
+        # zero-length link.
+        if from_key and from_key == to_key:
+            continue
+        # Working-set ceiling — drop transfers whose addition would
+        # push the node dict over the hard cap. Existing nodes can
+        # still receive new edges; only NEW addresses are blocked.
+        will_add_from = from_key not in nodes
+        will_add_to = to_key not in nodes
+        projected = len(nodes) + (1 if will_add_from else 0) + (
+            1 if will_add_to else 0
+        )
+        if projected > _AGGREGATE_NODE_HARD_CAP:
+            if not cap_warned:
+                log.warning(
+                    "flow diagram: aggregator hit node hard cap (%d) — "
+                    "%d-transfer case has too many unique counterparties; "
+                    "dropping further additions (this is malicious-input "
+                    "protection, not normal behavior)",
+                    _AGGREGATE_NODE_HARD_CAP, len(case.transfers),
+                )
+                cap_warned = True
+            continue
         # Per-side node bookkeeping. The from-side defaults to an
         # unlabeled wallet (unless we've already seen it as the victim or
         # promoted it via a previous to-side transfer that classified it).
@@ -365,32 +523,40 @@ def _aggregate(case: Case) -> tuple[dict[str, _NodeAttrs], list[_EdgeAttrs]]:
         cat_name, identity = _classify_counterparty(t)
         if cat_name != "wallet" and to_node.category == "wallet":
             to_node.category = cat_name
-            to_node.identity = identity
+            to_node.identity = _sanitize_label(identity)
 
-        usd = t.usd_value_at_tx or Decimal(0)
+        usd = _safe_usd(t.usd_value_at_tx)
         from_node.outbound_usd += usd
         to_node.inbound_usd += usd
 
-        # Aggregate the edge. Key is canonical-pair so case variants
-        # of the same logical (src, dst) pair collapse into one edge.
-        key = (from_key, to_key)
+        # Aggregate the edge. Key includes chain pair so two distinct
+        # chain legs (e.g. ETH and ARB) between the same (from, to)
+        # don't clobber each other. Pre-fix a bridge leg's
+        # cross-chain detection silently broke because the second
+        # transfer overwrote src_chain/dst_chain to a same-chain
+        # value.
+        t_chain = t.chain.value
+        key = (from_key, to_key, t_chain, t_chain)
         edge = edges.setdefault(
             key,
             _EdgeAttrs(
                 src=from_node.address,
                 dst=to_node.address,
-                src_chain=from_node.chain,
-                dst_chain=to_node.chain,
+                src_chain=t_chain,
+                dst_chain=t_chain,
             ),
         )
         edge.total_usd += usd
         edge.transfer_count += 1
-        edge.src_chain = from_node.chain
-        edge.dst_chain = to_node.chain
-        if edge.first_time is None or t.block_time < edge.first_time:
-            edge.first_time = t.block_time
-        if edge.last_time is None or t.block_time > edge.last_time:
-            edge.last_time = t.block_time
+        # block_time may be None on synthetic/virtual transfers (bridge
+        # calldata decoder, normalizer output). Guard the comparison so
+        # a single None doesn't TypeError-crash the whole render.
+        bt = t.block_time
+        if bt is not None:
+            if edge.first_time is None or bt < edge.first_time:
+                edge.first_time = bt
+            if edge.last_time is None or bt > edge.last_time:
+                edge.last_time = bt
         # Track the largest single-transfer token symbol — that's the
         # most informative one to show on the aggregated edge label.
         if usd > edge.dominant_usd:

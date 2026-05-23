@@ -66,6 +66,8 @@ def test_send_confirmation_happy_path():
     with patch(
         "recupero._common.db_connect", return_value=stub_conn,
     ), patch(
+        "recupero.worker._email.has_been_sent", return_value=False,
+    ), patch(
         "recupero.portal.tokens.generate_token",
         return_value=(TOKEN_ID, "test-token-xyz", None),
     ), patch(
@@ -130,6 +132,8 @@ def test_send_confirmation_token_mint_failure_returns_failure():
     with patch(
         "recupero._common.db_connect", return_value=stub_conn,
     ), patch(
+        "recupero.worker._email.has_been_sent", return_value=False,
+    ), patch(
         "recupero.portal.tokens.generate_token",
         side_effect=ValueError("simulated mint failure"),
     ):
@@ -157,6 +161,8 @@ def test_send_confirmation_email_send_failure_returns_failure():
 
     with patch(
         "recupero._common.db_connect", return_value=stub_conn,
+    ), patch(
+        "recupero.worker._email.has_been_sent", return_value=False,
     ), patch(
         "recupero.portal.tokens.generate_token",
         return_value=(TOKEN_ID, "test-token", None),

@@ -91,6 +91,21 @@ _BLOCKED_HOSTNAME_SUFFIXES = (
 API_CREATED_BY_PREFIX = "api:"
 
 
+# RIGOR-Jacob Z12-3: bidi-override / zero-width / BOM code points
+# rejected in the partner-supplied label. A label like
+# ``"prod‮evil"`` renders as ``"prodlive"`` reversed in the
+# operator triage UI — same Trojan-Source spoof class as the v0.21.0
+# freeze_outcomes hardening.
+_LABEL_TROJAN_CHARS = frozenset({
+    "‪", "‫", "‬", "‭", "‮",  # bidi formatting / overrides
+    "⁦", "⁧", "⁨", "⁩",       # bidi isolates
+    "​", "‌", "‍",            # zero-width space / NJ / J
+    "‎", "‏",                 # LTR / RTL marks
+    "﻿",                       # BOM
+    "\x00",                    # NUL (defense-in-depth)
+})
+
+
 _VALID_TRIGGER_TYPES = frozenset({
     "any_movement", "movement_above_usd",
     "balance_drop", "ofac_contact",
@@ -222,15 +237,50 @@ def _ssrf_host_allowlist() -> frozenset[str]:
 def _is_blocked_ip(ip_str: str) -> bool:
     """True when ``ip_str`` parses as a private / loopback /
     link-local / multicast / reserved IP. Defends against partners
-    pointing webhook_url at internal infra."""
+    pointing webhook_url at internal infra.
+
+    RIGOR-Jacob Z12-1: ``ipaddress.ip_address`` is strict (RFC-only
+    dotted-quad). The libc family (glibc inet_aton, used by curl /
+    httpx / Linux name resolution) accepts alternative IPv4 literal
+    forms:
+
+      * ``2130706433``   (32-bit decimal of 127.0.0.1)
+      * ``0177.0.0.1``   (leading-zero octal segment)
+      * ``127.1``        (short-form trailing big-endian)
+      * ``0x7f000001``   (hex)
+
+    A partner that registers ``https://2130706433/`` previously passed
+    every check here and the dispatcher then POSTed to 127.0.0.1.
+    Real attack target: 169.254.169.254 in decimal (=2852039166) to
+    reach the AWS IMDS through this gap.
+
+    Fix: try ``socket.inet_aton`` (libc-form parser) as a fallback
+    and re-check the resulting dotted-quad with strict ``ip_address``.
+    """
+    # Strict path first — covers IPv6 + canonical IPv4.
     try:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
-        # Not an IP literal — caller falls back to hostname check.
+        ip = None
+    if ip is not None:
+        return (
+            ip.is_loopback or ip.is_private or ip.is_link_local
+            or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+        )
+    # Fallback: libc-form IPv4 literal (decimal / octal / hex /
+    # short-form). socket.inet_aton accepts all of these and returns
+    # a 4-byte packed addr we can re-feed into ip_address.
+    try:
+        packed = socket.inet_aton(ip_str)
+    except (OSError, TypeError):
+        return False
+    try:
+        ip4 = ipaddress.IPv4Address(packed)
+    except (ipaddress.AddressValueError, ValueError):
         return False
     return (
-        ip.is_loopback or ip.is_private or ip.is_link_local
-        or ip.is_multicast or ip.is_reserved or ip.is_unspecified
+        ip4.is_loopback or ip4.is_private or ip4.is_link_local
+        or ip4.is_multicast or ip4.is_reserved or ip4.is_unspecified
     )
 
 
@@ -346,6 +396,19 @@ def _validate_subscription_input(
             f"{', '.join(sorted(_VALID_TRIGGER_TYPES))}.",
         )
 
+    # RIGOR-Jacob Z12-2: reject NaN / Infinity threshold_usd at the
+    # validation layer. Decimal('Infinity') passes Pydantic's ge=0
+    # check (Inf > 0 is True) and lands in monitoring_subscriptions.
+    # threshold_usd; every downstream ``observed_amount >= threshold``
+    # comparison in the worker then returns False forever — the
+    # subscription appears active but never fires. Same shape as the
+    # v0.21.0 freeze_outcomes Inf hardening.
+    if threshold_usd is not None and not threshold_usd.is_finite():
+        raise MonitoringApiError(
+            "threshold_usd",
+            "threshold_usd must be a finite number (no NaN/Inf).",
+        )
+
     if trigger_type in _THRESHOLD_REQUIRED_TRIGGERS:
         if threshold_usd is None or threshold_usd <= 0:
             raise MonitoringApiError(
@@ -376,6 +439,16 @@ def _validate_subscription_input(
         raise MonitoringApiError(
             "label", f"label exceeds {_MAX_LABEL} character limit.",
         )
+    # RIGOR-Jacob Z12-3: bidi-override / zero-width / BOM rejection
+    # on the partner-supplied label. Spoofs the operator triage UI.
+    if label is not None:
+        for ch in label:
+            if ch in _LABEL_TROJAN_CHARS:
+                raise MonitoringApiError(
+                    "label",
+                    "label contains a bidi-override / zero-width / "
+                    "BOM character (display-spoof / Trojan-Source).",
+                )
 
     # v0.27.1 (HIGH-1): partner-supplied HMAC secret must be at
     # least 16 chars when provided (or omitted entirely).

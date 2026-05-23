@@ -27,6 +27,7 @@ import signal
 import socket
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Final
 
@@ -71,6 +72,56 @@ _HEARTBEAT_DEFAULT_SEC: Final = 30
 _STALE_DEFAULT_SEC: Final = 300
 _POLL_IDLE_DEFAULT_SEC: Final = 2.0
 _POLL_MAX_DEFAULT_SEC: Final = 30.0
+
+
+# ----- Env-var coercion helpers (Wave-9 type-coercion audit) ----- #
+#
+# An operator-supplied ``RECUPERO_HEARTBEAT_INTERVAL_SEC=oops`` used to
+# crash the worker entrypoint with an unhandled ``ValueError`` from
+# ``float(...)`` before ``run_forever()`` could even start. These
+# helpers wrap the coercion in try/except + finite-check so the worker
+# always falls back to the documented default instead of failing
+# closed.
+
+def _resolve_float_env(name: str, *, default: float) -> float:
+    import math
+
+    raw = os.environ.get(name, "")
+    if raw is None:
+        return float(default)
+    raw = raw.strip() if isinstance(raw, str) else raw
+    if not raw:
+        return float(default)
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        log.warning("%s is not a float (%r) — using default %r", name, raw, default)
+        return float(default)
+    if not math.isfinite(val) or val <= 0:
+        # NaN / Infinity / non-positive timing values are nonsense for
+        # any of the worker's interval knobs; reject and fall back.
+        log.warning("%s is not a positive finite float (%r) — using default %r",
+                    name, val, default)
+        return float(default)
+    return val
+
+
+def _resolve_int_env(name: str, *, default: int) -> int:
+    raw = os.environ.get(name, "")
+    if raw is None:
+        return int(default)
+    raw = raw.strip() if isinstance(raw, str) else raw
+    if not raw:
+        return int(default)
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        log.warning("%s is not an int (%r) — using default %r", name, raw, default)
+        return int(default)
+    if val <= 0:
+        log.warning("%s must be > 0 (%r) — using default %r", name, val, default)
+        return int(default)
+    return val
 
 
 # ----- Heartbeat thread ----- #
@@ -170,6 +221,35 @@ def _install_signal_handlers() -> None:
     # SIGINT is Ctrl+C in the terminal. Both should drain gracefully.
     signal.signal(signal.SIGTERM, handler)
     signal.signal(signal.SIGINT, handler)
+
+
+# ----- Crash-loop protection (W9-07) ----- #
+# Railway restarts a crashed container immediately. If a startup
+# crash takes <1s (e.g. import-time exception, bad env), the
+# container will hot-loop dozens of times per minute, burning quota
+# and flooding logs before an operator can react. Enforce a minimum
+# uptime: if the worker exits abnormally faster than this, sleep
+# out the remainder so Railway sees a more leisurely crash cadence
+# (and ops gets a clearer signal something is fundamentally broken).
+_MIN_UPTIME_SEC: Final = 30.0
+
+
+def _enforce_min_uptime(started_at_monotonic: float) -> None:
+    """Sleep out the difference between actual uptime and _MIN_UPTIME_SEC.
+
+    No-op when uptime already meets/exceeds the floor. Called before
+    the entrypoint propagates a non-zero exit so a tight crash loop
+    can't burn Railway's restart budget.
+    """
+    elapsed = time.monotonic() - started_at_monotonic
+    remaining = _MIN_UPTIME_SEC - elapsed
+    if remaining > 0:
+        log.warning(
+            "worker exited after only %.2fs — sleeping %.2fs before exit "
+            "to avoid Railway crash-loop hot-restarts",
+            elapsed, remaining,
+        )
+        time.sleep(remaining)
 
 
 # ----- Main loop ----- #
@@ -745,7 +825,26 @@ def cli() -> None:
     )
     args = parser.parse_args()
 
-    load_dotenv()
+    # Wave-8 audit (dotenv discipline): only read a local ``.env`` for
+    # local-dev runs. Railway/Docker inject env vars via the platform;
+    # a stray ``.env`` baked into a deploy image must NOT be silently
+    # consumed. We mirror the production-marker logic from
+    # ``recupero.api.auth._is_production_environment``. If any common
+    # deploy marker says we're in prod, skip ``load_dotenv()``.
+    _prod_markers = (
+        "RAILWAY_ENVIRONMENT",
+        "ENVIRONMENT",
+        "ENV",
+        "NODE_ENV",
+        "RECUPERO_ENV",
+        "SENTRY_ENVIRONMENT",
+    )
+    _in_prod = any(
+        (os.environ.get(m) or "").strip().lower() in ("production", "prod")
+        for m in _prod_markers
+    )
+    if not _in_prod:
+        load_dotenv()
     setup_logging(args.log_level.upper())
 
     # v0.17.0 (observability): init Sentry if SENTRY_DSN is set. No-op
@@ -812,19 +911,24 @@ def cli() -> None:
         # not a failure. Only true failures trip non-zero exit code.
         sys.exit(0 if report["failed"] == 0 else 1)
 
-    heartbeat_sec = float(
-        os.environ.get("RECUPERO_HEARTBEAT_INTERVAL_SEC", _HEARTBEAT_DEFAULT_SEC)
+    heartbeat_sec = _resolve_float_env(
+        "RECUPERO_HEARTBEAT_INTERVAL_SEC", default=float(_HEARTBEAT_DEFAULT_SEC),
     )
-    stale_after_sec = int(
-        os.environ.get("RECUPERO_STALE_AFTER_SEC", _STALE_DEFAULT_SEC)
+    stale_after_sec = _resolve_int_env(
+        "RECUPERO_STALE_AFTER_SEC", default=int(_STALE_DEFAULT_SEC),
     )
-    poll_idle_sec = float(
-        os.environ.get("RECUPERO_POLL_IDLE_SEC", _POLL_IDLE_DEFAULT_SEC)
+    poll_idle_sec = _resolve_float_env(
+        "RECUPERO_POLL_IDLE_SEC", default=float(_POLL_IDLE_DEFAULT_SEC),
     )
-    poll_max_sec = float(
-        os.environ.get("RECUPERO_POLL_MAX_SEC", _POLL_MAX_DEFAULT_SEC)
+    poll_max_sec = _resolve_float_env(
+        "RECUPERO_POLL_MAX_SEC", default=float(_POLL_MAX_DEFAULT_SEC),
     )
 
+    # Track startup time so a fast crash can be padded out to
+    # _MIN_UPTIME_SEC before the non-zero exit propagates. Railway's
+    # restart policy is otherwise too eager — a 0.3s import-time
+    # exception would hot-loop the container.
+    started_at = time.monotonic()
     try:
         run_forever(
             once=args.once,
@@ -835,6 +939,14 @@ def cli() -> None:
         )
     except KeyboardInterrupt:
         log.info("interrupted; shutting down")
+    except BaseException:
+        # Any other exit path is abnormal — pad out the uptime so
+        # Railway doesn't hot-restart us. Re-raise so the Python
+        # interpreter still reports the non-zero exit code that
+        # distinguishes "crash" from "clean SIGTERM drain" in
+        # Railway's deploy log.
+        _enforce_min_uptime(started_at)
+        raise
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -53,6 +53,28 @@ from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 log = logging.getLogger(__name__)
 
 
+def _safe_ms_to_datetime(ts_ms: Any) -> datetime:
+    """Convert an untrusted millisecond-epoch value to a UTC datetime.
+
+    TronGrid is an external API. A compromised / buggy response can
+    carry ``block_timestamp`` values that crash
+    ``datetime.fromtimestamp`` — OverflowError on huge values,
+    OSError on Windows for very-negative, ValueError on Linux. We
+    clamp to epoch so the BFS hop keeps moving.
+    """
+    try:
+        ts_int = int(ts_ms or 0)
+    except (TypeError, ValueError):
+        return datetime.fromtimestamp(0, tz=UTC)
+    try:
+        return datetime.fromtimestamp(ts_int / 1000.0, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        log.warning(
+            "tron: clamping out-of-range ms-timestamp %r to epoch", ts_int,
+        )
+        return datetime.fromtimestamp(0, tz=UTC)
+
+
 # Public Tron explorer used for chain-of-custody URLs.
 _TRONSCAN_BASE = "https://tronscan.org/#"
 
@@ -138,7 +160,8 @@ class TronAdapter(ChainAdapter):
         return is_contract
 
     def fetch_native_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Native TRX outflows.
 
@@ -161,7 +184,8 @@ class TronAdapter(ChainAdapter):
         return []
 
     def fetch_erc20_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """TRC-20 outbound transfers from ``from_address``.
 
@@ -235,14 +259,20 @@ class TronAdapter(ChainAdapter):
                 f"empty receipt for {tx_hash} — TronGrid returned no id "
                 "(tx may be unconfirmed)"
             )
-        block_number = int(receipt.get("blockNumber") or 0)
-        block_ts_ms = int(receipt.get("blockTimeStamp") or 0)
+        try:
+            block_number = int(receipt.get("blockNumber") or 0)
+        except (TypeError, ValueError):
+            block_number = 0
+        try:
+            block_ts_ms = int(receipt.get("blockTimeStamp") or 0)
+        except (TypeError, ValueError):
+            block_ts_ms = 0
         if block_ts_ms <= 0:
             raise TronGridError(
                 f"receipt for {tx_hash} missing blockTimeStamp — "
                 "cannot assemble evidence (tx may be unconfirmed)"
             )
-        block_time = datetime.fromtimestamp(block_ts_ms / 1000.0, tz=UTC)
+        block_time = _safe_ms_to_datetime(block_ts_ms)
         try:
             block_header = self.client.get_block_by_num(block_number)
         except TronGridError as e:
@@ -311,7 +341,10 @@ class TronAdapter(ChainAdapter):
         block_ts_ms = event.get("block_timestamp")
         if not isinstance(block_ts_ms, (int, float)):
             return None
-        block_time = datetime.fromtimestamp(block_ts_ms / 1000.0, tz=UTC)
+        # RIGOR-Jacob H adversarial: external ms-epoch values can be
+        # extreme — clamp safely instead of letting OverflowError /
+        # OSError / ValueError kill the BFS hop.
+        block_time = _safe_ms_to_datetime(block_ts_ms)
 
         token_info = event.get("token_info") or {}
         if not isinstance(token_info, dict):

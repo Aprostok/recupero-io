@@ -522,6 +522,32 @@ def match_freeze_asks(
     _ABSOLUTE_CAP_USD = Decimal("100000000")  # $100M
     for candidate in candidates:
         for holding in candidate.holdings:
+            # RIGOR-Jacob Z18-1 (HIGH, DoS): defense-in-depth — drop
+            # non-finite usd_value BEFORE the comparator. ``TokenHolding``
+            # is a plain dataclass with no Pydantic validator, so a
+            # holding deserialized from a stale case.json whose price
+            # cache was poisoned (RIGOR-Jacob F only hardened CoinGecko
+            # ingest), OR built outside dormant.finder._check_one_address
+            # (Z10's fix is local), can carry ``Decimal('NaN')`` or
+            # ``Decimal('Infinity')``. Pre-fix:
+            #   * NaN: the next line ``holding.usd_value < min_holding_usd``
+            #     raises ``decimal.InvalidOperation`` → brief generator
+            #     crashes mid-pipeline.
+            #   * Infinity: silently absorbed by the $100M cap branch,
+            #     which is misleading (it's not a giant pool, it's
+            #     corrupted data).
+            # Now: filter at the boundary, same semantics as a
+            # holding whose price lookup failed (treated as unmatched
+            # if no other holdings remain).
+            if holding.usd_value is not None and not holding.usd_value.is_finite():
+                log.warning(
+                    "match_freeze_asks: dropping candidate %s holding of %s "
+                    "with non-finite usd_value=%r — likely poisoned price "
+                    "cache or hostile chain-adapter response",
+                    candidate.address, holding.token.symbol,
+                    holding.usd_value,
+                )
+                continue
             if holding.usd_value is None or holding.usd_value < min_holding_usd:
                 continue
             if holding.usd_value > _ABSOLUTE_CAP_USD:

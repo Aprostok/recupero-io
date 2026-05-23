@@ -300,8 +300,17 @@ async def require_api_key(request: Request) -> str:
     if _is_optional_auth():
         return "anonymous"
 
-    key_secret = request.headers.get("X-Recupero-API-Key", "").strip()
-    if not key_secret:
+    # v0.20.2 (adversarial-audit): do NOT .strip() the inbound header.
+    # Stripping silently accepts " sk_xxx\t" as equivalent to "sk_xxx",
+    # expanding the valid-key surface for every leaked secret and
+    # defeating naive log-fingerprint / WAF diff detection. Treat the
+    # header value as opaque bytes; compare exactly what the client
+    # sent. We still treat a missing header OR a header that is empty
+    # / whitespace-only as "no credential supplied" (401), so that a
+    # client sending `X-Recupero-API-Key: ` does not slip through to
+    # the constant-time match with an empty-string probe.
+    key_secret = request.headers.get("X-Recupero-API-Key", "")
+    if not key_secret or not key_secret.strip():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing X-Recupero-API-Key header",

@@ -68,6 +68,9 @@ def render_recovery_snapshot(
         # silently rendering as empty strings that look like missing data.
         undefined=StrictUndefined,
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
 
     try:
         from recupero import __version__ as software_version
@@ -88,7 +91,18 @@ def render_recovery_snapshot(
         return None
 
     briefs_dir.mkdir(parents=True, exist_ok=True)
-    safe_case_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in case_id)
+    # Z11: sanitize case_id so a hostile (or empty / traversal) case_id
+    # cannot escape briefs_dir and cannot collapse to the degenerate
+    # filename "recovery_snapshot_.html".
+    safe_case_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in (case_id or ""))
+    # Drop ".." segments after the char-restriction pass so a sequence
+    # like "../../" collapsing to "______" still doesn't carry the
+    # traversal semantics (defense-in-depth — the char restriction
+    # above already does this since "." is not in the allowlist).
+    safe_case_id = safe_case_id.strip("._-")
+    if not safe_case_id:
+        safe_case_id = "unknown"
+    safe_case_id = safe_case_id[:128]
     out_path = briefs_dir / f"recovery_snapshot_{safe_case_id}.html"
     atomic_write_text(out_path, html)
     return out_path

@@ -72,8 +72,14 @@ def inspect_address(
     eth_balance_wei: int | None = None
     eth_balance: Decimal | None = None
     try:
-        eth_balance_wei = adapter.client.get_eth_balance(addr)
-        eth_balance = Decimal(eth_balance_wei) / Decimal(10**18)
+        raw_balance = adapter.client.get_eth_balance(addr)
+        # Adversarial-hardening: an upstream client returning a negative
+        # value is a bug (real wallets cannot owe ETH). Mask to None
+        # rather than propagating an impossible value into the profile
+        # (where it would surface in CLI tables / freeze-target counts).
+        if raw_balance is not None and int(raw_balance) >= 0:
+            eth_balance_wei = int(raw_balance)
+            eth_balance = Decimal(eth_balance_wei) / Decimal(10**18)
     except Exception as e:  # noqa: BLE001
         log.debug("get_eth_balance failed: %s", e)
 
@@ -98,13 +104,25 @@ def inspect_address(
     last_seen_block: int | None = None
     last_seen_at: datetime | None = None
     if recent_txs:
+        # Adversarial-hardening: an Etherscan response carrying an
+        # extreme ``timeStamp`` (positive or negative) raises
+        # OverflowError / OSError out of datetime.fromtimestamp on
+        # some platforms; neither was in the previous catch tuple, so
+        # the whole inspector would crash on a single bad row.
+        # Inspector is documented as "never raise on chain errors".
         try:
             first_seen_block = int(recent_txs[0]["blockNumber"])
             first_seen_at = datetime.fromtimestamp(int(recent_txs[0]["timeStamp"]), tz=UTC)
             last_seen_block = int(recent_txs[-1]["blockNumber"])
             last_seen_at = datetime.fromtimestamp(int(recent_txs[-1]["timeStamp"]), tz=UTC)
-        except (KeyError, ValueError, TypeError) as e:
+        except (KeyError, ValueError, TypeError, OverflowError, OSError) as e:
             log.debug("could not parse tx timestamps: %s", e)
+            # Reset partial state so the profile reports None for both
+            # endpoints rather than half-populated values.
+            first_seen_block = None
+            first_seen_at = None
+            last_seen_block = None
+            last_seen_at = None
 
     # 6. Top counterparties — count occurrences of "the other side" of each tx
     cp_counter: Counter[str] = Counter()

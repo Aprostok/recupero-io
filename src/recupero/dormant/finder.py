@@ -40,7 +40,29 @@ from recupero.pricing.coingecko import CoinGeckoClient
 # per-key rate caps regardless of thread count. 5 is a safe default —
 # higher values produce diminishing returns once the rate limit caps
 # the throughput.
-_DORMANT_CONCURRENCY = int(os.environ.get("RECUPERO_DORMANT_CONCURRENCY", "5"))
+#
+# Wave-9 audit (type-coercion): a malformed env var (``"five"``,
+# ``""``, ``"-3"``) used to propagate ValueError out of the *import*
+# itself — every CLI/worker entrypoint crashed at startup. Wrap in
+# try/except and clamp to >= 1 so the module always imports cleanly
+# regardless of operator typos / orchestrator quirks.
+_DEFAULT_DORMANT_CONCURRENCY = 5
+
+
+def _resolve_dormant_concurrency() -> int:
+    raw = os.environ.get("RECUPERO_DORMANT_CONCURRENCY", "")
+    if not raw:
+        return _DEFAULT_DORMANT_CONCURRENCY
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_DORMANT_CONCURRENCY
+    if n < 1:
+        return _DEFAULT_DORMANT_CONCURRENCY
+    return n
+
+
+_DORMANT_CONCURRENCY = _resolve_dormant_concurrency()
 
 
 # Categories where the address itself is custodial infrastructure for
@@ -484,6 +506,30 @@ def _check_one_address(
     instances of this function in parallel can't exceed the per-key cap.
     """
     holdings = _fetch_holdings(address, tokens, adapter, price_client, chain=chain)
+    # RIGOR-Jacob Z10: filter out holdings whose ``usd_value`` is
+    # non-finite (NaN / Infinity) BEFORE aggregating. ``price_now``'s
+    # cache is hardened against ``{"usd": "NaN"}`` corruption at the
+    # read side, but adversarial-test fakes (and any future cache
+    # backend that doesn't run the parser) could still produce a
+    # poisoned Decimal here. ``NaN < min_usd`` is False so an
+    # un-filtered NaN would pass the threshold, contaminate
+    # ``DormantCandidate.total_usd``, and crash ``FreezeAsk.__post_init__``
+    # mid-brief generation — a DoS on the freeze brief from an
+    # attacker-controlled token contract.
+    finite_holdings = []
+    for h in holdings:
+        if h.usd_value is None:
+            finite_holdings.append(h)
+            continue
+        if not h.usd_value.is_finite():
+            log.warning(
+                "dormant: dropping holding %s on %s with non-finite "
+                "usd_value=%r (cache poison / pricing corruption)",
+                h.token.symbol, address, h.usd_value,
+            )
+            continue
+        finite_holdings.append(h)
+    holdings = finite_holdings
     total_usd = sum(
         (h.usd_value for h in holdings if h.usd_value is not None),
         start=Decimal("0"),
@@ -542,7 +588,22 @@ def _fetch_holdings(
             continue
         decimal_amount = Decimal(raw) / Decimal(10 ** token.decimals)
         price = price_client.price_now(token)
-        usd = (price.usd_value * decimal_amount) if price.usd_value is not None else None
+        # RIGOR-Jacob Z10: guard the multiply against a non-finite
+        # ``price.usd_value`` (cache poison / fake-test injection).
+        # ``Decimal('NaN') * Decimal('1')`` raises ``InvalidOperation``
+        # in the default Decimal context — which would propagate out
+        # of ``_fetch_holdings`` and crash the per-address worker.
+        # Treat poison as "no price available" so the holding still
+        # surfaces in the audit list but contributes zero USD.
+        if price.usd_value is None or not price.usd_value.is_finite():
+            usd = None
+        else:
+            try:
+                usd = price.usd_value * decimal_amount
+                if not usd.is_finite():
+                    usd = None
+            except ArithmeticError:
+                usd = None
         holdings.append(TokenHolding(
             token=token, raw_amount=raw, decimal_amount=decimal_amount,
             usd_value=usd, pricing_error=price.error,
@@ -636,7 +697,16 @@ def _fetch_native_holding(
     )
     decimal_amount = Decimal(raw) / Decimal(10 ** int(meta["decimals"]))  # type: ignore[arg-type]
     price = price_client.price_now(token)
-    usd = (price.usd_value * decimal_amount) if price.usd_value is not None else None
+    # RIGOR-Jacob Z10: same non-finite guard as _fetch_holdings above.
+    if price.usd_value is None or not price.usd_value.is_finite():
+        usd = None
+    else:
+        try:
+            usd = price.usd_value * decimal_amount
+            if not usd.is_finite():
+                usd = None
+        except ArithmeticError:
+            usd = None
     return TokenHolding(
         token=token, raw_amount=raw, decimal_amount=decimal_amount,
         usd_value=usd, pricing_error=price.error,
@@ -673,5 +743,5 @@ def write_dormant_report(
             for c in candidates
         ],
     }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False, ensure_ascii=False), encoding="utf-8")
     return path

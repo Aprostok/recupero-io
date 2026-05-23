@@ -242,6 +242,9 @@ def send_followup(
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
 
     try:
         html = env.get_template("followup_status.html.j2").render(
@@ -353,7 +356,25 @@ def run_followup_cron(*, dsn: str) -> dict[str, Any]:
                 c.investigation_id,
             )
             continue
-        ok = send_followup(candidate=c, dsn=dsn)
+        # RIGOR-Jacob Z17-F1: per-row try/except. Pre-fix one bad row
+        # (e.g. a naive datetime in engagement_started_at — `now -
+        # naive` raises TypeError before send_followup's inner
+        # try/except — or any other unexpected exception escaping the
+        # render/send path) crashed the WHOLE BATCH, silently skipping
+        # every remaining engagement for the day and violating the
+        # 30-day weekly-status commitment. Each row is now isolated:
+        # a failure logs + increments `failed` and the loop continues
+        # to the next candidate.
+        try:
+            ok = send_followup(candidate=c, dsn=dsn)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "followup send raised unexpectedly for inv=%s: %s "
+                "(continuing batch)",
+                c.investigation_id, exc,
+            )
+            failed += 1
+            continue
         if ok:
             sent += 1
         elif email_disabled:
@@ -440,10 +461,17 @@ def _build_status_summary(
         if "Law-enforcement handoff" in a["description"]
     )
 
+    # RIGOR-Jacob Z17-F2: clamp ``days_since`` at 0 before rendering.
+    # An operator entry bug or clock skew can produce
+    # engagement_started_at IN THE FUTURE, which makes days_since
+    # negative. Pre-fix the prose read ``"It's been -3 days since
+    # your engagement began"`` which is nonsense to the victim.
+    days_since_render = max(0, days_since)
+
     if days_since < 3:
         return (
             f"Your active recovery engagement has just begun "
-            f"({days_since} days in). Compliance freeze letters and the "
+            f"({days_since_render} days in). Compliance freeze letters and the "
             f"law-enforcement handoff package are being prepared for "
             f"send within the 5-business-day commitment."
         )
@@ -464,7 +492,7 @@ def _build_status_summary(
         parts.append("the law-enforcement handoff has not yet been delivered")
 
     return (
-        f"It's been {days_since} days since your engagement began. "
+        f"It's been {days_since_render} days since your engagement began. "
         + " and ".join(parts) + ". "
         "We're continuing to follow up on the sends and tracking "
         "any developments in the case."

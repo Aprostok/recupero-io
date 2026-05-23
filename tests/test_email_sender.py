@@ -233,8 +233,13 @@ def test_send_email_handles_http_error(monkeypatch) -> None:
 
     with patch("recupero.worker._email.urllib.request.urlopen", fake_urlopen_400):
         with patch("recupero.worker._email._log_to_audit") as mock_log:
+            # RIGOR-Wave6: a malformed recipient is now rejected at the
+            # validator BEFORE the HTTP call (defense in depth). To
+            # exercise the HTTP-422 branch the original test targeted,
+            # supply a well-formed address — the mocked urlopen still
+            # raises the 422 we're testing.
             result = send_email(
-                to="not-an-email", subject="Test",
+                to="recipient@example.com", subject="Test",
                 html="<p>body</p>", email_type="victim_summary",
             )
 

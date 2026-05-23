@@ -39,16 +39,37 @@ RUN apt-get update && \
         shared-mime-info && \
     rm -rf /var/lib/apt/lists/*
 
+# Create the unprivileged runtime user up front so the COPY layers below
+# can land with the right ownership instead of needing a recursive chown
+# pass at the end (which would double the image size for /app).
+RUN useradd -m -u 10001 recupero
+
 # Install Python deps. Order is set up so that adding a code-only change
 # doesn't bust the dep-install cache layer.
-COPY pyproject.toml README.md ./
-COPY src/ ./src/
+COPY --chown=recupero:recupero pyproject.toml README.md ./
+COPY --chown=recupero:recupero src/ ./src/
 
 # Regular install. config.py reads default.yaml via importlib.resources
 # from the bundled `recupero._defaults` package, so we don't need to
 # COPY config/ or use editable install anymore.
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir .
+    pip install --no-cache-dir . && \
+    chown -R recupero:recupero /app
+
+# Drop privileges before running the worker. W12-05: containers should
+# never run as root in production.
+USER recupero
+
+# Health server (recupero.worker._health_server) binds $PORT or 8080 and
+# serves GET /healthz (liveness) + GET /health (readiness). railway.json
+# points `healthcheckPath` at /healthz, so EXPOSE + a HEALTHCHECK
+# directive let the image self-report and let Railway / `docker inspect`
+# surface a regression (port not bound, server thread crashed) the
+# moment it happens, instead of waiting for the Railway edge probe to
+# notice. Probe budget fits inside railway.json's `healthcheckTimeout`.
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD python -c "import os,urllib.request,sys; url=f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8080\")}/healthz'; sys.exit(0 if urllib.request.urlopen(url, timeout=5).status==200 else 1)" || exit 1
 
 # `recupero-worker` is registered by pyproject.toml's [project.scripts].
 # railway.json's startCommand also points here; both end up the same.

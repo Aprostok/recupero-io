@@ -286,6 +286,38 @@ async def correlation_endpoint(
     """Cross-case correlation lookup. Returns prior-case count plus
     OFAC / mixer / drainer exposure flags if any."""
     import os
+    # v0.28.1 (correlations-adversarial hardening): validate the
+    # path/query inputs BEFORE any DB hit. Pre-hardening the address
+    # was an unbounded `str` passed straight into _ck/SQL — an
+    # authenticated caller could submit a 16MB address, a bidi-
+    # trojan-laden address that pollutes logs, or a NUL-embedded
+    # string that broke downstream encoders. Same five gates the
+    # other API surfaces enforce (length cap, control chars, NUL,
+    # bidi/zero-width trojans, supported-chain enum).
+    if len(address) < 1 or len(address) > 128:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="address must be 1-128 chars",
+        )
+    if "\x00" in address or "\r" in address or "\n" in address:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="address contains forbidden control characters",
+        )
+    if any(c in _TEXT_TROJAN_CHARS for c in address):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="address contains forbidden bidi / zero-width characters",
+        )
+    _SUPPORTED_CHAINS = {
+        "ethereum", "arbitrum", "base", "bsc", "polygon",
+        "solana", "tron", "bitcoin", "hyperliquid",
+    }
+    if chain not in _SUPPORTED_CHAINS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"unsupported chain: {chain!r}",
+        )
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
     if not dsn:
         # v0.18.2 (round-11 sec-HIGH-005, api-MED-002): generic detail.
@@ -334,6 +366,36 @@ async def correlation_endpoint(
 # ---- v0.21.0: freeze-outcome intake endpoint ---- #
 
 
+# RIGOR-Jacob E adversarial hardening: text-trojan code-point set
+# rejected on free-text response_text / operator_notes. Bidi overrides,
+# isolates, formatting marks, zero-width chars, BOM. Same set as
+# portal/intake._reject_unicode_trojans.
+_TEXT_TROJAN_CHARS = frozenset({
+    "‪",  # LEFT-TO-RIGHT EMBEDDING
+    "‫",  # RIGHT-TO-LEFT EMBEDDING
+    "‬",  # POP DIRECTIONAL FORMATTING
+    "‭",  # LEFT-TO-RIGHT OVERRIDE
+    "‮",  # RIGHT-TO-LEFT OVERRIDE
+    "⁦",  # LEFT-TO-RIGHT ISOLATE
+    "⁧",  # RIGHT-TO-LEFT ISOLATE
+    "⁨",  # FIRST-STRONG ISOLATE
+    "⁩",  # POP DIRECTIONAL ISOLATE
+    "​",  # ZERO-WIDTH SPACE
+    "‌",  # ZERO-WIDTH NON-JOINER
+    "‍",  # ZERO-WIDTH JOINER
+    "‎",  # LEFT-TO-RIGHT MARK
+    "‏",  # RIGHT-TO-LEFT MARK
+    "﻿",  # BYTE-ORDER MARK / ZERO-WIDTH NO-BREAK SPACE
+})
+
+
+# RIGOR-Jacob E: realistic upper bound for any single seizure. The
+# largest recorded historical seizure (FBI 2022 BTC) was ~$3B; cap at
+# 1e15 (a quadrillion USD) so anything legitimate passes but accidental
+# / malicious 1e18-style values are rejected.
+_USD_HARD_CAP = 1e15
+
+
 class FreezeOutcomeIn(BaseModel):
     """Inbound payload for ``POST /v1/freeze-outcomes``.
 
@@ -349,7 +411,12 @@ class FreezeOutcomeIn(BaseModel):
     """
     case_id: str = Field(..., description="The case UUID as a string.")
     issuer: str = Field(..., min_length=1, max_length=200)
-    target_address: str = Field(..., min_length=4, max_length=128)
+    # RIGOR-Jacob E: bump min_length to 25 so a 4-char garbage string
+    # like "abcd" is rejected up-front. Shortest realistic chain
+    # address is BTC legacy P2PKH at 25 chars (base58); EVM is 42;
+    # Solana is 32-44; Tron is 34. 4-char strings fail every shape
+    # check downstream but used to pass and pollute the DB.
+    target_address: str = Field(..., min_length=25, max_length=128)
     outcome_type: str = Field(
         ...,
         description=(
@@ -363,6 +430,61 @@ class FreezeOutcomeIn(BaseModel):
     returned_usd: float | None = Field(default=None, ge=0)
     response_text: str | None = Field(default=None, max_length=8000)
     operator_notes: str | None = Field(default=None, max_length=2000)
+
+    @field_validator("frozen_usd", "returned_usd")
+    @classmethod
+    def _reject_non_finite_usd(cls, v: float | None) -> float | None:
+        """RIGOR-Jacob E: reject NaN / Inf / -Inf. Pydantic's ge=0
+        constraint accepts +Infinity (Inf >= 0 is True) and accepts
+        NaN under some FP setups. Either value crashes Decimal(...) on
+        the DB-insert path or silently breaks downstream comparisons.
+        Also enforce a realistic absolute cap ($1e15) so a quintillion-
+        dollar bogus value doesn't roll up into LE handoff totals."""
+        import math
+        if v is None:
+            return v
+        if not math.isfinite(v):
+            raise ValueError(
+                "must be a finite number (no NaN/Inf)",
+            )
+        if v >= _USD_HARD_CAP:
+            raise ValueError(
+                f"value exceeds realistic cap (${_USD_HARD_CAP:.0e})",
+            )
+        return v
+
+    @field_validator("target_address")
+    @classmethod
+    def _validate_target_address_shape(cls, v: str) -> str:
+        """RIGOR-Jacob E: defense-in-depth shape check. The min_length=25
+        already rejects 4-char garbage; this strips whitespace and
+        rejects NUL / control bytes that would crash psycopg on insert.
+        Real per-chain shape validation lives in the recorder."""
+        if not v:
+            raise ValueError("target_address is required")
+        if "\x00" in v:
+            raise ValueError("target_address contains a NUL byte")
+        return v
+
+    @field_validator("response_text", "operator_notes")
+    @classmethod
+    def _reject_text_trojans(cls, v: str | None) -> str | None:
+        """RIGOR-Jacob O: reject NUL bytes (psycopg-crash) and bidi /
+        zero-width / BOM characters (Trojan-Source CVE-2021-42574)
+        on free-text fields that flow into operator triage UIs +
+        LE handoff Section 5.5. Same rejection set as
+        portal/intake._reject_unicode_trojans."""
+        if v is None:
+            return v
+        if "\x00" in v:
+            raise ValueError("contains a NUL byte")
+        for ch in v:
+            if ch in _TEXT_TROJAN_CHARS:
+                raise ValueError(
+                    "contains a bidi / zero-width / BOM control "
+                    "character (Trojan-Source / CVE-2021-42574)"
+                )
+        return v
 
 
 @app.post(
@@ -414,8 +536,19 @@ async def record_freeze_outcome_endpoint(
     # keys) OR have the requested issuer in its
     # RECUPERO_API_KEY_ISSUERS allow-list. Default is deny.
     from recupero.api.auth import is_authorized_to_record_outcome
-    if not is_authorized_to_record_outcome(
-        api_key_name=api_key_name, issuer=req.issuer,
+    # Route-authz audit (this commit): also gate by case_id when the
+    # operator supplied RECUPERO_API_KEY_CASES. Issuer scoping alone is
+    # not enough — a partner whose key is allow-listed for "Tether"
+    # could otherwise write outcomes against ANY case_id containing
+    # Tether letters, including cases where the partner shouldn't have
+    # write visibility. Admin keys + unconfigured env var bypass.
+    if (
+        not is_authorized_to_record_outcome(
+            api_key_name=api_key_name, issuer=req.issuer,
+        )
+        or not _is_api_key_authorized_for_case(
+            api_key_name=api_key_name, case_id=req.case_id,
+        )
     ):
         # Mirror the 404 path's response shape so an unauthorized
         # caller can't distinguish "you don't own this issuer" from
@@ -956,6 +1089,124 @@ _INTAKE_RL_MAX = 5
 _intake_rl_state: dict[str, tuple[float, int]] = {}
 
 
+def _is_api_key_authorized_for_case(
+    *, api_key_name: str, case_id: str,
+) -> bool:
+    """Route-authz audit (this commit): per-case scoping for
+    /v1/freeze-outcomes.
+
+    A partner key authorized for issuer "Tether" via
+    RECUPERO_API_KEY_ISSUERS could otherwise write outcomes against
+    *any* case_id whose freeze letters happen to mention Tether — a
+    horizontal-privilege gap (issuer-allow-list does not imply
+    case-allow-list).
+
+    Env var ``RECUPERO_API_KEY_CASES`` format:
+      ``key_name:case_uuid|case_uuid,key2:case_uuid``
+
+    Semantics (backward-compatible, deny-by-default ONLY when explicit):
+      1. Admin keys (RECUPERO_API_KEY_ADMINS) bypass case scoping.
+      2. Optional-auth mode (auth disabled in local dev) bypasses.
+      3. If the env var is UNSET, return True — preserves the pre-audit
+         issuer-only behavior. Operators opt in to case scoping.
+      4. If the env var is SET but the key has no entry, return True —
+         keys without case restrictions remain issuer-gated.
+      5. If the key HAS an entry, the requested case_id must be in it.
+    """
+    import os as _os
+    # Reuse the same admin / optional-auth shortcuts as the issuer gate.
+    try:
+        from recupero.api.auth import (
+            _is_optional_auth,  # type: ignore[attr-defined]
+            _load_api_key_admins,
+        )
+    except ImportError:
+        return True
+    if _is_optional_auth():
+        return True
+    if api_key_name in _load_api_key_admins():
+        return True
+    raw = (_os.environ.get("RECUPERO_API_KEY_CASES", "") or "").strip()
+    if not raw:
+        return True  # case scoping not configured → preserve legacy
+    # Parse "key_name:uuid|uuid,key2:uuid"
+    per_key: dict[str, set[str]] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        name, _, cases_str = pair.partition(":")
+        name = name.strip()
+        if not name:
+            continue
+        cases = {
+            c.strip().lower() for c in cases_str.split("|") if c.strip()
+        }
+        if cases:
+            per_key[name] = cases
+    if api_key_name not in per_key:
+        return True  # this key has no case restriction
+    return (case_id or "").strip().lower() in per_key[api_key_name]
+
+
+def _intake_post_csrf_ok(request: Request) -> bool:
+    """Route-authz audit (this commit): Origin/Referer check for the
+    unauthenticated POST /v1/intake form.
+
+    The intake endpoint accepts ``application/x-www-form-urlencoded``
+    with no auth header — a textbook CSRF target. A malicious site
+    can autosubmit a hidden form to /v1/intake from an attacker
+    origin and create a `cases` row with operator-visible data
+    (waste of triage time + DB pollution).
+
+    Browser-issued cross-origin form POSTs always carry an Origin
+    header (set by the browser, not script-controllable). Non-browser
+    callers (curl, integration tests, server-side scripts) typically
+    have NO Origin / Referer — those are allowed through.
+
+    Allow-list source: ``RECUPERO_INTAKE_ALLOWED_ORIGINS`` (comma-sep).
+    Empty / unset → any same-origin host is permitted; cross-origin
+    is rejected only if BOTH the env var AND an Origin header are
+    set and the Origin is not on the list.
+
+    Returns True when the request should proceed, False when CSRF
+    rejection is warranted.
+    """
+    import os as _os
+    origin = (request.headers.get("origin", "") or "").strip()
+    referer = (request.headers.get("referer", "") or "").strip()
+    # Non-browser caller — no Origin, no Referer. Treated as safe;
+    # curl/postman/server-side integrations.
+    if not origin and not referer:
+        return True
+    raw_allow = (
+        _os.environ.get("RECUPERO_INTAKE_ALLOWED_ORIGINS", "") or ""
+    ).strip()
+    if not raw_allow:
+        # Allow-list not configured — fall back to same-origin check
+        # against the request's own host header. Reject only when the
+        # browser-supplied Origin differs from the host (true
+        # cross-origin POST). Defends against the default-config case
+        # without operator action.
+        host = (request.headers.get("host", "") or "").strip().lower()
+        if not host:
+            return True  # can't determine — allow rather than break.
+        # Origin is "scheme://host[:port]". Compare host portion.
+        if origin:
+            try:
+                from urllib.parse import urlsplit
+                origin_host = (urlsplit(origin).netloc or "").lower()
+            except Exception:  # noqa: BLE001
+                return False
+            if origin_host and origin_host != host:
+                return False
+        return True
+    allow = {o.strip().lower() for o in raw_allow.split(",") if o.strip()}
+    if origin and origin.lower() in allow:
+        return True
+    return False
+
+
 def _intake_rl_client_ip(request: Request) -> str:
     """Resolve the client IP for rate-limit bucketing.
 
@@ -986,13 +1237,19 @@ def _intake_rl_client_ip(request: Request) -> str:
         trusted_hops = 0
 
     if trusted_hops > 0 and xff_chain:
-        # Walk N hops back from the tail. If the chain is shorter
-        # than N, take the leftmost entry inside the trusted
-        # segment (don't fabricate trust by extrapolating).
-        idx = max(0, len(xff_chain) - trusted_hops)
-        candidate = xff_chain[idx]
-        if candidate:
-            return candidate
+        # RIGOR-S-3b fail-closed: when the chain is SHORTER than the
+        # configured number of trusted hops, the operator misconfigured
+        # the env var (e.g., set trusted_hops=3 after migrating from
+        # Cloudflare+Railway down to Railway-only). The pre-hardening
+        # behaviour returned xff_chain[0] — the LEFTMOST entry — which
+        # is attacker-controlled in that misconfig scenario. We now
+        # skip the XFF path entirely and fall through to x-real-ip /
+        # socket peer (coarser bucket but no bypass).
+        if len(xff_chain) >= trusted_hops:
+            idx = len(xff_chain) - trusted_hops
+            candidate = xff_chain[idx]
+            if candidate:
+                return candidate
 
     # x-real-ip is set by some edge proxies after XFF normalization.
     # Still client-influenceable through misconfiguration, but a
@@ -1051,6 +1308,9 @@ def _render_intake_html(
         loader=FileSystemLoader(str(templates_dir)),
         autoescape=select_autoescape(["html", "j2"]),
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
     return env.get_template("intake.html.j2").render(
         form=form or {},
         error=error,
@@ -1111,6 +1371,25 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
         create_case_from_intake,
         validate_intake_payload,
     )
+
+    # Route-authz audit (this commit): CSRF Origin/Referer check.
+    # The intake form is unauthenticated and accepts
+    # x-www-form-urlencoded — without an Origin check, a malicious
+    # site can autosubmit a hidden form cross-origin and create
+    # garbage `cases` rows. Browsers always set Origin on form POSTs;
+    # non-browser callers (curl, tests) have neither header and are
+    # allowed through.
+    if not _intake_post_csrf_ok(request):
+        log.info(
+            "/v1/intake POST: CSRF reject — Origin=%r Referer=%r host=%r",
+            request.headers.get("origin"),
+            request.headers.get("referer"),
+            request.headers.get("host"),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="cross-origin form submission not permitted",
+        )
 
     # v0.25.1 (CRIT D-1): rate-limit by client IP BEFORE touching the
     # DB. The unauthenticated /v1/intake endpoint is otherwise free
@@ -1225,7 +1504,15 @@ def main() -> None:  # pragma: no cover
 
     import uvicorn
     host = os.environ.get("RECUPERO_API_HOST", "0.0.0.0")
-    port = int(os.environ.get("RECUPERO_API_PORT", "8000"))
+    # Wave-9 audit (type-coercion): operator typo in RECUPERO_API_PORT
+    # used to crash uvicorn bootstrap before the 8000 default kicked in.
+    raw_port = (os.environ.get("RECUPERO_API_PORT", "") or "").strip()
+    try:
+        port = int(raw_port) if raw_port else 8000
+    except (TypeError, ValueError):
+        port = 8000
+    if port < 1 or port > 65535:
+        port = 8000
     log_level = os.environ.get("RECUPERO_LOG_LEVEL", "info").lower()
     uvicorn.run(
         "recupero.api.app:app",

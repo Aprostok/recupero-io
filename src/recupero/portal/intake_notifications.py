@@ -108,6 +108,61 @@ def send_intake_confirmation(
             error="case has no client_email on file",
         )
 
+    # v0.25.2 (intake-adversarial 1+2): validate recipient + sanitize
+    # subject-bound fields BEFORE minting a portal token. Pre-fix, a
+    # poisoned client_email (CRLF smuggle) flew past us, we minted a
+    # bearer token, then send_email rejected it — leaving an orphan
+    # token in case_tokens that a log/DB leak could replay. Validate
+    # at the boundary so token-mint never runs for a doomed send.
+    from recupero.worker._email import (
+        _sanitize_email_header,
+        _validate_email_address,
+    )
+    if not _validate_email_address(client_email):
+        log.warning(
+            "send_intake_confirmation: case %s has malformed "
+            "client_email; rejecting before token mint", case_id,
+        )
+        return IntakeConfirmationResult(
+            success=False, portal_url=None, email_sent=False,
+            error="invalid client_email on file",
+        )
+    # Strip CRLF / bidi / zero-width from any field that flows into
+    # the subject. send_email sanitizes its `subject` arg too, but
+    # doing it here keeps the boundary explicit and is robust to a
+    # future regression where the transport is swapped.
+    safe_case_number = _sanitize_email_header(case_number)
+    safe_name_for_html = _sanitize_email_header(client_name)
+
+    # v0.25.2 (intake-adversarial 4): idempotency. Stripe retries the
+    # webhook on transient post-commit failure; without this check the
+    # second call mints a SECOND portal token and sends a SECOND
+    # confirmation email. Fail-closed on audit-query error (matches
+    # the worker._email.has_been_sent docstring policy).
+    try:
+        from recupero.worker._email import has_been_sent
+        already = has_been_sent(
+            investigation_id=investigation_id,
+            email_type="intake_confirmation",
+            dsn=dsn,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "send_intake_confirmation: idempotency check crashed for "
+            "case %s — failing closed: %s", case_id, exc,
+        )
+        already = True
+    if already:
+        log.info(
+            "send_intake_confirmation: already sent for investigation "
+            "%s; skipping duplicate (no token mint, no email)",
+            investigation_id,
+        )
+        return IntakeConfirmationResult(
+            success=True, portal_url=None, email_sent=False,
+            error=None,
+        )
+
     # 2. Mint a portal token for the case.
     token_id_for_cleanup: UUID | None = None
     try:
@@ -129,14 +184,16 @@ def send_intake_confirmation(
         )
 
     # 3. Build + send the confirmation email.
-    subject = f"Recupero — Case {case_number} received, trace starting"
+    subject = _sanitize_email_header(
+        f"Recupero — Case {safe_case_number} received, trace starting"
+    )
     html_body = _build_confirmation_html(
-        client_name=client_name,
-        case_number=case_number,
+        client_name=safe_name_for_html,
+        case_number=safe_case_number,
         portal_url=portal_url,
     )
     preview_text = (
-        f"Your case {case_number} is in queue. We'll start tracing your "
+        f"Your case {safe_case_number} is in queue. We'll start tracing your "
         "stolen funds within minutes and email you the report when ready."
     )
 

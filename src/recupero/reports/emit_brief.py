@@ -143,7 +143,26 @@ _EDITORIAL_TEMPLATE_STATIC: dict[str, Any] = {
 
 
 def _now_utc_iso_seconds() -> str:
-    """UTC timestamp, second precision, ISO 8601 with trailing Z."""
+    """UTC timestamp, second precision, ISO 8601 with trailing Z.
+
+    Honors ``SOURCE_DATE_EPOCH`` for reproducible-builds workflows.
+    Pre-audit-wave the bare ``datetime.now()`` made every run of the
+    same case write a different ``REPORT_TIME_UTC`` — defeating the
+    byte-reproducibility contract the rest of the build chain
+    (manifest SHAs, ``brief.py::_resolve_render_time``) already
+    honors. On parse failure, fall back to wall-clock.
+    """
+    src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    if src_epoch:
+        try:
+            return datetime.fromtimestamp(
+                int(src_epoch), tz=UTC,
+            ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except (ValueError, TypeError):
+            log.warning(
+                "SOURCE_DATE_EPOCH=%r is not a valid integer epoch; "
+                "falling back to wall-clock", src_epoch,
+            )
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -157,10 +176,21 @@ def _parse_usd_string(s: str) -> Decimal:
 
 
 def usd(v: Decimal | float | int | None) -> str:
-    """Format a USD amount like '$47,840' or '$47,840.12'. None -> '$0'."""
+    """Format a USD amount like '$47,840' or '$47,840.12'. None -> '$0'.
+
+    RIGOR-Jacob Z11: NaN / Infinity inputs are clamped to ``$0`` so a
+    poisoned upstream Decimal (e.g., from a cluster aggregate of a
+    poisoned member case) doesn't propagate the literal "$NaN" /
+    "$Infinity" into freeze_brief.json and every downstream renderer.
+    """
     if v is None:
         return "$0"
-    d = Decimal(str(v))
+    try:
+        d = Decimal(str(v))
+    except Exception:  # noqa: BLE001
+        return "$0"
+    if not d.is_finite():
+        return "$0"
     # Strip trailing zeros after decimal if it's a round number
     if d == d.to_integral_value():
         return f"${int(d):,}"
@@ -1017,7 +1047,7 @@ def write_editorial_template(case_dir: Path) -> Path:
     # v0.20.13 (R17-C): atomic write — if the worker is killed mid-write,
     # the truncated file must not survive (the `if path.exists()` guard on
     # line 1003 prevents the next run from overwriting it).
-    atomic_write_text(path, json.dumps(_editorial_template(), indent=2))
+    atomic_write_text(path, json.dumps(_editorial_template(), indent=2, allow_nan=False, ensure_ascii=False))
     return path
 
 
@@ -1726,11 +1756,29 @@ def run_emit_brief(
     # 2. Load victim
     victim = load_victim(case_dir)
 
-    # 3. Load freeze asks (may be missing if user hasn't run list-freeze-targets yet)
+    # 3. Load freeze asks (may be missing if user hasn't run list-freeze-targets yet).
+    # Tolerate a partially-corrupted file rather than crashing the whole brief
+    # emission: a truncated freeze_asks.json (worker killed mid-write before the
+    # v0.20.13 atomic-write fix, or an operator who hand-edited it) used to
+    # raise JSONDecodeError and abort emit-brief entirely. Now: log + treat as
+    # empty so the brief still lands; the freeze-ask side car can be regenerated
+    # from `recupero list-freeze-targets` and emit-brief re-run.
     freeze_asks_path = case_dir / "freeze_asks.json"
-    freeze_asks = {}
+    freeze_asks: dict[str, Any] = {}
     if freeze_asks_path.exists():
-        freeze_asks = json.loads(freeze_asks_path.read_text(encoding="utf-8-sig"))
+        try:
+            freeze_asks = json.loads(
+                freeze_asks_path.read_text(encoding="utf-8-sig"),
+            )
+        except json.JSONDecodeError as _exc:
+            log.warning(
+                "emit_brief: freeze_asks.json at %s is corrupt (%s) — "
+                "proceeding with empty freeze-ask set. Regenerate via "
+                "`recupero list-freeze-targets` and re-run emit-brief "
+                "to recover.",
+                freeze_asks_path, _exc,
+            )
+            freeze_asks = {}
 
     # 4. Load editorial (or write template and stop)
     editorial_path = case_dir / "brief_editorial.json"
@@ -1755,7 +1803,7 @@ def run_emit_brief(
     out_path = case_dir / "freeze_brief.json"
     # Atomic write so a concurrent reader (bucket uploader, portal) can't
     # pick up a half-written JSON.
-    atomic_write_text(out_path, json.dumps(brief, indent=2))
+    atomic_write_text(out_path, json.dumps(brief, indent=2, allow_nan=False, ensure_ascii=False))
 
     # 7. v0.21.0: auto-subscribe perp wallets to live monitoring.
     # Best-effort — a Supabase outage here must not break the brief
@@ -1815,7 +1863,7 @@ def run_emit_brief(
                     "joined_via_address": membership.joined_via_address,
                     "joined_via_chain": membership.joined_via_chain,
                 }
-                atomic_write_text(out_path, json.dumps(brief, indent=2))
+                atomic_write_text(out_path, json.dumps(brief, indent=2, allow_nan=False, ensure_ascii=False))
                 log.info(
                     "emit_brief: case joined cluster %s "
                     "(members=%d co_victims=%d)",

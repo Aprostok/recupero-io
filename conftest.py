@@ -87,6 +87,13 @@ def _load_dotenv_into_environ() -> None:
         for key, val in values.items():
             if val is None:
                 continue
+            # Wave-8 audit (dotenv discipline): reject obviously
+            # malformed entries — ``=oops`` and friends produce an
+            # empty-string key in python-dotenv, and assigning
+            # ``os.environ[""] = ...`` raises ValueError on Windows
+            # and silently corrupts the env on POSIX. Skip them.
+            if not key or not isinstance(key, str) or not key.strip():
+                continue
             # Explicit shell exports win — don't clobber.
             if key not in os.environ:
                 os.environ[key] = val

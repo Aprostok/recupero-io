@@ -411,7 +411,7 @@ def _list_bucket_briefs(*, investigation_id: UUID) -> list[dict[str, Any]]:
             "prefix": f"investigations/{investigation_id}/briefs/",
             "limit": 200,
             "offset": 0,
-        }).encode(),
+        }, separators=(",", ":"), allow_nan=False).encode(),
         headers={
             "Authorization": f"Bearer {key}", "apikey": key,
             "Content-Type": "application/json",

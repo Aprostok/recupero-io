@@ -39,8 +39,12 @@ dependencies = [
     # On-disk storage
     "orjson>=3.10,<4.0",         # faster JSON for large case files
 
-    # Templated HTML for briefs/reports
-    "jinja2>=3.1,<4.0",
+    # Templated HTML for briefs/reports.
+    # Floor pinned to 3.1.5 to cover CVE-2024-22195 (XSS via xmlattr filter,
+    # fixed in 3.1.3), CVE-2024-56326 (sandbox escape via str.format, fixed in
+    # 3.1.5), and CVE-2024-56201 (compiler RCE, fixed in 3.1.5). 3.1.0–3.1.4
+    # are vulnerable.
+    "jinja2>=3.1.5,<4.0",
 
     # Worker queue (Phase 2): Supabase Postgres via the transaction pooler.
     # [binary] ships pre-built wheels — no Visual C++ Build Tools required.
@@ -92,7 +96,9 @@ dependencies = [
     # was indistinguishable from "not installed in prod" because
     # nobody checks deploy-time warnings. Hard-required as of this
     # version; ofac_sync refuses to run without it.
-    "defusedxml>=0.7,<1.0",
+    # Floor pinned to 0.7.1 — earlier 0.7.0 had a known CVE-style regression
+    # affecting whitelist filtering; 0.7.1 is the current safe baseline.
+    "defusedxml>=0.7.1,<1.0",
 
     # FastAPI service surface (v0.15.1). The REST endpoints for
     # wallet screening / token-risk / monitoring are exposed via
@@ -161,14 +167,31 @@ warn_unused_configs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers"
+# v0.27.x: skip slow / perf-regression tests by default so the fast
+# inner-loop CI run stays fast. CI's full-suite stage (and operators
+# who want the perf-lock signal) opt in with `pytest -m slow` or
+# `pytest -m "slow or not slow"` to re-enable.
+addopts = "-ra --strict-markers -m \"not slow\""
 asyncio_mode = "auto"
 # v0.20.0 (round-13 Phase B): integration-test markers.
 # `live` — test hits real external services; requires
 #   RECUPERO_INTEGRATION_LIVE=1 to opt in (gated by the
 #   `live_mode_required` fixture in tests/integration/conftest.py).
-# `slow` — test takes > 5s; can be skipped with `-m "not slow"`.
+# `slow` — test takes > 5s OR is a perf-regression lock; can be
+#   skipped with `-m "not slow"` (the default in addopts above).
 markers = [
     "live: test requires real external services (set RECUPERO_INTEGRATION_LIVE=1)",
-    "slow: test takes > 5 seconds",
+    "slow: test takes > 5 seconds or is a perf-regression lock (opt-in via `-m slow`)",
+]
+# Deprecation gate (v0.27.x): treat DeprecationWarning / PendingDeprecationWarning
+# emitted by code under the `recupero.*` module namespace as test errors. We
+# narrow the module-regex filter so third-party deprecations (httpx, anthropic,
+# weasyprint, etc.) do NOT fail the suite — operators can't fix those without
+# upstream releases. The companion test (tests/test_deprecation_warnings_gate.py)
+# imports every recupero module under warnings.catch_warnings() and asserts no
+# DeprecationWarning fires during import; the filter here catches any that fire
+# at call time (inside other tests).
+filterwarnings = [
+    "error::DeprecationWarning:recupero.*",
+    "error::PendingDeprecationWarning:recupero.*",
 ]

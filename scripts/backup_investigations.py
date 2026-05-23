@@ -230,7 +230,7 @@ def main() -> int:
         },
         "bucket": bucket_summary,
     }
-    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False, ensure_ascii=False), encoding="utf-8")
     log.info("done. manifest at %s", out_dir / "manifest.json")
     return 0
 

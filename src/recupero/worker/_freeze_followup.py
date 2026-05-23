@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -352,6 +353,35 @@ def _rollback_stage_advance(
         )
 
 
+def _format_requested_freeze_usd(value: Any) -> str:
+    """Format a possibly-poisoned NUMERIC value for the email body.
+
+    RIGOR-Jacob Z9-2: Postgres NUMERIC accepts NaN / +Infinity / -Infinity
+    and the freeze_letters_sent row could carry a poisoned amount from
+    upstream pricing corruption. The legacy renderer did
+    ``f"{float(value or 0):,.2f}"`` which emits the literal strings
+    ``"nan"`` / ``"inf"`` / ``"-inf"`` straight into the issuer-facing
+    HTML — embarrassing artifact for compliance teams. Coerce to a
+    safe fallback (``—`` em-dash) on non-finite input.
+    """
+    if value is None:
+        return "0.00"
+    try:
+        if isinstance(value, Decimal):
+            if not value.is_finite():
+                return "—"
+            return f"{float(value):,.2f}"
+        # Non-Decimal numeric (float / int) — guard against IEEE-754
+        # NaN / Inf the same way.
+        f = float(value)
+    except (TypeError, ValueError, ArithmeticError):
+        return "—"
+    # math.isfinite without importing math
+    if f != f or f in (float("inf"), float("-inf")):
+        return "—"
+    return f"{f:,.2f}"
+
+
 def _render_followup_html(
     candidate: FreezeFollowupCandidate,
     *,
@@ -369,9 +399,17 @@ def _render_followup_html(
         # email would be embarrassing.
         undefined=StrictUndefined,
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
     now = datetime.now(UTC)
     days_since_sent = max(0, (now - candidate.sent_at).days)
-    requested_human = f"{float(candidate.requested_freeze_usd or 0):,.2f}"
+    # RIGOR-Jacob Z9-2: a freeze_letters_sent row carrying
+    # ``Decimal('NaN')`` / ``Decimal('Infinity')`` (Postgres NUMERIC
+    # accepts both) would flow through ``float(...):,.2f`` as the
+    # literal ``"nan"`` / ``"inf"`` and out to issuer compliance teams
+    # in the rendered email body. Coerce non-finite to a sentinel.
+    requested_human = _format_requested_freeze_usd(candidate.requested_freeze_usd)
 
     ctx = {
         "case_id": str(candidate.case_id or candidate.letter_id),
@@ -481,6 +519,12 @@ def run_freeze_followup_cron(
         or "Recupero Investigation Services"
     )
 
+    # Late-import the canonical RFC 5322 / CRLF / bidi validator from
+    # _email.py — single source of truth so a poisoned address (CRLF
+    # injection, bidi smuggle, missing @) gets rejected the same way
+    # at every dispatcher.
+    from recupero.worker._email import _validate_email_address
+
     result = FreezeFollowupResult()
 
     try:
@@ -495,6 +539,35 @@ def run_freeze_followup_cron(
 
     for cand in candidates:
         try:
+            # v0.21.2 (audit-fix state-guards-6): validate the
+            # destination email BEFORE claiming the stage advance.
+            # Pre-fix order was claim → send → (send_email validates,
+            # rejects, returns failure) → rollback. That works
+            # functionally but every cron tick on a poisoned address
+            # burns two DB transactions (claim + rollback) plus an
+            # audit row. Worse, if the rollback ever fails (DB hiccup,
+            # 5-minute window expired) the stage gets stuck advanced
+            # with the issuer never receiving a single follow-up.
+            # Validate up front so a poisoned row is a no-op on the
+            # cron's stage state.
+            if cand.next_stage == _STAGE_SILENCE_14D:
+                target_email = cand.investigator_email or investigator_email_fallback
+                target_label = "investigator_email"
+            else:
+                target_email = cand.contact_email
+                target_label = "contact_email"
+            if not _validate_email_address(target_email):
+                result.errors.append(
+                    f"letter {cand.letter_id}: invalid {target_label} "
+                    f"for stage {cand.next_stage}; skipping (no claim, "
+                    f"no send)"
+                )
+                log.warning(
+                    "freeze_followup: letter %s skipped — invalid %s "
+                    "for stage %s (validated pre-claim)",
+                    cand.letter_id, target_label, cand.next_stage,
+                )
+                continue
             # v0.21.1 (audit-fix C1 + E3): claim-then-act. The atomic
             # UPDATE in _try_claim_stage_advance serves both as the
             # race-safe outcome re-check AND as the stage transition,

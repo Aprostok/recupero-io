@@ -105,7 +105,18 @@ class EsploraClient:
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.limiter = _RateLimiter(requests_per_second)
-        self._client = http_client or httpx.Client(timeout=timeout_seconds)
+        # Split connect/read timeouts: blockstream.info / mempool.space
+        # occasionally have slow TLS handshakes during regional incidents.
+        # A 10s connect cap fails fast so the retry can fail over to the
+        # other mirror instead of burning the full read window.
+        self._client = http_client or httpx.Client(
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=timeout_seconds,
+                write=timeout_seconds,
+                pool=timeout_seconds,
+            )
+        )
         self._owns_client = http_client is None
 
     def close(self) -> None:
@@ -138,6 +149,10 @@ class EsploraClient:
         """
         out: list[dict[str, Any]] = []
         last_seen: str | None = None
+        # RIGOR-Jacob Z14: stuck-cursor detection. A buggy mirror that
+        # returns the same last-txid forever would otherwise burn all
+        # ``max_pages`` slots.
+        prev_seen: str | None = None
         for page in range(max_pages):
             path = f"/address/{address}/txs"
             if last_seen:
@@ -153,9 +168,20 @@ class EsploraClient:
             if not batch:
                 break
             out.extend(batch)
-            last_seen = batch[-1].get("txid") if batch else None
-            if not last_seen:
+            next_seen = batch[-1].get("txid") if batch else None
+            if not next_seen:
                 break
+            # Stuck cursor: this page's last txid equals the cursor
+            # we used to fetch it (or the one before). Break.
+            if next_seen == last_seen or next_seen == prev_seen:
+                log.warning(
+                    "esplora address/txs: stuck cursor detected at page %d "
+                    "(txid=%r); breaking",
+                    page, next_seen,
+                )
+                break
+            prev_seen = last_seen
+            last_seen = next_seen
             # Esplora pagination stops naturally when a page has <25
             # results, but we don't have a documented hard rule —
             # check by length to avoid infinite loop on a misbehaving

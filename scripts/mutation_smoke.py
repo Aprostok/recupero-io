@@ -32,6 +32,11 @@ Coverage:
      line. The SSRF case-insensitivity test MUST detect this
      (LOCALHOST bypasses the denylist).
 
+Waves 10-13 (extension): 5 more mutations on the W7-04 PII redactor,
+the W8-01 subscriber canonical-addr helper, the W10-03 auth strip
+removal, the W11-01 ReDoS length cap, and the W12-03 manifest
+required-keys schema lock.
+
 Run:
   python scripts/mutation_smoke.py
 
@@ -53,6 +58,21 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent
+
+# Windows consoles default to cp1252 — mutation names use Unicode arrows
+# (→, em-dash) so reconfigure to utf-8 if available, else fall back to a
+# safe stdout wrapper that replaces unencodable chars with "?".
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+except (AttributeError, OSError):
+    import io
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer, encoding="utf-8", errors="replace"
+    )
+    sys.stderr = io.TextIOWrapper(
+        sys.stderr.buffer, encoding="utf-8", errors="replace"
+    )
 
 
 @dataclass
@@ -87,8 +107,12 @@ MUTATIONS: list[Mutation] = [
     Mutation(
         name="XFF: rightmost-N offset broken (set to 0)",
         file_path=REPO_ROOT / "src/recupero/api/app.py",
-        find="idx = max(0, len(xff_chain) - trusted_hops)",
-        replace_with="idx = 0  # MUTATION: always picks leftmost",
+        # RIGOR-S-3b promoted the misconfig path to fail-closed (no
+        # max(0, ...) needed because the if-check above enforces
+        # len(xff_chain) >= trusted_hops). The mutation now targets
+        # the assignment that picks the rightmost-N element.
+        find="idx = len(xff_chain) - trusted_hops",
+        replace_with="idx = 0  # MUTATION: always picks leftmost (attacker-controlled)",
         test_target=(
             "tests/test_xff_property_based.py::"
             "test_property_trusted_hops_picks_correct_element"
@@ -288,11 +312,17 @@ MUTATIONS: list[Mutation] = [
         ),
     ),
     Mutation(
+        # W11-08 hardening converted `!=` to `not hmac.compare_digest(...)`
+        # for constant-time compare. The mutation locator needs to match
+        # the new compare form; inverting the negation simulates a real
+        # bug (validator silently accepting mismatched SHAs) the same way
+        # the prior `!=` → `==` mutation did.
         name="validator: manifest SHA comparison inverted",
         file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
-        find="if actual_sha != declared_sha:",
+        find="if not hmac.compare_digest(actual_sha, declared_sha):",
         replace_with=(
-            "if actual_sha == declared_sha:  # MUTATION: comparison inverted"
+            "if hmac.compare_digest(actual_sha, declared_sha):  "
+            "# MUTATION: negation dropped — silent-success on SHA mismatch"
         ),
         test_target=(
             "tests/test_output_integrity_validator.py::"
@@ -363,6 +393,116 @@ MUTATIONS: list[Mutation] = [
             "test_w1_lock_is_per_case_not_global"
         ),
         requires_integration=True,
+    ),
+    # ─────────────────────────────────────────────────────────────────────────
+    # Waves 10-13 hardening — 5 additional mutations covering surfaces the
+    # original 15 didn't reach: PII redaction before LLM dispatch, the
+    # subscriber's local canonical-addr helper, the auth header's
+    # whitespace-equivalence bypass (W10-03), the ReDoS length cap (W11-01),
+    # and the manifest schema-drift detector (W12-03).
+    # ─────────────────────────────────────────────────────────────────────────
+    Mutation(
+        # W7-04: ai_editorial._redact_case_summary_for_prompt scrubs victim
+        # name/address/email before the prompt crosses to Anthropic. Inverting
+        # the redaction (no-op on the victim dict) re-opens PII leakage.
+        name="W7-04: ai_editorial PII redaction inverted (PII leaks to LLM)",
+        file_path=REPO_ROOT / "src/recupero/reports/ai_editorial.py",
+        find=(
+            '    for key in ("name", "address", "email"):\n'
+            "        if key in victim:\n"
+            '            victim[key] = "[redacted-pii]"'
+        ),
+        replace_with=(
+            '    for key in ():  # MUTATION: redaction disabled — PII leaks\n'
+            "        if key in victim:\n"
+            '            victim[key] = "[redacted-pii]"'
+        ),
+        test_target=(
+            "tests/test_ai_editorial_adversarial.py::"
+            "test_victim_pii_redacted_from_prompt"
+        ),
+    ),
+    Mutation(
+        # W8-01: monitoring.subscriber._canonical_addr lowercases EVM
+        # addresses so the dedup key collapses mixed-case duplicates and
+        # the persisted address is canonical. Flipping to .upper() means
+        # the persisted address is the UPPERCASE form, breaking the
+        # canonical-storage contract the test enforces.
+        name="W8-01: subscriber._canonical_addr lower→upper (canon drift)",
+        file_path=REPO_ROOT / "src/recupero/monitoring/subscriber.py",
+        find=(
+            '    if address[:2].lower() == "0x" and len(address) == 42:\n'
+            "        return address.lower()"
+        ),
+        replace_with=(
+            '    if address[:2].lower() == "0x" and len(address) == 42:\n'
+            "        return address.upper()  "
+            "# MUTATION: canonicalize to UPPER — drift undetected"
+        ),
+        test_target=(
+            "tests/test_subscriber_adversarial.py::"
+            "test_mixed_case_duplicate_collapses_and_persists_canonical"
+        ),
+    ),
+    Mutation(
+        # W10-03: api.auth removed `.strip()` on the inbound API-key header
+        # so that " sk_xxx\t" can no longer impersonate "sk_xxx". The
+        # mutation re-adds the strip, restoring the whitespace-equivalence
+        # bypass that the parametrized adversarial test pins shut.
+        name="W10-03: api/auth re-adds .strip() (whitespace-equivalence bypass)",
+        file_path=REPO_ROOT / "src/recupero/api/auth.py",
+        find='    key_secret = request.headers.get("X-Recupero-API-Key", "")',
+        replace_with=(
+            '    key_secret = request.headers.get('
+            '"X-Recupero-API-Key", "").strip()  '
+            "# MUTATION: strip re-added — W10-03 bypass re-opens"
+        ),
+        test_target=(
+            "tests/test_api_auth_adversarial.py::"
+            "test_whitespace_decorated_key_is_rejected"
+        ),
+    ),
+    Mutation(
+        # W11-01: hack_tracker.models._scrub_text caps inputs at 16KB before
+        # the polynomial _HTML_TAG_RE.sub runs. Lifting the cap to 16MB
+        # restores the multi-MB input path that triggers ~45s of regex
+        # backtracking — the ReDoS budget test detects the regression.
+        name="W11-01: _scrub_text ReDoS cap raised 16KB→16MB (DoS re-opens)",
+        file_path=REPO_ROOT / "src/recupero/hack_tracker/models.py",
+        find=(
+            "        if len(v) > 16384:\n"
+            "            v = v[:16384]"
+        ),
+        replace_with=(
+            "        if len(v) > 16777216:  "
+            "# MUTATION: cap raised to 16MB — ReDoS surface re-opens\n"
+            "            v = v[:16777216]"
+        ),
+        test_target=(
+            "tests/test_regex_redos_audit.py::"
+            "test_html_tag_regex_linear_on_pathological_input"
+        ),
+    ),
+    Mutation(
+        # W12-03: validators.output_integrity._MANIFEST_REQUIRED_KEYS is the
+        # locked schema gate. Emptying the tuple makes `missing` always []
+        # so no violation ever fires — schema drift goes undetected and a
+        # manifest with no `outputs` would trivially pass the SHA loop.
+        name="W12-03: _MANIFEST_REQUIRED_KEYS emptied (schema drift undetected)",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find=(
+            '_MANIFEST_REQUIRED_KEYS: tuple[str, ...] = (\n'
+            '    "outputs", "output_sha256",\n'
+            ")"
+        ),
+        replace_with=(
+            "_MANIFEST_REQUIRED_KEYS: tuple[str, ...] = ()  "
+            "# MUTATION: schema lock dropped"
+        ),
+        test_target=(
+            "tests/test_output_integrity_deeper.py::"
+            "test_manifest_missing_required_keys_emits_violation"
+        ),
     ),
 ]
 

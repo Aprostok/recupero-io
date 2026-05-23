@@ -101,6 +101,9 @@ def render_trace_report(
             lstrip_blocks=True,
             undefined=StrictUndefined,
         )
+        # XSS defense-in-depth filters (safe_url for href attrs).
+        from recupero.reports._jinja_filters import register_safe_filters
+        register_safe_filters(env)
         html = env.get_template("trace_report.html.j2").render(**ctx)
         from recupero._common import atomic_write_text
         atomic_write_text(report_path, html)
@@ -194,7 +197,14 @@ def _compute_stats(case: Case) -> dict[str, Any]:
     total_usd = Decimal(0)
     destinations: set[str] = set()
     for t in transfers:
-        if t.usd_value_at_tx is not None:
+        # TR-ADV-1/2 (HIGH): skip non-finite USD values. A single
+        # Decimal('NaN') / Decimal('Infinity') in any transfer would
+        # otherwise poison the running sum — `fmt_usd` then clamps the
+        # whole figure to "$0", silently zeroing out the trace's
+        # headline total. Concrete upstream trigger: a price-oracle
+        # adapter returning "NaN" from a malformed Coingecko payload,
+        # or upstream `_parse_usd_string('$NaN')` returning Decimal('NaN').
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             total_usd += t.usd_value_at_tx
         destinations.add(_ck(t.to_address))
     # Drop the seed itself from the destinations count if it appears.
@@ -264,7 +274,14 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
             # operator's first click. Stores the per-row chain so
             # the explorer dispatcher can render the right
             # block-explorer URL.
-            row_chain = t.chain.value if hasattr(t.chain, "value") else str(t.chain)
+            # TR-ADV-6 (LOW): coerce the chain value to str
+            # unconditionally — a stub/fuzz pipeline that passes a
+            # chain object with a non-string `.value` (None / int /
+            # bytes) would otherwise inject the non-string into the
+            # explorer-prefix dict lookup, silently returning ""
+            # and losing the block-explorer link.
+            row_chain_raw = t.chain.value if hasattr(t.chain, "value") else t.chain
+            row_chain = str(row_chain_raw) if row_chain_raw is not None else ""
             symbol = (t.token.symbol or "").upper()
             entry = {
                 "address": addr,
@@ -274,7 +291,13 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
                     label.category.value.replace("_", " ").title()
                     if label else "Wallet"
                 ),
-                "label": label.name if label else None,
+                # TR-ADV-3/4 (MEDIUM): strip CRLF/NUL + bidi-override
+                # bytes from operator-visible label text. Same threat
+                # model as ``safe_text`` (the Jinja filter), but
+                # enforced at the build site so the row payload is
+                # also safe when it's serialized to JSON / surfaced
+                # in the admin UI without re-rendering through Jinja.
+                "label": _sanitize_label(label.name) if label else None,
                 "symbol": t.token.symbol,
                 # RIGOR-3: flag rows whose asset is documented-
                 # UNRECOVERABLE so the template can render a badge.
@@ -287,13 +310,18 @@ def _build_destinations_table(case: Case) -> list[dict[str, Any]]:
                 # v0.20.11 (R15-A LOW): use explicit None check so a
                 # legitimately $0-priced transfer is not confused with
                 # an unpriced one. Decimal(0) is falsy in Python.
-                "_usd": t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0),
+                # TR-ADV-1 (HIGH): also sanitize NaN/Infinity to 0 —
+                # otherwise the ``rows.sort(key=_usd)`` call below
+                # raises ``decimal.InvalidOperation`` mid-render,
+                # which the outer try/except catches → no report
+                # file written → operator sees nothing for this case.
+                "_usd": _finite_or_zero(t.usd_value_at_tx),
             }
             by_addr[key] = entry
         else:
             # Same address re-appears — keep the highest-USD transfer's
             # representation (typically the most relevant flow).
-            t_usd = t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0)
+            t_usd = _finite_or_zero(t.usd_value_at_tx)
             if t_usd > entry["_usd"]:
                 entry["symbol"] = t.token.symbol
                 # RIGOR-3: also refresh the unrecoverable flag when
@@ -379,14 +407,70 @@ def _build_freezable_table(
     def _usd_key(r: dict[str, Any]) -> float:
         raw = (r["usd"] or "").replace("$", "").replace(",", "")
         try:
-            return float(raw)
+            f = float(raw)
         except (ValueError, TypeError):
             return 0.0
+        # TR-ADV-5 (LOW): ``float('NaN')`` parses successfully and
+        # poisons the sort with NaN comparisons → Timsort produces
+        # non-deterministic order across runs (NaN < NaN == False,
+        # NaN > NaN == False), breaking the trace_report's golden-
+        # diff / 3x-determinism contract. Concrete trigger: an older
+        # brief artifact on disk that carries the literal "$NaN" /
+        # "$Infinity" string in a holdings.usd field.
+        import math
+        if not math.isfinite(f):
+            return 0.0
+        return f
     rows.sort(key=_usd_key, reverse=True)
     return rows
 
 
 # ----- helpers ----- #
+
+
+def _finite_or_zero(v: Decimal | None) -> Decimal:
+    """Coerce non-finite Decimals (NaN / Infinity / -Infinity) to
+    Decimal(0). Pre-fix, a single poisoned ``usd_value_at_tx``
+    propagating from an upstream price-oracle adapter (e.g., a
+    Coingecko fetch that round-tripped through ``Decimal(str(None))``)
+    crashed ``rows.sort`` on the destinations table with
+    ``decimal.InvalidOperation`` — the outer ``except`` swallowed
+    it and ``render_trace_report`` silently returned None, so the
+    operator's wallet-trace UI showed no report at all.
+    """
+    if v is None:
+        return Decimal(0)
+    try:
+        return v if v.is_finite() else Decimal(0)
+    except (AttributeError, TypeError):
+        return Decimal(0)
+
+
+# Bidi-override + zero-width + NUL + CRLF stripper. Matches the
+# defensive set used by ``recupero.reports._jinja_filters.safe_text``
+# but is applied at the row-build site so the row payload is safe
+# both when rendered through Jinja AND when serialized to JSON /
+# surfaced in the admin UI without going through the template.
+_LABEL_STRIP_CHARS = (
+    "\r\n\t\x00"
+    "‪‫‬‭‮"  # bidi embedding / override
+    "⁦⁧⁨⁩"        # bidi isolate
+    "​‌‍‎‏"  # zero-width + LTR/RTL marks
+    "­"                          # soft hyphen
+)
+
+
+def _sanitize_label(name: str | None) -> str | None:
+    """Strip CRLF / NUL / bidi-override characters from a label
+    display name. Returns None unchanged so the caller's
+    ``{% if label %}`` guards continue to work."""
+    if name is None:
+        return None
+    out = name
+    for ch in _LABEL_STRIP_CHARS:
+        if ch in out:
+            out = out.replace(ch, "")
+    return out
 
 
 def _explorer_url(address: str, chain: str) -> str:

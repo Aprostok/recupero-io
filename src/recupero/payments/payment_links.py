@@ -50,6 +50,27 @@ class PaymentLinkConfigError(RuntimeError):
     message pointing at the env var the operator needs to set."""
 
 
+# RIGOR-Jacob Z15-1 / Z15-2: characters refused inside the CRI-bearing
+# fields (chain, seed_address) and the Stripe prefilled_email param.
+# ':' is the CRI format separator — embedding it splits parts wrong on
+# the dispatcher side. CR/LF/NUL are control-char-injection / psycopg
+# crash vectors and have no place in any of these inputs.
+_PAYMENT_LINK_FORBIDDEN_CHARS = frozenset(":\r\n\x00")
+
+
+def _reject_forbidden_chars(value: str, *, field: str) -> None:
+    """Raise ValueError when ``value`` contains ':' / CR / LF / NUL.
+    The error message embeds the field name so the FastAPI handler
+    + tests can grep on the bad-field identifier."""
+    for ch in value:
+        if ch in _PAYMENT_LINK_FORBIDDEN_CHARS:
+            raise ValueError(
+                f"{field} contains a forbidden character "
+                f"({ch!r}); ':' is the CRI separator and CR/LF/NUL "
+                "are control-char-injection vectors"
+            )
+
+
 def build_diagnostic_link(
     *,
     case_id: UUID,
@@ -82,6 +103,14 @@ def build_diagnostic_link(
     if not chain_clean:
         raise ValueError("chain is required for a diagnostic link")
 
+    # RIGOR-Jacob Z15-1 / Z15-2: refuse ':' (CRI separator), CR, LF,
+    # NUL on the format-bearing fields. Defense before they hit the
+    # URL builder + Stripe + the dispatcher's split() on the way back.
+    _reject_forbidden_chars(chain_clean, field="chain")
+    _reject_forbidden_chars(seed_clean, field="seed_address")
+    if prefilled_email is not None:
+        _reject_forbidden_chars(prefilled_email, field="prefilled_email")
+
     cri = f"diag:{case_id}:{chain_clean}:{seed_clean}"
     return _attach_params(base, client_reference_id=cri,
                           prefilled_email=prefilled_email)
@@ -110,6 +139,11 @@ def build_engagement_link(
             "with the Payment Link URL from your Stripe Dashboard "
             "(the $10,000 engagement product)."
         )
+    # RIGOR-Jacob Z15-2: same CRLF / NUL / ':' rejection on the
+    # prefilled_email field flowing into the Stripe Checkout URL.
+    if prefilled_email is not None:
+        _reject_forbidden_chars(prefilled_email, field="prefilled_email")
+
     cri = f"eng:{investigation_id}"
     return _attach_params(base, client_reference_id=cri,
                           prefilled_email=prefilled_email)

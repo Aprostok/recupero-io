@@ -1,3 +1,4 @@
+BEGIN;
 -- 009_kyc_confirmation.sql
 --
 -- INVESTIGATE → FREEZABLE promotion path. When an issuer's
@@ -42,3 +43,5 @@ COMMENT ON COLUMN public.watchlist.kyc_confirmation_note IS
 CREATE INDEX IF NOT EXISTS watchlist_recently_promoted_idx
     ON public.watchlist (kyc_confirmed_at DESC)
  WHERE kyc_confirmed_at IS NOT NULL;
+
+COMMIT;

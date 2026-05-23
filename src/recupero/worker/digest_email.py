@@ -42,6 +42,35 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 
+_DEFAULT_SMTP_PORT = 587
+
+
+def _resolve_smtp_port() -> int:
+    """Wave-9 audit (type-coercion): a typo like ``RECUPERO_SMTP_PORT=auto``
+    used to crash the nightly digest cron with an unhandled ValueError.
+    Fall back to 587 (the STARTTLS default) on any non-integer or
+    out-of-range value so the cron can still attempt delivery.
+    """
+    raw = (os.environ.get("RECUPERO_SMTP_PORT", "") or "").strip()
+    if not raw:
+        return _DEFAULT_SMTP_PORT
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "RECUPERO_SMTP_PORT is not an integer (%r) — using %d",
+            raw, _DEFAULT_SMTP_PORT,
+        )
+        return _DEFAULT_SMTP_PORT
+    if n < 1 or n > 65535:
+        log.warning(
+            "RECUPERO_SMTP_PORT %d is outside valid TCP range — using %d",
+            n, _DEFAULT_SMTP_PORT,
+        )
+        return _DEFAULT_SMTP_PORT
+    return n
+
+
 def maybe_send_digest_email(
     *,
     html_path: Path,
@@ -71,6 +100,25 @@ def maybe_send_digest_email(
     if not recipients:
         return False
 
+    # Adversarial-input guard: an operator who pastes
+    # RECUPERO_DIGEST_RECIPIENTS from a downstream system that
+    # has CRLF in it would otherwise let `python's smtplib` reject
+    # the whole digest (EmailMessage raises on `\n` in a header
+    # str). Validate each recipient via the same regex the Resend
+    # path uses — drop anything that fails. If nothing is left,
+    # bail out before opening an SMTP connection.
+    from recupero.worker._email import _validate_email_address  # local import: avoids cycle on cold import
+    valid_recipients = [r for r in recipients if _validate_email_address(r)]
+    if not valid_recipients:
+        log.warning(
+            "digest email skipped — no valid recipient in "
+            "RECUPERO_DIGEST_RECIPIENTS=%r (CRLF / control chars / "
+            "malformed address rejected by validator)",
+            recipients_raw,
+        )
+        return False
+    recipients = valid_recipients
+
     # v0.19.2 (round-13 pipeline-MED-8): env_truthy so "true" / "yes" /
     # "on" all work, matching RECUPERO_DISABLE_EMAIL's canonical
     # parsing. Pre-v0.19.2 only the literal "1" enabled all-clear
@@ -94,7 +142,7 @@ def maybe_send_digest_email(
             "incomplete (configure all three to enable email)"
         )
         return False
-    smtp_port = int(os.environ.get("RECUPERO_SMTP_PORT", "587"))
+    smtp_port = _resolve_smtp_port()
 
     from_header = (
         os.environ.get("RECUPERO_DIGEST_FROM", "").strip()
@@ -114,6 +162,19 @@ def maybe_send_digest_email(
         tick_date=tick_date,
         digest_id=digest_id,
     )
+
+    # Adversarial-input guard: strip CRLF / NUL / bidi controls from
+    # every header value before handing them to EmailMessage. The
+    # stdlib will raise `ValueError` on `\n` in a header str — that's
+    # safer than silent injection, but the cron is supposed to ALWAYS
+    # ship a digest if it has anything to say, so we sanitize instead
+    # of raising. tick_date / material_count / freezeable_count flow
+    # from internal computed integers + ISO date strings; the From
+    # header is operator-set env. The risk is operator pastes a value
+    # from a downstream system that contains a stray CRLF.
+    from recupero.worker._email import _sanitize_email_header
+    subject = _sanitize_email_header(subject)
+    from_header = _sanitize_email_header(from_header)
 
     msg = EmailMessage()
     msg["Subject"] = subject

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re as _re
 import sys
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -83,6 +84,29 @@ def _root(
     _ = version  # silence unused-arg lint; callback fires before this
 
 
+_INVESTIGATION_ID_RE = _re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
+
+
+def _validate_investigation_id(investigation_id: str | None) -> None:
+    """Adversarial-input wave (v0.20.2): reject investigation-id values
+    that aren't a constrained alphanumeric token.
+
+    The id is concatenated into a Supabase Storage bucket key as
+    ``investigations/<id>/...``; an unsanitized value carrying ``..``
+    or ``/`` would let an operator (or an attacker who controls the
+    CLI invocation through a wrapper script) mirror artifacts outside
+    the per-investigation namespace. Restrict to UUIDv4-shaped /
+    short-hex tokens to defend in depth.
+    """
+    if investigation_id is None:
+        return
+    if not _INVESTIGATION_ID_RE.match(investigation_id):
+        raise typer.BadParameter(
+            f"--investigation-id must match [A-Za-z0-9_-]{{1,64}}; "
+            f"got {investigation_id!r}"
+        )
+
+
 def _sync_to_bucket(investigation_id: str | None, case_dir: Path) -> None:
     """If --investigation-id was passed, mirror the case_dir to Supabase
     Storage under ``investigations/<investigation_id>/``.
@@ -98,6 +122,7 @@ def _sync_to_bucket(investigation_id: str | None, case_dir: Path) -> None:
     import os as _os
     if not investigation_id:
         return
+    _validate_investigation_id(investigation_id)
     supabase_url = _os.environ.get("SUPABASE_URL", "").strip()
     service_role_key = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if not supabase_url or not service_role_key:
@@ -348,7 +373,7 @@ def inspect_cmd(
             "added_at": datetime.now(UTC).isoformat(),
         }
         existing.append(new_entry)
-        out_path.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+        out_path.write_text(json.dumps(existing, indent=2, allow_nan=False, ensure_ascii=False), encoding="utf-8")
         console.print(f"\n[green]Saved label to {out_path}[/]")
 
 

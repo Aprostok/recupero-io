@@ -77,3 +77,4 @@ Avoid:
 | 014 | case_token_hmac | additive | v0.16.12 — eliminate timing channel |
 | 015 | engagement double-submit guard | additive | v0.16.12 — race fix |
 | 016 | freeze letters unique hardening | additive | v0.16.12 — wallet-trace idempotency |
+| 021 | cases + investigations drift backfill | additive | adds case_state / estimated_value_usd / total_loss_usd / change_summary — code-referenced columns that pre-existed in prod via admin UI |

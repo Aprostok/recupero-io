@@ -73,9 +73,21 @@ def _canonical_addr(address: str) -> str:
     """
     if not address:
         return address
-    if address.startswith("0x") and len(address) == 42:
+    # Case-insensitive 0x check — upstream briefs occasionally arrive
+    # with the prefix upper-cased (Etherscan UI export quirk).
+    if address[:2].lower() == "0x" and len(address) == 42:
         return address.lower()
     return address
+
+
+# v0.21.0 cranky-fermat audit: label values flow into Postgres TEXT
+# columns. NUL bytes are rejected outright by libpq; CR/LF in audit
+# labels break downstream log parsing. Strip both.
+_LABEL_BAD_CHARS = str.maketrans({"\x00": "", "\r": " ", "\n": " "})
+
+
+def _sanitize_label(label: str) -> str:
+    return label.translate(_LABEL_BAD_CHARS)[:200]
 
 
 def _collect_ofac_addresses(brief: dict[str, Any]) -> set[str]:
@@ -153,13 +165,16 @@ def derive_subscriptions_from_brief(
             else _TRIGGER_ANY_MOVEMENT
         )
         seeds[key] = SubscriptionSeed(
-            address=address,
+            # Persist the CANONICAL form so the DB unique constraint
+            # (address, chain, created_by) stays stable across reruns
+            # where upstream brief casing drifts (v0.21.0 cranky-fermat).
+            address=canon,
             chain=chain_lc,
             trigger_type=trigger,
             alert_email=investigator_email,
             case_id=case_id,
             investigation_id=investigation_id,
-            label=label[:200],
+            label=_sanitize_label(label),
             created_by=created_by,
         )
 

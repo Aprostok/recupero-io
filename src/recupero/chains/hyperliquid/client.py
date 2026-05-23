@@ -75,7 +75,18 @@ class HyperliquidLedgerEvent:
 
     @property
     def when(self) -> datetime:
-        return datetime.fromtimestamp(self.time_ms / 1000, tz=UTC)
+        # Adversarial-hardening: Hyperliquid's API returns the timestamp
+        # verbatim — a poisoned / MITM'd response can carry an extreme
+        # value (positive or negative) that overflows datetime.fromtimestamp
+        # on Windows (OSError) or Linux (OverflowError / ValueError).
+        # The scraper uses this property as Transfer.block_time inside
+        # a for-loop; one bad event must not poison the whole case build.
+        # Fallback to epoch (1970-01-01 UTC) — same convention the rest
+        # of the codebase uses for unrecoverable timestamps.
+        try:
+            return datetime.fromtimestamp(self.time_ms / 1000, tz=UTC)
+        except (OverflowError, OSError, ValueError):
+            return datetime.fromtimestamp(0, tz=UTC)
 
 
 class HyperliquidClient:
@@ -225,6 +236,15 @@ def _parse_ledger_event(raw: dict[str, Any]) -> HyperliquidLedgerEvent | None:
         try:
             usdc_delta = Decimal(str(usdc_value))
         except Exception:  # noqa: BLE001
+            usdc_delta = Decimal("0")
+        # Adversarial-hardening: Decimal("NaN") and Decimal("Infinity")
+        # are LEGAL Decimal values that don't raise on construction but
+        # blow up downstream (int(NaN * 10**6) → ValueError,
+        # int(Infinity * 10**6) → OverflowError, NaN < 0 →
+        # InvalidOperation under default contexts). Coerce non-finite
+        # values to 0 so the event is treated as a no-op rather than
+        # crashing the case build.
+        if not usdc_delta.is_finite():
             usdc_delta = Decimal("0")
         destination = delta.get("destination") or delta.get("to") or None
         return HyperliquidLedgerEvent(

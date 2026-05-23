@@ -933,20 +933,35 @@ def cli() -> None:
                   file=sys.stderr)
             sys.exit(2)
 
-        frozen = _Decimal(args.frozen_usd) if args.frozen_usd else None
-        returned = _Decimal(args.returned_usd) if args.returned_usd else None
+        # Z13-4: wrap Decimal parsing so a malformed --frozen-usd /
+        # --returned-usd argument produces a clean ERROR + exit 2
+        # rather than a ``decimal.InvalidOperation`` traceback.
+        try:
+            frozen = _Decimal(args.frozen_usd) if args.frozen_usd else None
+            returned = _Decimal(args.returned_usd) if args.returned_usd else None
+        except Exception as e:  # noqa: BLE001
+            print(f"ERROR: invalid --frozen-usd/--returned-usd: {e}",
+                  file=sys.stderr)
+            sys.exit(2)
 
         if has_letter_id:
             # Legacy form: record_outcome by letter_id.
             from recupero.freeze_learning.recorder import record_outcome
-            out_id = record_outcome(
-                letter_id=_parse_uuid(args.letter_id, field_name="letter_id"),
-                outcome_type=args.outcome,
-                frozen_usd=frozen,
-                returned_usd=returned,
-                operator_notes=args.note,
-                dsn=_require_dsn(),
-            )
+            # Z13-4: wrap record_outcome() — the recorder raises
+            # ValueError for non-finite frozen_usd; without this try
+            # the operator sees a traceback instead of ``ERROR: ...``.
+            try:
+                out_id = record_outcome(
+                    letter_id=_parse_uuid(args.letter_id, field_name="letter_id"),
+                    outcome_type=args.outcome,
+                    frozen_usd=frozen,
+                    returned_usd=returned,
+                    operator_notes=args.note,
+                    dsn=_require_dsn(),
+                )
+            except ValueError as e:
+                print(f"ERROR: {e}", file=sys.stderr)
+                sys.exit(2)
             if out_id is None:
                 print("ERROR: failed to record outcome (see logs).")
                 sys.exit(1)

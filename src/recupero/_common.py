@@ -14,9 +14,20 @@ happen in one place.
 from __future__ import annotations
 
 import os
+import re as _re_module
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
+
+# Pre-compiled DSN-password regex used by `redact_dsn` AND by the
+# `db_connect` exception-message scrubber. Defined here at module top
+# so name-resolution works even when called before the helper functions
+# are defined (the connection helper sits earlier in the file for
+# blame-line preservation).
+_DSN_REDACT_RE = _re_module.compile(
+    r"(postgres(?:ql)?://[^:/@\s]+:)([^@\s]+)(@)",
+    flags=_re_module.IGNORECASE,
+)
 
 # ---- freeze_capability mapping ---- #
 
@@ -287,11 +298,11 @@ def short_addr(addr: str | None) -> str:
 def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     """Write `content` to `path` atomically.
 
-    Writes to a sibling `.tmp` then `os.replace`s into place — atomic on
-    POSIX and on Windows (Python 3.3+). Important for JSON files that a
-    separate process / thread may read concurrently (the bucket uploader
-    reads files after the worker writes them; without atomicity it can
-    pick up a half-written truncated JSON).
+    Writes to a sibling tempfile then `os.replace`s into place — atomic
+    on POSIX and on Windows (Python 3.3+). Important for JSON files that
+    a separate process / thread may read concurrently (the bucket
+    uploader reads files after the worker writes them; without
+    atomicity it can pick up a half-written truncated JSON).
 
     v0.28.0 (JACOB-3 validator finding): newline translation is
     DISABLED. Python's default text-mode write applies platform-
@@ -305,13 +316,39 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
     and the HTML on Linux/Mac/Windows is byte-identical so the
     rendered output is deterministic across platforms (which the
     `3x determinism` regression also depends on).
+
+    Wave-3 hardening (TOCTOU/symlink audit):
+      * Reject if `path` already exists as a symlink — silently
+        following an operator-placed redirect to an unrelated
+        directory has caused recovery-snapshot corruption in
+        ops-incidents. Cheaper to fail loud.
+      * Tempfile name is unique (``tempfile.mkstemp``) so concurrent
+        writers targeting the SAME path (e.g. two brief generators
+        racing on brief.html) don't clobber each other's tempfile
+        mid-write. Pre-wave3 the tmp name was a deterministic
+        ``path + ".tmp"`` which created a write-write race on the
+        same intermediate file.
     """
+    import tempfile
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
+
+    if path.is_symlink():
+        raise ValueError(
+            f"refusing to write to symlink at {path}; delete the link "
+            f"and retry (wave-3 symlink-following guard)"
+        )
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=path.name + ".",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+    tmp_path = Path(tmp_name)
     try:
         # newline="" disables universal-newline translation on
         # write — bytes go to disk exactly as supplied.
-        with open(tmp_path, "w", encoding=encoding, newline="") as f:
+        with os.fdopen(fd, "w", encoding=encoding, newline="") as f:
             f.write(content)
         os.replace(tmp_path, path)
     except Exception:
@@ -375,7 +412,35 @@ def db_connect(dsn: str, **overrides: Any):
         "autocommit": True,
     }
     kwargs.update(overrides)
-    return psycopg.connect(dsn, **kwargs)
+    # Adversarial-input wave (v0.20.2): psycopg's connection errors
+    # routinely include the full DSN (including the password) in the
+    # exception message. A failed connect on operator stdout therefore
+    # leaks the Supabase password. Re-raise with a redacted DSN
+    # substituted into the message so the secret never lands in logs.
+    try:
+        return psycopg.connect(dsn, **kwargs)
+    except Exception as exc:
+        red = redact_dsn(dsn)
+        msg = str(exc)
+        if dsn and dsn in msg:
+            msg = msg.replace(dsn, red)
+        # Strip any other DSN-shaped substrings that might have been
+        # composed by psycopg (e.g., with normalized hostname).
+        msg = _DSN_REDACT_RE.sub(r"\1***\3", msg)
+        # Try to reconstruct the same exception type with the redacted
+        # message so callers' `except SpecificError` paths still work.
+        # Fall back to mutating .args if the exception type doesn't
+        # accept a single-string constructor (some psycopg error
+        # subclasses are picky).
+        try:
+            new_exc: BaseException = type(exc)(msg)
+        except Exception:  # noqa: BLE001
+            exc.args = (msg,)
+            new_exc = exc
+        # Chain with `from None` so the redacted message is what gets
+        # formatted in tracebacks instead of the original (which may
+        # still embed the password via psycopg's own __str__ override).
+        raise new_exc from None
 
 
 # ---- Investigator identity defaults ---- #
@@ -487,19 +552,35 @@ def pooled_dsn(dsn: str) -> str:
     if not dsn or "db." not in dsn or ".supabase.co" not in dsn:
         return dsn
     import re as _re
+    # Wave-6 hardening (adversarial-input audit): the password slot may
+    # contain ANY URL-safe character including `@`, `/`, `?`, `:` once
+    # percent-decoded. The previous regex used `[^@]+` (greedy) which
+    # silently truncated to the LAST `@db.` boundary, splicing a
+    # malformed DSN with embedded credentials downstream. We now match
+    # `.*?` (lazy) with an explicit `@db.<ref>.supabase.co` lookahead so
+    # the password may contain '@', and we URL-encode the password
+    # component on the way out so any reserved character (`@`, `/`,
+    # `?`, `:`, `#`) round-trips through libpq's URI parser as the
+    # original byte rather than corrupting the URI structure.
     m = _re.search(
-        r"postgres(?:ql)?://([^:]+):([^@]+)@db\.([^.]+)\.supabase\.co",
+        r"postgres(?:ql)?://([^:/@\s]+):(.+?)@db\.([^.]+)\.supabase\.co",
         dsn,
     )
     if not m:
         return dsn
     user, pwd, ref = m.group(1), m.group(2), m.group(3)
+    from urllib.parse import quote as _q
+    # `safe=""` percent-encodes every reserved char; the username is
+    # constrained by [^:/@\s]+ above so it's already URI-safe, but we
+    # quote it too for symmetry.
+    pwd_enc = _q(pwd, safe="")
+    user_enc = _q(user, safe="")
     pooler_host = (
         os.environ.get("RECUPERO_SUPABASE_POOLER_HOST", "").strip()
         or "aws-1-us-east-1.pooler.supabase.com"
     )
     return (
-        f"postgresql://{user}.{ref}:{pwd}"
+        f"postgresql://{user_enc}.{ref}:{pwd_enc}"
         f"@{pooler_host}:6543/postgres"
     )
 
@@ -519,13 +600,7 @@ def redact_dsn(dsn: str | None) -> str:
     """
     if not dsn:
         return ""
-    import re as _re
-    return _re.sub(
-        r"(postgres(?:ql)?://[^:/@\s]+:)([^@\s]+)(@)",
-        r"\1***\3",
-        dsn,
-        flags=_re.IGNORECASE,
-    )
+    return _DSN_REDACT_RE.sub(r"\1***\3", dsn)
 
 
 __all__ = (

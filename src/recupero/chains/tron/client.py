@@ -131,7 +131,17 @@ class TronGridClient:
         self.limiter = _RateLimiter(requests_per_second)
         # http_client injection point — lets tests pass a respx-
         # mocked Client without monkey-patching httpx globally.
-        self._client = http_client or httpx.Client(timeout=timeout_seconds)
+        # Split connect vs read timeout: a slow-DNS / hung-TCP-handshake
+        # against api.trongrid.io must not block the worker for the full
+        # 30s read window. Connect cap = 10s.
+        self._client = http_client or httpx.Client(
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=timeout_seconds,
+                write=timeout_seconds,
+                pool=timeout_seconds,
+            )
+        )
         self._owns_client = http_client is None
 
     def close(self) -> None:
@@ -211,8 +221,23 @@ class TronGridClient:
             params["only_from"] = "true"
 
         url = f"/v1/accounts/{address}/transactions/trc20"
+        # RIGOR-Jacob Z14: stuck-fingerprint guard. A buggy or
+        # adversarial mirror that returns the SAME meta.fingerprint
+        # forever would otherwise burn all ``max_pages`` slots making
+        # duplicate calls. We break after observing the same
+        # fingerprint repeat 3 times in a row — leaves headroom for
+        # tests that intentionally validate the max_pages cap with a
+        # repeating fingerprint over small N (max_pages=3).
+        stuck_count = 0
         for page in range(max_pages):
             body = self._get(url, params=params)
+            # RIGOR-Jacob Z14: top-level shape gate. _get already raises
+            # on non-dict but we belt-and-suspender here.
+            if not isinstance(body, dict):
+                raise TronGridError(
+                    f"TronGrid TRC-20 response not a dict "
+                    f"(got {type(body).__name__})"
+                )
             data = body.get("data") or []
             if not isinstance(data, list):
                 log.warning(
@@ -226,6 +251,20 @@ class TronGridClient:
             fingerprint = meta.get("fingerprint") if isinstance(meta, dict) else None
             if not fingerprint or not data:
                 break
+            # Stuck-fingerprint detection: if the server returns the
+            # same fingerprint we just sent, count repeats; after a
+            # few we conclude the cursor isn't advancing and break.
+            if fingerprint == params.get("fingerprint"):
+                stuck_count += 1
+                if stuck_count >= 3:
+                    log.warning(
+                        "trongrid trc20 transfers: stuck fingerprint detected at "
+                        "page %d (fp=%r); breaking after %d repeats",
+                        page, fingerprint, stuck_count,
+                    )
+                    break
+            else:
+                stuck_count = 0
             params["fingerprint"] = fingerprint
         else:
             log.warning(
@@ -331,6 +370,16 @@ class TronGridClient:
         # error so callers don't silently accept empty results.
         if isinstance(body, dict) and body.get("Error"):
             raise TronGridError(f"TronGrid error for {url}: {body.get('Error')}")
+        # RIGOR-Jacob Z14: top-level shape gate. TronGrid's REST
+        # endpoints all return a dict envelope. A misbehaving mirror
+        # or CDN that returns a top-level list would otherwise crash
+        # callers like ``get_account`` on ``body.get("data")`` with
+        # AttributeError, killing the BFS hop.
+        if not isinstance(body, dict):
+            raise TronGridError(
+                f"TronGrid response from {url} is not a dict "
+                f"(got {type(body).__name__})"
+            )
         return body
 
     @retry(

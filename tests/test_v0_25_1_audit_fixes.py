@@ -240,6 +240,8 @@ def test_c2_email_failure_triggers_token_revoke():
         "recupero.worker._email.send_email",
         return_value=failing_email_result,
     ), patch(
+        "recupero.worker._email.has_been_sent", return_value=False,
+    ), patch(
         "recupero.portal.tokens.revoke_token", side_effect=_spy_revoke,
     ):
         result = send_intake_confirmation(
@@ -393,6 +395,8 @@ def test_e1_send_email_skipped_returns_success_not_failure():
     ), patch(
         "recupero.worker._email.send_email",
         return_value=skipped_email_result,
+    ), patch(
+        "recupero.worker._email.has_been_sent", return_value=False,
     ), patch(
         "recupero.portal.tokens.revoke_token",
         side_effect=lambda **kw: revoke_called.append(kw),

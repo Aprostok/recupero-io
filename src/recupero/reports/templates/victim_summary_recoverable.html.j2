@@ -265,7 +265,7 @@
 <p>
   If you'd like to engage us for active recovery (Option A above),
   reply to this email or contact us at
-  <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>.
+  <a href="{{ ('mailto:' ~ investigator.email)|safe_url }}">{{ investigator.email }}</a>.
   We'll send you a one-page engagement letter that confirms the
   fee structure, the addresses we'll address, and the 30-day
   reporting cadence. The engagement begins when you sign and the

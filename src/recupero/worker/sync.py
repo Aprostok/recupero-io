@@ -27,12 +27,22 @@ from pathlib import Path
 from recupero.storage.supabase_case_store import (
     PayloadTooLargeError,
     SupabaseCaseStore,
+    _validate_relpath,
 )
 
 log = logging.getLogger(__name__)
 
 
 _SKIP_DIRS: frozenset[str] = frozenset({"logs", "prices_cache"})
+
+# Per-file pre-upload size cap. The bucket / edge layer enforces its
+# own limit and returns 413, but ``path.read_bytes()`` slurps the
+# entire file into memory FIRST — a 10 GB file planted in case_dir
+# would OOM the worker before the 413 ever arrives. 256 MB mirrors
+# ``_DOWNLOAD_HARD_CAP_BYTES`` in the store; any single artifact
+# above this is either corruption or hostile, and oversize evidence
+# is already gracefully handled downstream as PayloadTooLargeError.
+_UPLOAD_HARD_CAP_BYTES = 256 * 1024 * 1024
 
 
 def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
@@ -56,6 +66,34 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
     skipped_oversize = 0
     for path in sorted(case_dir.rglob("*")):
         if not path.is_file():
+            continue
+        # Adversarial-input audit: skip symlinks. ``rglob`` does not
+        # recurse into symlinked directories on 3.13+, but a symlink
+        # pointing at a regular FILE outside ``case_dir`` is still
+        # enumerated and ``is_file()`` returns True. ``read_bytes()``
+        # follows the link and would upload the target's contents
+        # (e.g. /etc/passwd, a host-mounted secret) under the bucket
+        # prefix. The case_dir contract is "files this worker wrote"
+        # — symlinks have no legitimate use.
+        if path.is_symlink():
+            log.warning("skipping symlink in case_dir: %s", path)
+            continue
+        # Per-file size cap — refuse oversized files BEFORE
+        # read_bytes() / _read_text() pulls them into RAM. Without
+        # this, a planted 10 GB file in briefs/ would OOM the worker
+        # before the bucket's 413 response ever arrives.
+        try:
+            size = path.stat().st_size
+        except OSError as e:
+            log.warning("cannot stat %s, skipping: %s", path, e)
+            continue
+        if size > _UPLOAD_HARD_CAP_BYTES:
+            log.warning(
+                "skipping oversized file %s (%d bytes > %d cap); "
+                "investigation continues without it",
+                path, size, _UPLOAD_HARD_CAP_BYTES,
+            )
+            skipped_oversize += 1
             continue
 
         rel = path.relative_to(case_dir)
@@ -141,7 +179,7 @@ def download_editorial(store: SupabaseCaseStore, case_dir: Path) -> None:
     from recupero._common import atomic_write_text
     data = store.read_json("brief_editorial.json")
     dest = case_dir / "brief_editorial.json"
-    atomic_write_text(dest, json.dumps(data, indent=2, ensure_ascii=False))
+    atomic_write_text(dest, json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False))
     log.debug("refreshed brief_editorial.json from bucket → %s", dest)
 
 
@@ -189,5 +227,16 @@ def _upload_to_subpath(
     the underlying _upload helper since the storage_prefix already carries
     the investigations/<id>/ part.
     """
+    # Adversarial-input audit: SupabaseCaseStore.write_text/write_json
+    # call _validate_relpath, but _upload_to_subpath goes straight
+    # through the underlying _upload primitive — the validator was
+    # bypassed. Validate each path segment so a hostile filename
+    # (e.g. "briefs/../escape.html", NUL byte, backslash) cannot
+    # break out of the investigation prefix.
+    _validate_relpath(bucket_relative_path, kind="bucket_relative_path")
+    for seg in bucket_relative_path.split("/"):
+        if seg:
+            _validate_relpath(seg, kind="bucket_relative_path segment")
+
     full = store.storage_prefix + bucket_relative_path
     store._upload(full, body, content_type)  # noqa: SLF001

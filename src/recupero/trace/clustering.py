@@ -357,9 +357,26 @@ def cluster_addresses(
                         continue
                     seen_evidence_keys.add(key)
                     cluster_evidence.append(ev)
-        balance = sum(
-            (address_balances or {}).get(a, Decimal("0")) for a in members
-        )
+        # Z6-2: address_balances can carry Decimal('NaN') / Decimal(
+        # 'Infinity') after an upstream price-oracle glitch. ``sum(NaN)``
+        # produces NaN which then crashes ``clusters.sort(...)`` mid-sort
+        # with ``decimal.InvalidOperation``. Filter to finite, non-negative
+        # values via is_finite() so the entire ENTITY_CLUSTERS section
+        # doesn't silently disappear from the brief.
+        _bals = address_balances or {}
+        balance = Decimal("0")
+        for a in members:
+            v = _bals.get(a, Decimal("0"))
+            if isinstance(v, Decimal):
+                if v.is_finite():
+                    balance += v
+            else:
+                try:
+                    vd = Decimal(str(v))
+                    if vd.is_finite():
+                        balance += vd
+                except Exception:  # noqa: BLE001
+                    pass
         clusters.append(Cluster(
             cluster_id=f"C-{cluster_idx}",
             addresses=set(members),

@@ -84,7 +84,7 @@ def add_cmd(
         "notes": notes,
         "added_at": datetime.now(timezone.utc).isoformat(),
     })
-    out_path.write_text(json.dumps(existing, indent=2))
+    out_path.write_text(json.dumps(existing, indent=2, allow_nan=False, ensure_ascii=False))
     console.print(f"[green]Added label, total in {out_path}: {len(existing)}[/]")
 
 

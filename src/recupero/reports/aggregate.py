@@ -76,6 +76,8 @@ def aggregate_stolen(
     total_usd = Decimal("0")
     n = 0
     skipped_internal = 0
+    skipped_nonfinite_usd = 0
+    skipped_nonfinite_amount = 0
 
     for case in cases:
         for t in case.transfers:
@@ -92,13 +94,42 @@ def aggregate_stolen(
                 symbol=t.token.symbol, contract=t.token.contract,
             ))
             summary.transfer_count += 1
-            summary.total_amount += t.amount_decimal
-            if t.usd_value_at_tx is not None:
+            # W8-09++ adversarial harden: NaN / Inf must NEVER enter a
+            # running sum. The prior W8-09 fix only made `json.dumps`
+            # raise at write time — by then `total_usd` is already
+            # `Decimal('NaN')` and `format_aggregate_markdown` has
+            # leaked "$NaN" into the operator-facing cover line. Skip
+            # poisoned transfers at the source and tag the asset as
+            # having unpriced transfers so downstream readers know
+            # the total understates reality.
+            if t.amount_decimal.is_finite():
+                summary.total_amount += t.amount_decimal
+            else:
+                skipped_nonfinite_amount += 1
+                summary.has_unpriced_transfers = True
+            if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
                 summary.total_usd += t.usd_value_at_tx
                 total_usd += t.usd_value_at_tx
                 by_victim[t.from_address] += t.usd_value_at_tx
-            else:
+            elif t.usd_value_at_tx is None:
                 summary.has_unpriced_transfers = True
+            else:
+                # NaN / Inf USD — treat as unpriced.
+                skipped_nonfinite_usd += 1
+                summary.has_unpriced_transfers = True
+            # Scrub non-finite values out of the per-transfer record too,
+            # so a single poisoned transfer can't render "NaN" / "Inf"
+            # into the matched_transfers JSON either. (The W8-09
+            # ``allow_nan=False`` dump guard catches floats but
+            # str(Decimal('NaN')) == 'NaN' slips through as a string.)
+            _matched_usd: str | None
+            if t.usd_value_at_tx is None or not t.usd_value_at_tx.is_finite():
+                _matched_usd = None
+            else:
+                _matched_usd = str(t.usd_value_at_tx)
+            _matched_amount = (
+                str(t.amount_decimal) if t.amount_decimal.is_finite() else None
+            )
             matched.append({
                 "case_id": case.case_id,
                 "tx_hash": t.tx_hash,
@@ -107,8 +138,8 @@ def aggregate_stolen(
                 "to": t.to_address,
                 "symbol": t.token.symbol,
                 "contract": t.token.contract,
-                "amount": str(t.amount_decimal),
-                "usd": str(t.usd_value_at_tx) if t.usd_value_at_tx is not None else None,
+                "amount": _matched_amount,
+                "usd": _matched_usd,
                 "explorer_url": t.explorer_url,
             })
 
@@ -118,14 +149,49 @@ def aggregate_stolen(
             "(same stolen funds moving between already-identified perp wallets)",
             skipped_internal,
         )
+    if skipped_nonfinite_usd or skipped_nonfinite_amount:
+        log.warning(
+            "aggregate: skipped %d transfers with non-finite USD and %d with "
+            "non-finite amount_decimal (NaN/Inf — price-oracle or parser glitch). "
+            "These are flagged as unpriced on their asset row.",
+            skipped_nonfinite_usd, skipped_nonfinite_amount,
+        )
+
+    # Collapse `by_victim` on canonical (lower-cased) EVM keys so the
+    # same victim wallet shipped in mixed case across cases (checksum
+    # from one Etherscan response, lower-case from another) doesn't
+    # appear as two rows in the "By victim wallet" table. Preserve
+    # first-seen casing as the display key.
+    collapsed_victim: dict[str, Decimal] = {}
+    display_for: dict[str, str] = {}
+    for raw_addr, v in by_victim.items():
+        canon = _ck(raw_addr)
+        if canon not in display_for:
+            display_for[canon] = raw_addr
+        collapsed_victim[display_for[canon]] = (
+            collapsed_victim.get(display_for[canon], Decimal("0")) + v
+        )
+
+    # Deduplicate `cases_examined` on canonical (lower-cased) case_id so
+    # that if the same logical case is shipped in twice with different
+    # casing (operator typo at the CLI, mixed-case manifest) the cover
+    # line reflects the true count. We preserve first-seen order.
+    _seen: set[str] = set()
+    cases_examined: list[str] = []
+    for c in cases:
+        key = c.case_id.lower().strip()
+        if key in _seen:
+            continue
+        _seen.add(key)
+        cases_examined.append(c.case_id)
 
     return AggregateResult(
-        cases_examined=[c.case_id for c in cases],
+        cases_examined=cases_examined,
         perpetrators=list(perpetrator_addresses),
         total_usd=total_usd,
         transfer_count=n,
         by_asset=sorted(by_asset_map.values(), key=lambda s: s.total_usd, reverse=True),
-        by_victim_wallet=dict(by_victim),
+        by_victim_wallet=collapsed_victim,
         matched_transfers=matched,
     )
 
@@ -190,4 +256,4 @@ def write_aggregate_json(r: AggregateResult, out_path: Path) -> None:
         "by_victim_wallet": {k: str(v) for k, v in r.by_victim_wallet.items()},
         "matched_transfers": r.matched_transfers,
     }
-    out_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    out_path.write_text(json.dumps(data, indent=2, allow_nan=False, ensure_ascii=False, sort_keys=True), encoding="utf-8")

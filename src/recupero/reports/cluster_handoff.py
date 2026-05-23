@@ -78,16 +78,25 @@ def render_cluster_handoff(
         # render time, not silently rendered as empty.
         undefined=StrictUndefined,
     )
+    # XSS defense-in-depth (safe_url / safe_text on href interpolations).
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
 
     # Computed display fields the template expects.
+    # Z7: non-finite (NaN / Infinity) total_loss_usd from an upstream
+    # aggregator glitch must NOT render as ``$NaN`` / ``$Infinity`` in
+    # the LE-facing aggregated handoff. Clamp to $0.00 with the same
+    # contract as ``_pricing.fmt_usd``.
     total_loss = cluster.get("total_loss_usd") or 0
+    from decimal import Decimal
     try:
-        # Decimal | float | str → formatted "$1,234,567.89"
-        from decimal import Decimal
         d = Decimal(str(total_loss))
-        cluster["total_loss_usd_human"] = f"${d:,.2f}"
     except Exception:  # noqa: BLE001
-        cluster["total_loss_usd_human"] = f"${total_loss}"
+        d = Decimal(0)
+    if not d.is_finite():
+        d = Decimal(0)
+    cluster["total_loss_usd"] = d
+    cluster["total_loss_usd_human"] = f"${d:,.2f}"
 
     try:
         from recupero import __version__ as software_version

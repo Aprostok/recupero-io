@@ -864,7 +864,7 @@ def _stage_list_freeze_targets(
     # Atomic write — bucket uploader runs from a different thread/path
     # and must not pick up a half-written JSON.
     from recupero._common import atomic_write_text
-    atomic_write_text(out_path, json.dumps(payload, indent=2))
+    atomic_write_text(out_path, json.dumps(payload, indent=2, allow_nan=False, ensure_ascii=False))
     upload_case_dir(case_dir, bucket)
 
 
@@ -964,7 +964,7 @@ def _synthesize_freeze_brief_from_asks(
                 "TOTAL_LOSS_USD": "$0",
                 "MAX_RECOVERABLE_USD": "$0",
                 "SOURCE": "stub (freeze_asks.json missing — freeze stage produced no asks)",
-            }, indent=2),
+            }, indent=2, allow_nan=False, ensure_ascii=False),
         )
         upload_case_dir(case_dir, bucket)
         return
@@ -988,7 +988,7 @@ def _synthesize_freeze_brief_from_asks(
                 "TOTAL_LOSS_USD": "$0",
                 "MAX_RECOVERABLE_USD": "$0",
                 "SOURCE": "stub (freeze_asks.json unreadable)",
-            }, indent=2),
+            }, indent=2, allow_nan=False, ensure_ascii=False),
         )
         upload_case_dir(case_dir, bucket)
         return
@@ -1169,7 +1169,7 @@ def _synthesize_freeze_brief_from_asks(
         "MAX_RECOVERABLE_USD": f"${total_recoverable:,.2f}",
         "SOURCE": "synthesized from freeze_asks.json (skip_editorial path)",
     }
-    atomic_write_text(out_path, json.dumps(out, indent=2, default=str))
+    atomic_write_text(out_path, json.dumps(out, indent=2, default=str, allow_nan=False, ensure_ascii=False))
     upload_case_dir(case_dir, bucket)
     log.info("synthesized freeze_brief.json for skip_editorial path: "
              "%d freezable issuer(s)", len(freezable))
@@ -1627,24 +1627,58 @@ def _summarize_brief(brief_path: Path) -> dict[str, Any]:
 
     out["total_loss_usd"] = _parse_usd(brief.get("TOTAL_LOSS_USD"))
     out["max_recoverable_usd"] = _parse_usd(brief.get("MAX_RECOVERABLE_USD"))
-    issuers = sorted({
-        f.get("issuer") for f in brief.get("FREEZABLE", []) if f.get("issuer")
-    })
+    # State-machine audit #5: an entry in FREEZABLE[] is the per-issuer
+    # grouping that aggregates ALL of that issuer's holdings — including
+    # INVESTIGATE (sub-dust / suspected-only) and UNRECOVERABLE (no
+    # freeze authority, e.g. Lido staking). Promoting such an issuer to
+    # the investigations.freezable_issuers column mislabels it as a
+    # confirmed freeze target on the admin dashboard and in the LE
+    # handoff. Only count an issuer when at least one of its holdings
+    # is genuinely status="FREEZABLE".
+    issuers_set: set[str] = set()
+    for f in brief.get("FREEZABLE", []) or []:
+        if not isinstance(f, dict):
+            continue
+        issuer = f.get("issuer")
+        if not issuer:
+            continue
+        holdings = f.get("holdings") or []
+        if not isinstance(holdings, list):
+            continue
+        if any(
+            isinstance(h, dict)
+            and str(h.get("status") or "").upper() == "FREEZABLE"
+            for h in holdings
+        ):
+            issuers_set.add(issuer)
+    issuers = sorted(issuers_set)
     out["freezable_issuers"] = issuers or None
     return out
 
 
 def _parse_usd(s: Any) -> Decimal | None:
-    """'$1,234.56' → Decimal('1234.56'). Returns None on garbage input."""
+    """'$1,234.56' → Decimal('1234.56'). Returns None on garbage input.
+
+    RIGOR-Jacob Z5-2: rejects non-finite Decimals (NaN, Infinity,
+    -Infinity). Python's ``Decimal("NaN")`` / ``Decimal("Infinity")``
+    parses successfully, and a freeze_brief.json carrying ``"$NaN"`` /
+    ``"$Infinity"`` (e.g. from upstream pricing corruption) would
+    otherwise propagate through ``mark_built_package`` into the
+    ``investigations.total_loss_usd`` column and silently corrupt every
+    downstream aggregation that sums or compares that column.
+    """
     if s is None:
         return None
     try:
         cleaned = str(s).replace("$", "").replace(",", "").strip()
         if not cleaned:
             return None
-        return Decimal(cleaned)
+        value = Decimal(cleaned)
     except Exception:  # noqa: BLE001
         return None
+    if not value.is_finite():
+        return None
+    return value
 
 
 def _hydrate_local_from_bucket(
@@ -1670,7 +1704,7 @@ def _hydrate_local_from_bucket(
                 data = store.read_json(name)
                 atomic_write_text(
                     case_dir / name,
-                    json.dumps(data, indent=2, ensure_ascii=False),
+                    json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False),
                 )
             else:
                 text = store.read_text(name)

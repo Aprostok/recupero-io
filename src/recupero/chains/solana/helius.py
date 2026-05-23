@@ -67,7 +67,17 @@ class HeliusClient:
             raise ValueError("HELIUS_API_KEY is required")
         self.api_key = api_key
         self.limiter = _RateLimiter(requests_per_second)
-        self._client = httpx.Client(timeout=timeout_seconds)
+        # Split connect vs read timeout: a slow-DNS / hung-TCP-handshake
+        # against api.helius.xyz must not block the worker for the full
+        # 30s read window. Connect cap = 10s.
+        self._client = httpx.Client(
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=timeout_seconds,
+                write=timeout_seconds,
+                pool=timeout_seconds,
+            )
+        )
 
     def close(self) -> None:
         self._client.close()
@@ -91,6 +101,11 @@ class HeliusClient:
         """
         all_txs: list[dict[str, Any]] = []
         cursor = before_signature
+        # RIGOR-Jacob Z14: detect a non-advancing cursor (buggy or
+        # adversarial mirror returns the same last-signature forever)
+        # and break early instead of burning all max_pages slots on
+        # duplicate work.
+        stuck_count = 0
         for page in range(max_pages):
             batch = self._fetch_page(address, limit=limit, before=cursor)
             if not batch:
@@ -107,9 +122,24 @@ class HeliusClient:
                     )
                     break
             # Cursor = signature of the last (oldest) tx in this page
-            cursor = batch[-1].get("signature")
-            if not cursor:
+            next_cursor = batch[-1].get("signature")
+            if not next_cursor:
                 break
+            # Stuck-cursor guard: if this page's cursor equals the
+            # cursor we used to fetch it, the mirror is returning the
+            # same page repeatedly. Count repeats; break early.
+            if next_cursor == cursor:
+                stuck_count += 1
+                if stuck_count >= 1:
+                    log.warning(
+                        "helius pagination stuck cursor at page %d "
+                        "(cursor=%r); breaking",
+                        page, next_cursor,
+                    )
+                    break
+            else:
+                stuck_count = 0
+            cursor = next_cursor
         return all_txs
 
     def get_current_slot(self) -> int:
@@ -193,7 +223,16 @@ class HeliusClient:
                 f"HTTP {resp.status_code} (transient)"
             )
         resp.raise_for_status()
-        data = resp.json()
+        try:
+            data = resp.json()
+        except ValueError as e:
+            # RIGOR-Jacob Z14: Cloudflare 200 + HTML body. resp.json()
+            # raises JSONDecodeError (ValueError) which is NOT in the
+            # retry allow-list — would propagate as a raw ValueError
+            # and kill the trace branch.
+            raise HeliusError(
+                f"non-JSON response from Helius (HTML or invalid body): {e}"
+            ) from e
         if not isinstance(data, list):
             # Helius returns {"error": "..."} on errors
             msg = data.get("error") if isinstance(data, dict) else str(data)
@@ -222,5 +261,30 @@ class HeliusClient:
         resp = self._client.post(url, json=payload)
         if resp.status_code == 429:
             raise HeliusRateLimitError("HTTP 429")
+        if resp.status_code == 401:
+            raise HeliusError("HTTP 401 — HELIUS_API_KEY rejected")
+        # RIGOR-Jacob Z14: classify 5xx as retryable (mirror parity
+        # with _fetch_page). A 502/503/504 from mainnet.helius-rpc.com
+        # used to leak as a raw HTTPStatusError and kill the trace.
+        if resp.status_code >= 500:
+            raise HeliusRateLimitError(
+                f"HTTP {resp.status_code} (transient)"
+            )
         resp.raise_for_status()
-        return resp.json()
+        try:
+            data = resp.json()
+        except ValueError as e:
+            # Cloudflare 200 + HTML body → surface as HeliusError.
+            raise HeliusError(
+                f"non-JSON RPC response from Helius (HTML or invalid body): {e}"
+            ) from e
+        # RIGOR-Jacob R: the RPC endpoint MUST return a dict (JSON-RPC
+        # envelope). A list / string / other shape from a misbehaving
+        # mirror would crash callers like get_account_info on
+        # ``.get("result")`` with AttributeError. Surface as a clean
+        # HeliusError instead.
+        if not isinstance(data, dict):
+            raise HeliusError(
+                f"Helius RPC returned non-dict shape: {type(data).__name__}"
+            )
+        return data

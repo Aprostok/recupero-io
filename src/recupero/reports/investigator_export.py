@@ -24,11 +24,61 @@ import csv
 import json
 import logging
 import os
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+
+# v0.20.12 hardening: cells that begin with one of these characters are
+# interpreted as a FORMULA by Excel / LibreOffice / Google Sheets when
+# the analyst opens investigator_findings.csv (CWE-1236). Matches the
+# OWASP-standard mitigation already in CaseStore._csv_safe.
+_CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@", "\t", "\r")
+
+# Numeric tokens that would render as NaN / Inf when re-parsed by a
+# downstream pandas / numpy / Excel ingestion. The InvestigatorFinding
+# amount_usd field is typed `str` but operator/brief input can plant
+# any string; reject the IEEE-754 sentinels.
+_NUMERIC_NONFINITE_TOKENS = frozenset(
+    {"nan", "+nan", "-nan", "inf", "+inf", "-inf", "infinity",
+     "+infinity", "-infinity"}
+)
+
+
+def _csv_safe(value: Any) -> str:
+    """Neutralize CSV formula-injection (CWE-1236) on a single cell.
+
+    OWASP-standard mitigation: prefix a leading-trigger cell with a
+    single quote so the spreadsheet treats it as literal text. This
+    matches CaseStore._csv_safe (storage/case_store.py) so the same
+    sanitizer applies across every CSV we ship to investigators.
+    """
+    s = "" if value is None else str(value)
+    if not s:
+        return s
+    if s[0] in _CSV_FORMULA_TRIGGERS:
+        return "'" + s
+    return s
+
+
+def _amount_safe(value: Any) -> str:
+    """Strip non-finite numeric sentinels from amount_usd-style cells.
+
+    The brief feeds operator-derived strings (e.g. "$1,234") directly
+    into amount_usd; a poisoned upstream (price-oracle glitch, NaN
+    aggregation in a prior stage) can plant ``"nan"``/``"Infinity"``.
+    Rendering that into a government-ingested CSV is unsafe — pandas
+    coerces it to float NaN and the row drops out of analyst counts.
+    """
+    s = "" if value is None else str(value)
+    if not s:
+        return s
+    if s.strip().lower() in _NUMERIC_NONFINITE_TOKENS:
+        return ""
+    return s
 
 
 @dataclass(frozen=True)
@@ -201,8 +251,15 @@ def write_csv(
     # SIGTERM mid-write can't leave a truncated CSV that gets synced to
     # FBI/IRS-CI analysts. Pattern matches _common.atomic_write_text but
     # adapted for CSV's file-object writer API.
+    # v0.20.12 hardening: per-writer unique tmp suffix so two concurrent
+    # writers (operator retry + sync worker) don't trample each other's
+    # half-written tmp file and corrupt the os.replace. The amount_usd
+    # column is filtered for NaN/Inf and every cell is run through
+    # _csv_safe to neutralize CWE-1236 formula-injection.
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = out_path.with_suffix(out_path.suffix + ".tmp")
+    tmp_path = out_path.with_suffix(
+        out_path.suffix + f".{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
     try:
         with tmp_path.open("w", encoding="utf-8", newline="") as f:
             writer = csv.DictWriter(
@@ -211,7 +268,13 @@ def write_csv(
             )
             writer.writeheader()
             for fnd in findings:
-                writer.writerow({c: getattr(fnd, c, "") for c in _CSV_COLUMNS})
+                row = {}
+                for c in _CSV_COLUMNS:
+                    raw = getattr(fnd, c, "")
+                    if c == "amount_usd":
+                        raw = _amount_safe(raw)
+                    row[c] = _csv_safe(raw)
+                writer.writerow(row)
         os.replace(str(tmp_path), str(out_path))
     finally:
         try:
@@ -230,19 +293,30 @@ def write_json(
     prefer JSON over CSV (Jupyter notebooks, Splunk forwarders,
     custom ingestion pipelines)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    # v0.20.12 hardening: the JSON export targets tools that JSON-parse
+    # then often coerce amount_usd to float. A literal "NaN"/"Infinity"
+    # string survives the str-typed schema and re-parses to a real
+    # NaN downstream — drop it the same way the CSV path does. We
+    # intentionally do NOT csv-escape JSON cells (the formula trigger
+    # only matters in spreadsheet ingestion).
+    def _build_row(fnd: InvestigatorFinding) -> dict[str, str]:
+        row: dict[str, str] = {}
+        for col in _CSV_COLUMNS:
+            raw = getattr(fnd, col, "")
+            if col == "amount_usd":
+                raw = _amount_safe(raw)
+            row[col] = "" if raw is None else str(raw)
+        return row
     payload = {
         "schema_version": 1,
         "generated_by": "recupero",
         "findings_count": len(findings),
-        "findings": [
-            {col: getattr(fnd, col, "") for col in _CSV_COLUMNS}
-            for fnd in findings
-        ],
+        "findings": [_build_row(fnd) for fnd in findings],
     }
     # v0.20.11 (R15-C MEDIUM): atomic write via _common.atomic_write_text
     # so a SIGTERM mid-write can't produce a truncated JSON file.
     from recupero._common import atomic_write_text
-    atomic_write_text(out_path, json.dumps(payload, indent=2))
+    atomic_write_text(out_path, json.dumps(payload, indent=2, allow_nan=False, ensure_ascii=False))
     log.info("wrote investigator JSON: %s (%d findings)", out_path, len(findings))
     return out_path
 

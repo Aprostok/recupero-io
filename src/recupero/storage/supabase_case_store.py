@@ -51,6 +51,49 @@ log = logging.getLogger(__name__)
 
 _BOM = b"\xef\xbb\xbf"
 
+# RIGOR-Jacob Z19-2: hard cap on a single download response body.
+# Anyone with bucket write access (admin UI, sibling worker, a future
+# tenant) can plant a multi-GB case.json — the next worker that
+# resumes the case would OOM. 256 MB is generous (a real case.json
+# is a few MB at most); any single artifact larger than this is
+# either corruption or hostile.
+_DOWNLOAD_HARD_CAP_BYTES = 256 * 1024 * 1024
+
+# RIGOR-Jacob Z19-3: hard cap on _list pagination. A buggy or
+# hostile Supabase endpoint that returns ``limit`` rows forever
+# would pin the worker. 200 pages × 1000 = 200 000 files is far
+# beyond any real investigation.
+_LIST_MAX_PAGES = 200
+
+# RIGOR-Jacob Z19-4: max recursion depth for _walk_all_files.
+# Real bucket nesting is 2 levels (investigations/<uuid>/evidence/);
+# 16 leaves ample slack and prevents stack-exhaustion DoS.
+_WALK_MAX_DEPTH = 16
+
+# RIGOR-Jacob Z19-5: substrings forbidden in filenames / tx_hashes.
+# The storage URL is built by string-concat, so any of these would
+# break out of the investigation prefix.
+_FILENAME_FORBIDDEN_SUBSTRINGS = ("..", "\x00", "\n", "\r", "\\", "//")
+
+
+def _validate_relpath(value: str, *, kind: str) -> None:
+    """RIGOR-Jacob Z19-5: reject filename / tx_hash values that would
+    break out of the investigation's storage prefix when string-
+    concatenated into the bucket URL."""
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"invalid {kind}: must be a non-empty string")
+    if value.startswith("/"):
+        raise ValueError(
+            f"invalid {kind} {value!r}: must not start with '/' "
+            f"(would break out of investigation prefix)"
+        )
+    for bad in _FILENAME_FORBIDDEN_SUBSTRINGS:
+        if bad in value:
+            raise ValueError(
+                f"invalid {kind} {value!r}: contains forbidden "
+                f"substring {bad!r} (path traversal / control char)"
+            )
+
 
 class _StorageTransient(RuntimeError):
     """Marker exception raised internally to signal a retriable
@@ -130,6 +173,22 @@ class SupabaseCaseStore:
             raise ValueError("service_role_key is required")
         if not investigation_id:
             raise ValueError("investigation_id is required")
+        # RIGOR-Jacob V: validate investigation_id is a UUID — the
+        # documented contract. Without this, a value like
+        # ``"../../bucket/admin"`` lands in storage_prefix as
+        # ``investigations/../../bucket/admin/`` — even if Supabase
+        # normalizes the URL, the documented contract is violated
+        # and the surface is confusing 4xx errors. UUID validation
+        # closes the path-traversal + garbage-input class for this
+        # external-data-sink boundary.
+        from uuid import UUID as _UUID
+        try:
+            _UUID(str(investigation_id))
+        except (ValueError, TypeError) as e:
+            raise ValueError(
+                f"investigation_id {investigation_id!r} is not a "
+                f"valid UUID"
+            ) from e
         if not bucket:
             raise ValueError("bucket is required")
 
@@ -225,26 +284,31 @@ class SupabaseCaseStore:
         content: str,
         content_type: str = "text/plain; charset=utf-8",
     ) -> None:
+        _validate_relpath(filename, kind="filename")
         self._upload(self.storage_prefix + filename, content.encode("utf-8"), content_type)
 
     def read_text(self, filename: str) -> str:
+        _validate_relpath(filename, kind="filename")
         raw = self._download(self.storage_prefix + filename)
         if raw.startswith(_BOM):
             raw = raw[3:]
         return raw.decode("utf-8")
 
     def write_json(self, filename: str, data: dict | list) -> None:
+        _validate_relpath(filename, kind="filename")
         opts = orjson.OPT_INDENT_2 if self._pretty else 0
         body = orjson.dumps(data, option=opts)
         self._upload(self.storage_prefix + filename, body, "application/json")
 
     def read_json(self, filename: str) -> dict | list:
+        _validate_relpath(filename, kind="filename")
         raw = self._download(self.storage_prefix + filename)
         if raw.startswith(_BOM):
             raw = raw[3:]
         return orjson.loads(raw)
 
     def exists(self, filename: str) -> bool:
+        _validate_relpath(filename, kind="filename")
         url = f"{self._storage_root}/object/{self._bucket}/{self.storage_prefix}{filename}"
         resp = self._client.head(url)
         if resp.status_code == 200:
@@ -258,6 +322,10 @@ class SupabaseCaseStore:
     # ----- Evidence subpath ----- #
 
     def write_evidence(self, tx_hash: str, payload: dict) -> None:
+        # RIGOR-Jacob Z19-5: tx_hash is concatenated into the storage
+        # URL; a regressed chain adapter producing ``"../../leak"``
+        # would write outside the investigation prefix. Reject early.
+        _validate_relpath(tx_hash, kind="tx_hash")
         opts = orjson.OPT_INDENT_2 if self._pretty else 0
         body = orjson.dumps(payload, option=opts)
         path = self.storage_prefix + f"evidence/{tx_hash}.json"
@@ -409,13 +477,39 @@ class SupabaseCaseStore:
             raise RuntimeError(
                 f"download {path} failed: {resp.status_code} {resp.text[:200]}"
             )
-        return resp.content
+        # RIGOR-Jacob Z19-2: cap response body. Anyone with bucket
+        # write access (admin UI, sibling worker, a hostile tenant)
+        # can plant a multi-GB case.json — the next worker resuming
+        # the case would OOM loading it via resp.content.
+        try:
+            content_length_header = resp.headers.get("content-length")
+        except Exception:  # noqa: BLE001
+            content_length_header = None
+        try:
+            content_length = (
+                int(content_length_header) if content_length_header else None
+            )
+        except (TypeError, ValueError):
+            content_length = None
+        if content_length is not None and content_length > _DOWNLOAD_HARD_CAP_BYTES:
+            raise PayloadTooLargeError(path, content_length, resp.status_code)
+        body = resp.content
+        if len(body) > _DOWNLOAD_HARD_CAP_BYTES:
+            # Server lied about / omitted Content-Length; the body
+            # is already in memory but we still refuse to hand it
+            # back to the caller so downstream parsers can't choke
+            # on a hostile payload.
+            raise PayloadTooLargeError(path, len(body), resp.status_code)
+        return body
 
     def _list(self, prefix: str, limit: int = 1000) -> list[dict[str, Any]]:
         url = f"{self._storage_root}/object/list/{self._bucket}"
         offset = 0
         out: list[dict[str, Any]] = []
-        while True:
+        # RIGOR-Jacob Z19-3: bounded pagination. A hostile / buggy
+        # endpoint that keeps returning `limit` rows would otherwise
+        # spin the worker forever with unbounded memory growth.
+        for _ in range(_LIST_MAX_PAGES):
             page = self._list_page(url, prefix, limit, offset)
             if not page:
                 break
@@ -423,6 +517,13 @@ class SupabaseCaseStore:
             if len(page) < limit:
                 break
             offset += limit
+        else:
+            log.warning(
+                "supabase _list pagination hit cap of %d pages for "
+                "prefix %r — returning truncated result; check for "
+                "pathological bucket state",
+                _LIST_MAX_PAGES, prefix,
+            )
         return out
 
     @_storage_retry
@@ -451,10 +552,41 @@ class SupabaseCaseStore:
             raise RuntimeError(
                 f"list {prefix} failed: {resp.status_code} {resp.text[:200]}"
             )
-        return resp.json()
+        # RIGOR-Jacob Z19-6: validate response shape. A CDN error
+        # page parsed as JSON, an upstream schema change, or a hostile
+        # MITM could return a string / dict / null instead of a list.
+        # Without this guard the caller crashes with a confusing
+        # ``str.get`` AttributeError deep in a list comprehension.
+        try:
+            payload = resp.json()
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(
+                f"list {prefix} returned non-JSON response: {e}"
+            ) from e
+        if not isinstance(payload, list):
+            raise RuntimeError(
+                f"list {prefix} returned invalid response shape: "
+                f"expected list of dicts, got {type(payload).__name__}"
+            )
+        return payload
 
-    def _walk_all_files(self, prefix: str) -> list[str]:
-        """Recursively collect every file path under ``prefix``."""
+    def _walk_all_files(self, prefix: str, _depth: int = 0) -> list[str]:
+        """Recursively collect every file path under ``prefix``.
+
+        RIGOR-Jacob Z19-4: ``_depth`` is bounded by ``_WALK_MAX_DEPTH``
+        so a hostile bucket layout (or a Supabase server that reports
+        the same directory as its own child) cannot blow Python's
+        recursion limit. Production nesting is 2 levels
+        (``investigations/<uuid>/evidence/``); 16 leaves ample slack.
+        """
+        if _depth >= _WALK_MAX_DEPTH:
+            log.warning(
+                "supabase _walk_all_files hit max recursion depth %d "
+                "at prefix %r — skipping deeper traversal (suggests "
+                "pathological bucket state or buggy server)",
+                _WALK_MAX_DEPTH, prefix,
+            )
+            return []
         out: list[str] = []
         items = self._list(prefix)
         for item in items:
@@ -463,7 +595,7 @@ class SupabaseCaseStore:
                 continue
             full = prefix + name
             if item.get("id") is None:
-                out.extend(self._walk_all_files(full + "/"))
+                out.extend(self._walk_all_files(full + "/", _depth=_depth + 1))
             else:
                 out.append(full)
         return out

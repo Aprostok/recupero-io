@@ -66,6 +66,7 @@ import logging
 import os
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -102,6 +103,73 @@ OFAC_CONS_ADVANCED_URL = "https://www.treasury.gov/ofac/downloads/cons_advanced.
 DEFAULT_OFAC_CSV_PATH = (
     Path(__file__).parent.parent / "labels" / "seeds" / "ofac_crypto_live.csv"
 )
+
+# RIGOR-2a hardening: cap fetched response body. Treasury's full feed
+# is ~50MB; we allow ~3x headroom (150 MiB) and reject above that.
+# A hostile or compromised endpoint streaming gigabytes would otherwise
+# OOM the sync worker.
+_MAX_RESPONSE_BYTES = 150 * 1024 * 1024
+
+# RIGOR-2a hardening: scheme allowlist. Defends against an operator
+# typo / env-var override pointing at file:// (local-file read),
+# ftp:// or gopher:// (SSRF), or http://169.254.169.254 (cloud
+# metadata exfil). We accept http for dev/local fixtures but warn;
+# https only is the prod expectation.
+_ALLOWED_SCHEMES = frozenset({"http", "https"})
+
+# Hosts we refuse outright (link-local, loopback metadata services).
+# A wider SSRF defense (full RFC1918 / private-net block) belongs in
+# a shared http client; this is the minimum to close the obvious
+# cloud-metadata exfil vector.
+_DENY_HOSTS = frozenset({
+    "169.254.169.254",       # AWS/Azure/GCP IMDS
+    "metadata.google.internal",
+    "metadata",
+})
+
+# Characters that must never appear in an SDN name flowing into the
+# CSV: NUL truncates C-string consumers; bidi overrides (U+202A..E,
+# U+2066..9) let an attacker visually disguise filenames/addresses
+# in PDF/HTML reports.
+_FORBIDDEN_NAME_CHARS = (
+    "\x00"
+    "‪‫‬‭‮"
+    "⁦⁧⁨⁩"
+)
+_NAME_SANITIZE_TABLE = str.maketrans({c: None for c in _FORBIDDEN_NAME_CHARS})
+
+
+def _sanitize_sdn_name(name: str) -> str:
+    """Strip NUL and Unicode bidi-override codepoints from an SDN
+    name. These chars have no legitimate use in OFAC entry names
+    and break downstream CSV/PDF/HTML consumers."""
+    return name.translate(_NAME_SANITIZE_TABLE)
+
+
+def _validate_url(url: str) -> str | None:
+    """Return None if the URL is acceptable for fetch, else an
+    error string describing why we refused.
+
+    Enforces:
+      * scheme in {http, https}
+      * host present and not in the deny-list (cloud metadata svcs)
+    """
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception as exc:  # noqa: BLE001
+        return f"malformed url: {exc}"
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in _ALLOWED_SCHEMES:
+        return (
+            f"refused scheme {scheme!r}: only {sorted(_ALLOWED_SCHEMES)} "
+            "are permitted (SSRF / local-file-read defense)"
+        )
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return "url has no host"
+    if host in _DENY_HOSTS:
+        return f"refused host {host!r}: cloud-metadata exfil defense"
+    return None
 
 # RIGOR-2a: removed _PARSER_HARDENING_WARNED state. defusedxml is
 # now a hard dependency (see pyproject.toml + the top-of-file
@@ -173,14 +241,52 @@ def sync_ofac_sdn(
     out_path = output_path or DEFAULT_OFAC_CSV_PATH
     fetched_at = datetime.now(UTC).isoformat()
 
+    # RIGOR-2a: URL scheme/host allowlist BEFORE any urlopen. This
+    # closes file://, ftp://, gopher://, and cloud-metadata SSRF
+    # vectors when a misconfigured env-var / typo / future
+    # user-controlled caller passes a hostile URL.
+    refusal = _validate_url(url)
+    if refusal is not None:
+        log.warning("ofac sync: %s (url=%r)", refusal, url)
+        return SyncResult(
+            success=False,
+            entries_written=0,
+            output_path=out_path,
+            fetched_at=fetched_at,
+            error_message=refusal,
+        )
+
     try:
         log.info("ofac sync: fetching %s", url)
         req = urllib.request.Request(
             url, headers={"User-Agent": "recupero-ofac-sync/0.9.4"},
         )
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            xml_bytes = resp.read()
-    except (urllib.error.URLError, TimeoutError) as exc:
+            # RIGOR-2a: bounded read. Treasury's feed is ~50MB; we
+            # cap at _MAX_RESPONSE_BYTES + 1 so we can detect overflow.
+            # A hostile/compromised CDN streaming gigabytes would
+            # otherwise OOM the worker. urllib's real response accepts
+            # a size argument; legacy in-tree fakes (test doubles)
+            # don't — try the bounded read first, fall back to an
+            # unbounded read for fake objects, then re-check size.
+            try:
+                xml_bytes = resp.read(_MAX_RESPONSE_BYTES + 1)
+            except TypeError:
+                xml_bytes = resp.read()
+        if len(xml_bytes) > _MAX_RESPONSE_BYTES:
+            msg = (
+                f"response exceeded {_MAX_RESPONSE_BYTES} byte cap "
+                "(possible memory-bomb / wrong URL)"
+            )
+            log.warning("ofac sync: %s", msg)
+            return SyncResult(
+                success=False,
+                entries_written=0,
+                output_path=out_path,
+                fetched_at=fetched_at,
+                error_message=msg,
+            )
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         log.warning("ofac sync: feed unreachable (%s) — using stale data", exc)
         return SyncResult(
             success=False,
@@ -354,11 +460,13 @@ def _extract_crypto_entries(xml_bytes: bytes) -> list[OFACCryptoEntry]:
             if tag == "uid":
                 sdn_uid = (child.text or "").strip()
             elif tag == "firstName":
-                first = (child.text or "").strip()
+                # RIGOR-2a: strip NUL + bidi-override before the name
+                # flows into the CSV (and downstream PDF/HTML reports).
+                first = _sanitize_sdn_name((child.text or "").strip())
                 if first:
                     sdn_name_parts.append(first)
             elif tag == "lastName":
-                last = (child.text or "").strip()
+                last = _sanitize_sdn_name((child.text or "").strip())
                 if last:
                     sdn_name_parts.append(last)
             elif tag == "publishInformation":

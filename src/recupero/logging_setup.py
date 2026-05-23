@@ -199,9 +199,61 @@ _AUTH_HEADER_PATTERN = re.compile(
     r"x-cg-demo-api-key|x-api-key|helius-api-key|authorization)['\"]?\s*[:=]\s*['\"]?)"
     r"([A-Za-z0-9._\-]{8,})",
 )
-# Anthropic API keys (ant-...) and OpenAI keys (sk-...).
+# Anthropic API keys (ant-...) and OpenAI keys (sk-..., sk-proj-...).
 _LITERAL_KEY_PATTERN = re.compile(
-    r"\b(sk-(?:ant-)?[A-Za-z0-9_\-]{16,})",
+    r"\b(sk-(?:ant-|proj-)?[A-Za-z0-9_\-]{16,})",
+)
+# Wave 5+ extension: vendor key prefixes with underscore-style tokens.
+# Stripe live/test/restricted secret keys + webhook signing secret.
+# Resend live/test API keys (re_...). The shared pattern accepts any
+# `(prefix_)(token)` shape — we anchor on the prefix to avoid false
+# positives on arbitrary `xx_yy` identifiers.
+_STRIPE_KEY_PATTERN = re.compile(
+    r"\b((?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{16,})",
+)
+_STRIPE_WEBHOOK_PATTERN = re.compile(
+    r"\b(whsec_[A-Za-z0-9]{16,})",
+)
+_RESEND_KEY_PATTERN = re.compile(
+    r"\b(re_[A-Za-z0-9]{16,})",
+)
+# GitHub Personal Access Tokens — classic + fine-grained.
+# Prefix list per GitHub docs: ghp_ (PAT), gho_ (OAuth), ghu_ (user-to-server),
+# ghs_ (server-to-server), ghr_ (refresh).
+_GITHUB_TOKEN_PATTERN = re.compile(
+    r"\b(gh[pousr]_[A-Za-z0-9]{20,})",
+)
+# AWS access key ID — exactly 16 uppercase alphanumerics after AKIA / ASIA
+# (temporary STS). Anchor on word boundary so we don't gobble a longer hex.
+_AWS_ACCESS_KEY_PATTERN = re.compile(
+    r"\b((?:AKIA|ASIA)[0-9A-Z]{16})\b",
+)
+# JWT-shaped tokens: three base64url segments separated by dots, with the
+# header beginning `eyJ` (the literal base64 of `{"`). Catches Supabase
+# service-role JWTs, Anthropic OAuth, generic auth0 / cognito tokens.
+_JWT_PATTERN = re.compile(
+    r"\b(eyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+)",
+)
+# New-style Supabase keys. The JWT-shape legacy service-role token is
+# being phased out for prefixed opaque keys:
+#   sb_secret_<base62>       — server-only service role
+#   sb_publishable_<base62>  — client anon key (less sensitive, but
+#                              still an identifier we don't want in
+#                              shared log archives)
+#   sbp_<base62>             — short prefix variant seen in CLI tooling
+# Adversarial sync audit: SupabaseCaseStore echoes the upstream error
+# body in RuntimeError("upload ... failed: <status> <text[:200]>"), so
+# any 4xx that reflects the inbound header would leak the bearer key.
+_SUPABASE_NEWKEY_PATTERN = re.compile(
+    r"\b((?:sb_secret|sb_publishable|sbp)_[A-Za-z0-9]{16,})",
+)
+# Recupero portal tokens — secrets.token_urlsafe(32) produces ~43 chars of
+# URL-safe base64 (A-Z, a-z, 0-9, -, _). Catch when one is accidentally
+# logged as a free-form literal. Require the explicit context label so we
+# don't redact unrelated 43-char IDs (txids, etc.).
+_PORTAL_TOKEN_PATTERN = re.compile(
+    r"(?i)((?:portal[_-]?token|access[_-]?token|share[_-]?token)['\"]?\s*[:=]\s*['\"]?)"
+    r"([A-Za-z0-9_\-]{32,})",
 )
 
 
@@ -212,13 +264,62 @@ def _redact(text: str) -> str:
     text = _BEARER_PATTERN.sub(r"\1***", text)
     text = _API_KEY_PATTERN.sub(r"\1***", text)
     text = _AUTH_HEADER_PATTERN.sub(r"\1***", text)
+    text = _PORTAL_TOKEN_PATTERN.sub(r"\1***", text)
+    # Stripe / Resend / GitHub / AWS / JWT redaction runs BEFORE the
+    # generic sk-/ant- pattern so the more-specific shapes win cleanly.
+    text = _STRIPE_KEY_PATTERN.sub("***", text)
+    text = _STRIPE_WEBHOOK_PATTERN.sub("***", text)
+    text = _RESEND_KEY_PATTERN.sub("***", text)
+    text = _GITHUB_TOKEN_PATTERN.sub("***", text)
+    text = _AWS_ACCESS_KEY_PATTERN.sub("***", text)
+    text = _JWT_PATTERN.sub("***", text)
+    text = _SUPABASE_NEWKEY_PATTERN.sub("***", text)
     text = _LITERAL_KEY_PATTERN.sub("***", text)
     return text
 
 
+# Adversarial-input wave (v0.20.2): log-injection defense. An attacker
+# who controls a logged argument (a case_id carrying "\r\nFATAL: faked
+# log line") can forge an entire log line in plain-text handlers
+# (RichHandler / file handler). The JSON formatter escapes CR/LF for
+# us as a side effect of json.dumps, but it's the plain-text path
+# that's the operator's primary monitor. Strip CR/LF/NUL + other
+# ASCII control chars from every message before emission.
+#
+# CRLF is replaced with " | " so a multi-line traceback summary still
+# reads sensibly when an exception's message accidentally contained
+# embedded newlines; control chars are dropped entirely.
+def _strip_log_injection(text: str) -> str:
+    if not text:
+        return text
+    # Replace CR/LF with a marker so multi-line strings collapse to one
+    # log line. Drop NUL + remaining ASCII control chars (incl. tab is
+    # KEPT because operator-friendly traces use it).
+    text = text.replace("\r\n", " | ").replace("\n", " | ").replace("\r", " | ")
+    cleaned = []
+    for c in text:
+        cp = ord(c)
+        if cp == 0:
+            continue
+        # Keep tab (0x09) for legibility; drop other C0 controls (excluding
+        # what we already handled).
+        if cp < 0x20 and cp != 0x09:
+            continue
+        if cp == 0x7F:
+            continue
+        # Strip bidi / direction-override controls — these have been used
+        # to disguise the actual content of log lines (e.g., "Trojan Source"
+        # style attacks).
+        if 0x202A <= cp <= 0x202E or 0x2066 <= cp <= 0x2069:
+            continue
+        cleaned.append(c)
+    return "".join(cleaned)
+
+
 class _SecretRedactingFilter(logging.Filter):
-    """Logging filter that redacts DSN passwords + bearer tokens before
-    a record is emitted to any handler."""
+    """Logging filter that redacts DSN passwords + bearer tokens AND
+    strips log-injection control characters before a record is
+    emitted to any handler."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -228,11 +329,17 @@ class _SecretRedactingFilter(logging.Filter):
             msg = record.getMessage()
         except Exception:  # noqa: BLE001
             return True  # never block a log record on filter failure
+        # Order matters: redact secrets FIRST, then strip control
+        # chars. A password might contain `\n` characters; stripping
+        # before redaction could mangle the DSN match.
         redacted = _redact(msg)
-        if redacted != msg:
-            record.msg = redacted
+        sanitized = _strip_log_injection(redacted)
+        if sanitized != msg:
+            record.msg = sanitized
             record.args = None
-        # Also redact any exc_info text that's already been rendered.
+        # Also redact + sanitize any exc_info text that's already been
+        # rendered. Multi-line tracebacks are intentional — only
+        # control chars NOT part of the LF separator get stripped.
         if record.exc_text:
             record.exc_text = _redact(record.exc_text)
         return True

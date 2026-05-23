@@ -31,6 +31,63 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 log = logging.getLogger(__name__)
 
 
+_DEFAULT_HEALTH_PORT = 8080
+
+# Connection-level read timeout (seconds). BaseHTTPRequestHandler exposes
+# this as a class attribute; without it slow/partial clients hold the
+# worker thread indefinitely (slowloris). 10s is well above any honest
+# probe RTT (Railway's healthcheck completes in <500ms) but short enough
+# that a stalled socket gets reaped quickly.
+_REQUEST_TIMEOUT_SECONDS = 10
+
+
+def _resolve_health_bind_host() -> str:
+    """Wave-9 audit (bind-address): default to loopback so the admin-key
+    -gated endpoints (/investigations, /dashboard.json) and the public
+    /metrics endpoint aren't exposed on every interface by default.
+
+    Resolution order:
+      1. HEALTH_BIND_HOST env (explicit operator override)
+      2. ``0.0.0.0`` if PORT is set (Railway/Fly/Heroku style PaaS that
+         needs to reach the worker from the platform's edge proxy)
+      3. ``127.0.0.1`` otherwise (local dev, tests, on-prem)
+    """
+    raw = (os.environ.get("HEALTH_BIND_HOST", "") or "").strip()
+    if raw:
+        return raw
+    if (os.environ.get("PORT", "") or "").strip():
+        return "0.0.0.0"
+    return "127.0.0.1"
+
+
+def _resolve_health_port() -> int:
+    """Wave-9 audit (type-coercion): an operator-supplied ``PORT="foo"``
+    used to propagate ``ValueError`` out of ``int()`` and crash worker
+    startup before any health checks could run. Treat any non-integer,
+    out-of-range, or empty value as the default 8080 so the worker can
+    still bind a port (Railway will mark it healthy/unhealthy normally).
+    """
+    raw = (os.environ.get("PORT", "") or "").strip()
+    if not raw:
+        return _DEFAULT_HEALTH_PORT
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "PORT env var is not an integer (%r) — falling back to %d",
+            raw, _DEFAULT_HEALTH_PORT,
+        )
+        return _DEFAULT_HEALTH_PORT
+    if n < 1 or n > 65535:
+        log.warning(
+            "PORT env var %d is outside valid TCP range — "
+            "falling back to %d",
+            n, _DEFAULT_HEALTH_PORT,
+        )
+        return _DEFAULT_HEALTH_PORT
+    return n
+
+
 def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingHTTPServer:
     """Spawn the health server in a daemon thread. Returns the server
     instance so callers can shut it down on graceful exit (the daemon
@@ -39,9 +96,23 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
     ``check_fn`` is expected to be a parameterless callable that runs
     the readiness checks and returns ``(ok: bool, details: dict)``.
     """
-    port = int(os.environ.get("PORT", "8080"))
+    port = _resolve_health_port()
+    bind_host = _resolve_health_bind_host()
 
     class _Handler(BaseHTTPRequestHandler):
+        # Wave-9 audit: slowloris hardening + info-disclosure scrub.
+        # ``timeout`` is honored by BaseHTTPRequestHandler's underlying
+        # socket; partial requests are dropped after this many seconds.
+        timeout = _REQUEST_TIMEOUT_SECONDS
+
+        def version_string(self) -> str:
+            # Suppress the default ``BaseHTTP/x.x Python/x.x.x`` Server
+            # header. Knowing the exact Python minor version makes CVE
+            # matching trivial; the empty string here yields no Server
+            # header at all (BaseHTTPRequestHandler omits it when
+            # version_string() returns falsy).
+            return ""
+
         def do_GET(self) -> None:  # noqa: N802 (BaseHTTPRequestHandler API)
             self._serve(write_body=True)
 
@@ -426,7 +497,7 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
             })
 
         def _respond(self, code: int, body: dict, *, write_body: bool = True) -> None:
-            payload = json.dumps(body).encode("utf-8")
+            payload = json.dumps(body, allow_nan=False, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -458,12 +529,15 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             return
 
-    server = ThreadingHTTPServer(("0.0.0.0", port), _Handler)
+    server = ThreadingHTTPServer((bind_host, port), _Handler)
     thread = threading.Thread(
         target=server.serve_forever,
         name="health-server",
         daemon=True,
     )
     thread.start()
-    log.info("health server listening on :%d (/health, /healthz)", port)
+    log.info(
+        "health server listening on %s:%d (/health, /healthz)",
+        bind_host, port,
+    )
     return server

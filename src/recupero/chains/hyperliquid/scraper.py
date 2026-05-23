@@ -40,6 +40,37 @@ ARBITRUM_USDC = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
 USDC_DECIMALS = 6
 
 
+def _sanitize_address_field(value: str | None, *, fallback: str) -> str:
+    """Reject CRLF / NUL / control bytes in an attacker-controlled
+    address-shaped field.
+
+    Hyperliquid's ``delta.destination`` is passed through verbatim
+    from a JSON API response. A poisoned (MITM, cached fixture, or
+    upstream injection) value containing ``\\r\\n`` would corrupt
+    log lines, CSV exports, and freeze-letter templates that
+    interpolate this field. Strip every byte < 0x20, plus 0x7F,
+    plus Unicode bidi overrides + zero-width joiners. If nothing
+    survives, return ``fallback``.
+    """
+    if not isinstance(value, str):
+        return fallback
+    out_chars: list[str] = []
+    for ch in value:
+        cp = ord(ch)
+        if cp < 0x20 or cp == 0x7F:
+            continue
+        if 0x80 <= cp <= 0x9F:
+            continue
+        # Bidi overrides / zero-width / BOM.
+        if cp in (0x200B, 0x200C, 0x200D, 0x200E, 0x200F,
+                  0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                  0x2060, 0x2066, 0x2067, 0x2068, 0x2069, 0xFEFF):
+            continue
+        out_chars.append(ch)
+    cleaned = "".join(out_chars).strip()
+    return cleaned or fallback
+
+
 def scrape_hyperliquid_case(
     *,
     user_address: str,
@@ -108,6 +139,19 @@ def _events_to_transfers(
     _MONEY_FLOW_DELTA_TYPES = {"withdraw", "deposit"}
     transfers: list[Transfer] = []
     for idx, evt in enumerate(events):
+        # Adversarial-hardening (defense-in-depth — client.py also
+        # coerces non-finite Decimals to 0 at parse time): if a NaN
+        # or Infinity has slipped through, ``int(NaN * 10**6)`` raises
+        # ValueError and ``int(Infinity * 10**6)`` raises OverflowError.
+        # Skip non-finite events outright; they don't represent
+        # real money flow.
+        if not evt.usdc_delta.is_finite():
+            log.debug(
+                "skipping hyperliquid event with non-finite usdc_delta: %s",
+                evt.hash,
+            )
+            continue
+
         # Only events with a real USDC delta are meaningful for the money-flow
         # picture. Skip position transfers, class transfers, etc. with zero delta.
         if evt.usdc_delta == 0:
@@ -130,8 +174,17 @@ def _events_to_transfers(
         # Direction: negative delta = outflow (withdraw / send)
         #            positive delta = inflow (deposit / receive)
         is_outflow = evt.usdc_delta < 0
-        from_addr = user_address if is_outflow else (evt.destination or "hyperliquid:unknown_source")
-        to_addr = (evt.destination or "hyperliquid:unknown_destination") if is_outflow else user_address
+        # Adversarial-hardening: sanitize attacker-controlled ``destination``
+        # so CRLF / NUL / control bytes can't poison Transfer.from_address
+        # / to_address (which downstream renderers interpolate into log
+        # lines, CSV cells, freeze-letter bodies).
+        clean_dest = _sanitize_address_field(
+            evt.destination,
+            fallback=("hyperliquid:unknown_destination" if is_outflow
+                      else "hyperliquid:unknown_source"),
+        )
+        from_addr = user_address if is_outflow else clean_dest
+        to_addr = clean_dest if is_outflow else user_address
 
         token = TokenRef(
             chain=Chain.ethereum,

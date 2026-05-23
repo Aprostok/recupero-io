@@ -95,6 +95,8 @@ def test_happy_path_log_does_not_leak_portal_url():
         with patch(
             "recupero._common.db_connect", return_value=stub,
         ), patch(
+            "recupero.worker._email.has_been_sent", return_value=False,
+        ), patch(
             "recupero.portal.tokens.generate_token",
             return_value=(TOKEN_ID, raw_token, None),
         ), patch(
@@ -148,6 +150,8 @@ def test_disabled_email_branch_log_does_not_leak_portal_url():
     try:
         with patch(
             "recupero._common.db_connect", return_value=stub,
+        ), patch(
+            "recupero.worker._email.has_been_sent", return_value=False,
         ), patch(
             "recupero.portal.tokens.generate_token",
             return_value=(TOKEN_ID, raw_token, None),

@@ -252,5 +252,60 @@
     "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc"],
     "follow_up_url": "https://layerzeroscan.com",
     "added_at": "2026-05-17T00:00:00Z"
+  },
+  {
+    "address": "0x66a71dcef29a0ffbdbe3c6a460a3b5bc225cd675",
+    "name": "LayerZero: Endpoint v1",
+    "category": "bridge",
+    "source": "layerzero_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base", "fantom"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "notes": "Generic LayerZero messaging endpoint. Many OFTs / aggregators route through this; check inner OApp for the actual destination.",
+    "added_at": "2026-05-22T00:00:00Z"
+  },
+  {
+    "address": "0x1a44076050125825900e736c501f859c50fe728c",
+    "name": "LayerZero: Endpoint v2",
+    "category": "bridge",
+    "source": "layerzero_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "added_at": "2026-05-22T00:00:00Z"
+  },
+  {
+    "address": "0x80226fc0ee2b096224eeac085bb9a8cba1146f7d",
+    "name": "Chainlink CCIP: Router (Ethereum)",
+    "category": "bridge",
+    "source": "chainlink_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "follow_up_url": "https://ccip.chain.link",
+    "notes": "Chainlink Cross-Chain Interoperability Protocol router. ccipSend() encodes destChainSelector + receiver in calldata.",
+    "added_at": "2026-05-22T00:00:00Z"
+  },
+  {
+    "address": "0xce16f69375520ab01377ce7b88f5ba8c48f8d666",
+    "name": "Squid Router",
+    "category": "bridge",
+    "source": "squid_docs",
+    "confidence": "high",
+    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base", "fantom"],
+    "follow_up_url": "https://axelarscan.io",
+    "notes": "Squid aggregator on top of Axelar GMP. Check Axelarscan for the underlying GMP message.",
+    "added_at": "2026-05-22T00:00:00Z"
+  },
+  {
+    "address": "0x2df1c51e09aecf9cacb7bc98cb1742757f163df7",
+    "name": "Hyperliquid: Bridge2 (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "hyperliquid_docs",
+    "confidence": "high",
+    "supports_to_chains": ["hyperliquid"],
+    "follow_up_url": "https://app.hyperliquid.xyz",
+    "notes": "Canonical USDC deposit gateway on Arbitrum for Hyperliquid L1. Withdrawals signed by Hyperliquid validator set.",
+    "added_at": "2026-05-22T00:00:00Z"
   }
 ]

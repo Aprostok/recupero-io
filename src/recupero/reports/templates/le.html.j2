@@ -231,7 +231,7 @@
   {% else %}
   <p style="margin:0 0 0.7em 0;">
     The position was promptly forwarded by the perpetrator to a secondary
-    wallet at {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}, where
+    wallet at {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url|safe_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}, where
     {{ outbound_count_of_stolen_asset }} outbound transfers have been
     observed as of {{ verified_at }} UTC.
   </p>
@@ -251,7 +251,7 @@
   {% if victim.address %}<dt>Residential address:</dt><dd>{{ victim.address }}</dd>{% endif %}
   {% if victim.email %}<dt>Email:</dt>      <dd>{{ victim.email }}</dd>{% endif %}
   {% if victim.phone %}<dt>Phone:</dt>      <dd>{{ victim.phone }}</dd>{% endif %}
-  <dt>Affected wallet:</dt>     <dd>{% if victim_wallet_explorer_url %}<a class="mono" href="{{ victim_wallet_explorer_url }}">{{ victim.wallet_address }}</a>{% else %}<span class="mono">{{ victim.wallet_address }}</span>{% endif %}</dd>
+  <dt>Affected wallet:</dt>     <dd>{% if victim_wallet_explorer_url %}<a class="mono" href="{{ victim_wallet_explorer_url|safe_url }}">{{ victim.wallet_address }}</a>{% else %}<span class="mono">{{ victim.wallet_address }}</span>{% endif %}</dd>
   {% if victim.legal_counsel %}
   <dt>Legal counsel:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
   {% endif %}
@@ -282,18 +282,18 @@
       {{ ev.amount_human }} {{ ev.symbol }}
       {% if ev.usd_value and ev.usd_value != '(unknown)' %}(USD {{ ev.usd_value }}){% endif %}
       transferred from
-      {% if ev.from_explorer_url %}<a class="mono" href="{{ ev.from_explorer_url }}">{{ ev.from_address }}</a>{% else %}<span class="mono">{{ ev.from_address }}</span>{% endif %}
-      to {% if ev.to_explorer_url %}<a class="mono" href="{{ ev.to_explorer_url }}">{{ ev.to_address }}</a>{% else %}<span class="mono">{{ ev.to_address }}</span>{% endif %}.
-      Tx: <span class="mono">{% if ev.explorer_url %}<a href="{{ ev.explorer_url }}">{{ ev.tx_hash }}</a>{% else %}{{ ev.tx_hash }}{% endif %}</span>
+      {% if ev.from_explorer_url %}<a class="mono" href="{{ ev.from_explorer_url|safe_url }}">{{ ev.from_address }}</a>{% else %}<span class="mono">{{ ev.from_address }}</span>{% endif %}
+      to {% if ev.to_explorer_url %}<a class="mono" href="{{ ev.to_explorer_url|safe_url }}">{{ ev.to_address }}</a>{% else %}<span class="mono">{{ ev.to_address }}</span>{% endif %}.
+      Tx: <span class="mono">{% if ev.explorer_url %}<a href="{{ ev.explorer_url|safe_url }}">{{ ev.tx_hash }}</a>{% else %}{{ ev.tx_hash }}{% endif %}</span>
     </div>
     {% endfor %}
   {% else %}
   <div class="timeline-event theft">
     <time>{{ theft_event.timestamp_human }}</time> &nbsp;—&nbsp;
     <strong>Initial theft.</strong> {{ asset.amount_human }} {{ asset.symbol }} transferred
-    from victim wallet {% if theft_event.from_explorer_url %}<a class="mono" href="{{ theft_event.from_explorer_url }}">{{ theft_event.from_address }}</a>{% else %}<span class="mono">{{ theft_event.from_address }}</span>{% endif %}
-    to perpetrator wallet {% if theft_event.to_explorer_url %}<a class="mono" href="{{ theft_event.to_explorer_url }}">{{ theft_event.to_address }}</a>{% else %}<span class="mono">{{ theft_event.to_address }}</span>{% endif %}.
-    Tx: <span class="mono">{% if theft_event.explorer_url %}<a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a>{% else %}{{ theft_event.tx_hash }}{% endif %}</span>
+    from victim wallet {% if theft_event.from_explorer_url %}<a class="mono" href="{{ theft_event.from_explorer_url|safe_url }}">{{ theft_event.from_address }}</a>{% else %}<span class="mono">{{ theft_event.from_address }}</span>{% endif %}
+    to perpetrator wallet {% if theft_event.to_explorer_url %}<a class="mono" href="{{ theft_event.to_explorer_url|safe_url }}">{{ theft_event.to_address }}</a>{% else %}<span class="mono">{{ theft_event.to_address }}</span>{% endif %}.
+    Tx: <span class="mono">{% if theft_event.explorer_url %}<a href="{{ theft_event.explorer_url|safe_url }}">{{ theft_event.tx_hash }}</a>{% else %}{{ theft_event.tx_hash }}{% endif %}</span>
   </div>
   {% endif %}
   {% for hop in hops %}
@@ -301,9 +301,9 @@
     <time>{{ hop.timestamp_human }}</time> &nbsp;—&nbsp;
     <strong>Hop {{ loop.index }}.</strong>
     {{ hop.amount_human }} {{ hop.symbol }} transferred from
-    {% if hop.from_explorer_url %}<a class="mono" href="{{ hop.from_explorer_url }}">{{ hop.from_address }}</a>{% else %}<span class="mono">{{ hop.from_address }}</span>{% endif %}
-    to {% if hop.to_explorer_url %}<a class="mono" href="{{ hop.to_explorer_url }}">{{ hop.to_address }}</a>{% else %}<span class="mono">{{ hop.to_address }}</span>{% endif %}.
-    Tx: <span class="mono">{% if hop.explorer_url %}<a href="{{ hop.explorer_url }}">{{ hop.tx_hash }}</a>{% else %}{{ hop.tx_hash }}{% endif %}</span>
+    {% if hop.from_explorer_url %}<a class="mono" href="{{ hop.from_explorer_url|safe_url }}">{{ hop.from_address }}</a>{% else %}<span class="mono">{{ hop.from_address }}</span>{% endif %}
+    to {% if hop.to_explorer_url %}<a class="mono" href="{{ hop.to_explorer_url|safe_url }}">{{ hop.to_address }}</a>{% else %}<span class="mono">{{ hop.to_address }}</span>{% endif %}.
+    Tx: <span class="mono">{% if hop.explorer_url %}<a href="{{ hop.explorer_url|safe_url }}">{{ hop.tx_hash }}</a>{% else %}{{ hop.tx_hash }}{% endif %}</span>
   </div>
   {% endfor %}
   <div class="timeline-event current">
@@ -344,7 +344,7 @@
     {% endif %}
     {% else %}
     <strong>Current state.</strong> Position remains in
-    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}.
+    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url|safe_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}.
     {{ outbound_count_of_stolen_asset }} outbound transfers of the stolen asset observed
     since receipt.
     {% endif %}
@@ -367,7 +367,7 @@
 <h2>4. Stolen Asset Details</h2>
 <table class="evidence">
   <tr><th>Asset symbol</th>           <td>{{ asset.symbol }}</td></tr>
-  <tr><th>Token contract address</th> <td>{% if asset_contract_explorer_url %}<a class="mono" href="{{ asset_contract_explorer_url }}">{{ asset.contract }}</a>{% else %}<span class="mono">{{ asset.contract }}</span>{% endif %}</td></tr>
+  <tr><th>Token contract address</th> <td>{% if asset_contract_explorer_url %}<a class="mono" href="{{ asset_contract_explorer_url|safe_url }}">{{ asset.contract }}</a>{% else %}<span class="mono">{{ asset.contract }}</span>{% endif %}</td></tr>
   <tr><th>Issuer (legal entity)</th>  <td>{{ asset.issuer }}</td></tr>
   {% if issuer.jurisdiction %}<tr><th>Issuer jurisdiction</th><td>{{ issuer.jurisdiction }}</td></tr>{% endif %}
   {% if issuer.secondary_party and issuer.secondary_role %}<tr><th>Underlying strategy operator</th><td>{{ issuer.secondary_party }} ({{ issuer.secondary_role }})</td></tr>{% endif %}
@@ -430,7 +430,7 @@
         <span class="label-pill" style="color:#6B7280;">{{ h.status or 'UNKNOWN' }}</span>
         {% endif %}
       </td>
-      <td class="mono">{% if h.explorer_url %}<a href="{{ h.explorer_url }}">{{ h.address }}</a>{% else %}{{ h.address }}{% endif %}</td>
+      <td class="mono">{% if h.explorer_url %}<a href="{{ h.explorer_url|safe_url }}">{{ h.address }}</a>{% else %}{{ h.address }}{% endif %}</td>
       <td class="amount mono">{{ h.amount }}</td>
       <td class="amount mono">{{ h.usd }}</td>
     </tr>
@@ -502,7 +502,7 @@
         <span class="label-pill" style="color:#6B7280;">{{ h.status or 'UNKNOWN' }}</span>
         {% endif %}
       </td>
-      <td class="mono">{% if h.explorer_url %}<a href="{{ h.explorer_url }}">{{ h.address }}</a>{% else %}{{ h.address }}{% endif %}</td>
+      <td class="mono">{% if h.explorer_url %}<a href="{{ h.explorer_url|safe_url }}">{{ h.address }}</a>{% else %}{{ h.address }}{% endif %}</td>
       <td class="amount mono">{{ h.amount }}</td>
       <td class="amount mono">{{ h.usd }}</td>
     </tr>
@@ -530,7 +530,7 @@
   </tr>
   {% for w in identified_wallets %}
   <tr class="{{ w.row_class }}">
-    <td class="mono">{% if w.explorer_url %}<a href="{{ w.explorer_url }}">{{ w.address }}</a>{% else %}{{ w.address }}{% endif %}</td>
+    <td class="mono">{% if w.explorer_url %}<a href="{{ w.explorer_url|safe_url }}">{{ w.address }}</a>{% else %}{{ w.address }}{% endif %}</td>
     <td>{{ w.role }}</td>
     <td>{{ w.type }}</td>
     <td>{{ w.notes }}</td>
@@ -965,7 +965,7 @@
     holds protocol-level authority over redemption and is the only party
     in a position to technically halt the {{ asset.amount_human }}
     {{ asset.symbol }} position at
-    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}. A request
+    {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url|safe_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}. A request
     originating from your office is materially more enforceable than a
     third-party request.
     {% if issuer.kyc_required %}
@@ -1006,7 +1006,7 @@
   {% else %}
   <li>Issue legal process to {{ issuer.short_name }} for KYC records on
       any party attempting to redeem or transfer the position out of
-      {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}.</li>
+      {% if current_holder.explorer_url %}<a class="mono" href="{{ current_holder.explorer_url|safe_url }}">{{ current_holder.address }}</a>{% else %}<span class="mono">{{ current_holder.address }}</span>{% endif %}.</li>
   {% endif %}
   <li>Issue legal process to any centralized exchange that receives
       onward transfers from the identified perpetrator wallets listed
@@ -1041,8 +1041,8 @@
       <td><strong>{{ route.name }}</strong></td>
       <td>{{ route.jurisdiction }}</td>
       <td class="small">
-        {% if route.url %}<a href="{{ route.url }}">{{ route.url }}</a><br/>{% endif %}
-        {% if route.email %}<a href="mailto:{{ route.email }}">{{ route.email }}</a><br/>{% endif %}
+        {% if route.url %}<a href="{{ route.url|safe_url }}">{{ route.url }}</a><br/>{% endif %}
+        {% if route.email %}<a href="{{ ('mailto:' ~ route.email)|safe_url }}">{{ route.email }}</a><br/>{% endif %}
         {% if route.phone %}{{ route.phone }}<br/>{% endif %}
         {% if route.expected_response %}<span class="small">Response: {{ route.expected_response }}</span>{% endif %}
       </td>
@@ -1065,8 +1065,8 @@
       <td><strong>{{ route.name }}</strong></td>
       <td>{{ route.jurisdiction }}</td>
       <td class="small">
-        {% if route.url %}<a href="{{ route.url }}">{{ route.url }}</a><br/>{% endif %}
-        {% if route.email %}<a href="mailto:{{ route.email }}">{{ route.email }}</a><br/>{% endif %}
+        {% if route.url %}<a href="{{ route.url|safe_url }}">{{ route.url }}</a><br/>{% endif %}
+        {% if route.email %}<a href="{{ ('mailto:' ~ route.email)|safe_url }}">{{ route.email }}</a><br/>{% endif %}
         {% if route.phone %}{{ route.phone }}<br/>{% endif %}
       </td>
       <td class="small">{{ route.description }}</td>
@@ -1088,8 +1088,8 @@
       <td><strong>{{ route.name }}</strong></td>
       <td>{{ route.jurisdiction }}</td>
       <td class="small">
-        {% if route.url %}<a href="{{ route.url }}">{{ route.url }}</a><br/>{% endif %}
-        {% if route.email %}<a href="mailto:{{ route.email }}">{{ route.email }}</a><br/>{% endif %}
+        {% if route.url %}<a href="{{ route.url|safe_url }}">{{ route.url }}</a><br/>{% endif %}
+        {% if route.email %}<a href="{{ ('mailto:' ~ route.email)|safe_url }}">{{ route.email }}</a><br/>{% endif %}
         {% if route.phone %}{{ route.phone }}<br/>{% endif %}
         {% if route.expected_response %}<span class="small">Response: {{ route.expected_response }}</span>{% endif %}
       </td>

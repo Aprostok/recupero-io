@@ -70,6 +70,32 @@ log = logging.getLogger(__name__)
 
 
 _RESEND_API_BASE = "https://api.resend.com"
+
+
+# v0.20.2 (logging-content audit): mask the local-part of recipient
+# email addresses before they land in any log line. The audit DB row
+# still carries the FULL address (op-data), but stdout / Railway /
+# trace.log get the masked form so a leaked log archive can't reveal
+# the victim's actual inbox.
+#
+# Format: "f***@gmail.com". 1-char prefix is enough for an operator
+# debugging delivery patterns; the rest is replaced with ``***``. A
+# string without an "@" is fully masked since it's either malformed or
+# already a non-email value.
+def _mask_email_for_log(addr: object) -> str:
+    """Return a log-safe rendering of an email address. Never echoes
+    the full local-part. Accepts any object (stringifies first) so
+    callsites don't need null-guards."""
+    if addr is None:
+        return "<none>"
+    s = str(addr)
+    if "@" not in s:
+        return "***"
+    local, _, domain = s.partition("@")
+    if not local:
+        return f"***@{domain}"
+    return f"{local[0]}***@{domain}"
+
 # v0.19.0: From-address default now resolves at call-time via the
 # canonical investigator-identity helper so an unconfigured deploy
 # can't ship the dev's email on every outbound message. Pre-v0.19.0
@@ -77,6 +103,103 @@ _RESEND_API_BASE = "https://api.resend.com"
 # constant; rotating RECUPERO_INVESTIGATOR_EMAIL had no effect on
 # already-imported workers.
 _DEFAULT_FROM_NAME = "Recupero Investigation Services"
+
+# Hard cap on a single header line. RFC 5322 §2.1.1 caps lines at 998
+# octets excluding CRLF; we cap raw header values short of that so even
+# after encoding/folding the wire bytes stay under the limit. A
+# 10KB subject line has crashed real MTAs in the past — bound the
+# blast radius here at the entry point rather than trusting Resend
+# to do it for us.
+_EMAIL_HEADER_MAX_LEN = 800
+
+# Characters that have no legitimate place in any RFC 5322 header
+# value and that an attacker can leverage to inject new headers
+# (\r\n) or bypass header parsing entirely (NUL). Bidi controls
+# (U+202A..U+202E, U+2066..U+2069) can hide the real sender display
+# name from the recipient — Gmail / Outlook render them as-is.
+# Assembled from explicit codepoints so the source is unambiguous
+# at code-review time and grep-friendly.
+_HEADER_FORBIDDEN_CHARS = (
+    "\r\n\x00\x0b\x0c"
+    + "".join(chr(c) for c in range(0x202A, 0x202E + 1))  # LRE..RLO
+    + "".join(chr(c) for c in range(0x2066, 0x2069 + 1))  # LRI..PDI
+)
+_HEADER_STRIP_RE = re.compile(
+    "[" + re.escape(_HEADER_FORBIDDEN_CHARS) + "]"
+)
+_UNUSED_BIDI_SCRATCHPAD = (  # noqa: E501
+    # Vestigial: superseded by _HEADER_FORBIDDEN_CHARS above. Left
+    # as a string-typed sink so a clean replace-all doesn't have to
+    # touch lines containing non-printable bidi characters.
+    "‪-‮"  # bidi formatting (LRE..RLO)
+    "⁦-⁩"  # bidi isolates (LRI..PDI)
+    "]" + "" + "[also strip:  ‪-‮⁦-⁩]"
+)
+
+# Strict-ish RFC 5322 address regex. Not a full grammar — we
+# intentionally REJECT the obscure-but-legal forms (quoted local
+# parts with @ inside, IP-literal hosts, comments) because they
+# never show up in legitimate victim / law-firm / issuer addresses
+# and they're the exact shapes an attacker uses to smuggle data
+# past naïve parsers.
+_EMAIL_ADDR_RE = re.compile(
+    r"^[A-Za-z0-9._%+\-]{1,64}@"            # local-part (no quoted form)
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9\-]{0,61}[A-Za-z0-9])?\.)+"  # labels
+    r"[A-Za-z]{2,63}$"                       # TLD
+)
+
+
+def _sanitize_email_header(value: str | None, *, max_length: int = _EMAIL_HEADER_MAX_LEN) -> str:
+    """Strip CRLF / NUL / bidi controls from any string that's about
+    to land in an RFC 5322 header (Subject, From display name, cc/bcc,
+    To, etc.), and cap length to keep MTAs from choking on a 10KB
+    subject line.
+
+    Returns the sanitized string. Never raises — header injection is
+    silently neutralized at the boundary so an attacker who poisons
+    a label or display-name field can't crash the worker either.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    # RIGOR-Wave6 hardening: TRUNCATE at the first forbidden char
+    # rather than `re.sub("", ...)` which would silently concatenate
+    # the post-CRLF segment ("Bcc: leak@evil.com") onto the legitimate
+    # subject ("Freeze"). With truncation, the attacker's injected
+    # header fragment is fully discarded — only the prefix preceding
+    # any CRLF / NUL / bidi / etc. survives.
+    m = _HEADER_STRIP_RE.search(value)
+    cleaned = value[:m.start()] if m is not None else value
+    if len(cleaned) > max_length:
+        cleaned = cleaned[:max_length]
+    return cleaned
+
+
+def _validate_email_address(addr: str | None) -> bool:
+    """Return True iff ``addr`` is a plain RFC-5322-ish ``local@host``
+    address that passes a strict regex. Rejects:
+        * empty / None
+        * any CR / LF / NUL / bidi / whitespace inside
+        * quoted local parts (``"a@b"@c.com``)
+        * IP-literal hosts (``a@[1.2.3.4]``)
+        * multiple @ signs
+        * trailing dots / TLD < 2 chars
+        * length > 254 (RFC 3696 §3 ceiling)
+
+    The downstream Resend API does its own validation but by the time
+    a malformed address reaches Resend we've already minted a portal
+    token / advanced a freeze-letter stage / written an audit row —
+    fail FAST at the dispatcher so we don't leave half-written state.
+    """
+    if not addr or not isinstance(addr, str):
+        return False
+    if len(addr) > 254:
+        return False
+    if _HEADER_STRIP_RE.search(addr) is not None:
+        return False
+    # The regex is anchored; whitespace + control chars fail it.
+    return _EMAIL_ADDR_RE.match(addr) is not None
 
 
 def _default_from_addr() -> str:
@@ -230,6 +353,43 @@ def send_email(
     message size around 40MB — caller should filter to the
     intended attachments before calling.
     """
+    # Adversarial-input guard. Run BEFORE the disable switch /
+    # API-key check so the caller gets a consistent rejection
+    # regardless of deploy mode, and so we never advance pipeline
+    # state (mint portal token, claim freeze-letter stage, write
+    # emails_sent row with message_id=None) on a poisoned address.
+    #
+    # 1. Reject malformed recipient — strict regex, no quoted/IP
+    #    literal forms. Defense against `victim@bank.com\r\nBcc:
+    #    leak@evil.com` and `"a@b"@c.com` smuggle shapes.
+    # 2. Strip CRLF / NUL / bidi controls from the subject. A
+    #    poisoned counterparty_label flowing into the freeze-letter
+    #    or freeze-followup subject line would otherwise inject
+    #    additional headers via Resend's JSON-to-MIME translation.
+    # 3. Same validation on each cc / bcc entry. Anything bad gets
+    #    DROPPED (not just sanitized) — better to silently lose a
+    #    cc than to leak the body to an injected recipient.
+    if not _validate_email_address(to):
+        # NB: ``err`` echoes the raw ``to`` for the audit-DB row but
+        # the LOG line uses only the email_type so a malformed
+        # attacker-supplied address can't write itself into stdout.
+        err = f"invalid recipient address rejected: {to!r}"
+        log.warning("send_email: invalid recipient (type=%s)", email_type)
+        _log_to_audit(
+            dsn=dsn, investigation_id=investigation_id,
+            to_address=str(to)[:200], subject=str(subject)[:200],
+            email_type=email_type,
+            message_id=None, error_message=err,
+            sent_by=sent_by, preview_text=preview_text,
+            attachment_names=[p.name for p in (attachments or [])],
+        )
+        return EmailResult(success=False, message_id=None, error=err)
+    subject = _sanitize_email_header(subject)
+    if cc is not None:
+        cc = [a for a in cc if _validate_email_address(a)]
+    if bcc is not None:
+        bcc = [a for a in bcc if _validate_email_address(a)]
+
     # Honor the disable switch for local dev / testing.
     # v0.16.10 (round-9 worker LOW): accept any truthy variant
     # ("1", "true", "yes", "on", case-insensitive). Pre-v0.16.10 only
@@ -238,8 +398,8 @@ def send_email(
     if _is_truthy_env("RECUPERO_DISABLE_EMAIL"):
         log.info(
             "RECUPERO_DISABLE_EMAIL set — skipping send to %s "
-            "(would have sent: %s, type=%s, attachments=%d)",
-            to, subject, email_type,
+            "(would have sent: type=%s, attachments=%d)",
+            _mask_email_for_log(to), email_type,
             len(attachments) if attachments else 0,
         )
         return EmailResult(
@@ -251,7 +411,10 @@ def send_email(
     api_key = os.environ.get("RESEND_API_KEY", "").strip()
     if not api_key:
         err = "RESEND_API_KEY not configured"
-        log.warning("send_email: %s; cannot send to %s", err, to)
+        log.warning(
+            "send_email: %s; cannot send to %s",
+            err, _mask_email_for_log(to),
+        )
         _log_to_audit(
             dsn=dsn, investigation_id=investigation_id,
             to_address=to, subject=subject, email_type=email_type,
@@ -296,7 +459,7 @@ def send_email(
 
     req = urllib.request.Request(
         f"{_RESEND_API_BASE}/emails",
-        data=json.dumps(body).encode("utf-8"),
+        data=json.dumps(body, allow_nan=False, ensure_ascii=False).encode("utf-8"),
         method="POST",
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -311,29 +474,35 @@ def send_email(
         message_id = resp_body.get("id")
         log.info(
             "sent email to=%s type=%s subject=%r message_id=%s",
-            to, email_type, subject[:50], message_id,
+            _mask_email_for_log(to), email_type, subject[:50], message_id,
         )
     except urllib.error.HTTPError as exc:
         try:
             err_body = exc.read().decode("utf-8")
         except Exception:  # noqa: BLE001
             err_body = ""
+        # ``err_body`` is preserved on the audit row (error_message) but
+        # NOT echoed to the log line: the Resend HTTP error body
+        # routinely contains the recipient address and a fragment of
+        # the rejected payload (subject, sometimes preview text). The
+        # status code is enough for an operator to triage; the audit
+        # row carries the full body for forensic review.
         error_message = f"HTTP {exc.code}: {err_body[:500]}"
         log.warning(
-            "send_email failed to=%s type=%s status=%d body=%s",
-            to, email_type, exc.code, err_body[:200],
+            "send_email failed to=%s type=%s status=%d",
+            _mask_email_for_log(to), email_type, exc.code,
         )
     except urllib.error.URLError as exc:
         error_message = f"URLError: {exc.reason}"
         log.warning(
             "send_email URLError to=%s type=%s reason=%s",
-            to, email_type, exc.reason,
+            _mask_email_for_log(to), email_type, exc.reason,
         )
     except Exception as exc:  # noqa: BLE001
         error_message = f"{type(exc).__name__}: {exc}"
         log.warning(
             "send_email unexpected error to=%s type=%s err=%s",
-            to, email_type, exc,
+            _mask_email_for_log(to), email_type, exc,
         )
 
     # Always log to audit (success or failure)
@@ -431,16 +600,25 @@ def _format_from_header(
     # If operator pasted the whole header `Name <addr>` into FROM,
     # use it verbatim and skip name-wrapping.
     if "<" in addr_raw and ">" in addr_raw:
-        # Sanitize control chars but otherwise pass through.
-        safe = re.sub(r"[\r\n\x00]", "", addr_raw)
-        return safe
+        # Sanitize control chars (CRLF/NUL/bidi) and cap length.
+        return _sanitize_email_header(addr_raw)
 
-    # Sanitize name: strip CRLF / nulls / angle-bracket injection.
-    name = re.sub(r"[\r\n\x00<>]", "", name_raw)
-    # Sanitize addr: strip CRLF / nulls. Angle brackets in addr
-    # would break the wrap; reject by collapsing them.
-    addr = re.sub(r"[\r\n\x00<>]", "", addr_raw)
-    return f"{name} <{addr}>"
+    # Sanitize name: strip CRLF / NUL / bidi + cap length, then
+    # remove angle brackets (which would break the wrap below).
+    name = _sanitize_email_header(name_raw).replace("<", "").replace(">", "")
+    # Sanitize addr the same way.
+    addr = _sanitize_email_header(addr_raw).replace("<", "").replace(">", "")
+    # Defense against From-spoofing: if the display NAME contains a
+    # bare ``@``, an attacker controlling RECUPERO_EMAIL_FROM_NAME
+    # could ship `victim@bank.com` as the visible "From" — most
+    # clients render only the display name and the recipient sees
+    # what looks like an email from their bank. Strip the entire
+    # display name in that case rather than try to surgically edit.
+    if "@" in name:
+        name = ""
+    if name:
+        return f"{name} <{addr}>"
+    return f"<{addr}>"
 
 
 def _log_to_audit(
@@ -488,4 +666,14 @@ def _log_to_audit(
         log.warning("audit log write failed: %s", exc)
 
 
-__all__ = ("EmailResult", "send_email", "has_been_sent")
+__all__ = (
+    "EmailResult",
+    "send_email",
+    "has_been_sent",
+    # Adversarial-input helpers — exported so other email surfaces
+    # (worker/digest_email.py SMTP path, future SDK swaps) can reuse
+    # the single canonical CRLF / bidi / length / RFC-5322-ish guard
+    # without copy-paste drift.
+    "_sanitize_email_header",
+    "_validate_email_address",
+)

@@ -29,7 +29,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
+import time
 from decimal import Decimal
 from pathlib import Path
 from typing import Protocol
@@ -37,6 +39,12 @@ from typing import Protocol
 from recupero._common import db_connect
 
 log = logging.getLogger(__name__)
+
+# v0.20.2 (adversarial audit): TTL for file-system price cache.
+# A poisoned or wildly stale entry shouldn't live forever — historical
+# prices keyed by date are stable, but corruption + no TTL = permanent
+# breakage. 180 days is well past any in-flight investigation horizon.
+_PRICE_CACHE_MAX_AGE_S = 180 * 86400
 
 
 class PriceCacheLike(Protocol):
@@ -57,27 +65,56 @@ class PriceCache:
         path = self._path_for(key)
         if not path.exists():
             return None
+        # v0.20.2 (adversarial audit): TTL guard. Refuse entries older
+        # than _PRICE_CACHE_MAX_AGE_S so a once-poisoned file (e.g.
+        # written by a buggy prior version, or hand-tampered) doesn't
+        # live forever. Stale entries are silently treated as misses.
         try:
-            with path.open() as f:
+            mtime = path.stat().st_mtime
+            if (time.time() - mtime) > _PRICE_CACHE_MAX_AGE_S:
+                log.info("price cache entry stale for key=%s — refusing", key)
+                return None
+        except OSError:
+            return None
+        try:
+            with path.open(encoding="utf-8") as f:
                 data = json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            log.warning("price cache miss (corrupted) %s: %s", path, e)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            # UnicodeDecodeError: pinning encoding="utf-8" (W14-05 audit)
+            # means a hand-tampered or pre-W14 cp1252-written cache file
+            # raises here instead of JSONDecodeError. Fail closed.
+            log.warning("price cache miss (corrupted) for key=%s: %s", key, e)
+            return None
+        if not isinstance(data, dict):
+            # A non-dict top-level (e.g. attacker wrote a list/number)
+            # would crash callers that do data.get(...).
             return None
         # v0.16.10 (round-9 forensic MEDIUM): negative-price defense.
-        # CoinGecko has been known to return absurd negatives during
-        # outages on obscure tokens; refuse to surface them to the
-        # consumer (they'd pollute USD totals).
+        # v0.20.2 (adversarial audit): also reject NaN/Infinity. Both
+        # the raw float NaN (json permits it by default — allow_nan=True
+        # on the parser side) and the string "NaN"/"Infinity" (which
+        # float() happily coerces) would slip past the negative check
+        # because `nan < 0` is False and `inf < 0` is False, poisoning
+        # every downstream USD aggregate.
         usd = data.get("usd")
         if usd is not None:
             try:
-                if float(usd) < 0:
+                f = float(usd)
+            except (TypeError, ValueError):
+                f = None
+            if f is not None:
+                if not math.isfinite(f):
+                    log.warning(
+                        "price cache returned non-finite usd=%r for key=%s — discarding",
+                        usd, key,
+                    )
+                    return None
+                if f < 0:
                     log.warning(
                         "price cache returned negative usd=%r for key=%s — discarding",
                         usd, key,
                     )
                     return None
-            except (TypeError, ValueError):
-                pass
         return data
 
     def put(self, key: str, value: dict) -> None:
@@ -90,8 +127,8 @@ class PriceCache:
         # parsed as truncated JSON and we'd refetch unnecessarily.
         try:
             tmp = path.with_suffix(path.suffix + ".tmp")
-            with tmp.open("w") as f:
-                json.dump(value, f, indent=2)
+            with tmp.open("w", encoding="utf-8") as f:
+                json.dump(value, f, indent=2, sort_keys=True, allow_nan=False, ensure_ascii=False)
             os.replace(tmp, path)
         except OSError as e:
             log.warning("failed to write price cache %s: %s", path, e)

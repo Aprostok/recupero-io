@@ -50,6 +50,34 @@ def run(
     # owned that domain. The idempotency check let the typo through if
     # it was never sent there before.
     import re as _re
+    # v0.20.1 (Z14): the regex below filters @ + whitespace but does NOT
+    # catch NUL bytes, bidi-override format chars (Cf), or oversize
+    # paste-bombs. Each of those passes the regex and either header-
+    # injects through the SMTP MTA (NUL) or spoofs the audit-rendered
+    # recipient (bidi). Cap length first, then reject control + bidi
+    # characters, *then* run the structural regex.
+    if not isinstance(to_email, str) or len(to_email) > 254:
+        print(
+            f"ERROR: --to address is invalid or too long (max 254 octets "
+            f"per RFC 5321). Got length={len(to_email) if isinstance(to_email, str) else 'n/a'}."
+        )
+        return 2
+    # Reject control chars (NUL, ESC, DEL, ...) and Unicode bidi overrides
+    # (LRO/RLO/LRE/RLE/PDF/LRI/RLI/FSI/PDI) — none belong in an email
+    # addr-spec and all are known audit-trail / header-injection vectors.
+    _BIDI_CONTROLS = {
+        "‪", "‫", "‬", "‭", "‮",
+        "⁦", "⁧", "⁨", "⁩",
+    }
+    for ch in to_email:
+        if ord(ch) < 0x20 or ord(ch) == 0x7f or ch in _BIDI_CONTROLS:
+            print(
+                f"ERROR: --to address contains an invalid control or "
+                f"bidi-override character (codepoint U+{ord(ch):04X}). "
+                f"Refusing to send forensic PII through a recipient "
+                f"address that the audit log cannot render safely."
+            )
+            return 2
     if not _re.match(r"^[^@\s]+@[^@\s]+\.[A-Za-z]{2,}$", to_email):
         print(
             f"ERROR: --to {to_email!r} doesn't look like a valid email "
@@ -216,7 +244,7 @@ def _list_bucket_briefs(*, investigation_id: UUID) -> list[dict[str, Any]]:
         data=json.dumps({
             "prefix": f"investigations/{investigation_id}/briefs/",
             "limit": 200, "offset": 0,
-        }).encode(),
+        }, separators=(",", ":"), allow_nan=False).encode(),
         headers={
             "Authorization": f"Bearer {key}", "apikey": key,
             "Content-Type": "application/json",

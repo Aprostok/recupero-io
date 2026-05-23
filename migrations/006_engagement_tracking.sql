@@ -1,3 +1,4 @@
+BEGIN;
 -- 006_engagement_tracking.sql
 --
 -- Tracks Tier-2 engagement state per investigation so the worker
@@ -56,3 +57,5 @@ CREATE INDEX IF NOT EXISTS investigations_followup_eligibility_idx
     ON public.investigations (engagement_started_at, last_followup_sent_at)
     WHERE engagement_started_at IS NOT NULL
       AND engagement_closed_at IS NULL;
+
+COMMIT;

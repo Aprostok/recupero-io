@@ -77,7 +77,7 @@
 <table class="evidence">
   <tr><th>Date / time (UTC)</th><td class="mono">{{ theft_event.timestamp_human }}</td></tr>
   <tr><th>Block</th>             <td class="mono">{{ theft_event.block_number }}</td></tr>
-  <tr><th>Transaction hash</th>  <td class="mono"><a href="{{ theft_event.explorer_url }}">{{ theft_event.tx_hash }}</a></td></tr>
+  <tr><th>Transaction hash</th>  <td class="mono"><a href="{{ theft_event.explorer_url|safe_url }}">{{ theft_event.tx_hash }}</a></td></tr>
   <tr><th>From (victim)</th>     <td class="mono victim-row">{{ theft_event.from_address }}</td></tr>
   <tr><th>To (perpetrator)</th>  <td class="mono perp-row">{{ theft_event.to_address }}</td></tr>
   <tr><th>Asset</th>             <td>{{ asset.symbol }} <span class="small">(contract: <span class="mono">{{ asset.contract }}</span>)</span></td></tr>
@@ -98,7 +98,7 @@
   <tr>
     <td>{{ loop.index }}</td>
     <td class="mono">{{ hop.timestamp_human }}</td>
-    <td class="mono"><a href="{{ hop.explorer_url }}">{{ hop.tx_hash[:14] }}…</a></td>
+    <td class="mono"><a href="{{ hop.explorer_url|safe_url }}">{{ hop.tx_hash[:14] }}…</a></td>
     <td class="mono perp-row">{{ hop.from_address }}</td>
     <td class="mono perp-row">{{ hop.to_address }}</td>
     <td class="amount">{{ hop.amount_human }} {{ hop.symbol }}</td>
@@ -123,9 +123,9 @@
   <p style="margin:0"><strong>The {{ asset.amount_human }} {{ asset.symbol }} position is currently held in:</strong></p>
   <p class="mono" style="font-size:11pt; margin:0.5em 0;">{{ current_holder.address }}</p>
   <p style="margin:0">
-    <a href="{{ current_holder.explorer_url }}">View on {{ primary_chain_explorer_name | default("the block explorer") }}</a>
+    <a href="{{ current_holder.explorer_url|safe_url }}">View on {{ primary_chain_explorer_name | default("the block explorer") }}</a>
     &nbsp;·&nbsp;
-    <a href="{{ current_holder.explorer_url }}#tokentxns">Token transfer history</a>
+    <a href="{{ current_holder.explorer_url|safe_url }}#tokentxns">Token transfer history</a>
   </p>
   <p style="margin:0.5em 0 0;">
     <strong>Last verified:</strong> {{ verified_at }} UTC.

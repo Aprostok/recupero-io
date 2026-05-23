@@ -36,16 +36,29 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 import os
+import re
 from datetime import UTC, datetime, timedelta
 
 from recupero.hack_tracker.models import (
     HackEvent,
     HackEventSeverity,
     HackEventSource,
+    _scrub_hostile_chars,
 )
 
 log = logging.getLogger(__name__)
+
+
+# Defense-in-depth caps. Adversarial X posts can be megabyte-scale
+# even though the public API caps per-tweet content; the upstream
+# payload contains multi-tweet threads concatenated by the X API.
+# These caps bound CPU + memory before we even hand text to regex
+# / Pydantic.
+_MAX_TWEET_TEXT_CHARS = 20_000   # generous, ~10x normal tweet
+_MAX_EXTRACTED_ADDRS = 5_000     # one tweet can mention many addrs but not millions
+_TWEET_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
 # X handle → HackEventSource mapping.
@@ -138,18 +151,56 @@ def _post_to_event(
     *, post: dict, handle: str, source: HackEventSource,
 ) -> HackEvent | None:
     """Normalize an X-API tweet dict into a HackEvent. Returns None
-    if the post is filtered out (retweet, off-topic, etc.)."""
-    text = (post.get("text") or "").strip()
+    if the post is filtered out (retweet, off-topic, etc.) or hostile.
+
+    Adversarial-input hardening (v0.20.1):
+      * tweet_id is validated against a strict allowlist
+        (alphanumeric + ``-_``) — anything else (``..``, ``@``,
+        ``/``, control chars, non-string types) would let an attacker
+        rewrite the constructed source_url to an arbitrary URL.
+      * Tweet text is scrubbed of NUL / bidi / zero-width / control
+        chars BEFORE every downstream use (regex extractors, severity
+        inference, hashing, model construction). Without this an
+        attacker could smuggle invisible content into the operator's
+        digest.
+      * Text is capped at ``_MAX_TWEET_TEXT_CHARS`` before regex
+        extraction to bound CPU/memory.
+      * datetime parsing catches every exception type
+        (ValueError, TypeError, OverflowError, AttributeError) — the
+        X API has historically returned malformed timestamps for
+        archived tweets.
+    """
+    # --- text validation + scrub ---
+    raw_text = post.get("text")
+    if not isinstance(raw_text, str):
+        return None
+    # Cap BEFORE the scrub loop so a megabyte-scale hostile post can't
+    # waste CPU on the per-char iteration.
+    if len(raw_text) > _MAX_TWEET_TEXT_CHARS:
+        raw_text = raw_text[:_MAX_TWEET_TEXT_CHARS]
+    text = _scrub_hostile_chars(raw_text).strip()
     if not text or len(text) < 20:
         return None
-    tweet_id = post.get("id", "")
-    if not tweet_id:
+
+    # --- tweet_id validation (SSRF guard for source_url) ---
+    tweet_id_raw = post.get("id")
+    if not isinstance(tweet_id_raw, str):
         return None
+    tweet_id = tweet_id_raw.strip()
+    if not tweet_id or not _TWEET_ID_RE.match(tweet_id):
+        return None
+
+    # --- created_at parsing ---
     created_at_raw = post.get("created_at", "")
-    try:
-        created_at = datetime.fromisoformat(created_at_raw.replace("Z", "+00:00"))
-    except (ValueError, TypeError):
-        created_at = datetime.now(UTC)
+    created_at = datetime.now(UTC)
+    if isinstance(created_at_raw, str) and created_at_raw:
+        try:
+            cleaned = _scrub_hostile_chars(created_at_raw).strip()
+            cleaned = cleaned.replace("Z", "+00:00")
+            created_at = datetime.fromisoformat(cleaned)
+        except (ValueError, TypeError, OverflowError, AttributeError):
+            created_at = datetime.now(UTC)
+
     severity = _infer_severity(text)
     addrs = _extract_addresses(text)
     txs = _extract_tx_hashes(text)
@@ -179,17 +230,27 @@ def _content_hash(source: str, title: str, addrs: list[str]) -> str:
 
 
 def _infer_severity(text: str) -> HackEventSeverity:
-    """Rough severity inference from numeric strings in the post."""
+    """Rough severity inference from numeric strings in the post.
+
+    Adversarial-input hardening:
+      * ``float()`` can raise ``OverflowError`` for ``"1e400"``-style
+        inputs (not a ValueError) — both are caught.
+      * After parsing + unit multiplication, the value is gated through
+        ``math.isfinite()``. An attacker post claiming ``$1e400 million``
+        would otherwise produce ``inf`` and trivially rank ``critical``.
+      * NaN parses to ``nan``; ``math.isfinite()`` rejects it.
+    """
     lower = text.lower()
     if "$" in text:
         # Crude — pull numbers next to the $; refined version lives in
         # the v0.20.1 enhancement.
-        import re
-        amounts = re.findall(r"\$([\d.,]+)\s*(m|million|b|billion|k)?", lower)
+        amounts = re.findall(r"\$([\d.,eE+-]+)\s*(m|million|b|billion|k)?", lower)
         for raw, unit in amounts:
             try:
                 value = float(raw.replace(",", ""))
-            except ValueError:
+            except (ValueError, OverflowError):
+                continue
+            if not math.isfinite(value):
                 continue
             if unit in ("b", "billion"):
                 value *= 1e9
@@ -197,6 +258,11 @@ def _infer_severity(text: str) -> HackEventSeverity:
                 value *= 1e6
             elif unit == "k":
                 value *= 1e3
+            # Re-check finiteness after the multiplication — `1e308 * 1e9`
+            # overflows to inf in IEEE-754 even though both operands
+            # are finite.
+            if not math.isfinite(value) or value < 0:
+                continue
             if value >= 10_000_000:
                 return HackEventSeverity.critical
             if value >= 1_000_000:
@@ -209,15 +275,49 @@ def _infer_severity(text: str) -> HackEventSeverity:
 
 
 def _extract_addresses(text: str) -> list[str]:
-    """Pull EVM 0x-addresses out of free-form text."""
-    import re
-    return re.findall(r"\b0x[a-fA-F0-9]{40}\b", text)
+    """Pull EVM 0x-addresses out of free-form text.
+
+    Returns canonical lowercased, deduped form. Caps total returned at
+    ``_MAX_EXTRACTED_ADDRS`` so an attacker can't OOM the digest with
+    a tweet containing megabytes of repeated 0x patterns.
+    """
+    # Cap input length defensively — the caller in _post_to_event
+    # already caps, but _extract_addresses is also called from tests.
+    if len(text) > _MAX_TWEET_TEXT_CHARS:
+        text = text[:_MAX_TWEET_TEXT_CHARS]
+    raw = re.findall(r"\b0x[a-fA-F0-9]{40}\b", text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in raw:
+        canon = r.lower()
+        if canon in seen:
+            continue
+        seen.add(canon)
+        out.append(canon)
+        if len(out) >= _MAX_EXTRACTED_ADDRS:
+            break
+    return out
 
 
 def _extract_tx_hashes(text: str) -> list[str]:
-    """Pull EVM tx hashes (0x + 64 hex) out of free-form text."""
-    import re
-    return re.findall(r"\b0x[a-fA-F0-9]{64}\b", text)
+    """Pull EVM tx hashes (0x + 64 hex) out of free-form text.
+
+    Same defensive caps + dedup as ``_extract_addresses``.
+    """
+    if len(text) > _MAX_TWEET_TEXT_CHARS:
+        text = text[:_MAX_TWEET_TEXT_CHARS]
+    raw = re.findall(r"\b0x[a-fA-F0-9]{64}\b", text)
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in raw:
+        canon = r.lower()
+        if canon in seen:
+            continue
+        seen.add(canon)
+        out.append(canon)
+        if len(out) >= _MAX_EXTRACTED_ADDRS:
+            break
+    return out
 
 
 def _extract_chains_mentioned(text: str) -> list[str]:

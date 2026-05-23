@@ -170,7 +170,39 @@ def _parse_signature_header(header: str) -> tuple[int, list[str]]:
                     f"too many v1= entries in signature header "
                     f"(>{_MAX_V1_SIGNATURES}); rejecting to avoid CPU DoS"
                 )
-            sigs.append(value.strip())
+            # RIGOR-Jacob Z17-W1: validate v1= value is pure ASCII hex
+            # before accepting it. ``hmac.compare_digest`` raises
+            # ``TypeError`` (not a bool result) when fed strings
+            # containing non-ASCII characters — an attacker sending
+            # ``v1=café`` would crash the verifier with a TypeError
+            # that leaks past the HTTP handler's WebhookVerifyError
+            # catch and surfaces as a 500 + stack trace. Stripe HMAC
+            # hex digests are exactly 64 lowercase hex chars; anything
+            # outside [0-9a-fA-F] is malformed by definition.
+            #
+            # Wave-5 extension (W5-1 + W5-3):
+            #  * Enforce length == 64 at parse time so structurally
+            #    invalid v1= values (e.g. ``v1=ab``) are rejected
+            #    BEFORE reaching hmac.compare_digest — saves CPU on
+            #    probe storms and gives a clear typed error.
+            #  * Do NOT echo the attacker-controlled v1_value into
+            #    the WebhookVerifyError message — only its length.
+            #    Echoing up to ~8KB of attacker bytes into app logs
+            #    is a log-injection / log-spam vector.
+            v1_value = value.strip()
+            if not v1_value:
+                raise WebhookVerifyError("v1= signature is empty")
+            if any(c not in "0123456789abcdefABCDEF" for c in v1_value):
+                raise WebhookVerifyError(
+                    f"v1= signature contains non-hex chars "
+                    f"(length={len(v1_value)})"
+                )
+            if len(v1_value) != 64:
+                raise WebhookVerifyError(
+                    f"v1= signature has wrong length "
+                    f"(got {len(v1_value)}, expected 64)"
+                )
+            sigs.append(v1_value)
         # other schemes (v0, etc.) deliberately ignored
     if timestamp is None:
         raise WebhookVerifyError("missing t= component in header")

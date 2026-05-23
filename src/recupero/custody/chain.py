@@ -380,21 +380,81 @@ def load_chain(case_dir: Path) -> list[AttestationEntry]:
     """Read the chain file back into AttestationEntry dataclasses.
 
     Returns [] if the chain doesn't exist yet.
+
+    Adversarial-hardening:
+      * A corrupt JSON line is logged and skipped — the chain is
+        append-only and one mangled line should not destroy the whole
+        verifier. Subsequent valid entries (and the prev_hash chain
+        check during verify_chain) will catch any tampering.
+      * Forward-compatible field drift: an entry / artifact carrying
+        extra keys from a future pipeline version is accepted by
+        dropping the unknown keys, NOT by crashing the loader. The
+        dropped key set is logged for diagnosis.
     """
     chain_path = chain_file_path(case_dir)
     if not chain_path.exists():
         return []
+
+    # Known field sets — anything else is dropped during forward-compat
+    # tolerant decode. These mirror the dataclass definitions above.
+    _ARTIFACT_KEYS = {"relative_path", "sha256_hex", "size_bytes"}
+    _ENTRY_KEYS = {
+        "chain_id", "entry_index", "stage", "timestamp_iso", "operator",
+        "public_key_fingerprint", "prev_hash", "note",
+        "signed_payload_sha256", "signature_b64",
+    }
+
     out: list[AttestationEntry] = []
     with chain_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+        for line_no, raw_line in enumerate(f, start=1):
+            line = raw_line.strip()
             if not line:
                 continue
-            d = json.loads(line)
-            artifacts = [
-                AttestedArtifact(**a) for a in d.pop("artifacts", [])
-            ]
-            out.append(AttestationEntry(artifacts=artifacts, **d))
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError as e:
+                log.warning(
+                    "skipping malformed JSON in chain.jsonl line %d: %s",
+                    line_no, e,
+                )
+                continue
+            if not isinstance(d, dict):
+                log.warning(
+                    "skipping non-object JSON in chain.jsonl line %d", line_no,
+                )
+                continue
+            raw_artifacts = d.pop("artifacts", []) or []
+            artifacts: list[AttestedArtifact] = []
+            for a in raw_artifacts:
+                if not isinstance(a, dict):
+                    continue
+                known = {k: v for k, v in a.items() if k in _ARTIFACT_KEYS}
+                extras = set(a) - _ARTIFACT_KEYS
+                if extras:
+                    log.debug(
+                        "dropping unknown artifact keys in line %d: %s",
+                        line_no, extras,
+                    )
+                try:
+                    artifacts.append(AttestedArtifact(**known))
+                except TypeError as e:
+                    log.warning(
+                        "skipping malformed artifact in line %d: %s",
+                        line_no, e,
+                    )
+            known_entry = {k: v for k, v in d.items() if k in _ENTRY_KEYS}
+            extras = set(d) - _ENTRY_KEYS
+            if extras:
+                log.debug(
+                    "dropping unknown entry keys in line %d: %s",
+                    line_no, extras,
+                )
+            try:
+                out.append(AttestationEntry(artifacts=artifacts, **known_entry))
+            except TypeError as e:
+                log.warning(
+                    "skipping malformed entry in line %d: %s", line_no, e,
+                )
     return out
 
 

@@ -236,14 +236,19 @@ class EvmAdapter(ChainAdapter):
         return False
 
     def fetch_native_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         addr = to_checksum_address(from_address)
         addr_l = addr.lower()
         client_side_filter = self._needs_client_side_start_block_filter()
         api_start = 0 if client_side_filter else start_block
-        normal = self.client.get_normal_transactions(addr, start_block=api_start)
-        internal = self.client.get_internal_transactions(addr, start_block=api_start)
+        normal = self.client.get_normal_transactions(
+            addr, start_block=api_start, max_results=max_results,
+        )
+        internal = self.client.get_internal_transactions(
+            addr, start_block=api_start, max_results=max_results,
+        )
 
         def _keep(tx: dict[str, Any]) -> bool:
             from_l = tx.get("from", "").lower()
@@ -275,31 +280,65 @@ class EvmAdapter(ChainAdapter):
             # them inflates USD totals with zero-economic-value transfers.
             if from_l and to_l and from_l == to_l:
                 return False
-            if int(tx.get("value", "0")) == 0:
+            # RIGOR-Jacob X: defensive ``int()`` on untrusted fields.
+            # Etherscan/Alchemy are external; a single row with
+            # ``value="not-a-number"`` would otherwise raise
+            # ValueError uncaught and kill the BFS hop.
+            try:
+                if int(tx.get("value", "0") or "0") == 0:
+                    return False
+            except (TypeError, ValueError):
                 return False
             if self._is_failed_tx(tx):
                 return False
-            if client_side_filter and int(tx.get("blockNumber", "0")) < start_block:
-                return False
+            if client_side_filter:
+                try:
+                    if int(tx.get("blockNumber", "0") or "0") < start_block:
+                        return False
+                except (TypeError, ValueError):
+                    return False
             return True
 
         out: list[dict[str, Any]] = []
         for tx in normal:
-            if _keep(tx):
+            if not _keep(tx):
+                continue
+            # RIGOR-Jacob N: per-row try/except so a single malformed
+            # address (truncated, non-hex, garbage) from Etherscan
+            # doesn't crash the whole loop via
+            # ``to_checksum_address`` → InvalidAddress.
+            try:
                 out.append(self._normalize_native(tx, source="normal"))
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "evm: dropping malformed native row tx=%s: %s",
+                    tx.get("hash", "?"), e,
+                )
+                continue
         for tx in internal:
-            if _keep(tx):
+            if not _keep(tx):
+                continue
+            try:
                 out.append(self._normalize_native(tx, source="internal"))
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "evm: dropping malformed internal row tx=%s: %s",
+                    tx.get("hash", "?"), e,
+                )
+                continue
         return out
 
     def fetch_erc20_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         addr = to_checksum_address(from_address)
         addr_l = addr.lower()
         client_side_filter = self._needs_client_side_start_block_filter()
         api_start = 0 if client_side_filter else start_block
-        rows = self.client.get_erc20_transfers(addr, start_block=api_start)
+        rows = self.client.get_erc20_transfers(
+            addr, start_block=api_start, max_results=max_results,
+        )
         out: list[dict[str, Any]] = []
         for tx in rows:
             from_l = tx.get("from", "").lower()
@@ -335,12 +374,19 @@ class EvmAdapter(ChainAdapter):
             # to the same destination — those carry value=0 most of the
             # time. value==0 is a no-op transfer either way.
             try:
-                if int(tx.get("value", "0")) == 0:
+                if int(tx.get("value", "0") or "0") == 0:
                     continue
             except (TypeError, ValueError):
                 continue
-            if client_side_filter and int(tx.get("blockNumber", "0")) < start_block:
-                continue
+            if client_side_filter:
+                try:
+                    if int(tx.get("blockNumber", "0") or "0") < start_block:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            # RIGOR-Jacob N: broad-except so a malformed
+            # ``contractAddress`` (or ``to`` / ``from``) doesn't crash
+            # the whole loop via eth_utils.InvalidAddress.
             try:
                 out.append(self._normalize_erc20(tx))
             except ValueError as e:
@@ -349,6 +395,14 @@ class EvmAdapter(ChainAdapter):
                 # whole outflow fetch for this address.
                 log.warning(
                     "skipping ERC-20 row from %s tx=%s: %s",
+                    from_l, tx.get("hash"), e,
+                )
+                continue
+            except Exception as e:  # noqa: BLE001
+                # InvalidAddress (eth_utils) and other adversarial
+                # malformed-row failures land here.
+                log.warning(
+                    "skipping malformed ERC-20 row from %s tx=%s: %s",
                     from_l, tx.get("hash"), e,
                 )
                 continue
@@ -394,7 +448,18 @@ class EvmAdapter(ChainAdapter):
             raise ValueError(f"non-integer timeStamp: {ts_raw!r}") from e
         if ts_int < 0:
             raise ValueError(f"negative timeStamp: {ts_int}")
-        block_time = datetime.fromtimestamp(ts_int, tz=UTC)
+        # RIGOR-Jacob J adversarial: ``datetime.fromtimestamp`` raises
+        # OverflowError on values > datetime.MAX (~year 9999) BEFORE
+        # the future-cap check below ever runs. A compromised Etherscan
+        # response with timeStamp=999999999999999 would otherwise leak
+        # OverflowError uncaught and kill the BFS hop. Map to the
+        # documented ValueError contract.
+        try:
+            block_time = datetime.fromtimestamp(ts_int, tz=UTC)
+        except (OverflowError, OSError, ValueError) as e:
+            raise ValueError(
+                f"out-of-range timeStamp: {ts_int} ({e})"
+            ) from e
         # Allow a 24h forward window for clock-skew tolerance.
         if block_time > datetime.now(UTC) + timedelta(days=1):
             raise ValueError(

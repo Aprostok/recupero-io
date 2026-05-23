@@ -44,6 +44,49 @@ from recupero._common import db_connect
 log = logging.getLogger(__name__)
 
 
+# Z13-3: identical constraint to mark_closed._MAX_REASON_LEN — keep
+# the audit-note size bounded.
+_MAX_REASON_LEN = 4_000
+
+
+def _validate_reason(reason: str) -> str | None:
+    """Validate --reason for NUL bytes / bidi controls / oversize text.
+
+    See mark_closed._validate_reason — same threat model, same rules.
+    """
+    if not isinstance(reason, str):
+        return "ERROR: --reason must be a string"
+    if len(reason) > _MAX_REASON_LEN:
+        return (
+            f"ERROR: --reason too long: {len(reason)} characters "
+            f"(max {_MAX_REASON_LEN})."
+        )
+    for ch in reason:
+        cp = ord(ch)
+        if cp == 0:
+            return (
+                "ERROR: --reason contains a null byte — invalid "
+                "audit-log content."
+            )
+        if cp < 0x20 and ch not in ("\n", "\r", "\t"):
+            return (
+                "ERROR: --reason contains a control character "
+                f"(codepoint {cp:#06x})."
+            )
+        if cp == 0x7F or 0x80 <= cp <= 0x9F:
+            return (
+                "ERROR: --reason contains a control character "
+                f"(codepoint {cp:#06x})."
+            )
+        if cp in (0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                  0x2066, 0x2067, 0x2068, 0x2069):
+            return (
+                "ERROR: --reason contains a Unicode bidi-override "
+                f"control (codepoint {cp:#06x}) — invalid in audit logs."
+            )
+    return None
+
+
 def run(
     *,
     watchlist_id: UUID,
@@ -54,6 +97,13 @@ def run(
 ) -> int:
     """Promote a watchlist row to FREEZABLE. Returns 0 on success."""
     operator = os.environ.get("RECUPERO_OPS_OPERATOR", "").strip() or "unknown"
+
+    # Z13-3: reject NUL / bidi / oversize reason notes BEFORE the DB
+    # round-trip so a hostile note doesn't open a transaction.
+    err = _validate_reason(reason)
+    if err is not None:
+        print(err)
+        return 1
 
     if len(reason.strip()) < 10:
         print(

@@ -265,6 +265,9 @@ def render_victim_summary(
             lstrip_blocks=True,
             undefined=StrictUndefined,
         )
+        # XSS defense-in-depth filters.
+        from recupero.reports._jinja_filters import register_safe_filters
+        register_safe_filters(env)
         html = env.get_template(template_name).render(**ctx)
 
         briefs_dir.mkdir(parents=True, exist_ok=True)
@@ -442,14 +445,30 @@ def _count_unique_addresses(case: Case) -> int:
 
 def _parse_usd_string(s: str | None) -> Decimal:
     """Parse a freeze_brief-format USD string (``"$1,234.56"``) into Decimal.
-    Returns 0 on empty / malformed input."""
+    Returns 0 on empty / malformed input.
+
+    RIGOR-Jacob Z9-1: rejects non-finite Decimals (NaN, Infinity,
+    -Infinity). ``Decimal("NaN")`` parses successfully, but propagates
+    into ``classify_recovery_prospects`` where ``total_freezable >=
+    floor_usd`` raises ``decimal.InvalidOperation``. The outer caller
+    catches the exception and silently misclassifies the entire case as
+    unrecoverable — operator never sees the engagement letter even
+    though other entries contain real freezable USD. Treat poisoned
+    values as Decimal(0), matching the existing "couldn't parse"
+    sentinel.
+    """
     if not s:
         return Decimal(0)
     try:
         cleaned = str(s).replace("$", "").replace(",", "").strip()
-        return Decimal(cleaned) if cleaned else Decimal(0)
+        if not cleaned:
+            return Decimal(0)
+        value = Decimal(cleaned)
     except Exception:  # noqa: BLE001
         return Decimal(0)
+    if not value.is_finite():
+        return Decimal(0)
+    return value
 
 
 def _fmt_usd(d: Decimal) -> str:

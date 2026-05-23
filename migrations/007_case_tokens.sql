@@ -1,3 +1,4 @@
+BEGIN;
 -- 007_case_tokens.sql
 --
 -- Token-gated customer portal access. Each case gets one or more
@@ -62,3 +63,5 @@ CREATE INDEX IF NOT EXISTS case_tokens_active_token_idx
 COMMENT ON TABLE public.case_tokens IS
     'Bearer tokens for token-gated /portal/<token> customer access. '
     'See recupero.portal.tokens for the generation/verification logic.';
+
+COMMIT;

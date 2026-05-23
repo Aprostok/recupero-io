@@ -1,3 +1,4 @@
+BEGIN;
 -- 010_payments.sql
 --
 -- Stripe payment-event audit trail + idempotency. Every payment
@@ -99,3 +100,5 @@ COMMENT ON TABLE public.payments IS
     'Stripe payment-event audit trail with idempotency on '
     'stripe_event_id. One row per webhook event, regardless of '
     'whether it succeeded or required operator triage.';
+
+COMMIT;

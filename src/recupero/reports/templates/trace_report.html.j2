@@ -88,7 +88,7 @@
     </div>
     <div class="cover-meta-item">
       <dt>Traced Wallet</dt>
-      <dd>{% if wallet_explorer_url %}<a class="mono" href="{{ wallet_explorer_url }}">{{ wallet_address }}</a>{% else %}<span class="mono">{{ wallet_address }}</span>{% endif %}</dd>
+      <dd>{% if wallet_explorer_url %}<a class="mono" href="{{ wallet_explorer_url|safe_url }}">{{ wallet_address }}</a>{% else %}<span class="mono">{{ wallet_address }}</span>{% endif %}</dd>
     </div>
     <div class="cover-meta-item">
       <dt>Chain</dt>
@@ -176,7 +176,7 @@
   <tbody>
     {% for d in destinations %}
     <tr>
-      <td class="mono">{% if d.explorer_url %}<a href="{{ d.explorer_url }}">{{ d.address_short }}</a>{% else %}<span>{{ d.address_short }}</span>{% endif %}</td>
+      <td class="mono">{% if d.explorer_url %}<a href="{{ d.explorer_url|safe_url }}">{{ d.address_short }}</a>{% else %}<span>{{ d.address_short }}</span>{% endif %}</td>
       <td>{{ d.role }}{% if d.label %}<br/><span class="small secondary">{{ d.label }}</span>{% endif %}</td>
       <td>{{ d.symbol or '—' }}</td>
       <td class="mono">{{ d.balance_human or '—' }}</td>
@@ -222,7 +222,7 @@
   <tbody>
     {% for f in freezable_rows %}
     <tr>
-      <td class="mono">{% if f.explorer_url %}<a href="{{ f.explorer_url }}">{{ f.address_short }}</a>{% else %}<span>{{ f.address_short }}</span>{% endif %}</td>
+      <td class="mono">{% if f.explorer_url %}<a href="{{ f.explorer_url|safe_url }}">{{ f.address_short }}</a>{% else %}<span>{{ f.address_short }}</span>{% endif %}</td>
       <td>{{ f.symbol }}</td>
       <td class="mono">{{ f.amount }}</td>
       <td class="amount">{{ f.usd }}</td>
@@ -290,12 +290,12 @@ notification).</p>
     <tr>
       <td class="small">{{ h.block_time }}</td>
       <td>{{ h.bridge_name }}<br/><span class="small secondary">{{ h.bridge_protocol }}</span></td>
-      <td class="mono">{% if h.tx_explorer_url %}<a href="{{ h.tx_explorer_url }}">{{ h.source_address[:10] }}…</a>{% else %}<span>{{ h.source_address[:10] }}…</span>{% endif %}</td>
+      <td class="mono">{% if h.tx_explorer_url %}<a href="{{ h.tx_explorer_url|safe_url }}">{{ h.source_address[:10] }}…</a>{% else %}<span>{{ h.source_address[:10] }}…</span>{% endif %}</td>
       <td class="amount">{{ h.amount_usd or h.amount_decimal }}</td>
       <td>{{ h.token_symbol }}</td>
       <td class="small">{{ h.destination_chain_candidates | join(', ') if h.destination_chain_candidates else '(see bridge explorer)' }}</td>
       <td class="small">
-        {% if h.follow_up_url %}<a href="{{ h.follow_up_url }}">{{ h.follow_up_url }}</a>{% else %}—{% endif %}
+        {% if h.follow_up_url %}<a href="{{ h.follow_up_url|safe_url }}">{{ h.follow_up_url }}</a>{% else %}—{% endif %}
       </td>
     </tr>
     {% endfor %}

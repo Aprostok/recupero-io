@@ -30,6 +30,7 @@ serves /metrics on its own port when configured to do so).
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from collections import defaultdict
@@ -46,6 +47,56 @@ _DEFAULT_BUCKETS_SEC = (
 )
 
 
+# Adversarial-input wave (v0.20.2): hard caps on label cardinality and
+# label-value length. A Prometheus metric series is keyed by its
+# labels-tuple; an attacker who controls a label value (case_id,
+# investigation_id, address, IP) can blow up worker memory by emitting
+# distinct values forever. Without a cap, the in-process registry grows
+# without bound and the /metrics endpoint eventually times out rendering
+# the text payload.
+#
+# Per-metric-series cardinality cap (number of distinct label-tuples).
+# Sized for the worst-case legitimate workload (~few thousand cases /
+# stages / issuers) with plenty of headroom; anything beyond is
+# replaced with a single "_overflow" sentinel series.
+_MAX_LABEL_CARDINALITY = 10_000
+# Per-label-value length cap; longer values are truncated with a marker.
+_MAX_LABEL_VALUE_LEN = 200
+_OVERFLOW_SENTINEL = "_overflow"
+
+
+def _sanitize_label_value(v: Any) -> str:
+    """Coerce a label value to a safe, bounded string.
+
+    Strips CR/LF/NUL and other control characters so an attacker who
+    controls a label value can't inject a fake Prometheus exposition
+    line. Truncates oversized values to bound memory."""
+    s = str(v) if v is not None else ""
+    # Strip ASCII control chars (incl. CR/LF/NUL) and Unicode bidi /
+    # zero-width / direction-override marks that can be smuggled past
+    # operator eyeballs to disguise the source of a label.
+    cleaned_chars = []
+    for c in s:
+        cp = ord(c)
+        if cp < 0x20 or cp == 0x7F:
+            continue
+        # Bidi / format / zero-width controls (U+200B..U+200F, U+202A..U+202E,
+        # U+2066..U+2069, U+FEFF).
+        if 0x200B <= cp <= 0x200F or 0x202A <= cp <= 0x202E:
+            continue
+        if 0x2066 <= cp <= 0x2069 or cp == 0xFEFF:
+            continue
+        cleaned_chars.append(c)
+    cleaned = "".join(cleaned_chars)
+    if len(cleaned) > _MAX_LABEL_VALUE_LEN:
+        cleaned = cleaned[: _MAX_LABEL_VALUE_LEN] + "...(truncated)"
+    return cleaned
+
+
+def _sanitize_labels(labels: dict[str, Any]) -> dict[str, str]:
+    return {k: _sanitize_label_value(v) for k, v in labels.items()}
+
+
 class _Counter:
     def __init__(self, name: str, help_text: str) -> None:
         self.name = name
@@ -55,9 +106,29 @@ class _Counter:
         self._values: dict[tuple[tuple[str, str], ...], float] = defaultdict(float)
 
     def inc(self, amount: float = 1.0, **labels: str) -> None:
-        key = tuple(sorted(labels.items()))
+        # Reject non-finite increments: NaN poisons the sum forever,
+        # +Inf saturates the bucket. Both are smoking-gun bugs upstream.
+        try:
+            amt = float(amount)
+        except (TypeError, ValueError):
+            log.warning("counter %s: non-numeric inc(amount=%r) ignored",
+                        self.name, amount)
+            return
+        if not math.isfinite(amt) or amt < 0:
+            log.warning("counter %s: non-finite or negative inc(%r) ignored",
+                        self.name, amount)
+            return
+        clean = _sanitize_labels(labels)
+        key = tuple(sorted(clean.items()))
         with self._lock:
-            self._values[key] += amount
+            if (
+                key not in self._values
+                and len(self._values) >= _MAX_LABEL_CARDINALITY
+            ):
+                # Cardinality cap hit: fold into a single overflow series
+                # so we still record the event without unbounded growth.
+                key = tuple(sorted({k: _OVERFLOW_SENTINEL for k in clean}.items()))
+            self._values[key] += amt
 
     def snapshot(self) -> dict[tuple[tuple[str, str], ...], float]:
         with self._lock:
@@ -82,15 +153,34 @@ class _Histogram:
         ] = {}
 
     def observe(self, value: float, **labels: str) -> None:
-        key = tuple(sorted(labels.items()))
+        # Reject non-finite observations: NaN poisons the running sum
+        # so EVERY future render returns "NaN" for the metric; +Inf
+        # makes the sum unrenderable.
+        try:
+            val = float(value)
+        except (TypeError, ValueError):
+            log.warning("histogram %s: non-numeric observe(%r) ignored",
+                        self.name, value)
+            return
+        if not math.isfinite(val):
+            log.warning("histogram %s: non-finite observe(%r) ignored",
+                        self.name, value)
+            return
+        clean = _sanitize_labels(labels)
+        key = tuple(sorted(clean.items()))
         with self._lock:
+            if (
+                key not in self._data
+                and len(self._data) >= _MAX_LABEL_CARDINALITY
+            ):
+                key = tuple(sorted({k: _OVERFLOW_SENTINEL for k in clean}.items()))
             if key not in self._data:
                 self._data[key] = ([0] * len(self.buckets), 0.0, 0)
             counts, total, count = self._data[key]
             for i, b in enumerate(self.buckets):
-                if value <= b:
+                if val <= b:
                     counts[i] += 1
-            self._data[key] = (counts, total + value, count + 1)
+            self._data[key] = (counts, total + val, count + 1)
 
     def snapshot(
         self,
@@ -174,7 +264,16 @@ def metrics_endpoint_text() -> str:
         return "{" + inner + "}"
 
     def _escape(v: str) -> str:
-        return v.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+        # Per Prometheus exposition spec backslash, double-quote, and
+        # newline must be escaped. CR was not in the original impl —
+        # without it, a label value containing "\r" lets an attacker
+        # smuggle a fake exposition line past the renderer.
+        return (
+            v.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\r", "\\r")
+        )
 
     # Counters
     for counter in (
@@ -215,7 +314,7 @@ def metrics_endpoint_text() -> str:
     return "\n".join(lines) + "\n"
 
 
-def start_metrics_server(port: int) -> None:
+def start_metrics_server(port: int, *, bind_host: str | None = None) -> None:
     """Spin up a tiny stdlib HTTP server serving /metrics on ``port``.
 
     Background-threaded; never blocks the caller. Re-exports the
@@ -227,7 +326,24 @@ def start_metrics_server(port: int) -> None:
     adding a /metrics route. This standalone server exists for
     operators who want metrics on a separate port for
     network-isolation reasons.
+
+    Adversarial-input wave (v0.20.2):
+      * `port` validated to the IANA range; junk values raise ValueError
+        instead of crashing socket bind with a misleading OSError.
+      * `bind_host` defaults to 127.0.0.1 — metrics are operator-local
+        unless explicitly exposed (RECUPERO_METRICS_BIND_HOST=0.0.0.0).
+        The prior 0.0.0.0 default leaked an unauth'd internal endpoint
+        on multi-tenant hosts.
     """
+    try:
+        port_int = int(port)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"port must be an integer, got {port!r}") from exc
+    if not (1 <= port_int <= 65535):
+        raise ValueError(f"port must be in 1..65535, got {port_int}")
+    import os as _os
+    if bind_host is None:
+        bind_host = (_os.environ.get("RECUPERO_METRICS_BIND_HOST") or "").strip() or "127.0.0.1"
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
     class _Handler(BaseHTTPRequestHandler):
@@ -251,7 +367,8 @@ def start_metrics_server(port: int) -> None:
             # we have our own logger.
             pass
 
-    server = HTTPServer(("0.0.0.0", port), _Handler)  # noqa: S104
+    server = HTTPServer((bind_host, port_int), _Handler)  # noqa: S104
+    port = port_int  # re-bind so the log line / thread name reflect normalized value
     log.info("metrics server listening on :%d/metrics", port)
     thread = threading.Thread(
         target=server.serve_forever, daemon=True,
@@ -266,6 +383,15 @@ __all__ = (
     "record_stage_duration",
     "metrics_endpoint_text",
     "start_metrics_server",
+)
+
+
+# Constants surfaced for tests / external introspection. Not promised
+# stable; do not pin behavior on these from outside the package.
+_PUBLIC_FOR_TESTS = (
+    _MAX_LABEL_CARDINALITY,
+    _MAX_LABEL_VALUE_LEN,
+    _OVERFLOW_SENTINEL,
 )
 
 

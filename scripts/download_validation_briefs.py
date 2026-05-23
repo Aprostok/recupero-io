@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -31,10 +32,48 @@ from recupero.config import load_config  # noqa: E402
 from recupero.storage.supabase_case_store import SupabaseCaseStore  # noqa: E402
 
 
+_SAFE_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _safe_local_path(out_dir: Path, relative: str) -> Path:
+    """Resolve ``out_dir / relative`` and refuse anything that escapes
+    ``out_dir`` (path traversal via ``..`` or absolute paths in
+    bucket-listed filenames). Returns the resolved local path.
+    """
+    if not relative or relative.startswith(("/", "\\")):
+        raise ValueError(f"refusing absolute bucket path: {relative!r}")
+    candidate = (out_dir / relative).resolve()
+    root = out_dir.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(
+            f"refusing path traversal in bucket filename: {relative!r}"
+        ) from exc
+    return candidate
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     parser.add_argument("investigation_id")
     args = parser.parse_args()
+
+    # Reject anything that isn't a plain identifier — investigation_id
+    # is appended to a filesystem path, so disallow path separators and
+    # ``..`` segments before we ever touch disk. The `_SAFE_ID` regex
+    # allows dots as separators but a pure-dot string (e.g. ".." or
+    # "...") is path-traversal in disguise — reject explicitly.
+    raw_id = args.investigation_id or ""
+    if (not _SAFE_ID.match(raw_id)
+            or ".." in raw_id
+            or set(raw_id) <= {"."}):
+        print(
+            "ERROR: investigation_id must match "
+            f"{_SAFE_ID.pattern!r} and contain no '..' segment; "
+            f"got {raw_id!r}",
+            file=sys.stderr,
+        )
+        return 2
 
     load_dotenv(override=True)
     cfg, _ = load_config()
@@ -61,7 +100,11 @@ def main() -> int:
             data = store._download(  # noqa: SLF001
                 store.storage_prefix + full_bucket_path
             )
-            local = out_dir / f
+            try:
+                local = _safe_local_path(out_dir, f)
+            except ValueError as exc:
+                print(f"  ! skipping {f}: {exc}", file=sys.stderr)
+                continue
             local.parent.mkdir(parents=True, exist_ok=True)
             local.write_bytes(data)
             print(f"  ↓ {f}  ({len(data):,} bytes)")

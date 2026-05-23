@@ -81,6 +81,69 @@ class ScreeningResult:
 # ----- Screening logic ----- #
 
 
+def _safe_int(val: Any, default: int = 0) -> int:
+    """Coerce an arbitrary DB / caller-supplied value to int.
+
+    Z1-1 hardening: DB rows may surface non-numeric strings ("NaN",
+    "abc") after a schema migration glitch. ``int('NaN')`` raises
+    ``ValueError`` and propagates out of the screener. Degrade to
+    ``default`` instead.
+    """
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return int(val)
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        if val != val or val in (float("inf"), float("-inf")):
+            return default
+        try:
+            return int(val)
+        except (ValueError, OverflowError):
+            return default
+    # Decimal: W13-04 fuzzer caught `Decimal('Infinity')` → OverflowError
+    # from int() propagating out of this helper. Check finiteness first.
+    if isinstance(val, Decimal):
+        if not val.is_finite():
+            return default
+        try:
+            return int(val)
+        except (ValueError, OverflowError):
+            return default
+    try:
+        return int(val)
+    except (TypeError, ValueError, OverflowError):
+        try:
+            d = Decimal(str(val))
+            if not d.is_finite():
+                return default
+            return int(d)
+        except Exception:  # noqa: BLE001
+            return default
+
+
+def _safe_decimal(val: Any, default: Decimal = Decimal("0")) -> Decimal:
+    """Coerce an arbitrary value to a finite, non-negative Decimal.
+
+    Z1-2 hardening: a corrupted ``SUM(usd_flowed)`` column may carry
+    the string ``"NaN"`` or a negative number (corruption). Replace
+    with ``default`` rather than letting NaN poison every downstream
+    comparison.
+    """
+    if val is None:
+        return default
+    try:
+        d = Decimal(str(val))
+    except Exception:  # noqa: BLE001
+        return default
+    if not d.is_finite():
+        return default
+    if d < 0:
+        return default
+    return d
+
+
 def screen_address(
     address: str,
     *,
@@ -109,6 +172,15 @@ def screen_address(
       A ScreeningResult with the verdict + structured details.
     """
     addr_norm = _normalize_for_lookup(address, chain=chain)
+
+    # Z1-6: reject non-dict high_risk_db at the boundary so callers
+    # see a clean TypeError rather than an AttributeError from
+    # `db.get(addr_norm)` deep inside the screener.
+    if high_risk_db is not None and not isinstance(high_risk_db, dict):
+        raise TypeError(
+            "high_risk_db must be a dict/mapping, got "
+            f"{type(high_risk_db).__name__}"
+        )
 
     db = high_risk_db if high_risk_db is not None else load_high_risk_db()
     sources_used: list[str] = ["local_seeds"]
@@ -209,6 +281,37 @@ def _normalize_for_lookup(address: str, *, chain: str) -> str:
     if not address:
         raise ValueError("address is empty")
 
+    # Z1-5: reject unreasonably long inputs at the boundary. Real
+    # EVM/Tron/BTC/Solana addresses are <= 64 chars; even with
+    # base58check overhead, 128 is generous. A 1MB string is hostile.
+    if len(address) > 128:
+        raise ValueError(
+            f"address too long: {len(address)} chars (max 128)"
+        )
+
+    # Z1-4: reject NUL bytes (Postgres UntranslatableCharacter) and
+    # Unicode bidi-override controls (audit-log spoof). The character
+    # set inside a real on-chain address is alnum + a few separators
+    # only — bail on any C0 / C1 / bidi control codepoint.
+    for ch in address:
+        cp = ord(ch)
+        if cp == 0:
+            raise ValueError(
+                "address contains a NUL byte (invalid control character)"
+            )
+        # C0 controls (\x00-\x1F) + DEL (\x7F) + C1 controls (\x80-\x9F).
+        if cp < 0x20 or cp == 0x7F or 0x80 <= cp <= 0x9F:
+            raise ValueError(
+                f"address contains a control character (codepoint {cp:#06x})"
+            )
+        # Unicode bidi controls — RLO/LRO/RLE/LRE/PDF/RLM/LRM/etc.
+        if cp in (0x200E, 0x200F, 0x202A, 0x202B, 0x202C,
+                  0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069):
+            raise ValueError(
+                "address contains a Unicode bidi-override control "
+                f"(codepoint {cp:#06x}) — invalid"
+            )
+
     # Case-sensitive chains: base58 / base58check encode the address
     # bytes in a way that's case-meaningful. Lowercasing produces
     # wrong addresses that won't match any DB entry.
@@ -271,13 +374,13 @@ def _lookup_correlation_for_address(
         row = cur.fetchone() or {}
 
     return ScreeningCorrelation(
-        prior_case_count=int(row.get("prior_case_count") or 0),
-        prior_ofac_exposed_count=int(row.get("prior_ofac_exposed_count") or 0),
-        prior_mixer_exposed_count=int(row.get("prior_mixer_exposed_count") or 0),
-        prior_drainer_attributed_count=int(
-            row.get("prior_drainer_attributed_count") or 0
+        prior_case_count=_safe_int(row.get("prior_case_count")),
+        prior_ofac_exposed_count=_safe_int(row.get("prior_ofac_exposed_count")),
+        prior_mixer_exposed_count=_safe_int(row.get("prior_mixer_exposed_count")),
+        prior_drainer_attributed_count=_safe_int(
+            row.get("prior_drainer_attributed_count")
         ),
-        prior_total_usd_flowed=Decimal(str(row.get("prior_total_usd_flowed") or 0)),
+        prior_total_usd_flowed=_safe_decimal(row.get("prior_total_usd_flowed")),
         prior_roles_seen=sorted([r for r in (row.get("roles_seen") or []) if r]),
     )
 
@@ -308,7 +411,21 @@ def _compute_score(
             return 9
         if "drainer" in cat or "scam" in cat:
             return 7
-        return max(5, entry.severity * 2)
+        # Z1-3: severity may be non-int (None, str — legacy mixer
+        # seed rows pre-v0.9 had no severity field) or out-of-range
+        # (attacker-controlled HighRiskEntry). Clamp to 0..4 before
+        # the *2 doubling and floor the result to 0..10 so the
+        # documented contract holds.
+        raw_sev = getattr(entry, "severity", None)
+        sev = _safe_int(raw_sev)
+        if sev < 0:
+            sev = 0
+        if sev > 4:
+            sev = 4
+        score = max(5, sev * 2)
+        if score > 10:
+            score = 10
+        return score
 
     # No seed hit — fall back to correlation history.
     if correlation.prior_ofac_exposed_count > 0:

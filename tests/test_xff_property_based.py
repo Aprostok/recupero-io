@@ -73,8 +73,14 @@ def _xff_chain_strategy() -> st.SearchStrategy[list[str]]:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Property 1: with trusted_hops=N, the chosen IP is the (L-N)-th
-# element of the chain
+# Property 1: with trusted_hops=N AND len(chain) >= N, the chosen IP is
+# the (L-N)-th element of the chain.
+#
+# RIGOR-S-3b update: when trusted_hops > len(chain), the contract was
+# promoted to FAIL-CLOSED (return "unknown" rather than chain[0]). That
+# misconfig path is covered exhaustively in
+# tests/test_xff_misconfig_hardening.py. This property only asserts the
+# well-configured case so it remains a clean tail-pick proof.
 # ═════════════════════════════════════════════════════════════════════════════
 
 
@@ -84,8 +90,10 @@ def test_property_trusted_hops_picks_correct_element(
     chain: list[str], trusted_hops: int,
 ) -> None:
     """For a chain `[a, b, c, d]` with trusted_hops=2, the function
-    must pick `c` (chain[-2]). For trusted_hops > len(chain), pick
-    chain[0] (the leftmost element of what's there)."""
+    must pick `c` (chain[-2]). The misconfigured case (trusted_hops >
+    len(chain)) is excluded — covered by test_xff_misconfig_hardening."""
+    assume(trusted_hops <= len(chain))
+
     raw = ", ".join(chain)
     req = _FakeRequest(headers={"x-forwarded-for": raw})
 
@@ -93,7 +101,7 @@ def test_property_trusted_hops_picks_correct_element(
                     {"RECUPERO_TRUSTED_PROXY_HOPS": str(trusted_hops)}):
         result = _intake_rl_client_ip(req)
 
-    expected_idx = max(0, len(chain) - trusted_hops)
+    expected_idx = len(chain) - trusted_hops
     expected = chain[expected_idx]
     assert result == expected, (
         f"chain={chain}, trusted_hops={trusted_hops}, "
@@ -194,77 +202,21 @@ def test_property_attacker_xff_rotation_does_not_bypass_rate_limit(
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Property 4: chain shorter than trusted_hops takes the leftmost
-# inside-trust element
-# ═════════════════════════════════════════════════════════════════════════════
-
-
-@given(chain=st.lists(_ip_strategy(), min_size=1, max_size=3),
-       extra_hops=st.integers(1, 5))
-@_SETTINGS
-def test_property_short_chain_takes_leftmost(
-    chain: list[str], extra_hops: int,
-) -> None:
-    """When trusted_hops > len(chain), the function must NOT
-    fabricate trust by extrapolating beyond the chain. It must
-    fall back to the leftmost (`chain[0]`) — the most conservative
-    choice within what's actually there."""
-    trusted_hops = len(chain) + extra_hops
-    raw = ", ".join(chain)
-    req = _FakeRequest(headers={"x-forwarded-for": raw})
-
-    with patch.dict("os.environ",
-                    {"RECUPERO_TRUSTED_PROXY_HOPS": str(trusted_hops)}):
-        result = _intake_rl_client_ip(req)
-
-    assert result == chain[0], (
-        f"chain (len {len(chain)})={chain}, "
-        f"trusted_hops={trusted_hops} (exceeds chain length), "
-        f"expected leftmost={chain[0]!r}, got {result!r}"
-    )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Documented misconfiguration behavior: chain length <= trusted_hops
-# falls back to leftmost (chain[0]).
+# Property 4 + "documented misconfig behavior" tests REMOVED.
 #
-# RIGOR-1 finding: the leftmost-fallback IS a documented behavior in
-# the docstring but creates an attacker-bypass when an operator
-# misconfigures RECUPERO_TRUSTED_PROXY_HOPS too high. A safer
-# fail-closed alternative would be to fall back to socket-peer here.
-# Documenting the current behavior explicitly so the contract is
-# audit-visible; a follow-up RIGOR task can promote it to fail-closed
-# after evaluating production deploy shapes.
+# RIGOR-S-3b: the contract was promoted from "fall back to leftmost
+# (chain[0]) when trusted_hops >= len(chain)" to "skip the XFF path
+# entirely". The new positive lock lives in
+# tests/test_xff_misconfig_hardening.py — that file's
+# test_misconfig_chain_too_short_falls_through_to_real_ip and friends
+# pin the fail-closed contract. The two former property tests here
+# (``test_property_short_chain_takes_leftmost`` and
+# ``test_documented_short_chain_falls_back_to_leftmost``) asserted the
+# OLD behavior; their docstrings explicitly noted "a code change
+# promoting this to fail-closed should also remove this test."
+# Removing them keeps the property test suite consistent with the
+# hardened contract.
 # ═════════════════════════════════════════════════════════════════════════════
-
-
-@given(chain=st.lists(_ip_strategy(), min_size=1, max_size=3,
-                      unique=True),
-       extra_hops=st.integers(0, 4))
-@_SETTINGS
-def test_documented_short_chain_falls_back_to_leftmost(
-    chain: list[str], extra_hops: int,
-) -> None:
-    """When trusted_hops >= chain length, the function returns chain[0]
-    (the leftmost entry). This is documented behavior. The leftmost is
-    attacker-controlled in malicious-input scenarios — operators MUST
-    NOT set trusted_hops higher than the actual proxy count.
-
-    Marked as a documented behavior to lock the contract: a code change
-    promoting this to "fail closed to socket peer" should also remove
-    this test."""
-    trusted_hops = len(chain) + extra_hops
-    raw = ", ".join(chain)
-    req = _FakeRequest(headers={"x-forwarded-for": raw})
-
-    with patch.dict("os.environ",
-                    {"RECUPERO_TRUSTED_PROXY_HOPS": str(trusted_hops)}):
-        result = _intake_rl_client_ip(req)
-    assert result == chain[0], (
-        f"Documented behavior broken: chain (len={len(chain)})="
-        f"{chain!r}, trusted_hops={trusted_hops}, expected leftmost "
-        f"{chain[0]!r}, got {result!r}"
-    )
 
 
 # ═════════════════════════════════════════════════════════════════════════════

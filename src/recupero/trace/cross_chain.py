@@ -149,7 +149,20 @@ def ingest_bridge_seeds(path: Path | None = None) -> dict[tuple[Chain, str], Bri
         if not isinstance(addr, str) or not addr.strip():
             continue
         # Default chain is ethereum (existing seed file is Ethereum-only).
-        chain_str = (entry.get("chain") or "ethereum").lower()
+        # Z6-1: a non-string chain value (int / list / dict from schema
+        # drift) made ``.lower()`` raise AttributeError mid-loop and
+        # dropped the entire bridge DB. Skip the malformed row instead.
+        raw_chain = entry.get("chain")
+        if raw_chain is None or raw_chain == "":
+            chain_str = "ethereum"
+        elif isinstance(raw_chain, str):
+            chain_str = raw_chain.lower()
+        else:
+            log.debug(
+                "bridges: skipping entry with non-string chain field: %r",
+                raw_chain,
+            )
+            continue
         try:
             chain = Chain(chain_str)
         except (ValueError, KeyError):

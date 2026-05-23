@@ -169,27 +169,38 @@ def load_high_risk_db(
     try:
         raw = json.loads(hr_path.read_text(encoding="utf-8-sig"))
         for entry in raw.get("addresses", []):
-            if not isinstance(entry, dict):
-                continue
-            addr = entry.get("address")
-            if not isinstance(addr, str) or not addr.strip():
-                continue
+            # Z6-3 companion: per-entry try/except so a single bad
+            # row (e.g., a junk address whose canonicalizer returns
+            # "") cannot kill the loader and silently drop the
+            # curated Lazarus / Garantex rows that follow.
             try:
-                severity = int(entry.get("severity", 3))
-            except (TypeError, ValueError):
-                severity = 3
-            key = _canonical_address_key(addr)
-            if not key:
+                if not isinstance(entry, dict):
+                    continue
+                addr = entry.get("address")
+                if not isinstance(addr, str) or not addr.strip():
+                    continue
+                try:
+                    severity = int(entry.get("severity", 3))
+                except (TypeError, ValueError):
+                    severity = 3
+                key = _canonical_address_key(addr)
+                if not key:
+                    continue
+                out[key] = HighRiskEntry(
+                    address=key,
+                    name=entry.get("name", "(unknown)"),
+                    risk_category=entry.get("risk_category", "unknown"),
+                    severity=severity,
+                    notes=entry.get("notes"),
+                    confidence=entry.get("confidence", "high"),
+                    ofac_listing_date=entry.get("ofac_listing_date"),
+                )
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "high_risk seed: skipping malformed entry %r: %s",
+                    entry, exc,
+                )
                 continue
-            out[key] = HighRiskEntry(
-                address=key,
-                name=entry.get("name", "(unknown)"),
-                risk_category=entry.get("risk_category", "unknown"),
-                severity=severity,
-                notes=entry.get("notes"),
-                confidence=entry.get("confidence", "high"),
-                ofac_listing_date=entry.get("ofac_listing_date"),
-            )
     except FileNotFoundError:
         log.info("high_risk seed not found at %s — risk scoring degraded", hr_path)
     except Exception as exc:  # noqa: BLE001
@@ -263,33 +274,56 @@ def load_high_risk_db(
         raw = json.loads(mx_path.read_text(encoding="utf-8-sig"))
         if isinstance(raw, list):
             for entry in raw:
-                if not isinstance(entry, dict):
+                # Z6-3: per-entry try/except so a single malformed row
+                # (non-string ``notes`` field — schema drift / human
+                # paste) does NOT abort the whole loop and silently drop
+                # every subsequent (curated Tornado Cash / Sinbad / etc.)
+                # entry. Pre-fix the outer try wrapped the entire for,
+                # so the first AttributeError on ``notes.lower()`` was
+                # caught and "mixers seed load failed" was logged, but
+                # the curated rows after the malformed one disappeared
+                # from the risk DB → mixer screening silently zeroed.
+                try:
+                    if not isinstance(entry, dict):
+                        continue
+                    addr = entry.get("address")
+                    if not isinstance(addr, str) or not addr.strip():
+                        continue
+                    # Don't overwrite high_risk.json entries if there's
+                    # a duplicate; the more specific entry wins.
+                    key = _canonical_address_key(addr)
+                    if not key:
+                        continue
+                    if key in out:
+                        continue
+                    notes_raw = entry.get("notes")
+                    # Coerce non-string notes to None — keep the row
+                    # loadable, conservative classification.
+                    if isinstance(notes_raw, str):
+                        notes = notes_raw
+                    else:
+                        notes = ""
+                    is_sanctioned = (
+                        "ofac" in notes.lower()
+                        or "sanction" in notes.lower()
+                    )
+                    out[key] = HighRiskEntry(
+                        address=key,
+                        name=entry.get("name", "(mixer)"),
+                        risk_category=(
+                            "mixer_sanctioned" if is_sanctioned
+                            else "mixer_high_risk"
+                        ),
+                        severity=4 if is_sanctioned else 3,
+                        notes=notes or None,
+                        confidence=entry.get("confidence", "high"),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "mixers seed: skipping malformed entry %r: %s",
+                        entry, exc,
+                    )
                     continue
-                addr = entry.get("address")
-                if not isinstance(addr, str) or not addr.strip():
-                    continue
-                # Don't overwrite high_risk.json entries if there's
-                # a duplicate; the more specific entry wins.
-                key = _canonical_address_key(addr)
-                if not key:
-                    continue
-                if key in out:
-                    continue
-                notes = entry.get("notes") or ""
-                # If notes mention OFAC, treat as sanctioned;
-                # otherwise mixer_high_risk.
-                is_sanctioned = "ofac" in notes.lower() or "sanction" in notes.lower()
-                out[key] = HighRiskEntry(
-                    address=key,
-                    name=entry.get("name", "(mixer)"),
-                    risk_category=(
-                        "mixer_sanctioned" if is_sanctioned
-                        else "mixer_high_risk"
-                    ),
-                    severity=4 if is_sanctioned else 3,
-                    notes=notes or None,
-                    confidence=entry.get("confidence", "high"),
-                )
     except FileNotFoundError:
         log.debug("mixers seed not found at %s", mx_path)
     except Exception as exc:  # noqa: BLE001

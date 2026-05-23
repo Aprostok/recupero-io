@@ -1,0 +1,64 @@
+# ---------------------------------------------------------------------------
+# .dockerignore — guard rails for `docker build`.
+#
+# `COPY src/` in the Dockerfile is currently narrow, but if anyone later
+# switches to `COPY .` we must NOT ship test fixtures, operator case data,
+# credentials, or build/IDE detritus into the image. Exclusions below mirror
+# tests/test_deploy_config_audit.py::test_dockerignore_excludes_dangerous_paths.
+# ---------------------------------------------------------------------------
+
+# Test code & fixtures
+tests/
+
+# Operator case data (PII, addresses, evidence bundles)
+data/cases/
+data/
+
+# Secrets / env files
+.env
+.env.*
+
+# VCS metadata
+.git/
+.gitignore
+
+# Python bytecode & caches
+__pycache__
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test / type / lint caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Logs & backups
+*.log
+*.bak
+
+# Editor / agent state
+.claude/
+.idea/
+.vscode/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Documentation builds
+docs/_build/
+
+# JS toolchain
+node_modules/
+
+# OS cruft
+.DS_Store
+*.swp
+
+# Vestigial test artifacts that may live alongside src/
+recupero/test_*.py

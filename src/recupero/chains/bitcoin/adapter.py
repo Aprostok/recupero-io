@@ -62,6 +62,28 @@ from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 log = logging.getLogger(__name__)
 
 
+def _safe_unix_to_datetime(ts: Any) -> datetime:
+    """Convert an untrusted unix-seconds value to a UTC datetime.
+
+    Esplora is an external HTTP service. A buggy / compromised
+    response can carry timestamps that crash
+    ``datetime.fromtimestamp`` — OverflowError on year-> 9999,
+    OSError on Windows for very-negative, ValueError on Linux. We
+    clamp to epoch so the BFS hop keeps moving.
+    """
+    try:
+        ts_int = int(ts or 0)
+    except (TypeError, ValueError):
+        return datetime.fromtimestamp(0, tz=UTC)
+    try:
+        return datetime.fromtimestamp(ts_int, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        log.warning(
+            "bitcoin: clamping out-of-range timestamp %r to epoch", ts_int,
+        )
+        return datetime.fromtimestamp(0, tz=UTC)
+
+
 # Public Bitcoin explorers — first match per (mainnet, address-type)
 # is what we cite in chain-of-custody URLs.
 _MEMPOOL_BASE = "https://mempool.space"
@@ -163,7 +185,8 @@ class BitcoinAdapter(ChainAdapter):
         return False
 
     def fetch_native_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Bitcoin native (BTC) outflows from ``from_address``.
 
@@ -199,7 +222,8 @@ class BitcoinAdapter(ChainAdapter):
         return out
 
     def fetch_erc20_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Bitcoin has no fungible-token standard equivalent to ERC-20
         (Ordinals / BRC-20 / Runes exist but have low forensic
@@ -227,7 +251,7 @@ class BitcoinAdapter(ChainAdapter):
                 f"tx {tx_hash} not confirmed or has incomplete status; "
                 "chain-of-custody requires a confirmed tx"
             )
-        block_time = datetime.fromtimestamp(block_time_unix, tz=UTC)
+        block_time = _safe_unix_to_datetime(block_time_unix)
         raw_block: dict[str, Any] = {}
         if isinstance(block_hash, str):
             try:
@@ -280,7 +304,7 @@ class BitcoinAdapter(ChainAdapter):
         block_time_unix = status.get("block_time")
         if not isinstance(block_height, int) or not isinstance(block_time_unix, int):
             return []
-        block_time = datetime.fromtimestamp(block_time_unix, tz=UTC)
+        block_time = _safe_unix_to_datetime(block_time_unix)
 
         vin = tx.get("vin") if isinstance(tx, dict) else None
         vout = tx.get("vout") if isinstance(tx, dict) else None

@@ -138,8 +138,26 @@ def build_all_deliverables(
     # the letter.
     issuers_seen: dict[str, IssuerInfo] = {}
     for entry in freezable:
+        # Adversarial-input audit: a buggy upstream writer can drop a
+        # non-dict element (e.g., a stray string) into FREEZABLE. Pre-fix
+        # `entry.get` raised AttributeError, killing every other issuer's
+        # brief generation. Skip non-dicts defensively.
+        if not isinstance(entry, dict):
+            log.warning(
+                "skipping non-dict FREEZABLE entry (%r) — malformed brief",
+                type(entry).__name__,
+            )
+            continue
         issuer_name = entry.get("issuer")
         if not issuer_name or issuer_name in issuers_seen:
+            continue
+        # Reject non-string issuer names (e.g., int 123 from a bad JSON
+        # cast) — they'd crash `_issuer_info_for(name).split(" ")`.
+        if not isinstance(issuer_name, str):
+            log.warning(
+                "skipping FREEZABLE entry with non-string issuer name (%r)",
+                type(issuer_name).__name__,
+            )
             continue
         if not _has_actionable_holding(entry):
             log.info(
@@ -545,6 +563,18 @@ def build_all_deliverables(
         pdf_paths = _emit_pdfs(html_paths, flow_svg_path=flow_svg_path if flow_filename else None)
     written.extend(pdf_paths)
 
+    # Case-level manifest: declares every case-scoped artifact
+    # (engagement_letter, victim_summary, recovery_snapshot, trace_report,
+    # flow svg, findings csv/json + their PDF siblings). Per-issuer
+    # manifests already cover freeze_request + le_handoff. With both,
+    # every primary deliverable on disk is declared in *some* manifest
+    # and the chain-of-custody validator's orphan check goes clean.
+    _write_case_manifest(
+        briefs_dir=case_dir / "briefs",
+        case=case,
+        written=written,
+    )
+
     # Auto-send the victim-summary letter to the victim. Skipped on
     # wallet traces (no real victim email), on cases without a
     # victim email (operator didn't capture one), and on cases
@@ -566,6 +596,86 @@ def build_all_deliverables(
     log.info("deliverables done: %d file(s) under %s/briefs/",
              len(written), case_dir.name)
     return written
+
+
+# Filename prefixes for case-level (non per-issuer) artifacts that must
+# appear in the case manifest so the chain-of-custody validator's
+# `_check_orphan_artifacts_on_disk` sees them as declared. Per-issuer
+# files (freeze_request_*, le_handoff_*) are covered by the per-issuer
+# manifests written from brief.py.
+_CASE_MANIFEST_PREFIXES = (
+    "engagement_letter_",
+    "victim_summary_",
+    "recovery_snapshot_",
+    "trace_report_",
+    "flow_",
+    "investigator_findings",  # .csv + .json
+)
+
+
+def _write_case_manifest(
+    *, briefs_dir: Path, case: Case, written: list[Path]
+) -> None:
+    """Emit ``manifest_case_<case_id>.json`` declaring every case-scoped
+    artifact under briefs/. Hashes are computed from on-disk bytes (the
+    canonical thing the validator will hash later), so atomic-write
+    races between HTML emission and the manifest write resolve to
+    whatever ended up on disk.
+
+    Best-effort: any failure logs a warning and leaves the case-level
+    manifest unwritten. The per-issuer manifests are still in place,
+    so the case still has chain-of-custody coverage for the freeze
+    letters + LE handoffs; only the supplementary deliverables fall
+    back to orphan-info severity.
+    """
+    import hashlib
+    import json
+    from datetime import datetime, timezone
+
+    from recupero._common import atomic_write_text
+
+    if not briefs_dir.is_dir():
+        return
+    try:
+        outputs: dict[str, str] = {}
+        shas: dict[str, str] = {}
+        for path in sorted(briefs_dir.iterdir()):
+            if not path.is_file():
+                continue
+            if not any(path.name.startswith(p) for p in _CASE_MANIFEST_PREFIXES):
+                continue
+            # Use the full filename as the manifest key. Stable, unique,
+            # and the validator's orphan-check matches against Path(v).name
+            # anyway so a self-naming key is the most direct contract.
+            outputs[path.name] = str(path)
+            shas[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        if not outputs:
+            return  # nothing to declare; skip the empty manifest
+        case_id_str = (
+            str(case.case_id) if getattr(case, "case_id", None) else "unknown"
+        )
+        manifest = {
+            "kind": "case_manifest",
+            "case_id": case_id_str,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "outputs": outputs,
+            "output_sha256": shas,
+        }
+        manifest_path = briefs_dir / f"manifest_case_{case_id_str}.json"
+        atomic_write_text(
+            manifest_path,
+            json.dumps(
+                manifest, indent=2, sort_keys=True,
+                allow_nan=False, ensure_ascii=False,
+            ),
+        )
+        written.append(manifest_path)
+        log.info(
+            "wrote case-level manifest: %s (%d artifact(s))",
+            manifest_path.name, len(outputs),
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("case manifest write failed (continuing): %s", e)
 
 
 def _maybe_auto_send_victim_summary(
@@ -689,6 +799,7 @@ def _maybe_auto_send_victim_summary(
         html_body = portal_banner + pay_banner + html_body
 
     try:
+        from recupero.worker._email import _mask_email_for_log
         result = send_email(
             to=victim.email,
             subject=subject,
@@ -698,19 +809,20 @@ def _maybe_auto_send_victim_summary(
             attachments=attachments,
             preview_text=preview,
         )
+        masked_to = _mask_email_for_log(victim.email)
         if result.success:
             log.info(
                 "auto-sent victim summary to=%s inv=%s message_id=%s "
                 "(%d attachment(s))",
-                victim.email, investigation_id, result.message_id,
-                len(attachments),
+                masked_to, investigation_id,
+                result.message_id, len(attachments),
             )
         elif result.skipped:
             log.info("auto-send skipped (RECUPERO_DISABLE_EMAIL=1): inv=%s",
                      investigation_id)
         else:
             log.warning("auto-send victim summary FAILED to=%s inv=%s err=%s",
-                        victim.email, investigation_id, result.error)
+                        masked_to, investigation_id, result.error)
     except Exception as e:  # noqa: BLE001
         log.warning("auto-send victim summary unexpected error: %s", e)
 
@@ -942,6 +1054,64 @@ def _emit_pdfs(html_paths: list[Path], *, flow_svg_path: Path | None) -> list[Pa
     return out
 
 
+def validate_url_for_weasyprint(url: str, base_dir: str) -> None:
+    """Reject any URL WeasyPrint should not fetch.
+
+    Allowlist policy (anything outside this raises ``ValueError``):
+
+      * Empty / ``file:`` schemes whose resolved path lies *inside*
+        ``base_dir`` (case_dir). Symlinks are resolved via realpath
+        before the boundary check so a symlink-inside-case_dir
+        pointing at ``/etc/shadow`` is rejected.
+      * Boundary check uses ``os.path.commonpath`` (not naive
+        ``startswith``) so sibling paths like ``/case_dir_evil/...``
+        cannot bypass via prefix overlap.
+
+    Everything else — ``http``, ``https``, ``ftp``, ``data``, ``gopher``,
+    ``sftp``, ``jar``, ``javascript``, any unknown scheme — is rejected.
+    The pre-W7-02 fetcher rejected only http/https/ftp explicitly and
+    fell through to ``default_url_fetcher`` for every other scheme,
+    including ``data:`` (an editorial-AI prompt injection vector since
+    ``<img src="data:text/html;base64,...">`` could carry arbitrary
+    payloads that WeasyPrint's data-URL handler would gladly decode).
+    """
+    from urllib.parse import urlparse
+    p = urlparse(url)
+    scheme = p.scheme.lower()
+    # Windows drive letters ("C:\\...") parse with scheme="c" — treat
+    # any single-character scheme as a bare local path, not a URL scheme.
+    if len(scheme) == 1:
+        scheme = ""
+    # Allowlist: only empty + file: are candidates for local fetch.
+    if scheme not in ("", "file"):
+        raise ValueError(
+            f"WeasyPrint refused fetch for disallowed scheme "
+            f"{scheme!r}: {url}"
+        )
+    # Resolve the path. file:// URLs use p.path; bare paths fall through
+    # via the url itself. realpath resolves symlinks so an in-tree
+    # symlink can't point at /etc/shadow and pass the boundary check.
+    # For Windows drive-letter "URLs" we discarded the scheme above, so
+    # use the original `url` (urlparse will have placed "\\..." in p.path,
+    # losing the drive).
+    raw = url if len(p.scheme) == 1 else (p.path or url)
+    resolved = os.path.realpath(os.path.abspath(raw))
+    base_resolved = os.path.realpath(os.path.abspath(base_dir))
+    # commonpath raises ValueError for cross-drive paths on Windows
+    # (e.g., C: vs D:). Treat that as an out-of-tree reject.
+    try:
+        common = os.path.commonpath([resolved, base_resolved])
+    except ValueError:
+        raise ValueError(
+            f"WeasyPrint refused out-of-tree fetch (cross-drive): {url}"
+        )
+    if common != base_resolved:
+        raise ValueError(
+            f"WeasyPrint refused out-of-tree fetch: {url} "
+            f"(resolved={resolved}, base={base_resolved})"
+        )
+
+
 def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
     """Render an HTML deliverable to PDF in an isolated subprocess.
 
@@ -983,21 +1153,32 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
     # who slipped <img src=http://169.254.169.254/...> into editorial
     # JSON would have WeasyPrint fetch IAM credentials. New: refuse
     # any URL scheme outside `file://` rooted at the case_dir.
+    # W7-02 (sec-HIGH): strict allowlist fetcher — refuse every scheme
+    # except in-tree file:// resources. Pre-W7-02 the fetcher rejected
+    # only http/https/ftp explicitly and fell through to the default
+    # fetcher for `data:`, `gopher:`, `sftp:`, `jar:`, etc. The boundary
+    # check is also tightened: realpath + commonpath instead of naive
+    # startswith (which would have allowed `/case_dir_evil/...`).
     script = (
         "import os, sys\n"
         "from weasyprint import HTML\n"
         "from urllib.parse import urlparse\n"
         "\n"
-        "_case_dir = os.path.dirname(os.path.abspath(sys.argv[1]))\n"
+        "_case_dir = os.path.realpath(os.path.dirname(os.path.abspath(sys.argv[1])))\n"
         "\n"
         "def _no_network_fetcher(url, timeout=10, ssl_context=None):\n"
         "    p = urlparse(url)\n"
-        "    if p.scheme in ('http', 'https', 'ftp'):\n"
-        "        raise ValueError(f'WeasyPrint refused remote fetch: {url}')\n"
-        "    if p.scheme in ('', 'file'):\n"
-        "        path = os.path.abspath(p.path or url)\n"
-        "        if not path.startswith(_case_dir):\n"
-        "            raise ValueError(f'WeasyPrint refused out-of-tree path: {url}')\n"
+        "    scheme = p.scheme.lower()\n"
+        "    if scheme not in ('', 'file'):\n"
+        "        raise ValueError(f'WeasyPrint refused scheme {scheme!r}: {url}')\n"
+        "    raw = p.path or url\n"
+        "    resolved = os.path.realpath(os.path.abspath(raw))\n"
+        "    try:\n"
+        "        common = os.path.commonpath([resolved, _case_dir])\n"
+        "    except ValueError:\n"
+        "        raise ValueError(f'WeasyPrint refused cross-drive path: {url}')\n"
+        "    if common != _case_dir:\n"
+        "        raise ValueError(f'WeasyPrint refused out-of-tree path: {url}')\n"
         "    from weasyprint.urls import default_url_fetcher\n"
         "    return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)\n"
         "\n"
@@ -1017,7 +1198,16 @@ def _html_to_pdf(html_path: Path, pdf_path: Path) -> None:
     # that the bucket sync would then ship to compliance teams. Same
     # contract as _common.atomic_write_text but adapted for PDFs
     # (binary, written by a subprocess).
-    tmp_path = pdf_path.with_suffix(pdf_path.suffix + ".tmp")
+    #
+    # Adversarial-input audit: the tmp filename must be process-unique
+    # so two concurrent workers running on the same case_dir don't smash
+    # each other's tmp file (and os.replace one worker's partial PDF
+    # over the other's complete render). Tag the sibling with pid+tid
+    # so the names diverge per writer.
+    import os as _os_uniq
+    import threading as _threading_uniq
+    _uniq = f".{_os_uniq.getpid()}.{_threading_uniq.get_ident()}"
+    tmp_path = pdf_path.with_suffix(pdf_path.suffix + _uniq + ".tmp")
     _render_pdf_in_subprocess(
         script=script,
         args=[str(html_path), str(tmp_path)],
@@ -1072,26 +1262,42 @@ def _svg_to_pdf(svg_path: Path, pdf_path: Path) -> None:
     # sibling .tmp file then os.replace() onto the final path so a
     # SIGTERM / OOM mid-render can't leave a truncated PDF. Mirrors the
     # v0.18.4 fix applied to _html_to_pdf that was never backported here.
-    tmp_pdf_path = pdf_path.with_suffix(pdf_path.suffix + ".tmp")
+    #
+    # Adversarial-input audit: same per-worker uniqueness as
+    # _html_to_pdf — pid+tid tag prevents concurrent-worker tmp-file
+    # collision on the same case_dir.
+    import os as _os_uniq
+    import threading as _threading_uniq
+    _uniq = f".{_os_uniq.getpid()}.{_threading_uniq.get_ident()}"
+    tmp_pdf_path = pdf_path.with_suffix(pdf_path.suffix + _uniq + ".tmp")
     try:
         # v0.18.2 (round-11 sec-HIGH-008): same SSRF lockdown as the
         # HTML→PDF path. SVG documents can carry <image href="http://...">
         # which WeasyPrint would otherwise fetch.
         _render_pdf_in_subprocess(
             script=(
+                # W7-02: same strict allowlist + realpath+commonpath
+                # boundary as the HTML→PDF path. SVG documents can carry
+                # <image href="data:..."> or <image href="http://...">;
+                # both must be refused.
                 "import os, sys\n"
                 "from urllib.parse import urlparse\n"
                 "from weasyprint import HTML\n"
                 "from weasyprint.urls import default_url_fetcher\n"
-                "_base = os.path.abspath(sys.argv[3])\n"
+                "_base = os.path.realpath(os.path.abspath(sys.argv[3]))\n"
                 "def _no_net(url, timeout=10, ssl_context=None):\n"
                 "    p = urlparse(url)\n"
-                "    if p.scheme in ('http','https','ftp'):\n"
-                "        raise ValueError(f'remote fetch refused: {url}')\n"
-                "    if p.scheme in ('','file'):\n"
-                "        path = os.path.abspath(p.path or url)\n"
-                "        if not path.startswith(_base):\n"
-                "            raise ValueError(f'out-of-tree path: {url}')\n"
+                "    scheme = p.scheme.lower()\n"
+                "    if scheme not in ('','file'):\n"
+                "        raise ValueError(f'refused scheme {scheme!r}: {url}')\n"
+                "    raw = p.path or url\n"
+                "    resolved = os.path.realpath(os.path.abspath(raw))\n"
+                "    try:\n"
+                "        common = os.path.commonpath([resolved, _base])\n"
+                "    except ValueError:\n"
+                "        raise ValueError(f'refused cross-drive: {url}')\n"
+                "    if common != _base:\n"
+                "        raise ValueError(f'out-of-tree path: {url}')\n"
                 "    return default_url_fetcher(url, timeout=timeout, ssl_context=ssl_context)\n"
                 "HTML(filename=sys.argv[1], base_url=sys.argv[3], url_fetcher=_no_net)"
                 ".write_pdf(sys.argv[2])"
@@ -1356,7 +1562,15 @@ def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:
     business sending the issuer a freeze letter.
     """
     holdings = freezable_entry.get("holdings") or []
+    # Adversarial-input audit: holdings may arrive non-list (dict) or
+    # contain non-dict elements (string slipped in by a buggy writer).
+    # Defensively coerce / skip rather than letting `.get` crash and
+    # kill the entire stage.
+    if not isinstance(holdings, list):
+        return False
     for h in holdings:
+        if not isinstance(h, dict):
+            continue
         if (h.get("status") or "").upper() != "UNRECOVERABLE":
             return True
     return False
@@ -1375,7 +1589,15 @@ def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:
         return MIDAS_ISSUER
 
     # Short-name slug used for the output filename.
-    short_name = name.split(" ")[0].split("/")[0].lower()
+    # Adversarial-input audit: brief.py also sanitizes the slug, but we
+    # belt-and-brace here so the IssuerInfo dataclass never carries a
+    # short_name with path separators or parent-dir tokens. Defense in
+    # depth against a future call site that doesn't run the brief.py
+    # sanitization pass.
+    short_name = name.split(" ")[0].split("/")[0].split("\\")[0].lower()
+    short_name = short_name.replace("..", "_").strip("._-")
+    if not short_name:
+        short_name = "issuer"
 
     # freeze_brief.json's contact key is literally "contact_email" (see
     # the v0.2.0 schema in freeze_brief.json — earlier code looked up

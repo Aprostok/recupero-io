@@ -23,6 +23,112 @@ log = logging.getLogger(__name__)
 _MIN_SAMPLE_SIZE_FOR_LEARNED_PRIOR = 20
 
 
+# --- Free-text validation (RIGOR-Jacob Z10) ---
+# Reject control / bidi / zero-width characters at the recorder
+# boundary. The CLI shim (``recupero-ops record-freeze-outcome``)
+# passes ``args.note`` straight through to ``record_outcome``; the API
+# layer already has equivalent rejection in
+# ``FreezeOutcomeIn._reject_text_trojans``, but the recorder is a
+# separate entry point that the CLI bypasses Pydantic on. Defense in
+# depth: validate here so the contract is identical regardless of
+# which call site (CLI vs API) triggered the write.
+# Bidi-control codepoints (Trojan-Source class — CVE-2021-42574). Use
+# explicit \u-escapes so the source file is unambiguous regardless of
+# editor / encoding settings.
+_BIDI_CODEPOINTS = frozenset({
+    0x202A,  # LRE - Left-to-Right Embedding
+    0x202B,  # RLE - Right-to-Left Embedding
+    0x202C,  # PDF - Pop Directional Formatting
+    0x202D,  # LRO - Left-to-Right Override
+    0x202E,  # RLO - Right-to-Left Override
+    0x2066,  # LRI - Left-to-Right Isolate
+    0x2067,  # RLI - Right-to-Left Isolate
+    0x2068,  # FSI - First Strong Isolate
+    0x2069,  # PDI - Pop Directional Isolate
+})
+# Zero-width / invisible codepoints. Don't print but break \b boundaries,
+# search/replace, and downstream grep tools.
+_ZERO_WIDTH_CODEPOINTS = frozenset({
+    0x200B,  # zero-width space
+    0x200C,  # zero-width non-joiner
+    0x200D,  # zero-width joiner
+    0x2060,  # word joiner
+    0xFEFF,  # BOM / zero-width no-break space
+})
+
+
+def _validate_free_text(value: str | None, field_name: str) -> None:
+    """Reject operator-typed strings that smuggle trojan-source / null
+    bytes / zero-width invisibles.
+
+    Raises ``ValueError`` with a field-tagged message so the CLI can
+    surface a clear "your --note contained a null byte" error.
+    """
+    if value is None:
+        return
+    if not isinstance(value, str):
+        raise ValueError(
+            f"{field_name}: invalid type {type(value).__name__}; expected str"
+        )
+    if "\x00" in value:
+        raise ValueError(
+            f"{field_name}: contains a null byte (control character) — "
+            "rejected as a potential injection. Strip the null and retry."
+        )
+    for ch in value:
+        code = ord(ch)
+        if code in _BIDI_CODEPOINTS:
+            raise ValueError(
+                f"{field_name}: contains bidi control character U+{code:04X} "
+                "(Trojan-Source spoof risk; cf. CVE-2021-42574). Remove "
+                "Unicode bidi controls and retry."
+            )
+        if code in _ZERO_WIDTH_CODEPOINTS:
+            raise ValueError(
+                f"{field_name}: contains zero-width / invisible character "
+                f"U+{code:04X}. Remove invisible Unicode and retry."
+            )
+        # Reject other C0 control chars except tab/newline/carriage return.
+        if code < 0x20 and ch not in ("\t", "\n", "\r"):
+            raise ValueError(
+                f"{field_name}: contains control character U+{code:04X}. "
+                "Strip control characters and retry."
+            )
+
+
+def _validate_usd_amount(value: Decimal | None, field_name: str) -> None:
+    """Reject non-finite (NaN, Infinity, -Infinity) or negative
+    ``Decimal`` USD amounts.
+
+    RIGOR-Jacob Z10: ``Decimal('NaN')`` and ``Decimal('Infinity')`` are
+    valid ``Decimal`` constructors. The operator CLI does
+    ``Decimal(args.frozen_usd)`` directly — both inputs slip past
+    Decimal's own validation. The API layer rejects via
+    ``FreezeOutcomeIn._reject_non_finite_usd``; this is the recorder
+    parity for the CLI bypass. Aggregations like
+    ``compute_priors_from_outcomes`` and the LE handoff would
+    otherwise consume the bogus value.
+    """
+    if value is None:
+        return
+    if not isinstance(value, Decimal):
+        try:
+            value = Decimal(str(value))
+        except (ArithmeticError, ValueError, TypeError) as exc:
+            raise ValueError(
+                f"{field_name}: invalid USD amount {value!r}: {exc}"
+            ) from None
+    if not value.is_finite():
+        raise ValueError(
+            f"{field_name}: non-finite Decimal {value!r} (NaN / Infinity) "
+            "rejected — USD amounts must be finite."
+        )
+    if value < 0:
+        raise ValueError(
+            f"{field_name}: negative USD amount {value!r} rejected; must be >= 0."
+        )
+
+
 # Outcome types that count as "freeze happened" (numerator for
 # p_any_freeze).
 _FREEZE_OUTCOMES = frozenset([
@@ -140,7 +246,21 @@ def record_outcome(
     """Insert a freeze_outcomes row.
 
     Returns the row id, or None on DB failure.
+
+    RIGOR-Jacob Z10: validates ``response_text`` / ``operator_notes``
+    free-text inputs for null bytes, bidi controls, and zero-width
+    invisible characters; validates ``frozen_usd`` / ``returned_usd``
+    are finite and non-negative ``Decimal``. Raises ``ValueError`` at
+    the boundary on bad input — defense-in-depth parity with the API's
+    Pydantic layer (the operator CLI bypasses Pydantic).
     """
+    # Input validation — raise BEFORE any DB work so the CLI surfaces
+    # a clear user-visible error.
+    _validate_free_text(response_text, "response_text")
+    _validate_free_text(operator_notes, "operator_notes")
+    _validate_usd_amount(frozen_usd, "frozen_usd")
+    _validate_usd_amount(returned_usd, "returned_usd")
+
     try:
         import psycopg
     except ImportError:  # pragma: no cover
@@ -236,6 +356,15 @@ def record_outcome_by_target(
             f"outcome_type {outcome_type!r} not in VALID_OUTCOME_TYPES "
             f"({sorted(VALID_OUTCOME_TYPES)})"
         )
+
+    # RIGOR-Jacob Z10: validate user-typed fields BEFORE DB round-trips.
+    # Fail fast on null bytes / bidi spoofs / NaN-Infinity USD so the
+    # CLI surfaces a clear error rather than the operator seeing a
+    # DB-error trace or a silent string-truncation in the audit row.
+    _validate_free_text(response_text, "response_text")
+    _validate_free_text(operator_notes, "operator_notes")
+    _validate_usd_amount(frozen_usd, "frozen_usd")
+    _validate_usd_amount(returned_usd, "returned_usd")
 
     try:
         import psycopg  # noqa: F401

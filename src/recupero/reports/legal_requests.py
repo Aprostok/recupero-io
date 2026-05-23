@@ -60,6 +60,86 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 LEGAL_REQUEST_TYPES = ("mlat", "314b", "subpoena", "exchange-subpoena")
 
 
+def _safe_filename_segment(name: str | None, *, fallback: str = "unknown") -> str:
+    """Sanitize an attacker-controlled string into a safe filename segment.
+
+    Z4 hardening: brief.EXCHANGES[*].exchange + freeze_asks
+    .onward_cex_flows[*].exchange come from token-label provenance, which
+    ultimately sources external data. Without sanitation, a malicious
+    label like ``../../etc/passwd`` would let the renderer write outside
+    the operator's chosen output_dir.
+
+    The sanitizer:
+      * Replaces path separators (``/``, ``\\``) with ``_``
+      * Strips ``..`` segments and leading/trailing dots
+      * Drops NUL bytes and other C0/C1 controls
+      * Drops Unicode bidi-override controls
+      * Restricts the surviving character set to alnum + ``-_``
+      * Caps length to 64 chars
+      * Returns ``fallback`` when the result would be empty
+    """
+    if not isinstance(name, str):
+        name = str(name) if name is not None else ""
+    # Strip path-traversal segments + separators outright. Doing this
+    # BEFORE the char-restriction pass means a literal ".." is dropped
+    # even though dots survive the char restriction.
+    cleaned = name.replace("\\", "_").replace("/", "_")
+    # Remove every ".." sequence iteratively (handles "...." → empty).
+    while ".." in cleaned:
+        cleaned = cleaned.replace("..", "")
+    # Strip NUL + controls + bidi overrides + reduce to alnum/_/-
+    out_chars: list[str] = []
+    for ch in cleaned:
+        cp = ord(ch)
+        if cp == 0:
+            continue
+        if cp < 0x20 or cp == 0x7F or 0x80 <= cp <= 0x9F:
+            continue
+        if cp in (0x200E, 0x200F, 0x202A, 0x202B, 0x202C,
+                  0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069):
+            continue
+        if ch.isalnum() or ch in "-_":
+            out_chars.append(ch)
+        elif ch == " ":
+            out_chars.append("_")
+        # Everything else (including `.`) is dropped.
+    safe = "".join(out_chars).strip("._-")
+    safe = safe[:64]
+    if not safe:
+        return fallback
+    # Lowercase to match the long-standing filename convention. The
+    # original pre-Z4 code lowercased the exchange name; this sanitizer
+    # is a stricter replacement and must preserve that behavior so URLs
+    # / shell-safety expectations (and locked-contract tests) hold.
+    return safe.lower()
+
+
+def _safe_total_usd(values: list[Any]) -> float:
+    """Sum ``flow_usd_value`` entries, defensively skipping NaN/Inf.
+
+    Z4 Bug 3: a poisoned ``flow_usd_value="Infinity"`` propagated into
+    the cover-page banner ``f"${total_usd:,.2f}"`` as the literal text
+    ``$inf``. Same shape for ``"NaN"`` → ``$nan``. Both are legal-
+    document quality bugs.
+    """
+    import math
+    total = 0.0
+    for raw in values:
+        try:
+            cleaned = str(raw).replace("$", "").replace(",", "").strip()
+            if not cleaned:
+                continue
+            v = float(cleaned)
+        except (TypeError, ValueError):
+            continue
+        if math.isnan(v) or math.isinf(v):
+            continue
+        if v < 0:
+            continue
+        total += v
+    return total
+
+
 @dataclass(frozen=True)
 class LegalRequestRender:
     """Result of rendering one legal-request document."""
@@ -115,6 +195,9 @@ def render_legal_request(
         loader=FileSystemLoader(_TEMPLATES_DIR),
         autoescape=select_autoescape(["html", "j2"]),
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
     template = env.get_template(template_file)
 
     base_ctx = _build_base_context(brief)
@@ -125,7 +208,10 @@ def render_legal_request(
         ctx = {**base_ctx, "perpetrator": target}
         html = template.render(**ctx)
         # Filename: <type>_<exchange-safe>.html
-        safe_exchange = target["exchange_name"].lower().replace(" ", "_")
+        # Z4 Bug 1: an attacker-controlled exchange name (sourced from
+        # token labels) could carry path-traversal segments. Sanitize
+        # via _safe_filename_segment so the file lands inside output_dir.
+        safe_exchange = _safe_filename_segment(target["exchange_name"])
         out_path = output_dir / f"{request_type}_{safe_exchange}.html"
         atomic_write_text(out_path, html)
         log.info(
@@ -523,16 +609,41 @@ def _render_exchange_subpoena_requests(
         loader=FileSystemLoader(_TEMPLATES_DIR),
         autoescape=select_autoescape(["html", "j2"]),
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
     template = env.get_template("exchange_subpoena_request.html.j2")
 
     base_ctx = _build_base_context(brief)
     renders: list[LegalRequestRender] = []
 
     for exchange_name, exchange_flows in by_exchange.items():
+        # Z4 Bug 3 (per-row): sanitize flow_usd_value on each flow so
+        # the template's ``{{ flow.flow_usd_value }}`` cell can't leak
+        # ``Infinity`` / ``NaN`` strings into the legal document body.
+        import math
+        sanitized_flows: list[dict] = []
+        for f in exchange_flows:
+            row = dict(f)
+            raw = row.get("flow_usd_value", "0")
+            try:
+                cleaned = str(raw).replace("$", "").replace(",", "").strip()
+                v = float(cleaned) if cleaned else 0.0
+                if math.isnan(v) or math.isinf(v) or v < 0:
+                    row["flow_usd_value"] = "$0.00"
+                elif not str(raw).startswith("$"):
+                    row["flow_usd_value"] = f"${v:,.2f}"
+            except (TypeError, ValueError):
+                row["flow_usd_value"] = "$0.00"
+            sanitized_flows.append(row)
+        exchange_flows = sanitized_flows
+
         # Sum total flow USD for the cover-page banner.
-        total_usd = sum(
-            float(str(f.get("flow_usd_value", "0")).replace("$", "").replace(",", ""))
-            for f in exchange_flows
+        # Z4 Bug 3: defend against Inf/NaN in flow_usd_value (price-
+        # oracle glitch) — these would render as "$inf"/"$nan" in the
+        # grand-jury subpoena cover page.
+        total_usd = _safe_total_usd(
+            [f.get("flow_usd_value", "0") for f in exchange_flows]
         )
         total_usd_str = f"${total_usd:,.2f}"
 
@@ -558,7 +669,9 @@ def _render_exchange_subpoena_requests(
         }
 
         html = template.render(**ctx)
-        safe_exchange = exchange_name.lower().replace(" ", "_").replace(".", "")
+        # Z4 Bug 2: attacker-controlled exchange string can be
+        # ``../evil`` etc — sanitize via _safe_filename_segment.
+        safe_exchange = _safe_filename_segment(exchange_name)
         out_path = output_dir / f"exchange_subpoena_{safe_exchange}.html"
         atomic_write_text(out_path, html)
         renders.append(LegalRequestRender(

@@ -78,7 +78,46 @@ _BTC_ADDR_RE = re.compile(r"^(bc1[0-9a-zA-Z]{8,87}|[13][1-9A-HJ-NP-Za-km-z]{25,3
 # Minimal email validation. Not RFC 5321 — just enough to reject
 # obvious typos so the operator's inbox doesn't fill up with
 # undeliverable confirmation emails.
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+#
+# ReDoS note (regex-audit, v0.20.x): the previous shape
+# ``^[^@\s]+@[^@\s]+\.[^@\s]+$`` was polynomial-backtracking on
+# inputs of the form ``a@<huge>`` (no final dot) because the two
+# right-hand ``[^@\s]+`` quantifiers both admit ``.`` so the engine
+# tries every split point for where the literal ``.`` lives.
+# Hardened by (a) capping length BEFORE the match (see
+# ``_EMAIL_MAX_LEN`` below — enforced in ``validate_intake_payload``)
+# and (b) replacing the host-part with a class that excludes ``.``,
+# so the ``\.`` separator is unambiguous and matching is linear.
+_EMAIL_MAX_LEN = 320  # RFC 5321 ceiling — enforced BEFORE the regex
+_EMAIL_RE = re.compile(r"^[^@\s.]+(?:\.[^@\s.]+)*@[^@\s.]+(?:\.[^@\s.]+)+$")
+
+
+# RIGOR-Jacob E: Unicode-trojan code-point set we reject on every
+# user-supplied free-text intake field. Covers:
+#   * NUL byte (psycopg-crash on Postgres TEXT insert)
+#   * Bidi formatting / overrides / isolates (Trojan-Source spoofs)
+#   * Zero-width chars (invisible-payload smuggling)
+#   * BOM (display-render inconsistency)
+# Standard `str.strip()` only removes ASCII whitespace — these
+# code points survive the strip and corrupt downstream displays.
+_FORBIDDEN_CHARS: frozenset[str] = frozenset({
+    "\x00",  # NUL
+    "‪",  # LEFT-TO-RIGHT EMBEDDING
+    "‫",  # RIGHT-TO-LEFT EMBEDDING
+    "‬",  # POP DIRECTIONAL FORMATTING
+    "‭",  # LEFT-TO-RIGHT OVERRIDE
+    "‮",  # RIGHT-TO-LEFT OVERRIDE
+    "⁦",  # LEFT-TO-RIGHT ISOLATE
+    "⁧",  # RIGHT-TO-LEFT ISOLATE
+    "⁨",  # FIRST-STRONG ISOLATE
+    "⁩",  # POP DIRECTIONAL ISOLATE
+    "​",  # ZERO-WIDTH SPACE
+    "‌",  # ZERO-WIDTH NON-JOINER
+    "‍",  # ZERO-WIDTH JOINER
+    "‎",  # LEFT-TO-RIGHT MARK
+    "‏",  # RIGHT-TO-LEFT MARK
+    "﻿",  # BOM / ZERO-WIDTH NO-BREAK SPACE
+})
 
 
 class IntakeValidationError(ValueError):
@@ -90,6 +129,20 @@ class IntakeValidationError(ValueError):
         super().__init__(f"{field}: {detail}")
         self.field = field
         self.detail = detail
+
+
+def _reject_unicode_trojans(value: str, *, field: str) -> None:
+    """Raise IntakeValidationError when ``value`` contains any
+    code point in _FORBIDDEN_CHARS. Pure check; no normalization."""
+    for ch in value:
+        if ch in _FORBIDDEN_CHARS:
+            raise IntakeValidationError(
+                field,
+                "Contains a hidden / invisible character "
+                "(bidi-override, zero-width, or NUL). Please retype "
+                "this field directly without copy-pasting from a "
+                "rich-text source.",
+            )
 
 
 @dataclass(frozen=True)
@@ -123,6 +176,8 @@ def validate_intake_payload(form: dict[str, Any]) -> IntakePayload:
             "client_name",
             "Name is too long (200 character limit).",
         )
+    # RIGOR-Jacob E: bidi-override / zero-width / NUL rejection.
+    _reject_unicode_trojans(name, field="client_name")
 
     email = (form.get("client_email") or "").strip().lower()
     if not email:
@@ -130,15 +185,18 @@ def validate_intake_payload(form: dict[str, Any]) -> IntakePayload:
             "client_email",
             "Please enter the email address where you'd like updates sent.",
         )
+    # ReDoS hardening: length cap BEFORE regex so a multi-MB
+    # attacker-supplied "email" can never reach _EMAIL_RE at all.
+    # (Even though _EMAIL_RE is now linear, defense in depth.)
+    if len(email) > _EMAIL_MAX_LEN:
+        raise IntakeValidationError(
+            "client_email",
+            "Email is too long.",
+        )
     if not _EMAIL_RE.match(email):
         raise IntakeValidationError(
             "client_email",
             "That doesn't look like a valid email address.",
-        )
-    if len(email) > 320:  # RFC 5321 max
-        raise IntakeValidationError(
-            "client_email",
-            "Email is too long.",
         )
 
     chain = (form.get("chain") or "").strip().lower()
@@ -202,6 +260,9 @@ def validate_intake_payload(form: dict[str, Any]) -> IntakePayload:
             "description",
             "Description is too long (2000 character limit). Please trim.",
         )
+    # RIGOR-Jacob E: bidi-override / zero-width / NUL rejection on
+    # the free-text description (highest-impact display-spoof field).
+    _reject_unicode_trojans(description, field="description")
 
     country = (form.get("country") or "").strip() or None
     if country and len(country) > 100:

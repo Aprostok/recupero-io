@@ -142,6 +142,46 @@ class GraphEdge:
         }
 
 
+def _safe_usd_decimal(v: Any) -> Decimal:
+    """Coerce a (maybe-Decimal) USD value to a finite, non-negative Decimal.
+
+    RIGOR-Jacob Z11: ``node.inbound_usd`` / ``edge.total_usd`` may
+    arrive as ``Decimal('NaN')`` / ``Decimal('Infinity')`` (price-
+    oracle glitch). The pre-fix code formatted these as the literal
+    text ``$NaN`` / ``$Infinity`` in node tooltips + the graph header,
+    AND piped float('nan') into ``totalUsdNumeric`` which breaks the
+    browser's strict JSON.parse on the embedded data blob.
+    """
+    if v is None:
+        return Decimal(0)
+    if isinstance(v, Decimal):
+        if not v.is_finite():
+            return Decimal(0)
+        if v < 0:
+            return Decimal(0)
+        return v
+    try:
+        d = Decimal(str(v))
+    except Exception:  # noqa: BLE001
+        return Decimal(0)
+    if not d.is_finite():
+        return Decimal(0)
+    if d < 0:
+        return Decimal(0)
+    return d
+
+
+def _safe_usd_float(v: Any) -> float:
+    """Float variant of ``_safe_usd_decimal`` for D3 line-thickness
+    scaling. NaN / Inf collapse to 0.0 so ``json.dumps(allow_nan=False)``
+    accepts the result."""
+    d = _safe_usd_decimal(v)
+    try:
+        return float(d)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
 def _explorer_url(chain: str, address: str) -> str:
     """Best-effort chain → explorer URL mapping. Sources the prefix
     table from `recupero._common` so adding a chain happens in one
@@ -190,6 +230,11 @@ def build_graph_data(case: Case) -> dict[str, Any]:
             identity if identity and identity not in ("(unlabeled)", "unknown")
             else _short_addr(addr)
         )
+        # Z11: sanitize NaN / Infinity USD values so the operator-
+        # shared HTML never renders "$NaN" / "$Infinity" in a tooltip
+        # AND the embedded JSON blob is JSON.parse-safe.
+        safe_inbound = _safe_usd_decimal(attrs.inbound_usd)
+        safe_outbound = _safe_usd_decimal(attrs.outbound_usd)
         node = GraphNode(
             id=addr,
             label=label,
@@ -198,8 +243,8 @@ def build_graph_data(case: Case) -> dict[str, Any]:
             chain_color=_CHAIN_COLOR.get(chain.lower(), "#9E9E9E"),
             category=category,
             identity=identity,
-            inbound_usd=f"${attrs.inbound_usd:,.2f}",
-            outbound_usd=f"${attrs.outbound_usd:,.2f}",
+            inbound_usd=f"${safe_inbound:,.2f}",
+            outbound_usd=f"${safe_outbound:,.2f}",
             is_victim=is_victim,
             issuer=attrs.issuer,
             explorer_url=_explorer_url(chain, addr),
@@ -209,12 +254,19 @@ def build_graph_data(case: Case) -> dict[str, Any]:
     json_edges: list[dict[str, Any]] = []
     total_usd = Decimal(0)
     for e in edges_list:
-        usd_num = float(e.total_usd or 0)
-        total_usd += e.total_usd or Decimal(0)
+        # Z11: sanitize NaN / Infinity edge totals (price-oracle glitch
+        # propagated through aggregation). Without this:
+        #   * tooltip renders ``$NaN`` (confidence hit)
+        #   * totalUsdNumeric becomes float('nan') → JSON.parse on the
+        #     embedded blob throws SyntaxError → graph never loads
+        #   * the running ``total_usd`` Decimal poisons meta.total_usd_traced
+        safe_edge_total = _safe_usd_decimal(e.total_usd)
+        usd_num = _safe_usd_float(e.total_usd)
+        total_usd += safe_edge_total
         edge = GraphEdge(
             source=e.src,
             target=e.dst,
-            total_usd=f"${e.total_usd:,.2f}",
+            total_usd=f"${safe_edge_total:,.2f}",
             total_usd_numeric=usd_num,
             transfer_count=e.transfer_count,
             dominant_symbol=e.dominant_symbol,
@@ -238,7 +290,7 @@ def build_graph_data(case: Case) -> dict[str, Any]:
             "seed_address": case.seed_address,
             "node_count": len(json_nodes),
             "edge_count": len(json_edges),
-            "total_usd_traced": f"${total_usd:,.2f}",
+            "total_usd_traced": f"${_safe_usd_decimal(total_usd):,.2f}",
             "chain": case.chain.value,
         },
     }
@@ -263,6 +315,9 @@ def render_graph_html(
         loader=FileSystemLoader(_TEMPLATES_DIR),
         autoescape=select_autoescape(["html", "j2"]),
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
     # v0.18.2 (round-11 sec-CRIT-001): defense-in-depth escape for
     # `</script>` substrings in node labels. The template now embeds
     # graph_data inside `<script type="application/json">` which
@@ -271,12 +326,61 @@ def render_graph_html(
     # tricked. Also escapes HTML comment sequences <!-- / --> which
     # can interact with old HTML4 quirks.
     template = env.get_template("interactive_graph.html.j2")
-    safe_json = (
-        json.dumps(graph_data, separators=(",", ":"))
-        .replace("</", "<\\/")
-        .replace("<!--", "<\\!--")
-        .replace("-->", "-\\->")
-    )
+    # Z11: ``allow_nan=False`` makes json.dumps RAISE on NaN/Inf
+    # rather than emit the JS-literal ``NaN`` / ``Infinity`` that
+    # ``JSON.parse`` rejects with SyntaxError. The graph builder
+    # already sanitizes per-node/edge values; this is defense-in-
+    # depth in case a future caller threads a raw float in.
+    try:
+        safe_json = (
+            json.dumps(graph_data, separators=(",", ":"), allow_nan=False)
+            # W11-03 hardening: `<\!--` and `-\->` are NOT valid JSON
+            # escapes (`\!`/`\-` are undefined in the JSON spec), so a
+            # strict JSON.parse on the browser side would reject the
+            # whole block — silently breaking the graph the moment any
+            # label contained `<!--` or `-->`. Use Unicode escapes
+            # (`<!--` / `-->`) instead. These are valid JSON
+            # AND avoid producing the literal byte sequence the HTML
+            # parser would special-case in legacy script-data states.
+            # `<\/` is preserved because `\/` IS a valid JSON escape.
+            .replace("</", "<\\/")
+            .replace("<!--", "\\u003c!--")
+            .replace("-->", "--\\u003e")
+        )
+    except ValueError:
+        # Last-resort: walk the structure and replace every non-finite
+        # float with 0 BEFORE re-serializing. The `default=` hook isn't
+        # enough — json.dumps only consults it for types it doesn't
+        # already know how to encode, and `float` is built-in, so a
+        # nested `float("inf")` would slip past as the bare JS literal
+        # `Infinity` (defeating the defense entirely).
+        import math
+
+        def _walk(o: Any) -> Any:
+            if isinstance(o, float) and not math.isfinite(o):
+                return 0
+            if isinstance(o, dict):
+                return {k: _walk(v) for k, v in o.items()}
+            if isinstance(o, (list, tuple)):
+                return [_walk(v) for v in o]
+            return o
+
+        scrubbed = _walk(graph_data)
+        safe_json = (
+            json.dumps(scrubbed, separators=(",", ":"), allow_nan=False)
+            # W11-03 hardening: `<\!--` and `-\->` are NOT valid JSON
+            # escapes (`\!`/`\-` are undefined in the JSON spec), so a
+            # strict JSON.parse on the browser side would reject the
+            # whole block — silently breaking the graph the moment any
+            # label contained `<!--` or `-->`. Use Unicode escapes
+            # (`<!--` / `-->`) instead. These are valid JSON
+            # AND avoid producing the literal byte sequence the HTML
+            # parser would special-case in legacy script-data states.
+            # `<\/` is preserved because `\/` IS a valid JSON escape.
+            .replace("</", "<\\/")
+            .replace("<!--", "\\u003c!--")
+            .replace("-->", "--\\u003e")
+        )
     html = template.render(
         title=title or f"Fund-flow graph — {graph_data['meta']['case_id']}",
         graph_data_json=safe_json,

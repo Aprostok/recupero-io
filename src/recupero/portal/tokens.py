@@ -80,12 +80,27 @@ def _token_pepper() -> bytes | None:
     if not raw:
         return None
     # Try hex first (64 chars = 32 bytes).
+    hex_ok = False
     try:
         decoded = bytes.fromhex(raw)
+        hex_ok = True
         if len(decoded) >= 16:
             return decoded
     except ValueError:
         pass
+    # Adversarial-input audit (v0.20.2): if the input parsed cleanly as
+    # hex but came back too short, do NOT silently fall through to the
+    # base64 decoder. Otherwise an operator typo (truncated 32-byte hex
+    # pepper) can decode as 16+ "valid" base64 bytes and quietly accept
+    # a derivation of the typo as the live pepper. Refusing the hex
+    # case here surfaces the misconfiguration via the error log below.
+    if hex_ok:
+        log.error(
+            "RECUPERO_TOKEN_PEPPER parsed as hex but is too short "
+            "(need >=32 hex chars / 16 bytes). Falling back to LEGACY "
+            "raw-token lookup — fix the env var ASAP."
+        )
+        return None
     # Try base64-url.
     import base64
     try:

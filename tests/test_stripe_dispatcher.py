@@ -130,7 +130,12 @@ def test_diagnostic_payment_creates_investigation() -> None:
         metadata={
             "type": "diagnostic",
             "case_id": str(case_uuid),
-            "seed_address": "0xabc123",
+            # RIGOR-Jacob-P seed_address shape gate (in dispatcher.
+            # _is_valid_seed_address_shape) rejects anything shorter
+            # than 0x + 40 hex on EVM chains; this happy-path test
+            # must supply a real-shape address so we exercise the
+            # post-validation INSERT branch.
+            "seed_address": "0x" + "a" * 40,
             "chain": "ethereum",
         },
     )

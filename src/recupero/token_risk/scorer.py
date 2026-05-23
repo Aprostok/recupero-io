@@ -87,15 +87,21 @@ def score_token(
     signals: list[TokenRiskSignal] = []
     sources: list[str] = []
 
-    if bytecode is not None:
+    # Z8-D: bytecode must be a string. Anything else (int, bytes,
+    # list, object()) would crash ``.lower()`` / ``.removeprefix()``.
+    if bytecode is not None and isinstance(bytecode, str):
         sources.append("bytecode_heuristic")
         signals.extend(_score_bytecode(bytecode))
 
-    if tx_history_stats is not None:
+    # Z8-A: tx_history_stats must be a dict. A string / list / int
+    # / etc. would crash ``stats.get(...)``.
+    if tx_history_stats is not None and isinstance(tx_history_stats, dict):
         sources.append("tx_history_heuristic")
         signals.extend(_score_tx_history(tx_history_stats))
 
-    if goplus_result is not None:
+    # Z8-E: goplus_result must be a dict. Anything else would crash
+    # ``"result" in goplus`` (raises TypeError on int).
+    if goplus_result is not None and isinstance(goplus_result, dict):
         sources.append("goplus_api")
         signals.extend(_score_goplus(goplus_result))
 
@@ -136,13 +142,109 @@ def _score_bytecode(bytecode: str) -> list[TokenRiskSignal]:
     return out
 
 
+def _safe_count(val: Any) -> int | None:
+    """Coerce a tx-history count to a non-negative int.
+
+    Z8-B / Z8-C hardening: attacker-controlled stats may inject
+    NaN, +/-Infinity, non-numeric strings, or negative values. We:
+
+      * return 0 for NaN / non-numeric / empty / None inputs (treat
+        as "no data")
+      * return a very large sentinel for +Infinity (treat as "very
+        many")
+      * return 0 for any negative value — negative counts are
+        nonsense, and pre-fix ``sell_success == 0`` failed open for
+        sell_success_count = -1, silently bypassing honeypot
+        detection (FALSE-CLEAN on real honeypots).
+    """
+    if val is None or val is True or val is False:
+        # Bool subclasses int but we shouldn't treat True/False as
+        # counts — treat as no-data.
+        if isinstance(val, bool):
+            return int(val) if val else 0
+        return 0
+    # Float: reject NaN and Infinity explicitly.
+    if isinstance(val, float):
+        if val != val:  # NaN
+            return 0
+        if val == float("inf"):
+            return 10**9  # treat as "very many"
+        if val == float("-inf"):
+            return 0
+        try:
+            n = int(val)
+        except (ValueError, OverflowError):
+            return 0
+        return max(0, n)
+    # Int: clamp negatives to 0.
+    if isinstance(val, int):
+        return max(0, val)
+    # String / other: try parse, else 0.
+    try:
+        s = str(val).strip()
+    except Exception:  # noqa: BLE001
+        return 0
+    if not s:
+        return 0
+    try:
+        n = int(s)
+    except (TypeError, ValueError):
+        try:
+            f = float(s)
+        except (TypeError, ValueError):
+            return 0
+        if f != f or f == float("inf") or f == float("-inf"):
+            return 0
+        n = int(f)
+    return max(0, n)
+
+
+def _safe_launch_block_evidence(val: Any) -> str:
+    """Render launch_block defensively for the evidence string.
+
+    Z8-F hardening: launch_block may be attacker-controlled HTML.
+    Embedding it verbatim in evidence (which can flow into HTML/PDF
+    LE reports) is an XSS / formatting hazard. Coerce to int when
+    possible, else render a cap-bounded plain-text repr that
+    cannot contain "<script>".
+    """
+    if val is None:
+        return "launch_block=None"
+    if isinstance(val, bool):
+        return f"launch_block={int(val)}"
+    if isinstance(val, int):
+        return f"launch_block={val}"
+    if isinstance(val, float):
+        if val != val or val == float("inf") or val == float("-inf"):
+            return "launch_block=invalid"
+        return f"launch_block={int(val)}"
+    # String / anything else: try parse to int, else strip HTML and cap.
+    try:
+        n = int(str(val).strip())
+        return f"launch_block={n}"
+    except (TypeError, ValueError):
+        # Strip dangerous tag markers and cap length so a hostile
+        # input can't leak through to LE-bound PDFs.
+        safe = (
+            str(val)
+            .replace("<", "")
+            .replace(">", "")
+            .replace("\x00", "")
+        )[:32]
+        return f"launch_block={safe!r}"
+
+
 def _score_tx_history(stats: dict[str, Any]) -> list[TokenRiskSignal]:
     out: list[TokenRiskSignal] = []
-    buy_count = int(stats.get("buy_count", 0) or 0)
-    sell_success = int(stats.get("sell_success_count", 0) or 0)
+    # Z8-B/C: defensive count parsing.
+    buy_count = _safe_count(stats.get("buy_count", 0))
+    sell_success = _safe_count(stats.get("sell_success_count", 0))
 
-    # Strong honeypot indicator: many buys, zero sells.
-    if buy_count >= 20 and sell_success == 0:
+    # Strong honeypot indicator: many buys, no (or negative) sells.
+    # Use `<= 0` so a hostile negative sell_success can't bypass the
+    # `== 0` check that the pre-fix code used. `_safe_count` clamps
+    # negatives to 0 already, but defense in depth.
+    if buy_count >= 20 and sell_success <= 0:
         out.append(TokenRiskSignal(
             kind="high_buy_no_sell",
             severity=4,
@@ -152,7 +254,7 @@ def _score_tx_history(stats: dict[str, Any]) -> list[TokenRiskSignal]:
             ),
             evidence=f"buys={buy_count} sells_succeeded={sell_success}",
         ))
-    elif buy_count >= 5 and sell_success == 0:
+    elif buy_count >= 5 and sell_success <= 0:
         out.append(TokenRiskSignal(
             kind="high_buy_no_sell",
             severity=3,
@@ -173,7 +275,8 @@ def _score_tx_history(stats: dict[str, Any]) -> list[TokenRiskSignal]:
                 "launch — classic rug-pull pattern. Funds in the "
                 "token are unrecoverable."
             ),
-            evidence=f"launch_block={stats.get('launch_block')}",
+            # Z8-F: sanitize launch_block — could be hostile HTML.
+            evidence=_safe_launch_block_evidence(stats.get("launch_block")),
         ))
     return out
 

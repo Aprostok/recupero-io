@@ -76,11 +76,41 @@ log = logging.getLogger(__name__)
 
 
 # Per-tick guardrails. Tunable via env.
-_MAX_SUBSCRIPTIONS_PER_TICK = int(
-    os.environ.get("RECUPERO_MONITOR_MAX_SUBS_PER_TICK", "50")
+def _safe_positive_int_env(name: str, default: int) -> int:
+    """Read a positive-int env var, falling back to ``default`` on
+    garbage / missing / non-positive values.
+
+    RIGOR-Jacob Z5-1: pre-fix this module did ``int(os.environ.get(...))``
+    directly. A typo / leftover value like ``"50 "`` (trailing space),
+    ``"fifty"``, or ``""`` raised ``ValueError`` at MODULE IMPORT time,
+    which crashed the entire ``recupero-worker monitor-tick`` boot.
+    Survive garbage env vars; clamp negatives/zeros to the default.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        val = int(str(raw).strip())
+    except (ValueError, TypeError):
+        log.warning(
+            "monitor_tick: env %s=%r is not a valid int; using default %d",
+            name, raw, default,
+        )
+        return default
+    if val <= 0:
+        log.warning(
+            "monitor_tick: env %s=%r must be positive; using default %d",
+            name, raw, default,
+        )
+        return default
+    return val
+
+
+_MAX_SUBSCRIPTIONS_PER_TICK = _safe_positive_int_env(
+    "RECUPERO_MONITOR_MAX_SUBS_PER_TICK", 50
 )
-_MAX_ACTIVITY_PER_SUB = int(
-    os.environ.get("RECUPERO_MONITOR_MAX_ACTIVITY_PER_SUB", "25")
+_MAX_ACTIVITY_PER_SUB = _safe_positive_int_env(
+    "RECUPERO_MONITOR_MAX_ACTIVITY_PER_SUB", 25
 )
 
 
@@ -297,7 +327,22 @@ def _row_to_subscription(row: dict[str, Any]) -> Any:
     from recupero.monitoring.poller import Subscription
     threshold = row.get("threshold_usd")
     if threshold is not None and not isinstance(threshold, Decimal):
-        threshold = Decimal(str(threshold))
+        try:
+            threshold = Decimal(str(threshold))
+        except Exception:  # noqa: BLE001
+            threshold = None
+    # W-Z M-1: Postgres ``numeric`` accepts NaN / Infinity. If a
+    # poisoned row arrives, ``activity.amount_usd >= NaN`` raises
+    # ``InvalidOperation`` and silently mutes the alert. Reject
+    # non-finite thresholds at the read boundary (mirrors Z5-2's
+    # _parse_usd hardening for the freeze-brief path).
+    if isinstance(threshold, Decimal) and not threshold.is_finite():
+        log.warning(
+            "monitor_tick: subscription %s has non-finite "
+            "threshold_usd=%r; treating as None",
+            row.get("id"), threshold,
+        )
+        threshold = None
     # alert_channels arrives as a Python list from psycopg's array
     # decoder. Freeze it into a tuple so the dataclass stays
     # hashable / immutable. Default ('webhook',) handles pre-v0.21.0
@@ -456,11 +501,30 @@ def _fetch_evm_activities(sub: Any) -> list[Any]:
         )
         # Approximate USD value — not all adapters fetch pricing;
         # for monitoring we accept None and let trigger rules handle.
-        amount_usd = r.get("usd_value_at_tx")
+        # W-Z M-2: a buggy / hostile chain adapter returning
+        # ``float('nan')`` / ``float('inf')`` for usd_value_at_tx
+        # otherwise propagates NaN into the alert template (renders
+        # "NaN" to the webhook recipient) and into downstream
+        # numeric aggregation. Reject non-finite at the boundary.
+        amount_usd_raw = r.get("usd_value_at_tx")
+        if amount_usd_raw is None:
+            amount_usd_dec: Decimal | None = None
+        else:
+            try:
+                amount_usd_dec = Decimal(str(amount_usd_raw))
+            except Exception:  # noqa: BLE001
+                amount_usd_dec = None
+            if amount_usd_dec is not None and not amount_usd_dec.is_finite():
+                log.warning(
+                    "monitor_tick: sub %s tx %s has non-finite "
+                    "usd_value_at_tx=%r; dropping USD field",
+                    sub.subscription_id, r.get("tx_hash"), amount_usd_raw,
+                )
+                amount_usd_dec = None
         out.append(ObservedActivity(
             tx_hash=r.get("tx_hash", ""),
             block_time_iso=block_time_iso,
-            amount_usd=Decimal(str(amount_usd)) if amount_usd is not None else None,
+            amount_usd=amount_usd_dec,
             direction="outflow",
             counterparty=r.get("to"),
             counterparty_label=None,

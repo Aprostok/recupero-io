@@ -48,6 +48,7 @@ from recupero._common import (
 from recupero._common import (
     short_addr as _short_addr,
 )
+from recupero.reports._jinja_filters import safe_text as _safe_text
 
 
 @dataclass
@@ -90,6 +91,9 @@ def generate_daily_digest(
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    # XSS defense-in-depth filters.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
     html = env.get_template("mini_freeze_digest.html.j2").render(**ctx)
 
     # v0.17.7 (round-10 PDF/Output HIGH): atomic write so a crash
@@ -177,7 +181,7 @@ def generate_daily_digest(
     summary_path = output_dir / f"{digest_id}.summary.json"
     atomic_write_text(
         summary_path,
-        json.dumps(summary, indent=2, default=_json_default),
+        json.dumps(summary, indent=2, default=_json_default, allow_nan=False, ensure_ascii=False),
     )
     log.info(
         "digest summary written: %s (%d bytes)",
@@ -320,18 +324,30 @@ def _change_to_ctx(mc: MaterialChange) -> dict[str, Any]:
     explorer_url = f"{explorer}{mc.address}" if explorer else ""
     row_class = "perp-row" if mc.role in {"perpetrator", "current_holder"} else ""
 
+    # Wave-7: scrub bidi-override / NUL / CR / LF from operator-visible
+    # text fields. ``label_name`` comes from Etherscan tag scrapes
+    # (attacker-controllable for newly-deployed addresses); ``reason``
+    # is internal today but threaded with token names that aren't.
+    # ``safe_text`` strips bidi controls; we additionally drop NUL/CR/LF
+    # to defeat header-injection variants in the SMTP digest path.
+    def _scrub(v: str | None) -> str | None:
+        if v is None:
+            return None
+        cleaned = _safe_text(v)
+        return cleaned.replace("\x00", "").replace("\r", "").replace("\n", " ")
+
     return {
         "address": mc.address,
         "address_short": _short_addr(mc.address),
         "chain": mc.chain,
         "role": mc.role,
-        "label_name": mc.label_name,
+        "label_name": _scrub(mc.label_name),
         "is_freezeable": mc.is_freezeable,
-        "issuer": mc.issuer,
-        "asset_symbol": mc.asset_symbol,
+        "issuer": _scrub(mc.issuer),
+        "asset_symbol": _scrub(mc.asset_symbol),
         "explorer_url": explorer_url,
         "row_class": row_class,
-        "reason": mc.reason,
+        "reason": _scrub(mc.reason) or "",
         "prior_taken_at_human": (
             mc.prior_taken_at.strftime("%Y-%m-%d %H:%M") if mc.prior_taken_at else "—"
         ),
@@ -355,6 +371,14 @@ def _fmt_usd(usd: Decimal | None) -> str:
 
 def _fmt_signed_usd(usd: Decimal | None) -> str:
     if usd is None:
+        return "—"
+    # Wave-7: NaN / Infinity must not render as literal "+NaN" / "-Inf"
+    # in the digest delta column. ``Decimal.is_finite`` is False for both
+    # quiet/signaling NaN and ±Infinity — drop to the em-dash fallback.
+    try:
+        if not usd.is_finite():
+            return "—"
+    except (AttributeError, TypeError):
         return "—"
     sign = "+" if usd >= 0 else "-"
     try:

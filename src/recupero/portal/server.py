@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ipaddress
 import logging
+import math
 import os
 import re
 import urllib.parse
@@ -186,6 +187,40 @@ _PORTAL_SECURITY_HEADERS: dict[str, str] = {
     ),
     # HSTS — assume HTTPS in front of the worker (Railway always is).
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    # Permissions-Policy — disable powerful browser APIs that the portal
+    # never legitimately uses. Defense-in-depth against a future XSS
+    # bypass: even if attacker JS lands on the page, it cannot prompt
+    # for camera/mic/geolocation, trigger Payment Request, or read
+    # USB/serial. Portal pages are pure HTML+inline CSS today; none
+    # of these features are needed.
+    "Permissions-Policy": (
+        "camera=(), microphone=(), geolocation=(), payment=(), "
+        "usb=(), serial=(), bluetooth=(), accelerometer=(), "
+        "gyroscope=(), magnetometer=(), interest-cohort=()"
+    ),
+    # RIGOR-Jacob Z16-1: no-store on every portal HTML/redirect/error
+    # response. The bearer token is in the URL path → without
+    # Cache-Control: no-store, any shared HTTP cache (CDN, corporate
+    # proxy, ISP web cache) sitting in front of the worker can pin
+    # the rendered PII page (case_number, client_name, client_email,
+    # estimated_value_usd, signature_name on the post-sign page)
+    # under the token-bearing URL. The artifact 302 already sets
+    # this (v0.17.6 round-10 fix); the HTML response paths were
+    # missed in that pass. Browser bfcache can also retain the
+    # signed.html.j2 PII after token rotation; no-store inhibits
+    # bfcache as well.
+    "Cache-Control": "private, no-store, max-age=0",
+    # Route-authz audit: Vary defense-in-depth for the few intermediate
+    # caches (Cloudflare 'Cache Everything' rule, some ISP-grade
+    # transparent proxies) that disregard Cache-Control: private/no-store
+    # but still honor Vary when building cache keys. Cookie covers
+    # any future session/CSRF cookie the portal might add; Authorization
+    # covers a future Bearer-header migration. Without Vary, the cache
+    # key is URL-only — two distinct browsers visiting the same token
+    # URL collide on one cache entry, so one victim's rendered PII can
+    # be served to a different visitor whose request was misrouted
+    # through the same edge cache.
+    "Vary": "Cookie, Authorization",
 }
 
 
@@ -200,6 +235,34 @@ def _strip_control_chars(s: str, *, max_len: int) -> str:
     """
     cleaned = re.sub(r"[\x00-\x1f\x7f]", "", s or "")
     return cleaned[:max_len]
+
+
+# RIGOR-Jacob Z2-1: bidi-override / zero-width / BOM code points that
+# spoof how a signature_name renders in operator views. Mirrors
+# portal/intake._FORBIDDEN_CHARS. The /sign POST path was missed in
+# the v0.25.0 intake-hardening pass.
+_SIGNATURE_TROJAN_CHARS = frozenset({
+    "‪",  # LEFT-TO-RIGHT EMBEDDING
+    "‫",  # RIGHT-TO-LEFT EMBEDDING
+    "‬",  # POP DIRECTIONAL FORMATTING
+    "‭",  # LEFT-TO-RIGHT OVERRIDE
+    "‮",  # RIGHT-TO-LEFT OVERRIDE
+    "⁦",  # LEFT-TO-RIGHT ISOLATE
+    "⁧",  # RIGHT-TO-LEFT ISOLATE
+    "⁨",  # FIRST-STRONG ISOLATE
+    "⁩",  # POP DIRECTIONAL ISOLATE
+    "​",  # ZERO-WIDTH SPACE
+    "‌",  # ZERO-WIDTH NON-JOINER
+    "‍",  # ZERO-WIDTH JOINER
+    "‎",  # LEFT-TO-RIGHT MARK
+    "‏",  # RIGHT-TO-LEFT MARK
+    "﻿",  # BOM / ZERO-WIDTH NO-BREAK SPACE
+})
+
+
+def _signature_name_has_trojan(name: str) -> bool:
+    """True iff ``name`` contains a bidi-override / zero-width / BOM."""
+    return any(ch in _SIGNATURE_TROJAN_CHARS for ch in name)
 
 
 def _origin_matches_self(headers: dict[str, str]) -> bool:
@@ -307,6 +370,11 @@ def _get_jinja_env():
         trim_blocks=True,
         lstrip_blocks=True,
     )
+    # XSS defense-in-depth filters — safe_url neuters javascript:
+    # URLs that could slip through into href attributes; safe_text
+    # strips bidi-override that could spoof identifier display order.
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(_jinja_env)
     return _jinja_env
 
 
@@ -413,6 +481,20 @@ def _route_sign_form(
         and verified.engagement_closed_at is None
     ):
         return _redirect(f"/portal/{token}")
+    # RIGOR-Jacob Z16-2: ALSO redirect closed engagements to the
+    # status page. The POST handler rejects closed engagements with
+    # a 403 (v0.16.7 round-9 HIGH); rendering the sign form here
+    # creates two problems:
+    #   1. UX-trap — the victim types their full legal name, ticks
+    #      the agreement box, hits Submit, gets a 403.
+    #   2. Defense-in-depth — if the POST closed-engagement guard
+    #      ever regressed, the only thing stopping a silent re-
+    #      engagement on a closed case would be a single check.
+    # Mirror the active-engagement short-circuit: send the victim
+    # to the status page where the closed-engagement messaging +
+    # support-contact link live.
+    if verified.engagement_closed_at is not None:
+        return _redirect(f"/portal/{token}")
     html = _get_jinja_env().get_template("sign.html.j2").render(
         token=token, case=_case_dict(verified), error=error,
     )
@@ -489,6 +571,41 @@ def _route_sign_submit(
             error="Please enter a legal name under 200 characters.",
         )
     if len(name) < 3 or not agreed:
+        return _route_sign_form(
+            token=token, verified=verified,
+            error="Please enter your full legal name and check the agreement box.",
+        )
+
+    # RIGOR-Jacob Z2-1: reject bidi-override / zero-width / BOM in
+    # signature_name BEFORE _persist_signature touches the DB. The
+    # engagement_signatures column is the legal-defensibility audit
+    # trail; a name like ``Smith‮nimdA`` renders as ``SmithAdmin`` in
+    # any operator view, undermining the audit claim made on /sign.
+    if _signature_name_has_trojan(name):
+        log.warning(
+            "portal: rejecting /sign POST with bidi/zero-width/BOM in "
+            "signature_name (token=%s...)", token[:8],
+        )
+        return _route_sign_form(
+            token=token, verified=verified,
+            error=(
+                "Your name contains a hidden character "
+                "(bidi-override, zero-width, or BOM). Please retype "
+                "it directly without copy-pasting from a rich-text "
+                "source — your signature is part of the legal audit "
+                "record."
+            ),
+        )
+
+    # RIGOR-Jacob Z2-2: strip CR / LF / NUL / control chars from the
+    # signature_name BEFORE the INSERT. Pre-fix, ``Alex\r\nFAKE`` would
+    # store a multi-line string that surfaces in admin views as a
+    # forged second audit line; a NUL byte crashes psycopg with
+    # "A string literal cannot contain NUL (0x00) characters" and
+    # surfaces a 500 to the victim. Both shapes neutralized by
+    # _strip_control_chars (same helper used for user-agent storage).
+    name = _strip_control_chars(name, max_len=200)
+    if len(name) < 3:
         return _route_sign_form(
             token=token, verified=verified,
             error="Please enter your full legal name and check the agreement box.",
@@ -1042,4 +1159,155 @@ def _get_dsn() -> str:
     return os.environ.get("SUPABASE_DB_URL", "").strip()
 
 
-__all__ = ("handle_portal",)
+# ----- Cookie hardening guard rail ----- #
+#
+# The portal is intentionally cookieless: authentication uses a bearer
+# token embedded in the URL path, and state-changing POSTs are defended
+# by Origin/Referer matching (_origin_matches_self) rather than a CSRF
+# cookie. No code path below today calls _validate_cookie_directive.
+#
+# We export it anyway as a forcing function: if a future change adds
+# any session / preferences / "remember-me" cookie, it must construct
+# the Set-Cookie value through this helper first. The helper raises
+# ValueError on every weak attribute combination so a regression
+# surfaces at unit-test time, not in production.
+#
+# tests/test_portal_cookies_session.py pins both layers: the actual
+# routes today must emit ZERO Set-Cookie headers, AND if Set-Cookie
+# is ever emitted it must satisfy every check in the helper.
+def _validate_cookie_directive(
+    directive: str, *, value_entropy_bits: int = 128
+) -> None:
+    """Raise ValueError unless ``directive`` is a safe Set-Cookie value.
+
+    Enforces every attribute the portal cookie hardening policy
+    requires:
+
+      * ``Secure``                  — never in cleartext.
+      * ``HttpOnly``                — JS cannot read the value.
+      * ``SameSite=Strict|Lax``     — never ``None`` (never ``None``
+                                      even with ``Secure``, because
+                                      the portal has no documented
+                                      cross-site flow that needs it).
+      * ``Path=/portal``            — scoped to the portal mount, not
+                                      bare ``/``.
+      * No ``Domain=`` attribute    — defaults to host-only; explicit
+                                      ``Domain=`` widens to subdomains.
+      * ``Max-Age=`` or ``Expires=``— bounded session, not permanent.
+      * Opaque cookie name          — must not contain ``case`` /
+                                      ``token`` / a UUID-shaped hex
+                                      blob (operators see Set-Cookie
+                                      in access logs).
+      * Cookie value entropy        — Shannon-entropy estimate over
+                                      the value must meet
+                                      ``value_entropy_bits``. A
+                                      deterministic case-id hash
+                                      has near-zero secrecy.
+    """
+    if not directive or "=" not in directive:
+        raise ValueError("Set-Cookie directive missing name=value pair")
+
+    # Split into name=value + attributes (semicolon-separated).
+    parts = [p.strip() for p in directive.split(";")]
+    name_value = parts[0]
+    attrs = parts[1:]
+    name, _, value = name_value.partition("=")
+    name = name.strip()
+    value = value.strip()
+
+    # --- name opacity ---
+    name_lower = name.lower()
+    forbidden_in_name = ("case", "token", "investigation", "client", "victim")
+    for needle in forbidden_in_name:
+        if needle in name_lower:
+            raise ValueError(
+                f"cookie name {name!r} is not opaque (contains {needle!r}); "
+                f"operator access-log scrapes would deanonymize visitors"
+            )
+    # 32-char hex blob in the name → likely a UUID-shaped identifier.
+    if re.search(r"[0-9a-f]{16,}", name_lower):
+        raise ValueError(
+            f"cookie name {name!r} embeds a hex blob — names must be opaque"
+        )
+
+    # --- attribute parsing (case-insensitive keys) ---
+    has_secure = False
+    has_httponly = False
+    samesite: str | None = None
+    path: str | None = None
+    has_domain = False
+    has_bound = False
+    for a in attrs:
+        if not a:
+            continue
+        key, _eq, val = a.partition("=")
+        k = key.strip().lower()
+        v = val.strip()
+        if k == "secure":
+            has_secure = True
+        elif k == "httponly":
+            has_httponly = True
+        elif k == "samesite":
+            samesite = v.lower()
+        elif k == "path":
+            path = v
+        elif k == "domain":
+            has_domain = True
+        elif k in ("max-age", "expires"):
+            has_bound = True
+
+    # Check SameSite-specific failures BEFORE the missing-Secure
+    # check, so a `SameSite=None; (no Secure)` cookie surfaces the
+    # more informative "SameSite=None requires Secure" diagnostic
+    # instead of the generic "missing Secure" message. The spec
+    # (RFC 6265bis) treats SameSite=None+missing-Secure as a
+    # SameSite violation, not just a Secure violation.
+    if samesite is None:
+        raise ValueError("cookie missing SameSite attribute")
+    if samesite == "none":
+        raise ValueError(
+            "cookie SameSite=None disallowed (even with Secure); "
+            "use Strict or Lax"
+        )
+    if samesite not in ("strict", "lax"):
+        raise ValueError(
+            f"cookie SameSite={samesite!r} disallowed; use Strict or Lax"
+        )
+    if not has_secure:
+        raise ValueError("cookie missing Secure attribute")
+    if not has_httponly:
+        raise ValueError("cookie missing HttpOnly attribute")
+    if path is None or not path.startswith("/portal"):
+        raise ValueError(
+            f"cookie Path={path!r} must be scoped to /portal, not bare /"
+        )
+    if has_domain:
+        raise ValueError(
+            "cookie must NOT set Domain= attribute (host-only is safer)"
+        )
+    if not has_bound:
+        raise ValueError("cookie missing Max-Age / Expires (unbounded)")
+
+    # --- value entropy ---
+    if not value:
+        raise ValueError("cookie value empty (no entropy)")
+    # Shannon entropy estimate: H(X) * len(X). This is an over-estimate
+    # for short strings (treats observed symbol frequencies as the true
+    # distribution) but small enough that low-entropy junk like a hex
+    # hash of the case_id will still fall well below 128 bits.
+    from collections import Counter
+    counts = Counter(value)
+    total = len(value)
+    h_per_symbol = -sum(
+        (c / total) * math.log2(c / total) for c in counts.values() if c > 0
+    )
+    estimated_bits = h_per_symbol * total
+    if estimated_bits < value_entropy_bits:
+        raise ValueError(
+            f"cookie value entropy {estimated_bits:.1f} bits below "
+            f"required {value_entropy_bits} bits — a deterministic "
+            f"case_id hash is NOT an acceptable session token"
+        )
+
+
+__all__ = ("handle_portal", "_validate_cookie_directive")

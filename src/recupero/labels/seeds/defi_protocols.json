@@ -24,14 +24,6 @@
     "added_at": "2025-01-01T00:00:00Z"
   },
   {
-    "address": "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45",
-    "name": "Uniswap V3: Router 2",
-    "category": "defi_protocol",
-    "source": "uniswap_docs",
-    "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
-  },
-  {
     "address": "0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
     "name": "Uniswap V2: Router",
     "category": "defi_protocol",
@@ -85,16 +77,6 @@
     "added_at": "2026-05-17T00:00:00Z"
   },
 
-  {
-    "address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-    "name": "Uniswap V3: SwapRouter02",
-    "category": "defi_protocol",
-    "subcategory": "dex",
-    "source": "uniswap_docs",
-    "confidence": "high",
-    "notes": "Uniswap V3 SwapRouter02 — primary V3 swap entry point.",
-    "added_at": "2026-05-17T00:00:00Z"
-  },
   {
     "address": "0xba12222222228d8ba445958a75a0704d566bf2c8",
     "name": "Balancer V2: Vault",
@@ -188,15 +170,6 @@
   },
 
   {
-    "address": "0x32400084c286cf3e17e7b677ea9583e60a000324",
-    "name": "Pendle: Router",
-    "category": "defi_protocol",
-    "subcategory": "yield",
-    "source": "pendle_docs",
-    "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
-  },
-  {
     "address": "0x4ddc2d193948926d02f9b1fe9e1daa0718270ed5",
     "name": "Compound: cETH",
     "category": "defi_protocol",
@@ -271,16 +244,6 @@
     "source": "ethereum_foundation",
     "confidence": "high",
     "notes": "Canonical ETH 2.0 deposit contract. 32 ETH stakes get locked here. Withdrawal requires validator credentials — not recoverable except by depositor.",
-    "added_at": "2026-05-17T00:00:00Z"
-  },
-
-  {
-    "address": "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45",
-    "name": "Uniswap V3: Router 2 (alt)",
-    "category": "defi_protocol",
-    "subcategory": "dex",
-    "source": "uniswap_docs",
-    "confidence": "high",
     "added_at": "2026-05-17T00:00:00Z"
   }
 ]

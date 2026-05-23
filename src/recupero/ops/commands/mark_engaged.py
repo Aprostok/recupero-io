@@ -37,6 +37,24 @@ def run(*, investigation_id: UUID, fee_usd: Decimal, dsn: str) -> int:
     negative engagement_fee_paid_usd that broke downstream P&L
     metrics; `--fee 1e30` would have been accepted by Decimal() too.
     """
+    # Z13-1: ``Decimal('NaN') <= 0`` raises ``decimal.InvalidOperation``
+    # (NaN traps by default) — the operator would see a traceback
+    # instead of a friendly error. Gate the finite-check first.
+    if not isinstance(fee_usd, Decimal):
+        try:
+            fee_usd = Decimal(str(fee_usd))
+        except Exception:  # noqa: BLE001
+            print(
+                "ERROR: --fee must be a finite numeric value "
+                f"(got {fee_usd!r})."
+            )
+            return 1
+    if not fee_usd.is_finite():
+        print(
+            f"ERROR: --fee must be a finite number (got {fee_usd}). "
+            "NaN / Infinity are not valid engagement-fee values."
+        )
+        return 1
     if fee_usd <= 0 or fee_usd > Decimal("1000000"):
         print(
             f"ERROR: --fee must be > 0 and <= $1,000,000 (got {fee_usd}). "

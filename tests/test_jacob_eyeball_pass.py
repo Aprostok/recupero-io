@@ -686,3 +686,101 @@ def test_validator_passes_with_zero_critical_or_high(artifacts):
         f"validator found {result.high_count} high violations:\n"
         + result.summary_text()
     )
+    # JACOB-FOLLOWUP: every primary deliverable on disk must be
+    # declared in *some* manifest_*.json — no orphans, not even info-
+    # severity. Pre-fix the per-issuer manifests overwrote each other
+    # (only the last issuer's outputs survived) and the case-level
+    # artifacts (engagement_letter, victim_summary, recovery_snapshot)
+    # were never declared anywhere. Both gaps are closed; this test
+    # pins it shut so a regression resurfaces immediately.
+    orphans = [
+        v for v in result.violations
+        if v.check == "artifact_orphan_on_disk"
+    ]
+    assert not orphans, (
+        f"{len(orphans)} orphan deliverable(s) not declared in any "
+        f"manifest_*.json:\n  "
+        + "\n  ".join(v.file for v in orphans)
+    )
+
+
+def test_per_issuer_manifests_exist_and_each_declares_its_outputs(artifacts):
+    """JACOB-FOLLOWUP: one manifest per issuer (no overwrite races).
+
+    The pre-fix manifest naming was ``manifest_<brief_id>.json``, so
+    when generate_briefs ran four times (once per issuer) it silently
+    clobbered the manifest three times and only the last issuer's
+    outputs survived. Lock the per-issuer naming so a future refactor
+    that reverts to a shared name immediately fails this test.
+    """
+    briefs = artifacts["briefs_dir"]
+    manifests = sorted(briefs.glob("manifest_*.json"))
+    # Expect: 4 per-issuer manifests + 1 case-level manifest = 5
+    per_issuer = [m for m in manifests if not m.name.startswith("manifest_case_")]
+    case_level = [m for m in manifests if m.name.startswith("manifest_case_")]
+    expected_issuer_slugs = {"midas", "tether", "circle", "coinbase"}
+    found_slugs = set()
+    for m in per_issuer:
+        # manifest_<slug>_<brief_id>.json
+        rest = m.stem[len("manifest_"):]
+        slug = rest.split("_", 1)[0]
+        found_slugs.add(slug)
+    missing = expected_issuer_slugs - found_slugs
+    assert not missing, (
+        f"Per-issuer manifest(s) missing for {missing}. "
+        f"Found manifests: {[m.name for m in per_issuer]}"
+    )
+    assert len(case_level) == 1, (
+        f"Expected exactly 1 case-level manifest (manifest_case_*.json), "
+        f"found {len(case_level)}: {[m.name for m in case_level]}"
+    )
+
+
+def test_case_manifest_declares_supplementary_deliverables(artifacts):
+    """JACOB-FOLLOWUP: the case-level manifest must declare every
+    case-scoped deliverable (engagement_letter, victim_summary,
+    recovery_snapshot, trace_report, flow svg, findings exports).
+
+    Without this, those files appear as orphans to the chain-of-custody
+    validator even though the per-issuer manifests cover freeze_request
+    + le_handoff.
+    """
+    briefs = artifacts["briefs_dir"]
+    case_manifests = list(briefs.glob("manifest_case_*.json"))
+    assert case_manifests, "no manifest_case_*.json was written"
+    cm = json.loads(_read(case_manifests[0]))
+    declared = set(cm.get("outputs", {}).keys())
+    # Every actual file on disk with a case-scoped prefix must be declared.
+    expected_prefixes = (
+        "engagement_letter_", "victim_summary_", "recovery_snapshot_",
+        "trace_report_", "flow_",
+    )
+    expected_files = sorted(
+        p.name for p in briefs.iterdir()
+        if p.is_file()
+        and any(p.name.startswith(pfx) for pfx in expected_prefixes)
+    )
+    missing = [f for f in expected_files if f not in declared]
+    assert not missing, (
+        f"manifest_case_*.json fails to declare {len(missing)} "
+        f"case-scoped deliverable(s): {missing}"
+    )
+    # SHA must match on-disk bytes for every declared output.
+    shas = cm.get("output_sha256", {})
+    failures = []
+    for name in declared:
+        if name not in shas:
+            failures.append(f"{name}: no SHA declared")
+            continue
+        path = briefs / name
+        if not path.is_file():
+            failures.append(f"{name}: declared but not on disk")
+            continue
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != shas[name]:
+            failures.append(
+                f"{name}: manifest={shas[name][:16]}... disk={actual[:16]}..."
+            )
+    assert not failures, (
+        "case-manifest SHA mismatch(es):\n  " + "\n  ".join(failures)
+    )

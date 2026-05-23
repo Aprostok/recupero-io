@@ -105,7 +105,7 @@ class LabelStore:
 
     def _load_file(self, path: Path, source_prefix: str) -> None:
         try:
-            with path.open() as f:
+            with path.open(encoding="utf-8") as f:
                 data = json.load(f)
         except json.JSONDecodeError as e:
             log.error("invalid JSON in label file %s: %s", path, e)
@@ -122,6 +122,17 @@ class LabelStore:
             return
 
         for entry in data:
+            # RIGOR-Jacob W: a corrupted or operator-mistyped labels.json
+            # may contain non-dict entries (lists, strings, numbers,
+            # nulls). Constructing a Label from those raises TypeError
+            # on subscription, which used to abort the entire load and
+            # break startup. Guard the shape and broaden the except so
+            # bad entries are logged + skipped, not fatal.
+            if not isinstance(entry, dict):
+                log.warning(
+                    "skipping non-dict label entry in %s: %r", path, entry,
+                )
+                continue
             try:
                 label = Label(
                     address=entry["address"],
@@ -133,10 +144,16 @@ class LabelStore:
                     notes=entry.get("notes"),
                     added_at=_parse_dt(entry.get("added_at")),
                 )
-            except (KeyError, ValueError) as e:
+            except (KeyError, ValueError, TypeError, AttributeError) as e:
                 log.warning("skipping malformed label in %s: %s", path, e)
                 continue
-            self.add(label)
+            try:
+                self.add(label)
+            except (ValueError, TypeError, AttributeError) as e:
+                log.warning(
+                    "skipping label that failed to add in %s: %s", path, e,
+                )
+                continue
 
 
 def _parse_dt(s: str | None) -> datetime:

@@ -124,16 +124,6 @@
       "jurisdiction": "United States (Massachusetts)"
     },
     {
-      "chain": "arbitrum",
-      "contract": "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
-      "symbol": "USDT",
-      "issuer": "Tether",
-      "freeze_capability": "yes",
-      "freeze_notes": "Arbitrum-native USDT issued by Tether.",
-      "primary_contact": "compliance@tether.to",
-      "jurisdiction": "British Virgin Islands"
-    },
-    {
       "chain": "solana",
       "_comment_address_case": "v0.18.0 (round-11 pricing-CRIT-003): Solana base58 mints stored case-preserved. Pre-v0.18.0 entries were all-lowercase which produces INVALID on-chain addresses (Solana base58 is case-sensitive at the network layer).",
       "contract": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",

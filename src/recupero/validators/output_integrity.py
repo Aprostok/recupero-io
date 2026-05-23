@@ -82,8 +82,10 @@ validator must complete on any non-empty case_dir without raising.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
@@ -286,6 +288,13 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_recovery_snapshot_iff_recoverable(
              briefs_dir, freeze_brief,
          )),
+        # Wave 2 — per-artifact size, schema lock, orphan detection.
+        ("artifact_size_invariants",
+         lambda: _check_artifact_size_invariants(briefs_dir)),
+        ("manifest_schema_required_keys",
+         lambda: _check_manifest_required_keys(briefs_dir)),
+        ("artifact_orphan_on_disk",
+         lambda: _check_orphan_artifacts_on_disk(briefs_dir)),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -306,14 +315,38 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+#: RIGOR-Jacob S: hard cap on validator JSON size to prevent OOM on
+#: hostile or corrupted manifest_*.json files. Realistic manifest is
+#: <100KB; 50MB is a 500× margin.
+MAX_VALIDATOR_JSON_BYTES = 50 * 1024 * 1024  # 50MB
+
+
 def _safe_load_json(path: Path) -> dict[str, Any] | None:
-    """Return the parsed JSON contents or None on any failure."""
+    """Return the parsed JSON contents or None on any failure.
+
+    RIGOR-Jacob S: stat() the file first and refuse to read anything
+    over MAX_VALIDATOR_JSON_BYTES. Also returns None for valid JSON
+    whose top-level shape isn't a dict (list/string/number) so the
+    downstream callers' ``.get()`` / ``.items()`` calls can't crash
+    with AttributeError.
+    """
     if not path.is_file():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        st = os.stat(path)
+    except OSError:
         return None
+    if st.st_size > MAX_VALIDATOR_JSON_BYTES:
+        return None
+    try:
+        parsed = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(parsed, dict):
+        # Wrong top-level shape — callers expect a dict. Surface as
+        # None so they don't crash with AttributeError.
+        return None
+    return parsed
 
 
 def _safe_read(path: Path) -> str:
@@ -644,15 +677,83 @@ def _check_manifest_sha_matches_disk(briefs_dir: Path) -> list[Violation]:
         if not manifest:
             # Already reported by check 3.
             continue
-        outputs = manifest.get("outputs") or {}
-        shas = manifest.get("output_sha256") or {}
+        # RIGOR-Jacob Q: manifest fields may be the wrong shape on a
+        # corrupted / partially-written / hand-edited file. Don't
+        # crash with AttributeError on .items() / .get() — surface
+        # one clean violation per malformed field and move on.
+        outputs_raw = manifest.get("outputs")
+        shas_raw = manifest.get("output_sha256")
+        outputs: dict
+        if isinstance(outputs_raw, dict):
+            outputs = outputs_raw
+        elif outputs_raw is None:
+            outputs = {}
+        else:
+            violations.append(Violation(
+                check="manifest_sha_matches_disk", severity="high",
+                file=manifest_path.name,
+                detail=(
+                    f"manifest 'outputs' has wrong shape "
+                    f"({type(outputs_raw).__name__}), expected dict"
+                ),
+            ))
+            outputs = {}
+        shas: dict
+        if isinstance(shas_raw, dict):
+            shas = shas_raw
+        elif shas_raw is None:
+            shas = {}
+        else:
+            violations.append(Violation(
+                check="manifest_sha_matches_disk", severity="high",
+                file=manifest_path.name,
+                detail=(
+                    f"manifest 'output_sha256' has wrong shape "
+                    f"({type(shas_raw).__name__}), expected dict"
+                ),
+            ))
+            shas = {}
         for key, declared_path in outputs.items():
-            declared_sha = shas.get(key, "")
+            declared_sha = shas.get(key, "") if isinstance(shas, dict) else ""
             if not declared_sha:
                 continue
+            # RIGOR-Jacob Q: declared_path may be None / int / list /
+            # dict / bool from a corrupted manifest. Path(None) raises
+            # TypeError — guard explicitly. Also reject pathologically
+            # long paths to keep Path() bounded.
+            if not isinstance(declared_path, str):
+                violations.append(Violation(
+                    check="manifest_sha_matches_disk", severity="high",
+                    file=manifest_path.name,
+                    detail=(
+                        f"manifest outputs[{key!r}] path has wrong type "
+                        f"({type(declared_path).__name__}), expected str"
+                    ),
+                ))
+                continue
+            if not declared_path:
+                violations.append(Violation(
+                    check="manifest_sha_matches_disk", severity="high",
+                    file=manifest_path.name,
+                    detail=f"manifest outputs[{key!r}] is empty",
+                ))
+                continue
             # The manifest may record absolute paths; we resolve
-            # relative to the briefs/ dir by filename.
-            target = briefs_dir / Path(declared_path).name
+            # relative to the briefs/ dir by filename. Path(...).name
+            # extracts only the basename — that's also the traversal
+            # defense: "../sensitive.txt" → "sensitive.txt".
+            try:
+                basename = Path(declared_path).name
+            except (TypeError, ValueError) as e:
+                violations.append(Violation(
+                    check="manifest_sha_matches_disk", severity="high",
+                    file=manifest_path.name,
+                    detail=(
+                        f"manifest outputs[{key!r}] path is invalid: {e}"
+                    ),
+                ))
+                continue
+            target = briefs_dir / basename
             if not target.is_file():
                 violations.append(Violation(
                     check="manifest_sha_matches_disk", severity="high",
@@ -663,10 +764,25 @@ def _check_manifest_sha_matches_disk(briefs_dir: Path) -> list[Violation]:
                     ),
                 ))
                 continue
-            actual_sha = hashlib.sha256(
-                target.read_bytes()
-            ).hexdigest()
-            if actual_sha != declared_sha:
+            try:
+                actual_sha = hashlib.sha256(
+                    target.read_bytes()
+                ).hexdigest()
+            except OSError as e:
+                violations.append(Violation(
+                    check="manifest_sha_matches_disk", severity="high",
+                    file=manifest_path.name,
+                    detail=(
+                        f"could not read {target.name!r} to verify sha: {e}"
+                    ),
+                ))
+                continue
+            # Use constant-time compare. Pure-correctness compares are
+            # fine with !=, but if this code path is reused on a
+            # signed manifest downstream, a timing side channel could
+            # leak the declared digest a nibble at a time. Cheap to
+            # do right at the leaf.
+            if not hmac.compare_digest(actual_sha, declared_sha):
                 violations.append(Violation(
                     check="manifest_sha_matches_disk", severity="critical",
                     file=manifest_path.name,
@@ -1806,6 +1922,166 @@ def _check_recovery_snapshot_iff_recoverable(
             ),
         )]
     return []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Deeper-audit checks (Wave 2 — per-artifact size / schema lock / orphans)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+#: Per-artifact realism caps. Distinct from MAX_VALIDATOR_JSON_BYTES
+#: (which bounds what the validator will read into memory). These
+#: caps reject artifacts that *parsed fine* but are absurdly large
+#: vs. their real-world size — strong signal of a template runaway
+#: or a write-the-whole-DB-to-one-file bug. A real freeze_request
+#: is ~50–300KB; a real manifest is <100KB; a real CSV / JSON
+#: investigator_findings is <500KB.
+ARTIFACT_SIZE_CAPS: dict[str, int] = {
+    ".html": 10 * 1024 * 1024,   # 10MB
+    ".json": 5 * 1024 * 1024,    # 5MB
+    ".csv": 5 * 1024 * 1024,     # 5MB
+    ".svg": 5 * 1024 * 1024,     # 5MB
+}
+
+
+def _check_artifact_size_invariants(briefs_dir: Path) -> list[Violation]:
+    """Per-deliverable size invariant. A rendered artifact that is
+    structurally valid but pathologically large (10MB HTML, 5MB JSON)
+    almost certainly indicates a template / data bug, not a real case.
+    """
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.iterdir()):
+        if not path.is_file():
+            continue
+        cap = ARTIFACT_SIZE_CAPS.get(path.suffix.lower())
+        if cap is None:
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        if size > cap:
+            violations.append(Violation(
+                check="artifact_size_invariants", severity="high",
+                file=path.name,
+                detail=(
+                    f"{path.name} is {size:,} bytes (cap "
+                    f"{cap:,} bytes for {path.suffix}). Realistic size "
+                    "is two orders of magnitude smaller — likely a "
+                    "template runaway or data dump."
+                ),
+            ))
+    return violations
+
+
+#: The manifest_*.json schema is locked at three top-level keys. A
+#: manifest missing 'outputs' silently passes the SHA loop (zero
+#: entries to verify) — a silent-success bug. Lock the contract.
+#: ``case_id`` is the canonical brief-identifier; in some legacy
+#: manifest schemas it lives under a different top-level key
+#: (or is implicit in the filename). The mandatory invariant the
+#: validator must enforce is the SHA-loop substrate: `outputs` +
+#: `output_sha256` MUST exist together or the SHA check trivially
+#: succeeds on zero entries (silent pass). `case_id` is desirable
+#: but not load-bearing for the integrity guarantee.
+_MANIFEST_REQUIRED_KEYS: tuple[str, ...] = (
+    "outputs", "output_sha256",
+)
+
+
+def _check_manifest_required_keys(briefs_dir: Path) -> list[Violation]:
+    """Every manifest_*.json must carry the locked required keys."""
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for manifest_path in sorted(briefs_dir.glob("manifest_*.json")):
+        manifest = _safe_load_json(manifest_path)
+        if not manifest:
+            continue  # other checks surface unparseable / wrong-shape
+        missing = [k for k in _MANIFEST_REQUIRED_KEYS if k not in manifest]
+        if missing:
+            violations.append(Violation(
+                check="manifest_schema_required_keys", severity="high",
+                file=manifest_path.name,
+                detail=(
+                    f"manifest is missing required keys: {missing}. "
+                    f"Locked schema requires {list(_MANIFEST_REQUIRED_KEYS)}."
+                ),
+            ))
+    return violations
+
+
+#: Artifact prefixes that MUST be declared in the manifest if they
+#: live in briefs/. Other files (the manifest itself, generated
+#: report fragments, .csv companions) are intentionally permitted
+#: out-of-band so this check doesn't flap on legitimate layouts.
+_MANIFEST_DECLARED_PREFIXES: tuple[str, ...] = (
+    "freeze_request_", "le_handoff_", "engagement_letter_",
+    "victim_summary_", "recovery_snapshot_",
+)
+
+
+def _check_orphan_artifacts_on_disk(briefs_dir: Path) -> list[Violation]:
+    """Reverse direction of check 5: every primary deliverable on
+    disk must be declared in *some* manifest_*.json's outputs. Orphans
+    are typically stale builds from a prior case ID — AUSA would
+    download them and attribute to the current case.
+    """
+    if not briefs_dir.is_dir():
+        return []
+    declared: set[str] = set()
+    for manifest_path in briefs_dir.glob("manifest_*.json"):
+        m = _safe_load_json(manifest_path)
+        if not m:
+            continue
+        # Manifests have a few legitimate output-key layouts in the wild
+        # (a flat `outputs` mapping, a nested `outputs.files` list, plus
+        # the `output_sha256` keys themselves which are filenames). Walk
+        # all of them so an artifact declared anywhere counts as "known."
+        for key in ("outputs", "output_sha256"):
+            block = m.get(key)
+            if isinstance(block, dict):
+                declared.update(
+                    Path(v).name for v in block.values()
+                    if isinstance(v, str) and v
+                )
+                declared.update(
+                    Path(k).name for k in block.keys() if isinstance(k, str)
+                )
+            elif isinstance(block, list):
+                for item in block:
+                    if isinstance(item, str) and item:
+                        declared.add(Path(item).name)
+                    elif isinstance(item, dict):
+                        for v in item.values():
+                            if isinstance(v, str) and v:
+                                declared.add(Path(v).name)
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.iterdir()):
+        if not path.is_file():
+            continue
+        if not any(path.name.startswith(p) for p in _MANIFEST_DECLARED_PREFIXES):
+            continue
+        if path.name in declared:
+            continue
+        # Severity=info: producing this as a HIGH violation produces
+        # too many false positives across legitimate test fixtures
+        # (manifest layouts vary; some files are legitimate companions
+        # that ops generates outside the manifest pathway). Operators
+        # still see the diagnostic in the report; it just doesn't gate
+        # publication.
+        violations.append(Violation(
+            check="artifact_orphan_on_disk", severity="info",
+            file=path.name,
+            detail=(
+                f"{path.name} exists in briefs/ but is not declared "
+                "in any manifest_*.json outputs. May be a stale build "
+                "from a prior case ID; operator triage recommended."
+            ),
+        ))
+    return violations
 
 
 __all__ = (

@@ -361,6 +361,17 @@ def _parse_client_reference_id(cri: str) -> dict[str, str]:
     return {}
 
 
+# RIGOR-Jacob T: realistic absolute cap on Stripe-supplied amounts.
+# $1B (1e11 cents) is the ceiling for any plausible single payment —
+# real largest historical recovery was ~$3B BTC, but as a single
+# Stripe charge that's still implausible. Anything above falls back
+# to the typed default. Defends against:
+#   * Compromised STRIPE_WEBHOOK_SECRET injecting absurd amount_total
+#   * Payload-mangling proxy / replay attack on a forwarded event
+#   * Stripe API breakage that returns sentinel values
+_STRIPE_AMOUNT_CENTS_CAP = 100_000_000_000  # $1B in cents
+
+
 def _resolve_amount_cents(obj: dict[str, Any], amount_type: str) -> int:
     """Extract the payment amount from the Stripe object.
 
@@ -370,10 +381,25 @@ def _resolve_amount_cents(obj: dict[str, Any], amount_type: str) -> int:
     types. For unknown shapes, fall back to the typed default
     (so an INSERT with amount_cents>0 succeeds) and rely on the
     notes column to flag the manual triage need.
+
+    RIGOR-Jacob T: extreme values (10**18 cents = $10 quadrillion)
+    are capped to the typed default. The amount lands in
+    public.payments.amount_cents (BIGINT) and drives the
+    engagement_fee_paid_usd Decimal — passing through silently
+    would corrupt every downstream P&L roll-up. We fall back to
+    the default rather than truncate so the operator notices via
+    the "amount_cents matches typed default" pattern in audit.
     """
     for key in ("amount_total", "amount"):
         val = obj.get(key)
         if isinstance(val, int) and val > 0:
+            if val > _STRIPE_AMOUNT_CENTS_CAP:
+                log.warning(
+                    "dispatcher: rejecting extreme amount_cents=%d on "
+                    "%s — exceeds $1B cap; falling back to typed default",
+                    val, amount_type,
+                )
+                continue
             return val
     return _default_amounts_cents().get(amount_type, 0)
 
@@ -452,6 +478,56 @@ def _apply_workflow(
     )
 
 
+# RIGOR-Jacob P: chain + seed_address validation helpers.
+
+# Supported chain values that the worker pipeline can actually run.
+# Mirrors recupero.models.Chain.
+_SUPPORTED_DISPATCH_CHAINS = frozenset({
+    "ethereum", "arbitrum", "base", "polygon", "bsc", "hyperliquid",
+    "optimism", "avalanche", "linea", "blast", "zksync",
+    "scroll", "mantle",
+    "solana", "tron", "bitcoin",
+})
+
+# EVM chains share the 0x + 40 hex shape.
+_EVM_DISPATCH_CHAINS = frozenset({
+    "ethereum", "arbitrum", "base", "polygon", "bsc", "hyperliquid",
+    "optimism", "avalanche", "linea", "blast", "zksync",
+    "scroll", "mantle",
+})
+
+import re as _re_dispatch
+_EVM_ADDR_DISPATCH_RE = _re_dispatch.compile(r"^0x[0-9a-fA-F]{40}$")
+_SOL_ADDR_DISPATCH_RE = _re_dispatch.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+_TRON_ADDR_DISPATCH_RE = _re_dispatch.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+_BTC_ADDR_DISPATCH_RE = _re_dispatch.compile(
+    r"^(bc1[0-9a-zA-Z]{8,87}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$"
+)
+
+
+def _is_supported_chain(chain: str) -> bool:
+    """True iff chain is a value the trace pipeline can adapt for."""
+    return chain in _SUPPORTED_DISPATCH_CHAINS
+
+
+def _is_valid_seed_address_shape(addr: str, chain: str) -> bool:
+    """Cheap per-chain shape gate. False rejects obvious garbage
+    (and NUL bytes that would crash psycopg)."""
+    if not addr or "\x00" in addr:
+        return False
+    if chain in _EVM_DISPATCH_CHAINS:
+        return bool(_EVM_ADDR_DISPATCH_RE.match(addr))
+    if chain == "solana":
+        return bool(_SOL_ADDR_DISPATCH_RE.match(addr))
+    if chain == "tron":
+        return bool(_TRON_ADDR_DISPATCH_RE.match(addr))
+    if chain == "bitcoin":
+        return bool(_BTC_ADDR_DISPATCH_RE.match(addr))
+    # Unknown chain (shouldn't reach here after the chain gate, but
+    # be defensive): reject rather than INSERT garbage.
+    return False
+
+
 def _handle_diagnostic(
     cur: Any, case_uuid: UUID | None, amount_cents: int, obj: dict[str, Any],
 ) -> tuple[str, UUID | None, str | None]:
@@ -494,6 +570,36 @@ def _handle_diagnostic(
             f"diagnostic payment for case {case_row['case_number']} "
             "missing metadata.seed_address — operator must populate "
             "before the investigation can run"
+        )
+
+    # RIGOR-Jacob P: validate the customer-controllable CRI fields.
+    # Stripe's client_reference_id flows in verbatim from the
+    # Checkout page; an attacker who knows the Payment Link URL can
+    # construct any value. Pre-fix we INSERTed those values straight
+    # into investigations.chain / .seed_address without shape checks,
+    # so a chain like "javascript_chain" got stuck retrying forever
+    # in the worker. Reject up-front; operator triages via audit_only.
+    if not _is_supported_chain(chain):
+        log.warning(
+            "dispatcher: diagnostic payment rejected — unsupported "
+            "chain=%r in CRI metadata (case=%s)",
+            chain, case_row.get("case_number"),
+        )
+        return "audit_only", None, (
+            f"diagnostic payment for case {case_row['case_number']} "
+            f"supplied unsupported chain={chain!r}; operator triage "
+            "required (re-issue Payment Link with a supported chain)"
+        )
+    if not _is_valid_seed_address_shape(seed_address, chain):
+        log.warning(
+            "dispatcher: diagnostic payment rejected — malformed "
+            "seed_address=%r for chain=%s (case=%s)",
+            seed_address, chain, case_row.get("case_number"),
+        )
+        return "audit_only", None, (
+            f"diagnostic payment for case {case_row['case_number']} "
+            f"supplied malformed seed_address for chain {chain!r}; "
+            "operator triage required"
         )
 
     # v0.25.1 (CRIT C-1) — partially fixed Stripe's 2-3-events-per-

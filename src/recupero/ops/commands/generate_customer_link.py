@@ -46,6 +46,42 @@ def run(
     dsn: str,
 ) -> int:
     """Mint + print a portal link. Returns 0 on success, 1 on errors."""
+    # v0.20.1 (Z14): validate ttl_days + label BEFORE the DB round-trip.
+    # Pre-v0.20.1: --ttl-days -7 minted an already-expired token;
+    # --ttl-days 100000 minted a 273-year token; --label with NUL bytes
+    # silently corrupted the audit row.
+    if ttl_days is not None:
+        if not isinstance(ttl_days, int) or isinstance(ttl_days, bool):
+            print(f"ERROR: --ttl-days must be an integer (got {ttl_days!r})")
+            return 1
+        if ttl_days <= 0:
+            print(
+                f"ERROR: --ttl-days must be > 0 (got {ttl_days}). "
+                "Negative or zero TTLs mint an already-expired token; "
+                "use 90 for the default."
+            )
+            return 1
+        if ttl_days > 730:
+            print(
+                f"ERROR: --ttl-days must be <= 730 (got {ttl_days}). "
+                "Portal tokens are bearer credentials; multi-year TTLs "
+                "are almost always operator typos. Re-issue when needed."
+            )
+            return 1
+    if label is not None:
+        if not isinstance(label, str) or len(label) > 200:
+            print(
+                "ERROR: --label must be a string of <= 200 characters."
+            )
+            return 1
+        for ch in label:
+            if ord(ch) < 0x20 or ord(ch) == 0x7f:
+                print(
+                    f"ERROR: --label contains a control character "
+                    f"(codepoint U+{ord(ch):04X}). Reject before insert."
+                )
+                return 1
+
     # Fetch the case so we can echo back "V-058868 (Validation Run)" in
     # the success line — much easier for the operator to confirm "yes
     # this is the right case" than seeing only the UUID.

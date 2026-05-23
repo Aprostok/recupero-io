@@ -137,6 +137,9 @@ def render_engagement_letter(
             trim_blocks=True,
             lstrip_blocks=True,
         )
+        # XSS defense-in-depth filters.
+        from recupero.reports._jinja_filters import register_safe_filters
+        register_safe_filters(env)
         html = env.get_template("engagement_letter.html.j2").render(**ctx)
 
         briefs_dir.mkdir(parents=True, exist_ok=True)
@@ -233,7 +236,21 @@ def _fmt_usd(d: Decimal) -> str:
     The engagement letter never renders an "(unknown)" amount in its
     fee fields (all are non-Optional callers), so the fallback is
     decorative; "$0" is the safe choice for any defensive path.
+
+    RIGOR-Jacob Z15-3: a Decimal("NaN") / Decimal("Infinity") that
+    propagated up from an upstream aggregation MUST NOT render as
+    the literal '$NaN' / '$Infinity' inline in the legal engagement
+    contract the victim is asked to sign. Fall back to '$—' (em dash)
+    — strictly better than letting "$NaN" reach the customer.
     """
+    if d is not None:
+        try:
+            from decimal import Decimal as _Dec
+            d_dec = d if isinstance(d, _Dec) else _Dec(str(d))
+            if not d_dec.is_finite():
+                return "$—"
+        except Exception:  # noqa: BLE001
+            return "$—"
     from recupero._pricing import fmt_usd_or
     return fmt_usd_or(d, fallback="$0")
 

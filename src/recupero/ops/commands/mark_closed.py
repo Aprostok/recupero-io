@@ -31,9 +31,69 @@ from recupero._common import db_connect
 log = logging.getLogger(__name__)
 
 
+# Z13-2/3: Maximum acceptable length for a --reason audit note.
+# An operator pasting a 100KB chat log into the field would otherwise
+# write a 100KB row into the change_summary jsonb column.
+_MAX_REASON_LEN = 4_000
+
+
+def _validate_reason(reason: str) -> str | None:
+    """Validate a --reason audit note.
+
+    Returns an error message string when the reason is invalid, or
+    ``None`` when it passes. Rejects:
+
+      * NUL bytes (psycopg silently strips or errors mid-transaction)
+      * C0 / C1 control characters
+      * Unicode bidi-override controls (audit-log spoofing vector)
+      * Oversized notes (> _MAX_REASON_LEN chars)
+    """
+    if not isinstance(reason, str):
+        return "ERROR: --reason must be a string"
+    if len(reason) > _MAX_REASON_LEN:
+        return (
+            f"ERROR: --reason too long: {len(reason)} characters "
+            f"(max {_MAX_REASON_LEN}). Trim the audit note to a "
+            "concise sentence; longer narrative belongs in the case "
+            "directory's change-log, not in change_summary."
+        )
+    for ch in reason:
+        cp = ord(ch)
+        if cp == 0:
+            return (
+                "ERROR: --reason contains a null byte / control "
+                "character — invalid audit-log content."
+            )
+        # C0 controls (allow \n, \r, \t for legitimate operator notes).
+        if cp < 0x20 and ch not in ("\n", "\r", "\t"):
+            return (
+                "ERROR: --reason contains a control character "
+                f"(codepoint {cp:#06x}) — invalid audit-log content."
+            )
+        if cp == 0x7F or 0x80 <= cp <= 0x9F:
+            return (
+                "ERROR: --reason contains a control character "
+                f"(codepoint {cp:#06x}) — invalid audit-log content."
+            )
+        if cp in (0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
+                  0x2066, 0x2067, 0x2068, 0x2069):
+            return (
+                "ERROR: --reason contains a Unicode bidi-override "
+                f"control (codepoint {cp:#06x}) — invalid in audit logs."
+            )
+    return None
+
+
 def run(*, investigation_id: UUID, reason: str, dsn: str) -> int:
     """Close an active engagement. Returns 0 on success, 1 on
     errors / no-active-engagement."""
+    # Z13-2: validate --reason BEFORE touching the DB so a hostile
+    # note doesn't open a transaction we then have to roll back.
+    err = _validate_reason(reason)
+    if err is not None:
+        print(err)
+        return 1
+
     with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT id, engagement_started_at, engagement_closed_at, "

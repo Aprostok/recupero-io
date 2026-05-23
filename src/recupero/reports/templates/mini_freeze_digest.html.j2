@@ -105,7 +105,7 @@
   </tr>
   {% for c in changes %}
   <tr class="{{ c.row_class }}">
-    <td class="mono">{% if c.explorer_url %}<a href="{{ c.explorer_url }}">{{ c.address_short }}</a>{% else %}{{ c.address_short }}{% endif %}</td>
+    <td class="mono">{% if c.explorer_url %}<a href="{{ c.explorer_url|safe_url }}">{{ c.address_short }}</a>{% else %}{{ c.address_short }}{% endif %}</td>
     <td>{{ c.role }}{% if c.label_name %}<br/><span class="small secondary">{{ c.label_name }}</span>{% endif %}</td>
     <td>{{ c.issuer or '—' }}{% if c.asset_symbol %}<br/><span class="small secondary">{{ c.asset_symbol }}</span>{% endif %}</td>
     <td class="amount">{{ c.delta_usd_human }}</td>
@@ -153,7 +153,7 @@
     — <em>{{ c.reason }}</em>
   </p>
   <table class="evidence" style="margin:0;">
-    <tr><th>Address</th><td class="mono">{% if c.explorer_url %}<a href="{{ c.explorer_url }}">{{ c.address }}</a>{% else %}{{ c.address }}{% endif %}</td></tr>
+    <tr><th>Address</th><td class="mono">{% if c.explorer_url %}<a href="{{ c.explorer_url|safe_url }}">{{ c.address }}</a>{% else %}{{ c.address }}{% endif %}</td></tr>
     <tr><th>Chain</th><td>{{ c.chain }}</td></tr>
     <tr><th>Role on case</th><td>{{ c.role }}</td></tr>
     {% if c.issuer %}<tr><th>Asset issuer</th><td>{{ c.issuer }}{% if c.asset_symbol %} ({{ c.asset_symbol }}){% endif %}</td></tr>{% endif %}

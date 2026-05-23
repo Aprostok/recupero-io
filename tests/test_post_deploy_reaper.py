@@ -226,6 +226,17 @@ def test_post_deploy_reaper_against_canary() -> None:
         os.environ.get("SUPABASE_DB_URL", "")
         or os.environ.get("RECUPERO_INTEGRATION_DSN", "")
     ).strip()
+    # RIGOR-Wave8 conftest auto-redirects SUPABASE_DB_URL to a local
+    # test DSN that may or may not point at a reachable DB. Probe before
+    # committing — if the redirected DSN doesn't connect, fall through
+    # to the PGPASSWORD auto-detect path, then skip if neither works.
+    if dsn:
+        try:
+            import psycopg
+            with psycopg.connect(dsn, connect_timeout=2):
+                pass
+        except Exception:  # noqa: BLE001
+            dsn = ""
     if not dsn:
         # Auto-detect local test DB.
         pgpassword = os.environ.get("PGPASSWORD", "").strip()

@@ -32,6 +32,30 @@ from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 log = logging.getLogger(__name__)
 
 
+def _safe_unix_to_datetime(ts: Any) -> datetime:
+    """Convert an untrusted unix-seconds value to a UTC datetime.
+
+    Helius is an external API. A compromised / buggy response can
+    carry timestamps that crash ``datetime.fromtimestamp`` —
+    OverflowError (>~year 9999), OSError (Windows on very-negative),
+    ValueError (Linux on very-negative). Any of these would abort
+    the BFS hop mid-iteration. We clamp to a sentinel (epoch) so
+    downstream code keeps moving; callers may also detect a sentinel
+    block_time and drop the row if they prefer.
+    """
+    try:
+        ts_int = int(ts or 0)
+    except (TypeError, ValueError):
+        return datetime.fromtimestamp(0, tz=UTC)
+    try:
+        return datetime.fromtimestamp(ts_int, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        log.warning(
+            "solana: clamping out-of-range timestamp %r to epoch", ts_int,
+        )
+        return datetime.fromtimestamp(0, tz=UTC)
+
+
 SOLANA_NATIVE_DECIMALS = 9            # 1 SOL = 10^9 lamports
 WRAPPED_SOL_MINT = "So11111111111111111111111111111111111111112"
 USDC_SOLANA_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
@@ -95,7 +119,8 @@ class SolanaAdapter(ChainAdapter):
         return is_program
 
     def fetch_native_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch SOL outflows since ``start_block`` (interpreted as unix ts)."""
         # v0.16.9 (round-9 forensic CRIT): normalize at the boundary so
@@ -115,19 +140,33 @@ class SolanaAdapter(ChainAdapter):
         raw = self._fetch_all(from_address, start_block)
         out: list[dict[str, Any]] = []
         for tx in raw:
-            if tx.get("timestamp", 0) < start_block:
+            try:
+                if int(tx.get("timestamp", 0) or 0) < start_block:
+                    continue
+            except (TypeError, ValueError):
                 continue
             for nt in tx.get("nativeTransfers", []) or []:
                 if (nt.get("fromUserAccount") or "") != from_address:
                     continue
-                amount_lamports = int(nt.get("amount", 0))
+                try:
+                    amount_lamports = int(nt.get("amount", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
                 if amount_lamports == 0:
                     continue
-                out.append(self._normalize_native(tx, nt, amount_lamports))
+                try:
+                    out.append(self._normalize_native(tx, nt, amount_lamports))
+                except Exception as e:  # noqa: BLE001
+                    log.warning(
+                        "solana: dropping native transfer (sig=%s): %s",
+                        tx.get("signature", "?"), e,
+                    )
+                    continue
         return out
 
     def fetch_erc20_outflows(
-        self, from_address: Address, start_block: int
+        self, from_address: Address, start_block: int,
+        *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch SPL token outflows since ``start_block`` (interpreted as unix ts).
 
@@ -147,7 +186,10 @@ class SolanaAdapter(ChainAdapter):
         raw = self._fetch_all(from_address, start_block)
         out: list[dict[str, Any]] = []
         for tx in raw:
-            if tx.get("timestamp", 0) < start_block:
+            try:
+                if int(tx.get("timestamp", 0) or 0) < start_block:
+                    continue
+            except (TypeError, ValueError):
                 continue
             for tt in tx.get("tokenTransfers", []) or []:
                 if (tt.get("fromUserAccount") or "") != from_address:
@@ -158,15 +200,26 @@ class SolanaAdapter(ChainAdapter):
                 # is a decimal float — prefer raw where available.
                 try:
                     amount_raw = int(amount_raw_str)
-                except ValueError:
-                    # Fall back to float conversion if necessary
+                except (ValueError, TypeError):
+                    # Fall back to float conversion if necessary. This
+                    # path is hardened against attacker-supplied
+                    # ``Infinity`` / extreme ``decimals`` values that
+                    # would otherwise raise OverflowError uncaught and
+                    # kill the BFS hop.
                     try:
                         amount_raw = int(float(amount_raw_str) * (10 ** int(raw_amount.get("decimals", 0) or 0)))
-                    except (ValueError, TypeError):
+                    except (ValueError, TypeError, OverflowError):
                         amount_raw = 0
                 if amount_raw == 0:
                     continue
-                out.append(self._normalize_spl(tx, tt, amount_raw))
+                try:
+                    out.append(self._normalize_spl(tx, tt, amount_raw))
+                except Exception as e:  # noqa: BLE001
+                    log.warning(
+                        "solana: dropping SPL transfer (sig=%s): %s",
+                        tx.get("signature", "?"), e,
+                    )
+                    continue
         return out
 
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
@@ -176,8 +229,11 @@ class SolanaAdapter(ChainAdapter):
         ``tx_hash`` here is the signature.
         """
         raw = self.client.get_parsed_transaction(tx_hash) or {}
-        block_number = int(raw.get("slot", 0))
-        block_time = datetime.fromtimestamp(int(raw.get("timestamp", 0) or 0), tz=UTC)
+        try:
+            block_number = int(raw.get("slot", 0) or 0)
+        except (TypeError, ValueError):
+            block_number = 0
+        block_time = _safe_unix_to_datetime(raw.get("timestamp", 0))
         return EvidenceReceipt(
             chain=self.chain, tx_hash=tx_hash, block_number=block_number,
             block_time=block_time,
@@ -214,8 +270,11 @@ class SolanaAdapter(ChainAdapter):
     def _normalize_native(
         self, tx: dict[str, Any], nt: dict[str, Any], amount_lamports: int
     ) -> dict[str, Any]:
-        slot = int(tx.get("slot", 0))
-        block_time = datetime.fromtimestamp(int(tx.get("timestamp", 0) or 0), tz=UTC)
+        try:
+            slot = int(tx.get("slot", 0) or 0)
+        except (TypeError, ValueError):
+            slot = 0
+        block_time = _safe_unix_to_datetime(tx.get("timestamp", 0))
         token = TokenRef(
             chain=Chain.solana, contract=None,
             symbol="SOL", decimals=SOLANA_NATIVE_DECIMALS,
@@ -237,8 +296,11 @@ class SolanaAdapter(ChainAdapter):
     def _normalize_spl(
         self, tx: dict[str, Any], tt: dict[str, Any], amount_raw: int
     ) -> dict[str, Any]:
-        slot = int(tx.get("slot", 0))
-        block_time = datetime.fromtimestamp(int(tx.get("timestamp", 0) or 0), tz=UTC)
+        try:
+            slot = int(tx.get("slot", 0) or 0)
+        except (TypeError, ValueError):
+            slot = 0
+        block_time = _safe_unix_to_datetime(tx.get("timestamp", 0))
         mint = tt.get("mint", "")
         raw_amount = tt.get("rawTokenAmount") or {}
         # Decimals: prefer rawTokenAmount.decimals, fall back to a reasonable default
@@ -248,7 +310,10 @@ class SolanaAdapter(ChainAdapter):
             # only a fallback; Helius almost always populates it.
             decimals = 6 if mint in (USDC_SOLANA_MINT, USDT_SOLANA_MINT) else 9
         else:
-            decimals = int(decimals_raw)
+            try:
+                decimals = int(decimals_raw)
+            except (TypeError, ValueError):
+                decimals = 6 if mint in (USDC_SOLANA_MINT, USDT_SOLANA_MINT) else 9
         # Symbol — we don't get it from Helius for SPL, so derive conservatively
         symbol = _symbol_from_mint(mint)
         token = TokenRef(

@@ -208,7 +208,7 @@
 <h2>5. Termination</h2>
 <p>
   Either party may terminate this engagement at any time by written
-  notice (email to <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>
+  notice (email to <a href="{{ ('mailto:' ~ investigator.email)|safe_url }}">{{ investigator.email }}</a>
   is sufficient).
 </p>
 <p>
@@ -281,7 +281,7 @@
     and authorize Recupero to begin the work described in Section 2.</strong>
   </p>
   <p style="margin:0;">
-    Sign and return to <a href="mailto:{{ investigator.email }}">{{ investigator.email }}</a>
+    Sign and return to <a href="{{ ('mailto:' ~ investigator.email)|safe_url }}">{{ investigator.email }}</a>
     — electronic signature acceptable.
   </p>
 </div>

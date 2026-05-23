@@ -167,13 +167,25 @@ def _rank_key(ev: HackEvent) -> float:
     `has_identifiable_victim` is the marketing-priority kicker —
     events that point at a specific victim (e.g., "DEX-X lost $50M")
     are higher-leverage outreach signals than generic advisories.
+
+    Adversarial-input hardening (v0.20.1):
+      * If ``ev.observed_at`` is naive (no tzinfo), it is treated
+        as UTC. A test fixture or an upstream feed that forgot the
+        ``Z`` suffix used to crash this function with
+        ``TypeError: can't subtract offset-naive and offset-aware
+        datetimes``, poisoning the entire digest sort.
     """
     sev = _SEVERITY_WEIGHT.get(ev.severity, 1.0)
     src = _SOURCE_WEIGHT.get(ev.source, 1.0)
     # Recency: full weight if observed in last 6 hours, decays linearly
     # to 0.25 weight at 7 days, then floor at 0.25.
     now = datetime.now(UTC)
-    age_h = (now - ev.observed_at).total_seconds() / 3600.0
+    observed = ev.observed_at
+    if observed.tzinfo is None:
+        # Naive datetime — assume UTC. Conservative because a fixture
+        # that forgot the Z suffix is more likely UTC than local.
+        observed = observed.replace(tzinfo=UTC)
+    age_h = (now - observed).total_seconds() / 3600.0
     if age_h < 6:
         recency = 1.0
     elif age_h < 168:  # 7 days

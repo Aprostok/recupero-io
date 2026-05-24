@@ -147,7 +147,7 @@ def test_f3_priors_exclude_unresponded_letters_from_denominator():
         return {
             "letter_id": lid,
             "issuer": "Tether",
-            "letter_language": "standard",
+            "letter_tier": "standard",
             "sent_at": None,
             "outcome_type": outcome,
             "observed_at": observed,

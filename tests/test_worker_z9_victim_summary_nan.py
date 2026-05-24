@@ -154,7 +154,7 @@ def test_z9_freeze_followup_renders_finite_amount_for_poisoned_decimal() -> None
             asset_symbol="USDC",
             requested_freeze_usd=poison,
             letter_subject="Freeze request",
-            letter_language="standard",
+            letter_tier="standard",
             contact_email="compliance@circle.com",
             sent_at=sent,
             last_followup_sent_at=None,

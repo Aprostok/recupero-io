@@ -70,7 +70,7 @@ def _cand(
         asset_symbol="USDC",
         requested_freeze_usd=requested_freeze_usd,
         letter_subject="Freeze request",
-        letter_language="standard",
+        letter_tier="standard",
         contact_email=contact_email,
         sent_at=sent_at,
         last_followup_sent_at=None,

@@ -144,9 +144,9 @@ _WIN_OUTCOMES = frozenset(["returned_to_victim"])
 
 @dataclass
 class IssuerPrior:
-    """Aggregated per-(issuer, letter_language) prior."""
+    """Aggregated per-(issuer, letter_tier) prior."""
     issuer: str
-    letter_language: str
+    letter_tier: str
     sample_size: int
     p_any_freeze: float
     p_full_freeze: float
@@ -166,7 +166,7 @@ def record_letter_sent(
     asset_symbol: str,
     requested_freeze_usd: Decimal,
     operator: str,
-    letter_language: str = "standard",
+    letter_tier: str = "standard",
     letter_subject: str | None = None,
     letter_body_excerpt: str | None = None,
     contact_email: str | None = None,
@@ -194,7 +194,7 @@ def record_letter_sent(
         INSERT INTO public.freeze_letters_sent (
             id, case_id, investigation_id, issuer, target_address,
             chain, asset_symbol, requested_freeze_usd,
-            letter_subject, letter_body_excerpt, letter_language,
+            letter_subject, letter_body_excerpt, letter_tier,
             contact_email, contact_portal_url, operator, storage_path
         ) VALUES (
             %(id)s, %(case)s, %(inv)s, %(issuer)s, %(target)s,
@@ -205,7 +205,7 @@ def record_letter_sent(
         ON CONFLICT (case_id, issuer, target_address, asset_symbol)
         DO UPDATE SET
             requested_freeze_usd = EXCLUDED.requested_freeze_usd,
-            letter_language      = EXCLUDED.letter_language,
+            letter_tier      = EXCLUDED.letter_tier,
             letter_subject       = EXCLUDED.letter_subject,
             letter_body_excerpt  = EXCLUDED.letter_body_excerpt,
             contact_email        = EXCLUDED.contact_email,
@@ -222,7 +222,7 @@ def record_letter_sent(
                 "chain": chain, "asset": asset_symbol,
                 "usd": requested_freeze_usd,
                 "subject": letter_subject, "body": body_truncated,
-                "language": letter_language,
+                "language": letter_tier,
                 "email": contact_email, "portal": contact_portal_url,
                 "op": operator, "storage": storage_path,
             })
@@ -431,7 +431,7 @@ def compute_priors_from_outcomes(
 
     Input: list of joined rows from freeze_letters_sent +
     freeze_outcomes, each containing:
-      * issuer, letter_language, sent_at
+      * issuer, letter_tier, sent_at
       * outcome_type, observed_at, frozen_usd, returned_usd
 
     Output: ``{(issuer, language): IssuerPrior}``.
@@ -483,11 +483,11 @@ def compute_priors_from_outcomes(
         if current is None or outcome_strength > current.get("_strength", -2):
             by_letter[letter_id] = {**row, "_strength": outcome_strength}
 
-    # Now bucket by (issuer, letter_language).
+    # Now bucket by (issuer, letter_tier).
     by_pair: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for row in by_letter.values():
         issuer = row.get("issuer") or "(unknown)"
-        language = row.get("letter_language") or "standard"
+        language = row.get("letter_tier") or "standard"
         by_pair.setdefault((issuer, language), []).append(row)
 
     out: dict[tuple[str, str], IssuerPrior] = {}
@@ -547,7 +547,7 @@ def compute_priors_from_outcomes(
         # priors when you have NO domain knowledge of the base rate.
         out[(issuer, language)] = IssuerPrior(
             issuer=issuer,
-            letter_language=language,
+            letter_tier=language,
             sample_size=n,
             p_any_freeze=_beta_posterior_mean(n_any_freeze, n),
             p_full_freeze=_beta_posterior_mean(n_full, n),
@@ -575,14 +575,14 @@ def refresh_priors(dsn: str) -> int:
 
     query = """
         SELECT
-            l.id AS letter_id, l.issuer, l.letter_language, l.sent_at,
+            l.id AS letter_id, l.issuer, l.letter_tier, l.sent_at,
             o.outcome_type, o.observed_at, o.frozen_usd, o.returned_usd
           FROM public.freeze_letters_sent l
           LEFT JOIN public.freeze_outcomes o ON o.letter_id = l.id;
     """
     upsert = """
         INSERT INTO public.issuer_freeze_priors (
-            issuer, letter_language, sample_size,
+            issuer, letter_tier, sample_size,
             p_any_freeze, p_full_freeze, p_returned_to_victim,
             avg_response_hours, median_response_hours, refreshed_at
         ) VALUES (
@@ -590,7 +590,7 @@ def refresh_priors(dsn: str) -> int:
             %(p_any)s, %(p_full)s, %(p_win)s,
             %(avg_h)s, %(med_h)s, NOW()
         )
-        ON CONFLICT (issuer, letter_language)
+        ON CONFLICT (issuer, letter_tier)
         DO UPDATE SET
             sample_size           = EXCLUDED.sample_size,
             p_any_freeze          = EXCLUDED.p_any_freeze,
@@ -610,7 +610,7 @@ def refresh_priors(dsn: str) -> int:
                 for prior in priors.values():
                     cur.execute(upsert, {
                         "issuer": prior.issuer,
-                        "language": prior.letter_language,
+                        "language": prior.letter_tier,
                         "n": prior.sample_size,
                         "p_any": prior.p_any_freeze,
                         "p_full": prior.p_full_freeze,
@@ -638,11 +638,11 @@ def load_learned_priors(dsn: str) -> dict[str, IssuerPrior]:
         return {}
 
     sql = """
-        SELECT issuer, letter_language, sample_size,
+        SELECT issuer, letter_tier, sample_size,
                p_any_freeze, p_full_freeze, p_returned_to_victim,
                avg_response_hours, median_response_hours
           FROM public.issuer_freeze_priors
-         WHERE letter_language = 'standard'
+         WHERE letter_tier = 'standard'
            AND sample_size >= %(threshold)s;
     """
     out: dict[str, IssuerPrior] = {}
@@ -659,7 +659,7 @@ def load_learned_priors(dsn: str) -> dict[str, IssuerPrior]:
                 # produce out-of-bounds confidence intervals.
                 out[row["issuer"]] = IssuerPrior(
                     issuer=row["issuer"],
-                    letter_language=row["letter_language"],
+                    letter_tier=row["letter_tier"],
                     sample_size=row["sample_size"],
                     p_any_freeze=_clamp01(row["p_any_freeze"] or 0),
                     p_full_freeze=_clamp01(row["p_full_freeze"] or 0),

@@ -12,7 +12,7 @@ Three-table substrate
     send-time, immutable).
   freeze_outcomes — one row per outcome event (multiple per
     letter as the issuer's response evolves).
-  issuer_freeze_priors — aggregated per-(issuer, letter_language)
+  issuer_freeze_priors — aggregated per-(issuer, letter_tier)
     success rates + response times. Refreshed nightly. Read by
     recupero.recovery.scorer.
 

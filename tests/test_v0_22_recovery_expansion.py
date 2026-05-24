@@ -60,7 +60,7 @@ def test_score_recovery_per_issuer_marks_learned_vs_heuristic():
 
     learned = {
         "Tether": IssuerPrior(
-            issuer="Tether", letter_language="standard",
+            issuer="Tether", letter_tier="standard",
             sample_size=50, p_any_freeze=0.85, p_full_freeze=0.6,
             p_returned_to_victim=0.4,
             avg_response_hours=48.0, median_response_hours=24.0,

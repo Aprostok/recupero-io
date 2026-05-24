@@ -50,7 +50,7 @@ def _candidate(
         asset_symbol="USDT",
         requested_freeze_usd=1_200_000,
         letter_subject="Freeze request: case RCP-2026-0427",
-        letter_language="le_backed",
+        letter_tier="le_backed",
         contact_email=contact_email,
         sent_at=sent_at,
         last_followup_sent_at=None,

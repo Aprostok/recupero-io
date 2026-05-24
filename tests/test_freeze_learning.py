@@ -25,7 +25,7 @@ def _outcome_row(
     *,
     letter_id=None,
     issuer="Tether",
-    letter_language="standard",
+    letter_tier="standard",
     sent_at=None,
     outcome_type="full_freeze",
     observed_at=None,
@@ -35,7 +35,7 @@ def _outcome_row(
     return {
         "letter_id": letter_id or uuid4(),
         "issuer": issuer,
-        "letter_language": letter_language,
+        "letter_tier": letter_tier,
         "sent_at": sent_at,
         "outcome_type": outcome_type,
         "observed_at": observed_at,
@@ -148,7 +148,7 @@ def test_per_issuer_buckets_separate() -> None:
     assert priors[("Circle", "standard")].p_any_freeze == pytest.approx(0.4, abs=0.001)
 
 
-def test_per_letter_language_buckets_separate() -> None:
+def test_per_letter_tier_buckets_separate() -> None:
     """'standard' and 'le_backed' letters at Tether get separate
     priors — this is how the operator learns 'does FBI backing
     materially help?'.
@@ -157,11 +157,11 @@ def test_per_letter_language_buckets_separate() -> None:
     """
     rows = [
         _outcome_row(
-            issuer="Tether", letter_language="standard",
+            issuer="Tether", letter_tier="standard",
             outcome_type="declined",
         ),
         _outcome_row(
-            issuer="Tether", letter_language="le_backed",
+            issuer="Tether", letter_tier="le_backed",
             outcome_type="full_freeze",
         ),
     ]
@@ -280,7 +280,7 @@ def test_outcome_without_letter_id_skipped() -> None:
     rows = [
         _outcome_row(),
         {"letter_id": None, "outcome_type": "full_freeze",
-         "issuer": "Tether", "letter_language": "standard"},
+         "issuer": "Tether", "letter_tier": "standard"},
     ]
     priors = compute_priors_from_outcomes(rows)
     # Only the valid row was aggregated.
@@ -299,7 +299,7 @@ def test_scorer_uses_learned_prior_over_heuristic() -> None:
     learned = {
         "Tether": IssuerPrior(
             issuer="Tether",
-            letter_language="standard",
+            letter_tier="standard",
             sample_size=50,
             p_any_freeze=0.20,
             p_full_freeze=0.15,
@@ -343,7 +343,7 @@ def test_scorer_falls_back_when_no_learned_prior() -> None:
     """Issuer not in learned_priors dict → fall back to heuristic."""
     learned = {
         "Circle": IssuerPrior(
-            issuer="Circle", letter_language="standard", sample_size=50,
+            issuer="Circle", letter_tier="standard", sample_size=50,
             p_any_freeze=0.95, p_full_freeze=0.90,
             p_returned_to_victim=0.85,
             avg_response_hours=8.0, median_response_hours=6.0,

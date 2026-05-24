@@ -100,9 +100,9 @@ _MIN_LETTERS_FOR_CONFIDENT_PROFILE = 3
 
 
 # Recommended legal instrument values -- matches the existing
-# letter_language CHECK constraint in freeze_letters_sent
+# letter_tier CHECK constraint in freeze_letters_sent
 # (migration 013) so the recommended instrument can be threaded
-# directly into the next letter's letter_language column.
+# directly into the next letter's letter_tier column.
 INSTRUMENT_DIRECT_REQUEST = "standard"
 INSTRUMENT_LE_BACKED = "le_backed"
 INSTRUMENT_AUSA_SIGNED = "ausa_signed"

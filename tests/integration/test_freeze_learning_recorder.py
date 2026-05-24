@@ -85,7 +85,7 @@ def test_record_letter_sent_inserts_row(clean_recorder_db: str) -> None:
         requested_freeze_usd=Decimal("12500.00"),
         letter_subject="Freeze request for stolen USDT",
         letter_body_excerpt="Body excerpt of the freeze letter.",
-        letter_language="standard",
+        letter_tier="standard",
         contact_email="compliance@tether.to",
         contact_portal_url=None,
         operator="integration-test",
@@ -127,7 +127,7 @@ def test_record_letter_sent_idempotent_on_resend(
         case_id=case_id, investigation_id=None,
         issuer="Tether", target_address="0x" + "c" * 40,
         chain="ethereum", asset_symbol="USDT",
-        letter_language="standard", contact_email="compliance@tether.to",
+        letter_tier="standard", contact_email="compliance@tether.to",
         contact_portal_url=None, operator="op1",
         storage_path=None, dsn=clean_recorder_db,
     )
@@ -190,7 +190,7 @@ def test_record_outcome_inserts_row(clean_recorder_db: str) -> None:
         chain="ethereum", asset_symbol="USDC",
         requested_freeze_usd=Decimal("50000.00"),
         letter_subject="USDC freeze", letter_body_excerpt="...",
-        letter_language="standard", contact_email="compliance@circle.com",
+        letter_tier="standard", contact_email="compliance@circle.com",
         contact_portal_url=None, operator="op1",
         storage_path=None, dsn=clean_recorder_db,
     )

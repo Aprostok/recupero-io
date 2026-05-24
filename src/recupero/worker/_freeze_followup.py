@@ -86,7 +86,7 @@ class FreezeFollowupCandidate:
     asset_symbol: str
     requested_freeze_usd: Any        # NUMERIC → Decimal | float
     letter_subject: str | None
-    letter_language: str
+    letter_tier: str
     contact_email: str | None
     sent_at: datetime
     last_followup_sent_at: datetime | None
@@ -170,7 +170,7 @@ def find_freeze_followups_due(*, dsn: str) -> list[FreezeFollowupCandidate]:
                fl.asset_symbol             AS asset_symbol,
                fl.requested_freeze_usd     AS requested_freeze_usd,
                fl.letter_subject           AS letter_subject,
-               fl.letter_language          AS letter_language,
+               fl.letter_tier          AS letter_tier,
                fl.contact_email            AS contact_email,
                fl.sent_at                  AS sent_at,
                fl.last_followup_sent_at    AS last_followup_sent_at,
@@ -245,7 +245,7 @@ def find_freeze_followups_due(*, dsn: str) -> list[FreezeFollowupCandidate]:
             asset_symbol=row["asset_symbol"],
             requested_freeze_usd=row["requested_freeze_usd"],
             letter_subject=row["letter_subject"],
-            letter_language=row["letter_language"] or "standard",
+            letter_tier=row["letter_tier"] or "standard",
             contact_email=row["contact_email"],
             sent_at=row["sent_at"],
             last_followup_sent_at=row["last_followup_sent_at"],
@@ -420,7 +420,7 @@ def _render_followup_html(
         "asset_symbol": candidate.asset_symbol,
         "requested_freeze_usd_human": requested_human,
         "letter_subject": candidate.letter_subject,
-        "letter_language": candidate.letter_language,
+        "letter_tier": candidate.letter_tier,
         "ic3_case_id": candidate.ic3_case_id,
         "jurisdiction": candidate.jurisdiction,
         "contact_email": candidate.contact_email,

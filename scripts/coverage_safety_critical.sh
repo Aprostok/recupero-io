@@ -94,6 +94,27 @@ python -m coverage run --branch --append --source="$SCOPE" -m pytest -q --tb=lin
 echo "=== Coverage report ==="
 python -m coverage report --skip-covered --skip-empty --sort=miss
 
+# Floor gate — RIGOR-4. Current measured coverage (2026-05-24): 73%.
+# Floor is set at 70% to allow ±3% noise from test-set drift; ratchet
+# this up as new tests land. The goal remains 90%; this gate prevents
+# backsliding from the current state. Aspirational targets per file:
+#   * Tier-A (payments, validators, portal/tokens, api/auth): 90%+
+#   * Tier-B (intake, monitoring_api, dispatcher): 85%+
+#   * Tier-C (api/app, portal/server, recorder): 70%+ → 80%+
+# Override the floor with RECUPERO_COVERAGE_FLOOR if testing locally.
+COVERAGE_FLOOR="${RECUPERO_COVERAGE_FLOOR:-70}"
+echo ""
+echo "=== Coverage floor gate: fail if total < ${COVERAGE_FLOOR}% ==="
+if ! python -m coverage report --fail-under="${COVERAGE_FLOOR}" >/dev/null 2>&1; then
+    echo "FAIL: total coverage dropped below floor (${COVERAGE_FLOOR}%)." >&2
+    echo "      Either restore the tests that lapsed, or argue the floor down" >&2
+    echo "      with a PR comment explaining what shifted (e.g. a large new" >&2
+    echo "      module landed and dilutes the percentage while net branches" >&2
+    echo "      covered grew). Don't blindly drop the floor." >&2
+    exit 1
+fi
+echo "PASS: total coverage at or above ${COVERAGE_FLOOR}% floor."
+
 echo ""
 echo "=== Done ==="
 echo "Generate HTML drill-down:    python -m coverage html"

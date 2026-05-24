@@ -133,7 +133,9 @@ def _build_context(
     # format string — the template appends " UTC" itself, so the pre-fix
     # output was "2026-05-18T17:00:00Z UTC" (double timezone suffix).
     # Matches the pattern used in brief.py's generated_at field.
-    now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    # RIGOR-7: SOURCE_DATE_EPOCH-honoring for byte-identical idempotency.
+    from recupero.reports.brief import _resolve_render_time
+    now = _resolve_render_time().strftime("%Y-%m-%dT%H:%M:%S")
     wallet_addr = case.seed_address
 
     stats = _compute_stats(case)

@@ -77,7 +77,9 @@ def render_recovery_snapshot(
     except Exception:  # noqa: BLE001
         software_version = "0.22.x"
 
-    generated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    # RIGOR-7: SOURCE_DATE_EPOCH-honoring for byte-identical idempotency.
+    from recupero.reports.brief import _resolve_render_time
+    generated_at = _resolve_render_time().strftime("%Y-%m-%dT%H:%M:%S")
 
     try:
         html = env.get_template("recovery_snapshot.html.j2").render(

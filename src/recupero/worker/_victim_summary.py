@@ -324,7 +324,9 @@ def _build_context(
     them)."""
     from recupero import __version__ as software_version
 
-    now = datetime.now(UTC)
+    # RIGOR-7: SOURCE_DATE_EPOCH-honoring for byte-identical idempotency.
+    from recupero.reports.brief import _resolve_render_time
+    now = _resolve_render_time()
 
     # Per-issuer summary table data + aggregate evidence_mode across
     # all freezable entries so the customer template can render the

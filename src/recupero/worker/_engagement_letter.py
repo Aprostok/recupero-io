@@ -182,7 +182,10 @@ def _build_context(
     """Build the Jinja context for the engagement letter."""
     from recupero import __version__ as software_version
 
-    now = datetime.now(UTC)
+    # SOURCE_DATE_EPOCH-honoring; falls back to wall-clock when unset.
+    # RIGOR-7: byte-identical output across re-runs of the same case.
+    from recupero.reports.brief import _resolve_render_time
+    now = _resolve_render_time()
 
     from recupero._common import aggregate_evidence_mode_from_entries
     freezable_entries = freeze_brief.get("FREEZABLE") or []

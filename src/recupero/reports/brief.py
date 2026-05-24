@@ -829,9 +829,13 @@ def generate_briefs(
         "investigator": investigator.__dict__,
         "issuer": issuer.name,
         "software_version": __version__,
+        # Store filenames (relative to briefs_dir) — the manifest lives
+        # next to the files it declares so absolute paths are noise and
+        # also break determinism (different temp-dir per test run, etc.).
+        # Validator already uses Path(v).name regardless.
         "outputs": {
-            "issuer_freeze_request": str(maple_path),
-            "le_handoff": str(le_path),
+            "issuer_freeze_request": maple_path.name,
+            "le_handoff": le_path.name,
         },
         "output_sha256": {
             "issuer_freeze_request": maple_hash,

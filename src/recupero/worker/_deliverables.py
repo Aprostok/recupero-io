@@ -630,9 +630,13 @@ def _write_case_manifest(
     """
     import hashlib
     import json
-    from datetime import datetime, timezone
 
     from recupero._common import atomic_write_text
+    # Honor SOURCE_DATE_EPOCH for reproducible-builds workflows so the
+    # case manifest's `generated_at` field doesn't break byte-identical
+    # idempotency checks (RIGOR-7 E2E). Falls back to wall-clock when
+    # the env var is absent.
+    from recupero.reports.brief import _resolve_render_time
 
     if not briefs_dir.is_dir():
         return
@@ -647,7 +651,11 @@ def _write_case_manifest(
             # Use the full filename as the manifest key. Stable, unique,
             # and the validator's orphan-check matches against Path(v).name
             # anyway so a self-naming key is the most direct contract.
-            outputs[path.name] = str(path)
+            # Filename (not absolute path) — manifest is co-located with
+            # the files it declares, and absolute paths break SOURCE_DATE_
+            # EPOCH-honored byte-identical idempotency (different temp
+            # dirs per test run, different container roots in prod, etc.).
+            outputs[path.name] = path.name
             shas[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
         if not outputs:
             return  # nothing to declare; skip the empty manifest
@@ -657,7 +665,7 @@ def _write_case_manifest(
         manifest = {
             "kind": "case_manifest",
             "case_id": case_id_str,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "generated_at": _resolve_render_time().isoformat(),
             "outputs": outputs,
             "output_sha256": shas,
         }

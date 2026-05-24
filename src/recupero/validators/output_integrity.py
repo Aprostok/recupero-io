@@ -295,6 +295,8 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_manifest_required_keys(briefs_dir)),
         ("artifact_orphan_on_disk",
          lambda: _check_orphan_artifacts_on_disk(briefs_dir)),
+        ("unrecoverable_total_matches_holdings",
+         lambda: _check_unrecoverable_total_matches_holdings(freeze_brief)),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -2082,6 +2084,56 @@ def _check_orphan_artifacts_on_disk(briefs_dir: Path) -> list[Violation]:
             ),
         ))
     return violations
+
+
+def _check_unrecoverable_total_matches_holdings(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """Jacob v0.21.x residual: ``TOTAL_UNRECOVERABLE_USD`` must roll up
+    every UNRECOVERABLE-status holding across ALL_ISSUER_HOLDINGS plus
+    every editorial UNRECOVERABLE_ITEMS entry. Pre-fix it only summed
+    the editorial list, leaving a $655K Sky-DAI hole when the perp hub
+    held UNRECOVERABLE tokens that weren't explicitly editorialized.
+
+    Tolerance: $1 (rounding noise from per-issuer aggregation).
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    declared = freeze_brief.get("TOTAL_UNRECOVERABLE_USD")
+    if not isinstance(declared, str):
+        return []
+    try:
+        declared_num = _parse_usd_string(declared)
+    except (InvalidOperation, ValueError, TypeError):
+        return []
+    # Sum every UNRECOVERABLE holding across ALL_ISSUER_HOLDINGS.
+    holdings_total = Decimal("0")
+    for entry in freeze_brief.get("ALL_ISSUER_HOLDINGS") or []:
+        if not isinstance(entry, dict):
+            continue
+        for h in entry.get("holdings") or []:
+            if not isinstance(h, dict):
+                continue
+            if h.get("status") != "UNRECOVERABLE":
+                continue
+            try:
+                holdings_total += _parse_usd_string(h.get("usd"))
+            except (InvalidOperation, ValueError, TypeError):
+                pass
+    diff = abs(declared_num - holdings_total)
+    if diff <= Decimal("1.00"):
+        return []
+    return [Violation(
+        check="unrecoverable_total_matches_holdings",
+        severity="high",
+        file="freeze_brief.json",
+        detail=(
+            f"TOTAL_UNRECOVERABLE_USD={declared} disagrees with the sum "
+            f"of UNRECOVERABLE-status holdings in ALL_ISSUER_HOLDINGS "
+            f"(${holdings_total}). Rollup is dropping non-editorialized "
+            "UNRECOVERABLE holdings (Jacob v0.21.x audit shape)."
+        ),
+    )]
 
 
 __all__ = (

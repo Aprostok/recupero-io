@@ -436,7 +436,15 @@ def _extract_destinations(
         # Role inference
         if is_freezable:
             freeze_info = freeze_targets_by_addr[addr_canon]
-            role = f"Holds {freeze_info.get('symbol', 'tokens')} — freezable"
+            # Jacob v0.21.x residual: role text said "Holds DAI — freezable"
+            # on the perp hub even though its issuer (Sky Protocol) has
+            # freeze_capability='no' and the row classifies UNRECOVERABLE.
+            # Respect the capability flag so the display text agrees with
+            # the status / risk_category fields downstream.
+            if capability_blocks_freeze(freeze_info.get("freeze_capability")):
+                role = f"Holds {freeze_info.get('symbol', 'tokens')} — UNRECOVERABLE"
+            else:
+                role = f"Holds {freeze_info.get('symbol', 'tokens')} — freezable"
             holding_now = usd(Decimal(str(freeze_info.get("usd_value") or "0")))
         elif is_mixer:
             role = f"{label_name or 'Mixer deposit'}"
@@ -957,7 +965,13 @@ def _compute_perpetrator_holdings(
     return total
 
 
-def _compute_totals(case: Case, freezable: list[dict[str, Any]], unrecoverable: list[dict[str, Any]]) -> dict[str, str]:
+def _compute_totals(
+    case: Case,
+    freezable: list[dict[str, Any]],
+    unrecoverable: list[dict[str, Any]],
+    *,
+    all_issuer_holdings: list[dict[str, Any]] | None = None,
+) -> dict[str, str]:
     """Compute headline totals for the brief.
 
     TOTAL_LOSS_USD       — actual amount drained from the victim's wallet (from case data)
@@ -979,14 +993,45 @@ def _compute_totals(case: Case, freezable: list[dict[str, Any]], unrecoverable: 
     total_suspected = sum((_parse_usd_string(f.get("total_suspected_usd", "0")) for f in freezable), start=Decimal("0"))
     total_excluded = sum((_parse_usd_string(f.get("total_excluded_usd", "0")) for f in freezable), start=Decimal("0"))
 
-    # Unrecoverable sum from editorial's UNRECOVERABLE_ITEMS (best-effort regex parse)
+    # Unrecoverable sum: union of two sources so neither pathway leaves
+    # a $655K Sky-DAI-shaped hole in the rollup. Jacob v0.21.x audit
+    # caught the pre-fix sum returning $0 when the editorial-list was
+    # empty but the freeze_asks had freeze_capability='no' holdings.
+    #   1. Editorial UNRECOVERABLE_ITEMS (regex-parsed asset string)
+    #   2. Per-holding UNRECOVERABLE status across the freezable list
+    #      (catches issuers like Sky Protocol where the freeze_asks
+    #      emit but freeze_capability='no').
+    # De-dup by (issuer, address) so a holding flagged in BOTH sources
+    # only counts once.
     total_unrecoverable = Decimal("0")
+    seen_unrecoverable_keys: set[tuple[str, str]] = set()
     for u in unrecoverable:
         asset = u.get("asset", "")
         m = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
         if m:
             try:
                 total_unrecoverable += Decimal(m.group(1).replace(",", ""))
+                key = (str(u.get("issuer", "")), str(u.get("address", "")))
+                if key != ("", ""):
+                    seen_unrecoverable_keys.add(key)
+            except Exception:
+                pass
+    # Walk the FULL all_issuer_holdings list — `freezable` filters
+    # UNRECOVERABLE-only issuers out (Sky Protocol / DAI gets dropped
+    # from the letter list because there's no actionable freeze-target).
+    # The rollup needs the complete picture, not the filtered one.
+    for entry in (all_issuer_holdings or freezable):
+        issuer_name = str(entry.get("issuer", ""))
+        for h in entry.get("holdings", []):
+            if h.get("status") != "UNRECOVERABLE":
+                continue
+            addr = str(h.get("address", ""))
+            key = (issuer_name, addr)
+            if key in seen_unrecoverable_keys:
+                continue  # already counted via editorial list
+            seen_unrecoverable_keys.add(key)
+            try:
+                total_unrecoverable += _parse_usd_string(h.get("usd", "0"))
             except Exception:
                 pass
 
@@ -1501,7 +1546,10 @@ def emit_brief(
     # TOTAL_LOSS_USD comes from actual case data (transfers leaving the seed wallet),
     # NOT from a sum of current freezable balances (which can be inflated by bystander
     # contracts caught in the trace expansion — e.g. the Lido stETH contract).
-    totals = _compute_totals(case, freezable, unrecoverable)
+    totals = _compute_totals(
+        case, freezable, unrecoverable,
+        all_issuer_holdings=all_issuer_holdings,
+    )
 
     # --- Cross-chain handoffs (v0.8.1) --- v0.20.0 Phase C: extracted
     cross_chain_handoffs = _build_cross_chain_handoffs_section(case)

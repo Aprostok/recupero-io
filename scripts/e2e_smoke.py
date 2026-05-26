@@ -286,6 +286,15 @@ def main() -> int:
         args.timeout_sec = 2700 if args.max_depth >= 3 else 900
 
     load_dotenv(override=True)
+    # v0.30.2 (V030_2_SCRIPTS_AUDIT T1-A): refuse to run against a
+    # prod-shaped DSN unless the operator explicitly opts in via
+    # RECUPERO_ALLOW_PROD_DSN=1. e2e_smoke writes a synthetic row to
+    # public.cases + public.investigations and DELETEs it on cleanup
+    # (lines ~243-247); if pointed at prod, the row briefly exists
+    # and would consume a Stripe webhook before cleanup. Refuse by
+    # default; require explicit opt-in.
+    from _prod_dsn_guard import assert_not_prod_dsn  # noqa: E402
+    assert_not_prod_dsn("e2e_smoke: synthetic case lifecycle with INSERT+DELETE on public.cases")
     dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
     supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     service_role = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()

@@ -585,14 +585,19 @@ def generate_briefs(
                 ) if any(t.usd_value_at_tx is not None for t in theft_events)
                 else theft_transfer.usd_value_at_tx,
             ),
-            "total_amount_human": _fmt_decimal(
-                sum(
-                    (t.amount_decimal for t in theft_events
-                     if t.amount_decimal is not None),
-                    start=Decimal(0),
-                ) if any(t.amount_decimal is not None for t in theft_events)
-                else theft_transfer.amount_decimal,
-            ),
+            # v0.30.2 (V030_2_CORRECTNESS_AUDIT T1-A): pre-v0.30.2 this
+            # summed `amount_decimal` across ALL theft_events as if they
+            # were the same unit — 0.21 ETH + 20,610 USDT rendered as
+            # "20,610.55". Forensically nonsensical and the v0.30.0
+            # read-through (F10) flagged it but the fix never landed in
+            # code (only the docs). The correct render: aggregate ONLY
+            # when every event is the same token symbol; otherwise
+            # surface a non-additive label and let the templates show
+            # the per-event breakdown.
+            "total_amount_human": _aggregate_theft_amount_human(theft_events, theft_transfer),
+            # v0.30.2: explicit flag so templates can branch instead of
+            # silently rendering an addition that doesn't make sense.
+            "theft_assets_mixed": _theft_events_mixed_assets(theft_events),
             "theft_event_count": len(theft_events),
             "is_multi_event": len(theft_events) > 1,
             "usd_value_current": asset_usd_value_current,
@@ -1586,6 +1591,47 @@ def _build_identified_wallets(
         })
 
     return result
+
+
+def _theft_events_mixed_assets(theft_events: list) -> bool:
+    """v0.30.2 (V030_2_CORRECTNESS_AUDIT T1-A): True iff the theft
+    events span more than one token. Returns False on empty or
+    single-event lists (treated as same-asset by definition)."""
+    symbols: set[str] = set()
+    for t in theft_events or ():
+        token = getattr(t, "token", None)
+        sym = getattr(token, "symbol", None) if token else None
+        if isinstance(sym, str) and sym.strip():
+            symbols.add(sym.strip().upper())
+    return len(symbols) > 1
+
+
+def _aggregate_theft_amount_human(theft_events: list, theft_transfer) -> str:
+    """v0.30.2 (V030_2_CORRECTNESS_AUDIT T1-A): correct multi-event
+    amount rendering for the Stolen Asset Details "Amount" cell.
+
+    Pre-v0.30.2 we summed `amount_decimal` across every event with no
+    same-token check, producing "0.21 ETH + 20,610 USDT = 20,610.55"
+    nonsense. The corrected behaviors:
+
+    - Empty events: fall back to the primary theft_transfer's amount.
+    - Single event: render that event's amount.
+    - All events same symbol: sum them.
+    - Mixed symbols: refuse to add. Render the count + an explicit
+      "(mixed assets)" label so the template can branch to a
+      per-event breakdown rather than misleading the reader.
+    """
+    if not theft_events:
+        return _fmt_decimal(getattr(theft_transfer, "amount_decimal", None))
+    if len(theft_events) == 1:
+        return _fmt_decimal(theft_events[0].amount_decimal)
+    if _theft_events_mixed_assets(theft_events):
+        return f"{len(theft_events)} events, mixed assets"
+    # All same symbol — addition is meaningful.
+    decimals = [t.amount_decimal for t in theft_events if t.amount_decimal is not None]
+    if not decimals:
+        return _fmt_decimal(getattr(theft_transfer, "amount_decimal", None))
+    return _fmt_decimal(sum(decimals, start=Decimal(0)))
 
 
 def _fmt_decimal(d: Decimal | None) -> str:

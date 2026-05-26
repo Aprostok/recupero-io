@@ -75,6 +75,13 @@ def main() -> int:
     args = parser.parse_args()
 
     load_dotenv(override=True)
+    # v0.30.2 (V030_2_SCRIPTS_AUDIT T1-A): refuse to run against a
+    # prod-shaped DSN unless the operator explicitly opts in via
+    # RECUPERO_ALLOW_PROD_DSN=1. Approval flips a `validation_approved_at`
+    # column; on a prod DSN this would mark real customer cases as
+    # validation-approved.
+    from _prod_dsn_guard import assert_not_prod_dsn  # noqa: E402
+    assert_not_prod_dsn("approve_validation_row: UPDATE public.investigations")
 
     supabase_url = os.environ["SUPABASE_URL"]
     service_role = os.environ["SUPABASE_SERVICE_ROLE_KEY"]

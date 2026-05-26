@@ -574,6 +574,211 @@ MUTATIONS: list[Mutation] = [
             "test_verify_token_does_not_query_legacy_token_column"
         ),
     ),
+
+    # ─────────────────────────────────────────────────────────────────
+    # v0.28 mutations — verify the new test surface has real bug-
+    # catching power. Each mutation flips a critical line; the named
+    # test MUST detect it (FAIL on the mutated code).
+    # ─────────────────────────────────────────────────────────────────
+    Mutation(
+        # The NaN/Inf/negative defense in _sanitize_usd is what stops
+        # extract_subpoena_targets from crashing on adversarial USD
+        # strings. Removing the NaN check makes the property test
+        # explode because `Decimal('NaN') < 0` raises InvalidOperation.
+        name="v0.28: _sanitize_usd NaN check removed",
+        file_path=REPO_ROOT / "src/recupero/reports/subpoena_targets.py",
+        find="    if d.is_nan() or d.is_infinite():",
+        replace_with=(
+            "    if False:  # MUTATION: NaN check dropped"
+        ),
+        test_target=(
+            "tests/test_v028_deep_hardening.py::"
+            "test_property_sanitize_usd_always_non_negative_finite"
+        ),
+    ),
+    Mutation(
+        # The negative-amount clamp protects against editorial JSON
+        # with a typo'd "-$5,000" or similar. Removing the < 0 check
+        # makes negative USD pass through, which the NaN/negative
+        # property test catches.
+        name="v0.28: _sanitize_usd negative-amount clamp removed",
+        file_path=REPO_ROOT / "src/recupero/reports/subpoena_targets.py",
+        find="    if d < 0:\n        return Decimal(\"0\")",
+        replace_with=(
+            "    if False:  # MUTATION: negative clamp dropped\n"
+            "        return Decimal(\"0\")"
+        ),
+        test_target=(
+            "tests/test_v028_hardening.py::"
+            "test_sanitize_usd_rejects_negative"
+        ),
+    ),
+    Mutation(
+        # The filename-length cap is what prevents the Windows MAX_PATH
+        # crash. Removing the cap test causes the renderer to write
+        # arbitrarily long filenames that exceed the OS limit. The
+        # property test asserts len(out) <= _FILENAME_COMPONENT_MAX
+        # over thousands of random inputs.
+        name="v0.28: _safe_filename_component length-cap removed",
+        file_path=REPO_ROOT / "src/recupero/reports/subpoena_renderer.py",
+        find="    if len(out) > _FILENAME_COMPONENT_MAX:",
+        replace_with=(
+            "    if False:  # MUTATION: length cap removed"
+        ),
+        # v0.28.4 mutation-survivor fix: the previous target was
+        # the property test with max_size=2000 — most random strings
+        # at that size were already truncated by the sanitize step.
+        # The retargeted test uses size=50000 explicitly so the cap
+        # is the only thing that bounds the output.
+        test_target=(
+            "tests/test_v028_deep_hardening.py::"
+            "test_property_safe_filename_component_bounded_at_large_sizes"
+        ),
+    ),
+    Mutation(
+        # The filename-collision detection is what prevents multiple
+        # seizure-targets (same recipient_name = "Identified law
+        # enforcement agency") from overwriting each other. Removing
+        # the used_filenames check restores the bug the e2e test
+        # caught.
+        name="v0.28: filename-collision detection removed",
+        file_path=REPO_ROOT / "src/recupero/reports/subpoena_renderer.py",
+        find=(
+            "        if base_filename in used_filenames:"
+        ),
+        replace_with=(
+            "        if False:  # MUTATION: collision detection skipped"
+        ),
+        test_target=(
+            "tests/test_v028_deep_hardening.py::"
+            "test_e2e_zigha_shape_brief_render_validate"
+        ),
+    ),
+    Mutation(
+        # INVARIANT D cycle-detection: removing the GRAY-state check
+        # in the DFS means back-edges (cycles) are no longer detected.
+        # The cycle tests must catch this.
+        name="v0.28: INVARIANT D cycle GRAY-check removed",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find="            if color[nxt] == GRAY:",
+        replace_with=(
+            "            if False:  # MUTATION: cycle detection disabled"
+        ),
+        test_target=(
+            "tests/test_v028_hardening.py::"
+            "test_invariant_d_catches_self_reference_cycle"
+        ),
+    ),
+    Mutation(
+        # INVARIANT C Zigha-shape escalation: pre-v0.28.2 this was
+        # warning-only. v0.28.2 escalated to high above $100K. Mutating
+        # back to warning-only is the regression.
+        name="v0.28: INVARIANT C Zigha-shape escalation reverted",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find='severity = "high" if usd >= Decimal("100000") else "warning"',
+        replace_with=(
+            'severity = "warning"  '
+            '# MUTATION: escalation removed; all warnings now'
+        ),
+        test_target=(
+            "tests/test_v028_hardening.py::"
+            "test_invariant_c_escalates_to_high_above_100k"
+        ),
+    ),
+    Mutation(
+        # The extraction-error sentinel is what surfaces silent
+        # extraction crashes. Removing the SUBPOENA_TARGETS_EXTRACTION_
+        # ERROR write in emit_brief means a crash silently emits an
+        # empty list — the bug class the v0.28.2 hardening introduced
+        # the sentinel to catch.
+        name="v0.28: extraction-error sentinel NOT written on exception",
+        file_path=REPO_ROOT / "src/recupero/reports/emit_brief.py",
+        find='brief["SUBPOENA_TARGETS_EXTRACTION_ERROR"] = (',
+        replace_with=(
+            'pass; _orig = (  # MUTATION: sentinel write removed'
+        ),
+        # v0.28.4 mutation-survivor fix: the previous test only
+        # asserted absence-of-sentinel passes; it didn't exercise
+        # the sentinel-write path. The new test does a structural
+        # source-inspect check, which catches the mutation directly.
+        test_target=(
+            "tests/test_v028_hardening.py::"
+            "test_emit_brief_source_contains_sentinel_write"
+        ),
+    ),
+    Mutation(
+        # _atomic_write must clean up the .tmp file on failure.
+        # Removing the unlink leaves the orphan .tmp. The simulated
+        # PermissionError test catches this.
+        name="v0.28: _atomic_write tmp cleanup removed on failure",
+        file_path=REPO_ROOT / "src/recupero/reports/subpoena_renderer.py",
+        find=(
+            "        try:\n"
+            "            if tmp.exists():\n"
+            "                tmp.unlink()"
+        ),
+        replace_with=(
+            "        try:\n"
+            "            if False:  # MUTATION: cleanup skipped\n"
+            "                tmp.unlink()"
+        ),
+        test_target=(
+            "tests/test_v028_deep_hardening.py::"
+            "test_atomic_write_cleans_tmp_when_rename_fails"
+        ),
+    ),
+    Mutation(
+        # _resolve_cex_recipient with operator override: the load
+        # function MUST short-circuit when no env var is set. Mutating
+        # the early return to fall through means an "" env var would
+        # try to open the file and log a warning. Test enforces no
+        # warning + correct canonical fallback.
+        name="v0.28: CEX override early-return on empty env var",
+        file_path=REPO_ROOT / "src/recupero/reports/subpoena_targets.py",
+        find=(
+            "    if not override_path:\n"
+            "        return out"
+        ),
+        replace_with=(
+            "    if False:  # MUTATION: early return removed\n"
+            "        return out"
+        ),
+        # v0.28.4 mutation-survivor fix: the previous test only
+        # checked the canonical fallback worked, which it does
+        # either way (open("") raises and the except catches it).
+        # The new test asserts NO WARNING is logged, which fails
+        # when the mutation falls through to the file-open path.
+        test_target=(
+            "tests/test_v028_deep_hardening.py::"
+            "test_cex_compliance_override_unset_does_not_attempt_file_read"
+        ),
+    ),
+    Mutation(
+        # The 1-cycle (self-reference) is caught by the GRAY-state
+        # check too, but specifically tested via the index lookup.
+        # Mutate the cycle violation EMIT to a different severity
+        # (warning) — the test must check severity=='high'.
+        name="v0.28: INVARIANT D cycle severity downgraded to warning",
+        file_path=REPO_ROOT / "src/recupero/validators/output_integrity.py",
+        find=(
+            '                    violations.append(Violation(\n'
+            '                        check="subpoena_targets_depends_on_resolves",\n'
+            '                        severity="high",\n'
+            '                        detail=(\n'
+            '                            "Dependency cycle in SUBPOENA_TARGETS: "'
+        ),
+        replace_with=(
+            '                    violations.append(Violation(\n'
+            '                        check="subpoena_targets_depends_on_resolves",\n'
+            '                        severity="warning",  # MUTATION: downgraded\n'
+            '                        detail=(\n'
+            '                            "Dependency cycle in SUBPOENA_TARGETS: "'
+        ),
+        test_target=(
+            "tests/test_v028_hardening.py::"
+            "test_invariant_d_catches_self_reference_cycle"
+        ),
+    ),
 ]
 
 

@@ -87,6 +87,21 @@ def test_property_safe_filename_component_always_bounded(s: str) -> None:
     )
 
 
+@pytest.mark.parametrize("size", [100, 500, 1000, 5000, 10000, 50000])
+def test_property_safe_filename_component_bounded_at_large_sizes(size: int) -> None:
+    """Mutation-survivor coverage: hypothesis's max_size=2000 wasn't
+    enough to surface a removed length-cap because most random
+    strings have lots of non-alphanumeric chars that get collapsed
+    to dashes anyway. Test EXPLICITLY with monotonically long
+    alphanumeric strings — where the cap is the only thing that
+    bounds the output."""
+    out = _safe_filename_component("a" * size)
+    assert len(out) <= _FILENAME_COMPONENT_MAX, (
+        f"input size={size} produced output len={len(out)} > "
+        f"{_FILENAME_COMPONENT_MAX}"
+    )
+
+
 @given(s=st.text(max_size=2000))
 @settings(suppress_health_check=[HealthCheck.too_slow], deadline=None)
 def test_property_safe_filename_component_ascii_only(s: str) -> None:
@@ -471,16 +486,50 @@ def test_cex_compliance_override_missing_file_falls_back(
     assert out["recipient_compliance_email"] == "compliance@mexc.com"
 
 
-def test_cex_compliance_override_unset_uses_canonical() -> None:
+def test_cex_compliance_override_unset_uses_canonical(monkeypatch) -> None:
     """No env var set → canonical map only."""
     from recupero.reports.subpoena_targets import _resolve_cex_recipient
-    import os
 
     # Ensure unset.
-    os.environ.pop("RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE", None)
+    monkeypatch.delenv("RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE", raising=False)
     out = _resolve_cex_recipient("MEXC")
     assert out is not None
     assert out["recipient_compliance_email"] == "compliance@mexc.com"
+
+
+def test_cex_compliance_override_unset_does_not_attempt_file_read(
+    monkeypatch, caplog,
+) -> None:
+    """v0.28.4 mutation-survivor coverage: when the env var is
+    unset/empty, _load_operator_overrides MUST short-circuit
+    without attempting any file I/O. A regression removing the
+    early `return out` would fall through to the file-open code
+    and (a) succeed silently when no override path was supplied,
+    OR (b) log a misleading warning about a nonexistent file.
+
+    Pin the contract: with the env var unset, no WARNING is
+    emitted from the override loader."""
+    import logging
+    from recupero.reports.subpoena_targets import _load_operator_overrides
+
+    monkeypatch.delenv("RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE", raising=False)
+    monkeypatch.setenv("RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE", "")
+    caplog.clear()
+    with caplog.at_level(logging.WARNING,
+                         logger="recupero.reports.subpoena_targets"):
+        out = _load_operator_overrides()
+    # Returns the canonical map unchanged.
+    assert "mexc" in out
+    # No warnings logged — early return means no file-open attempt.
+    overrides_warnings = [
+        r for r in caplog.records
+        if "RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE" in r.message
+    ]
+    assert not overrides_warnings, (
+        "Loader should NOT log when env var is empty/unset — silent "
+        "passthrough is the contract. A regression removing the "
+        f"early return leaked: {[r.message for r in overrides_warnings]}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────

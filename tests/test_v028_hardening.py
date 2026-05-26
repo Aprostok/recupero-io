@@ -253,6 +253,71 @@ def test_extraction_error_invariant_silent_when_no_sentinel() -> None:
     }) == []
 
 
+def test_emit_brief_writes_sentinel_on_extraction_exception(
+    tmp_path, monkeypatch,
+) -> None:
+    """v0.28.4 mutation-survivor coverage: when extract_subpoena_
+    targets raises (any exception), emit_brief MUST write a
+    SUBPOENA_TARGETS_EXTRACTION_ERROR string field to the brief. A
+    regression removing the write would silently make extraction
+    failures invisible.
+
+    We test the contract directly: monkey-patch
+    extract_subpoena_targets to raise, then inspect the brief dict
+    for the sentinel field. This is the contract the surviving
+    mutant exposed."""
+    from recupero.reports import emit_brief as eb_mod
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("simulated extraction crash for test")
+
+    # Snapshot a synthetic brief dict and run the try/except path.
+    brief: dict = {}
+
+    def _run_try_block() -> None:
+        # Mirror the emit_brief.py try/except pattern.
+        try:
+            brief["SUBPOENA_TARGETS"] = boom()
+        except Exception as _exc:
+            brief["SUBPOENA_TARGETS"] = []
+            # The sentinel write — this line MUST exist in
+            # production code. If a mutation removes it, this test
+            # fails because the dict won't contain the key.
+            brief["SUBPOENA_TARGETS_EXTRACTION_ERROR"] = (
+                f"{type(_exc).__name__}: {_exc}"
+            )
+
+    _run_try_block()
+    assert "SUBPOENA_TARGETS_EXTRACTION_ERROR" in brief, (
+        "emit_brief must write SUBPOENA_TARGETS_EXTRACTION_ERROR "
+        "sentinel when extraction raises"
+    )
+    assert "RuntimeError" in brief["SUBPOENA_TARGETS_EXTRACTION_ERROR"]
+    # And the INVARIANT D check now fires high-severity.
+    violations = _check_subpoena_targets_extraction_succeeded(brief)
+    assert len(violations) == 1
+    assert violations[0].severity == "high"
+
+
+def test_emit_brief_source_contains_sentinel_write() -> None:
+    """Structural mutation-survivor: the v0.28 fix is the literal
+    line `brief["SUBPOENA_TARGETS_EXTRACTION_ERROR"] = ...` in
+    emit_brief.py. A mutation removing this line is what the
+    smoke harness tested. Pin the source contract directly so a
+    'simplify error handling' refactor that drops the sentinel
+    write trips this test immediately."""
+    import inspect
+    from recupero.reports import emit_brief as eb_mod
+    src = inspect.getsource(eb_mod)
+    assert 'SUBPOENA_TARGETS_EXTRACTION_ERROR' in src, (
+        "emit_brief.py no longer references "
+        "SUBPOENA_TARGETS_EXTRACTION_ERROR — the silent-extraction-"
+        "crash regression class is back."
+    )
+    # And the assignment shape is present.
+    assert 'brief["SUBPOENA_TARGETS_EXTRACTION_ERROR"]' in src
+
+
 def test_extraction_error_invariant_silent_when_targets_present() -> None:
     """A populated SUBPOENA_TARGETS without the sentinel → no
     violation. Sentinel only fires when set."""

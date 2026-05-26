@@ -5,7 +5,14 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "solana"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "solana"
+    ],
     "follow_up_url": "https://app.debridge.finance/orders",
     "notes": "Main entry point for deBridge cross-chain transfers. Order hash extractable from the createOrder event.",
     "added_at": "2025-01-01T00:00:00Z"
@@ -80,7 +87,13 @@
     "category": "bridge",
     "source": "hop_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "base", "gnosis"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "base",
+      "gnosis"
+    ],
     "follow_up_url": "https://explorer.hop.exchange",
     "added_at": "2025-01-01T00:00:00Z"
   },
@@ -90,7 +103,12 @@
     "category": "bridge",
     "source": "hop_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "base"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "base"
+    ],
     "follow_up_url": "https://explorer.hop.exchange",
     "notes": "Hop L1 bridge entrypoint — locks tokens for L2 mint",
     "added_at": "2026-05-17T00:00:00Z"
@@ -101,7 +119,14 @@
     "category": "bridge",
     "source": "celer_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "fantom"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom"
+    ],
     "follow_up_url": "https://cbridge-v2.celer.network/refund",
     "added_at": "2026-05-17T00:00:00Z"
   },
@@ -111,7 +136,14 @@
     "category": "bridge",
     "source": "synapse_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "fantom"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom"
+    ],
     "follow_up_url": "https://explorer.synapseprotocol.com",
     "added_at": "2026-05-17T00:00:00Z"
   },
@@ -121,7 +153,14 @@
     "category": "bridge",
     "source": "socket_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "base", "avalanche"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "base",
+      "avalanche"
+    ],
     "follow_up_url": "https://socketscan.io",
     "notes": "Aggregator — routes through underlying bridges. Check the inner transactions for actual bridge used.",
     "added_at": "2026-05-17T00:00:00Z"
@@ -132,7 +171,13 @@
     "category": "bridge",
     "source": "allbridge_docs",
     "confidence": "high",
-    "supports_to_chains": ["solana", "polygon", "bsc", "avalanche", "tron"],
+    "supports_to_chains": [
+      "solana",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "tron"
+    ],
     "follow_up_url": "https://app.allbridge.io",
     "notes": "Stablecoin-focused bridge with Solana + Tron support",
     "added_at": "2026-05-17T00:00:00Z"
@@ -143,18 +188,21 @@
     "category": "bridge",
     "source": "gnosis_docs",
     "confidence": "high",
-    "supports_to_chains": ["gnosis"],
+    "supports_to_chains": [
+      "gnosis"
+    ],
     "follow_up_url": "https://omni.gnosischain.com",
     "added_at": "2026-05-17T00:00:00Z"
   },
-
   {
     "address": "0xa0c68c638235ee32657e8f720a23cec1bfc77c77",
     "name": "Polygon: RootChainManager",
     "category": "bridge",
     "source": "polygon_docs",
     "confidence": "high",
-    "supports_to_chains": ["polygon"],
+    "supports_to_chains": [
+      "polygon"
+    ],
     "follow_up_url": "https://polygonscan.com",
     "notes": "Canonical Polygon PoS bridge",
     "added_at": "2026-05-17T00:00:00Z"
@@ -165,7 +213,9 @@
     "category": "bridge",
     "source": "polygon_docs",
     "confidence": "high",
-    "supports_to_chains": ["polygon"],
+    "supports_to_chains": [
+      "polygon"
+    ],
     "follow_up_url": "https://polygonscan.com",
     "notes": "Polygon canonical ERC-20 deposit gate (lockTokens)",
     "added_at": "2026-05-17T00:00:00Z"
@@ -176,7 +226,9 @@
     "category": "bridge",
     "source": "arbitrum_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum"],
+    "supports_to_chains": [
+      "arbitrum"
+    ],
     "follow_up_url": "https://arbiscan.io",
     "notes": "Arbitrum One canonical Inbox — ETH deposits + L1→L2 messages",
     "added_at": "2026-05-17T00:00:00Z"
@@ -187,7 +239,9 @@
     "category": "bridge",
     "source": "arbitrum_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum"],
+    "supports_to_chains": [
+      "arbitrum"
+    ],
     "follow_up_url": "https://arbiscan.io",
     "added_at": "2026-05-17T00:00:00Z"
   },
@@ -197,7 +251,9 @@
     "category": "bridge",
     "source": "optimism_docs",
     "confidence": "high",
-    "supports_to_chains": ["optimism"],
+    "supports_to_chains": [
+      "optimism"
+    ],
     "follow_up_url": "https://optimistic.etherscan.io",
     "added_at": "2026-05-17T00:00:00Z"
   },
@@ -207,7 +263,9 @@
     "category": "bridge",
     "source": "base_docs",
     "confidence": "high",
-    "supports_to_chains": ["base"],
+    "supports_to_chains": [
+      "base"
+    ],
     "follow_up_url": "https://basescan.org",
     "added_at": "2026-05-17T00:00:00Z"
   },
@@ -217,7 +275,9 @@
     "category": "bridge",
     "source": "zksync_docs",
     "confidence": "high",
-    "supports_to_chains": ["zksync"],
+    "supports_to_chains": [
+      "zksync"
+    ],
     "follow_up_url": "https://explorer.zksync.io",
     "added_at": "2026-05-17T00:00:00Z"
   },
@@ -227,18 +287,25 @@
     "category": "bridge",
     "source": "avalanche_docs",
     "confidence": "high",
-    "supports_to_chains": ["avalanche"],
+    "supports_to_chains": [
+      "avalanche"
+    ],
     "follow_up_url": "https://snowtrace.io",
     "added_at": "2026-05-17T00:00:00Z"
   },
-
   {
     "address": "0xe8a36e62a2d50dd2e3b18a3a86b94b2feab02da7",
     "name": "Multichain / Anyswap (defunct)",
     "category": "bridge",
     "source": "historical",
     "confidence": "high",
-    "supports_to_chains": ["bsc", "polygon", "avalanche", "fantom", "harmony"],
+    "supports_to_chains": [
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "harmony"
+    ],
     "follow_up_url": null,
     "notes": "Multichain ceased operations July 2023 after the founder's arrest in China. Historical contracts retained for legacy investigations — funds bridged via Multichain after the shutdown are likely unrecoverable.",
     "added_at": "2026-05-17T00:00:00Z"
@@ -249,7 +316,12 @@
     "category": "bridge",
     "source": "stargate_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
     "added_at": "2026-05-17T00:00:00Z"
   },
@@ -259,7 +331,15 @@
     "category": "bridge",
     "source": "layerzero_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base", "fantom"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base",
+      "fantom"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
     "notes": "Generic LayerZero messaging endpoint. Many OFTs / aggregators route through this; check inner OApp for the actual destination.",
     "added_at": "2026-05-22T00:00:00Z"
@@ -270,7 +350,14 @@
     "category": "bridge",
     "source": "layerzero_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
     "added_at": "2026-05-22T00:00:00Z"
   },
@@ -280,7 +367,14 @@
     "category": "bridge",
     "source": "chainlink_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base"
+    ],
     "follow_up_url": "https://ccip.chain.link",
     "notes": "Chainlink Cross-Chain Interoperability Protocol router. ccipSend() encodes destChainSelector + receiver in calldata.",
     "added_at": "2026-05-22T00:00:00Z"
@@ -291,7 +385,15 @@
     "category": "bridge",
     "source": "squid_docs",
     "confidence": "high",
-    "supports_to_chains": ["arbitrum", "optimism", "polygon", "bsc", "avalanche", "base", "fantom"],
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base",
+      "fantom"
+    ],
     "follow_up_url": "https://axelarscan.io",
     "notes": "Squid aggregator on top of Axelar GMP. Check Axelarscan for the underlying GMP message.",
     "added_at": "2026-05-22T00:00:00Z"
@@ -303,12 +405,13 @@
     "category": "bridge",
     "source": "hyperliquid_docs",
     "confidence": "high",
-    "supports_to_chains": ["hyperliquid"],
+    "supports_to_chains": [
+      "hyperliquid"
+    ],
     "follow_up_url": "https://app.hyperliquid.xyz",
     "notes": "Canonical USDC deposit gateway on Arbitrum for Hyperliquid L1. Withdrawals signed by Hyperliquid validator set.",
     "added_at": "2026-05-22T00:00:00Z"
   },
-
   {
     "_section": "Arbitrum-side bridges (added v0.28.0 — Zigha trace coverage fix). Pre-v0.28 bridges.json had ONE Arbitrum entry (Hyperliquid). identify_cross_chain_handoffs keys on (chain, address), so any transfer on Arbitrum to a bridge contract missed detection. The Zigha case (Arbitrum→Ethereum DeBridge / 1inch consolidation) was invisible. The entries below add Arbitrum-side coverage. See docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md."
   },
@@ -319,11 +422,20 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "base", "solana"],
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base",
+      "solana"
+    ],
     "follow_up_url": "https://app.debridge.finance/orders",
     "notes": "DeBridge Gate deploys deterministically at the same address on all supported chains. The order hash is extractable from the createOrder event. Zigha unblocker — the v0.27.x worker missed DeBridge handoffs entirely on the Arbitrum side.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "address": "0xeF4fB24aD0916217251F553c0596F8Edc630EB66",
@@ -332,11 +444,19 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "base", "avalanche"],
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "base",
+      "avalanche"
+    ],
     "follow_up_url": "https://app.debridge.finance/orders",
     "notes": "DLN Source deploys at the same address on multiple chains (deterministic deploy). The Zigha consolidation funnel went through this on Arbitrum.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "_section": "1inch Aggregation Router v5/v6 (0x1111111254eeb25477b68fb85ed929f73a960582, 0x111111125421ca6dc452d289314280a0f8842a65) is correctly cataloged in defi_protocols.json as a DEX/swap router, not a bridge. The bridge_calldata.py _decode_1inch stub recognizes 1inch method IDs for surfacing in trace reports, but the address itself is NOT in bridges.json — 1inch's primary function is same-chain DEX aggregation. Fusion+ cross-chain is a layered protocol; over-classifying the base router would tag the vast majority of same-chain 1inch txs as bridges."
@@ -347,12 +467,20 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "stargate_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "base", "avalanche"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "base",
+      "avalanche"
+    ],
     "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
-    "notes": "Stargate Router on Arbitrum One — Stargate composer for cross-chain stablecoin swaps via LayerZero.",
+    "notes": "Stargate Router on Arbitrum One — Stargate composer for cross-chain stablecoin swaps via LayerZero. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
   },
   {
     "address": "0xbf22f0f184bCcbeA268dF387a49fF5238dD23E40",
@@ -360,12 +488,19 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "stargate_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "base"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "base"
+    ],
     "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
-    "notes": "Stargate native-ETH router on Arbitrum One.",
+    "notes": "Stargate native-ETH router on Arbitrum One. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
   },
   {
     "address": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A",
@@ -373,12 +508,20 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "base", "linea", "zksync"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "base",
+      "linea",
+      "zksync"
+    ],
     "follow_up_url": "https://across.to/explorer",
-    "notes": "Across V3 SpokePool on Arbitrum One. Optimistic relayer model — funds bridged in minutes, settled in ~2h.",
+    "notes": "Across V3 SpokePool on Arbitrum One. Optimistic relayer model — funds bridged in minutes, settled in ~2h. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
   },
   {
     "address": "0x0b2402144Bb366A632D14B83F244D2e0e21bD39c",
@@ -386,12 +529,22 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "wormhole_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "solana", "bsc", "polygon", "avalanche", "fantom", "optimism", "base"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "optimism",
+      "base"
+    ],
     "follow_up_url": "https://wormholescan.io",
-    "notes": "Wormhole Token Bridge on Arbitrum One. transferTokens(...) recipient + recipientChain extractable via _decode_wormhole.",
+    "notes": "Wormhole Token Bridge on Arbitrum One. transferTokens(...) recipient + recipientChain extractable via _decode_wormhole. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
   },
   {
     "address": "0x1a44076050125825900e736c501f859c50fe728c",
@@ -400,11 +553,19 @@
     "category": "bridge",
     "source": "layerzero_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
     "notes": "LayerZero V2 Endpoint deploys at the SAME address on all supported EVM chains (deterministic). Many OFTs / aggregators route through this.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "address": "0x3c2269811836af69497E5F486A85D7316753cf62",
@@ -412,12 +573,21 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "layerzero_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "fantom", "base"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "base"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
-    "notes": "LayerZero V1 Endpoint on Arbitrum. Same address on most EVM chains.",
+    "notes": "LayerZero V1 Endpoint on Arbitrum. Same address on most EVM chains. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
   },
   {
     "address": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
@@ -426,11 +596,18 @@
     "category": "bridge",
     "source": "hop_docs",
     "confidence": "medium",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "base", "gnosis"],
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "base",
+      "gnosis"
+    ],
     "follow_up_url": "https://explorer.hop.exchange",
     "notes": "Hop L2 AMM wrapper deploys at the same address across L2s — note this matches the Ethereum-side bridge entry. Confidence: medium because the L2 deployment pattern shifted between Hop v1 / v2.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "address": "0xb8901acb165ed027e32754e0ffe830802919727f",
@@ -439,11 +616,20 @@
     "category": "bridge",
     "source": "synapse_docs",
     "confidence": "medium",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "fantom", "base"],
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "base"
+    ],
     "follow_up_url": "https://explorer.synapseprotocol.com",
     "notes": "Synapse bridge — same address pattern on multiple chains. Verify against synapseprotocol.com docs before relying on it for new chains.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "address": "0x141fa059441E0ca23ce184B6A78bafD2A517DdE8",
@@ -451,14 +637,21 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "chainlink_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base"
+    ],
     "follow_up_url": "https://ccip.chain.link",
-    "notes": "CCIP Router on Arbitrum One. ccipSend() encodes destChainSelector + receiver in calldata.",
+    "notes": "CCIP Router on Arbitrum One. ccipSend() encodes destChainSelector + receiver in calldata. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
   },
-
   {
     "_section": "Optimism-side bridges (v0.28.0)"
   },
@@ -469,11 +662,19 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "bsc", "base", "avalanche"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "polygon",
+      "bsc",
+      "base",
+      "avalanche"
+    ],
     "follow_up_url": "https://app.debridge.finance/orders",
     "notes": "DeBridge Gate same address on Optimism via deterministic deploy.",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "address": "0xB0D502E938ed5f4df2E681fE6E419ff29631d62b",
@@ -482,7 +683,13 @@
     "category": "bridge",
     "source": "stargate_docs",
     "confidence": "medium",
-    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "bsc", "base"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "polygon",
+      "bsc",
+      "base"
+    ],
     "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
     "notes": "Stargate Router on Optimism. Confidence medium — verify against Stargate SDK for the exact OP deployment.",
     "added_at": "2026-05-26T00:00:00Z",
@@ -494,11 +701,19 @@
     "chain": "optimism",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "base", "linea"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "polygon",
+      "base",
+      "linea"
+    ],
     "follow_up_url": "https://across.to/explorer",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
+    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
   },
   {
     "address": "0x1D68124e65faFC907325e3EDbF8c4d84499DAa8b",
@@ -506,11 +721,21 @@
     "chain": "optimism",
     "category": "bridge",
     "source": "wormhole_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "solana", "bsc", "polygon", "avalanche", "arbitrum", "base"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "arbitrum",
+      "base"
+    ],
     "follow_up_url": "https://wormholescan.io",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
+    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
   },
   {
     "address": "0x1a44076050125825900e736c501f859c50fe728c",
@@ -519,12 +744,19 @@
     "category": "bridge",
     "source": "layerzero_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "bsc", "avalanche", "base"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "base"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
-
   {
     "_section": "Base-side bridges (v0.28.0)"
   },
@@ -535,10 +767,18 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon", "bsc", "avalanche"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche"
+    ],
     "follow_up_url": "https://app.debridge.finance/orders",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "address": "0x45f1A95A4D3f3836523F5c83673c797f4d4d263B",
@@ -547,7 +787,13 @@
     "category": "bridge",
     "source": "stargate_docs",
     "confidence": "medium",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon", "bsc"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc"
+    ],
     "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true
@@ -558,11 +804,18 @@
     "chain": "base",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "polygon"
+    ],
     "follow_up_url": "https://across.to/explorer",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
+    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
   },
   {
     "address": "0x8d2de8d2f73F1F4cAB472AC9A881C9b123C79627",
@@ -571,7 +824,15 @@
     "category": "bridge",
     "source": "wormhole_docs",
     "confidence": "medium",
-    "supports_to_chains": ["ethereum", "solana", "bsc", "polygon", "avalanche", "arbitrum", "optimism"],
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "arbitrum",
+      "optimism"
+    ],
     "follow_up_url": "https://wormholescan.io",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true
@@ -583,12 +844,19 @@
     "category": "bridge",
     "source": "layerzero_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon", "bsc", "avalanche"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "bsc",
+      "avalanche"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
-
   {
     "_section": "Polygon-side bridges (v0.28.0)"
   },
@@ -599,10 +867,18 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base", "bsc", "avalanche"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "bsc",
+      "avalanche"
+    ],
     "follow_up_url": "https://app.debridge.finance/orders",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   },
   {
     "address": "0x45A01E4e04F14f7A4a6702c74187c5F6222033cd",
@@ -611,7 +887,13 @@
     "category": "bridge",
     "source": "stargate_docs",
     "confidence": "medium",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base", "bsc"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "bsc"
+    ],
     "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true
@@ -622,11 +904,18 @@
     "chain": "polygon",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base"],
+    "confidence": "medium",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base"
+    ],
     "follow_up_url": "https://across.to/explorer",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
+    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
   },
   {
     "address": "0x1a44076050125825900e736c501f859c50fe728c",
@@ -635,9 +924,17 @@
     "category": "bridge",
     "source": "layerzero_docs",
     "confidence": "high",
-    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base", "bsc", "avalanche"],
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "bsc",
+      "avalanche"
+    ],
     "follow_up_url": "https://layerzeroscan.com",
     "added_at": "2026-05-26T00:00:00Z",
-    "_v028_addition": true
+    "_v028_addition": true,
+    "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
   }
 ]

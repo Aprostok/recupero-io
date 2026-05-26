@@ -41,6 +41,42 @@ SEEDS = Path(__file__).parent.parent / "src" / "recupero" / "labels" / "seeds"
 LIST_FILES = ["cex_deposits.json", "defi_protocols.json", "mixers.json"]
 
 
+# v0.30.0 audit fix (Tier-1 from V029_AUDIT_FINDINGS): the v0.29.1 sweep
+# stamped chain='ethereum' on every entry that lacked a chain field
+# without consulting the entry's name/notes. Tornado Cash 40 BNB (BSC)
+# carried "(BSC)" in the name + "BSC deployment" in notes but still got
+# 'ethereum' stamped on it — a real OFAC false-negative in any
+# BSC-side trace. The map below catches name-suffix hints so a future
+# run of this script can't reproduce the bug. Any other unrecognized
+# chain hint = leave the entry alone and print a warning, rather than
+# silently defaulting it.
+_NAME_CHAIN_HINTS: dict[str, str] = {
+    "(bsc)": "bsc",
+    "(binance smart chain)": "bsc",
+    "(arbitrum)": "arbitrum",
+    "(optimism)": "optimism",
+    "(base)": "base",
+    "(polygon)": "polygon",
+    "(avalanche)": "avalanche",
+    "(fantom)": "fantom",
+    "(tron)": "tron",
+    "(solana)": "solana",
+    "(linea)": "linea",
+}
+
+
+def _infer_chain_from_entry(entry: dict) -> str:
+    """Conservative chain inference. Returns 'ethereum' for the
+    common case (Ethereum-mainnet contract, no chain hint anywhere).
+    Honors name-suffix hints — fixes the v0.29.1 Tornado/BSC mislabel."""
+    name = str(entry.get("name", "")).lower()
+    notes = str(entry.get("notes", "")).lower()
+    for hint, chain in _NAME_CHAIN_HINTS.items():
+        if hint in name or hint in notes:
+            return chain
+    return "ethereum"
+
+
 def backfill(path: Path) -> tuple[int, int]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, list):
@@ -54,7 +90,7 @@ def backfill(path: Path) -> tuple[int, int]:
         if isinstance(existing, str) and existing.strip():
             already_tagged += 1
             continue
-        entry["chain"] = "ethereum"
+        entry["chain"] = _infer_chain_from_entry(entry)
         entry["_v029_1_chain_backfill"] = True
         backfilled += 1
     if backfilled:

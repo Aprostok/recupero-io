@@ -108,6 +108,18 @@ from recupero._common import (
 from recupero._common import (
     explorer_name_for_chain as _common_explorer_name_for_chain,
 )
+# v0.30.0 (F7): operator-identity predicate. Wrapped in a safe-import
+# helper so a brief render never crashes because of an unexpected
+# import-time error in _common.py — the worst case becomes "DRAFT
+# banner shown defensively", never "brief generation aborts".
+
+
+def _is_investigator_configured_safe() -> bool:
+    try:
+        from recupero._common import is_investigator_configured
+        return is_investigator_configured()
+    except Exception:  # noqa: BLE001
+        return False
 from recupero._common import (
     short_addr as _short_addr,
 )
@@ -226,6 +238,55 @@ def _resolve_theft_asset_issuer_name(
     return fallback
 
 
+# ---- v0.30.0: per-token asset descriptions (F5 from read-through) ---- #
+# Address-keyed (lower-cased) → factually-accurate one-liner that
+# appears in the "Stolen Asset Details" / "Asset description" row of the
+# LE handoff. Pre-v0.30.0 every brief inherited Midas's
+# "ERC-20 yield-bearing wrapper token" default, which is wrong for
+# anything that isn't a Midas mSyrupUSD wrapper. The map is the canonical
+# token → description authority for ERC-20 contracts the brief stamps;
+# unknown contracts fall back to the asset_type argument the caller
+# passes (usually "ERC-20 token" — accurate-but-bland default).
+_TOKEN_ASSET_DESCRIPTIONS: dict[str, str] = {
+    # Ethereum mainnet — the contracts that drive ~95% of recovery
+    # cases. Address-lowercased for chain-agnostic lookup.
+    "0xdac17f958d2ee523a2206206994597c13d831ec7":
+        "USD-pegged stablecoin (ERC-20) issued by Tether Holdings Limited",
+    "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48":
+        "USD-pegged stablecoin (ERC-20) issued by Circle Internet Financial",
+    "0x6b175474e89094c44da98b954eedeac495271d0f":
+        "Multi-collateralized USD-pegged stablecoin (ERC-20, MakerDAO/Sky Protocol)",
+    "0x4fabb145d64652a948d72533023f6e7a623c7c53":
+        "USD-pegged stablecoin (ERC-20) issued by Paxos Trust Company (BUSD/Binance USD)",
+    "0x8e870d67f660d95d5be530380d0ec0bd388289e1":
+        "USDP — USD-pegged stablecoin (ERC-20) issued by Paxos Trust Company",
+    "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2":
+        "WETH (ERC-20 canonical wrapper for native Ether)",
+    "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599":
+        "WBTC (ERC-20 wrapper for Bitcoin custodied by BitGo Trust Company)",
+}
+
+
+def _resolve_asset_description(
+    *, token_contract: str | None, default_description: str | None,
+    fallback_asset_type: str,
+) -> str:
+    """v0.30.0 (F5): return the most-accurate available description.
+
+    Priority order:
+      1. The issuer's hand-curated `asset_description` (mSyrupUSDp etc).
+      2. Token-contract-keyed entry in `_TOKEN_ASSET_DESCRIPTIONS`.
+      3. The caller-supplied `asset_type` fallback.
+    """
+    if default_description and default_description.strip():
+        return default_description
+    if isinstance(token_contract, str) and token_contract.startswith("0x"):
+        canonical = token_contract.lower()
+        if canonical in _TOKEN_ASSET_DESCRIPTIONS:
+            return _TOKEN_ASSET_DESCRIPTIONS[canonical]
+    return fallback_asset_type
+
+
 # ---- Small generate_briefs helpers (v0.20.0 Phase C decomposition) ---- #
 
 
@@ -280,7 +341,16 @@ def generate_briefs(
     investigator: InvestigatorInfo,
     case_dir: Path,
     issuer: IssuerInfo = MIDAS_ISSUER,
-    asset_type: str = "ERC-20 yield-bearing wrapper token",
+    # v0.30.0 (F5 — brief read-through): pre-v0.30.0 the default value
+    # was "ERC-20 yield-bearing wrapper token" — a description that fits
+    # Midas mSyrupUSDp (the V-CFI01 shape) but is factually WRONG for
+    # USDT / USDC / DAI / ETH / WBTC etc. A federal agent reading
+    # "USDT — ERC-20 yield-bearing wrapper token" on the Stolen Asset
+    # Details table immediately loses confidence in the report. The
+    # default is now a generic placeholder; the per-token map below
+    # (`_TOKEN_ASSET_DESCRIPTIONS`) overrides it when the stolen token
+    # is one we recognize.
+    asset_type: str = "ERC-20 token",
     asset_usd_value_current: str | None = None,
     outbound_count_of_stolen_asset: int = 0,
     flow_filename: str | None = None,
@@ -413,8 +483,20 @@ def generate_briefs(
         "brief_id": brief_id,
         # v0.18.6: IC3 reference + DRAFT watermark plumbed into ctx.
         "ic3_case_id": ic3_case_id,
-        "draft": draft,
-        "draft_label": draft_label or "DRAFT",
+        # v0.30.0 (F7): auto-promote to DRAFT mode when the operator
+        # identity isn't configured. The §9 Investigator Attestation
+        # block is the most legally-significant paragraph in the
+        # package — an unsigned attestation is worse than no
+        # attestation. Stamp UNSIGNED across every page so an operator
+        # never accidentally transmits a brief that lacks a signing
+        # human.
+        "draft": draft or (not _is_investigator_configured_safe()),
+        "draft_label": (
+            draft_label
+            or ("UNSIGNED — DO NOT TRANSMIT"
+                if not _is_investigator_configured_safe()
+                else "DRAFT")
+        ),
         # v0.19.1 (round-12 PDF-CRIT-4): the 23 templates that render this
         # field already append a literal " UTC" suffix. Pre-v0.19.1 the
         # value carried a trailing 'Z', producing "2026-05-19T17:00:00Z UTC"
@@ -470,7 +552,15 @@ def generate_briefs(
             ),
             "issuer_short": issuer.short_name,
             "type": asset_type,
-            "description": issuer.asset_description or asset_type,
+            # v0.30.0 (F5): resolve the description from the canonical
+            # token-address map when the issuer hasn't supplied one,
+            # rather than letting the Midas-shape default leak onto
+            # USDT / USDC / DAI / WETH / WBTC theft cases.
+            "description": _resolve_asset_description(
+                token_contract=getattr(theft_transfer.token, "contract", None),
+                default_description=issuer.asset_description,
+                fallback_asset_type=asset_type,
+            ),
             "amount_human": _fmt_decimal(theft_transfer.amount_decimal),
             "usd_value_at_theft": _fmt_usd(theft_transfer.usd_value_at_tx),
             # v0.20.2 (audit-round-3 R3-3): expose aggregate
@@ -1180,14 +1270,110 @@ def _flatten_primary_chain(tree: list[Transfer]) -> list[Transfer]:
     return primary
 
 
+_BURN_ADDRESSES: dict[str, str] = {
+    # v0.30.0 (F6 — brief read-through): canonical "this is not an
+    # under-investigation wallet" addresses get hard-coded labels so
+    # they don't pollute Section 5 with rows tagged
+    # "Unlabeled (under investigation)" — a federal agent reading
+    # `0x0000…0000` annotated "under investigation" loses confidence.
+    "0x0000000000000000000000000000000000000000": "Burn / zero address (ERC-20 transfer)",
+    "0x000000000000000000000000000000000000dead": "Burn address (0x…dEaD)",
+}
+
+# v0.30.0 (F6): Section 5 noise threshold. Pre-v0.30.0 we dumped every
+# counterparty touched by the BFS — 407 of 414 rows tagged
+# "Unlabeled (under investigation)" with "—" notes. A detective skim of
+# that table reads as auto-generated noise. The new rule keeps any
+# unlabeled row that meets ONE of:
+#   * Direct counterparty of the victim (hop_depth ≤ 1)
+#   * Aggregate USD inflow ≥ this floor
+# Labeled rows (perpetrator / bridge / exchange / mixer / current holder)
+# are ALWAYS kept regardless of volume — a $5 bridge handoff is still
+# the most actionable row in the table.
+_SECTION_5_USD_INCLUSION_FLOOR_DEFAULT = Decimal("100")
+_SECTION_5_HOP_DEPTH_FLOOR = 1
+# Hard cap on unlabeled rows to keep the section skimmable; everything
+# beyond appears as a single "+N more counterparties (truncated)" line
+# with a pointer to the full CSV (investigator_findings.csv).
+_SECTION_5_UNLABELED_HARD_CAP = 25
+
+
+def _enrich_via_label_store(addr: str, chain: Any) -> tuple[str, str, str] | None:
+    """v0.30.0 (F6): query the LabelStore at brief-render-time.
+
+    The Case-on-disk has labels only for whatever was in the seed file
+    when the trace ran. v0.29 expanded bridges.json by 58 entries +
+    v0.29.1 by another 58 — a v0.27-era cached case carries none of
+    those. Re-enriching at brief time captures those without re-running
+    the trace. Returns (role, type, notes) tuple or None.
+    """
+    try:
+        from recupero.config import load_default_config
+        from recupero.labels.store import LabelStore
+        from recupero.models import Chain
+        # Cache the store on the function (cheap; runs once per brief).
+        if not hasattr(_enrich_via_label_store, "_store"):
+            try:
+                _enrich_via_label_store._store = LabelStore.load(load_default_config())  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                _enrich_via_label_store._store = None  # type: ignore[attr-defined]
+        store = _enrich_via_label_store._store  # type: ignore[attr-defined]
+        if store is None:
+            return None
+        chain_enum = chain if isinstance(chain, Chain) else Chain.ethereum
+        lbl = store.lookup(addr, chain=chain_enum)
+        if lbl is None:
+            return None
+        # Build a human-readable role from the label.
+        if lbl.category.value == "bridge":
+            role = lbl.name
+            notes = f"Bridge contract · Category: {lbl.category.value}"
+        elif lbl.category.value == "exchange_deposit":
+            role = lbl.name
+            notes = f"Exchange deposit · Category: {lbl.category.value}"
+        elif lbl.category.value == "exchange_hot_wallet":
+            role = lbl.name
+            notes = f"Exchange hot wallet · Category: {lbl.category.value}"
+        elif lbl.category.value == "mixer":
+            role = f"Mixer ({lbl.name})"
+            notes = f"Privacy mixer · Category: {lbl.category.value}"
+        elif lbl.category.value == "defi_protocol":
+            role = lbl.name
+            notes = f"DeFi protocol · Category: {lbl.category.value}"
+        else:
+            role = lbl.name
+            notes = f"Category: {lbl.category.value}"
+        if lbl.notes:
+            notes = f"{notes} · {lbl.notes}"
+        return (role, notes, lbl.category.value)
+    except Exception:  # noqa: BLE001 — non-fatal, fall back to unlabeled
+        return None
+
+
 def _build_identified_wallets(
     primary: Case,
     linked: list[Case],
     victim: VictimInfo,
     current_holder: str,
 ) -> list[dict[str, Any]]:
-    """Collect every distinct address mentioned across all cases, with role + label."""
+    """Collect every distinct address mentioned across all cases, with role + label.
+
+    v0.30.0 (F6 — brief read-through): three new behaviors close the
+    "Section 5 dumps 407 'Unlabeled' rows" credibility gap:
+
+      1. Burn / zero-address rows get a hard-coded canonical label.
+      2. Labels missing from the on-disk case (because the trace
+         ran against an older bridges.json) are re-resolved at
+         render time via the live LabelStore.
+      3. Unlabeled rows are filtered to a high-signal subset:
+         direct counterparties of the victim OR aggregate USD inflow
+         ≥ $100. Anything beyond `_SECTION_5_UNLABELED_HARD_CAP` is
+         collapsed into a single "+N more counterparties (truncated)"
+         pointer line.
+    """
     seen: dict[str, dict[str, Any]] = {}
+    # Aggregates for filtering: per-address USD-in + min hop_depth seen.
+    addr_aggregates: dict[str, dict[str, Any]] = {}
 
     # Each identified wallet carries an ``explorer_url`` so the
     # rendered table makes every address a click-through to its
@@ -1237,34 +1423,144 @@ def _build_identified_wallets(
             if _ck(t.from_address) == victim_key:
                 continue  # victim already added
             cp_label = t.counterparty.label
+            addr_lower = t.to_address.lower() if isinstance(t.to_address, str) else t.to_address
+            # Burn-address shortcut (F6.1).
+            burn_label = _BURN_ADDRESSES.get(addr_lower)
+
             if _ck(t.to_address) == current_holder_key:
                 role = "Current holder of stolen position"
                 row_class = "perp-row"
+                category = "current_holder"
             elif cp_label and cp_label.category.value == "perpetrator":
                 role = f"Perpetrator wallet ({cp_label.name})"
                 row_class = "perp-row"
+                category = "perpetrator"
             elif cp_label:
                 role = cp_label.name
                 row_class = ""
-            else:
-                role = "Unlabeled (under investigation)"
+                category = cp_label.category.value
+            elif burn_label:
+                role = burn_label
                 row_class = ""
+                category = "burn"
+            else:
+                # v0.30.0 (F6.2): try the LIVE LabelStore — case may
+                # pre-date v0.29.x bridges.json expansion.
+                live = _enrich_via_label_store(t.to_address, t.chain)
+                if live is not None:
+                    role = live[0]
+                    row_class = ""
+                    category = live[2]
+                else:
+                    role = "Unlabeled (under investigation)"
+                    row_class = ""
+                    category = "unlabeled"
+
             type_str = "Contract" if t.counterparty.is_contract else "EOA"
             notes_parts = []
             if cp_label:
                 notes_parts.append(f"Category: {cp_label.category.value}")
                 if cp_label.notes:
                     notes_parts.append(cp_label.notes)
+            elif burn_label:
+                notes_parts.append("Canonical burn address")
+            elif category != "unlabeled":
+                # Came from live LabelStore — already populated notes above
+                pass
             notes = " · ".join(notes_parts) or "—"
+
+            # Aggregate per-address signal for the filter step below.
+            key = _ck(t.to_address)
+            agg = addr_aggregates.setdefault(
+                key, {"usd_in": Decimal("0"), "min_hop": 999, "category": category}
+            )
+            try:
+                if t.usd_value_at_tx is not None:
+                    agg["usd_in"] = agg["usd_in"] + Decimal(t.usd_value_at_tx)
+            except Exception:  # noqa: BLE001
+                pass
+            hop = getattr(t, "hop_depth", None)
+            if isinstance(hop, int) and hop < agg["min_hop"]:
+                agg["min_hop"] = hop
+            # First-seen wins for category — labeled rows are not
+            # overwritten by later unlabeled hits.
+            if agg["category"] == "unlabeled" and category != "unlabeled":
+                agg["category"] = category
+
             _add(t.to_address, role, type_str, notes, row_class, chain=t.chain)
 
-    # Sort: victim, perpetrators, then everyone else
-    def _sort_key(w: dict[str, Any]) -> tuple[int, str]:
-        if "victim" in w["row_class"]: return (0, w["address"])
-        if "perp" in w["row_class"]: return (1, w["address"])
-        return (2, w["address"])
+    # v0.30.0 (F6.3): noise-filter unlabeled rows.
+    #
+    # Always-keep set: victim + everything tagged with a real category
+    # (perpetrator, current_holder, bridge, exchange, mixer,
+    # defi_protocol, burn).
+    # Unlabeled rows survive only if they meet ONE of:
+    #   - hop_depth ≤ 1 (direct counterparty of the victim)
+    #   - aggregate USD inflow ≥ floor
+    # The remainder collapse into a single truncation pointer row.
 
-    return sorted(seen.values(), key=_sort_key)
+    def _is_high_signal(addr_key: str) -> bool:
+        agg = addr_aggregates.get(addr_key)
+        if agg is None:
+            return True  # the victim row has no aggregate; keep
+        if agg["category"] != "unlabeled":
+            return True
+        if agg["min_hop"] <= _SECTION_5_HOP_DEPTH_FLOOR:
+            return True
+        if agg["usd_in"] >= _SECTION_5_USD_INCLUSION_FLOOR_DEFAULT:
+            return True
+        return False
+
+    filtered = {k: v for k, v in seen.items() if _is_high_signal(k)}
+    dropped = len(seen) - len(filtered)
+
+    # Hard cap unlabeled rows in the filtered set.
+    unlabeled_keys = [
+        k for k, v in filtered.items()
+        if v["role"] == "Unlabeled (under investigation)"
+    ]
+    if len(unlabeled_keys) > _SECTION_5_UNLABELED_HARD_CAP:
+        # Keep unlabeled rows ordered by USD-in DESC so the highest-
+        # volume noise is what survives the cap.
+        sorted_unlabeled = sorted(
+            unlabeled_keys,
+            key=lambda k: addr_aggregates.get(k, {}).get("usd_in", Decimal("0")),
+            reverse=True,
+        )
+        for k in sorted_unlabeled[_SECTION_5_UNLABELED_HARD_CAP:]:
+            filtered.pop(k, None)
+        dropped += len(sorted_unlabeled) - _SECTION_5_UNLABELED_HARD_CAP
+
+    # Sort: victim, perpetrators, labeled-by-category, then unlabeled
+    def _sort_key(w: dict[str, Any]) -> tuple[int, str]:
+        if "victim" in w["row_class"]:
+            return (0, w["address"])
+        if "perp" in w["row_class"]:
+            return (1, w["address"])
+        if w["role"] != "Unlabeled (under investigation)":
+            return (2, w["address"])  # labeled rows next
+        return (3, w["address"])  # unlabeled rows last
+
+    result = sorted(filtered.values(), key=_sort_key)
+
+    # Append a truncation-pointer row if we dropped anything.
+    if dropped > 0:
+        result.append({
+            "address": "—",
+            "role": f"+ {dropped} additional counterparties not surfaced here",
+            "type": "—",
+            "notes": (
+                "These are low-signal addresses (hop > 1 from the victim "
+                "AND aggregate inflow < $100). The full counterparty set "
+                "is exported to investigator_findings.csv accompanying "
+                "this package; Section 5 is intentionally filtered to "
+                "high-signal rows so the investigator can focus."
+            ),
+            "row_class": "small",
+            "explorer_url": None,
+        })
+
+    return result
 
 
 def _fmt_decimal(d: Decimal | None) -> str:

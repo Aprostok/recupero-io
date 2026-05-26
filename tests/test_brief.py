@@ -270,7 +270,14 @@ class TestGenerateBriefs:
         # Content sanity — Midas-targeted
         maple = bundle.maple_html
         assert "Ibrahim Zigha" in maple
-        assert "snowkombat@gmail.com" in maple
+        # v0.30.0 (F2 — privacy contract): the issuer freeze letter
+        # MUST NOT leak victim PII (home address / personal email /
+        # phone) to a compliance team. Pre-v0.30.0 this assertion
+        # was the opposite — it pinned the leak. The LE handoff
+        # package remains the appropriate vessel for victim PII.
+        assert "snowkombat@gmail.com" not in maple, (
+            "Victim email leaked to issuer freeze letter — F2 regression."
+        )
         assert PERP1 in maple
         assert PERP2 in maple   # current holder shown
         assert "msyrupUSDp" in maple

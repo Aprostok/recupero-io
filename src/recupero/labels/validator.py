@@ -38,9 +38,12 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
         "wrapping": "list",
         "required": ["address", "name", "category"],
         # v0.29.1 (label-DB sweep): explicit chain + provenance markers.
+        # v0.30.0: `_v030_chain_corrected` records the audit-driven
+        # correction for the Tornado-Cash-BSC mislabel.
         "optional": [
             "source", "confidence", "notes", "added_at",
             "chain", "_v029_1_chain_backfill", "last_verified_at",
+            "_v030_chain_corrected",
         ],
     },
     "ransomware.json": {

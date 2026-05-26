@@ -84,8 +84,8 @@
     "confidence": "high",
     "notes": "OFAC SANCTIONED — BSC deployment",
     "added_at": "2026-05-17T00:00:00Z",
-    "chain": "ethereum",
-    "_v029_1_chain_backfill": true
+    "chain": "bsc",
+    "_v030_chain_corrected": "v0.29.1 sweep stamped this entry chain='ethereum' from the row's missing chain field. Audit (V029_AUDIT_FINDINGS Tier-1) caught the contradiction with the row's name+notes ('BSC deployment'). Corrected to bsc."
   },
   {
     "address": "0xfac583c0cf07ea434052c49115a4682172ab6b4f",

@@ -272,6 +272,39 @@ _FBI_VAU_THRESHOLD_USD = Decimal("100000")    # >= $100k loss → recommend FBI 
 _SECRET_SERVICE_THRESHOLD_USD = Decimal("1000000")  # >= $1M → add Secret Service ECTF
 
 
+def _parse_citizenship_country_state(
+    raw: str | None,
+) -> tuple[str | None, str | None]:
+    """Parse a free-form citizenship/country string into (country, state).
+
+    Intake captures `citizenship` as a single free-form field like:
+      "USA (Texas)"          → ("USA", "Texas")
+      "United States (CA)"   → ("United States", "CA")
+      "Germany"              → ("Germany", None)
+      "USA"                  → ("USA", None)
+
+    Pre-v0.30.0 the LE-routing logic compared `citizenship` directly
+    against a fixed set of US synonyms — so "USA (Texas)" was
+    classified as non-US and a US victim got the international-fallback
+    routing with an empty contact column. This helper closes the gap.
+    """
+    if not isinstance(raw, str):
+        return (None, None)
+    text = raw.strip()
+    if not text:
+        return (None, None)
+    # Pull a parenthesized suffix as state.
+    state: str | None = None
+    if "(" in text and text.endswith(")"):
+        head, _, tail = text.rpartition("(")
+        candidate_state = tail[:-1].strip()
+        head = head.strip()
+        if candidate_state and head:
+            text = head
+            state = candidate_state
+    return (text, state)
+
+
 def recommend_le_routes(
     *,
     state: str | None,
@@ -283,13 +316,31 @@ def recommend_le_routes(
 
     All inputs are optional — the function returns a sensible plan
     even with no victim location data + no loss amount.
+
+    v0.30.0 (F3/F4 — brief read-through): country is now parsed via
+    `_parse_citizenship_country_state` so a victim record with
+    `citizenship="USA (Texas)"` and `country=None`, `state=None`
+    correctly resolves to US + Texas — pre-v0.30.0 the literal-string
+    compare misclassified US victims as international and emitted an
+    empty-contact-column INTERNATIONAL_FALLBACK route.
     """
     plan = LERoutingPlan()
 
+    parsed_country, parsed_state = _parse_citizenship_country_state(country)
+    effective_country = parsed_country or country
+    # `state` arg always wins over a parenthesized state extracted from
+    # the country string — operator-set fields are more authoritative
+    # than parsed free-form input.
+    if not state and parsed_state:
+        state = parsed_state
+
     # Country normalization. Default to US (most cases). Anything that
     # doesn't look like the US gets the international fallback.
-    country_norm = (country or "US").strip().upper()
-    is_us = country_norm in ("US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA")
+    country_norm = (effective_country or "US").strip().upper()
+    is_us = country_norm in (
+        "US", "USA", "U.S.", "U.S.A.",
+        "UNITED STATES", "UNITED STATES OF AMERICA", "AMERICA",
+    )
 
     if not is_us:
         plan.primary_routes.append(INTERNATIONAL_FALLBACK)

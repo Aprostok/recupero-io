@@ -568,15 +568,20 @@ def test_perpetrator_holdings_reconcile_tolerance_at_1pct(
 
 
 def test_zigha_ground_truth_fixture_has_documented_address_count() -> None:
-    """Finding #10: the fixture lists 3 of 7 known Zigha
-    destinations. As bridge-following fixes land in v0.28 and the
-    remaining 4 (ZIGHA-ETH-26D20f, -37fc5f, -c1ee32, -3e2E66af)
-    resolve to full hex, the operator must update the fixture.
-    Pin the expected count here so a silent edit that DROPS an
-    address is caught.
+    """Finding #10: the fixture lists confirmed Zigha destinations.
+    As more (ZIGHA-ETH-26D20f, -37fc5f, -c1ee32) resolve to full
+    hex, the operator must update the fixture. Pin the expected
+    count here so a silent edit that DROPS an address is caught.
 
-    When v0.28+ adds more addresses, bump the constant. The fail
-    message tells the next operator what to do.
+    History:
+      * v0.27.2 shipped with 3 addresses (Arbitrum hub + 2 dormant
+        DAI).
+      * v0.28.4 added the 4th address (Midas mSyrupUSDp at
+        0x3e2E66af967075120fa8bE27C659d0803DfF4436) resolved from
+        a multi-file test-fixture cross-reference. This is the
+        only Zigha destination with a freeze pathway.
+      * 3 more (ZIGHA-ETH-26D20f, -37fc5f, -c1ee32) remain unresolved
+        — full hex requires the CFI PDF + Etherscan manual lookup.
     """
     fixture_path = (
         Path(__file__).parent / "fixtures" / "zigha_ground_truth.json"
@@ -584,12 +589,33 @@ def test_zigha_ground_truth_fixture_has_documented_address_count() -> None:
     payload = json.loads(fixture_path.read_text(encoding="utf-8"))
     expected = payload.get("expected_destinations") or []
     # Pin the count. Bump this when more Zigha addresses resolve.
-    PINNED_COUNT = 3
+    PINNED_COUNT = 4
     assert len(expected) >= PINNED_COUNT, (
         f"zigha_ground_truth.json has {len(expected)} expected "
         f"destinations; pin requires at least {PINNED_COUNT}. If "
         f"you intentionally removed one, bump PINNED_COUNT down "
         f"with a comment explaining why."
+    )
+
+
+def test_zigha_ground_truth_contains_midas_msyrup_destination() -> None:
+    """v0.28.4 addition: the Midas mSyrupUSDp address is the ONLY
+    Zigha destination with a freeze pathway. If a future edit
+    accidentally drops it, the only-actionable-freeze-target on
+    the case disappears — INVARIANT B would catch the omission at
+    validate time, but pin it directly here too."""
+    fixture_path = (
+        Path(__file__).parent / "fixtures" / "zigha_ground_truth.json"
+    )
+    payload = json.loads(fixture_path.read_text(encoding="utf-8"))
+    expected = payload.get("expected_destinations") or []
+    midas_addr = "0x3e2e66af967075120fa8be27c659d0803dff4436"  # lowercase
+    addrs = [e.get("address", "").lower() for e in expected]
+    assert midas_addr in addrs, (
+        "Zigha ground-truth fixture missing the Midas mSyrupUSDp "
+        f"destination ({midas_addr}). This is the only freezable "
+        "position in the Zigha case — dropping it removes the "
+        "only actionable freeze target."
     )
 
 

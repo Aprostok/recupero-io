@@ -520,7 +520,13 @@ def test_zigha_ground_truth_fixture_runs_through_validator(
         case_dir, freeze_brief={"DESTINATIONS": []},
     )
     crits = [v for v in violations if v.severity == "critical"]
-    assert len(crits) == 3, (
-        f"expected 3 critical violations from the 3-address Zigha "
-        f"fixture; got {len(crits)}: {[v.detail for v in crits]}"
+    # v0.28.4: fixture grew from 3 to 4 addresses (added Midas
+    # mSyrupUSDp 0x3e2E66af resolved from PERP2 test fixture cross-
+    # reference). One critical per expected address against an
+    # empty brief.
+    EXPECTED_COUNT = 4
+    assert len(crits) == EXPECTED_COUNT, (
+        f"expected {EXPECTED_COUNT} critical violations from the "
+        f"{EXPECTED_COUNT}-address Zigha fixture; got {len(crits)}: "
+        f"{[v.detail[:80] for v in crits]}"
     )

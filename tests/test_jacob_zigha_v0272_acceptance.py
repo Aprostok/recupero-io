@@ -68,6 +68,11 @@ from recupero.validators.output_integrity import validate_case_output
 ZIGHA_ARB_HUB = "0xf4be227b268e191b79097daad0acccd9a7a7fad2"
 ZIGHA_ETH_DORMANT_DAI_1 = "0x3dafc6a860334d4feb0467a3d58c3687e9e921b6"
 ZIGHA_ETH_DORMANT_DAI_2 = "0x415d8d075cacb5a61ae854a8e5ea53df3a76f688"
+# v0.28.4: added the Midas mSyrupUSDp destination (the only Zigha
+# position with a freeze pathway — Midas can freeze the wrapped
+# token at the issuer level). Resolved from PERP2 test-fixture
+# cross-reference; multi-file evidence + the journal.txt note.
+ZIGHA_MIDAS_MSYRUP = "0x3e2e66af967075120fa8be27c659d0803dff4436"
 
 # Synthetic AGRASC-frozen DAI position (from French LE seizure order
 # referenced in Jacob's v0.27.1 review). The address itself is
@@ -134,8 +139,9 @@ def _build_post_v0272_zigha_case(tmp_path: Path) -> Path:
             "issuer": "Circle",
         },
         # DESTINATIONS = the brief's claim of "addresses we identified".
-        # All three confirmed Zigha addresses present — INVARIANT B
-        # passes.
+        # All FOUR confirmed Zigha addresses present (post v0.28.4
+        # which added the Midas mSyrupUSDp address from a multi-
+        # file PERP2 cross-reference) — INVARIANT B passes.
         "DESTINATIONS": [
             {"address": ZIGHA_ARB_HUB, "chain": "arbitrum",
              "role": "consolidation hub", "total_usd": "$3,120,000.00"},
@@ -145,6 +151,9 @@ def _build_post_v0272_zigha_case(tmp_path: Path) -> Path:
             {"address": ZIGHA_ETH_DORMANT_DAI_2, "chain": "ethereum",
              "role": "dormant DAI holder",
              "total_usd": "$6,910,000.00"},
+            {"address": ZIGHA_MIDAS_MSYRUP, "chain": "ethereum",
+             "role": "Midas mSyrupUSDp dormant (FREEZABLE)",
+             "total_usd": "$3,120,000.00"},
         ],
         # FREEZABLE = only the Midas mSyrupUSDp position at the ARB
         # hub. Every holding here has status == "FREEZABLE" — the
@@ -487,15 +496,20 @@ def test_zigha_v0272_pre_fix_shape_would_fail(tmp_path: Path) -> None:
         "the pre-fix BitGo $0-FREEZABLE letter must be flagged; got "
         f"{[v.detail for v in bitgo_letter_crits]}"
     )
-    # INVARIANT B must trip on all three ground-truth addresses.
+    # INVARIANT B must trip on EVERY ground-truth address (the
+    # pre-fix shape has DESTINATIONS=[] so all expected addresses
+    # surface as missing). v0.28.4: fixture grew from 3 to 4
+    # addresses (Midas mSyrupUSDp added).
     b_crits = [
         v for v in result.violations
         if v.check == "destinations_superset_of_ground_truth"
         and v.severity == "critical"
     ]
-    assert len(b_crits) == 3, (
-        f"expected 3 INVARIANT B critical violations on the pre-fix "
-        f"shape; got {len(b_crits)}"
+    EXPECTED_GROUND_TRUTH_COUNT = 4
+    assert len(b_crits) == EXPECTED_GROUND_TRUTH_COUNT, (
+        f"expected {EXPECTED_GROUND_TRUTH_COUNT} INVARIANT B critical "
+        f"violations on the pre-fix shape (one per ground-truth "
+        f"address); got {len(b_crits)}"
     )
     # Overall result.ok must be False.
     assert result.ok is False, (

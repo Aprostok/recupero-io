@@ -467,7 +467,7 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "stargate_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "optimism",
@@ -477,10 +477,10 @@
       "avalanche"
     ],
     "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
-    "notes": "Stargate Router on Arbitrum One — Stargate composer for cross-chain stablecoin swaps via LayerZero. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
+    "notes": "Stargate Router on Arbitrum One — Stargate composer for cross-chain stablecoin swaps via LayerZero.",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
+    "_audit_status": "externally_verified_v0284: Stargate Router Arbitrum — confirmed via WebFetch from stargateprotocol.gitbook.io (v0.28.4 audit)"
   },
   {
     "address": "0xbf22f0f184bCcbeA268dF387a49fF5238dD23E40",
@@ -488,7 +488,7 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "stargate_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "optimism",
@@ -497,10 +497,10 @@
       "base"
     ],
     "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
-    "notes": "Stargate native-ETH router on Arbitrum One. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
+    "notes": "Stargate native-ETH router on Arbitrum One.",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
+    "_audit_status": "externally_verified_v0284: Stargate Router ETH Arbitrum — confirmed via WebFetch from stargateprotocol.gitbook.io (v0.28.4 audit)"
   },
   {
     "address": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A",
@@ -508,7 +508,7 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "optimism",
@@ -518,10 +518,10 @@
       "zksync"
     ],
     "follow_up_url": "https://across.to/explorer",
-    "notes": "Across V3 SpokePool on Arbitrum One. Optimistic relayer model — funds bridged in minutes, settled in ~2h. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
+    "notes": "Across V3 SpokePool on Arbitrum One. Optimistic relayer model — funds bridged in minutes, settled in ~2h.",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
+    "_audit_status": "externally_verified_v0284: Across V3 SpokePool Arbitrum — confirmed via WebFetch from docs.across.to (v0.28.4 audit)"
   },
   {
     "address": "0x0b2402144Bb366A632D14B83F244D2e0e21bD39c",
@@ -529,7 +529,7 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "wormhole_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "solana",
@@ -541,10 +541,10 @@
       "base"
     ],
     "follow_up_url": "https://wormholescan.io",
-    "notes": "Wormhole Token Bridge on Arbitrum One. transferTokens(...) recipient + recipientChain extractable via _decode_wormhole. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
+    "notes": "Wormhole Token Bridge on Arbitrum One. transferTokens(...) recipient + recipientChain extractable via _decode_wormhole.",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
+    "_audit_status": "externally_verified_v0284: Wormhole Token Bridge Arbitrum — confirmed via WebSearch + arbiscan.io (v0.28.4 audit)"
   },
   {
     "address": "0x1a44076050125825900e736c501f859c50fe728c",
@@ -573,7 +573,7 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "layerzero_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "optimism",
@@ -584,10 +584,10 @@
       "base"
     ],
     "follow_up_url": "https://layerzeroscan.com",
-    "notes": "LayerZero V1 Endpoint on Arbitrum. Same address on most EVM chains. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
+    "notes": "LayerZero V1 Endpoint on Arbitrum. Same address on most EVM chains.",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
+    "_audit_status": "externally_verified_v0284: LayerZero V1 Endpoint Arbitrum — confirmed via WebSearch + arbiscan.io (v0.28.4 audit). Same address deploys on Arb/Op/BSC/AVAX."
   },
   {
     "address": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
@@ -637,7 +637,7 @@
     "chain": "arbitrum",
     "category": "bridge",
     "source": "chainlink_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "optimism",
@@ -647,10 +647,10 @@
       "base"
     ],
     "follow_up_url": "https://ccip.chain.link",
-    "notes": "CCIP Router on Arbitrum One. ccipSend() encodes destChainSelector + receiver in calldata. AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs.",
+    "notes": "CCIP Router on Arbitrum One. ccipSend() encodes destChainSelector + receiver in calldata.",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection"
+    "_audit_status": "externally_verified_v0284: Chainlink CCIP Router Arbitrum — confirmed via WebSearch + docs.chain.link/ccip/directory/mainnet (v0.28.4 audit)"
   },
   {
     "_section": "Optimism-side bridges (v0.28.0)"
@@ -701,7 +701,7 @@
     "chain": "optimism",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "arbitrum",
@@ -712,8 +712,7 @@
     "follow_up_url": "https://across.to/explorer",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
-    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
+    "_audit_status": "externally_verified_v0284: Across V3 SpokePool Optimism — confirmed via WebFetch from docs.across.to (v0.28.4 audit)"
   },
   {
     "address": "0x1D68124e65faFC907325e3EDbF8c4d84499DAa8b",
@@ -721,7 +720,7 @@
     "chain": "optimism",
     "category": "bridge",
     "source": "wormhole_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "solana",
@@ -734,8 +733,7 @@
     "follow_up_url": "https://wormholescan.io",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
-    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
+    "_audit_status": "externally_verified_v0284: Wormhole Token Bridge Optimism — confirmed via WebSearch + optimistic.etherscan.io (v0.28.4 audit)"
   },
   {
     "address": "0x1a44076050125825900e736c501f859c50fe728c",
@@ -804,7 +802,7 @@
     "chain": "base",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "arbitrum",
@@ -814,8 +812,7 @@
     "follow_up_url": "https://across.to/explorer",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
-    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
+    "_audit_status": "externally_verified_v0284: Across V3 SpokePool Base — confirmed via WebFetch from docs.across.to (v0.28.4 audit)"
   },
   {
     "address": "0x8d2de8d2f73F1F4cAB472AC9A881C9b123C79627",
@@ -904,7 +901,7 @@
     "chain": "polygon",
     "category": "bridge",
     "source": "across_docs",
-    "confidence": "medium",
+    "confidence": "high",
     "supports_to_chains": [
       "ethereum",
       "arbitrum",
@@ -914,8 +911,7 @@
     "follow_up_url": "https://across.to/explorer",
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
-    "_audit_status": "unverified_v028: no external corroboration in repo; manual operator audit against protocol docs required before relying on this entry for cross-chain handoff detection",
-    "notes": "AUDIT: address not externally verified in repo cross-reference (v0.28.4 audit). Confidence downgraded from high to medium pending operator verification against the protocol's canonical docs."
+    "_audit_status": "externally_verified_v0284: Across V3 SpokePool Polygon — confirmed via WebFetch from docs.across.to (v0.28.4 audit)"
   },
   {
     "address": "0x1a44076050125825900e736c501f859c50fe728c",

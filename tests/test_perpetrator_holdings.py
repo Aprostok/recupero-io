@@ -45,16 +45,20 @@ def test_perpetrator_holdings_zigha_shape_sums_freezable_and_unrecoverable() -> 
     should sum the GROSS at every perpetrator-controlled address,
     not just the attribution share.
 
-    v0.18.0 (round-11 forensic CRIT): the prior version of this test
-    had ``total_usd`` and ``total_suspected_usd`` set to the SAME value
-    per issuer, because the original implementation comment claimed
-    ``total_suspected_usd = FREEZABLE + INVESTIGATE`` and the test
-    pinned that semantics with ``max()``. The actual emit_brief loop
-    routes each holding into EXACTLY ONE bucket (FREEZABLE-status
-    holdings → total_usd, INVESTIGATE-status holdings →
-    total_suspected_usd) — the two are mutually exclusive. Test data
-    now reflects realistic emit_brief output and the assertion uses
-    the corrected sum semantics.
+    History (three revisions):
+      * Pre-v0.18.0: total_suspected_usd was wrongly believed to be
+        FREEZABLE+INVESTIGATE cumulative; max() was used.
+      * v0.18.0: actual emit_brief loop confirmed buckets MUTUALLY
+        EXCLUSIVE. Sum of FREEZABLE + INVESTIGATE was adopted (this
+        was the prior version of this test).
+      * v0.27.2 (Jacob Zigha review, item 1): summing INVESTIGATE
+        inflated the trace-report headline by 21.6× on Zigha because
+        1inch/Uniswap reflective-liquidity contracts ($145M) were
+        tagged INVESTIGATE — not perpetrator-controlled. Reverted to
+        the original docstring semantic: FREEZABLE + UNRECOVERABLE
+        only. INVESTIGATE has its own TOTAL_SUSPECTED_USD field for
+        operator visibility but does NOT count toward the
+        "perpetrator-controlled" headline.
     """
     freezable = [
         # Maple destination — $3.27M FREEZABLE-status holdings.
@@ -64,7 +68,9 @@ def test_perpetrator_holdings_zigha_shape_sums_freezable_and_unrecoverable() -> 
          "total_usd": "$3,270,000.00",
          "total_suspected_usd": "$0.00"},
         # Hub — $655K INVESTIGATE-status (pending KYC verification),
-        # $0 FREEZABLE.
+        # $0 FREEZABLE. Under v0.27.2 this is NO LONGER counted in
+        # perpetrator holdings — INVESTIGATE is a lead, not a
+        # confirmed-controlled position.
         {"issuer": "(unknown)", "token": "DAI",
          "total_usd": "$0.00",
          "total_suspected_usd": "$655,000.00"},
@@ -79,12 +85,14 @@ def test_perpetrator_holdings_zigha_shape_sums_freezable_and_unrecoverable() -> 
          "reason": "Dormant"},
     ]
     total = _compute_perpetrator_holdings(freezable, unrecoverable)
-    # Expected = $3.27M (Maple FREEZABLE) + $655K (Hub INVESTIGATE)
-    #           + $10.08M + $6.91M + $1.14M (Unrecoverable)
-    #         = $22,055,000 exactly.
-    assert total == Decimal("22055000"), (
-        f"Zigha-shape headline should be $22.055M (3.27M FREEZABLE + "
-        f"655K INVESTIGATE + 18.13M Unrecoverable), got {total}"
+    # v0.27.2: $3.27M (Maple FREEZABLE) + $18.13M Unrecoverable
+    #         = $21,400,000. The $655K Hub INVESTIGATE is dropped
+    # because INVESTIGATE-tagged positions are not confirmed
+    # perpetrator-controlled.
+    assert total == Decimal("21400000"), (
+        f"Zigha-shape headline should be $21.4M (3.27M FREEZABLE + "
+        f"18.13M Unrecoverable; INVESTIGATE excluded per v0.27.2), "
+        f"got {total}"
     )
 
 
@@ -103,23 +111,29 @@ def test_perpetrator_holdings_chen_shape_matches_attribution() -> None:
     assert total == Decimal("50000.00")
 
 
-def test_perpetrator_holdings_sums_both_buckets_when_mixed() -> None:
-    """v0.18.0 (round-11 forensic CRIT): when an issuer has BOTH
+def test_perpetrator_holdings_mixed_bucket_issuer_counts_freezable_only() -> None:
+    """v0.27.2 (Jacob Zigha review, item 1): when an issuer has both
     FREEZABLE and INVESTIGATE holdings, the perpetrator-holdings
-    total must SUM them, not take max(). Pre-v0.18.0 the page-1
-    headline understated perpetrator exposure by the INVESTIGATE
-    bucket whenever both buckets were non-empty — typically 20-40%
-    too low on multi-bucket issuers."""
+    headline counts ONLY the FREEZABLE bucket. INVESTIGATE is a lead
+    — worth asking about, not confirmed-controlled.
+
+    History: v0.18.0 changed this from max() to sum() believing
+    INVESTIGATE was perpetrator-controlled-but-needs-KYC. Jacob's
+    v0.27.1 Zigha review showed that this assumption breaks when
+    the INVESTIGATE bucket includes smart-contract reflective
+    liquidity ($145M on Zigha, NOT perpetrator-controlled) — the
+    trace report headline ballooned to 21.6× the real number. The
+    rule now is: only confirmed FREEZABLE + UNRECOVERABLE count.
+    """
     freezable = [
-        # An issuer with BOTH FREEZABLE and INVESTIGATE positions.
-        # Pre-v0.18.0 max() would report $500K; correct answer is $700K.
         {"issuer": "Circle", "token": "USDC",
          "total_usd": "$500,000.00",
-         "total_suspected_usd": "$200,000.00"},
+         "total_suspected_usd": "$200,000.00"},  # excluded post-v0.27.2
     ]
     total = _compute_perpetrator_holdings(freezable, [])
-    assert total == Decimal("700000.00"), (
-        f"Mixed-bucket issuer must sum FREEZABLE + INVESTIGATE, got {total}"
+    assert total == Decimal("500000.00"), (
+        f"Mixed-bucket issuer counts FREEZABLE only post-v0.27.2; "
+        f"got {total}"
     )
 
 
@@ -128,28 +142,29 @@ def test_perpetrator_holdings_empty_returns_zero() -> None:
     assert _compute_perpetrator_holdings([], []) == Decimal("0")
 
 
-def test_perpetrator_holdings_sums_freezable_and_investigate_buckets() -> None:
-    """v0.18.0 (round-11 forensic CRIT, renamed from
-    `uses_max_of_total_and_suspected`): the OLD assumption was that
-    `total_suspected_usd` = FREEZABLE + INVESTIGATE cumulative — so
-    `max(suspected, freezable)` would give the gross perpetrator
-    position. The actual emit_brief loop (emit_brief.py:596-601)
-    routes EACH holding into EXACTLY ONE bucket: FREEZABLE → total_usd,
-    INVESTIGATE → total_suspected_usd. So the gross is the SUM, not
-    the max.
+def test_perpetrator_holdings_excludes_investigate_only_entry() -> None:
+    """v0.27.2 (Jacob Zigha review, item 1): an entry whose entire
+    holding is INVESTIGATE contributes ZERO to perpetrator holdings.
+    This is the BitGo / Threshold Zigha shape: 0x52Aa smart-contract
+    bleed, $46M of INVESTIGATE-tagged 1inch/Uniswap liquidity, no
+    FREEZABLE rows.
 
-    Common shape: address holds $1M, of which $200K is USDC under
-    Circle (FREEZABLE, capability=high) and $800K is other tokens
-    pending KYC verification (INVESTIGATE). Gross perpetrator
-    position = $200K + $800K = $1M.
+    History: this was previously `test_..._sums_freezable_and_
+    investigate_buckets` and pinned a SUM semantic that v0.27.2
+    rejects (see test_perpetrator_holdings_mixed_bucket_issuer_
+    counts_freezable_only for the rationale).
     """
     freezable = [
-        {"issuer": "X", "token": "Y",
-         "total_usd": "$200,000.00",          # FREEZABLE-status
-         "total_suspected_usd": "$800,000.00"},  # INVESTIGATE-status
+        # Pure INVESTIGATE entry — 0x52Aa bleed pattern.
+        {"issuer": "BitGo", "token": "WBTC",
+         "total_usd": "$0.00",
+         "total_suspected_usd": "$46,762,084.33"},
     ]
     total = _compute_perpetrator_holdings(freezable, [])
-    assert total == Decimal("1_000_000.00")
+    assert total == Decimal("0"), (
+        f"INVESTIGATE-only entry must contribute $0 to perpetrator "
+        f"holdings post-v0.27.2; got {total}"
+    )
 
 
 def test_perpetrator_holdings_unrecoverable_amount_extraction() -> None:

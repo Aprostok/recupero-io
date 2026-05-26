@@ -1559,15 +1559,23 @@ def _render_pdf_in_subprocess(
             pass
 
 
-def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:
-    """True if at least one holding in the entry is not UNRECOVERABLE.
+def _has_freezable_holding(freezable_entry: dict[str, Any]) -> bool:
+    """True iff the entry has at least one confirmed-FREEZABLE holding.
 
-    The freeze_brief writer (emit_brief.py) classifies each holding's
-    ``status`` as ``FREEZABLE`` (high-confidence freeze target),
-    ``INVESTIGATE`` (worth asking about), or ``UNRECOVERABLE`` (technically
-    held by issuer's token but not freezable — e.g. funds at a Lido
-    staking contract). If every holding is UNRECOVERABLE we have no
-    business sending the issuer a freeze letter.
+    v0.27.2 (Jacob 0x52Aa bleed fix, item 1 / proposal b): the previous
+    name + semantic (``_has_actionable_holding``: any non-UNRECOVERABLE)
+    let issuers through whose entire freeze ask was INVESTIGATE-only
+    bleed from a smart contract reflecting protocol liquidity. The
+    resulting letters had ``$0`` confirmed FREEZABLE totals and shipped
+    the contradiction "the 0 FREEZABLE addresses ($0 total) are the
+    primary targets" — a credibility-killer Jacob caught on v0.27.1.
+
+    The correct semantic: only emit a freeze letter when at least one
+    address is CONFIRMED holding the issuer's token AND eligible for
+    freeze action. INVESTIGATE-tagged addresses are leads, not asks;
+    UNRECOVERABLE-tagged addresses have no freeze pathway by definition.
+    The letter we send to an issuer must be backed by at least one row
+    we are asking them to act on.
     """
     holdings = freezable_entry.get("holdings") or []
     # Adversarial-input audit: holdings may arrive non-list (dict) or
@@ -1579,9 +1587,16 @@ def _has_actionable_holding(freezable_entry: dict[str, Any]) -> bool:
     for h in holdings:
         if not isinstance(h, dict):
             continue
-        if (h.get("status") or "").upper() != "UNRECOVERABLE":
+        if (h.get("status") or "").upper() == "FREEZABLE":
             return True
     return False
+
+
+# Back-compat alias — there are existing imports / tests that reference
+# the old name. New code should call _has_freezable_holding directly.
+# Remove this alias in a follow-up once we've verified no in-tree
+# callers + any external scripts have caught up.
+_has_actionable_holding = _has_freezable_holding
 
 
 def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:

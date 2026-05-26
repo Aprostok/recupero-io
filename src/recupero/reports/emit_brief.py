@@ -934,32 +934,69 @@ def _compute_perpetrator_holdings(
     addresses) because those aren't perpetrator-controlled in
     any actionable sense.
     """
-    # v0.18.0 (round-11 forensic CRIT): pre-v0.18.0 the comment here
-    # claimed `total_suspected_usd` was FREEZABLE+INVESTIGATE and used
-    # max() to avoid double-counting. The actual data at lines 596-601
-    # proves the buckets are MUTUALLY EXCLUSIVE: total_usd is FREEZABLE-
-    # only, total_suspected_usd is INVESTIGATE-only. The old max()
-    # systematically understated perpetrator holdings whenever an issuer
-    # had both FREEZABLE and INVESTIGATE addresses — e.g., $500K FREEZABLE
-    # + $200K INVESTIGATE was reported as $500K instead of $700K. The
-    # headline page-1 USD number on every multi-bucket issuer was 20-40%
-    # too low.
+    # v0.27.2 (Jacob 0x52Aa bleed fix, item 1): exclude INVESTIGATE
+    # balances from this headline. The trace-report "Perpetrator-
+    # controlled holdings: $X" cover figure shipped to AUSAs and
+    # engagement lawyers needs to be the CONFIRMED number, not
+    # confirmed + leads-pending-KYC. On Zigha v0.27.1 the inclusion
+    # of INVESTIGATE inflated this from ~$3.5M (real) to ~$149M
+    # (real + $145M of 1inch/Uniswap pool reflective liquidity) —
+    # 21.6× wrong, instant credibility collapse for any lawyer or
+    # LE reader doing arithmetic against the freeze_brief detail.
+    #
+    # The original docstring above ("FREEZABLE + UNRECOVERABLE") is
+    # the right semantic. The v0.18.0 commit that added `+ suspected`
+    # was correcting a different bug (the buckets-are-mutually-
+    # exclusive observation) and accidentally also widened scope.
+    # We revert scope to FREEZABLE + UNRECOVERABLE; INVESTIGATE has
+    # its own `TOTAL_SUSPECTED_USD` field for operator visibility.
+    #
+    # NB: total_usd is FREEZABLE-only, total_suspected_usd is
+    # INVESTIGATE-only, total_excluded_usd is UNRECOVERABLE/EXCHANGE/
+    # TRANSIT/UNKNOWN — all mutually exclusive per _extract_freezable's
+    # if/elif/else block.
     total = Decimal("0")
     for f in freezable:
-        suspected = _parse_usd_string(f.get("total_suspected_usd", "0"))
         freezable_amt = _parse_usd_string(f.get("total_usd", "0"))
-        total += freezable_amt + suspected
+        total += freezable_amt
     # Add UNRECOVERABLE addresses: dormant addresses holding
     # non-issuer-freezable assets (DAI, native ETH, etc.) are
     # still perpetrator-controlled. They're "unrecoverable
     # via issuer freeze" but recoverable via seizure if the
-    # perpetrator is identified.
+    # perpetrator is identified. Two sources, mutually de-duped
+    # via the (issuer, address) key so an editorially-flagged
+    # UNRECOVERABLE_ITEMS entry that also appears as a per-issuer
+    # UNRECOVERABLE holding only counts once.
+    seen_unrec_keys: set[tuple[str, str]] = set()
     for u in unrecoverable:
         asset = u.get("asset", "")
         m = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
         if m:
             try:
                 total += Decimal(m.group(1).replace(",", ""))
+                key = (str(u.get("issuer", "")), str(u.get("address", "")))
+                if key != ("", ""):
+                    seen_unrec_keys.add(key)
+            except Exception:
+                pass
+    # Per-issuer UNRECOVERABLE holdings (Sky DAI etc.) live in
+    # total_excluded_usd by default, but we only want UNRECOVERABLE
+    # specifically — not EXCHANGE/TRANSIT. Iterate per-holding so we
+    # can filter precisely without over-counting EXCLUDED-status
+    # holdings that aren't perpetrator-controlled.
+    for f in freezable:
+        issuer_name = str(f.get("issuer", ""))
+        for h in (f.get("holdings") or []):
+            if not isinstance(h, dict):
+                continue
+            if h.get("status") != "UNRECOVERABLE":
+                continue
+            addr = str(h.get("address", ""))
+            if (issuer_name, addr) in seen_unrec_keys:
+                continue
+            seen_unrec_keys.add((issuer_name, addr))
+            try:
+                total += _parse_usd_string(h.get("usd", "0"))
             except Exception:
                 pass
     return total

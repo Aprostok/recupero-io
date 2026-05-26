@@ -1,0 +1,43 @@
+{
+  "case_id": "ZIGHA-VERIFY",
+  "_curated_by": "Alec Prostok",
+  "_curated_at": "2026-05-26",
+  "_v": 1,
+  "_purpose": "INVARIANT B ground-truth pin for the Zigha case. Source-of-truth for which addresses MUST appear in every Recupero brief generated against the Zigha victim seed (0x0cdC902f...). When this fixture is copied into a case directory as `ground_truth.json`, the output_integrity validator's `destinations_superset_of_ground_truth` check enforces superset coverage. See docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md for the v0.27.1 coverage-gap diagnosis that motivated this fixture.",
+  "_provenance": [
+    "0xF4bE…FAD2: Arbitrum-side consolidation hub. Confirmed in journal.txt + tests/test_brief.py (PERP1 constant). The v0.27.1 worker DID find this address — it's the pre-bridge hop the trace stops at.",
+    "0x3daFC6a8…: Ethereum dormant DAI holder, ~$9.98M. Documented in journal.txt 'Known numbers' + src/recupero/dormant/finder.py docstring + tests/test_v14.py PERP_DORMANT_DAI constant.",
+    "0x415D8D07…: Ethereum dormant DAI holder, ~$6.91M. Same provenance set as 0x3daFC6a8.",
+    "Remaining destinations from the CFI-00265 report (ZIGHA-ETH-26D20f, -37fc5f, -c1ee32, -3e2E66af) are listed by 4-byte prefix in journal.txt but not yet resolved to full hex strings in any committed artifact. Add to expected_destinations as full hex strings become operator-confirmed. INVARIANT B silently passes prefix-only entries (skipped via the EVM-hex regex guard) so this fixture stays usable until the rest are filled in."
+  ],
+  "_known_coverage_gap_v0271": "Per docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md the v0.27.1 worker found 1 of 7 known Zigha destinations (the Arbitrum hub 0xF4bE only). Bridge-following (DeBridge DLN + 1inch on Arbitrum) is the dominant blocker. v0.28+ resolves with bridges.json seeds + bridge_calldata decoders + RECUPERO_CROSS_CHAIN_CONTINUATION=1 default. Once v0.28 ships, running validate_case_output against ZIGHA-VERIFY with this fixture in place must surface zero INVARIANT B violations.",
+  "expected_destinations": [
+    {
+      "address": "0xF4bE227b268e191b79097Daad0AcCcD9a7A7FAD2",
+      "chain": "arbitrum",
+      "role": "Perpetrator consolidation hub on Arbitrum (pre-bridge)",
+      "source": "Zigha CFI-00265 + tests/test_brief.py PERP1",
+      "approx_usd": 18130000,
+      "freeze_capability": "no",
+      "_notes": "The v0.27.1 worker DID find this address. Listed here for completeness so a future regression that loses Arbitrum-side coverage trips INVARIANT B."
+    },
+    {
+      "address": "0x3daFC6a860334d4feB0467a3D58C3687E9E921B6",
+      "chain": "ethereum",
+      "role": "Dormant DAI holder (Ethereum)",
+      "source": "journal.txt 'DAI dormant at 0x3daFC6a8: $9.98M' + tests/test_v14.py PERP_DORMANT_DAI",
+      "approx_usd": 9980000,
+      "freeze_capability": "no",
+      "_notes": "DAI is permissionless — no issuer-level freeze. Subpoena-target candidate per docs/v0.28_subpoena_targets_design.md."
+    },
+    {
+      "address": "0x415D8D075CAcB5A61Ae854A8e5ea53DF3A76F688",
+      "chain": "ethereum",
+      "role": "Dormant DAI holder (Ethereum)",
+      "source": "journal.txt 'DAI dormant at 0x415D8D07: $6.91M' + tests/test_v14.py PERP_DORMANT_DAI_2",
+      "approx_usd": 6910000,
+      "freeze_capability": "no",
+      "_notes": "DAI is permissionless — no issuer-level freeze. Subpoena-target candidate per docs/v0.28_subpoena_targets_design.md."
+    }
+  ]
+}

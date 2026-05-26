@@ -89,6 +89,15 @@ def _build_minimal_good_case(tmp_path: Path) -> Path:
 
     # Issuer-named freeze_request + le_handoff — both reference the
     # Tether compliance email so the filename/content check passes.
+    #
+    # v0.27.2 (Jacob 0x52Aa bleed fix, INVARIANT
+    # issuer_letter_backed_by_freezable_row): the freeze request MUST
+    # contain at least one FREEZABLE-tagged row in a <tbody>. A letter
+    # with no FREEZABLE row is a letter with no ask — pre-fix Zigha
+    # shipped four such letters. The minimal fixture now embeds a
+    # primary-targets table with a single FREEZABLE row so this
+    # validator-level check trips only on actual regressions, not on
+    # the synthetic test baseline.
     freeze_html = (
         "<!DOCTYPE html>\n<html>"
         "<head><title>Compliance Freeze Request to Tether — Case TEST</title></head>"
@@ -96,6 +105,12 @@ def _build_minimal_good_case(tmp_path: Path) -> Path:
         "<h1>Freeze Request — Tether</h1>"
         "<p>To: compliance@tether.to</p>"
         "<p>USDT freeze request. CASE_ID: TEST. Amount: $1,000.00.</p>"
+        "<table class=\"evidence\"><thead><tr><th>Status</th><th>Address</th>"
+        "<th>Amount</th></tr></thead><tbody>"
+        "<tr><td><span class=\"label-pill\">FREEZABLE</span></td>"
+        "<td><a href=\"https://etherscan.io/address/0xaaa\">0xaaa</a></td>"
+        "<td>$1,000.00</td></tr>"
+        "</tbody></table>"
         "</body></html>"
     )
     _write_lf(briefs / "freeze_request_tether_BRIEF-TEST-1.html", freeze_html)
@@ -110,6 +125,13 @@ def _build_minimal_good_case(tmp_path: Path) -> Path:
         "<div><p>USDT theft. The token is issued by Tether. "
         "Total loss: $1,000.00.</p></div>"
         "<h2>2. Asset</h2><p>Tether USDT</p>"
+        "<h2>4.1 Recoverable Positions</h2>"
+        "<table class=\"evidence\"><thead><tr><th>Status</th><th>Address</th>"
+        "<th>Amount</th></tr></thead><tbody>"
+        "<tr><td><span class=\"label-pill\">FREEZABLE</span></td>"
+        "<td><a href=\"https://etherscan.io/address/0xaaa\">0xaaa</a></td>"
+        "<td>$1,000.00</td></tr>"
+        "</tbody></table>"
         "<h2>4.2 ALL_ISSUER_HOLDINGS</h2>"
         "<table><tr><td>Tether</td><td>USDT</td><td>$1,000.00</td>"
         "<td>FREEZABLE</td></tr></table>"

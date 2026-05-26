@@ -351,19 +351,24 @@
     </tr>
   </thead>
   <tbody>
-    {# v0.20.2 (audit-round-3 R3-2): explicit branches per status so
-       UNRECOVERABLE / EXCHANGE / TRANSIT rows are not silently
-       mislabeled as INVESTIGATE. Same fix as le.html.j2 from
-       audit-round-2 #10 — the issuer-facing letter had the bug
-       too: every non-FREEZABLE row rendered with a red INVESTIGATE
-       pill, including UNRECOVERABLE protocol contracts and
-       EXCHANGE deposit addresses that the issuer's compliance
-       team would (correctly) bin as not their problem. The
-       resulting credibility hit on an issuer letter is much
-       worse than the LE one — the issuer can call us out by
-       saying "row 4 isn't a real freeze target, why is it on
-       your INVESTIGATE list?" #}
-    {% for h in issuer_freezable.holdings %}
+    {# v0.27.2 (Jacob 0x52Aa bleed fix, item 1): iterate
+       `freezable_holdings` only — NEVER `holdings`. The latter
+       includes INVESTIGATE-tagged rows (smart-contract reflective
+       liquidity, dormant addresses awaiting KYC verification, etc.)
+       which the issuer's compliance team has no business acting
+       on AND which produce embarrassing ratios on issuer letters
+       where a $246K real freeze target shows up next to a $46M
+       1inch/Uniswap-pool INVESTIGATE row from the same contract.
+       INVESTIGATE rows are operator-internal — they live in
+       brief_editorial.json + investigator_findings.csv.
+
+       v0.20.2 historical note (preserved branches below for
+       defense-in-depth): explicit per-status branches so a future
+       regression that re-introduces non-FREEZABLE rows into this
+       loop renders them with the correct pill rather than silently
+       mislabeling everything INVESTIGATE.
+    #}
+    {% for h in issuer_freezable.freezable_holdings %}
     <tr>
       <td>
         {% if h.status == 'FREEZABLE' %}

@@ -8,7 +8,8 @@ don't cover. The validator covers CATEGORIES of bugs by checking
 structural properties of the rendered output that must hold for
 every case regardless of shape.
 
-27 invariants (Jacob's Part 4.2 starter set + Part 5 audit expansion):
+29+ invariants (Jacob's Part 4.2 starter set + Part 5 audit
+expansion + v0.27.2 0x52Aa bleed fix):
 
   1. Filename/content consistency for issuer-named files (catches
      v0.20.15's freeze_request_midas containing the Circle letter).
@@ -297,6 +298,36 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_orphan_artifacts_on_disk(briefs_dir)),
         ("unrecoverable_total_matches_holdings",
          lambda: _check_unrecoverable_total_matches_holdings(freeze_brief)),
+        # v0.27.2 (Jacob 0x52Aa bleed fix): INVARIANT A.
+        ("freeze_ask_targets_not_investigate_tagged",
+         lambda: _check_freeze_ask_targets_not_investigate_tagged(
+             briefs_dir, freeze_brief,
+         )),
+        # v0.27.2 (Jacob 0x52Aa bleed fix, proposal b): hard rule that
+        # every shipped issuer freeze letter + LE handoff must back the
+        # ask with at least one CONFIRMED FREEZABLE row. Pre-fix
+        # BitGo + Threshold letters shipped on Zigha with "$0 confirmed
+        # FREEZABLE" + "the 0 FREEZABLE addresses are the primary
+        # targets" — internal contradiction. _has_freezable_holding
+        # now filters those out at letter-generation time; this
+        # validator catches a regression at output time.
+        ("issuer_letter_backed_by_freezable_row",
+         lambda: _check_issuer_letter_backed_by_freezable_row(
+             briefs_dir, freeze_brief,
+         )),
+        # v0.27.2 (Jacob 0x52Aa bleed fix): INVARIANT B — when an
+        # operator-curated ground-truth file is present in the case
+        # directory (ground_truth.json), the brief's identified
+        # addresses MUST be a superset of every address in the
+        # ground-truth's expected_destinations list. Catches a
+        # trace-coverage regression on known cases (Zigha v0.27.1
+        # found 1 of 7 known destinations — pre-INVARIANT-B that
+        # shipped silently). Inapplicable (silently no-op) for cases
+        # without a ground_truth.json file — the fixture is opt-in.
+        ("destinations_superset_of_ground_truth",
+         lambda: _check_destinations_superset_of_ground_truth(
+             case_dir, freeze_brief,
+         )),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -2134,6 +2165,417 @@ def _check_unrecoverable_total_matches_holdings(
             "UNRECOVERABLE holdings (Jacob v0.21.x audit shape)."
         ),
     )]
+
+
+# Pattern: a freeze-ask row in a freeze_request_*.html or le_handoff_*.html
+# is structurally identifiable as a freeze-ask target if it sits inside a
+# table marked with the `.evidence` class and renders a status pill with
+# the FREEZABLE label. We extract addresses by looking at <a href="...">
+# inside such rows. The INVESTIGATE-tagged check uses the brief's
+# DESTINATION_NOTES (operator-keyed) and matches by canonical address.
+_FREEZABLE_ROW_RE = re.compile(
+    r'<span[^>]*>FREEZABLE</span>.*?<a[^>]+href="[^"]*?(0x[a-fA-F0-9]{40}|'
+    r'[1-9A-HJ-NP-Za-km-z]{32,44})[^"]*?"',
+    re.DOTALL,
+)
+_INVESTIGATE_NOTE_RE = re.compile(r"\U0001F7E7|🟧")  # orange square emoji
+
+
+def _check_freeze_ask_targets_not_investigate_tagged(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT A (Jacob v0.27.1 Zigha review, item 1):
+
+    No address that appears in any freeze_request_*.html or
+    le_handoff_*.html as a FREEZABLE freeze-ask target may be tagged
+    🟧 INVESTIGATE in the brief's DESTINATION_NOTES.
+
+    Why this exists: on Zigha v0.27.1 the smart contract
+    0x52Aa…e497 (1inch / Uniswap LP reflective liquidity) was
+    correctly tagged INVESTIGATE in the brief's DESTINATION_NOTES,
+    but the freeze_asks generator emitted its full holdings to four
+    issuer entries (Tether $65M, BitGo $46M, Circle $33M, Threshold
+    $163K), the freeze letters then surfaced those rows as primary
+    targets alongside legitimate $245K-$8.9K real freeze asks. The
+    ratio (400:1 — 3,770:1) reads as careless to a compliance
+    reviewer.
+
+    This invariant catches the regression at output time. The
+    template-level fix (issuer_freeze_request.html.j2 line 366 and
+    le.html.j2 line 416 iterating `freezable_holdings` not
+    `holdings`) prevents it at generation time. Belt + suspenders.
+
+    Severity: high. Letters shipping with INVESTIGATE-tagged
+    FREEZABLE rows are credibility-damaging and should gate
+    publication.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    if not briefs_dir.is_dir():
+        return []
+    # Build the INVESTIGATE-tagged canonical-address set from the
+    # brief's DESTINATION_NOTES. Operator notes may carry mixed-case
+    # addresses; canonicalize so the lookup matches the
+    # freeze-letter HTML (which renders the on-chain display form).
+    try:
+        from recupero._common import canonical_address_key as _ck
+    except Exception:  # noqa: BLE001
+        return []
+    dest_notes = freeze_brief.get("DESTINATION_NOTES") or {}
+    if not isinstance(dest_notes, dict):
+        return []
+    investigate_canon: set[str] = set()
+    for addr, note in dest_notes.items():
+        if not isinstance(addr, str) or not isinstance(note, str):
+            continue
+        if _INVESTIGATE_NOTE_RE.search(note):
+            ck = _ck(addr)
+            if ck:
+                investigate_canon.add(ck)
+    if not investigate_canon:
+        return []
+    # Scan every per-issuer freeze letter + LE handoff.
+    violations: list[Violation] = []
+    targets = sorted(briefs_dir.glob("freeze_request_*.html")) + sorted(
+        briefs_dir.glob("le_handoff_*.html")
+    )
+    for path in targets:
+        try:
+            html = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for m in _FREEZABLE_ROW_RE.finditer(html):
+            row_addr = m.group(1)
+            if not row_addr:
+                continue
+            ck = _ck(row_addr)
+            if ck in investigate_canon:
+                violations.append(Violation(
+                    check="freeze_ask_targets_not_investigate_tagged",
+                    severity="high",
+                    file=path.name,
+                    detail=(
+                        f"{path.name}: FREEZABLE row at {row_addr} is "
+                        "🟧 INVESTIGATE in brief.DESTINATION_NOTES. The "
+                        "letter is asking an issuer to act on a lead, not "
+                        "a confirmed target — credibility-damaging on "
+                        "external delivery. See Jacob v0.27.1 Zigha "
+                        "review, issue 1 (0x52Aa bleed)."
+                    ),
+                ))
+    return violations
+
+
+_FREEZE_ASK_TABLE_RE = re.compile(
+    r'<tbody[^>]*>(.*?)</tbody>', re.DOTALL,
+)
+
+
+def _check_issuer_letter_backed_by_freezable_row(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """Hard rule: every shipped freeze_request_*.html (and matching
+    le_handoff_*.html, by issuer) MUST contain at least one
+    FREEZABLE-tagged row in its primary-targets table.
+
+    A letter without a FREEZABLE row is a letter with no ask. Pre-fix
+    Zigha v0.27.1 shipped four such letters (BitGo, BitGo LE,
+    Threshold, Threshold LE) whose entire freeze ask was INVESTIGATE-
+    only bleed from a smart contract. The Threshold LE handoff section
+    6 read verbatim: "The 0 FREEZABLE addresses ($0 total) are the
+    primary targets." Self-contradictory shipping artifact.
+
+    The upstream _has_freezable_holding gate in _deliverables.py
+    prevents such letters from being generated in the first place.
+    This validator is the safety net.
+
+    Severity: critical. A self-contradictory letter is unfileable
+    and signals a generation-stage failure.
+    """
+    if not briefs_dir.is_dir():
+        return []
+    violations: list[Violation] = []
+    for path in sorted(briefs_dir.glob("freeze_request_*.html")):
+        try:
+            html = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        # Search every tbody — the primary-targets table is the first
+        # one in freeze_request_*.html but defensively scan all
+        # tbodies so a template restructure doesn't break this check.
+        has_freezable_row = any(
+            "FREEZABLE" in (m.group(1) or "")
+            for m in _FREEZE_ASK_TABLE_RE.finditer(html)
+        )
+        if not has_freezable_row:
+            violations.append(Violation(
+                check="issuer_letter_backed_by_freezable_row",
+                severity="critical",
+                file=path.name,
+                detail=(
+                    f"{path.name}: no FREEZABLE-tagged row in any table "
+                    "body. The letter has no actionable ask. Either the "
+                    "_has_freezable_holding gate in _deliverables.py "
+                    "regressed OR the template stopped rendering the "
+                    "FREEZABLE pill. Either way the letter is unfileable."
+                ),
+            ))
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT B (v0.27.2) — ground-truth destination superset check.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Recognized canonical-address regex (EVM only — Solana base58 has a
+# separate canonicalization path we don't need here yet). We match
+# both checksummed and lowercase hex.
+_GROUND_TRUTH_ADDR_RE = re.compile(r'^0x[a-fA-F0-9]{40}$')
+
+
+def _canonicalize_for_compare(addr: str) -> str:
+    """Lower-case + strip whitespace. EVM addresses compare
+    case-insensitively (EIP-55 is a checksum, not an identity). For
+    INVARIANT B we want canonical-form equality, so we apply the
+    project's canonical key convention (delegated to
+    recupero._common.canonical_address_key) but fall back to lower()
+    for the local copy so the validator has no import-cycle risk."""
+    try:
+        from recupero._common import canonical_address_key
+        return canonical_address_key(addr)
+    except Exception:
+        return (addr or "").strip().lower()
+
+
+def _extract_brief_addresses(freeze_brief: dict | None) -> set[str]:
+    """Collect every address the brief reports as identified, across
+    DESTINATIONS, FREEZABLE.holdings, PERP_HUB, EXCHANGES,
+    UNRECOVERABLE — anything the worker found. Returned as canonical
+    keys (case-normalized) so the superset check can run a direct
+    set-membership test.
+
+    This is the brief's claim of "addresses we saw" for the
+    INVARIANT B check. Empty set when freeze_brief is None/malformed
+    — the calling check downgrades to a high-severity violation in
+    that case (a brief without a destinations field IS a regression).
+    """
+    if not isinstance(freeze_brief, dict):
+        return set()
+    out: set[str] = set()
+
+    def _add(addr: object) -> None:
+        if not isinstance(addr, str):
+            return
+        c = _canonicalize_for_compare(addr)
+        if c:
+            out.add(c)
+
+    # DESTINATIONS — primary surface (every destination the BFS found).
+    for d in freeze_brief.get("DESTINATIONS") or []:
+        if isinstance(d, dict):
+            _add(d.get("address"))
+
+    # PERP_HUB — consolidation address (single dict or None).
+    perp = freeze_brief.get("PERP_HUB")
+    if isinstance(perp, dict):
+        _add(perp.get("address"))
+
+    # FREEZABLE.holdings — each per-issuer holding has an address.
+    for f in freeze_brief.get("FREEZABLE") or []:
+        if not isinstance(f, dict):
+            continue
+        for h in f.get("holdings") or []:
+            if isinstance(h, dict):
+                _add(h.get("address"))
+
+    # EXCHANGES — off-ramp deposit addresses.
+    for ex in freeze_brief.get("EXCHANGES") or []:
+        if isinstance(ex, dict):
+            _add(ex.get("address"))
+
+    # UNRECOVERABLE — dormant DAI / Sky / native ETH positions live
+    # here with an explicit address.
+    for u in freeze_brief.get("UNRECOVERABLE") or []:
+        if isinstance(u, dict):
+            _add(u.get("address"))
+
+    # ALL_ISSUER_HOLDINGS — Section 4.2 complete inventory may
+    # carry addresses not in DESTINATIONS (e.g. UNRECOVERABLE-only
+    # issuers like Sky/DAI).
+    for e in freeze_brief.get("ALL_ISSUER_HOLDINGS") or []:
+        if isinstance(e, dict):
+            _add(e.get("address"))
+
+    return out
+
+
+def _check_destinations_superset_of_ground_truth(
+    case_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT B (v0.27.2, Jacob 0x52Aa bleed fix): when the case
+    directory contains an operator-curated ``ground_truth.json``
+    file, every address listed in its ``expected_destinations``
+    field MUST appear in the brief's identified-addresses set.
+
+    Catches the Zigha v0.27.1 trace-coverage regression where the
+    worker found 1 of 7 known destinations (cross-chain
+    bridge-following blocker). Pre-INVARIANT-B such regressions
+    shipped silently — the brief listed what it found, and what it
+    didn't find was invisible. With INVARIANT B, a ground-truth
+    fixture pinned to a known case acts as a permanent canary:
+    every release run against that case prints a critical violation
+    listing the missing addresses by name.
+
+    Schema (ground_truth.json):
+      {
+        "case_id": "...",
+        "_curated_by": "...",
+        "_curated_at": "YYYY-MM-DD",
+        "_notes": "...",
+        "expected_destinations": [
+          {"address": "0x...", "chain": "ethereum", "role": "...",
+           "source": "...", "approx_usd": 9980000},
+          ...
+        ]
+      }
+
+    Behavior:
+      * No ground_truth.json file → no-op (returns []). The fixture
+        is opt-in — most operator cases won't have one.
+      * Malformed ground_truth.json (parse error, missing
+        expected_destinations key, expected_destinations not a list)
+        → high-severity violation describing the malformation.
+      * freeze_brief.json absent / empty when ground_truth.json is
+        present → critical violation (we can't verify the superset
+        property without a brief).
+      * Every expected address NOT in the brief's identified set →
+        one critical violation per missing address, with the
+        ground-truth role + source attached for actionable triage.
+
+    Severity rationale: critical. A known-case regression in trace
+    coverage means the next live case may also under-cover, and the
+    shipped artifacts may underclaim what's recoverable. This is the
+    same severity class as a broken freeze-letter generator: the
+    artifact looks fine, but it isn't.
+    """
+    gt_path = case_dir / "ground_truth.json"
+    if not gt_path.is_file():
+        return []
+
+    try:
+        gt = json.loads(gt_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return [Violation(
+            check="destinations_superset_of_ground_truth",
+            severity="high",
+            file="ground_truth.json",
+            detail=(
+                f"ground_truth.json could not be parsed ({type(e).__name__}: "
+                f"{e}). Either the file is malformed or unreadable. "
+                "Fix the file or remove it to disable the invariant."
+            ),
+        )]
+
+    if not isinstance(gt, dict):
+        return [Violation(
+            check="destinations_superset_of_ground_truth",
+            severity="high",
+            file="ground_truth.json",
+            detail=(
+                "ground_truth.json must be a JSON object at the root. "
+                f"Got {type(gt).__name__}. See validator docstring for "
+                "the expected schema."
+            ),
+        )]
+
+    expected = gt.get("expected_destinations")
+    if not isinstance(expected, list):
+        return [Violation(
+            check="destinations_superset_of_ground_truth",
+            severity="high",
+            file="ground_truth.json",
+            detail=(
+                "ground_truth.json must contain an "
+                "`expected_destinations` array. Either the key is "
+                "missing or the value is not a list."
+            ),
+        )]
+
+    # Empty list → invariant is satisfied trivially (no destinations
+    # to verify). Operators may want this as a curated case marker
+    # without enforcement yet.
+    if not expected:
+        return []
+
+    if not isinstance(freeze_brief, dict) or not freeze_brief:
+        return [Violation(
+            check="destinations_superset_of_ground_truth",
+            severity="critical",
+            file="ground_truth.json",
+            detail=(
+                "ground_truth.json is present and lists "
+                f"{len(expected)} expected destinations, but "
+                "freeze_brief.json is missing or empty. Cannot verify "
+                "the destination-superset property without the brief."
+            ),
+        )]
+
+    found_addrs = _extract_brief_addresses(freeze_brief)
+
+    violations: list[Violation] = []
+    for i, item in enumerate(expected):
+        if not isinstance(item, dict):
+            violations.append(Violation(
+                check="destinations_superset_of_ground_truth",
+                severity="high",
+                file="ground_truth.json",
+                detail=(
+                    f"ground_truth.json expected_destinations[{i}] is "
+                    f"not a JSON object (got {type(item).__name__}). "
+                    "Each entry must be {address, chain, role, "
+                    "source, approx_usd}."
+                ),
+            ))
+            continue
+        addr = item.get("address")
+        if not isinstance(addr, str) or not _GROUND_TRUTH_ADDR_RE.match(addr):
+            violations.append(Violation(
+                check="destinations_superset_of_ground_truth",
+                severity="high",
+                file="ground_truth.json",
+                detail=(
+                    f"ground_truth.json expected_destinations[{i}] has "
+                    f"invalid address {addr!r}. EVM addresses must "
+                    "match 0x + 40 hex. Non-EVM ground-truth is not "
+                    "yet supported."
+                ),
+            ))
+            continue
+        canon = _canonicalize_for_compare(addr)
+        if canon not in found_addrs:
+            role = item.get("role") or "(no role specified)"
+            source = item.get("source") or "(no source specified)"
+            approx_usd = item.get("approx_usd")
+            usd_hint = (
+                f" (~${approx_usd:,})" if isinstance(approx_usd, (int, float))
+                else ""
+            )
+            violations.append(Violation(
+                check="destinations_superset_of_ground_truth",
+                severity="critical",
+                file="ground_truth.json",
+                detail=(
+                    f"Expected destination {addr} (role: {role}; "
+                    f"source: {source}{usd_hint}) is NOT in the "
+                    "brief's identified addresses. The trace did not "
+                    "reach this address — likely a coverage regression "
+                    "(cross-chain bridge-following, hop budget, or "
+                    "decoder gap). See "
+                    "docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md for the "
+                    "canonical Zigha investigation pattern."
+                ),
+            ))
+    return violations
 
 
 __all__ = (

@@ -289,7 +289,27 @@ def test_generate_briefs_renders_stablecoin_when_freezable_provided() -> None:
     """End-to-end: the rendered freeze letter mentions USDC (the
     issuer's token) prominently — not just ETH (the original
     asset). This is the regression that this whole fix exists to
-    prevent."""
+    prevent.
+
+    v0.27.2 (Jacob 0x52Aa bleed fix, item 1): the issuer freeze
+    request template now iterates ``freezable_holdings`` only in
+    section 4 — INVESTIGATE-tagged rows (smart-contract reflective
+    liquidity, dormant pre-KYC addresses) are operator-internal and
+    must NOT appear in the issuer-facing letter. Pre-fix Zigha shipped
+    a Circle letter with a $46M 1inch-pool INVESTIGATE row next to a
+    $245K real FREEZABLE row — an internal contradiction Circle's
+    compliance team would have rejected at the first read.
+
+    The pinned contract now:
+      * USDC + FREEZABLE row address present (Circle can act on it)
+      * INVESTIGATE address `0x016606…` ABSENT from the primary
+        targets table (it's an operator-internal lead, not a freeze
+        target)
+      * FREEZABLE badge present; INVESTIGATE badge ABSENT from the
+        primary targets table (summary prose may still reference
+        "investigation" but no INVESTIGATE-status pill renders for
+        an issuer to act on)
+    """
     case = _make_minimal_case()
     victim = VictimInfo(
         name="Jane Doe",
@@ -328,12 +348,27 @@ def test_generate_briefs_renders_stablecoin_when_freezable_provided() -> None:
     assert "USDC" in html
     # Specific freezable amount should appear (the cumulative $7,097.58)
     assert "$7,097.58" in html
-    # Both addresses should appear in section 4
-    assert "0x016606Acc6B0cFE537acc221e3bf1bb44B4049Ee" in html
+    # FREEZABLE address renders in section 4 (this is the actionable
+    # freeze target).
     assert "0x480CD46E6faDe651a0437DeaddA53D5c8e7D846A" in html
-    # Status badges
+    # v0.27.2: INVESTIGATE address must NOT appear in the freeze letter.
+    # Operator-internal leads stay in brief_editorial.json /
+    # investigator_findings.csv — they don't get shipped to issuers.
+    assert "0x016606Acc6B0cFE537acc221e3bf1bb44B4049Ee" not in html, (
+        "v0.27.2 contract: INVESTIGATE-tagged address must not appear "
+        "in the issuer freeze letter (0x52Aa bleed prevention)"
+    )
+    # FREEZABLE status badge renders for the one FREEZABLE row.
     assert "FREEZABLE" in html
-    assert "INVESTIGATE" in html
+    # v0.27.2: INVESTIGATE pill must NOT render in the primary-targets
+    # table. The word "investigation" may appear in prose (totals
+    # summary references "$X under investigation"), but the
+    # status-pill span itself only renders when an INVESTIGATE row
+    # is in freezable_holdings — which is impossible by definition.
+    assert "INVESTIGATE</span>" not in html, (
+        "v0.27.2 contract: INVESTIGATE pill must not render in the "
+        "freeze letter's primary-targets table"
+    )
 
 
 def test_generate_briefs_legacy_path_unchanged() -> None:
@@ -378,9 +413,29 @@ def test_generate_briefs_legacy_path_unchanged() -> None:
 
 def test_le_handoff_renders_recoverable_positions_section() -> None:
     """End-to-end: when issuer_freezable is provided, the LE handoff
-    template renders a new section 4.1 'Recoverable Positions' with
-    every holding listed. Mirror of the freeze-letter test above —
-    this is the law-enforcement-facing variant of the same fix."""
+    template renders section 4.1 'Recoverable Positions' as the
+    per-issuer PRIMARY FREEZE TARGETS table. Mirror of the
+    freeze-letter test above — this is the law-enforcement-facing
+    variant of the same fix.
+
+    v0.27.2 (Jacob 0x52Aa bleed fix, item 1): section 4.1 now
+    iterates ``freezable_holdings`` only — it's a primary-targets
+    table, NOT a complete inventory. The complete inventory across
+    statuses lives in section 4.2 ALL_ISSUER_HOLDINGS (only rendered
+    when ``all_issuers_freezable`` is passed; this test exercises
+    the 4.1-only path).
+
+    The pinned contract:
+      * Section 4.1 header present
+      * USDC + FREEZABLE row address present
+      * INVESTIGATE address `0x016606…` ABSENT from 4.1 (would only
+        appear in 4.2 if all_issuers_freezable were passed)
+      * INVESTIGATE pill ABSENT from 4.1's tbody; the word
+        "INVESTIGATE" can still appear in the prose summary block
+        below 4.1 ("INVESTIGATE positions (N addresses representing
+        $X) require KYC verification...") — that's prose, not a
+        status badge driving an issuer action.
+    """
     case = _make_minimal_case()
     victim = VictimInfo(name="Jane Doe", wallet_address="0x" + "1" * 40,
                         citizenship="USA")
@@ -405,16 +460,37 @@ def test_le_handoff_renders_recoverable_positions_section() -> None:
         )
         le_html = bundle.le_path.read_text(encoding="utf-8")
 
-    # The new section 4.1 should exist
+    # The section 4.1 should exist
     assert "4.1 Recoverable Positions" in le_html
     # Stablecoin symbol shows up (not just the original ETH)
     assert "USDC" in le_html
-    # FREEZABLE / INVESTIGATE status badges both render
+    # FREEZABLE status badge renders for the one FREEZABLE row.
     assert "FREEZABLE" in le_html
-    assert "INVESTIGATE" in le_html
-    # Both addresses appear
-    assert "0x016606Acc6B0cFE537acc221e3bf1bb44B4049Ee" in le_html
+    # FREEZABLE address appears in section 4.1
     assert "0x480CD46E6faDe651a0437DeaddA53D5c8e7D846A" in le_html
+    # v0.27.2: INVESTIGATE address must NOT render in section 4.1.
+    # Without all_issuers_freezable (section 4.2), it should be
+    # nowhere in the LE handoff in this test scenario.
+    assert "0x016606Acc6B0cFE537acc221e3bf1bb44B4049Ee" not in le_html, (
+        "v0.27.2 contract: INVESTIGATE address must not render in "
+        "section 4.1 primary-targets table; complete inventory "
+        "across statuses lives in 4.2 only when all_issuers_freezable "
+        "is supplied"
+    )
+    # v0.27.2: INVESTIGATE status pill must NOT render in 4.1's tbody.
+    # The word "INVESTIGATE" may appear in the prose summary block
+    # below the table (a count of investigate positions), but no
+    # <span>INVESTIGATE</span> badge.
+    import re
+    sec_4_1_re = re.search(
+        r'4\.1 Recoverable Positions.*?</table>',
+        le_html, re.DOTALL,
+    )
+    assert sec_4_1_re is not None, "section 4.1 table not found"
+    sec_4_1_table = sec_4_1_re.group(0)
+    assert "INVESTIGATE</span>" not in sec_4_1_table, (
+        "v0.27.2 contract: no INVESTIGATE pill in section 4.1's tbody"
+    )
     # Section 6 (Recommended Actions) mentions section 4.1 in its ask
     assert "section 4.1" in le_html
     # Freeze capability surfaces

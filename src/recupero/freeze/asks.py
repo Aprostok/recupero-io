@@ -571,6 +571,29 @@ def match_freeze_asks(
             if issuer_entry is None:
                 unmatched.append(holding)
                 continue
+            # v0.27.2 (Jacob 0x52Aa bleed fix, small-item-3): drop
+            # canonical-wrapper pseudo-issuer entries entirely. WETH +
+            # similar wrappers in issuers.json carry the literal
+            # sentinel "(none — canonical wrapper)" as their issuer
+            # name (issuers.json:256) with freeze_capability="no" and
+            # primary_contact=None. They have no real freeze pathway
+            # — holdings reported as WETH should be treated as raw ETH
+            # for seizure (per the issuers.json freeze_notes field).
+            # Pre-fix these landed in freeze_asks.json under the
+            # pseudo-issuer name and surfaced as a confusing extra
+            # entry in the by_issuer breakdown. They still surface in
+            # trace_report.html and investigator_findings.{csv,json}
+            # for chain-of-custody completeness — they're just not a
+            # freeze ask. Step-3 (subpoena-targets artifact family)
+            # will give them a proper home.
+            if (issuer_entry.issuer or "").strip().startswith("(none"):
+                log.info(
+                    "match_freeze_asks: dropping %s/%s holding at %s "
+                    "(issuer='%s' — canonical wrapper / no real issuer)",
+                    candidate.chain, holding.token.symbol,
+                    candidate.address, issuer_entry.issuer,
+                )
+                continue
             # v0.20.2 (audit-round-2 finding #5): DO NOT skip
             # freeze_capability="no" holdings here. The v0.20.1 attempt
             # at this looked clean for freeze_asks.json hygiene but

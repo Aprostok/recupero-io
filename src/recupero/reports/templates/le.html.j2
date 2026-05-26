@@ -405,15 +405,22 @@
     </tr>
   </thead>
   <tbody>
-    {# v0.20.2 (audit-round-2 finding #10): explicit branches per
-       status so UNRECOVERABLE / EXCHANGE / TRANSIT rows are not
-       silently mislabeled as INVESTIGATE. Pre-v0.20.2 the `else`
-       branch swallowed every non-FREEZABLE status into one
-       "INVESTIGATE" pill — including UNRECOVERABLE protocol
-       contracts and EXCHANGE deposit addresses (which the LE
-       reader is expected to route differently from genuine
-       investigative leads). #}
-    {% for h in issuer_freezable.holdings %}
+    {# v0.27.2 (Jacob 0x52Aa bleed fix, item 1): section 4.1 is the
+       per-issuer PRIMARY FREEZE TARGETS table — iterate
+       `freezable_holdings` only. Section 4.2 below (Complete
+       Holdings Inventory) intentionally uses `holdings` to give LE
+       the full picture across all statuses; that section is the
+       right place for INVESTIGATE/UNRECOVERABLE/EXCHANGE rows, not
+       this one. Without this filter a $46M 1inch-pool INVESTIGATE
+       row reads as a primary freeze target alongside a $245K real
+       FREEZABLE row — internal contradiction that ships to AUSA.
+
+       v0.20.2 historical note (preserved per-status branches below
+       as defense-in-depth): so a future regression that re-
+       introduces non-FREEZABLE rows here renders them with the
+       correct pill rather than silently mislabeling everything.
+    #}
+    {% for h in issuer_freezable.freezable_holdings %}
     <tr>
       <td>
         {% if h.status == 'FREEZABLE' %}

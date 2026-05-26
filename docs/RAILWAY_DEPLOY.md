@@ -49,14 +49,23 @@ in [.env.example](../.env.example).
 | `ANTHROPIC_API_KEY`               | https://console.anthropic.com/settings/keys |
 | `ETHERSCAN_API_KEY`               | https://etherscan.io/myapikey |
 | `COINGECKO_API_KEY`               | https://www.coingecko.com/en/api (demo tier OK) |
+| `RECUPERO_TOKEN_PEPPER`           | 32-byte server-side secret used to HMAC portal access tokens before persisting. Generate with `python -c "import secrets; print(secrets.token_hex(32))"`. **REQUIRED post-S-5** — without this, portal token mint raises `RuntimeError` and verify returns `None` for every input. Rotating the value invalidates every existing token; operators re-issue from the CLI. |
 | `RECUPERO_LOG_LEVEL`              | `INFO` (default) or `DEBUG` |
 
-The first six are **required** — the worker refuses to start if any are
-missing or empty. This is deliberate: a worker that's missing
-`ETHERSCAN_API_KEY` would otherwise cheerfully claim every queued row
-and fail it on the trace stage, which is much harder to diagnose than a
-loud "deploy unhealthy" signal. If Railway shows the deploy unhealthy
-right after a redeploy, the worker logs say which variable is missing.
+The first seven are **required** — the worker is not usable if any are
+missing or empty. This is deliberate:
+
+- A worker missing `ETHERSCAN_API_KEY` would cheerfully claim every
+  queued row and fail it on the trace stage, much harder to diagnose
+  than a loud "deploy unhealthy" signal at boot.
+- A worker missing `RECUPERO_TOKEN_PEPPER` silently breaks every
+  victim portal link (S-5 close-out, 2026-05-26: the legacy raw-token
+  fallback was removed so the pepper is load-bearing, not optional).
+  The canonical breadcrumb is `RuntimeError("RECUPERO_TOKEN_PEPPER not
+  configured — cannot mint portal tokens")` in the worker logs.
+
+If Railway shows the deploy unhealthy right after a redeploy, the
+worker logs say which variable is missing.
 
 Optional tunables (defaults are sensible):
 

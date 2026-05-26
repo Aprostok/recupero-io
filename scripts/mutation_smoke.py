@@ -504,6 +504,76 @@ MUTATIONS: list[Mutation] = [
             "test_manifest_missing_required_keys_emits_violation"
         ),
     ),
+    Mutation(
+        # S-5 close-out: generate_token must raise when RECUPERO_TOKEN_PEPPER
+        # is unset, otherwise the worker would silently INSERT a row with
+        # NULL token_hmac that no future verify_token call could match —
+        # a permanent denial-of-service for that victim's portal link, AND
+        # security-equivalent to a leaked token (raw token sent in the email
+        # has no recoverable verifier on the server).
+        #
+        # Removing the raise sends generate_token down the legacy path that
+        # passes None as the HMAC value. The regression test pins this shut.
+        name="S-5: generate_token pepper-required raise removed",
+        file_path=REPO_ROOT / "src/recupero/portal/tokens.py",
+        find=(
+            "        if token_hmac_val is None:\n"
+            "            raise RuntimeError(\n"
+            '                "RECUPERO_TOKEN_PEPPER not configured — cannot mint "\n'
+            '                "portal tokens. Set the env var and restart the worker."\n'
+            "            )"
+        ),
+        replace_with=(
+            "        if token_hmac_val is None:\n"
+            "            pass  # MUTATION: pepper-required raise removed"
+        ),
+        test_target=(
+            "tests/test_portal_tokens.py::"
+            "test_generate_token_raises_when_pepper_unset"
+        ),
+    ),
+    Mutation(
+        # S-5 close-out: verify_token must return None when pepper is unset.
+        # Pre-fix the legacy raw-token fallback would still run, exposing
+        # the byte-comparison timing side-channel. The pepper-check early
+        # return is the load-bearing guard; flipping the check inverted
+        # makes any pepper-less request succeed via fallback (which no
+        # longer exists, so this mutation surfaces as a NameError or a
+        # SELECT against the dropped column — either way the test fails).
+        name="S-5: verify_token pepper-unset short-circuit inverted",
+        file_path=REPO_ROOT / "src/recupero/portal/tokens.py",
+        find=(
+            "    candidate_hmac = compute_token_hmac(token)\n"
+            "    if candidate_hmac is None:"
+        ),
+        replace_with=(
+            "    candidate_hmac = compute_token_hmac(token)\n"
+            "    if candidate_hmac is not None:  # MUTATION: predicate flipped"
+        ),
+        test_target=(
+            "tests/test_portal_tokens.py::"
+            "test_verify_token_returns_none_when_pepper_unset"
+        ),
+    ),
+    Mutation(
+        # S-5 close-out: the verify_token lookup must use the HMAC column,
+        # NOT the raw token column. Flipping `WHERE t.token_hmac = %s` back
+        # to `WHERE t.token = %s` would (a) crash at runtime because the
+        # column was dropped in migration 016, OR (b) silently pass against
+        # an older deploy that hadn't applied 016. The regression test
+        # uses a SQL-snooping mock to catch (b).
+        name="S-5: verify_token SELECT reverts to raw token column",
+        file_path=REPO_ROOT / "src/recupero/portal/tokens.py",
+        find="                 WHERE t.token_hmac = %s",
+        replace_with=(
+            "                 WHERE t.token = %s  "
+            "-- MUTATION: legacy raw-token SELECT"
+        ),
+        test_target=(
+            "tests/test_portal_tokens.py::"
+            "test_verify_token_does_not_query_legacy_token_column"
+        ),
+    ),
 ]
 
 

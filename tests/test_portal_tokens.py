@@ -30,6 +30,18 @@ from recupero.portal.tokens import (
     verify_token,
 )
 
+
+# Module-level: every test in this file gets a synthetic pepper unless
+# it explicitly opts out (via monkeypatch.delenv in the test body). Post-
+# S-5 the pepper is REQUIRED for token mint + verify; running tests
+# without one short-circuits the entire flow. The actual value doesn't
+# matter for correctness — only that compute_token_hmac can produce a
+# digest from it.
+@pytest.fixture(autouse=True)
+def _autouse_test_pepper(monkeypatch):
+    monkeypatch.setenv("RECUPERO_TOKEN_PEPPER", "00" * 32)
+
+
 # ---- public_portal_url ---- #
 
 
@@ -232,9 +244,10 @@ def test_verify_token_rejects_overlong_input() -> None:
 
 
 def test_compute_token_hmac_returns_none_when_pepper_unset(monkeypatch) -> None:
-    """v0.16.12: HMAC computation returns None when the server pepper
-    isn't configured. Callers fall back to legacy raw-token comparison
-    (with a WARNING log) so existing deploys aren't broken."""
+    """HMAC computation returns None when the server pepper isn't
+    configured. Post-S-5: the legacy raw-token fallback has been
+    removed, so a None HMAC means the entire verify/mint path is
+    refused — see the dedicated tests below that pin this contract."""
     from recupero.portal.tokens import compute_token_hmac
     monkeypatch.delenv("RECUPERO_TOKEN_PEPPER", raising=False)
     assert compute_token_hmac("anything") is None
@@ -421,3 +434,99 @@ def test_revoke_token_returns_false_on_unknown_id() -> None:
         result = revoke_token(token_id=uuid4(), dsn="fake-dsn")
 
     assert result is False
+
+
+# ---- S-5 close-out contract: pepper is REQUIRED post-v0.21.2 ---- #
+#
+# The legacy raw-token fallback was removed when the case_tokens.token
+# column dropped (migration 016). Without RECUPERO_TOKEN_PEPPER set,
+# generate_token MUST raise (no usable token can be minted) and
+# verify_token MUST return None for every input (no usable token can
+# be verified). Pinning both halves of the contract here so a future
+# revert that re-introduces the silent fallback is caught immediately.
+
+
+def test_generate_token_raises_when_pepper_unset(monkeypatch) -> None:
+    """S-5 close-out: generate_token raises RuntimeError when the
+    pepper isn't configured. The previous behavior was a silent
+    INSERT with NULL hmac (a row no future verify_token call could
+    ever match — security-equivalent to permanent token leak)."""
+    monkeypatch.delenv("RECUPERO_TOKEN_PEPPER", raising=False)
+    case_id = uuid4()
+    with patch("recupero.portal.tokens.psycopg.connect") as mock_connect:
+        mock_cursor = MagicMock()
+        # case-exists query returns one row — we want to reach the
+        # INSERT path so the pepper guard fires.
+        mock_cursor.fetchone.return_value = {"id": str(case_id)}
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        with pytest.raises(RuntimeError, match="RECUPERO_TOKEN_PEPPER"):
+            generate_token(case_id=case_id, dsn="fake-dsn", ttl_days=90)
+
+
+def test_verify_token_returns_none_when_pepper_unset(monkeypatch, caplog) -> None:
+    """S-5 close-out: verify_token returns None for every well-shaped
+    token when the pepper isn't configured. Pre-fix this triggered
+    the raw-token-equality fallback which leaked byte-comparison
+    timing. Post-fix the function refuses outright + logs a warning
+    so ops sees the misconfiguration."""
+    monkeypatch.delenv("RECUPERO_TOKEN_PEPPER", raising=False)
+    # Use a real-shaped (43-char) token so we get past the length
+    # guards and reach the pepper check.
+    well_shaped_token = secrets.token_urlsafe(32)
+    # DB connection must NOT be reached — if pepper is missing, the
+    # function returns before opening a cursor. Patching to a connect
+    # that would raise on use makes any DB hit visible as a failure.
+    with patch("recupero.portal.tokens.psycopg.connect") as mock_connect:
+        mock_connect.side_effect = AssertionError(
+            "verify_token must not open a DB connection when pepper is unset"
+        )
+        out = verify_token(token=well_shaped_token, dsn="fake-dsn")
+    assert out is None
+    # The operator-visible breadcrumb: a WARNING log naming the env var.
+    assert any(
+        "RECUPERO_TOKEN_PEPPER" in rec.getMessage()
+        for rec in caplog.records
+    ), (
+        "verify_token should log a WARNING naming the missing env var "
+        "so ops can self-diagnose silent rejection."
+    )
+
+
+def test_verify_token_does_not_query_legacy_token_column(monkeypatch) -> None:
+    """S-5 close-out: the raw-token equality SELECT has been removed.
+    Pin that no query references the dropped `token` column. Catches
+    a future revert that re-introduces the legacy SELECT.
+
+    Implementation: snoop every cur.execute call argument. None of
+    them should reference `t.token = %s` or `WHERE token = %s`.
+    """
+    monkeypatch.setenv("RECUPERO_TOKEN_PEPPER", "00" * 32)
+    well_shaped_token = secrets.token_urlsafe(32)
+    executed_sql: list[str] = []
+    with patch("recupero.portal.tokens.psycopg.connect") as mock_connect:
+        mock_cursor = MagicMock()
+        mock_cursor.fetchone.return_value = None  # token not found
+
+        def _capture_execute(sql, params=None):
+            executed_sql.append(str(sql))
+
+        mock_cursor.execute.side_effect = _capture_execute
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+        mock_connect.return_value.__enter__.return_value = mock_conn
+
+        _ = verify_token(token=well_shaped_token, dsn="fake-dsn")
+    # No raw-token equality query, anywhere in the executed SQL.
+    bad_patterns = ("t.token = ", "WHERE token = ", "WHERE t.token =")
+    leaked = [
+        s for s in executed_sql
+        if any(p in s for p in bad_patterns)
+    ]
+    assert not leaked, (
+        f"verify_token executed {len(leaked)} query(ies) referencing "
+        f"the dropped raw-token column: {leaked!r}. The S-5 legacy "
+        "fallback has come back."
+    )

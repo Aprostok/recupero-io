@@ -82,14 +82,18 @@ Output shape (consumed by emit_brief + AI editorial)
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from recupero.models import Case
+from recupero.models import Case, Chain, LabelCategory
+
+if TYPE_CHECKING:
+    from recupero.labels.store import LabelStore
 
 log = logging.getLogger(__name__)
 
@@ -472,9 +476,444 @@ def _looks_round(amount: Decimal) -> bool:
     return int_amount in round_set
 
 
+# ---------------------------------------------------------------- #
+# v0.31.0 — minimum-viable wallet clustering (Gap #4 trace-completeness)
+# ---------------------------------------------------------------- #
+#
+# `compute_address_clusters` is the MVP entry point described in
+# docs/V031_CLUSTERING_DESIGN.md. Heuristics, in order of strength:
+#
+#   H1 — Co-spending (Bitcoin only): two addresses that appeared
+#        together as inputs to the same Bitcoin tx. The textbook
+#        common-input-ownership heuristic. confidence=high.
+#
+#   H2 — Common CEX withdrawal: two EVM addresses that both
+#        withdrew from the same labeled exchange-deposit address
+#        within `_CEX_WITHDRAWAL_WINDOW` (≤ 1h). Same beneficiary
+#        likely owns both. confidence=high.
+#
+#   H3 — Common funding source: two addresses that both received
+#        their first material inflow from the same source within
+#        `_FUNDING_WINDOW` (≤ 1h). Possible same operator.
+#        confidence=medium.
+#
+#   H4 — Bridge round-trip: source-chain address A bridges to
+#        chain X, and another address C on the source chain
+#        receives a corresponding bridge return within
+#        `_BRIDGE_ROUNDTRIP_WINDOW`. Likely same operator.
+#        confidence=medium.
+#
+# Cluster IDs are stable across runs: cluster_<sha256(sorted_addrs)[:8]>.
+#
+# Pairs where EITHER address has an explicit label of category
+# exchange_deposit / exchange_hot_wallet / bridge / mixer /
+# defi_protocol / staking are NEVER clustered — they're shared
+# infrastructure, not operator wallets.
+
+#: Tighter than the v0.9 `_COMMON_WITHDRAWAL_WINDOW` (12h). The spec
+#: scenario is "same person withdraws from Binance to two of his
+#: wallets back-to-back" — minutes, not hours.
+_CEX_WITHDRAWAL_WINDOW = timedelta(hours=1)
+
+#: Funding within 1h: addresses initialized for gas from the same
+#: source in a single session. Wider than this and the signal degrades
+#: into "two unrelated users got funded by the same hot wallet today".
+_FUNDING_WINDOW = timedelta(hours=1)
+
+#: Bridge round-trip window. The full hop chain is unknown to us
+#: (we don't follow funds across chains in this MVP), so we use a
+#: generous window — bridges + chain finality can take tens of
+#: minutes plus the operator's own delay.
+_BRIDGE_ROUNDTRIP_WINDOW = timedelta(hours=6)
+
+#: Label categories that disqualify an address from being clustered
+#: with anything else. These are shared-infrastructure roles where
+#: clustering would conflate unrelated users.
+_NEVER_CLUSTER_CATEGORIES = frozenset({
+    LabelCategory.exchange_deposit,
+    LabelCategory.exchange_hot_wallet,
+    LabelCategory.bridge,
+    LabelCategory.mixer,
+    LabelCategory.defi_protocol,
+    LabelCategory.staking,
+})
+
+
+def _stable_cluster_id(addresses: set[str]) -> str:
+    """Stable cluster id from the sorted address set.
+
+    Two runs over the same case must produce the same cluster IDs
+    so downstream consumers (PDF brief, AI editorial, investigation
+    notes) can refer to "cluster_a1b2c3d4" persistently. SHA-256
+    over the joined-sorted addresses guarantees that property
+    regardless of dict-iteration order or how the union-find tree
+    rooted itself.
+    """
+    if not addresses:
+        return "cluster_empty"
+    joined = "\n".join(sorted(addresses))
+    digest = hashlib.sha256(joined.encode("utf-8")).hexdigest()
+    return f"cluster_{digest[:8]}"
+
+
+def _is_skip_labeled(
+    addr: str, label_store: LabelStore | None, chain: Chain,
+) -> bool:
+    """True if the address has an explicit label that excludes it
+    from clustering (exchange / bridge / mixer / DeFi / staking).
+
+    Returns False when label_store is None or the address has no
+    label — those addresses remain eligible for clustering.
+    """
+    if label_store is None or not addr:
+        return False
+    try:
+        lbl = label_store.lookup(addr, chain=chain)
+    except Exception:  # noqa: BLE001 — never fail clustering on lookup error
+        return False
+    if lbl is None:
+        return False
+    try:
+        return lbl.category in _NEVER_CLUSTER_CATEGORIES
+    except Exception:  # noqa: BLE001
+        return False
+
+
+@dataclass(frozen=True)
+class _PairSignal:
+    """One heuristic firing for a pair of addresses."""
+    heuristic: str         # 'co_spending' | 'cex_withdrawal' | 'common_funding' | 'bridge_round_trip'
+    confidence: str        # 'high' | 'medium'
+    details: str
+
+
+def compute_address_clusters(
+    case: Case,
+    *,
+    label_store: LabelStore | None = None,
+) -> dict[str, str]:
+    """Return ``{address: cluster_id}`` for the MVP clustering pass.
+
+    Pure function: no DB, no network, no filesystem. Single argument
+    is the in-memory ``Case``; ``label_store`` is keyword-only so the
+    caller has to opt in to the explicit-label suppression behaviour.
+
+    Only addresses that end up in a multi-member cluster appear in
+    the returned dict — singletons are omitted. An empty case (no
+    transfers) returns ``{}``.
+
+    The returned dict is stable across runs: the cluster ID is a
+    sha256 of the sorted address set, so two pipeline runs over the
+    same case yield identical IDs.
+
+    Side data (per-cluster heuristic / confidence / member list) is
+    available via :func:`compute_clusters_with_metadata` for callers
+    (e.g. emit_brief) that need richer output.
+    """
+    clusters_meta = compute_clusters_with_metadata(
+        case, label_store=label_store,
+    )
+    out: dict[str, str] = {}
+    for entry in clusters_meta:
+        cid = entry["cluster_id"]
+        for addr in entry["addresses"]:
+            out[addr] = cid
+    return out
+
+
+def compute_clusters_with_metadata(
+    case: Case,
+    *,
+    label_store: LabelStore | None = None,
+) -> list[dict[str, Any]]:
+    """MVP clustering with full metadata (heuristic + confidence + members).
+
+    Returns a list of dicts:
+        {
+          "cluster_id": "cluster_a1b2c3d4",
+          "addresses": ["0x...", "0x..."],
+          "size": 2,
+          "confidence": "high" | "medium",
+          "heuristics": ["co_spending", "cex_withdrawal", ...],
+          "evidence": [{"heuristic": "...", "details": "...",
+                        "confidence": "..."}, ...]
+        }
+
+    Sorted by size desc, then cluster_id for determinism.
+    """
+    if not case.transfers:
+        return []
+
+    from recupero._common import canonical_address_key as _ck
+
+    # All edges collected here, then unioned. Each entry is one
+    # pair-of-addresses + one heuristic firing. Multiple firings on
+    # the same pair are kept so the brief can show ALL the evidence.
+    edges: list[tuple[str, str, _PairSignal]] = []
+
+    # -- H1: Co-spending on Bitcoin ---------------------------- #
+    # Group Bitcoin transfers by tx_hash; multiple distinct
+    # from_address values on the same tx implies common input
+    # ownership. NB: the current Bitcoin adapter only retains the
+    # first input address per tx (see chains/bitcoin/adapter.py),
+    # so this heuristic fires only when the SAME txid is seen
+    # from multiple expansion seeds during the trace. The MVP
+    # version is intentionally narrow — see V031_CLUSTERING_DESIGN
+    # for the upstream model change needed to detect the full input
+    # set.
+    btc_inputs_by_tx: dict[str, set[str]] = defaultdict(set)
+    for t in case.transfers:
+        if t.chain != Chain.bitcoin:
+            continue
+        src = _ck(t.from_address)
+        if src:
+            btc_inputs_by_tx[t.tx_hash].add(src)
+    for tx_hash, inputs in btc_inputs_by_tx.items():
+        if len(inputs) < 2:
+            continue
+        inputs_list = sorted(inputs)
+        for i, a in enumerate(inputs_list):
+            for b in inputs_list[i + 1:]:
+                if _is_skip_labeled(a, label_store, Chain.bitcoin):
+                    continue
+                if _is_skip_labeled(b, label_store, Chain.bitcoin):
+                    continue
+                edges.append((a, b, _PairSignal(
+                    heuristic="co_spending",
+                    confidence="high",
+                    details=(
+                        f"Both addresses appeared as inputs to Bitcoin "
+                        f"tx {tx_hash[:16]}…"
+                    ),
+                )))
+
+    # -- H2: Common CEX-deposit withdrawal (EVM, ≤1h) ---------- #
+    # Group EVM transfers by from_address (the CEX deposit / hot
+    # wallet) where that source is explicitly labeled as an
+    # exchange. For each labeled source, find pairs of recipients
+    # that received within the 1-hour window.
+    cex_outflows: dict[str, list[tuple[str, Any, Chain]]] = defaultdict(list)
+    if label_store is not None:
+        for t in case.transfers:
+            if t.chain == Chain.bitcoin:
+                continue  # H2 is EVM-focused
+            src = _ck(t.from_address)
+            dst = _ck(t.to_address)
+            if not src or not dst:
+                continue
+            try:
+                lbl = label_store.lookup(t.from_address, chain=t.chain)
+            except Exception:  # noqa: BLE001
+                lbl = None
+            if lbl is None:
+                continue
+            if lbl.category not in (
+                LabelCategory.exchange_deposit,
+                LabelCategory.exchange_hot_wallet,
+            ):
+                continue
+            # The receiving address is what we want to cluster; the
+            # source is shared infrastructure (CEX). Skip if the
+            # recipient itself is exchange / bridge / etc.
+            if _is_skip_labeled(dst, label_store, t.chain):
+                continue
+            cex_outflows[src].append((dst, t.block_time, t.chain))
+
+    for src, recipients in cex_outflows.items():
+        if len(recipients) < 2:
+            continue
+        # Pairwise: cluster within window. Suppress noise if the
+        # exchange is dripping to dozens of users (shared infra).
+        if len(recipients) > 20:
+            log.debug(
+                "clustering H2: skipping CEX %s with %d recipients "
+                "(treated as shared infra)", src, len(recipients),
+            )
+            continue
+        for i, (a, ts_a, _) in enumerate(recipients):
+            for b, ts_b, _ in recipients[i + 1:]:
+                if a == b:
+                    continue
+                delta = abs((ts_a - ts_b).total_seconds())
+                if delta > _CEX_WITHDRAWAL_WINDOW.total_seconds():
+                    continue
+                edges.append((a, b, _PairSignal(
+                    heuristic="cex_withdrawal",
+                    confidence="high",
+                    details=(
+                        f"Both withdrew from exchange address "
+                        f"{src[:10]}… within {delta / 60:.1f}min"
+                    ),
+                )))
+
+    # -- H3: Common funding source (≤1h) ----------------------- #
+    # First material inflow per address; pairs sharing a source
+    # within the 1h window cluster (medium confidence).
+    _MIN_FUNDING_USD = Decimal("100")
+    first_inflow: dict[str, tuple[str, Any, Chain]] = {}
+    inflow_partners: dict[str, set[str]] = defaultdict(set)
+    for t in case.transfers:
+        if t.usd_value_at_tx is None or t.usd_value_at_tx < _MIN_FUNDING_USD:
+            continue
+        src = _ck(t.from_address)
+        dst = _ck(t.to_address)
+        if not src or not dst:
+            continue
+        if dst not in first_inflow:
+            first_inflow[dst] = (src, t.block_time, t.chain)
+        inflow_partners[src].add(dst)
+
+    funding_groups: dict[str, list[tuple[str, Any, Chain]]] = defaultdict(list)
+    for addr, (src, ts, chain) in first_inflow.items():
+        # Suppress sources that look like shared infrastructure
+        # (many distinct recipients) OR carry explicit shared-infra
+        # labels. Threshold of 5 matches the legacy clustering pass.
+        if len(inflow_partners[src]) >= 5:
+            continue
+        if _is_skip_labeled(src, label_store, chain):
+            continue
+        if _is_skip_labeled(addr, label_store, chain):
+            continue
+        funding_groups[src].append((addr, ts, chain))
+
+    for src, members in funding_groups.items():
+        if len(members) < 2:
+            continue
+        for i, (a, ts_a, _) in enumerate(members):
+            for b, ts_b, _ in members[i + 1:]:
+                if a == b:
+                    continue
+                delta = abs((ts_a - ts_b).total_seconds())
+                if delta > _FUNDING_WINDOW.total_seconds():
+                    continue
+                edges.append((a, b, _PairSignal(
+                    heuristic="common_funding",
+                    confidence="medium",
+                    details=(
+                        f"Both initially funded by {src[:10]}… within "
+                        f"{delta / 60:.1f}min"
+                    ),
+                )))
+
+    # -- H4: Bridge round-trip --------------------------------- #
+    # An address A sends to a bridge contract on source chain S;
+    # another address C receives from a bridge contract on source
+    # chain S within the round-trip window. The shape suggests
+    # the operator moved funds out and back. We can't follow the
+    # money cross-chain in this MVP, so this is a structural
+    # heuristic — medium confidence.
+    bridge_outs: list[tuple[str, Any, Chain]] = []   # (sender, ts, chain)
+    bridge_ins: list[tuple[str, Any, Chain]] = []    # (recipient, ts, chain)
+    if label_store is not None:
+        for t in case.transfers:
+            src = _ck(t.from_address)
+            dst = _ck(t.to_address)
+            if not src or not dst:
+                continue
+            # Bridge out: t.to_address is a bridge
+            try:
+                to_lbl = label_store.lookup(t.to_address, chain=t.chain)
+            except Exception:  # noqa: BLE001
+                to_lbl = None
+            try:
+                from_lbl = label_store.lookup(t.from_address, chain=t.chain)
+            except Exception:  # noqa: BLE001
+                from_lbl = None
+            if to_lbl is not None and to_lbl.category == LabelCategory.bridge:
+                if not _is_skip_labeled(src, label_store, t.chain):
+                    bridge_outs.append((src, t.block_time, t.chain))
+            if from_lbl is not None and from_lbl.category == LabelCategory.bridge:
+                if not _is_skip_labeled(dst, label_store, t.chain):
+                    bridge_ins.append((dst, t.block_time, t.chain))
+
+    for sender, ts_out, chain_out in bridge_outs:
+        for recipient, ts_in, chain_in in bridge_ins:
+            if sender == recipient:
+                continue  # same address, not a clustering signal
+            if chain_out != chain_in:
+                # We only match round-trips that return on the same
+                # source chain (the spec scenario). Cross-chain
+                # follow is out of scope for MVP.
+                continue
+            # Bridge return must come AFTER the out (operator
+            # bridges, waits, bridges back).
+            if ts_in <= ts_out:
+                continue
+            delta = (ts_in - ts_out).total_seconds()
+            if delta > _BRIDGE_ROUNDTRIP_WINDOW.total_seconds():
+                continue
+            edges.append((sender, recipient, _PairSignal(
+                heuristic="bridge_round_trip",
+                confidence="medium",
+                details=(
+                    f"A bridged out on {chain_out.value}; another address "
+                    f"received from a bridge on {chain_in.value} "
+                    f"{delta / 3600:.1f}h later"
+                ),
+            )))
+
+    # -- Union-find merge --------------------------------------- #
+    if not edges:
+        return []
+
+    uf = _UnionFind()
+    pair_evidence: dict[tuple[str, str], list[_PairSignal]] = defaultdict(list)
+    for a, b, sig in edges:
+        uf.union(a, b)
+        pair_evidence[_edge_key(a, b)].append(sig)
+
+    # Materialize clusters
+    members_by_root: dict[str, set[str]] = defaultdict(set)
+    for a, b, _ in edges:
+        members_by_root[uf.find(a)].add(a)
+        members_by_root[uf.find(a)].add(b)
+
+    out: list[dict[str, Any]] = []
+    for _root, members in members_by_root.items():
+        if len(members) < 2:
+            continue
+        cid = _stable_cluster_id(members)
+        # Collect deduped evidence from every internal edge.
+        evidence: list[dict[str, Any]] = []
+        seen_ev: set[tuple[str, str, str]] = set()
+        heuristics_set: set[str] = set()
+        confidences: set[str] = set()
+        sorted_members = sorted(members)
+        for i, x in enumerate(sorted_members):
+            for y in sorted_members[i + 1:]:
+                for sig in pair_evidence.get(_edge_key(x, y), []):
+                    key = (sig.heuristic, sig.confidence, sig.details)
+                    if key in seen_ev:
+                        continue
+                    seen_ev.add(key)
+                    evidence.append({
+                        "heuristic": sig.heuristic,
+                        "confidence": sig.confidence,
+                        "details": sig.details,
+                    })
+                    heuristics_set.add(sig.heuristic)
+                    confidences.add(sig.confidence)
+        # Cluster confidence: high if ANY high-confidence edge fired;
+        # otherwise medium (we don't emit clusters without evidence).
+        overall_conf = "high" if "high" in confidences else "medium"
+        out.append({
+            "cluster_id": cid,
+            "addresses": sorted_members,
+            "size": len(sorted_members),
+            "confidence": overall_conf,
+            "heuristics": sorted(heuristics_set),
+            "evidence": evidence,
+        })
+
+    out.sort(key=lambda c: (-c["size"], c["cluster_id"]))
+    return out
+
+
 __all__ = (
     "Cluster",
     "ClusterEvidence",
     "cluster_addresses",
     "clusters_to_brief_section",
+    "compute_address_clusters",
+    "compute_clusters_with_metadata",
 )

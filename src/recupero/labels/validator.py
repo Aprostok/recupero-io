@@ -40,10 +40,15 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
         # v0.29.1 (label-DB sweep): explicit chain + provenance markers.
         # v0.30.0: `_v030_chain_corrected` records the audit-driven
         # correction for the Tornado-Cash-BSC mislabel.
+        # v0.31.0: `_v031_addition` + `_audit_status` track the
+        # mixer-expansion batch (RAILGUN multi-chain, Aztec, Privacy
+        # Pools, Nocturne, etc.) — same provenance pattern bridges.json
+        # already uses for its expansion batches.
         "optional": [
             "source", "confidence", "notes", "added_at",
             "chain", "_v029_1_chain_backfill", "last_verified_at",
             "_v030_chain_corrected",
+            "_v031_addition", "_audit_status",
         ],
     },
     "ransomware.json": {

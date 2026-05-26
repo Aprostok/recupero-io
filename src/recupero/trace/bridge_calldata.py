@@ -170,6 +170,80 @@ _1INCH_METHODS = {
     "0xe449022e": ("1inch", "uniswapV3Swap"),
 }
 
+# v0.31.0 — Connext/Everclear Diamond `xcall` family.
+# Source: https://docs.connext.network — Diamond proxy uses standard
+# diamond-cut method routing; the LE-relevant signatures are:
+#   xcall(uint32 destination, address to, address asset, address delegate,
+#         uint256 amount, uint256 slippage, bytes callData)
+#   xcallIntoLocal(...)   — same args, internal liquidity
+#   xreceive(...)         — destination-side receive (not used here)
+# The first uint32 is Connext's "domain ID" — their own chain ID
+# mapping (not EVM chainID, not Wormhole, not LayerZero).
+_CONNEXT_METHODS = {
+    "0x4ff746f6": ("Connext", "xcall"),
+    "0x0c884583": ("Connext", "xcallIntoLocal"),
+}
+
+# v0.31.0 — Axelar Gateway `callContractWithToken` + sendToken.
+# Source: https://docs.axelar.dev — Gateway is the cross-chain entry
+# point; signatures:
+#   callContractWithToken(string destinationChain, string contractAddress,
+#                         bytes payload, string symbol, uint256 amount)
+#   sendToken(string destinationChain, string destinationAddress,
+#             string symbol, uint256 amount)
+# Note: Axelar destinationChain is a STRING (e.g. "Ethereum", "Polygon",
+# "Avalanche") not a uint16. The decoder parses it from the dynamic-
+# bytes section. Same for destinationAddress — string-typed, may be
+# either an EVM 0x-hex or a Cosmos bech32 (Axelar bridges into Cosmos).
+_AXELAR_METHODS = {
+    "0xb5417084": ("Axelar", "callContractWithToken"),
+    "0x26ef699d": ("Axelar", "sendToken"),
+}
+
+# Axelar destinationChain string → canonical chain enum. Conservative
+# subset of Axelar's network list; unknown strings render as the raw
+# value so the brief still surfaces the destination claim.
+_AXELAR_CHAIN_NAMES: dict[str, str] = {
+    "ethereum": "ethereum",
+    "polygon": "polygon",
+    "avalanche": "avalanche",
+    "fantom": "fantom",
+    "moonbeam": "moonbeam",
+    "binance": "bsc",
+    "bsc": "bsc",
+    "arbitrum": "arbitrum",
+    "optimism": "optimism",
+    "base": "base",
+    "linea": "linea",
+    "celo": "celo",
+    "kava": "kava",
+    "filecoin": "filecoin",
+    "osmosis": "cosmos",
+    "axelar": "cosmos",
+}
+
+# v0.31.0 — LiFi Diamond. LiFi is an aggregator — it routes through
+# OTHER bridges (Stargate, Across, Hop, etc.) — so the LiFi calldata
+# wraps an "encoded swap data" struct that names the underlying
+# bridge. The forensically-useful fields are:
+#   * destinationChainId (uint256, the EVM chainID of the destination)
+#   * receiver (address)
+#   * bridge (string, e.g. "stargate", "across", "hop")
+# Common methods (LiFi uses diamond facets — many selectors map here).
+# We catch the most common entry points; unrecognized facets fall back
+# to confidence='low' recognition.
+_LIFI_METHODS = {
+    # swapAndStartBridgeTokensViaXYZ family — facet routes
+    "0xfbb73a4f": ("LiFi", "swapAndStartBridgeTokensViaStargate"),
+    "0x6cf26d72": ("LiFi", "swapAndStartBridgeTokensViaAcross"),
+    "0x42a2b1cd": ("LiFi", "swapAndStartBridgeTokensViaHop"),
+    # startBridgeTokensViaXYZ — no-swap variants
+    "0xed178619": ("LiFi", "startBridgeTokensViaStargate"),
+    "0xb4c20477": ("LiFi", "startBridgeTokensViaAcross"),
+    # GenericSwapFacet — same-chain swap, used as a routing primitive
+    "0x4666fc80": ("LiFi", "swapTokensGeneric"),
+}
+
 # Wormhole chain-ID mapping. Wormhole assigns its own chain IDs
 # (different from EVM chain IDs).
 # Source: https://docs.wormhole.com/wormhole/reference/blockchains
@@ -257,6 +331,14 @@ def decode_bridge_calldata(
         return _decode_debridge(method_id, args_blob, data)
     if "1inch" in bridge_protocol.lower():
         return _decode_1inch(method_id, args_blob, data)
+    # v0.31.0 — full destination extraction for the 3 highest-volume
+    # bridges that were previously recognition-only.
+    if "connext" in bridge_protocol.lower() or "everclear" in bridge_protocol.lower():
+        return _decode_connext(method_id, args_blob, data)
+    if "axelar" in bridge_protocol.lower():
+        return _decode_axelar(method_id, args_blob, data)
+    if "lifi" in bridge_protocol.lower() or "li.fi" in bridge_protocol.lower():
+        return _decode_lifi(method_id, args_blob, data)
     return None
 
 
@@ -634,6 +716,299 @@ def _decode_1inch(
         confidence="low",
         raw_calldata_excerpt=full_data[:400],
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.31.0 — Connext / Axelar / LiFi decoders.
+# Pre-v0.31.0 these were recognition-only (confidence='low' via the seed
+# lookup); the gap was that 27 of the top-30 bridges had no destination
+# extraction. The 3 protocols here are the highest-volume of the 27.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# Connext domain IDs. Source: docs.connext.network/resources/deployments
+# Connext uses its own "domain ID" namespace (not Wormhole, not LayerZero,
+# not EVM chainID). The xcall() first uint32 arg is this domain ID.
+_CONNEXT_DOMAIN_IDS: dict[int, str] = {
+    6648936: "ethereum",
+    1869640809: "optimism",
+    1886350457: "polygon",
+    1634886255: "arbitrum",
+    6450786: "bsc",
+    6778479: "gnosis",
+    1818848877: "linea",
+    1853581795: "base",
+    6398002: "metis",
+}
+
+
+def _decode_connext(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Connext / Everclear xcall calldata.
+
+    Signature (xcall):
+      xcall(uint32 destination, address to, address asset,
+            address delegate, uint256 amount, uint256 slippage, bytes callData)
+
+    Calldata layout (each arg right-padded to 32 bytes):
+      [0..32]    destination domain ID (uint32 right-aligned)
+      [32..64]   to (address right-padded)
+      [64..96]   asset (address)
+      [96..128]  delegate (address)
+      [128..160] amount (uint256)
+      [160..192] slippage (uint256)
+      [192..224] offset to callData bytes
+    """
+    method_entry = _CONNEXT_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    if len(args_blob) < 224 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    try:
+        # destination domain — uint32 right-aligned in slot [0..32]
+        domain_hex = args_blob[0:64]
+        domain_id = int(domain_hex, 16) if domain_hex else 0
+        dest_chain = _CONNEXT_DOMAIN_IDS.get(domain_id)
+
+        # to address — slot [32..64], last 20 bytes
+        recipient_hex = args_blob[32*2 + 24:64*2]
+        dest_address = "0x" + recipient_hex if len(recipient_hex) == 40 else None
+
+        confidence = (
+            "high" if (dest_chain and dest_address)
+            else "medium" if (dest_chain or dest_address)
+            else "low"
+        )
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("connext decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+def _read_solidity_string(args_blob: str, offset_slot_hex_idx: int) -> str | None:
+    """Read a solidity string from a dynamic-bytes encoded arg.
+
+    `offset_slot_hex_idx` is the hex-character index in args_blob where
+    the offset-pointer 32-byte slot lives. Returns the decoded UTF-8
+    string, or None on any parse error.
+    """
+    try:
+        offset_hex = args_blob[offset_slot_hex_idx:offset_slot_hex_idx + 64]
+        offset_bytes = int(offset_hex, 16)
+        offset_hex_idx = offset_bytes * 2
+        if offset_hex_idx + 64 > len(args_blob):
+            return None
+        length_hex = args_blob[offset_hex_idx:offset_hex_idx + 64]
+        length = int(length_hex, 16)
+        if length == 0 or length > 256:  # sanity cap
+            return None
+        data_start = offset_hex_idx + 64
+        data_end = data_start + (length * 2)
+        if data_end > len(args_blob):
+            return None
+        raw_hex = args_blob[data_start:data_end]
+        return bytes.fromhex(raw_hex).decode("utf-8", errors="strict")
+    except (ValueError, IndexError, UnicodeDecodeError):
+        return None
+
+
+def _decode_axelar(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Axelar Gateway callContractWithToken / sendToken calldata.
+
+    Signature (callContractWithToken):
+      callContractWithToken(string destinationChain, string contractAddress,
+                            bytes payload, string symbol, uint256 amount)
+
+    Signature (sendToken):
+      sendToken(string destinationChain, string destinationAddress,
+                string symbol, uint256 amount)
+
+    Both have the destinationChain as the FIRST arg (string-typed
+    dynamic bytes; the first 32-byte slot is an offset pointer).
+    The destinationAddress / contractAddress is the SECOND arg
+    (same shape).
+    """
+    method_entry = _AXELAR_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    if len(args_blob) < 128 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    try:
+        # First slot = offset to destinationChain string
+        chain_str = _read_solidity_string(args_blob, 0)
+        # Second slot = offset to destinationAddress / contractAddress string
+        addr_str = _read_solidity_string(args_blob, 64)
+
+        dest_chain: str | None = None
+        if isinstance(chain_str, str):
+            dest_chain = _AXELAR_CHAIN_NAMES.get(chain_str.strip().lower())
+            if dest_chain is None:
+                # Keep the raw value as a soft signal — operator
+                # follow-up via the Axelar explorer can resolve it.
+                dest_chain = chain_str.strip().lower()
+
+        dest_address: str | None = None
+        if isinstance(addr_str, str):
+            s = addr_str.strip()
+            # EVM 0x-hex address
+            if s.startswith("0x") and len(s) == 42:
+                dest_address = s
+            # Cosmos bech32 — accept verbatim (operator follow-up)
+            elif len(s) > 10 and len(s) < 100:
+                dest_address = s
+
+        confidence = (
+            "high" if (dest_chain and dest_address)
+            else "medium" if (dest_chain or dest_address)
+            else "low"
+        )
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("axelar decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+def _decode_lifi(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode LiFi Diamond bridge calldata.
+
+    LiFi uses a `BridgeData` struct as the first arg of every bridge
+    facet:
+      struct BridgeData {
+        bytes32 transactionId;
+        string bridge;           // "stargate", "across", "hop", ...
+        string integrator;
+        address referrer;
+        address sendingAssetId;
+        address receiver;        // <-- forensically useful
+        uint256 minAmount;
+        uint256 destinationChainId;  // <-- forensically useful (EVM chainID)
+        bool hasSourceSwaps;
+        bool hasDestinationCall;
+      }
+
+    The struct is the first arg; tuple-encoded as one block at offset 0
+    in args_blob. For tuple types with dynamic strings inside, ABI
+    encoding nests offset pointers. The layout in calldata:
+      [0..32]    transactionId
+      [32..64]   offset to bridge string
+      [64..96]   offset to integrator string
+      [96..128]  referrer (address)
+      [128..160] sendingAssetId (address)
+      [160..192] receiver (address)        <-- read this
+      [192..224] minAmount
+      [224..256] destinationChainId        <-- read this
+      [256..288] hasSourceSwaps
+      [288..320] hasDestinationCall
+
+    Note: this is for the "no source swap" facets. The swap-and-bridge
+    variants prepend extra swap-data args; the BridgeData struct is
+    further in. We try to find the receiver/destinationChainId by
+    scanning two candidate offsets.
+    """
+    method_entry = _LIFI_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    if len(args_blob) < 320 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+    candidates = [
+        # (receiver_idx, chain_id_idx) in hex chars
+        (160 * 2, 224 * 2),   # BridgeData at offset 0 (start-bridge-only)
+        (320 * 2, 384 * 2),   # BridgeData after a 1-slot prefix
+        (416 * 2, 480 * 2),   # BridgeData after a 4-slot prefix (swap-and-bridge)
+    ]
+    try:
+        best: tuple[str | None, str | None, str] = (None, None, "low")
+        for recv_idx, chain_idx in candidates:
+            if chain_idx + 64 > len(args_blob):
+                continue
+            chain_hex = args_blob[chain_idx:chain_idx + 64]
+            try:
+                chain_id = int(chain_hex, 16)
+            except ValueError:
+                continue
+            dest_chain = _EVM_CHAIN_BY_ID.get(chain_id)
+            if not dest_chain:
+                continue  # Try next candidate
+
+            recv_hex_full = args_blob[recv_idx:recv_idx + 64]
+            recv_hex = recv_hex_full[-40:]  # last 20 bytes
+            if len(recv_hex) != 40:
+                continue
+            # Reject obviously-zero recipient (sentinel for wrong offset)
+            if recv_hex == "0" * 40:
+                continue
+            dest_address = "0x" + recv_hex
+            return BridgeDecodeResult(
+                destination_chain=dest_chain,
+                destination_address=dest_address,
+                bridge_method=method_name,
+                confidence="high",
+                raw_calldata_excerpt=full_data[:400],
+            )
+
+        # No candidate produced a sane (chain, recipient) pair.
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("lifi decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
 
 
 __all__ = (

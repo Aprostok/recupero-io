@@ -108,6 +108,17 @@ ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "zksync":      "https://explorer.zksync.io/address/",
     "scroll":      "https://scrollscan.com/address/",
     "mantle":      "https://mantlescan.xyz/address/",
+    # v0.31.0: 6 chains promoted from destination-only to full adapter
+    # coverage. Each routes through Etherscan V2 multichain. The
+    # block-explorer URLs here are the chain's CANONICAL public
+    # explorer (not the Etherscan-V2 endpoint), used in brief prose
+    # and address-link rendering. Verified via WebFetch 2026-05-26.
+    "fantom":      "https://ftmscan.com/address/",
+    "celo":        "https://celoscan.io/address/",
+    "gnosis":      "https://gnosisscan.io/address/",
+    "moonbeam":    "https://moonscan.io/address/",
+    "metis":       "https://andromeda-explorer.metis.io/address/",
+    "kava":        "https://kavascan.com/address/",
 }
 
 
@@ -135,6 +146,13 @@ EXPLORER_NAME_BY_CHAIN: dict[str, str] = {
     "zksync":      "zkSync Explorer",
     "scroll":      "ScrollScan",
     "mantle":      "MantleScan",
+    # v0.31.0: promoted destination chains.
+    "fantom":      "FtmScan",
+    "celo":        "Celoscan",
+    "gnosis":      "GnosisScan",
+    "moonbeam":    "Moonscan",
+    "metis":       "Metis Andromeda Explorer",
+    "kava":        "KavaScan",
 }
 
 

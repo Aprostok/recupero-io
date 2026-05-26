@@ -109,9 +109,47 @@ def run_trace(
     label_store = LabelStore.load(config)
     cache_dir = Path(config.storage.data_dir) / "prices_cache"
     price_client = CoinGeckoClient(config, env, cache_dir)
+
+    # v0.31.0 — env-var overrides for the two BFS knobs operators most
+    # often want to tune per-case. Both fall back to the config-yaml
+    # defaults (TraceParams.max_depth=2, dust_threshold_usd=10) so the
+    # behavior is unchanged when the env vars are absent.
+    #   * RECUPERO_TRACE_MAX_HOPS — bump for deep-laundering cases
+    #     (Zigha-shape paths can run 4-6 hops via consolidation hubs).
+    #   * RECUPERO_TRACE_DUST_USD — lower for sub-cent dust-attack
+    #     studies, raise for whale-volume cases where $10 noise gets
+    #     too much attention.
+    # Both are clamped to safe ranges: max_hops ∈ [1, 8], dust ∈ [0, 1e6].
+    cfg_max_depth = config.trace.max_depth
+    try:
+        env_max_hops = int(os.environ.get("RECUPERO_TRACE_MAX_HOPS", str(cfg_max_depth)))
+        cfg_max_depth = max(1, min(8, env_max_hops))
+    except (TypeError, ValueError):
+        log.warning(
+            "RECUPERO_TRACE_MAX_HOPS=%r is not an int; falling back to config (%d)",
+            os.environ.get("RECUPERO_TRACE_MAX_HOPS"), config.trace.max_depth,
+        )
+
+    cfg_dust = config.trace.dust_threshold_usd
+    try:
+        env_dust_raw = os.environ.get("RECUPERO_TRACE_DUST_USD")
+        if env_dust_raw is not None:
+            env_dust = float(env_dust_raw)
+            # Reject NaN / Inf / negative — these would silently break
+            # the filter (NaN comparison is always False, so EVERY
+            # transfer would slip the dust gate).
+            if env_dust != env_dust or env_dust == float("inf") or env_dust < 0:
+                raise ValueError("non-finite or negative")
+            cfg_dust = min(1_000_000.0, env_dust)
+    except (TypeError, ValueError) as exc:
+        log.warning(
+            "RECUPERO_TRACE_DUST_USD=%r rejected (%s); falling back to config ($%s)",
+            os.environ.get("RECUPERO_TRACE_DUST_USD"), exc, config.trace.dust_threshold_usd,
+        )
+
     policy = TracePolicy(
-        max_depth=config.trace.max_depth,
-        dust_threshold_usd=Decimal(str(config.trace.dust_threshold_usd)),
+        max_depth=cfg_max_depth,
+        dust_threshold_usd=Decimal(str(cfg_dust)),
         stop_at_exchange=config.trace.stop_at_exchange,
     )
     # Override stop_at_contract / stop_at_bridge / service_wallet threshold
@@ -497,11 +535,33 @@ def _continue_past_dex_and_bridges(
 
     # Track cross-chain seeds separately because they need their OWN
     # adapter (different chain) — they don't share the source-chain
-    # adapter's wave loop. Shape: list[(chain, address, depth_hint)].
-    cross_chain_seeds: list[tuple[Chain, Address, int]] = []
+    # adapter's wave loop. Shape: list[(chain, address, depth_hint,
+    # source_bridge_block_time)]. The trailing block_time enables the
+    # v0.31.0 cross-chain time-window filter (drop dst transfers
+    # outside [source_bridge_time, +window] hours).
+    cross_chain_seeds: list[tuple[Chain, Address, int, datetime]] = []
     # v0.17.4 (round-10 audit HIGH): dedup cross-chain seeds so the
     # same destination doesn't get traced twice. Keyed on (chain, addr).
     cross_chain_visited: set[tuple[str, str]] = set()
+
+    # v0.31.0 — Configurable cross-chain time window. Default 24h
+    # past the source bridge tx; 0 disables the filter (legacy
+    # behavior). Clamped to [0, 720] hours (30d max — bridge handoffs
+    # can hop in seconds or hours, never months in real cases).
+    try:
+        xchain_window_h = float(os.environ.get(
+            "RECUPERO_CROSSCHAIN_WINDOW_HOURS", "24",
+        ))
+        # Reject NaN / Inf
+        if xchain_window_h != xchain_window_h or xchain_window_h == float("inf"):
+            raise ValueError("non-finite")
+        xchain_window_h = max(0.0, min(720.0, xchain_window_h))
+    except (TypeError, ValueError):
+        log.warning(
+            "RECUPERO_CROSSCHAIN_WINDOW_HOURS=%r rejected; using default 24h",
+            os.environ.get("RECUPERO_CROSSCHAIN_WINDOW_HOURS"),
+        )
+        xchain_window_h = 24.0
 
     for handoff in handoffs:
         # Same-chain destination from decoded calldata.
@@ -556,7 +616,20 @@ def _continue_past_dex_and_bridges(
             if xkey in cross_chain_visited:
                 continue
             cross_chain_visited.add(xkey)
-            cross_chain_seeds.append((dest_chain, decoded_addr, 1))
+            # v0.31.0: stash the source-chain bridge tx block_time so the
+            # post-wave filter can drop dst transfers that fall outside
+            # RECUPERO_CROSSCHAIN_WINDOW_HOURS of the handoff. Parsed
+            # from handoff.block_time_iso ('Z'-terminated UTC ISO). On
+            # any parse failure we fall back to the case incident_time
+            # (forensically safe — case-wide window applies).
+            try:
+                src_iso = handoff.block_time_iso.replace("Z", "+00:00")
+                src_block_time = datetime.fromisoformat(src_iso)
+                if src_block_time.tzinfo is None:
+                    src_block_time = src_block_time.replace(tzinfo=UTC)
+            except (TypeError, ValueError, AttributeError):
+                src_block_time = incident_time
+            cross_chain_seeds.append((dest_chain, decoded_addr, 1, src_block_time))
 
     if not continuation_seeds and not cross_chain_seeds:
         return
@@ -619,14 +692,23 @@ def _continue_past_dex_and_bridges(
                 max_xchain, len(cross_chain_seeds),
             )
             cross_chain_seeds = cross_chain_seeds[:max_xchain]
-        # Group by destination chain.
+        # Group by destination chain. Also retain the per-chain
+        # source-bridge block_times so the post-wave window filter can
+        # gate on the earliest handoff timestamp for the chain (a
+        # single chain might be the destination of multiple bridges
+        # at different times — take the earliest to maximize coverage).
         by_chain: dict[Chain, list[tuple[Address, int]]] = {}
-        for (dst_chain, dst_addr, depth_hint) in cross_chain_seeds:
+        earliest_src_time_by_chain: dict[Chain, datetime] = {}
+        for (dst_chain, dst_addr, depth_hint, src_time) in cross_chain_seeds:
             by_chain.setdefault(dst_chain, []).append((dst_addr, depth_hint))
+            cur = earliest_src_time_by_chain.get(dst_chain)
+            if cur is None or src_time < cur:
+                earliest_src_time_by_chain[dst_chain] = src_time
 
         log.info(
-            "cross-chain BFS continuation: %d seed(s) across %d chain(s)",
-            len(cross_chain_seeds), len(by_chain),
+            "cross-chain BFS continuation: %d seed(s) across %d chain(s) "
+            "(window=%.1fh)",
+            len(cross_chain_seeds), len(by_chain), xchain_window_h,
         )
 
         for dst_chain, dst_seeds in by_chain.items():
@@ -662,8 +744,33 @@ def _continue_past_dex_and_bridges(
                         dst_chain.value, exc,
                     )
                     continue
-                for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
-                    new_transfers.extend(hop_transfers)
+                # v0.31.0: per-chain time-window filter. When
+                # xchain_window_h > 0 we drop destination-chain
+                # transfers that fall outside [src_bridge_time,
+                # src_bridge_time + window]. window=0 disables the
+                # filter (legacy behavior). 'src_bridge_time' is the
+                # earliest handoff into this destination chain so
+                # later seeds with later source times are still
+                # covered.
+                src_time = earliest_src_time_by_chain.get(dst_chain)
+                if xchain_window_h > 0 and src_time is not None:
+                    window_end = src_time + timedelta(hours=xchain_window_h)
+                    dropped = 0
+                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                        for tx in hop_transfers:
+                            if src_time <= tx.block_time <= window_end:
+                                new_transfers.append(tx)
+                            else:
+                                dropped += 1
+                    if dropped:
+                        log.info(
+                            "cross-chain window filter (%.1fh) dropped %d "
+                            "out-of-range transfers on %s",
+                            xchain_window_h, dropped, dst_chain.value,
+                        )
+                else:
+                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                        new_transfers.extend(hop_transfers)
             finally:
                 try:
                     dst_adapter.close()

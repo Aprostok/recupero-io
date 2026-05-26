@@ -291,24 +291,18 @@ def _resolve_asset_description(
 
 
 def _resolve_render_time() -> datetime:
-    """Resolve the wall-clock-or-pinned render timestamp.
+    """v0.30.4: delegate to `_common.resolve_render_time`.
 
-    Honors ``SOURCE_DATE_EPOCH`` for reproducible-builds workflows.
-    On parse failure, falls back to ``datetime.now(UTC)``. v0.20.0
-    Phase C extraction: previously inlined ~15 lines inside
-    generate_briefs() with two ad-hoc imports; clarified into a
-    single pure helper.
+    Pre-v0.30.4 this function existed only here; v0.30.4 moved it to
+    `_common.py` so the 7 other renderers (cluster_handoff, aggregate,
+    ai_editorial, cooperation_dashboard, legal_requests,
+    subpoena_renderer, law_firm_dashboard) can share the implementation
+    and honor SOURCE_DATE_EPOCH for reproducible-builds workflows. This
+    local wrapper preserves the call site for callers that imported
+    `_resolve_render_time` directly.
     """
-    src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
-    if src_epoch:
-        try:
-            return datetime.fromtimestamp(int(src_epoch), tz=UTC)
-        except (ValueError, TypeError):
-            log.warning(
-                "SOURCE_DATE_EPOCH=%r is not a valid integer epoch; "
-                "falling back to wall-clock", src_epoch,
-            )
-    return datetime.now(UTC)
+    from recupero._common import resolve_render_time
+    return resolve_render_time()
 
 
 def _make_brief_id(case_id: str, theft_tx_hash: str) -> str:

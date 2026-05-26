@@ -13,11 +13,15 @@ happen in one place.
 
 from __future__ import annotations
 
+import logging
 import os
 import re as _re_module
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # Pre-compiled DSN-password regex used by `redact_dsn` AND by the
 # `db_connect` exception-message scrubber. Defined here at module top
@@ -498,6 +502,37 @@ def investigator_defaults() -> dict[str, str]:
     }
 
 
+def resolve_render_time() -> datetime:
+    """Resolve the wall-clock-or-pinned render timestamp.
+
+    Honors ``SOURCE_DATE_EPOCH`` for reproducible-builds workflows so
+    re-rendering the same case on the same code produces byte-identical
+    artifacts.
+
+    v0.30.4 (V030_2_CORRECTNESS_AUDIT T2-A): moved from `brief.py` into
+    `_common.py` so every renderer can share the implementation. Pre-
+    v0.30.4 only `brief.py` and `recovery_snapshot.py` honored
+    SOURCE_DATE_EPOCH; 7 other renderers (cluster_handoff, aggregate,
+    ai_editorial, cooperation_dashboard, legal_requests,
+    subpoena_renderer, law_firm_dashboard) used bare
+    ``datetime.now(UTC)`` and broke byte-reproducibility of multi-
+    artifact bundles. All 7 now route here.
+
+    On parse failure (invalid SOURCE_DATE_EPOCH), falls back to
+    wall-clock with a warning.
+    """
+    src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    if src_epoch:
+        try:
+            return datetime.fromtimestamp(int(src_epoch), tz=UTC)
+        except (ValueError, TypeError):
+            log.warning(
+                "SOURCE_DATE_EPOCH=%r is not a valid integer epoch; "
+                "falling back to wall-clock", src_epoch,
+            )
+    return datetime.now(UTC)
+
+
 def is_investigator_configured() -> bool:
     """v0.30.0 (F7): True iff RECUPERO_INVESTIGATOR_NAME is set to a
     non-empty value.
@@ -675,6 +710,9 @@ __all__ = (
     "is_investigator_configured",
     "require_investigator_configured",
     "INVESTIGATOR_NAME_UNCONFIGURED",
+    # v0.30.4 (V030_2_CORRECTNESS_AUDIT T2-A): shared render-time
+    # helper used by 8 renderers for SOURCE_DATE_EPOCH coverage.
+    "resolve_render_time",
     "pooled_dsn",
     "redact_dsn",
     "aggregate_evidence_mode_from_entries",

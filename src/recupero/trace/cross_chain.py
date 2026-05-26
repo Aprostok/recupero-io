@@ -326,8 +326,15 @@ def handoffs_to_brief_section(
             "bridge_protocol": h.bridge_protocol,
             "bridge_address": h.bridge_address,
             "amount_decimal": str(h.amount_decimal),
+            # v0.30.4 (V030_2_CORRECTNESS_AUDIT T2-B): finite-check
+            # before formatting. Pre-v0.30.4 a poisoned amount_usd
+            # (Decimal('NaN'), Decimal('Inf')) would render as literal
+            # `$NaN` or `$Inf` in the LE handoff Section 3 "Cross-chain
+            # handoffs" table.
             "amount_usd": (
-                f"${h.amount_usd:,.2f}" if h.amount_usd is not None else None
+                f"${h.amount_usd:,.2f}"
+                if h.amount_usd is not None and h.amount_usd.is_finite()
+                else None
             ),
             "token_symbol": h.token_symbol,
             "block_time": h.block_time_iso,
@@ -354,9 +361,13 @@ def _build_investigator_note(h: CrossChainHandoff) -> str:
     destination chain for transfers received at this perpetrator's
     address near <block_time>.'
     """
+    # v0.30.4 (V030_2_CORRECTNESS_AUDIT T2-B companion): same finite-
+    # check on the investigator-note prose so it doesn't render
+    # "Bridged $NaN USDT via Stargate" if a NaN-priced bridge transfer
+    # reaches this builder.
     amount_str = (
         f"${h.amount_usd:,.2f} {h.token_symbol}"
-        if h.amount_usd is not None
+        if h.amount_usd is not None and h.amount_usd.is_finite()
         else f"{h.amount_decimal} {h.token_symbol}"
     )
     chains_str = (

@@ -40,6 +40,9 @@ from recupero._common import (
     investigator_defaults as _investigator_defaults,
 )
 from recupero._common import (
+    resolve_render_time,
+)
+from recupero._common import (
     short_addr as _short_addr,
 )
 
@@ -472,7 +475,7 @@ USER_PROMPT_TEMPLATE = FEW_SHOT_PROMPT_TEMPLATE + CASE_PROMPT_TEMPLATE
 
 def _now_utc_iso_seconds() -> str:
     """UTC timestamp, second precision, ISO 8601 with trailing Z."""
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return resolve_render_time().strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # Bidi + invisible control codepoints that let an attacker hide a
@@ -602,7 +605,14 @@ def _summarize_case_for_ai(case: Any, victim: Any, freeze_asks: dict[str, Any], 
         if _ck(t.from_address) == seed_lower:
             to_canon = _ck(t.to_address)
             per_addr_display.setdefault(to_canon, t.to_address)
-            if t.usd_value_at_tx is not None:
+            # v0.30.4 (V030_2_CORRECTNESS_AUDIT T1-B last 3 sites):
+            # finite-only sum. The pre-v0.30.4 unguarded `+=` would
+            # poison `total_drained` AND `per_first_hop_usd` on a
+            # single Decimal('NaN') transfer; the AI prompt then fed
+            # the poisoned values into the LLM context as "total
+            # drained" and "first-hop counterparty totals", producing
+            # editorial narrative referencing $NaN figures.
+            if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
                 total_drained += t.usd_value_at_tx
                 per_first_hop_usd[to_canon] += t.usd_value_at_tx
             if (
@@ -851,7 +861,12 @@ def _enumerate_all_destinations(
         if to_canon == seed_lower:
             continue
         per_addr_display.setdefault(to_canon, to_raw)
-        if t.usd_value_at_tx is not None:
+        # v0.30.4 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum on
+        # per-address received-USD bucket. Without this, a single NaN
+        # transfer poisons the destination's running total, the AI
+        # prompt sees a NaN where a real dollar figure should be, and
+        # the rendered editorial narrative quotes `$NaN` at the AUSA.
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             per_addr_received[to_canon] += t.usd_value_at_tx
         if t.token and t.token.symbol:
             per_addr_tokens[to_canon].add(t.token.symbol)

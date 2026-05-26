@@ -20,6 +20,8 @@ from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
+from recupero._common import resolve_render_time
+
 log = logging.getLogger(__name__)
 
 # Filename-character sanitizer: keep alphanumerics + dash + underscore.
@@ -101,7 +103,7 @@ def render_subpoena_artifacts(
     # Build common Jinja context.
     case_id = str(getattr(case, "case_id", "") or "case")
     brief_id = _make_brief_id(case)
-    generated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    generated_at = resolve_render_time().strftime("%Y-%m-%dT%H:%M:%SZ")
     victim_ctx = _normalize_victim(victim)
     investigator_ctx = _normalize_investigator(investigator)
 

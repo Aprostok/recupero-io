@@ -344,9 +344,14 @@ def synthesize_onward_cex_subpoenas(
             "last_flow_at": t.block_time,
             "tx_hashes": [],
         })
-        if t.usd_value_at_tx is not None:
+        # v0.30.4 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum on
+        # the onward-flow USD bucket. A NaN poisons the per-issuer
+        # asks accumulator; the freeze letter then shows `$NaN` as
+        # the amount we're asking the issuer to freeze.
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             bucket["flow_usd_value"] += t.usd_value_at_tx
-        bucket["flow_amount_decimal"] += t.amount_decimal
+        if t.amount_decimal is not None and t.amount_decimal.is_finite():
+            bucket["flow_amount_decimal"] += t.amount_decimal
         bucket["transfer_count"] += 1
         bucket["tx_hashes"].append(t.tx_hash)
         if t.block_time < bucket["first_flow_at"]:
@@ -728,9 +733,13 @@ def synthesize_historical_freeze_asks(
             "earliest_block_time": t.block_time,
             "explorer_url": t.explorer_url,
         })
-        if t.usd_value_at_tx is not None:
+        # v0.30.4 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum on
+        # the historical-inflow USD bucket. Same defense-in-depth as
+        # the flow_usd_value bucket above.
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             bucket["total_usd"] += t.usd_value_at_tx
-        bucket["total_amount_decimal"] += t.amount_decimal
+        if t.amount_decimal is not None and t.amount_decimal.is_finite():
+            bucket["total_amount_decimal"] += t.amount_decimal
         bucket["transfer_count"] += 1
         if t.block_time < bucket["earliest_block_time"]:
             bucket["earliest_block_time"] = t.block_time

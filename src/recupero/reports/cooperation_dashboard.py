@@ -24,7 +24,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, select_autoescape
 
-from recupero._common import atomic_write_text
+from recupero._common import atomic_write_text, resolve_render_time
 
 log = logging.getLogger(__name__)
 
@@ -199,7 +199,7 @@ def render_cooperation_dashboard(
     except Exception:  # noqa: BLE001
         software_version = "0.24.x"
 
-    generated_at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
+    generated_at = resolve_render_time().strftime("%Y-%m-%dT%H:%M:%S")
 
     try:
         html = env.get_template("cooperation_dashboard.html.j2").render(

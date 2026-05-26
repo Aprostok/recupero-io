@@ -135,10 +135,13 @@ def run_trace(
         env_dust_raw = os.environ.get("RECUPERO_TRACE_DUST_USD")
         if env_dust_raw is not None:
             env_dust = float(env_dust_raw)
-            # Reject NaN / Inf / negative — these would silently break
+            # Reject NaN / ±Inf / negative — these would silently break
             # the filter (NaN comparison is always False, so EVERY
-            # transfer would slip the dust gate).
-            if env_dust != env_dust or env_dust == float("inf") or env_dust < 0:
+            # transfer would slip the dust gate; -inf would clamp to 0
+            # via max(0, -inf) and silently disable the filter while
+            # masking the operator misconfig).
+            import math as _m
+            if not _m.isfinite(env_dust) or env_dust < 0:
                 raise ValueError("non-finite or negative")
             cfg_dust = min(1_000_000.0, env_dust)
     except (TypeError, ValueError) as exc:
@@ -552,8 +555,13 @@ def _continue_past_dex_and_bridges(
         xchain_window_h = float(os.environ.get(
             "RECUPERO_CROSSCHAIN_WINDOW_HOURS", "24",
         ))
-        # Reject NaN / Inf
-        if xchain_window_h != xchain_window_h or xchain_window_h == float("inf"):
+        # Reject NaN / ±Inf. v0.31.1: the earlier check only rejected
+        # +Infinity (and NaN via self-inequality); -Infinity would slip
+        # through, then `max(0, -inf) = 0` silently disabled the filter
+        # and masked the operator misconfig. Use math.isfinite to catch
+        # both infinities + NaN in one call.
+        import math as _m
+        if not _m.isfinite(xchain_window_h):
             raise ValueError("non-finite")
         xchain_window_h = max(0.0, min(720.0, xchain_window_h))
     except (TypeError, ValueError):

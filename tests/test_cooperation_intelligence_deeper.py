@@ -374,14 +374,8 @@ def test_nan_in_response_hours_does_not_poison_median(monkeypatch):
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Outlier dampening (trimmed mean / IQR clipping) is a v0.24.2 "
-        "feature, not part of the current cooperation hardening pass. "
-        "Documented here so a future change can mark this xpassing."
-    ),
-    strict=False,
-)
+# v0.31.1: was previously xfail — closed by adding _trimmed_mean
+# in cooperation_intelligence (10% symmetric trim above n=10).
 def test_avg_response_hours_resists_outlier_dominance(monkeypatch):
     from recupero.monitoring import cooperation_intelligence
 

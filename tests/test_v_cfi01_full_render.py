@@ -296,7 +296,7 @@ def _build_freeze_asks_dict() -> dict:
                     "usd_value": "246812.01",
                     "freeze_capability": "yes",
                     "issuer": "Coinbase",
-                    "primary_contact": "compliance@coinbase.com",
+                    "primary_contact": "subpoenas@coinbase.com",
                     "evidence_type": "historical_inflow",
                     "observed_at": "2025-10-09T00:29:00Z",
                     "observed_transfer_count": 1,
@@ -399,7 +399,7 @@ def _build_issuer_metadata() -> dict:
             "freeze_note": "Circle is the fastest stablecoin freeze pathway",
         },
         "Coinbase": {
-            "contact_email": "compliance@coinbase.com",
+            "contact_email": "subpoenas@coinbase.com",
             "portal_url": "https://coinbase.com/legal",
             "typical_response_time": "2-3 business days",
             "freeze_note": "cbBTC backing held at Coinbase; freeze via exchange compliance",

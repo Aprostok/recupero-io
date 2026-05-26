@@ -398,6 +398,26 @@ def recommend_le_routes(
             "supplements IC3."
         )
 
+    # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-C): NaN/Inf guard.
+    # `Decimal('NaN') >= 1000000` returns False per IEEE 754, so a
+    # NaN total_loss_usd silently SKIPS both FBI VAU and Secret Service
+    # ECTF escalation on a high-value case. Symmetrically,
+    # `Decimal('Infinity') >= 1000000` returns True and the f-string
+    # then renders 'Loss of $Infinity' into the LE handoff note. Both
+    # paths leak forensic garbage; the only safe behavior is to refuse
+    # to escalate on non-finite loss and leave a diagnostic breadcrumb
+    # in the routing notes so an operator sees why.
+    if total_loss_usd is not None and not total_loss_usd.is_finite():
+        plan.notes.append(
+            "Loss-tier escalation skipped: total_loss_usd is non-finite "
+            "(NaN/Inf), likely a pricing-cache poison or a hand-edited "
+            "case file. Investigator should manually decide whether the "
+            "case warrants FBI VAU / Secret Service ECTF engagement and "
+            "verify the underlying USD math before transmitting this "
+            "handoff package."
+        )
+        return plan
+
     # Loss-tier escalations
     if total_loss_usd is not None:
         if total_loss_usd >= _FBI_VAU_THRESHOLD_USD:

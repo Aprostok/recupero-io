@@ -243,7 +243,15 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
         if _ck(t.from_address) == seed_canon:
             to_raw = t.to_address
             to_canon = _ck(to_raw)
-            if t.usd_value_at_tx is not None:
+            # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): mirror the
+            # _trace_report.py:209 NaN-guard pattern. Pre-v0.30.3, a
+            # single Decimal('NaN') usd_value_at_tx (from a hand-edited
+            # cache, a future non-CoinGecko adapter, or a corrupt
+            # case-on-disk) poisoned per_addr_usd[to_canon] and
+            # propagated into the max()-based perp-hub selection on the
+            # LE handoff cover — yielding a randomly-chosen "largest
+            # outflow" destination because NaN comparisons are False.
+            if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
                 per_addr_usd[to_canon] += t.usd_value_at_tx
             if (
                 to_canon not in per_addr_first_seen
@@ -289,6 +297,14 @@ def _parse_dust_threshold() -> Decimal:
     raw = os.environ.get("RECUPERO_DESTINATION_DUST_USD", "1000.00").strip()
     try:
         val = Decimal(raw)
+        # v0.30.3 (V030_2_CORRECTNESS_AUDIT T3-B): Decimal("NaN") /
+        # Decimal("Infinity") parse successfully but `val < 0` returns
+        # False per IEEE 754, so the pre-v0.30.3 guard let non-finite
+        # thresholds through. A NaN threshold makes EVERY destination
+        # fail `received >= NaN` (False), collapsing the destination
+        # list to freeze-target-only entries.
+        if not val.is_finite():
+            raise ValueError("non-finite threshold (NaN/Inf)")
         if val < 0:
             raise ValueError("negative threshold")
         return val
@@ -375,7 +391,12 @@ def _extract_destinations(
         if not to or to == seed_canon:
             continue
         per_addr_display.setdefault(to, to_raw)
-        if t.usd_value_at_tx is not None:
+        # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum so
+        # a single NaN doesn't poison the destination's received-USD
+        # bucket. Without this, the `received >= dust_threshold` filter
+        # behaves unpredictably for any address that received any
+        # NaN-priced transfer.
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             per_addr_received[to] += t.usd_value_at_tx
         if t.token and t.token.symbol:
             per_addr_tokens[to].add(t.token.symbol)
@@ -903,7 +924,15 @@ def _compute_total_drained(case: Case) -> Decimal:
     seed_lower = _ck(case.seed_address)
     total = Decimal("0")
     for t in case.transfers:
-        if _ck(t.from_address) == seed_lower and t.usd_value_at_tx is not None:
+        # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only. Without
+        # this, a single Decimal('NaN') usd_value_at_tx poisons the
+        # running total and the LE cover renders the headline as
+        # "USD $NaN stolen" in front of a federal agent.
+        if (
+            _ck(t.from_address) == seed_lower
+            and t.usd_value_at_tx is not None
+            and t.usd_value_at_tx.is_finite()
+        ):
             total += t.usd_value_at_tx
     return total
 

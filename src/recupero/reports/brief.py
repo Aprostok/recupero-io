@@ -1627,8 +1627,16 @@ def _aggregate_theft_amount_human(theft_events: list, theft_transfer) -> str:
         return _fmt_decimal(theft_events[0].amount_decimal)
     if _theft_events_mixed_assets(theft_events):
         return f"{len(theft_events)} events, mixed assets"
-    # All same symbol — addition is meaningful.
-    decimals = [t.amount_decimal for t in theft_events if t.amount_decimal is not None]
+    # All same symbol — addition is meaningful, but a single
+    # Decimal('NaN') amount_decimal (from a corrupt case-on-disk or a
+    # future non-EVM adapter that returns garbage) would poison the
+    # sum into NaN. v0.30.3 (Jacob-style adversarial input hunt) adds
+    # the finite filter so the aggregated amount can never render as
+    # 'NaN' in the Stolen Asset Details cell.
+    decimals = [
+        t.amount_decimal for t in theft_events
+        if t.amount_decimal is not None and t.amount_decimal.is_finite()
+    ]
     if not decimals:
         return _fmt_decimal(getattr(theft_transfer, "amount_decimal", None))
     return _fmt_decimal(sum(decimals, start=Decimal(0)))

@@ -124,6 +124,7 @@ _ISSUER_EXPECTATIONS = {
             "compliance@circle.com",
             "compliance@coinbase.com",
             "law-enforcement@coinbase.com",
+            "subpoenas@coinbase.com",
         ],
     },
     "tether": {
@@ -141,6 +142,7 @@ _ISSUER_EXPECTATIONS = {
             "compliance@circle.com",
             "compliance@coinbase.com",
             "law-enforcement@coinbase.com",
+            "subpoenas@coinbase.com",
         ],
     },
     "circle": {
@@ -153,6 +155,7 @@ _ISSUER_EXPECTATIONS = {
             "compliance@tether.to",
             "compliance@coinbase.com",
             "law-enforcement@coinbase.com",
+            "subpoenas@coinbase.com",
         ],
     },
     "coinbase": {
@@ -199,6 +202,7 @@ def test_freeze_request_addresses_correct_issuer(artifacts, slug):
     candidates = [exp["compliance_email"]]
     if slug == "coinbase":
         candidates.append("law-enforcement@coinbase.com")
+        candidates.append("subpoenas@coinbase.com")
     found = [c for c in candidates if c in content]
     assert found, (
         f"{path.name}: NONE of the recognized compliance addresses "

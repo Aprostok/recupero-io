@@ -989,7 +989,19 @@ def _compute_perpetrator_holdings(
         for h in (f.get("holdings") or []):
             if not isinstance(h, dict):
                 continue
-            if h.get("status") != "UNRECOVERABLE":
+            # v0.27.2 post-merge hardening (audit finding #2): match
+            # case-insensitively. The asymmetry between this branch
+            # (was bare `!= "UNRECOVERABLE"`) and _has_freezable_holding
+            # (which uses .upper()) meant a writer emitting
+            # "unrecoverable" lowercase would silently drop the
+            # Sky/DAI bucket from the perpetrator-holdings headline —
+            # silently underreporting in the opposite direction from
+            # the Zigha bleed. .upper() everywhere is the canonical
+            # contract; the status set is closed and small (FREEZABLE
+            # / INVESTIGATE / UNRECOVERABLE / EXCHANGE / TRANSIT)
+            # and every writer should emit upper-case but we don't
+            # trust hand-written editorial JSON to comply.
+            if (h.get("status") or "").upper() != "UNRECOVERABLE":
                 continue
             addr = str(h.get("address", ""))
             if (issuer_name, addr) in seen_unrec_keys:

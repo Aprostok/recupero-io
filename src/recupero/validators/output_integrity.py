@@ -328,6 +328,21 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_destinations_superset_of_ground_truth(
              case_dir, freeze_brief,
          )),
+        # v0.27.2 post-merge hardening (audit finding #13): the
+        # 21.6× Zigha inflation symptom Jacob saw was in
+        # trace_report.html's "Perpetrator-controlled holdings: $X"
+        # cover line. INVARIANT A catches the per-letter symptom;
+        # INVARIANT B catches the trace-coverage symptom; this new
+        # check catches the headline-NUMBER symptom directly.
+        # A future regression that re-introduces `+ INVESTIGATE`
+        # ONLY in the trace-report-renderer (bypassing
+        # _compute_perpetrator_holdings) would surface here as a
+        # mismatch between the trace_report headline and the
+        # brief's FREEZABLE+UNRECOVERABLE total.
+        ("perpetrator_holdings_reconcile_across_artifacts",
+         lambda: _check_perpetrator_holdings_reconcile(
+             briefs_dir, freeze_brief,
+         )),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -2274,9 +2289,9 @@ _FREEZE_ASK_TABLE_RE = re.compile(
 def _check_issuer_letter_backed_by_freezable_row(
     briefs_dir: Path, freeze_brief: dict | None,
 ) -> list[Violation]:
-    """Hard rule: every shipped freeze_request_*.html (and matching
-    le_handoff_*.html, by issuer) MUST contain at least one
-    FREEZABLE-tagged row in its primary-targets table.
+    """Hard rule: every shipped freeze_request_*.html AND
+    le_handoff_*.html MUST contain at least one FREEZABLE-tagged row
+    in its primary-targets table.
 
     A letter without a FREEZABLE row is a letter with no ask. Pre-fix
     Zigha v0.27.1 shipped four such letters (BitGo, BitGo LE,
@@ -2284,6 +2299,13 @@ def _check_issuer_letter_backed_by_freezable_row(
     only bleed from a smart contract. The Threshold LE handoff section
     6 read verbatim: "The 0 FREEZABLE addresses ($0 total) are the
     primary targets." Self-contradictory shipping artifact.
+
+    v0.27.2 post-merge hardening (audit finding #4): originally this
+    check globbed only `freeze_request_*.html`. The Threshold-LE
+    example Jacob cited verbatim was an LE handoff, not a freeze
+    request — so the canonical Zigha shipping bug was UNCAUGHT by
+    this validator at the LE-handoff layer. Extended to glob both
+    file patterns so the safety-net covers both surfaces.
 
     The upstream _has_freezable_holding gate in _deliverables.py
     prevents such letters from being generated in the first place.
@@ -2295,14 +2317,20 @@ def _check_issuer_letter_backed_by_freezable_row(
     if not briefs_dir.is_dir():
         return []
     violations: list[Violation] = []
-    for path in sorted(briefs_dir.glob("freeze_request_*.html")):
+    # v0.27.2 post-merge hardening: cover both file types so the
+    # Threshold-LE / BitGo-LE shape (the literal Jacob review
+    # exemplar) is caught.
+    targets = sorted(briefs_dir.glob("freeze_request_*.html")) + sorted(
+        briefs_dir.glob("le_handoff_*.html")
+    )
+    for path in targets:
         try:
             html = path.read_text(encoding="utf-8")
         except OSError:
             continue
         # Search every tbody — the primary-targets table is the first
-        # one in freeze_request_*.html but defensively scan all
-        # tbodies so a template restructure doesn't break this check.
+        # one but defensively scan all tbodies so a template
+        # restructure doesn't break this check.
         has_freezable_row = any(
             "FREEZABLE" in (m.group(1) or "")
             for m in _FREEZE_ASK_TABLE_RE.finditer(html)
@@ -2576,6 +2604,184 @@ def _check_destinations_superset_of_ground_truth(
                 ),
             ))
     return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.27.2 post-merge hardening (audit finding #13):
+# Cross-artifact headline reconciliation
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Match the perpetrator-holdings headline in trace_report.html. The
+# canonical format is "Perpetrator-controlled holdings: $X" (or
+# variations: "Perpetrator-held: $X", "Perpetrator-controlled:
+# $X"). We match the leading phrase + capture the $-amount.
+_PERP_HOLDINGS_HEADLINE_RE = re.compile(
+    r"Perpetrator[- ]controlled\s+holdings?\s*:\s*"
+    r"\$([0-9][0-9,]*(?:\.[0-9]+)?)",
+    re.IGNORECASE,
+)
+
+
+def _parse_usd_decimal(s: str | None) -> Decimal | None:
+    """Parse "$1,234,567.89" or "1234567.89" → Decimal. Returns None
+    on parse failure; the caller decides whether to violate."""
+    if not isinstance(s, str):
+        return None
+    s = s.strip().lstrip("$").replace(",", "").replace(" ", "")
+    if not s:
+        return None
+    try:
+        return Decimal(s)
+    except (ValueError, ArithmeticError, InvalidOperation):
+        return None
+
+
+def _check_perpetrator_holdings_reconcile(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """The trace_report.html's "Perpetrator-controlled holdings: $X"
+    cover headline MUST equal the sum
+    (TOTAL_FREEZABLE_USD + TOTAL_UNRECOVERABLE_USD) computed by
+    emit_brief._compute_perpetrator_holdings.
+
+    Why: Jacob's v0.27.1 Zigha review found the headline displayed
+    $149,954,529.44 vs a real $7M shape — 21.6× inflation from
+    $145M of INVESTIGATE-tagged 1inch/Uniswap-pool bleed being
+    summed. The bug was in _compute_perpetrator_holdings; the
+    SYMPTOM was the trace_report headline. The v0.27.2 fix corrects
+    the computation, but a future regression that adds
+    `+ INVESTIGATE` ONLY to the trace-report renderer (bypassing
+    the centralized computer) would re-introduce the symptom
+    without any other validator surface catching it.
+
+    This check parses the trace_report headline + the brief's
+    FREEZABLE/UNRECOVERABLE totals + asserts they reconcile within
+    a small tolerance (1% or $100, whichever is larger).
+
+    Inapplicable (returns []) when:
+      * No trace_report*.html file present.
+      * trace_report has no "Perpetrator-controlled holdings: $X"
+        line (older briefs predating v0.7.4).
+      * freeze_brief lacks TOTAL_FREEZABLE_USD + the per-issuer
+        UNRECOVERABLE holdings information.
+
+    Severity: high. A mis-stated headline mis-positions the case for
+    every downstream reader (lawyer, AUSA, victim) — not as
+    catastrophic as an unfileable letter (which is critical) but
+    still a credibility-damaging defect.
+    """
+    if not briefs_dir.is_dir():
+        return []
+    if not isinstance(freeze_brief, dict):
+        return []
+
+    # Find the trace_report file (hash-suffixed).
+    trace_reports = sorted(briefs_dir.glob("trace_report*.html"))
+    if not trace_reports:
+        return []
+    # Use the first match — production only writes one trace_report
+    # per case.
+    trace_path = trace_reports[0]
+    try:
+        trace_html = trace_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    # Extract the headline number.
+    m = _PERP_HOLDINGS_HEADLINE_RE.search(trace_html)
+    if not m:
+        return []  # No headline to check — inapplicable.
+    headline = _parse_usd_decimal(m.group(1))
+    if headline is None:
+        return []
+
+    # Compute the canonical total from the brief: FREEZABLE.total_usd
+    # + UNRECOVERABLE per-holding amounts + editorial UNRECOVERABLE
+    # entries (regex-extracted from `asset` strings, mirroring
+    # _compute_perpetrator_holdings semantics).
+    freezable_total = Decimal("0")
+    for f in freeze_brief.get("FREEZABLE") or []:
+        if not isinstance(f, dict):
+            continue
+        amt = _parse_usd_decimal(f.get("total_usd"))
+        if amt is not None:
+            freezable_total += amt
+
+    unrec_total = Decimal("0")
+    seen_unrec_keys: set[tuple[str, str]] = set()
+    for u in freeze_brief.get("UNRECOVERABLE") or []:
+        if not isinstance(u, dict):
+            continue
+        asset = u.get("asset", "") or ""
+        if not isinstance(asset, str):
+            continue
+        rm = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
+        if rm:
+            try:
+                unrec_total += Decimal(rm.group(1).replace(",", ""))
+                key = (str(u.get("issuer", "")), str(u.get("address", "")))
+                seen_unrec_keys.add(key)
+            except (InvalidOperation, ArithmeticError):
+                pass
+    for f in freeze_brief.get("FREEZABLE") or []:
+        if not isinstance(f, dict):
+            continue
+        issuer_name = str(f.get("issuer", ""))
+        for h in f.get("holdings") or []:
+            if not isinstance(h, dict):
+                continue
+            if (h.get("status") or "").upper() != "UNRECOVERABLE":
+                continue
+            addr = str(h.get("address", ""))
+            if (issuer_name, addr) in seen_unrec_keys:
+                continue
+            seen_unrec_keys.add((issuer_name, addr))
+            amt = _parse_usd_decimal(h.get("usd"))
+            if amt is not None:
+                unrec_total += amt
+
+    expected = freezable_total + unrec_total
+    if expected == 0 and headline == 0:
+        return []  # Both zero — nothing to check.
+
+    # Tolerance: $100 absolute or 1% relative, whichever is larger.
+    # 1% covers rounding differences when the renderer formats
+    # totals with a different rounding mode than the computer.
+    # $100 absolute covers the very-small-case (e.g. $5,432 vs $5,500)
+    # where 1% is too tight.
+    tol_abs = Decimal("100")
+    tol_rel = (expected.copy_abs() * Decimal("0.01"))
+    tol = max(tol_abs, tol_rel)
+    diff = (headline - expected).copy_abs()
+    if diff <= tol:
+        return []
+
+    # Mismatch — report the inflation ratio so the operator can
+    # immediately see the Zigha-shape ("21.6×") symptom.
+    ratio = ""
+    if expected > 0:
+        ratio_val = headline / expected
+        if ratio_val > Decimal("1.05"):
+            ratio = f" (inflation: {float(ratio_val):.1f}×)"
+        elif ratio_val < Decimal("0.95"):
+            ratio = f" (under-reported: {float(ratio_val):.2f}×)"
+    return [Violation(
+        check="perpetrator_holdings_reconcile_across_artifacts",
+        severity="high",
+        file=trace_path.name,
+        detail=(
+            f"trace_report headline 'Perpetrator-controlled "
+            f"holdings: ${headline:,}' does not reconcile with "
+            f"freeze_brief FREEZABLE+UNRECOVERABLE total "
+            f"${expected:,} (tolerance: ${tol:,}; "
+            f"diff: ${diff:,}{ratio}). Likely cause: a recent "
+            "edit to the trace-report renderer added INVESTIGATE "
+            "(or another bucket) to the headline computation, "
+            "bypassing _compute_perpetrator_holdings. See Jacob "
+            "v0.27.1 Zigha review item 1 — this is the 21.6× "
+            "inflation symptom."
+        ),
+    )]
 
 
 __all__ = (

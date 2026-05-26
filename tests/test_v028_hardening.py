@@ -593,41 +593,36 @@ def test_v028_low_confidence_entries_carry_audit_notes() -> None:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_invariant_d_does_not_currently_catch_self_reference() -> None:
-    """Document the current behavior: a self-reference is a valid
-    target_id (it points to an existing id) so INVARIANT D
-    passes — even though it's a 1-cycle.
+def test_invariant_d_catches_self_reference_cycle() -> None:
+    """v0.28.3 hardening: INVARIANT D now detects 1-cycles
+    (self-references). Pre-hardening this was documented as a
+    limitation; cycle detection via DFS coloring fixes it.
 
-    Pre-hardening this is an explicit documentation step: we accept
-    the limitation but pin it so a future fix (cycle detection)
-    breaks this test and forces a re-think.
-
-    Cycles are rare in practice — operators don't write
-    depends_on=[self] — but the playbook DAG topological sort
-    would loop forever without a cycle break.
-    """
+    A self-reference (subpoena-1 → subpoena-1) makes the playbook's
+    topological sort unable to schedule the target — it's always
+    "blocked" by itself."""
     freeze_brief = {
         "SUBPOENA_TARGETS": [
             {"target_id": "subpoena-1",
-             "depends_on": ["subpoena-1"]},  # self-reference
+             "depends_on": ["subpoena-1"]},
         ],
     }
     violations = _check_subpoena_targets_depends_on_resolves(freeze_brief)
-    # Today: passes. If this assertion ever changes, the cycle
-    # detection has been added — update the docstring + the
-    # downstream playbook renderer to handle cycles.
-    assert violations == [], (
-        "INVARIANT D now catches self-references — update the "
-        "playbook renderer to handle DAG cycles. See "
-        "tests/test_v028_hardening.py::test_invariant_d_does_not_"
-        "currently_catch_self_reference docstring."
+    cycle_violations = [
+        v for v in violations
+        if "cycle" in v.detail.lower()
+    ]
+    assert len(cycle_violations) == 1, (
+        f"INVARIANT D must catch self-reference cycle; got "
+        f"{[v.detail for v in violations]}"
     )
+    assert cycle_violations[0].severity == "high"
 
 
-def test_invariant_d_does_catch_two_node_cycle_via_dangling_check() -> None:
-    """A 2-node cycle (subpoena-1 → subpoena-2 → subpoena-1) is
-    accepted today (both ids resolve). Same documentation pattern
-    as the self-reference case."""
+def test_invariant_d_catches_two_node_cycle() -> None:
+    """A 2-node cycle (subpoena-1 → subpoena-2 → subpoena-1) is the
+    most common cycle shape in practice. INVARIANT D's DFS-based
+    cycle detection finds it on the back-edge."""
     freeze_brief = {
         "SUBPOENA_TARGETS": [
             {"target_id": "subpoena-1", "depends_on": ["subpoena-2"]},
@@ -635,9 +630,49 @@ def test_invariant_d_does_catch_two_node_cycle_via_dangling_check() -> None:
         ],
     }
     violations = _check_subpoena_targets_depends_on_resolves(freeze_brief)
-    # Today: passes (no cycle detection). If this changes,
-    # cycle detection is in place.
-    assert violations == []
+    cycle_violations = [
+        v for v in violations
+        if "cycle" in v.detail.lower()
+    ]
+    assert len(cycle_violations) == 1
+    assert "subpoena-1" in cycle_violations[0].detail
+    assert "subpoena-2" in cycle_violations[0].detail
+
+
+def test_invariant_d_catches_three_node_cycle() -> None:
+    """A 3-node cycle (1 → 2 → 3 → 1). Verifies the DFS handles
+    longer cycles too."""
+    freeze_brief = {
+        "SUBPOENA_TARGETS": [
+            {"target_id": "subpoena-1", "depends_on": ["subpoena-2"]},
+            {"target_id": "subpoena-2", "depends_on": ["subpoena-3"]},
+            {"target_id": "subpoena-3", "depends_on": ["subpoena-1"]},
+        ],
+    }
+    violations = _check_subpoena_targets_depends_on_resolves(freeze_brief)
+    cycle_violations = [v for v in violations if "cycle" in v.detail.lower()]
+    assert len(cycle_violations) >= 1
+
+
+def test_invariant_d_passes_on_valid_dag_with_diamond_shape() -> None:
+    """A valid DAG with a diamond (1 → 2 + 1 → 3, both → 4) MUST
+    NOT be flagged as a cycle. Cycle detection's false-positive
+    test."""
+    freeze_brief = {
+        "SUBPOENA_TARGETS": [
+            {"target_id": "subpoena-1", "depends_on": []},
+            {"target_id": "subpoena-2", "depends_on": ["subpoena-1"]},
+            {"target_id": "subpoena-3", "depends_on": ["subpoena-1"]},
+            {"target_id": "subpoena-4",
+             "depends_on": ["subpoena-2", "subpoena-3"]},
+        ],
+    }
+    violations = _check_subpoena_targets_depends_on_resolves(freeze_brief)
+    cycle_violations = [v for v in violations if "cycle" in v.detail.lower()]
+    assert cycle_violations == [], (
+        "Diamond DAG (1→2, 1→3, 2→4, 3→4) is NOT a cycle. "
+        f"False positive: {[v.detail for v in cycle_violations]}"
+    )
 
 
 # ─────────────────────────────────────────────────────────────────────

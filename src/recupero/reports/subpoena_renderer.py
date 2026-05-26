@@ -145,6 +145,15 @@ def render_subpoena_artifacts(
         log.error("subpoena_target template missing: %s", exc)
         return written
 
+    # v0.28.3 hardening: track filename collisions across targets.
+    # Multiple seizure-target entries on the same case share
+    # recipient_name="Identified law enforcement agency" → identical
+    # slug → identical filename → one overwrites the other. The
+    # pre-v0.28.3 renderer silently produced N-1 files for N
+    # targets. INVARIANT E catches the count mismatch, but the
+    # underlying cause is right here. Fix: append target_id when
+    # a slug collision is detected.
+    used_filenames: set[str] = set()
     for t in targets:
         if not isinstance(t, dict):
             log.warning("skipping non-dict SUBPOENA_TARGETS entry: %r", t)
@@ -152,7 +161,20 @@ def render_subpoena_artifacts(
         recipient_slug = _safe_filename_component(
             t.get("recipient_slug") or t.get("recipient_name") or "unknown"
         )
-        filename = f"subpoena_target_{recipient_slug}_{brief_id}.html"
+        base_filename = f"subpoena_target_{recipient_slug}_{brief_id}.html"
+        if base_filename in used_filenames:
+            # Collision — append the target_id (already a stable
+            # sequential subpoena-N identifier) to differentiate.
+            target_id_slug = _safe_filename_component(
+                t.get("target_id") or "unknown",
+            )
+            filename = (
+                f"subpoena_target_{recipient_slug}_{target_id_slug}"
+                f"_{brief_id}.html"
+            )
+        else:
+            filename = base_filename
+        used_filenames.add(filename)
         out_path = briefs_dir / filename
         try:
             html = target_template.render(
@@ -209,11 +231,29 @@ def render_subpoena_artifacts(
 
 
 def _atomic_write(path: Path, content: str) -> None:
-    """LF-only atomic write so manifest SHAs match disk on Windows."""
+    """LF-only atomic write so manifest SHAs match disk on Windows.
+
+    v0.28.3 hardening: clean up the .tmp file if the rename fails
+    (e.g. Windows PermissionError when another process holds the
+    target open). Pre-hardening a failed rename left an orphan
+    .tmp file that confused the next case run + tripped
+    investigator_findings.csv schema audits.
+    """
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "w", encoding="utf-8", newline="") as f:
-        f.write(content)
-    tmp.replace(path)
+    try:
+        with open(tmp, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
+        tmp.replace(path)
+    except Exception:
+        # Best-effort .tmp cleanup. If even the unlink fails, we
+        # re-raise the original write/rename exception so the
+        # caller's try/except has the right error to log.
+        try:
+            if tmp.exists():
+                tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _normalize_victim(victim: Any) -> dict[str, Any] | None:

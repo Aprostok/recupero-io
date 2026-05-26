@@ -2875,18 +2875,25 @@ def _check_subpoena_targets_cover_non_freezable(
                     covered_addrs.add(addr.lower())
 
     # Collect addresses covered by UNRECOVERABLE with a reason.
+    # v0.28.3 hardening (audit finding #35): the editorial pass
+    # writes to either UNRECOVERABLE (post-v0.20.x) or
+    # UNRECOVERABLE_ITEMS (legacy). Check both keys so a schema
+    # drift in the editorial pipeline doesn't make INVARIANT C
+    # silently miss the coverage acknowledgment.
     unrec_covered: set[str] = set()
-    for u in freeze_brief.get("UNRECOVERABLE") or []:
-        if not isinstance(u, dict):
-            continue
-        # An UNRECOVERABLE row counts as "covered" only when it has
-        # a non-empty reason field — operator-acknowledged rationale.
-        reason = u.get("reason")
-        if not isinstance(reason, str) or not reason.strip():
-            continue
-        addr = u.get("address")
-        if isinstance(addr, str):
-            unrec_covered.add(addr.lower())
+    for key in ("UNRECOVERABLE", "UNRECOVERABLE_ITEMS"):
+        for u in freeze_brief.get(key) or []:
+            if not isinstance(u, dict):
+                continue
+            # An UNRECOVERABLE row counts as "covered" only when it
+            # has a non-empty reason field — operator-acknowledged
+            # rationale.
+            reason = u.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                continue
+            addr = u.get("address")
+            if isinstance(addr, str):
+                unrec_covered.add(addr.lower())
 
     # Find every freeze_capability="no" destination above the
     # threshold. Sources:
@@ -2967,14 +2974,25 @@ def _check_subpoena_targets_depends_on_resolves(
 ) -> list[Violation]:
     """INVARIANT D (v0.28.0, Jacob review item 3): every
     SUBPOENA_TARGETS entry's depends_on references must resolve to
-    other target_ids in the SAME case's list.
+    other target_ids in the SAME case's list — AND the dependency
+    graph must be acyclic (DAG).
 
-    Catches dangling DAG pointers — a target whose depends_on
-    references a target_id that doesn't exist in the case. The
-    playbook renderer would silently produce a broken dependency
-    chain.
+    Catches:
+      * Dangling pointers — depends_on references a target_id that
+        doesn't exist. The playbook renderer would silently produce
+        a broken dependency chain.
+      * Self-references — subpoena-1 depends_on ["subpoena-1"]. The
+        playbook's topological sort would never schedule it.
+      * Multi-node cycles — subpoena-1 → subpoena-2 → subpoena-1.
+        Same problem as self-reference, just harder to spot in
+        operator review.
 
-    Severity: high. Renders the playbook unreliable.
+    v0.28.3 hardening (audit finding #13 follow-up): cycle detection
+    added. Pre-hardening only dangling references were caught; the
+    test_v028_hardening.py test_invariant_d_does_not_currently_catch_
+    self_reference DOCUMENTED the gap but didn't fix it. Now fixed.
+
+    Severity: high. Renders the playbook unreliable / unrenderable.
     """
     if not isinstance(freeze_brief, dict):
         return []
@@ -2982,15 +3000,23 @@ def _check_subpoena_targets_depends_on_resolves(
     if not isinstance(targets, list) or not targets:
         return []
 
-    # Build the set of known target_ids in this case.
+    # Build the set of known target_ids in this case + a dep-graph
+    # adjacency map for cycle detection.
     known_ids: set[str] = set()
+    adj: dict[str, list[str]] = {}
     for t in targets:
         if isinstance(t, dict):
             tid = t.get("target_id")
             if isinstance(tid, str):
                 known_ids.add(tid)
+                deps = t.get("depends_on") or []
+                if isinstance(deps, list):
+                    adj[tid] = [d for d in deps if isinstance(d, str)]
+                else:
+                    adj[tid] = []
 
     violations: list[Violation] = []
+    # ── Pass 1: shape + reference validation ──
     for t in targets:
         if not isinstance(t, dict):
             continue
@@ -3018,6 +3044,55 @@ def _check_subpoena_targets_depends_on_resolves(
                         f"{sorted(known_ids)}. Dangling DAG pointer."
                     ),
                 ))
+
+    # ── Pass 2: cycle detection (DFS with WHITE/GRAY/BLACK coloring) ──
+    # Standard algorithm: a node entering its OWN ancestor set during
+    # DFS reveals a cycle. Self-references catch immediately
+    # (target-1 → target-1 ancestor includes target-1). Multi-node
+    # cycles caught on the back-edge.
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {tid: WHITE for tid in known_ids}
+    cycles_reported: set[tuple[str, ...]] = set()
+
+    def _dfs_cycle(start: str, path: list[str]) -> None:
+        color[start] = GRAY
+        for nxt in adj.get(start, []):
+            if nxt not in color:
+                # Dangling — already reported by pass 1, skip.
+                continue
+            if color[nxt] == GRAY:
+                # Back-edge → cycle. Extract the cycle from path.
+                try:
+                    cycle_start = path.index(nxt)
+                    cycle = tuple(path[cycle_start:]) + (nxt,)
+                except ValueError:
+                    cycle = (nxt, start, nxt)
+                # Normalize for dedup (rotation-invariant).
+                norm = tuple(sorted(set(cycle)))
+                if norm not in cycles_reported:
+                    cycles_reported.add(norm)
+                    violations.append(Violation(
+                        check="subpoena_targets_depends_on_resolves",
+                        severity="high",
+                        detail=(
+                            "Dependency cycle in SUBPOENA_TARGETS: "
+                            f"{' → '.join(cycle)}. The playbook's "
+                            "topological sort cannot order these "
+                            "subpoenas — operators would face an "
+                            "unschedulable chain. Either break the "
+                            "cycle (drop one depends_on edge) or "
+                            "restructure as a single multi-step "
+                            "subpoena."
+                        ),
+                    ))
+            elif color[nxt] == WHITE:
+                _dfs_cycle(nxt, path + [nxt])
+        color[start] = BLACK
+
+    for tid in known_ids:
+        if color[tid] == WHITE:
+            _dfs_cycle(tid, [tid])
+
     return violations
 
 

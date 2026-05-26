@@ -99,19 +99,86 @@ class _LabelHit:
     extras: dict[str, Any] = field(default_factory=dict)
 
 
+def _load_operator_overrides() -> dict[str, tuple]:
+    """v0.28.3 hardening (audit finding #31): read operator-supplied
+    CEX compliance overrides from an env-var pointer.
+
+    Set RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE to a JSON file path.
+    Schema: {exchange_key_lowercase: [name, email, jurisdiction,
+    days, priority]} where days is int and priority is one of
+    "high"/"medium"/"low". Unknown keys are ignored; values that
+    fail shape validation are logged + skipped.
+
+    Returns the canonical map merged with overrides (overrides win
+    on key collision).
+    """
+    import json
+    import os
+    out = dict(_KNOWN_CEX_COMPLIANCE)
+    override_path = os.environ.get(
+        "RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE", "",
+    ).strip()
+    if not override_path:
+        return out
+    try:
+        with open(override_path, encoding="utf-8") as f:
+            overrides = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        log.warning(
+            "RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE failed to load "
+            "%s: %s", override_path, exc,
+        )
+        return out
+    if not isinstance(overrides, dict):
+        log.warning(
+            "RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE root is not a "
+            "JSON object; ignoring.",
+        )
+        return out
+    for k, v in overrides.items():
+        if not isinstance(k, str) or not isinstance(v, list) or len(v) != 5:
+            log.warning(
+                "RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE entry %r has "
+                "wrong shape (must be [name,email,jurisdiction,days,"
+                "priority]); skipping.", k,
+            )
+            continue
+        name, email, jurisdiction, days, prio = v
+        if (not isinstance(name, str) or "@" not in str(email)
+            or not isinstance(jurisdiction, str)
+            or not isinstance(days, int) or days < 1 or days > 365
+            or prio not in ("high", "medium", "low")):
+            log.warning(
+                "RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE entry %r has "
+                "invalid values; skipping.", k,
+            )
+            continue
+        out[k.lower()] = (name, email, jurisdiction, days, prio)
+    return out
+
+
 def _resolve_cex_recipient(
     exchange_raw: str | None,
 ) -> dict[str, Any] | None:
     """Look up CEX compliance contact + jurisdiction by exchange
     display name. Case-insensitive; tries exact, then substring
-    match (handles 'Binance Hot Wallet 14' → 'binance')."""
+    match (handles 'Binance Hot Wallet 14' → 'binance').
+
+    v0.28.3: respects operator overrides via the
+    RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE env var (see
+    _load_operator_overrides docstring). Override values are
+    merged onto _KNOWN_CEX_COMPLIANCE at lookup time, so a typo'd
+    compliance email in production can be corrected without a
+    code redeploy.
+    """
     if not isinstance(exchange_raw, str):
         return None
     exchange = exchange_raw.strip().lower()
     if not exchange:
         return None
-    if exchange in _KNOWN_CEX_COMPLIANCE:
-        name, email, jurisdiction, days, prio = _KNOWN_CEX_COMPLIANCE[exchange]
+    compliance_map = _load_operator_overrides()
+    if exchange in compliance_map:
+        name, email, jurisdiction, days, prio = compliance_map[exchange]
         return {
             "recipient_name": name,
             "recipient_compliance_email": email,
@@ -120,7 +187,7 @@ def _resolve_cex_recipient(
             "priority": prio,
         }
     # Substring fallback (handles "Binance 8" / "Binance Hot Wallet 14").
-    for k, v in _KNOWN_CEX_COMPLIANCE.items():
+    for k, v in compliance_map.items():
         if k in exchange:
             name, email, jurisdiction, days, prio = v
             return {

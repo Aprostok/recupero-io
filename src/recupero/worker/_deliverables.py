@@ -542,6 +542,40 @@ def build_all_deliverables(
                 log.warning("brief generation failed for issuer=%s: %s",
                             issuer_name, e)
 
+    # v0.28.0 (Jacob review item 3): render the SUBPOENA_TARGETS
+    # artifact family — one subpoena_target_*.html per entry +
+    # one subpoena_playbook_*.html per case. These are operator-
+    # facing legal-process workplans for cases where the
+    # perpetrator-controlled position is real but not issuer-
+    # freezable (DAI / native ETH / Sky / WETH).
+    try:
+        from recupero.reports.subpoena_renderer import (
+            render_subpoena_artifacts,
+        )
+        subpoena_paths = render_subpoena_artifacts(
+            case=case,
+            victim=victim,
+            investigator=investigator,
+            freeze_brief=freeze_brief,
+            case_dir=case_dir,
+        )
+        for p in subpoena_paths:
+            written.append(p)
+            html_paths.append(p)
+        if subpoena_paths:
+            log.info(
+                "wrote %d subpoena artifact(s) for case=%s",
+                len(subpoena_paths), case.case_id,
+            )
+    except Exception as _exc:  # noqa: BLE001
+        # Subpoena render failure is non-fatal — log + continue so
+        # the rest of the deliverables still ship. INVARIANT E will
+        # surface the gap at validation time.
+        log.warning(
+            "subpoena artifact rendering failed (non-fatal, "
+            "INVARIANT E will flag at validation): %s", _exc,
+        )
+
     # Generate PDF versions of every HTML deliverable + the standalone
     # flow SVG. Best-effort — a WeasyPrint failure on one file logs a
     # warning but doesn't kill the stage (operators can still hand-deliver

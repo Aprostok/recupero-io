@@ -1,0 +1,199 @@
+{# Per-recipient subpoena target document. v0.28.0.
+
+   Renders one subpoena for a specific recipient (CEX, ISP, KYC
+   provider, dApp, law enforcement). Body sections mirror the
+   freeze_request structure so the legal-review pattern operators
+   already know maps 1:1.
+
+   Inputs (via Jinja context):
+     * target: a SUBPOENA_TARGETS list element (dict)
+     * case_id, brief_id, victim, investigator
+     * generated_at (ISO timestamp string)
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Subpoena Target — {{ target.recipient_name }} — Case {{ case_id }}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; max-width: 8.5in; margin: 0.5in auto; padding: 0 0.5in; color: #1f2937; line-height: 1.5; font-size: 11pt; }
+    h1 { font-size: 18pt; margin-bottom: 0.25em; color: #111827; border-bottom: 2px solid #1f2937; padding-bottom: 0.25em; }
+    h2 { font-size: 14pt; margin-top: 1.5em; color: #1f2937; }
+    h3 { font-size: 12pt; margin-top: 1em; color: #374151; }
+    table { border-collapse: collapse; width: 100%; margin: 0.5em 0; font-size: 10pt; }
+    th, td { border: 1px solid #d1d5db; padding: 0.4em 0.6em; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; font-weight: 600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9pt; word-break: break-all; }
+    .amount { text-align: right; }
+    .pill { display: inline-block; padding: 0.15em 0.5em; border-radius: 0.5em; font-size: 9pt; font-weight: 600; }
+    .pill-high { background: #fee2e2; color: #991b1b; }
+    .pill-medium { background: #fef3c7; color: #92400e; }
+    .pill-low { background: #f3f4f6; color: #374151; }
+    .summary-box { background: #f9fafb; border-left: 4px solid #1f2937; padding: 0.75em 1em; margin: 1em 0; }
+    .meta-row { display: flex; gap: 1em; flex-wrap: wrap; margin: 0.5em 0; font-size: 10pt; color: #4b5563; }
+    .meta-row strong { color: #1f2937; }
+    ul { padding-left: 1.5em; }
+    li { margin: 0.25em 0; }
+    footer { margin-top: 3em; border-top: 1px solid #d1d5db; padding-top: 1em; font-size: 9pt; color: #6b7280; }
+  </style>
+</head>
+<body>
+
+<h1>Subpoena Target — {{ target.recipient_name }}</h1>
+
+<div class="meta-row">
+  <span><strong>Case:</strong> {{ case_id }}</span>
+  <span><strong>Target ID:</strong> {{ target.target_id }}</span>
+  <span><strong>Priority:</strong>
+    <span class="pill pill-{{ target.priority|default('medium') }}">{{ target.priority|default('medium')|upper }}</span>
+  </span>
+  <span><strong>Generated:</strong> {{ generated_at }}</span>
+</div>
+
+<h2>1. Executive Summary</h2>
+<p>
+  This document is a structured record-request brief for
+  <strong>{{ target.recipient_name }}</strong>{% if target.recipient_jurisdiction %} ({{ target.recipient_jurisdiction }}){% endif %}.
+  In connection with case <code>{{ case_id }}</code>{% if victim and victim.name %} (victim: {{ victim.name }}){% endif %},
+  Recupero has identified
+  {% if target.linked_addresses|length == 1 %}
+    one on-chain address
+  {% else %}
+    {{ target.linked_addresses|length }} on-chain addresses
+  {% endif %}
+  that {% if target.evidentiary_basis == 'off_ramp_deposit' %}received perpetrator-controlled funds via {{ target.recipient_name }}'s exchange infrastructure{% elif target.evidentiary_basis == 'non_freezable_seizure_target' %}holds perpetrator-controlled value at non-freezable (permissionless / wrapper) assets{% else %}{{ target.evidentiary_basis|default('') }}{% endif %}.
+  The records requested below are intended to surface the
+  perpetrator's identity and enable subsequent
+  {% if target.recipient_type == 'cex' %}criminal-process referral and seizure{% elif target.recipient_type == 'law_enforcement' %}seizure / arrest{% else %}investigative pivots{% endif %}.
+  The expected response window is
+  <strong>{{ target.estimated_response_window_days|default(30) }} days</strong>.
+</p>
+
+<h2>2. Factual Basis</h2>
+<p>
+  The on-chain trace anchored at <code>{{ case_id }}</code> identifies the following address(es)
+  under {{ target.recipient_name }}'s control:
+</p>
+<table>
+  <thead>
+    <tr>
+      <th style="width:22em;">Address</th>
+      <th style="width:8em;">Chain</th>
+      <th>Role</th>
+      <th class="amount">Amount (USD)</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for la in target.linked_addresses %}
+    <tr>
+      <td class="mono">{{ la.address }}</td>
+      <td>{{ la.chain or '—' }}</td>
+      <td>{{ la.role }}</td>
+      <td class="amount mono">
+        {% if la.evidence and la.evidence|length > 0 %}
+          {% for ev in la.evidence %}
+            {% if ev.amount_usd %}${{ '{:,.2f}'.format(ev.amount_usd|float) }}{% endif %}
+            {% if not loop.last %}<br>{% endif %}
+          {% endfor %}
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<p>
+  Each address was identified via on-chain trace from the victim's
+  seed address, with provenance recorded in the case's
+  <code>case.json</code> and <code>freeze_brief.json</code> sibling
+  artifacts. Block-by-block trace evidence is available on request.
+</p>
+
+<h2>3. Records Requested</h2>
+<p>
+  The following records are requested for each address listed in
+  section 2:
+</p>
+<ul>
+{% for r in target.expected_records %}
+  <li>{{ r }}</li>
+{% endfor %}
+</ul>
+
+<h2>4. Legal Authority</h2>
+<p>
+  <strong>Instrument:</strong>
+  {% if target.instrument == 'grand_jury_subpoena' %}Grand jury subpoena (under 18 U.S.C. § 3486 or equivalent statutory authority){% elif target.instrument == 'seizure_order' %}Seizure order (post-identification — coordinated with prosecuting agency){% else %}{{ target.instrument or '(operator to specify)' }}{% endif %}.
+</p>
+<p>
+  Delivery: this document is for in-person service or e-mail forwarding
+  to the recipient's compliance team{% if target.recipient_compliance_email %}
+  at <code>{{ target.recipient_compliance_email }}</code>{% endif %}.
+  Chain-of-custody verification: every linked address in section 2 is
+  verifiable on-chain at the recipient's preferred block explorer.
+</p>
+
+<h2>5. Follow-up Pivots</h2>
+<p>
+  Anticipated follow-up actions based on the records this subpoena
+  produces:
+</p>
+{% if target.follow_up_pivots %}
+<table>
+  <thead>
+    <tr>
+      <th>If records show...</th>
+      <th>Next target type</th>
+      <th>Note</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for pivot in target.follow_up_pivots %}
+    <tr>
+      <td><code>{{ pivot.if_records_show }}</code></td>
+      <td>{{ pivot.next_target_type }}</td>
+      <td>{{ pivot.notes or '' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No follow-up pivots documented for this target.</em></p>
+{% endif %}
+
+<h2>6. Investigator Certification</h2>
+<p>
+  This document was prepared by Recupero on behalf of
+  {% if victim and victim.name %}victim <strong>{{ victim.name }}</strong>{% else %}the case-of-record victim{% endif %}
+  in coordination with
+  {% if investigator and investigator.name %}<strong>{{ investigator.name }}</strong>{% if investigator.organization %} ({{ investigator.organization }}){% endif %}{% else %}the assigned investigator{% endif %}.
+  All addresses listed are derived from on-chain BFS trace data
+  with full transaction-level evidence retained for forensic
+  cross-reference.
+</p>
+{% if investigator and investigator.email %}
+<p>
+  <strong>Investigator contact:</strong>
+  <code>{{ investigator.email }}</code>
+</p>
+{% endif %}
+
+{% if target.depends_on %}
+<div class="summary-box">
+  <strong>Dependency note.</strong> This subpoena is downstream of
+  {{ target.depends_on|length }} prior target(s):
+  {% for d in target.depends_on %}<code>{{ d }}</code>{% if not loop.last %}, {% endif %}{% endfor %}.
+  Deliver this only after the dependent records have been received
+  and reviewed for the records-show conditions in section 5.
+</div>
+{% endif %}
+
+<footer>
+  Generated by Recupero · Case <code>{{ case_id }}</code> · Target
+  <code>{{ target.target_id }}</code> · {{ generated_at }}.
+  This document is operator-prepared evidence intended for
+  judicial / law-enforcement review. Not a public artifact.
+</footer>
+
+</body>
+</html>

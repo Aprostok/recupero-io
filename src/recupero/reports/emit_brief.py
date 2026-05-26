@@ -1773,6 +1773,50 @@ def emit_brief(
         "SCHEMA_VERSION": _BRIEF_SCHEMA_VERSION,
     }
 
+    # v0.28.0 (Jacob review item 3): SUBPOENA_TARGETS — the
+    # identified-but-non-freezable artifact family. For Zigha-shape
+    # cases where the perpetrator-controlled position is real but
+    # there's no issuer-freeze pathway (DAI / native ETH / Sky /
+    # WETH), we still have leverage via the off-ramp CEX deposit's
+    # KYC records. This pass walks the case's exchange endpoints +
+    # editorial UNRECOVERABLE_ITEMS and emits structured subpoena-
+    # ready records the renderer turns into subpoena_target_*.html +
+    # subpoena_playbook_*.html artifacts. See
+    # docs/v0.28_subpoena_targets_design.md and INVARIANTS C/D/E.
+    try:
+        from recupero.reports.subpoena_targets import extract_subpoena_targets
+        # exchanges list: each entry already carries address +
+        # exchange + total_received_usd. Build the dict shape the
+        # extractor expects from the brief's already-built list.
+        exchange_dicts = [
+            {
+                "address": getattr(e, "address", None) if not isinstance(e, dict) else e.get("address"),
+                "exchange": getattr(e, "exchange", None) if not isinstance(e, dict) else e.get("exchange"),
+                "total_received_usd": str(getattr(e, "total_received_usd", "") or "")
+                    if not isinstance(e, dict) else e.get("total_received_usd"),
+                "chain": getattr(e, "chain", None) if not isinstance(e, dict) else e.get("chain"),
+                "source": "label_db",
+            }
+            for e in (case.exchange_endpoints or [])
+        ]
+        brief["SUBPOENA_TARGETS"] = extract_subpoena_targets(
+            case=case,
+            freeze_asks=freeze_asks,
+            editorial=editorial,
+            exchanges=exchange_dicts,
+            unrecoverable=unrecoverable,
+        )
+    except Exception as _exc:  # noqa: BLE001
+        # Never let a SUBPOENA_TARGETS extraction failure abort the
+        # whole brief — log + emit empty list so the rest of the
+        # pipeline proceeds. INVARIANT C will fire as a warning if
+        # the absence is unexpected.
+        log.warning(
+            "subpoena_targets extraction failed (%s); emitting empty list",
+            _exc,
+        )
+        brief["SUBPOENA_TARGETS"] = []
+
     # JACOB-EYEBALL fix: surface the stolen-asset block at top-level
     # so downstream readers (the output_integrity validator's check 8,
     # post-hoc inspection scripts, the API surface that exposes

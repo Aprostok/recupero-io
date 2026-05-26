@@ -343,6 +343,34 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_perpetrator_holdings_reconcile(
              briefs_dir, freeze_brief,
          )),
+        # v0.28.0 (Jacob review item 3): SUBPOENA_TARGETS INVARIANTS.
+        # The identified-but-non-freezable artifact family.
+        #
+        # INVARIANT C: every freeze_capability="no" destination
+        # above $1K USD has either (a) a SUBPOENA_TARGETS entry
+        # referencing it, or (b) an explicit UNRECOVERABLE entry
+        # with a `reason` field explaining why no subpoena pivot
+        # exists. Catches the Zigha-shape coverage gap where the
+        # worker identifies a non-freezable position and offers
+        # operators no follow-up action.
+        ("subpoena_targets_cover_non_freezable",
+         lambda: _check_subpoena_targets_cover_non_freezable(
+             freeze_brief,
+         )),
+        # INVARIANT D: every SUBPOENA_TARGETS entry's depends_on
+        # references must resolve to other target_ids in the same
+        # list. Dangling pointers = unrenderable playbook DAG.
+        ("subpoena_targets_depends_on_resolves",
+         lambda: _check_subpoena_targets_depends_on_resolves(
+             freeze_brief,
+         )),
+        # INVARIANT E: subpoena_target_*.html files on disk MUST
+        # equal |SUBPOENA_TARGETS|. A subpoena_playbook_*.html
+        # MUST also exist when SUBPOENA_TARGETS is non-empty.
+        ("subpoena_files_match_targets",
+         lambda: _check_subpoena_files_match_targets(
+             briefs_dir, freeze_brief,
+         )),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -2782,6 +2810,248 @@ def _check_perpetrator_holdings_reconcile(
             "inflation symptom."
         ),
     )]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.28.0 INVARIANTS C/D/E — SUBPOENA_TARGETS artifact family.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# USD threshold below which a non-freezable destination doesn't need
+# a SUBPOENA_TARGETS entry. Matches SUBPOENA_USD_THRESHOLD in
+# subpoena_targets.py — $1K matches the design doc's INVARIANT C wording.
+_SUBPOENA_USD_THRESHOLD = Decimal("1000")
+
+
+def _check_subpoena_targets_cover_non_freezable(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT C (v0.28.0, Jacob review item 3): every
+    freeze_capability="no" destination above $1K USD has either
+    (a) a SUBPOENA_TARGETS entry referencing it, or (b) an
+    explicit UNRECOVERABLE entry with a `reason` field explaining
+    why no subpoena pivot exists.
+
+    The intent: every non-freezable position the worker identifies
+    must be accounted for somewhere actionable — either in the
+    subpoena pipeline (subpoena → identity → seizure) or with an
+    explicit operator-curated "why no subpoena" rationale. Pre-fix
+    Zigha-shape cases had no place to put these positions; they
+    landed in UNRECOVERABLE as a dead-end label.
+
+    Severity: warning. INVARIANT C is the most policy-y of the
+    v0.28 invariants — operators may legitimately decide a
+    position isn't worth a subpoena (small amount, anonymous
+    perpetrator, no off-ramp). The warning surfaces the gap; an
+    operator decision to skip is fine.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    violations: list[Violation] = []
+
+    # Collect addresses already covered by SUBPOENA_TARGETS.
+    subpoena_targets = freeze_brief.get("SUBPOENA_TARGETS") or []
+    if not isinstance(subpoena_targets, list):
+        return []
+    covered_addrs: set[str] = set()
+    for t in subpoena_targets:
+        if not isinstance(t, dict):
+            continue
+        for la in t.get("linked_addresses") or []:
+            if isinstance(la, dict):
+                addr = la.get("address")
+                if isinstance(addr, str):
+                    covered_addrs.add(addr.lower())
+
+    # Collect addresses covered by UNRECOVERABLE with a reason.
+    unrec_covered: set[str] = set()
+    for u in freeze_brief.get("UNRECOVERABLE") or []:
+        if not isinstance(u, dict):
+            continue
+        # An UNRECOVERABLE row counts as "covered" only when it has
+        # a non-empty reason field — operator-acknowledged rationale.
+        reason = u.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            continue
+        addr = u.get("address")
+        if isinstance(addr, str):
+            unrec_covered.add(addr.lower())
+
+    # Find every freeze_capability="no" destination above the
+    # threshold. Sources:
+    #   * freeze_brief.FREEZABLE entries with freeze_capability
+    #     pinned to "no" / "low" (e.g. Sky DAI permissionless).
+    #   * freeze_brief.UNRECOVERABLE entries with a $ amount that
+    #     LACK a reason (those are the gap).
+    # We don't need to revisit UNRECOVERABLE-with-reason entries
+    # because they're already covered.
+    re_usd = re.compile(r"\$([0-9,]+(?:\.[0-9]+)?)")
+    for f in freeze_brief.get("FREEZABLE") or []:
+        if not isinstance(f, dict):
+            continue
+        cap = (f.get("freeze_capability") or "").strip().lower()
+        if cap not in ("no", "low"):
+            continue
+        for h in f.get("holdings") or []:
+            if not isinstance(h, dict):
+                continue
+            addr = (h.get("address") or "").lower()
+            if not addr:
+                continue
+            usd_raw = h.get("usd") or "0"
+            m = re_usd.search(usd_raw) if isinstance(usd_raw, str) else None
+            if not m:
+                continue
+            try:
+                usd = Decimal(m.group(1).replace(",", ""))
+            except (InvalidOperation, ArithmeticError):
+                continue
+            if usd < _SUBPOENA_USD_THRESHOLD:
+                continue
+            if addr in covered_addrs or addr in unrec_covered:
+                continue
+            violations.append(Violation(
+                check="subpoena_targets_cover_non_freezable",
+                severity="warning",
+                detail=(
+                    f"Non-freezable destination at {addr[:14]}... "
+                    f"(issuer {f.get('issuer')!r}, ${usd:,}) has no "
+                    "SUBPOENA_TARGETS entry AND no UNRECOVERABLE "
+                    "entry with a `reason` field. Either generate a "
+                    "subpoena target (via extract_subpoena_targets) "
+                    "or document why no subpoena pivot exists."
+                ),
+            ))
+    return violations
+
+
+def _check_subpoena_targets_depends_on_resolves(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT D (v0.28.0, Jacob review item 3): every
+    SUBPOENA_TARGETS entry's depends_on references must resolve to
+    other target_ids in the SAME case's list.
+
+    Catches dangling DAG pointers — a target whose depends_on
+    references a target_id that doesn't exist in the case. The
+    playbook renderer would silently produce a broken dependency
+    chain.
+
+    Severity: high. Renders the playbook unreliable.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    targets = freeze_brief.get("SUBPOENA_TARGETS") or []
+    if not isinstance(targets, list) or not targets:
+        return []
+
+    # Build the set of known target_ids in this case.
+    known_ids: set[str] = set()
+    for t in targets:
+        if isinstance(t, dict):
+            tid = t.get("target_id")
+            if isinstance(tid, str):
+                known_ids.add(tid)
+
+    violations: list[Violation] = []
+    for t in targets:
+        if not isinstance(t, dict):
+            continue
+        depends_on = t.get("depends_on") or []
+        if not isinstance(depends_on, list):
+            violations.append(Violation(
+                check="subpoena_targets_depends_on_resolves",
+                severity="high",
+                detail=(
+                    f"SUBPOENA_TARGETS entry {t.get('target_id')!r} has "
+                    f"depends_on of type {type(depends_on).__name__}; "
+                    "expected list. The playbook DAG cannot resolve."
+                ),
+            ))
+            continue
+        for d in depends_on:
+            if not isinstance(d, str) or d not in known_ids:
+                violations.append(Violation(
+                    check="subpoena_targets_depends_on_resolves",
+                    severity="high",
+                    detail=(
+                        f"SUBPOENA_TARGETS entry {t.get('target_id')!r} "
+                        f"depends_on={d!r} does not resolve to any "
+                        f"target_id in this case. Known target_ids: "
+                        f"{sorted(known_ids)}. Dangling DAG pointer."
+                    ),
+                ))
+    return violations
+
+
+def _check_subpoena_files_match_targets(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT E (v0.28.0, Jacob review item 3): the count of
+    subpoena_target_*.html files on disk MUST equal
+    |SUBPOENA_TARGETS|. The subpoena_playbook_*.html file MUST
+    exist when SUBPOENA_TARGETS is non-empty.
+
+    Catches the case where the renderer silently dropped one or
+    more targets (e.g. template parse error logged + swallowed,
+    file write permission failure).
+
+    Severity: high. A missing per-target file means an operator
+    won't see one of the subpoenas they need to file.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    targets = freeze_brief.get("SUBPOENA_TARGETS") or []
+    if not isinstance(targets, list):
+        return []
+
+    if not targets:
+        # Empty SUBPOENA_TARGETS → no files expected. Inapplicable.
+        return []
+
+    if not briefs_dir.is_dir():
+        return [Violation(
+            check="subpoena_files_match_targets",
+            severity="high",
+            detail=(
+                f"freeze_brief.SUBPOENA_TARGETS lists {len(targets)} "
+                "entries but briefs_dir doesn't exist."
+            ),
+        )]
+
+    violations: list[Violation] = []
+
+    # Count subpoena_target_*.html files on disk.
+    target_files = sorted(briefs_dir.glob("subpoena_target_*.html"))
+    if len(target_files) != len(targets):
+        violations.append(Violation(
+            check="subpoena_files_match_targets",
+            severity="high",
+            file=str(briefs_dir.name),
+            detail=(
+                f"freeze_brief.SUBPOENA_TARGETS has {len(targets)} "
+                f"entries but {len(target_files)} subpoena_target_"
+                f"*.html files were written. Likely cause: a "
+                "renderer error swallowed a file write (check the "
+                "worker logs for 'subpoena_target render failed')."
+            ),
+        ))
+
+    # Playbook must exist.
+    playbook_files = sorted(briefs_dir.glob("subpoena_playbook_*.html"))
+    if not playbook_files:
+        violations.append(Violation(
+            check="subpoena_files_match_targets",
+            severity="high",
+            file=str(briefs_dir.name),
+            detail=(
+                f"freeze_brief.SUBPOENA_TARGETS has {len(targets)} "
+                "entries but no subpoena_playbook_*.html exists. "
+                "Operators have no workplan document — every target "
+                "would have to be tracked manually."
+            ),
+        ))
+
+    return violations
 
 
 __all__ = (

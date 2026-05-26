@@ -1,0 +1,199 @@
+{# Subpoena playbook — one per case. v0.28.0.
+
+   Renders the depends_on DAG of subpoena targets as a workplan
+   document for the case's law-enforcement / investigator team. The
+   document an FBI cyber unit reads as their workplan.
+
+   Inputs:
+     * targets: full SUBPOENA_TARGETS list
+     * case_id, brief_id, victim, investigator
+     * generated_at
+#}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Subpoena Playbook — Case {{ case_id }}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 8.5in; margin: 0.5in auto; padding: 0 0.5in; color: #1f2937; line-height: 1.5; font-size: 11pt; }
+    h1 { font-size: 18pt; margin-bottom: 0.25em; border-bottom: 2px solid #1f2937; padding-bottom: 0.25em; }
+    h2 { font-size: 14pt; margin-top: 1.5em; }
+    h3 { font-size: 12pt; margin-top: 1em; color: #374151; }
+    table { border-collapse: collapse; width: 100%; margin: 0.5em 0; font-size: 10pt; }
+    th, td { border: 1px solid #d1d5db; padding: 0.4em 0.6em; text-align: left; vertical-align: top; }
+    th { background: #f3f4f6; font-weight: 600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 9pt; }
+    .pill { display: inline-block; padding: 0.15em 0.5em; border-radius: 0.5em; font-size: 9pt; font-weight: 600; }
+    .pill-high { background: #fee2e2; color: #991b1b; }
+    .pill-medium { background: #fef3c7; color: #92400e; }
+    .pill-low { background: #f3f4f6; color: #374151; }
+    .stage-card { background: #f9fafb; border-left: 4px solid #1f2937; padding: 0.75em 1em; margin: 1em 0; border-radius: 0.25em; }
+    .stage-card h3 { margin: 0 0 0.25em 0; }
+    .stage-meta { font-size: 10pt; color: #4b5563; margin-bottom: 0.5em; }
+    .empty { color: #6b7280; font-style: italic; }
+    footer { margin-top: 3em; border-top: 1px solid #d1d5db; padding-top: 1em; font-size: 9pt; color: #6b7280; }
+  </style>
+</head>
+<body>
+
+<h1>Subpoena Playbook — Case {{ case_id }}</h1>
+
+<p>
+  This document is the case-level workplan for the
+  {{ targets|length }} subpoena target(s) generated for case
+  <code>{{ case_id }}</code>{% if victim and victim.name %} (victim: <strong>{{ victim.name }}</strong>){% endif %}.
+  Each subpoena_target_*.html document carries the full per-recipient
+  brief; this playbook captures the dependency graph + recommended
+  ordering.
+</p>
+
+{% if not targets %}
+<div class="stage-card">
+  <h3>No subpoena targets identified for this case.</h3>
+  <p>This is the expected shape when every perpetrator-controlled
+  position is either fully freezable via the issuer pathway, or
+  below the $1,000 USD subpoena-threshold gate. See INVARIANT C for
+  the exhaustive-coverage rule.</p>
+</div>
+{% else %}
+
+<h2>Stages</h2>
+<p>
+  Targets are listed below in dependency order — earliest deliverable
+  first. A target with non-empty <em>depends_on</em> should not be
+  filed until the parent targets have produced results that satisfy
+  the records-show condition in section 5 of each parent's brief.
+</p>
+
+{# Stage 1: targets with no dependencies (file these first). #}
+<h3>Stage 1 — Independent (file immediately)</h3>
+{% set stage1 = targets | rejectattr('depends_on') | list %}
+{% if not stage1 %}
+  {# In case rejectattr doesn't behave the way we want with empty lists,
+     re-derive by length check. #}
+  {% set stage1 = [] %}
+  {% for t in targets %}
+    {% if not t.depends_on or t.depends_on|length == 0 %}
+      {% set _ = stage1.append(t) %}
+    {% endif %}
+  {% endfor %}
+{% endif %}
+
+{% if stage1 %}
+{% for t in stage1 %}
+<div class="stage-card">
+  <h3>
+    <span class="pill pill-{{ t.priority|default('medium') }}">
+      {{ t.priority|default('medium')|upper }}
+    </span>
+    {{ t.recipient_name }}
+    <span class="mono" style="color:#6b7280; font-weight:400;">({{ t.target_id }})</span>
+  </h3>
+  <div class="stage-meta">
+    {{ t.recipient_type|upper }}
+    {% if t.recipient_jurisdiction %} · {{ t.recipient_jurisdiction }}{% endif %}
+    {% if t.recipient_compliance_email %} · <code>{{ t.recipient_compliance_email }}</code>{% endif %}
+    · expected response: {{ t.estimated_response_window_days|default(30) }} days
+  </div>
+  <div>
+    <strong>Linked addresses:</strong>
+    {% for la in t.linked_addresses %}
+      <code class="mono">{{ la.address[:14] }}...{{ la.address[-6:] }}</code>
+      ({{ la.role }})
+      {% if not loop.last %}<br>{% endif %}
+    {% endfor %}
+  </div>
+  <div style="margin-top: 0.5em;">
+    <strong>Instrument:</strong> {{ t.instrument }}
+    · <strong>Basis:</strong> {{ t.evidentiary_basis }}
+  </div>
+  <div style="margin-top: 0.5em;">
+    Full brief: <code>subpoena_target_{{ t.recipient_slug }}_{{ brief_id }}.html</code>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<p class="empty">No independent targets — every target has unresolved dependencies.</p>
+{% endif %}
+
+{# Stage 2+: targets WITH dependencies. #}
+<h3>Stage 2 — Conditional (file after dependent records received)</h3>
+{% set stage2 = [] %}
+{% for t in targets %}
+  {% if t.depends_on and t.depends_on|length > 0 %}
+    {% set _ = stage2.append(t) %}
+  {% endif %}
+{% endfor %}
+{% if stage2 %}
+{% for t in stage2 %}
+<div class="stage-card">
+  <h3>
+    <span class="pill pill-{{ t.priority|default('medium') }}">
+      {{ t.priority|default('medium')|upper }}
+    </span>
+    {{ t.recipient_name }}
+    <span class="mono" style="color:#6b7280; font-weight:400;">({{ t.target_id }})</span>
+  </h3>
+  <div class="stage-meta">
+    {{ t.recipient_type|upper }}
+    {% if t.recipient_jurisdiction %} · {{ t.recipient_jurisdiction }}{% endif %}
+    {% if t.recipient_compliance_email %} · <code>{{ t.recipient_compliance_email }}</code>{% endif %}
+    · expected response: {{ t.estimated_response_window_days|default(30) }} days
+  </div>
+  <div>
+    <strong>Depends on:</strong>
+    {% for d in t.depends_on %}<code>{{ d }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+  </div>
+  <div style="margin-top: 0.5em;">
+    <strong>Linked addresses:</strong>
+    {% for la in t.linked_addresses %}
+      <code class="mono">{{ la.address[:14] }}...{{ la.address[-6:] }}</code>
+      ({{ la.role }})
+      {% if not loop.last %}<br>{% endif %}
+    {% endfor %}
+  </div>
+  <div style="margin-top: 0.5em;">
+    Full brief: <code>subpoena_target_{{ t.recipient_slug }}_{{ brief_id }}.html</code>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<p class="empty">No conditional targets — all subpoenas are independent.</p>
+{% endif %}
+
+<h2>Dependency Graph (text form)</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Target</th>
+      <th>Recipient</th>
+      <th>Depends on</th>
+      <th>Priority</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for t in targets %}
+    <tr>
+      <td class="mono">{{ t.target_id }}</td>
+      <td>{{ t.recipient_name }}</td>
+      <td>
+        {% if t.depends_on %}
+          {% for d in t.depends_on %}<code>{{ d }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+        {% else %}<em>(none)</em>{% endif %}
+      </td>
+      <td><span class="pill pill-{{ t.priority|default('medium') }}">{{ t.priority|default('medium')|upper }}</span></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<footer>
+  Generated by Recupero · Case <code>{{ case_id }}</code> ·
+  {{ targets|length }} target(s) · {{ generated_at }}.
+  This document is operator-prepared workplan evidence intended for
+  judicial / law-enforcement review. Not a public artifact.
+</footer>
+
+</body>
+</html>

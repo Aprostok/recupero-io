@@ -7,7 +7,9 @@
     "source": "manual:zigha_report_2025",
     "confidence": "high",
     "notes": "Identified by CryptoForensic Investigators in Zigha case report",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x28C6c06298d514Db089934071355E5743bf21d60",
@@ -16,7 +18,9 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x21a31Ee1afC51d94C2eFcCAa2092aD1028285549",
@@ -25,7 +29,9 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xDFd5293D8e347dFe59E90eFd55b2956a1343963d",
@@ -34,7 +40,9 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xF977814e90dA44bFA03b6295A0616a897441aceC",
@@ -43,7 +51,9 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x71660c4005BA85c37ccec55d0C4493E66Fe775d3",
@@ -52,7 +62,9 @@
     "exchange": "Coinbase",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x503828976D22510aad0201ac7EC88293211D23Da",
@@ -61,7 +73,9 @@
     "exchange": "Coinbase",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xddfAbCdc4D8FfC6d5beaf154f18B778f892A0740",
@@ -70,7 +84,9 @@
     "exchange": "Coinbase",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x3cD751E6b0078Be393132286c442345e5DC49699",
@@ -79,7 +95,9 @@
     "exchange": "Coinbase",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x267be1C1D684F78cb4F6a176C4911b741E4Ffdc0",
@@ -88,7 +106,9 @@
     "exchange": "Kraken",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x6262998Ced04146fA42253a5C0AF90CA02dfd2A3",
@@ -97,7 +117,9 @@
     "exchange": "Crypto.com",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x46340b20830761efd32832A74d7169B29FEB9758",
@@ -106,7 +128,9 @@
     "exchange": "Crypto.com",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x2FAF487A4414Fe77e2327F0bf4AE2a264a776AD2",
@@ -116,7 +140,9 @@
     "source": "etherscan_public_tag",
     "confidence": "high",
     "notes": "Bankruptcy estate — flag for special handling",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xA7EFAe728D2936e78BDA97dc267687568dD593f3",
@@ -125,7 +151,9 @@
     "exchange": "OKX",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x868daB0b8E21EC0a48b76A7787b7d3Cb6f9B3576",
@@ -134,7 +162,9 @@
     "exchange": "OKX",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xD6216fC19DB775Df9774a6E33526131dA7D19a2c",
@@ -143,7 +173,9 @@
     "exchange": "KuCoin",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xD89350284c7732163765b23338f2ff27449E0Bf5",
@@ -152,7 +184,9 @@
     "exchange": "Bybit",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x1AE0EA34a72D944a8C7603FfB3eC30a6669E454C",
@@ -161,7 +195,9 @@
     "exchange": "Poloniex",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x0D0707963952f2fBA59dD06f2b425ace40b492Fe",
@@ -170,7 +206,9 @@
     "exchange": "Gate.io",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x1C4b70a3968436B9A0a9cf5205c787eb81Bb558c",
@@ -179,7 +217,9 @@
     "exchange": "Gate.io",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x75e89d5979E4f6Fba9F97c104c2F0AFB3F1dcB88",
@@ -188,7 +228,9 @@
     "exchange": "MEXC",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x9642b23Ed1E01Df1092B92641051881a322F5D4E",
@@ -197,7 +239,9 @@
     "exchange": "Bitfinex",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x77696bb39917C91A0c3908D577d5e322095425cA",
@@ -207,9 +251,10 @@
     "source": "manual:public_observation",
     "confidence": "medium",
     "notes": "Instant-swap service frequently used by perpetrators per Zigha report",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
-
   {
     "address": "0x3f5ce5fbfe3e9af3971dd833d26ba9b5c936f0be",
     "name": "Binance 1 (cold)",
@@ -217,7 +262,9 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x564286362092d8e7936f0549571a803b203aaced",
@@ -226,7 +273,9 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x0681d8db095565fe8a346fa0277bffde9c0edbbf",
@@ -235,7 +284,9 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xb739d0895772dbb71a89a3754a160269068f0d45",
@@ -244,7 +295,9 @@
     "exchange": "Crypto.com",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x7891ebee8b59d1c69ef6f0d4b41f5d12d4a3fe8c",
@@ -253,7 +306,9 @@
     "exchange": "Bybit",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x47ac0fb4f2d84898e4d9e7b4dab3c24507a6d503",
@@ -262,9 +317,10 @@
     "exchange": "Binance",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
-
   {
     "address": "0xb5d85cbf7cb3ee0d56b3bb207d5fc4b82f43f511",
     "name": "Coinbase 6",
@@ -272,9 +328,10 @@
     "exchange": "Coinbase",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
-
   {
     "address": "0x66f820a414680b5bcda5eeca5dea238543f42054",
     "name": "Kraken 1",
@@ -282,7 +339,9 @@
     "exchange": "Kraken",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xae2d4617c862309a3d75a0ffb358c7a5009c673f",
@@ -291,7 +350,9 @@
     "exchange": "Kraken",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xfe9e8709d3215310075d67e3ed32a380ccf451c8",
@@ -300,7 +361,9 @@
     "exchange": "OKX",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x236f9f97e0e62388479bf9e5ba4889e46b0273c3",
@@ -309,7 +372,9 @@
     "exchange": "OKX",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x73f8fc2e74302eb2efda125a326655acf0dc2d1b",
@@ -318,9 +383,10 @@
     "exchange": "Gemini",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
-
   {
     "address": "0xfdb16996831753d5331ff813c29a93c76834a0ad",
     "name": "Huobi Hot",
@@ -328,7 +394,9 @@
     "exchange": "Huobi",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xeee28d484628d41a82d01e21d12e2e78d69920da",
@@ -337,10 +405,10 @@
     "exchange": "Huobi",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
-
-
   {
     "address": "0xc9a2c4868f0f96faaa739b59934dc9cb304112ec",
     "name": "Gate.io Hot",
@@ -348,9 +416,10 @@
     "exchange": "Gate.io",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
-
   {
     "address": "0x2b5634c42055806a59e9107ed44d43c426e58258",
     "name": "KuCoin 3",
@@ -358,6 +427,8 @@
     "exchange": "KuCoin",
     "source": "etherscan_public_tag",
     "confidence": "high",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   }
 ]

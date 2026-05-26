@@ -6,7 +6,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED — flag for special handling",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x910Cbd523D972eb0a6f4cAe4618aD62622b39DbF",
@@ -15,7 +17,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xA160cdAB225685dA1d56aa342Ad8841c3b53f291",
@@ -24,7 +28,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xD4B88Df4D29F5CedD6857912842cff3b20C8Cfa3",
@@ -33,7 +39,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x722122dF12D4e14e13Ac3b6895a86e84145b6967",
@@ -42,7 +50,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xDD4c48C0B24039969fC16D1cdF626eaB821d3384",
@@ -51,7 +61,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED — alternate deployment per Aug-2022 sanctions delta",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xFD8610d20aA15b7B2E3Be39B396a1bC3516c7144",
@@ -60,7 +72,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED — alternate deployment",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x07687e702b410Fa43f4cB4Af7FA097918ffD2730",
@@ -69,7 +83,9 @@
     "source": "tornado_docs",
     "confidence": "high",
     "notes": "OFAC SANCTIONED — BSC deployment",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xfac583c0cf07ea434052c49115a4682172ab6b4f",
@@ -78,7 +94,9 @@
     "source": "ofac_2023_11_29",
     "confidence": "high",
     "notes": "OFAC SANCTIONED Nov-2023. Successor to Blender.io. Used by Lazarus Group to launder $100M Atomic Wallet exploit funds.",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xbA214C1c1928a32Bffe790263E38B4Af9bFCD659",
@@ -87,7 +105,9 @@
     "source": "railgun_docs",
     "confidence": "high",
     "notes": "Used in Jun-2023 Atomic Wallet exploit laundering. Not OFAC-sanctioned but flagged by FBI as obfuscation infrastructure.",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0x9b8e9d523D1c6bD22B9c9eF8B97c5F4B6c4F4d3F",
@@ -96,7 +116,9 @@
     "source": "railgun_docs",
     "confidence": "medium",
     "notes": "Privacy protocol contract address. Confidence is medium because contract layout changes between Railgun versions; verify via tx-level routing.",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   },
   {
     "address": "0xb37a90B83Cd2c40A8c1F26F3aF67dDf73b6f9c1c",
@@ -105,6 +127,8 @@
     "source": "industry_known",
     "confidence": "medium",
     "notes": "Non-KYC cross-chain swap service routinely used in laundering flows. Not OFAC-sanctioned but high-risk pattern.",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum",
+    "_v029_1_chain_backfill": true
   }
 ]

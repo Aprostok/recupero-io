@@ -220,6 +220,28 @@ def cli() -> None:
              "risk-scoring. Recommended cadence: weekly via cron.",
     )
 
+    # ----- bridge-sync (v0.29.1 Recommendation #5) ----- #
+    p_bridge_sync = sub.add_parser(
+        "bridge-sync",
+        help="Audit the local bridges.json against L2Beat + DefiLlama "
+             "and write bridges_diff.json listing (protocol, chain) "
+             "pairs we don't yet cover. REPORT-ONLY — operator triages "
+             "and adds verified addresses in a follow-up commit. "
+             "Recommended cadence: weekly via cron.",
+    )
+    p_bridge_sync.add_argument(
+        "--output", default=None,
+        help="Output path for bridges_diff.json (default ./bridges_diff.json).",
+    )
+    p_bridge_sync.add_argument(
+        "--bridges", default=None,
+        help="Override path to bridges.json (default ships-with-package).",
+    )
+    p_bridge_sync.add_argument(
+        "--offline", action="store_true",
+        help="Skip live HTTP and use bundled snapshots (CI-safe).",
+    )
+
     # ----- hack-tracker ----- #
     # v0.20.0 (Phase D): daily hack-feed aggregator. Feature-flagged
     # OFF in production — operator must opt in via
@@ -676,6 +698,15 @@ def cli() -> None:
     if args.command == "ofac-sync":
         from recupero.ops.commands import ofac_sync_cmd as cmd
         sys.exit(cmd.run())
+
+    if args.command == "bridge-sync":
+        from pathlib import Path as _Path
+        from recupero.ops.commands import bridge_sync_cmd as bs
+        sys.exit(bs.run(
+            bridges_path=_Path(args.bridges) if args.bridges else None,
+            output_path=_Path(args.output) if args.output else None,
+            offline=bool(args.offline),
+        ))
 
     if args.command == "hack-tracker":
         # v0.20.0 (Phase D): feature-flagged hack-feed aggregator.

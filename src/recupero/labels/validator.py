@@ -37,7 +37,11 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
     "mixers.json": {
         "wrapping": "list",
         "required": ["address", "name", "category"],
-        "optional": ["source", "confidence", "notes", "added_at"],
+        # v0.29.1 (label-DB sweep): explicit chain + provenance markers.
+        "optional": [
+            "source", "confidence", "notes", "added_at",
+            "chain", "_v029_1_chain_backfill", "last_verified_at",
+        ],
     },
     "ransomware.json": {
         "wrapping": "addresses",
@@ -51,26 +55,40 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
     "defi_protocols.json": {
         "wrapping": "list",
         "required": ["address", "name"],
+        # v0.29.1 (label-DB sweep, Recommendation #7): explicit `chain`
+        # field — backfilled by scripts/_v029_1_label_db_sweep.py so an
+        # ad-hoc audit query can ask "what's our defi_protocols coverage
+        # on chain X?" and get a real answer.
         "optional": [
             "category", "subcategory", "source", "notes",
             "added_at", "confidence",
+            "chain", "_v029_1_chain_backfill", "last_verified_at",
         ],
     },
     "cex_deposits.json": {
         "wrapping": "list",
         "required": ["address", "name"],
+        # v0.29.1 (label-DB sweep): explicit `chain` + `last_verified_at`
+        # for confidence decay (Recommendation #6).
         "optional": [
             "category", "source", "exchange", "confidence", "notes",
             "added_at",
+            "chain", "_v029_1_chain_backfill", "last_verified_at",
         ],
     },
     "bridges.json": {
         "wrapping": "list",
         "required": ["address", "name"],
+        # v0.29.1 additions: `_v029_addition` / `_v029_1_addition` /
+        # `_audit_status` track provenance for the expansion batches;
+        # `last_verified_at` powers the confidence-decay test
+        # (Recommendation #6).
         "optional": [
             "category", "source", "notes", "destinations",
             "chain", "contract", "confidence", "added_at",
             "follow_up_url", "supports_to_chains",
+            "_v028_addition", "_v029_addition", "_v029_1_addition",
+            "_audit_status", "_v029_1_chain_backfill", "last_verified_at",
         ],
     },
     # Issuers map freezable-token contracts → the legal issuer who can
@@ -333,6 +351,17 @@ def _validate_entries(
             # the `0x...` EVM form.
             from recupero._common import canonical_address_key
             addr_key = canonical_address_key(addr)
+            # v0.29.1: dup-detection is (chain, address) keyed, not
+            # address-only. Many bridges deterministically deploy at the
+            # same address across chains (LiFi Diamond, Squid Router,
+            # Synapse Router all share an address on Eth / Arb / Op /
+            # Polygon / etc). Pre-v0.29.1 the validator flagged those
+            # as duplicate-address warnings, drowning real curation
+            # gaps in deterministic-deploy noise. Keying on (chain,
+            # address) means "the same address with the same chain
+            # appears twice" is the actual error condition.
+            chain_for_key = entry.get("chain") or "ethereum"
+            addr_key = (chain_for_key, addr_key)
             if addr_key in seen_addresses:
                 # Duplicates are surfaced as WARNINGS rather than
                 # errors. The seed files have some pre-existing

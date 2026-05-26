@@ -131,8 +131,14 @@ class TestInspector:
             ChainAdapter, "for_chain",
             classmethod(lambda cls, chain, bundle: fake),
         )
+        # Use a fabricated address rather than a real router (e.g.
+        # LiFi Diamond `0x1231DEB6...` would now match an existing
+        # label after the v0.29.1 expansion and overwrite the
+        # contract_name path under test). The point of this test is
+        # the "no label, fall back to verified contract name" branch
+        # — use an address we won't ever label.
         profile = inspect_address(
-            address="0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+            address="0x000000000000000000000000000000000000beef",
             chain=Chain.ethereum, config=config, env=env,
         )
         assert profile.is_contract is True

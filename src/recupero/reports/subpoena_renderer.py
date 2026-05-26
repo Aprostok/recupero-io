@@ -25,14 +25,36 @@ log = logging.getLogger(__name__)
 # Filename-character sanitizer: keep alphanumerics + dash + underscore.
 _FILENAME_SANITIZE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
+# v0.28.1 hardening: cap filename component length so we never write
+# a path that exceeds platform limits (Windows MAX_PATH = 260 bytes
+# including the full path; macOS HFS+ = 255 bytes per component;
+# Linux ext4 = 255 bytes per component). 64 chars per component
+# leaves headroom for the surrounding case_dir + suffix + .tmp +
+# the OS's own overhead. Truncation includes a 16-char hash suffix
+# so two long names that share a prefix don't collide silently.
+_FILENAME_COMPONENT_MAX = 64
+
 
 def _safe_filename_component(s: object) -> str:
-    """Make `s` filename-safe. Empty / non-string → 'unknown'."""
+    """Make `s` filename-safe with platform length cap.
+
+    Empty / non-string → 'unknown'. Long strings (>64 chars after
+    sanitization) get truncated with a stable hash suffix so two
+    different inputs sharing a prefix don't collide.
+    """
     if not isinstance(s, str) or not s.strip():
         return "unknown"
     out = _FILENAME_SANITIZE_RE.sub("-", s.strip())
     out = re.sub(r"-+", "-", out).strip("-_.")
-    return out or "unknown"
+    if not out:
+        return "unknown"
+    if len(out) > _FILENAME_COMPONENT_MAX:
+        # Truncate with a hash suffix for collision resistance.
+        # 47-char prefix + "-" + 16-char hex hash = 64 chars total.
+        import hashlib
+        digest = hashlib.sha256(out.encode("utf-8")).hexdigest()[:16]
+        out = f"{out[:47]}-{digest}"
+    return out
 
 
 def _make_brief_id(case: Any) -> str:

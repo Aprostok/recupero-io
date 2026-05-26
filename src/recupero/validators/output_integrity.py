@@ -371,6 +371,18 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_subpoena_files_match_targets(
              briefs_dir, freeze_brief,
          )),
+        # v0.28.1 hardening: surface the _extraction_error sentinel
+        # that emit_brief writes when extract_subpoena_targets
+        # raises an unexpected exception. Pre-hardening this was
+        # silent — empty SUBPOENA_TARGETS list and a log warning
+        # nobody reads. Now: a high-severity violation flags the
+        # operator that the SUBPOENA_TARGETS extraction was
+        # ABORTED, not just "no qualifying targets". Catches the
+        # NaN-USD-crash class of bug.
+        ("subpoena_targets_extraction_succeeded",
+         lambda: _check_subpoena_targets_extraction_succeeded(
+             freeze_brief,
+         )),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -2884,7 +2896,13 @@ def _check_subpoena_targets_cover_non_freezable(
     #     LACK a reason (those are the gap).
     # We don't need to revisit UNRECOVERABLE-with-reason entries
     # because they're already covered.
-    re_usd = re.compile(r"\$([0-9,]+(?:\.[0-9]+)?)")
+    #
+    # v0.28.1 hardening (audit finding #20): the `usd` field MAY
+    # carry a value without the leading "$" sign (e.g. "10000.00"
+    # vs "$10,000.00"). Accept either form. The original
+    # `\$([0-9,]+...)` regex skipped no-$-prefix amounts silently.
+    re_usd_with_dollar = re.compile(r"\$([0-9,]+(?:\.[0-9]+)?)")
+    re_usd_bare = re.compile(r"^([0-9,]+(?:\.[0-9]+)?)$")
     for f in freeze_brief.get("FREEZABLE") or []:
         if not isinstance(f, dict):
             continue
@@ -2898,27 +2916,47 @@ def _check_subpoena_targets_cover_non_freezable(
             if not addr:
                 continue
             usd_raw = h.get("usd") or "0"
-            m = re_usd.search(usd_raw) if isinstance(usd_raw, str) else None
+            if not isinstance(usd_raw, str):
+                continue
+            # Try $-prefixed form first, then bare numeric form.
+            m = re_usd_with_dollar.search(usd_raw)
+            if not m:
+                m = re_usd_bare.match(usd_raw.strip())
             if not m:
                 continue
             try:
                 usd = Decimal(m.group(1).replace(",", ""))
             except (InvalidOperation, ArithmeticError):
                 continue
+            # Same NaN/Inf/negative defense as in subpoena_targets.py.
+            if usd.is_nan() or usd.is_infinite() or usd < 0:
+                continue
             if usd < _SUBPOENA_USD_THRESHOLD:
                 continue
             if addr in covered_addrs or addr in unrec_covered:
                 continue
+            # v0.28.1 hardening (audit finding #10): Zigha-shape
+            # escalation. The canonical regression — operator misses
+            # a non-freezable position because no subpoena was
+            # generated — was the entire motivation for v0.28.1.
+            # Warning-only severity for a $9.98M dormant DAI gap
+            # is easy to miss in a long CI rollup. Escalate to
+            # 'high' for consequential amounts (≥ $100K) so the
+            # operator gets a loud signal on the exact bug class
+            # we shipped this work to prevent.
+            severity = "high" if usd >= Decimal("100000") else "warning"
             violations.append(Violation(
                 check="subpoena_targets_cover_non_freezable",
-                severity="warning",
+                severity=severity,
                 detail=(
                     f"Non-freezable destination at {addr[:14]}... "
                     f"(issuer {f.get('issuer')!r}, ${usd:,}) has no "
                     "SUBPOENA_TARGETS entry AND no UNRECOVERABLE "
                     "entry with a `reason` field. Either generate a "
                     "subpoena target (via extract_subpoena_targets) "
-                    "or document why no subpoena pivot exists."
+                    "or document why no subpoena pivot exists. "
+                    f"Severity={severity} (escalated to high above "
+                    "$100K — Zigha-shape gap)."
                 ),
             ))
     return violations
@@ -3036,6 +3074,48 @@ def _check_subpoena_files_match_targets(
             ),
         ))
 
+    # v0.28.1 hardening (audit finding #12 / #25): correlation check.
+    # The naive file-count comparison passes even when the same
+    # target is written twice (different slugs) and another is
+    # missed. Verify EACH target has a corresponding file by
+    # matching the recipient_slug substring in at least one
+    # filename — guarantees per-target rendering.
+    file_blob = " ".join(f.name for f in target_files)
+    for t in targets:
+        if not isinstance(t, dict):
+            continue
+        slug = t.get("recipient_slug") or t.get("recipient_name") or ""
+        if not isinstance(slug, str) or not slug:
+            continue
+        # The renderer's _safe_filename_component sanitizes the slug
+        # — match the sanitized form against the filename blob.
+        # Sanitization keeps alphanumerics + dash + underscore +
+        # dot; we lowercase to match the filesystem on case-
+        # insensitive volumes (Windows / HFS+).
+        sanitized = re.sub(r"[^A-Za-z0-9._-]", "-", slug).lower()
+        sanitized = re.sub(r"-+", "-", sanitized).strip("-_.")
+        if not sanitized:
+            continue
+        # Accept either the exact slug OR its first 47 chars (which
+        # is what the truncate-with-hash path produces for long
+        # slugs). Match the prefix to handle the hash-suffixed
+        # variant gracefully.
+        prefix = sanitized[:40]
+        if prefix not in file_blob.lower():
+            violations.append(Violation(
+                check="subpoena_files_match_targets",
+                severity="high",
+                file=str(briefs_dir.name),
+                detail=(
+                    f"SUBPOENA_TARGETS entry {t.get('target_id')!r} "
+                    f"(recipient {slug!r}) has no corresponding "
+                    f"subpoena_target_*.html file on disk. "
+                    "Likely cause: the renderer skipped this target "
+                    "(template-render error swallowed) OR the file "
+                    "naming convention drifted."
+                ),
+            ))
+
     # Playbook must exist.
     playbook_files = sorted(briefs_dir.glob("subpoena_playbook_*.html"))
     if not playbook_files:
@@ -3052,6 +3132,47 @@ def _check_subpoena_files_match_targets(
         ))
 
     return violations
+
+
+def _check_subpoena_targets_extraction_succeeded(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """v0.28.1 hardening: detect the silent-swallow class of bug
+    in the SUBPOENA_TARGETS extraction path.
+
+    emit_brief wraps extract_subpoena_targets in try/except so a
+    bug there never aborts the brief. The trade-off: an exception
+    is logged as a warning, but SUBPOENA_TARGETS becomes empty
+    indistinguishable from the "clean: no qualifying targets" case.
+    Operators reviewing the brief have no signal.
+
+    Post-hardening emit_brief writes a SUBPOENA_TARGETS_EXTRACTION_ERROR
+    string field on exception. This check surfaces it as a high-
+    severity violation so the operator knows the empty list is a
+    BUG not a FEATURE.
+
+    Severity: high. A silently empty SUBPOENA_TARGETS means the
+    Zigha-shape coverage gap re-introduces silently — pre-INVARIANT
+    territory.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    err = freeze_brief.get("SUBPOENA_TARGETS_EXTRACTION_ERROR")
+    if not err:
+        return []
+    return [Violation(
+        check="subpoena_targets_extraction_succeeded",
+        severity="high",
+        detail=(
+            "freeze_brief.SUBPOENA_TARGETS extraction raised an "
+            f"exception: {err}. The current SUBPOENA_TARGETS list "
+            "(probably empty) is unreliable. Check the worker logs "
+            "for the full stack trace + fix the underlying bug "
+            "in src/recupero/reports/subpoena_targets.py. Likely "
+            "causes: NaN/Inf USD strings, malformed editorial "
+            "UNRECOVERABLE_ITEMS shape, or a missing required field."
+        ),
+    )]
 
 
 __all__ = (

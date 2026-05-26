@@ -1811,11 +1811,22 @@ def emit_brief(
         # whole brief — log + emit empty list so the rest of the
         # pipeline proceeds. INVARIANT C will fire as a warning if
         # the absence is unexpected.
-        log.warning(
-            "subpoena_targets extraction failed (%s); emitting empty list",
+        #
+        # v0.28.1 hardening: emit an _extraction_error sentinel so
+        # downstream consumers (validator INVARIANT C, postmortem
+        # tooling) can distinguish "no qualifying targets" (clean
+        # empty list) from "extraction crashed" (sentinel present).
+        # The sentinel surfaces in the brief JSON as a top-level
+        # field operators can grep for.
+        log.exception(
+            "subpoena_targets extraction failed (%s); emitting empty "
+            "list + _extraction_error sentinel for operator visibility",
             _exc,
         )
         brief["SUBPOENA_TARGETS"] = []
+        brief["SUBPOENA_TARGETS_EXTRACTION_ERROR"] = (
+            f"{type(_exc).__name__}: {_exc}"
+        )
 
     # JACOB-EYEBALL fix: surface the stolen-asset block at top-level
     # so downstream readers (the output_integrity validator's check 8,

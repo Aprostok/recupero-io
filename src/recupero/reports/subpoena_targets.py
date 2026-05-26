@@ -139,16 +139,35 @@ def _resolve_cex_recipient(
 _USD_IN_STRING_RE = re.compile(r"\$([0-9,]+(?:\.[0-9]+)?)")
 
 
+def _sanitize_usd(d: Decimal) -> Decimal:
+    """v0.28.1 hardening: reject NaN / Inf / negative Decimal values.
+    A Decimal('NaN') compared with `< Decimal('1000')` raises
+    InvalidOperation, which the emit_brief try/except would silently
+    swallow into an empty SUBPOENA_TARGETS list. We canonicalize at
+    the parse boundary so the rest of the module can assume positive
+    finite values.
+
+    Negative amounts are coerced to 0 — they have no meaning in this
+    context (a CEX deposit can't be -$X). Inf / NaN clamp to 0.
+    """
+    if d.is_nan() or d.is_infinite():
+        return Decimal("0")
+    if d < 0:
+        return Decimal("0")
+    return d
+
+
 def _parse_usd_from_str(s: object) -> Decimal:
-    """Free-form USD amount → Decimal. Returns 0 on parse failure;
-    the caller decides whether the position is meaningful."""
+    """Free-form USD amount → Decimal. Returns 0 on parse failure,
+    NaN / Inf, or negative input. The caller can assume non-negative
+    finite output."""
     if not isinstance(s, str):
         return Decimal("0")
     s = s.strip().lstrip("$").replace(",", "").replace(" ", "")
     if not s:
         return Decimal("0")
     try:
-        return Decimal(s)
+        return _sanitize_usd(Decimal(s))
     except (ValueError, InvalidOperation):
         return Decimal("0")
 
@@ -163,7 +182,7 @@ def _parse_usd_from_asset_string(s: object) -> Decimal:
     if not m:
         return Decimal("0")
     try:
-        return Decimal(m.group(1).replace(",", ""))
+        return _sanitize_usd(Decimal(m.group(1).replace(",", "")))
     except (ValueError, InvalidOperation):
         return Decimal("0")
 

@@ -71,6 +71,26 @@ class Chain(str, Enum):
     zksync = "zksync"
     scroll = "scroll"
     mantle = "mantle"
+    # v0.29.0 (label-DB completeness audit): chains where the bridge
+    # ingestor needs to recognize destinations even though we don't
+    # yet have a full EVM adapter for them. The bridges.json now
+    # carries Stargate / Wormhole / Hop pool routers on these
+    # chains, and ingest_bridge_seeds would silently drop entries
+    # whose chain value wasn't in the enum.
+    #
+    # No adapter coverage yet — these are "destination-only" chains:
+    # if a Zigha-shape trace bridges OUT to fantom/celo/gnosis, we
+    # surface the handoff (operator pursues via the destination
+    # block explorer) but don't auto-continue the BFS. The Chain
+    # enum membership is what makes the destination labelable.
+    # Add the matching adapter in a later release if these become
+    # frequent.
+    fantom = "fantom"
+    celo = "celo"
+    gnosis = "gnosis"
+    moonbeam = "moonbeam"
+    metis = "metis"
+    kava = "kava"
 
 
 class LabelCategory(str, Enum):

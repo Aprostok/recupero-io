@@ -15,7 +15,8 @@
     ],
     "follow_up_url": "https://app.debridge.finance/orders",
     "notes": "Main entry point for deBridge cross-chain transfers. Order hash extractable from the createOrder event.",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xeF4fB24aD0916217251F553c0596F8Edc630EB66",
@@ -23,7 +24,8 @@
     "category": "bridge",
     "source": "debridge_docs",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x3ee18B2214AFF97000D974cf647E54347AE7C7E4",
@@ -31,7 +33,8 @@
     "category": "bridge",
     "source": "wormhole_docs",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B",
@@ -39,7 +42,8 @@
     "category": "bridge",
     "source": "wormhole_docs",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
@@ -47,7 +51,8 @@
     "category": "bridge",
     "source": "across_docs",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x8731d54E9D02c286767d56ac03e8037C07e01e98",
@@ -55,7 +60,8 @@
     "category": "bridge",
     "source": "stargate_docs",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x150f94B44927F078737562f0fcF3C95c01Cc2376",
@@ -63,7 +69,8 @@
     "category": "bridge",
     "source": "stargate_docs",
     "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x292fC50e4eB66C3f6514b9E402dBc25961824D62",
@@ -71,7 +78,8 @@
     "category": "bridge",
     "source": "symbiosis_docs",
     "confidence": "medium",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xeAc8f6f2C6BdAEcAb78ee20A1eA9aBCa46d5BfeC",
@@ -79,7 +87,8 @@
     "category": "bridge",
     "source": "chainflip_docs",
     "confidence": "medium",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
@@ -95,7 +104,8 @@
       "gnosis"
     ],
     "follow_up_url": "https://explorer.hop.exchange",
-    "added_at": "2025-01-01T00:00:00Z"
+    "added_at": "2025-01-01T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xb12bfca5a55806aaf64e99521918a4bf0fc40802",
@@ -111,7 +121,8 @@
     ],
     "follow_up_url": "https://explorer.hop.exchange",
     "notes": "Hop L1 bridge entrypoint — locks tokens for L2 mint",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x5427fefa711eff984124bfbb1ab6fbf5e3da1820",
@@ -128,7 +139,8 @@
       "fantom"
     ],
     "follow_up_url": "https://cbridge-v2.celer.network/refund",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xb8901acb165ed027e32754e0ffe830802919727f",
@@ -145,7 +157,8 @@
       "fantom"
     ],
     "follow_up_url": "https://explorer.synapseprotocol.com",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xc30141b657f4216252dc59af2e7cdb9d8792e1b0",
@@ -163,7 +176,8 @@
     ],
     "follow_up_url": "https://socketscan.io",
     "notes": "Aggregator — routes through underlying bridges. Check the inner transactions for actual bridge used.",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xa8cba66ef4ad65b7f6c97e6d5e58f9b9bfe9ab40",
@@ -180,7 +194,8 @@
     ],
     "follow_up_url": "https://app.allbridge.io",
     "notes": "Stablecoin-focused bridge with Solana + Tron support",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x88ad09518695c6c3712ac10a214be5109a655671",
@@ -192,7 +207,8 @@
       "gnosis"
     ],
     "follow_up_url": "https://omni.gnosischain.com",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xa0c68c638235ee32657e8f720a23cec1bfc77c77",
@@ -205,7 +221,8 @@
     ],
     "follow_up_url": "https://polygonscan.com",
     "notes": "Canonical Polygon PoS bridge",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x40ec5b33f54e0e8a33a975908c5ba1c14e5bbbdf",
@@ -218,7 +235,8 @@
     ],
     "follow_up_url": "https://polygonscan.com",
     "notes": "Polygon canonical ERC-20 deposit gate (lockTokens)",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x4dbd4fc535ac27206064b68ffcf827b0a60bab3f",
@@ -231,7 +249,8 @@
     ],
     "follow_up_url": "https://arbiscan.io",
     "notes": "Arbitrum One canonical Inbox — ETH deposits + L1→L2 messages",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xa3a7b6f88361f48403514059f1f16c8e78d60eec",
@@ -243,7 +262,8 @@
       "arbitrum"
     ],
     "follow_up_url": "https://arbiscan.io",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x99c9fc46f92e8a1c0dec1b1747d010903e884be1",
@@ -255,7 +275,8 @@
       "optimism"
     ],
     "follow_up_url": "https://optimistic.etherscan.io",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x3154cf16ccdb4c6d922629664174b904d80f2c35",
@@ -267,7 +288,8 @@
       "base"
     ],
     "follow_up_url": "https://basescan.org",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x32400084c286cf3e17e7b677ea9583e60a000324",
@@ -279,7 +301,8 @@
       "zksync"
     ],
     "follow_up_url": "https://explorer.zksync.io",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x8eb8a3b98659cce290402893d0123abb75e3ab28",
@@ -291,7 +314,8 @@
       "avalanche"
     ],
     "follow_up_url": "https://snowtrace.io",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xe8a36e62a2d50dd2e3b18a3a86b94b2feab02da7",
@@ -308,7 +332,8 @@
     ],
     "follow_up_url": null,
     "notes": "Multichain ceased operations July 2023 after the founder's arrest in China. Historical contracts retained for legacy investigations — funds bridged via Multichain after the shutdown are likely unrecoverable.",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x77b2043768d28e9c9ab44e1abfc95944bce57931",
@@ -323,7 +348,8 @@
       "bsc"
     ],
     "follow_up_url": "https://layerzeroscan.com",
-    "added_at": "2026-05-17T00:00:00Z"
+    "added_at": "2026-05-17T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x66a71dcef29a0ffbdbe3c6a460a3b5bc225cd675",
@@ -342,7 +368,8 @@
     ],
     "follow_up_url": "https://layerzeroscan.com",
     "notes": "Generic LayerZero messaging endpoint. Many OFTs / aggregators route through this; check inner OApp for the actual destination.",
-    "added_at": "2026-05-22T00:00:00Z"
+    "added_at": "2026-05-22T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x1a44076050125825900e736c501f859c50fe728c",
@@ -359,7 +386,8 @@
       "base"
     ],
     "follow_up_url": "https://layerzeroscan.com",
-    "added_at": "2026-05-22T00:00:00Z"
+    "added_at": "2026-05-22T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x80226fc0ee2b096224eeac085bb9a8cba1146f7d",
@@ -377,7 +405,8 @@
     ],
     "follow_up_url": "https://ccip.chain.link",
     "notes": "Chainlink Cross-Chain Interoperability Protocol router. ccipSend() encodes destChainSelector + receiver in calldata.",
-    "added_at": "2026-05-22T00:00:00Z"
+    "added_at": "2026-05-22T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0xce16f69375520ab01377ce7b88f5ba8c48f8d666",
@@ -396,7 +425,8 @@
     ],
     "follow_up_url": "https://axelarscan.io",
     "notes": "Squid aggregator on top of Axelar GMP. Check Axelarscan for the underlying GMP message.",
-    "added_at": "2026-05-22T00:00:00Z"
+    "added_at": "2026-05-22T00:00:00Z",
+    "chain": "ethereum"
   },
   {
     "address": "0x2df1c51e09aecf9cacb7bc98cb1742757f163df7",
@@ -932,5 +962,1474 @@
     "added_at": "2026-05-26T00:00:00Z",
     "_v028_addition": true,
     "_audit_status": "internally_corroborated: same address as pre-v0.28 Ethereum entry (deterministic deploy across EVM chains; cross-referenced in v0.28.4 audit)"
+  },
+  {
+    "address": "0x296F55F8Fb28E498B858d0BcDA06D955B2Cb3f97",
+    "name": "Stargate: Bridge (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xeCc19E177d24551aA7ed6Bc6FE566eCa726CC8a9",
+    "name": "Stargate: Composer (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xdf0770dF86a8034b3EFEf0A1Bb3c889B8332FF56",
+    "name": "Stargate: USDC Pool (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x38EA452219524Bb87e18dE1C24D3bB59510BD783",
+    "name": "Stargate: USDT Pool (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x101816545F6bd2b1076434B54383a1E633390A2E",
+    "name": "Stargate: ETH Pool (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x0Faf1d2d3CED330824de3B8200fc8dc6E397850d",
+    "name": "Stargate: DAI Pool (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xfA0F307783AC21C39E939ACFF795e27b650F6e68",
+    "name": "Stargate: FRAX Pool (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x4a364f8c717cAAD9A442737Eb7b8A55cc6cf18D8",
+    "name": "Stargate: Router (BSC)",
+    "chain": "bsc",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x6694340fc020c5E6B96567843da2df01b2CE1eb6",
+    "name": "Stargate: Bridge (BSC)",
+    "chain": "bsc",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x9aA83081AA06AF7208Dcc7A4cB72C94d057D2cda",
+    "name": "Stargate: USDT Pool (BSC)",
+    "chain": "bsc",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x45A01E4e04F14f7A4a6702c74187c5F6222033cd",
+    "name": "Stargate: Router (Avalanche)",
+    "chain": "avalanche",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x9d1B1669c73b033DFe47ae5a0164Ab96df25B944",
+    "name": "Stargate: Bridge (Avalanche)",
+    "chain": "avalanche",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x1205f31718499dBf1fCa446663B532Ef87481fe1",
+    "name": "Stargate: USDC Pool (Avalanche)",
+    "chain": "avalanche",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x29e38769f23701A2e4A8Ef0492e19dA4604Be62c",
+    "name": "Stargate: USDT Pool (Avalanche)",
+    "chain": "avalanche",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x892785f33CdeE22A30AEF750F285E18c18040c3e",
+    "name": "Stargate: USDC Pool (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xB6CfcF89a7B22988bfC96632aC2A9D6daB60d641",
+    "name": "Stargate: USDT Pool (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x915A55e36A01285A14f05dE6e81ED9cE89772f8e",
+    "name": "Stargate: ETH Pool (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x352d8275AAE3e0c2404d9f68f6cEE084B5bEB3DD",
+    "name": "Stargate: Bridge (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xB49c4e680174E331CB0A7fF3Ab58afC9738d5F8b",
+    "name": "Stargate: RouterETH (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x701a95707A0290AC8B90b3719e8EE5b210360883",
+    "name": "Stargate: Bridge (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xDecC0c09c3B5f6e92EF4184125D5648a66E35298",
+    "name": "Stargate: USDC Pool (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xd22363e3762cA7339569F3d33EADe20127D5F98C",
+    "name": "Stargate: ETH Pool (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x165137624F1f692e69659f944BF69DE02874ee27",
+    "name": "Stargate: DAI Pool (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x50B6EbC2103BFEc165949CC946d739d5650d7ae4",
+    "name": "Stargate: RouterETH (Base)",
+    "chain": "base",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x28fc411f9e1c480AD312b3d9C60c22b965015c6B",
+    "name": "Stargate: ETH Pool (Base)",
+    "chain": "base",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x4c80E24119CFB836cdF0a6b53dc23F04F7e652CA",
+    "name": "Stargate: USDC Pool (Base)",
+    "chain": "base",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x9d1B1669c73b033DFe47ae5a0164Ab96df25B944",
+    "name": "Stargate: Bridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xAf5191B0De278C7286d6C7CC6ab6BB8A73bA2Cd6",
+    "name": "Stargate: Router (Fantom)",
+    "chain": "fantom",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xc647ce76ec30033aa319d472ae9f4462068f2ad7",
+    "name": "Stargate: USDC Pool (Fantom)",
+    "chain": "fantom",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x2F6F07CDcf3588944Bf4C42aC74ff24bF56e7590",
+    "name": "Stargate: Router (Linea)",
+    "chain": "linea",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0x45f1A95A4D3f3836523F5c83673c797f4d4d263B",
+    "name": "Stargate: Bridge (Metis)",
+    "chain": "metis",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "bsc",
+      "avalanche",
+      "fantom",
+      "linea",
+      "metis",
+      "mantle",
+      "kava"
+    ],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://stargateprotocol.gitbook.io/stargate"
+  },
+  {
+    "address": "0xa5f208e072434bC67592E4C49C1B991BA79BCA46",
+    "name": "Wormhole: Core Bridge (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0xEe91C335eab126dF5fDB3797EA9d6aD93aeC9722",
+    "name": "Wormhole: Core Bridge (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0xbebdb6C8ddC678FfA9f8748f85C815C556Dd8ac6",
+    "name": "Wormhole: Core Bridge (Base)",
+    "chain": "base",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x7A4B5a56256163F07b2C80A7cA55aBE66c4ec4d7",
+    "name": "Wormhole: Core Bridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B",
+    "name": "Wormhole: Core Bridge (BSC)",
+    "chain": "bsc",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x54a8e5f9c4CbA08F9943965859F6c34eAF03E26c",
+    "name": "Wormhole: Core Bridge (Avalanche)",
+    "chain": "avalanche",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x126783A6Cb203a3E35344528B26ca3a0489a1485",
+    "name": "Wormhole: Core Bridge (Fantom)",
+    "chain": "fantom",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x3ee18B2214AFF97000D974cf647E7C347E8fa585",
+    "name": "Wormhole: Portal TokenBridge (Ethereum)",
+    "chain": "ethereum",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x5a58505a96D1dbf8dF91cB21B54419FC36e93fdE",
+    "name": "Wormhole: Portal TokenBridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0xB6F6D86a8f9879A9c87f643768d9efc38c1Da6E7",
+    "name": "Wormhole: Portal TokenBridge (BSC)",
+    "chain": "bsc",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x0e082F06FF657D94310cB8cE8B0D9a04541d8052",
+    "name": "Wormhole: Portal TokenBridge (Avalanche)",
+    "chain": "avalanche",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x7C9Fc5741288cDFdD83CeB07f3ea7e22618D79D2",
+    "name": "Wormhole: Portal TokenBridge (Fantom)",
+    "chain": "fantom",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x796Dff6D74F3E27060B71255Fe517BFb23C93eed",
+    "name": "Wormhole: Portal TokenBridge (Celo)",
+    "chain": "celo",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "solana",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "celo",
+      "moonbeam"
+    ],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://wormhole.com/docs/products/reference/contract-addresses"
+  },
+  {
+    "address": "0x0e0E3d2C5c292161999474247956EF542caBF8dd",
+    "name": "Hop: USDC L2 Bridge (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0xa81D244A1814468C734E5b4101F7b9c0c577a8fC",
+    "name": "Hop: USDC L2 Bridge (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x46ae9BaB8CEA96610807a275EBD36f8e916b5C61",
+    "name": "Hop: USDC L2 Bridge (Base)",
+    "chain": "base",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x25D8039bB044dC227f741a9e381CA4cEAE2E6aE8",
+    "name": "Hop: USDC L2 Bridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x72209Fe68386b37A40d6bCA04f78356fd342491f",
+    "name": "Hop: USDT L2 Bridge (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x6c9a1ACF73bd85463A46B0AFc076FBdf602b690B",
+    "name": "Hop: USDT L2 Bridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x7aC115536FE3A185100B2c4DE4cb328bf3A58Ba6",
+    "name": "Hop: DAI L2 Bridge (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x7191061D5d4C60f598214cC6913502184BAddf18",
+    "name": "Hop: DAI L2 Bridge (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0xEcf268Be00308980B5b3fcd0975D47C4C8e1382a",
+    "name": "Hop: DAI L2 Bridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x3749C4f034022c39ecafFaBA182555d4508caCCC",
+    "name": "Hop: ETH L2 Bridge (Arbitrum)",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x83f6244Bd87662118d96D9a6D44f09dffF14b30E",
+    "name": "Hop: ETH L2 Bridge (Optimism)",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x3666f603Cc164936C1b87e207F36BEBa4AC5f18a",
+    "name": "Hop: ETH L2 Bridge (Base)",
+    "chain": "base",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0xb98454270065A31D71Bf635F6F7Ee6A518dFb849",
+    "name": "Hop: ETH L2 Bridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
+  },
+  {
+    "address": "0x553bC791D746767166fA3888432038193cEED5E2",
+    "name": "Hop: MATIC L2 Bridge (Polygon)",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "arbitrum",
+      "optimism",
+      "base",
+      "polygon",
+      "gnosis"
+    ],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": null,
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v029_addition": true,
+    "_audit_status": "externally_verified_v029: WebFetch from https://github.com/hop-protocol/hop/blob/develop/packages/sdk/src/addresses/mainnet.ts"
   }
 ]

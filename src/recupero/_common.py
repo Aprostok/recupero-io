@@ -669,6 +669,12 @@ __all__ = (
     "db_connect",
     "env_truthy",
     "investigator_defaults",
+    # v0.30.1 (round-N T1-B): F7 investigator-gate helpers must be in
+    # __all__ so `from recupero._common import *` exposes them — without
+    # this, the deploy gate is bypassable via wildcard import.
+    "is_investigator_configured",
+    "require_investigator_configured",
+    "INVESTIGATOR_NAME_UNCONFIGURED",
     "pooled_dsn",
     "redact_dsn",
     "aggregate_evidence_mode_from_entries",

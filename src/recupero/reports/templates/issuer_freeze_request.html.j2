@@ -215,8 +215,14 @@
    If the victim's legal counsel is on file, surface their contact info
    as the requesting-party's representative — that's the appropriate
    channel for any compliance follow-up. #}
+{# v0.30.1 (round-N T1-C): citizenship was still being rendered as
+   "(USA (Texas))" in the previous F2 pass — TX state is incidental PII
+   that the issuer compliance team doesn't need. Strip down to just
+   the country / "USA" tier (no state). The name + the on-chain wallet
+   address are the only fields a compliance team needs to identify the
+   reported-loss subject. #}
 <dl class="meta-grid">
-  <dt>Victim of record:</dt> <dd>{{ victim.name }}{% if victim.citizenship %} ({{ victim.citizenship }}){% endif %}</dd>
+  <dt>Victim of record:</dt> <dd>{{ victim.name }}</dd>
   <dt>Affected wallet:</dt>  <dd>{% if victim_wallet_explorer_url %}<a class="mono" href="{{ victim_wallet_explorer_url|safe_url }}">{{ victim.wallet_address }}</a>{% else %}<span class="mono">{{ victim.wallet_address }}</span>{% endif %}</dd>
   {% if victim.legal_counsel %}
   <dt>Legal counsel of record:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>

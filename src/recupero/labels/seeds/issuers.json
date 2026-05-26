@@ -38,7 +38,7 @@
       "freeze_capability": "yes",
       "freeze_notes": "Tether has frozen billions in USDT and is generally responsive to law enforcement requests. Submit through their LE channel.",
       "primary_contact": "compliance@tether.to",
-      "secondary_contact": "https://tether.to/en/contact-law-enforcement",
+      "secondary_contact": "https://tether.to/en/legal/?tab=law-enforcement-requests",
       "jurisdiction": "British Virgin Islands"
     },
     {
@@ -48,7 +48,7 @@
       "issuer": "Paxos (BUSD discontinued by NYDFS Feb 2023)",
       "freeze_capability": "yes",
       "freeze_notes": "Paxos retains freeze capability on remaining BUSD supply. Note: BUSD was deprecated by NYDFS — minting halted.",
-      "primary_contact": "compliance@paxos.com",
+      "primary_contact": "subpoenas@paxos.com",
       "jurisdiction": "United States (New York)"
     },
     {
@@ -58,7 +58,7 @@
       "issuer": "Paxos / PayPal",
       "freeze_capability": "yes",
       "freeze_notes": "Paxos issues PYUSD on PayPal's behalf and has freeze capability.",
-      "primary_contact": "compliance@paxos.com",
+      "primary_contact": "subpoenas@paxos.com",
       "jurisdiction": "United States (New York)"
     },
     {
@@ -99,7 +99,7 @@
       "issuer": "Coinbase",
       "freeze_capability": "yes",
       "freeze_notes": "Coinbase issues cbBTC and retains freeze capability via their compliance program.",
-      "primary_contact": "law-enforcement@coinbase.com",
+      "primary_contact": "subpoenas@coinbase.com",
       "jurisdiction": "United States"
     },
     {
@@ -177,8 +177,8 @@
       "contract": "0x853d955acef822db058eb8505911ed77f175b99e",
       "symbol": "FRAX",
       "issuer": "Frax Finance",
-      "freeze_capability": "limited",
-      "freeze_notes": "FRAX is partially algorithmic with a governance-controlled component. Frax governance can blacklist specific addresses via a vote, but the process is slow and requires demonstrated cause. Worth contacting on substantial cases; not a fast freeze action.",
+      "freeze_capability": "no",
+      "freeze_notes": "v0.30.1 (V030_CONTACT_AUDIT): FRAX/FXS contracts have NO blacklist or pause primitives per Frax's own published docs. Pre-v0.30.1 we labeled this 'limited' implying contract-level governance freeze is possible — it is NOT. The protocol is governance-only; any freeze is achievable only via a slow community vote that lacks legal-process traction. Send courtesy notification only; do not represent FRAX as freezable in customer correspondence.",
       "primary_contact": "team@frax.finance",
       "secondary_contact": "https://gov.frax.finance",
       "jurisdiction": "decentralized / governance"
@@ -188,8 +188,8 @@
       "contract": "0xa663b02cf0a4b149d2ad41910cb81e23e1c41c32",
       "symbol": "sFRAX",
       "issuer": "Frax Finance",
-      "freeze_capability": "limited",
-      "freeze_notes": "Staked FRAX vault token. Same governance constraints as FRAX itself.",
+      "freeze_capability": "no",
+      "freeze_notes": "Staked FRAX vault token. Same governance-only constraint as FRAX itself — no contract-level freeze. See FRAX row.",
       "primary_contact": "team@frax.finance",
       "secondary_contact": "https://gov.frax.finance",
       "jurisdiction": "decentralized / governance"
@@ -270,7 +270,7 @@
       "issuer": "Paxos",
       "freeze_capability": "yes",
       "freeze_notes": "Pax Dollar (formerly PAX). Paxos retains freeze capability under their NYDFS license. Submit through their compliance channel.",
-      "primary_contact": "compliance@paxos.com",
+      "primary_contact": "subpoenas@paxos.com",
       "jurisdiction": "United States (New York)"
     },
     {
@@ -290,7 +290,8 @@
       "issuer": "First Digital Trust",
       "freeze_capability": "yes",
       "freeze_notes": "First Digital USD; issued by First Digital Trust under a Hong Kong trust company license. Freeze capability via blacklist; compliance generally responsive to court-order-backed requests.",
-      "primary_contact": "compliance@firstdigitalgroup.com",
+      "primary_contact": "compliance@1stdigital.com",
+      "_v030_1_contact_note": "v0.30.1 (V030_CONTACT_AUDIT): pre-v0.30.1 used `compliance@firstdigitalgroup.com` — that domain does not appear on First Digital's published pages. Their actual corporate domain is `1stdigital.com`. Switched accordingly; verify via 1stdigital.com legal/contact pages directly before relying on this in a real freeze request.",
       "jurisdiction": "Hong Kong"
     },
     {
@@ -354,7 +355,7 @@
       "issuer": "Paxos",
       "freeze_capability": "yes",
       "freeze_notes": "BUSD on BSC; discontinued by NYDFS Feb 2023 (Paxos stopped minting new BUSD) but existing balances are still freezable via Paxos compliance.",
-      "primary_contact": "compliance@paxos.com",
+      "primary_contact": "subpoenas@paxos.com",
       "secondary_contact": "https://paxos.com/law-enforcement-information-requests/",
       "jurisdiction": "United States (New York)"
     },

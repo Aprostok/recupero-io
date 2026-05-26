@@ -1298,6 +1298,20 @@ _SECTION_5_HOP_DEPTH_FLOOR = 1
 _SECTION_5_UNLABELED_HARD_CAP = 25
 
 
+# v0.30.1 (round-N T1-A): module-level LabelStore cache + threading.Lock.
+# Pre-v0.30.1 the cache lived as a function attribute, which is
+# thread-unsafe — two worker threads could race the `hasattr` check
+# and one would clobber the other's store reference with None on
+# load failure, silently dropping enrichment for every subsequent
+# row. The lock + module-level cache hands a single store across
+# threads with no torn-load window.
+import threading as _threading
+
+_LABEL_STORE_CACHE: list = [None]  # 1-element list as a mutable cell
+_LABEL_STORE_LOCK = _threading.Lock()
+_LABEL_STORE_LOAD_ATTEMPTED = [False]
+
+
 def _enrich_via_label_store(addr: str, chain: Any) -> tuple[str, str, str] | None:
     """v0.30.0 (F6): query the LabelStore at brief-render-time.
 
@@ -1306,18 +1320,29 @@ def _enrich_via_label_store(addr: str, chain: Any) -> tuple[str, str, str] | Non
     v0.29.1 by another 58 — a v0.27-era cached case carries none of
     those. Re-enriching at brief time captures those without re-running
     the trace. Returns (role, type, notes) tuple or None.
+
+    v0.30.1 (round-N T1-A): thread-safe load + cache via
+    `_LABEL_STORE_CACHE` + `_LABEL_STORE_LOCK`. The load happens
+    exactly once per process; subsequent threads see the populated
+    cache without contending on the lock.
     """
     try:
         from recupero.config import load_default_config
         from recupero.labels.store import LabelStore
         from recupero.models import Chain
-        # Cache the store on the function (cheap; runs once per brief).
-        if not hasattr(_enrich_via_label_store, "_store"):
-            try:
-                _enrich_via_label_store._store = LabelStore.load(load_default_config())  # type: ignore[attr-defined]
-            except Exception:  # noqa: BLE001
-                _enrich_via_label_store._store = None  # type: ignore[attr-defined]
-        store = _enrich_via_label_store._store  # type: ignore[attr-defined]
+        store = _LABEL_STORE_CACHE[0]
+        if store is None and not _LABEL_STORE_LOAD_ATTEMPTED[0]:
+            with _LABEL_STORE_LOCK:
+                # Double-checked under the lock so only one thread
+                # actually pays the load cost; later threads observe
+                # the cache populated and skip the LabelStore.load call.
+                if _LABEL_STORE_CACHE[0] is None and not _LABEL_STORE_LOAD_ATTEMPTED[0]:
+                    try:
+                        _LABEL_STORE_CACHE[0] = LabelStore.load(load_default_config())
+                    except Exception:  # noqa: BLE001
+                        _LABEL_STORE_CACHE[0] = None
+                    _LABEL_STORE_LOAD_ATTEMPTED[0] = True
+                store = _LABEL_STORE_CACHE[0]
         if store is None:
             return None
         chain_enum = chain if isinstance(chain, Chain) else Chain.ethereum

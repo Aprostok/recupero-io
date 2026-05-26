@@ -79,21 +79,36 @@ IC3 = LEContact(
     ),
 )
 
+# v0.30.1 (go-live preflight item #5 — contact audit V030_CONTACT_AUDIT.md):
+# `cryptocurrency@fbi.gov` could not be corroborated against any 2026 FBI/IC3
+# published source. The VAU is an internal FBI unit; the publicly-documented
+# intake channel for crypto cases is IC3. We retain the FBI_VAU contact card
+# as guidance for the >$100K escalation path (operators historically use it),
+# but mark the email as unverified and route operators to the IC3 +
+# field-office combo as the published channel. Treat as a SOFTER, NOT
+# OFFICIAL handoff — never claim this is the official VAU email in client
+# correspondence.
 FBI_VAU = LEContact(
-    name="FBI Virtual Assets Unit (VAU)",
+    name="FBI Virtual Assets Unit (VAU) — informal escalation",
     jurisdiction="Federal (US)",
     email="cryptocurrency@fbi.gov",
     description=(
-        "The FBI's dedicated cryptocurrency unit. Forward the LE handoff "
-        "PDF directly to the contact email. For high-value cases "
-        "(>$100K), this is materially faster than IC3 alone — the VAU "
-        "triages directly and engages the field office that the "
-        "perpetrator's identified service providers (exchanges, "
-        "stablecoin issuers) are within reach of."
+        "Informal escalation path for high-value cases (>$100K). The "
+        "officially-published FBI cryptocurrency intake channel is IC3 "
+        "(complaint.ic3.gov), and the VAU is an internal FBI unit "
+        "rather than a public intake; "
+        "`cryptocurrency@fbi.gov` is commonly cited by industry but "
+        "we have NOT independently verified it via an FBI publication "
+        "in 2026. Use this contact only AFTER an IC3 filing exists, "
+        "and pair it with engaging the FBI field office geographically "
+        "closest to the victim or to the perpetrator's identified "
+        "service providers. If the address bounces, do not retry — "
+        "fall back to field-office direct contact."
     ),
     expected_response=(
-        "Typically 5-10 business days for an initial response on cases "
-        "with quantified loss and identified service providers."
+        "Unspecified. IC3 acknowledgement is immediate; VAU follow-up "
+        "is best-effort and dependent on whether the case clusters "
+        "with active investigations."
     ),
 )
 
@@ -344,10 +359,17 @@ def recommend_le_routes(
 
     if not is_us:
         plan.primary_routes.append(INTERNATIONAL_FALLBACK)
+        # v0.30.1 (round-N T1-D): pre-v0.30.1 the note formatted with
+        # the RAW `country` arg, which could be None, "Germany (Berlin)"
+        # (re-rendering the parenthesized state inside the note), or
+        # other unparsed shapes. Use the parsed country with a graceful
+        # "(unspecified)" fallback so the rendered note never says
+        # "outside the US (None)" or doubles up the parens.
+        display_country = (parsed_country or country or "").strip() or "(unspecified)"
         plan.notes.append(
-            f"Victim located outside the US ({country}). Filing channels "
-            "are country-specific; this report's generic guidance is a "
-            "starting point only."
+            f"Victim located outside the US ({display_country}). Filing "
+            "channels are country-specific; this report's generic "
+            "guidance is a starting point only."
         )
         return plan
 

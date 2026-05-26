@@ -103,10 +103,13 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
     "issuers.json": {
         "wrapping": "tokens",
         "required": ["chain", "contract", "symbol", "issuer", "freeze_capability"],
+        # v0.30.1: `_v030_1_contact_note` records inline provenance for
+        # contact-data corrections from the V030_CONTACT_AUDIT.md sweep.
         "optional": [
             "freeze_notes", "primary_contact", "secondary_contact",
             "jurisdiction", "delegates_to", "le_portal_url",
             "freeze_response_time_hours", "notes", "added_at", "source",
+            "_v030_1_contact_note",
         ],
     },
 }

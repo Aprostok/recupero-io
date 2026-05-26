@@ -157,6 +157,31 @@ def _redirect_supabase_db_url_if_prod_shaped() -> None:
 _redirect_supabase_db_url_if_prod_shaped()
 
 
+# v0.30.1 (go-live preflight item #3 — CI hole): RECUPERO_TOKEN_PEPPER
+# is required by portal/tokens.py for HMAC-based portal token storage.
+# Pre-v0.30.1 the test suite assumed the env var was set by the
+# operator/developer's shell — meaning CI runs without the var
+# silently fail `test_portal_tokens_crypto::test_generate_token_*` and
+# `::test_verify_token_*`, opening a CI hole where broken portal-token
+# code could merge.
+#
+# Set a deterministic test-only pepper at conftest import time IF the
+# env var is unset. The value must look like a 32-byte hex string for
+# `_token_pepper()` to accept it (rejects shorter strings as misconfig).
+# Production deploys override this with a real RECUPERO_TOKEN_PEPPER
+# from Railway secrets; the conftest only sets a fallback for unit
+# tests.
+_TEST_ONLY_PEPPER_HEX = (
+    # 32 bytes of fixed-but-non-zero hex. Deterministic so token
+    # HMACs are stable across runs; clearly labeled as test-only so
+    # nobody confuses it for a production value.
+    "00000000000000000000000000000000"
+    "deadbeef0000000000000000deadbeef"
+)
+if not os.environ.get("RECUPERO_TOKEN_PEPPER", "").strip():
+    os.environ["RECUPERO_TOKEN_PEPPER"] = _TEST_ONLY_PEPPER_HEX
+
+
 def pytest_runtest_setup(item: pytest.Item) -> None:
     """Re-assert the invariant before every test.
 

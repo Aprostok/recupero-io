@@ -307,5 +307,337 @@
     "follow_up_url": "https://app.hyperliquid.xyz",
     "notes": "Canonical USDC deposit gateway on Arbitrum for Hyperliquid L1. Withdrawals signed by Hyperliquid validator set.",
     "added_at": "2026-05-22T00:00:00Z"
+  },
+
+  {
+    "_section": "Arbitrum-side bridges (added v0.28.0 — Zigha trace coverage fix). Pre-v0.28 bridges.json had ONE Arbitrum entry (Hyperliquid). identify_cross_chain_handoffs keys on (chain, address), so any transfer on Arbitrum to a bridge contract missed detection. The Zigha case (Arbitrum→Ethereum DeBridge / 1inch consolidation) was invisible. The entries below add Arbitrum-side coverage. See docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md."
+  },
+  {
+    "address": "0x43dE2d77BF8027e25dBD179B491e8d64f38398aA",
+    "name": "deBridgeGate (DLN) on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "debridge_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "base", "solana"],
+    "follow_up_url": "https://app.debridge.finance/orders",
+    "notes": "DeBridge Gate deploys deterministically at the same address on all supported chains. The order hash is extractable from the createOrder event. Zigha unblocker — the v0.27.x worker missed DeBridge handoffs entirely on the Arbitrum side.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0xeF4fB24aD0916217251F553c0596F8Edc630EB66",
+    "name": "deBridge DLN Source on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "debridge_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "base", "avalanche"],
+    "follow_up_url": "https://app.debridge.finance/orders",
+    "notes": "DLN Source deploys at the same address on multiple chains (deterministic deploy). The Zigha consolidation funnel went through this on Arbitrum.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "_section": "1inch Aggregation Router v5/v6 (0x1111111254eeb25477b68fb85ed929f73a960582, 0x111111125421ca6dc452d289314280a0f8842a65) is correctly cataloged in defi_protocols.json as a DEX/swap router, not a bridge. The bridge_calldata.py _decode_1inch stub recognizes 1inch method IDs for surfacing in trace reports, but the address itself is NOT in bridges.json — 1inch's primary function is same-chain DEX aggregation. Fusion+ cross-chain is a layered protocol; over-classifying the base router would tag the vast majority of same-chain 1inch txs as bridges."
+  },
+  {
+    "address": "0x53Bf833A5d6c4ddA888F69c22C88C9f356a41614",
+    "name": "Stargate: Router on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "base", "avalanche"],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": "Stargate Router on Arbitrum One — Stargate composer for cross-chain stablecoin swaps via LayerZero.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0xbf22f0f184bCcbeA268dF387a49fF5238dD23E40",
+    "name": "Stargate: Router ETH on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "base"],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": "Stargate native-ETH router on Arbitrum One.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0xe35e9842fceaCA96570B734083f4a58e8F7C5f2A",
+    "name": "Across V3: SpokePool on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "across_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "base", "linea", "zksync"],
+    "follow_up_url": "https://across.to/explorer",
+    "notes": "Across V3 SpokePool on Arbitrum One. Optimistic relayer model — funds bridged in minutes, settled in ~2h.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x0b2402144Bb366A632D14B83F244D2e0e21bD39c",
+    "name": "Wormhole: Token Bridge on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "solana", "bsc", "polygon", "avalanche", "fantom", "optimism", "base"],
+    "follow_up_url": "https://wormholescan.io",
+    "notes": "Wormhole Token Bridge on Arbitrum One. transferTokens(...) recipient + recipientChain extractable via _decode_wormhole.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x1a44076050125825900e736c501f859c50fe728c",
+    "name": "LayerZero: Endpoint v2 on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "layerzero_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "notes": "LayerZero V2 Endpoint deploys at the SAME address on all supported EVM chains (deterministic). Many OFTs / aggregators route through this.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x3c2269811836af69497E5F486A85D7316753cf62",
+    "name": "LayerZero: Endpoint v1 on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "layerzero_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "fantom", "base"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "notes": "LayerZero V1 Endpoint on Arbitrum. Same address on most EVM chains.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0xa6B71E26C5e0845f74c812102Ca7114b6a896AB2",
+    "name": "Hop Protocol: L2 AMM Wrapper on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "hop_docs",
+    "confidence": "medium",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "base", "gnosis"],
+    "follow_up_url": "https://explorer.hop.exchange",
+    "notes": "Hop L2 AMM wrapper deploys at the same address across L2s — note this matches the Ethereum-side bridge entry. Confidence: medium because the L2 deployment pattern shifted between Hop v1 / v2.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0xb8901acb165ed027e32754e0ffe830802919727f",
+    "name": "Synapse: Bridge on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "synapse_docs",
+    "confidence": "medium",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "fantom", "base"],
+    "follow_up_url": "https://explorer.synapseprotocol.com",
+    "notes": "Synapse bridge — same address pattern on multiple chains. Verify against synapseprotocol.com docs before relying on it for new chains.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x141fa059441E0ca23ce184B6A78bafD2A517DdE8",
+    "name": "Chainlink CCIP: Router on Arbitrum",
+    "chain": "arbitrum",
+    "category": "bridge",
+    "source": "chainlink_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "optimism", "polygon", "bsc", "avalanche", "base"],
+    "follow_up_url": "https://ccip.chain.link",
+    "notes": "CCIP Router on Arbitrum One. ccipSend() encodes destChainSelector + receiver in calldata.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+
+  {
+    "_section": "Optimism-side bridges (v0.28.0)"
+  },
+  {
+    "address": "0x43dE2d77BF8027e25dBD179B491e8d64f38398aA",
+    "name": "deBridgeGate (DLN) on Optimism",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "debridge_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "bsc", "base", "avalanche"],
+    "follow_up_url": "https://app.debridge.finance/orders",
+    "notes": "DeBridge Gate same address on Optimism via deterministic deploy.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0xB0D502E938ed5f4df2E681fE6E419ff29631d62b",
+    "name": "Stargate: Router on Optimism",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "medium",
+    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "bsc", "base"],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "notes": "Stargate Router on Optimism. Confidence medium — verify against Stargate SDK for the exact OP deployment.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x6f26Bf09B1C792e3228e5467807a900A503c0281",
+    "name": "Across V3: SpokePool on Optimism",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "across_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "base", "linea"],
+    "follow_up_url": "https://across.to/explorer",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x1D68124e65faFC907325e3EDbF8c4d84499DAa8b",
+    "name": "Wormhole: Token Bridge on Optimism",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "solana", "bsc", "polygon", "avalanche", "arbitrum", "base"],
+    "follow_up_url": "https://wormholescan.io",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x1a44076050125825900e736c501f859c50fe728c",
+    "name": "LayerZero: Endpoint v2 on Optimism",
+    "chain": "optimism",
+    "category": "bridge",
+    "source": "layerzero_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "polygon", "bsc", "avalanche", "base"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+
+  {
+    "_section": "Base-side bridges (v0.28.0)"
+  },
+  {
+    "address": "0x43dE2d77BF8027e25dBD179B491e8d64f38398aA",
+    "name": "deBridgeGate (DLN) on Base",
+    "chain": "base",
+    "category": "bridge",
+    "source": "debridge_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon", "bsc", "avalanche"],
+    "follow_up_url": "https://app.debridge.finance/orders",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x45f1A95A4D3f3836523F5c83673c797f4d4d263B",
+    "name": "Stargate: Router on Base",
+    "chain": "base",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "medium",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon", "bsc"],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x09aea4b2242aBC8bb4BB78D537A67a245A7bEC64",
+    "name": "Across V3: SpokePool on Base",
+    "chain": "base",
+    "category": "bridge",
+    "source": "across_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon"],
+    "follow_up_url": "https://across.to/explorer",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x8d2de8d2f73F1F4cAB472AC9A881C9b123C79627",
+    "name": "Wormhole: Token Bridge on Base",
+    "chain": "base",
+    "category": "bridge",
+    "source": "wormhole_docs",
+    "confidence": "medium",
+    "supports_to_chains": ["ethereum", "solana", "bsc", "polygon", "avalanche", "arbitrum", "optimism"],
+    "follow_up_url": "https://wormholescan.io",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x1a44076050125825900e736c501f859c50fe728c",
+    "name": "LayerZero: Endpoint v2 on Base",
+    "chain": "base",
+    "category": "bridge",
+    "source": "layerzero_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "polygon", "bsc", "avalanche"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+
+  {
+    "_section": "Polygon-side bridges (v0.28.0)"
+  },
+  {
+    "address": "0x43dE2d77BF8027e25dBD179B491e8d64f38398aA",
+    "name": "deBridgeGate (DLN) on Polygon",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "debridge_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base", "bsc", "avalanche"],
+    "follow_up_url": "https://app.debridge.finance/orders",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x45A01E4e04F14f7A4a6702c74187c5F6222033cd",
+    "name": "Stargate: Router on Polygon",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "stargate_docs",
+    "confidence": "medium",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base", "bsc"],
+    "follow_up_url": "https://stargateprotocol.gitbook.io/stargate",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x9295ee1d8C5b022Be115A2AD3c30C72E34e7F096",
+    "name": "Across V3: SpokePool on Polygon",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "across_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base"],
+    "follow_up_url": "https://across.to/explorer",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
+  },
+  {
+    "address": "0x1a44076050125825900e736c501f859c50fe728c",
+    "name": "LayerZero: Endpoint v2 on Polygon",
+    "chain": "polygon",
+    "category": "bridge",
+    "source": "layerzero_docs",
+    "confidence": "high",
+    "supports_to_chains": ["ethereum", "arbitrum", "optimism", "base", "bsc", "avalanche"],
+    "follow_up_url": "https://layerzeroscan.com",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v028_addition": true
   }
 ]

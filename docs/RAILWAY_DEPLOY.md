@@ -77,6 +77,7 @@ Optional tunables (defaults are sensible):
 | `RECUPERO_POLL_MAX_SEC`           | 30      | Cap on idle backoff. |
 | `RECUPERO_DORMANT_CONCURRENCY`    | 5       | Threads used by the dormant detector to parallelize per-address balance sweeps. Etherscan/CoinGecko rate limiters cap global throughput regardless. Set to 1 to disable parallelism (e.g., for debugging). Higher values give diminishing returns once the rate limit caps actual throughput. |
 | `RECUPERO_TRACE_CONCURRENCY`      | 5       | Threads used by the trace BFS to parallelize per-address outflow fetching within a single depth wave. Same rate-limiter ceiling as dormant. Set to 1 to force serial BFS (e.g., for deterministic test runs). |
+| `RECUPERO_CROSS_CHAIN_CONTINUATION` | **`on` (v0.28.0+)** | When ON the trace follows a bridge handoff onto the destination chain (depth-1 BFS) using the freshly-instantiated destination adapter. Pre-v0.28 default was OFF for cost reasons — flipped to ON in v0.28.0 because the Zigha case (1 of 7 known destinations found) made the trace-coverage gap visible in shipping artifacts and the v0.17.4 dedup + cost caps bound the expansion. Set to `0` / `false` / `no` / `off` to opt OUT (e.g. for R&D / fixture-build runs that intentionally stop at the source chain). |
 
 Investigator identity (optional; appears on every freeze brief + LE handoff):
 
@@ -353,8 +354,18 @@ The Dockerfile installs:
   is deferred. Productionize when needed by either (a) bundling Node +
   the JS builders into the same image or (b) running a second Railway
   service that watches for `complete` rows.
-- **Native cross-chain bridge following** — when the trace hits a
-  labeled bridge, it stops on the source chain and records "bridged
-  out" as a finding. Following the funds onto the destination chain
-  requires bridge decoders (DeBridge, Wormhole, Stargate, Across)
-  tracked in `docs/BACKLOG.md` Phase 4.
+- ~~Native cross-chain bridge following~~ — **shipped in v0.28.0.**
+  When the trace hits a labeled bridge, it now decodes the calldata
+  (Wormhole / Across / Stargate at high confidence; DeBridge + 1inch
+  at low confidence — protocol-recognition only, no destination
+  address extracted) AND if `RECUPERO_CROSS_CHAIN_CONTINUATION` is
+  on (the v0.28 default) the BFS continues on the destination chain
+  for one more depth wave. Coverage caveats: (a) full DeBridge DLN
+  order parsing lands in v0.28.x once an authoritative ABI test
+  fixture is checked in; until then the handoff is surfaced as
+  "Bridged via DeBridge — follow up at app.debridge.finance/orders"
+  but the BFS does not auto-continue past low-confidence decodes.
+  (b) bridges.json was expanded with Arbitrum/Optimism/Base/Polygon-
+  side entries (30+ additions) so handoffs DETECT on the source
+  side. See `docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md` for the
+  canonical investigation pattern.

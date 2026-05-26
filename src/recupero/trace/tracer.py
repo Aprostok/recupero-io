@@ -450,24 +450,31 @@ def _continue_past_dex_and_bridges(
     # --- Bridge handoffs (same-chain + cross-chain) ---
     #
     # v0.16.13 (round-9 forensic ARCH): cross-chain BFS state.
-    # When `RECUPERO_CROSS_CHAIN_CONTINUATION=1` is set AND the bridge
-    # handoff carries a decoded destination_chain that we have an
-    # adapter for, we run a shallow (depth=1) BFS on the destination
-    # chain using a freshly-instantiated adapter. The resulting
-    # transfers are tagged with the destination chain (each Transfer
-    # carries its own `chain` field) and merged into the case.
+    # When cross-chain continuation is enabled AND the bridge handoff
+    # carries a decoded destination_chain that we have an adapter for,
+    # we run a shallow (depth=1) BFS on the destination chain using a
+    # freshly-instantiated adapter. The resulting transfers are
+    # tagged with the destination chain (each Transfer carries its
+    # own `chain` field) and merged into the case.
     #
-    # Off by default because:
-    #   (a) the destination-chain trace burns extra Etherscan/Helius
-    #       quota that may not be budgeted for routine cases
-    #   (b) the case's `chain` stays as the source chain, but
-    #       individual transfers will carry destination chains —
-    #       downstream consumers that assume case.chain == transfer.chain
-    #       need to be tested against multi-chain output first
+    # v0.28.0 (Jacob Zigha review item 2, step 2.3): default flipped
+    # from OFF to ON. The original off-by-default decision was a
+    # v0.17.x conservative-default for cost/scope reasons. Three
+    # things changed:
+    #   * v0.17.4 added cross-chain seed dedup + per-case cap so the
+    #     expansion is bounded
+    #   * v0.27.2 made the trace coverage gap visible in shipping
+    #     artifacts (1 of 7 Zigha destinations found)
+    #   * v0.28.0 expanded bridges.json with Arbitrum/L2 entries so
+    #     handoffs actually get DETECTED on the source side
+    # Net: the env var is now opt-OUT, set
+    # RECUPERO_CROSS_CHAIN_CONTINUATION=0 (or "no"/"false"/"off")
+    # to disable. Default behavior chases bridge handoffs across
+    # chains.
     #
     # The handoffs report ALWAYS surfaces the decoded destination
-    # (regardless of the env var), so operators can manually pursue
-    # the next chain even when the env var is off.
+    # (regardless of the env var), so operators retain the manual-
+    # pursue option for any handoff the BFS doesn't auto-follow.
     try:
         # Pass the source-chain adapter so handoff decoding can fetch
         # tx receipts + decode bridge calldata.
@@ -476,9 +483,17 @@ def _continue_past_dex_and_bridges(
         log.warning("bridge-handoff detection failed; skipping: %s", exc)
         handoffs = []
 
-    cross_chain_continue = os.environ.get(
+    # v0.28.0: default ON. To disable, set the env var to one of
+    # the recognized opt-out values. An empty / unset env var falls
+    # through to the ON default.
+    _cross_chain_env = os.environ.get(
         "RECUPERO_CROSS_CHAIN_CONTINUATION", "",
-    ).strip().lower() in ("1", "true", "yes", "on")
+    ).strip().lower()
+    if _cross_chain_env in ("0", "false", "no", "off"):
+        cross_chain_continue = False
+    else:
+        # Anything else (including unset / "1" / "true") → ON.
+        cross_chain_continue = True
 
     # Track cross-chain seeds separately because they need their OWN
     # adapter (different chain) — they don't share the source-chain

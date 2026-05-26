@@ -203,7 +203,17 @@ def test_no_cross_file_category_conflicts() -> None:
 def test_no_within_file_exact_duplicate_addresses() -> None:
     """Within a single seed file, an address listed twice means
     risk-scoring picks last-write-wins. The validator already warns;
-    here we ERROR so the bug actually gets fixed."""
+    here we ERROR so the bug actually gets fixed.
+
+    v0.28.0 (Jacob Zigha review item 2, step 2.1): bridges.json
+    grew multi-chain entries (same DeBridgeGate / LayerZero v2
+    address deployed deterministically on Arbitrum/Optimism/Base/
+    Polygon). The bridge DB keys on (chain, address) per
+    cross_chain.ingest_bridge_seeds, so the duplicate-check here
+    must do the same — otherwise we'd have to remove legitimate
+    cross-chain entries that are how multi-chain bridge detection
+    works.
+    """
     dupes: list[str] = []
     for path in _all_seed_files():
         entries = _load_entries(path)
@@ -213,9 +223,11 @@ def test_no_within_file_exact_duplicate_addresses() -> None:
             if not isinstance(addr, str) or not addr:
                 continue
             key = addr.lower() if addr.startswith("0x") else addr
-            # For issuers.json the unique key is (chain, contract); allow
-            # the same contract under different chains.
-            if path.name == "issuers.json":
+            # For issuers.json and bridges.json the unique key is
+            # (chain, contract|address); allow the same address
+            # under different chains (deterministic deploys are
+            # the rule, not exception, for modern protocols).
+            if path.name in ("issuers.json", "bridges.json"):
                 chain = e.get("chain", "")
                 key = f"{chain}:{key}"
             if key in seen:

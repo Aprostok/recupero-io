@@ -131,6 +131,45 @@ _STARGATE_METHODS = {
     "0x1114cd2a": ("Stargate", "swapETH"),
 }
 
+# v0.28.0 (Jacob Zigha review item 2, step 2.2): DeBridge protocol
+# recognition. DeBridge DLN createOrder calldata layouts are
+# documented at https://docs.debridge.finance but the exact ABI
+# parsing requires bookkeeping I haven't validated against
+# authoritative on-chain data. The conservative path: recognize the
+# protocol + method, return confidence='low' with no destination
+# address. The handoff is still detected (bridges.json has the
+# Arbitrum DeBridge entries as of v0.28.0); the trace report
+# surfaces "Bridged via DeBridge — follow up at
+# app.debridge.finance/orders". A full DLN order decoder ships in a
+# v0.28.x point release once an authoritative test fixture is
+# available.
+_DEBRIDGE_METHODS = {
+    # createSaleOrder(...) — DLN Source primary order creation.
+    # Method selector verified against DLN source contract on
+    # mainnet. Multiple overloads exist; we treat any selector
+    # starting with 0xfb96b66e or 0xfaee513f as DeBridge for
+    # recognition purposes.
+    "0xfb96b66e": ("DeBridge", "createSaleOrder"),
+    "0xfaee513f": ("DeBridge", "createOrder"),
+    # send(...) — deBridgeGate forwarding call. Wraps an arbitrary
+    # destination-chain payload + bridges via DLN.
+    "0xb3c10b67": ("DeBridge", "send"),
+}
+
+# v0.28.0: 1inch router method recognition. 1inch Fusion+ deploys
+# the same router on Arbitrum + Ethereum, and the cross-chain
+# swap path produces calldata we can recognize at the method-ID
+# layer. Same conservative treatment as DeBridge — confidence=low
+# until a vetted DLN/1inch ABI test fixture exists.
+_1INCH_METHODS = {
+    # swap(...) on Aggregation Router v5 / v6
+    "0x12aa3caf": ("1inch", "swap"),
+    # unoswap(...) - direct DEX swap path
+    "0x0502b1c5": ("1inch", "unoswap"),
+    # uniswapV3Swap(...) - V3-path swap
+    "0xe449022e": ("1inch", "uniswapV3Swap"),
+}
+
 # Wormhole chain-ID mapping. Wormhole assigns its own chain IDs
 # (different from EVM chain IDs).
 # Source: https://docs.wormhole.com/wormhole/reference/blockchains
@@ -208,6 +247,16 @@ def decode_bridge_calldata(
         return _decode_across(method_id, args_blob, data)
     if bridge_protocol.lower().startswith("stargate"):
         return _decode_stargate(method_id, args_blob, data)
+    # v0.28.0 (Jacob Zigha review item 2, step 2.2):
+    # DeBridge + 1inch protocol-recognition decoders. Both return
+    # confidence='low' / 'medium' (no destination decode yet — see
+    # _decode_debridge / _decode_1inch docstrings for the rationale)
+    # so the BFS won't auto-continue, but the handoff IS surfaced
+    # in the trace report. Pre-v0.28 these were silently dropped.
+    if "debridge" in bridge_protocol.lower():
+        return _decode_debridge(method_id, args_blob, data)
+    if "1inch" in bridge_protocol.lower():
+        return _decode_1inch(method_id, args_blob, data)
     return None
 
 
@@ -507,6 +556,84 @@ _EVM_CHAIN_BY_ID = {
     56: "bsc",
     43114: "avalanche",
 }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.28.0 (Jacob Zigha review item 2, step 2.2) — DeBridge + 1inch
+# protocol-recognition decoders.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _decode_debridge(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Recognize DeBridge DLN calldata; return low-confidence decode.
+
+    DeBridge DLN's `createSaleOrder(...)` / `createOrder(...)` /
+    `send(...)` methods have multiple overloads with non-trivial
+    ABI layouts. The destination chain ID + receiver address ARE
+    encoded but extracting them reliably requires bookkeeping I
+    haven't validated against authoritative on-chain test fixtures.
+
+    The conservative path: emit confidence='low' with no
+    destination address. Outcomes:
+      * cross-chain BFS does NOT auto-continue (the
+        decoded_conf != "high" gate in tracer.py blocks it)
+      * trace_report DOES surface "Bridged via DeBridge — follow
+        up at app.debridge.finance/orders"
+      * operator can manually pursue the destination via the
+        DeBridge explorer
+
+    Full destination-decode lands in a v0.28.x point release once
+    an authoritative DLN ABI test fixture is checked in. Until
+    then this is strictly recognition + handoff surfacing.
+    """
+    method_entry = _DEBRIDGE_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+    return BridgeDecodeResult(
+        destination_chain=None,
+        destination_address=None,
+        bridge_method=method_name,
+        confidence="low",
+        raw_calldata_excerpt=full_data[:400],
+    )
+
+
+def _decode_1inch(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Recognize 1inch Aggregation Router calldata; low-confidence.
+
+    1inch routers (v5/v6) primarily perform same-chain DEX swaps
+    rather than cross-chain bridging. Fusion+ adds cross-chain
+    routing as a layered protocol on top. When a transfer to a
+    1inch router shows up in a trace, we want to surface "passed
+    through 1inch" without claiming a specific destination chain
+    (that would be wrong for most 1inch txs, which stay on the
+    source chain).
+
+    Same conservative treatment as DeBridge: confidence='low',
+    no destination address. The trace report shows "Routed via
+    1inch" and the operator follows up via 1inch's own explorers
+    or the source-chain block explorer for the swap outputs.
+    """
+    method_entry = _1INCH_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+    return BridgeDecodeResult(
+        destination_chain=None,
+        destination_address=None,
+        bridge_method=method_name,
+        confidence="low",
+        raw_calldata_excerpt=full_data[:400],
+    )
 
 
 __all__ = (

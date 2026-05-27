@@ -117,23 +117,56 @@ def test_canonical_address_key_handles_very_long_input() -> None:
 
 
 def test_atomic_write_text_refuses_symlink_target(tmp_path: Path) -> None:
-    """Wave-3 hardening: writing through a symlink is rejected loud."""
+    """Wave-3 hardening: writing through a symlink is rejected loud.
+
+    v0.31.3 — uses the cross-platform link helper. On Windows the
+    file-symlink path needs Dev Mode; if unavailable, the companion
+    junction test below (which only requires `mklink /J`) catches
+    the same is_link_like guard."""
+    import pytest
+    from tests._link_helper import LinkUnsupported, make_file_link
     from recupero._common import atomic_write_text
     real = tmp_path / "real.json"
     real.write_text("orig", encoding="utf-8")
     link = tmp_path / "link.json"
     try:
-        link.symlink_to(real)
-    except (OSError, NotImplementedError):
-        # Windows without dev-mode / no symlink privilege — skip.
-        import pytest
-        pytest.skip("symlink creation unavailable on this platform")
-        return
-    import pytest
+        make_file_link(real, link)
+    except LinkUnsupported as e:
+        pytest.skip(f"file symlink unavailable: {e}")
     with pytest.raises(ValueError, match="symlink"):
         atomic_write_text(link, "new content")
     # The real file must NOT have been modified.
     assert real.read_text(encoding="utf-8") == "orig"
+
+
+def test_atomic_write_text_refuses_junction_target(tmp_path: Path) -> None:
+    """v0.31.3 — Windows-only companion: writing through an NTFS
+    junction is also rejected. Pre-v0.31.3 ``Path.is_symlink``
+    returned False for junctions, leaving a Windows-only bypass.
+    """
+    import sys
+    import pytest
+    if sys.platform != "win32":
+        pytest.skip("junctions are a Windows NTFS concept")
+
+    from tests._link_helper import LinkUnsupported, make_dir_link
+    from recupero._common import atomic_write_text
+
+    real_dir = tmp_path / "real_dir"
+    real_dir.mkdir()
+    (real_dir / "marker.txt").write_text("INTACT")
+
+    # Plant a junction at the file path itself.
+    link = tmp_path / "case.json"
+    try:
+        make_dir_link(real_dir, link)
+    except LinkUnsupported as e:
+        pytest.skip(f"junction unavailable: {e}")
+
+    with pytest.raises(ValueError, match="symlink"):
+        atomic_write_text(link, "new content")
+    # Marker inside the junction target dir MUST be intact.
+    assert (real_dir / "marker.txt").read_text() == "INTACT"
 
 
 # ---- investigator_defaults env reads ---- #

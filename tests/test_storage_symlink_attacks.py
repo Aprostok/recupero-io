@@ -96,26 +96,73 @@ def test_atomic_write_text_refuses_symlink_destination(
     assert not target.exists()
 
 
-@pytest.mark.skipif(
-    not _CAN_REAL_SYMLINK,
-    reason="real symlinks require admin/Developer Mode on Windows",
-)
 def test_atomic_write_bytes_real_symlink_refused(tmp_path: Path) -> None:
-    """End-to-end: an actual symlink at the destination must be
-    refused. Skipped on Windows without Developer Mode."""
+    """End-to-end: an actual link at the destination must be refused.
+
+    v0.31.3: pre-v0.31.3 this was skipped on Windows because file
+    symlinks need Dev Mode. Now we ALSO exercise the new
+    junction-aware path with a sibling junction-based test that
+    catches the same code via NTFS junctions (no privilege needed).
+    """
+    from tests._link_helper import LinkUnsupported, make_file_link
     from recupero.storage.case_store import _atomic_write_bytes
 
     sensitive = tmp_path / "sensitive.txt"
     sensitive.write_text("secret data")
 
     link = tmp_path / "case.json"
-    link.symlink_to(sensitive)
+    try:
+        make_file_link(sensitive, link)
+    except LinkUnsupported as e:
+        pytest.skip(f"file symlink unavailable: {e}")
 
     with pytest.raises(ValueError, match="symlink"):
         _atomic_write_bytes(link, b'{"hacked": true}')
 
     # The sensitive file MUST still contain the original secret.
     assert sensitive.read_text() == "secret data"
+
+
+def test_atomic_write_bytes_real_junction_refused(tmp_path: Path) -> None:
+    """v0.31.3 — Windows-only junction equivalent of the test above.
+
+    Pre-v0.31.3 the production guard used ``Path.is_symlink``, which
+    returns False for NTFS junctions. An attacker who can write
+    inside the data dir could plant a junction (no admin needed)
+    pointing at a sensitive directory and the next file write
+    would land inside it. ``is_link_like`` now catches junctions
+    too — this test pins the fix.
+    """
+    if sys.platform != "win32":
+        pytest.skip("junctions are a Windows NTFS concept")
+
+    from tests._link_helper import LinkUnsupported, make_dir_link
+    from recupero.storage.case_store import _atomic_write_bytes
+
+    # The junction points the SUBJECT directory at a sensitive
+    # location. We then try to atomic-write a FILE inside the
+    # junctioned dir — _atomic_write_bytes' parent.mkdir runs first,
+    # then is_link_like is checked on `path` itself, which is a
+    # regular path inside the junctioned parent. To actually catch
+    # this we plant the junction AT THE FILE PATH (one level up
+    # from a typical attack: the attacker mklink-/J's the case.json
+    # spot — Windows allows junctioning over a non-existent target
+    # name, so this is the realistic shape).
+    sensitive_dir = tmp_path / "sensitive_dir"
+    sensitive_dir.mkdir()
+    (sensitive_dir / "marker.txt").write_text("DO NOT TOUCH")
+
+    link_path = tmp_path / "case.json"
+    try:
+        make_dir_link(sensitive_dir, link_path)
+    except LinkUnsupported as e:
+        pytest.skip(f"junction unavailable: {e}")
+
+    with pytest.raises(ValueError, match="symlink"):
+        _atomic_write_bytes(link_path, b'{"hacked": true}')
+
+    # The sensitive marker MUST still be intact.
+    assert (sensitive_dir / "marker.txt").read_text() == "DO NOT TOUCH"
 
 
 # ---- Read through a symlink (case_store.read_case) ---- #
@@ -175,15 +222,15 @@ def test_read_case_refuses_symlinked_parent(tmp_path: Path) -> None:
             store.read_case("FRONT")
 
 
-@pytest.mark.skipif(
-    not _CAN_REAL_SYMLINK,
-    reason="real symlinks require admin/Developer Mode on Windows",
-)
 def test_read_case_real_symlinked_case_json_refused(
     tmp_path: Path,
 ) -> None:
-    """End-to-end with a real symlink: case.json is a symlink to a
-    foreign file. Wave-3 must refuse."""
+    """End-to-end with a real link: case.json is a link to a foreign
+    file. Wave-3 must refuse. v0.31.3 — on Windows without Dev
+    Mode the file-symlink probe falls back; the junction-based
+    parent-link test below covers the same is_link_like path."""
+    from tests._link_helper import LinkUnsupported, make_file_link
+
     store, cases_root = _build_store(tmp_path)
 
     secret = tmp_path / "secret.json"
@@ -192,19 +239,26 @@ def test_read_case_real_symlinked_case_json_refused(
     case_dir = cases_root / "MARK"
     case_dir.mkdir(parents=True)
     link = case_dir / "case.json"
-    link.symlink_to(secret)
+    try:
+        make_file_link(secret, link)
+    except LinkUnsupported as e:
+        pytest.skip(f"file symlink unavailable: {e}")
 
     with pytest.raises(ValueError, match="symlink"):
         store.read_case("MARK")
 
 
-@pytest.mark.skipif(
-    not _CAN_REAL_SYMLINK,
-    reason="real symlinks require admin/Developer Mode on Windows",
-)
 def test_read_case_real_symlinked_dir_refused(tmp_path: Path) -> None:
-    """End-to-end: case directory is itself a symlink. Wave-3 catches
-    via the parent walk."""
+    """End-to-end: case directory is itself a link (symlink on POSIX,
+    NTFS junction on Windows). Wave-3 catches via the parent walk.
+
+    v0.31.3: pre-v0.31.3 this test skipped on Windows because file
+    symlinks need Dev Mode. But the production guard now uses
+    ``is_link_like`` which detects NTFS junctions too — and
+    ``mklink /J`` works for any user. The test now runs everywhere.
+    """
+    from tests._link_helper import LinkUnsupported, make_dir_link
+
     store, cases_root = _build_store(tmp_path)
 
     # Plant a victim case so it has a valid layout.
@@ -214,10 +268,13 @@ def test_read_case_real_symlinked_dir_refused(tmp_path: Path) -> None:
         '{"case_id":"REAL"}', encoding="utf-8"
     )
 
-    # And a symlink that points at it.
+    # And a link (symlink on POSIX, junction on Windows) that points at it.
     cases_root.mkdir(parents=True, exist_ok=True)
     link_dir = cases_root / "FAKE"
-    link_dir.symlink_to(real_dir, target_is_directory=True)
+    try:
+        make_dir_link(real_dir, link_dir)
+    except LinkUnsupported as e:  # pragma: no cover — only on locked-down hosts
+        pytest.skip(f"directory link unavailable: {e}")
 
     with pytest.raises(ValueError, match="symlink"):
         store.read_case("FAKE")

@@ -314,6 +314,46 @@ def short_addr(addr: str | None) -> str:
     return f"{addr[:6]}…{addr[-4:]}"
 
 
+# ---- Link-like path detection (symlinks + Windows junctions) ---- #
+
+
+def is_link_like(path: Path) -> bool:
+    """True if ``path`` is a symbolic link OR a Windows NTFS junction.
+
+    v0.31.3 (Windows path-traversal hardening): pre-v0.31.3 every
+    safety-net call site used only ``Path.is_symlink()``, which
+    returns ``False`` for NTFS junctions on Windows. That left a
+    Windows-specific path-traversal hole: ``mklink /J`` doesn't even
+    require admin / Developer Mode, so an attacker who could write
+    one directory inside the data-dir tree could plant a junction
+    pointing anywhere and bypass every "is this a symlink?" guard.
+
+    ``os.path.isjunction`` was added in Python 3.12. On older
+    interpreters it doesn't exist; we feature-detect and degrade
+    cleanly. On POSIX, ``isjunction`` is always ``False``, so the
+    helper collapses to the legacy ``is_symlink`` semantics — no
+    behavior change on Linux / Mac.
+
+    Defensive: any OSError from the underlying stat is swallowed
+    (returns False). The caller's own write/read code will surface
+    a real-FS error in a moment if there's a deeper problem.
+    """
+    try:
+        if path.is_symlink():
+            return True
+    except OSError:
+        return False
+    try:
+        # Python 3.12+ — os.path.isjunction. Feature-detect for
+        # older interpreters where it's missing.
+        isjunction = getattr(os.path, "isjunction", None)
+        if isjunction is not None and isjunction(str(path)):
+            return True
+    except OSError:
+        return False
+    return False
+
+
 # ---- Atomic file writes ---- #
 
 
@@ -344,6 +384,11 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
         following an operator-placed redirect to an unrelated
         directory has caused recovery-snapshot corruption in
         ops-incidents. Cheaper to fail loud.
+      * v0.31.3: also reject Windows NTFS junctions via
+        ``is_link_like`` — pre-v0.31.3 only ``is_symlink`` was
+        checked, which returns False for junctions, leaving a
+        Windows-specific path-traversal hole (`mklink /J` doesn't
+        even require admin / Developer Mode).
       * Tempfile name is unique (``tempfile.mkstemp``) so concurrent
         writers targeting the SAME path (e.g. two brief generators
         racing on brief.html) don't clobber each other's tempfile
@@ -355,7 +400,7 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if path.is_symlink():
+    if is_link_like(path):
         raise ValueError(
             f"refusing to write to symlink at {path}; delete the link "
             f"and retry (wave-3 symlink-following guard)"

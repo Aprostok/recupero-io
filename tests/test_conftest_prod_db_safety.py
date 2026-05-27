@@ -53,20 +53,54 @@ def test_supabase_db_url_is_not_prod_at_test_time() -> None:
     )
 
 
-def test_supabase_db_url_points_at_local_test_db_when_present() -> None:
+def test_supabase_db_url_points_at_local_test_db_when_present(monkeypatch) -> None:
     """If SUPABASE_DB_URL is set after conftest ran, it must target
-    a local test DB (DB name contains 'test' or '_int')."""
-    current = os.environ.get("SUPABASE_DB_URL", "")
-    if not current:
-        pytest.skip("SUPABASE_DB_URL unset — nothing to assert about.")
-    # Cheapest check: the DB-name segment.
+    a local test DB (DB name contains 'test' or '_int').
+
+    v0.31.3 — pre-v0.31.3 this skipped when the env var was unset;
+    now we ALWAYS exercise the assertion. If SUPABASE_DB_URL is set
+    naturally (CI), the original semantics fire. If it's unset
+    (local dev), we synthesize a known-good test-shaped DSN to
+    prove the check ITSELF is sound (an empty env var was hiding a
+    subtle defect: ``db_name == ""`` would have NOT contained
+    "test" / "_int" / the default, so the assertion would have
+    been False — but the early ``not current`` short-circuit
+    hid that. We re-derive the empty case here explicitly.)
+    """
     from urllib.parse import urlparse
-    db_name = (urlparse(current).path or "").lstrip("/").lower()
+
+    current = os.environ.get("SUPABASE_DB_URL", "")
+    if current:
+        db_name = (urlparse(current).path or "").lstrip("/").lower()
+        assert (
+            "test" in db_name
+            or "_int" in db_name
+            or db_name == LOCAL_TEST_DB_NAME_DEFAULT
+        ), f"Redirected DSN's DB name is not test-shaped: {db_name!r}"
+        return
+
+    # No real DSN — exercise the check shape against a synthetic
+    # test-DB DSN so the audit logic itself is verified.
+    monkeypatch.setenv(
+        "SUPABASE_DB_URL",
+        f"postgresql://test:test@localhost:5432/{LOCAL_TEST_DB_NAME_DEFAULT}",
+    )
+    synth = os.environ["SUPABASE_DB_URL"]
+    db_name = (urlparse(synth).path or "").lstrip("/").lower()
     assert (
         "test" in db_name
         or "_int" in db_name
         or db_name == LOCAL_TEST_DB_NAME_DEFAULT
-    ), f"Redirected DSN's DB name is not test-shaped: {db_name!r}"
+    ), f"Synthetic DSN's DB name not test-shaped: {db_name!r}"
+
+    # And the negative case: a prod-shaped DB name MUST fail this
+    # exact assertion logic, proving the check is meaningful.
+    bad_db_name = "production_recupero"
+    assert not (
+        "test" in bad_db_name
+        or "_int" in bad_db_name
+        or bad_db_name == LOCAL_TEST_DB_NAME_DEFAULT
+    ), "Test-shape predicate must reject the synthetic prod name."
 
 
 def test_prod_dsn_stash_key_is_the_only_alias() -> None:

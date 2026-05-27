@@ -3849,5 +3849,128 @@
     "added_at": "2026-05-26T00:00:00Z",
     "_v029_1_addition": true,
     "_audit_status": "externally_verified_v029_1: WebFetch from https://docs.synapseprotocol.com/protocol/synapse-router/router-addresses"
+  },
+  {
+    "address": "TCFNp179Lg46D16zKoumd4Poa2WFFdtqYj",
+    "name": "SunSwap: Smart Router (Tron)",
+    "chain": "tron",
+    "category": "bridge",
+    "source": "sunswap_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "tron"
+    ],
+    "follow_up_url": "https://docs.sun.io/developers/swap/smart-router",
+    "notes": "SunSwap Smart Router on Tron mainnet — routes USDT-TRC20 and USDD swaps through V1/V2/V3 pools + PSM + SunCurve. Pre-v0.31.2 bridges.json had zero Tron-keyed entries, so TRC-20 stablecoin laundering flows that touched a SunSwap router surfaced as unlabeled EOAs. Tron's bridge ecosystem is structurally thin (Wormhole, Stargate, PolyNetwork are NOT deployed on Tron — externally confirmed v0.31.2), so the DEX-aggregator layer functionally serves as Tron's primary cross-asset routing hop.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v031_addition": true,
+    "_audit_status": "externally_verified_v031_2: WebFetch from https://github.com/sun-protocol/smart-exchange-router (deployment example mainnet address); cross-referenced WebSearch SUN.io zendesk announcement on Smart Router contract"
+  },
+  {
+    "address": "TE2RzoSV3wFK99w6J9UnnZ4vLfXYoxvRwP",
+    "name": "JustLend: jTRX Market (Tron)",
+    "chain": "tron",
+    "category": "bridge",
+    "source": "tronscan_token_page",
+    "confidence": "high",
+    "supports_to_chains": [
+      "tron"
+    ],
+    "follow_up_url": "https://tronscan.org/#/token20/TE2RzoSV3wFK99w6J9UnnZ4vLfXYoxvRwP",
+    "notes": "JustLend jTRX market on Tron mainnet — primary TRX lending pool in Tron's JUST DeFi stack. Stablecoin laundering on Tron routinely touches JustLend (deposit USDT → borrow TRX → swap → re-deposit) so flagging it as bridge-adjacent surfaces the otherwise-invisible TRC-20 → JustLend → TRX hop. Labeled `category: bridge` (not `defi_protocol`) because v0.30.x trace bridge-following infrastructure only follows category=bridge edges; promoting jTRX into bridges.json puts it on the BFS path.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v031_addition": true,
+    "_audit_status": "externally_verified_v031_2: WebSearch returned tronscan.org/#/token20/TE2RzoSV3wFK99w6J9UnnZ4vLfXYoxvRwP as the canonical jTRX page"
+  },
+  {
+    "address": "TXDk8mbtRbXeYuMNS83CfKPaYYT8XWv9Hz",
+    "name": "USDD: Peg Stability Module (Tron)",
+    "chain": "tron",
+    "category": "bridge",
+    "source": "usdd_docs",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "tron",
+      "ethereum",
+      "bsc"
+    ],
+    "follow_up_url": "https://docs.usdd.io/user-guide/psm-peg-stability-module",
+    "notes": "USDD Peg Stability Module on Tron — 1:1 swaps between USDD and USDT/USDC/TUSD/USDJ. Cross-stablecoin laundering hop on Tron: USDT-TRC20 → USDD → USDT-ERC20 (post-bridge) defeats single-asset blacklist enforcement. Confidence medium because USDD 2.0 redeployed in 2024 with new contract addresses — this is the post-2.0 PSM address per USDD docs but a second-level on-chain audit is recommended before relying on it for high-stakes freezing decisions.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v031_addition": true,
+    "_audit_status": "externally_verified_v031_2: WebSearch USDD docs / Eco support referenced TXDk8mbtRbXeYuMNS83CfKPaYYT8XWv9Hz as the new USDD contract address post-2.0; need direct Tronscan verification once API access is restored"
+  },
+  {
+    "address": "wormDTUJ6AWPNvk59vGQbDvGJmqbDTdgWgAqcLBCgUb",
+    "name": "Wormhole: Token Bridge (Solana)",
+    "chain": "solana",
+    "category": "bridge",
+    "source": "wormhole_sdk_consts",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "aptos",
+      "sui"
+    ],
+    "follow_up_url": "https://wormhole.com/docs/products/reference/contract-addresses/",
+    "notes": "Wormhole Token Bridge program on Solana mainnet — also the canonical Portal Bridge entry point (same program ID). Pre-v0.31.2 bridges.json had zero Solana-keyed entries, so Solana-originated bridge handoffs (the high-value SOL/USDC outflow path for stablecoin theft post-2023) surfaced as unlabeled SPL program calls. Address verified against Wormhole's own SDK constants in sdk/js/src/utils/consts.ts on the main branch.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v031_addition": true,
+    "_audit_status": "externally_verified_v031_2: WebFetch from https://raw.githubusercontent.com/wormhole-foundation/wormhole/main/sdk/js/src/utils/consts.ts confirmed token bridge address wormDTUJ6AWPNvk59vGQbDvGJmqbDTdgWgAqcLBCgUb on Solana mainnet"
+  },
+  {
+    "address": "worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth",
+    "name": "Wormhole: Core Bridge (Solana)",
+    "chain": "solana",
+    "category": "bridge",
+    "source": "wormhole_sdk_consts",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "fantom",
+      "arbitrum",
+      "optimism",
+      "base",
+      "aptos",
+      "sui"
+    ],
+    "follow_up_url": "https://wormhole.com/docs/products/messaging/reference/core-contract-solana/",
+    "notes": "Wormhole Core Bridge (guardian-signed message layer) on Solana mainnet. Every Wormhole-mediated SPL transfer crosses this program before / after the Token Bridge — flagging both gives the trace both endpoints of the cross-chain hop. Address verified against Wormhole's own SDK constants.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v031_addition": true,
+    "_audit_status": "externally_verified_v031_2: WebFetch from https://raw.githubusercontent.com/wormhole-foundation/wormhole/main/sdk/js/src/utils/consts.ts confirmed core bridge address worm2ZoG2kUd4vFXhvjh93UUH596ayRfgQ2MgjNMTth on Solana mainnet"
+  },
+  {
+    "address": "DEbrdGj3HsRsAzx6uH4MKyREKxVAfBydijLUF3ygsFfh",
+    "name": "deBridge: DLN Program (Solana)",
+    "chain": "solana",
+    "category": "bridge",
+    "source": "debridge_solana_sdk",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "bsc",
+      "polygon",
+      "avalanche",
+      "arbitrum",
+      "optimism",
+      "base",
+      "fantom"
+    ],
+    "follow_up_url": "https://docs.debridge.com/dmp-details/dev-guides/solana/sending-cross-chain-messages",
+    "notes": "deBridge main program on Solana mainnet — paired with the existing 0x43dE2d77BF8027e25dBD179B491e8d64f38398aA (deBridgeGate DLN on Ethereum) entry. Pre-v0.31.2, a Solana-origin deBridge handoff resolved only on the EVM side, so the trace lost the SPL → EVM transition.",
+    "added_at": "2026-05-26T00:00:00Z",
+    "_v031_addition": true,
+    "_audit_status": "externally_verified_v031_2: WebSearch returned debridge-finance/debridge-solana-sdk and docs.debridge.com pages referencing DEbrdGj3HsRsAzx6uH4MKyREKxVAfBydijLUF3ygsFfh as the main Solana program ID"
   }
 ]

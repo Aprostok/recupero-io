@@ -412,37 +412,34 @@ def test_solana_keyed_bridge_db_lookup_works_when_populated() -> None:
     assert "wormhole" in handoffs[0].bridge_protocol.lower()
 
 
-def test_solana_keyed_bridge_db_is_empty_today() -> None:
-    """**Visible-gap pin.** The shipped bridges.json has zero entries
-    keyed to ``chain: "solana"``. Consequence: Solana-originated
-    bridge handoffs (SPL transfer landing on a Solana-side bridge
-    program) are silently undetected today.
+def test_solana_keyed_bridge_db_has_coverage() -> None:
+    """v0.31.2 — was previously a visible-gap pin asserting zero
+    Solana-keyed bridges.json entries. Closed by the v0.31.2
+    Tron+Solana seed-expansion pass: Wormhole Token Bridge (=Portal),
+    Wormhole Core Bridge, deBridge DLN Program. All three verified
+    against the Wormhole SDK constants + deBridge Solana SDK.
 
-    Tracked gap; see ``docs/V031_TRON_SOLANA_DEPTH.md`` and
-    ``docs/chain-coverage-status.md`` §Solana. When a future patch
-    adds Solana-side bridge entries, this assertion flips and the
-    test should be updated (intentional — reviewer sees the
-    coverage change).
+    Test now LOCKS coverage — bump count to add more.
+    See ``docs/V031_2_TRON_SOLANA_SEEDS.md`` for provenance.
     """
     db = ingest_bridge_seeds()
     solana_keys = [k for k in db if k[0] == Chain.solana]
-    assert solana_keys == [], (
-        f"Solana-keyed bridge rows now exist ({len(solana_keys)}): "
-        f"{solana_keys}. Update test + docs/V031_TRON_SOLANA_DEPTH.md "
-        f"to acknowledge the new coverage."
+    assert len(solana_keys) >= 3, (
+        f"Solana-keyed bridge coverage REGRESSED — expected >= 3 entries, "
+        f"got {len(solana_keys)}. Check whether bridges.json entries were "
+        f"accidentally removed since v0.31.2."
     )
 
 
-def test_cex_deposits_seed_has_no_solana_or_tron_entries_today() -> None:
-    """**Visible-gap pin** — the cex_deposits.json seed has 39
-    entries, all of which are Ethereum-shaped (0x-hex addresses,
-    ``chain: "ethereum"``). When a Solana or Tron deposit lands at a
-    Binance / OKX / Kraken Solana wallet the label store has nothing
-    to match against, so the brief shows the destination as an
-    unlabeled EOA — investigator workflow degrades.
+def test_cex_deposits_seed_has_solana_and_tron_coverage() -> None:
+    """v0.31.2 — was previously a visible-gap pin asserting the
+    cex_deposits.json seed had ZERO Solana / Tron entries. Closed by
+    the v0.31.2 expansion: 7 Tron CEX hot wallets (Binance ×5,
+    Bitfinex, Huobi/HTX) + 7 Solana CEX hot wallets (Coinbase ×2,
+    OKX, HTX, Bybit, Kraken, Crypto.com). All sourced from
+    OKLink / ClankApp / Bitquery / Solscan public tags.
 
-    Same shape as the bridge-DB pin; flipping the assertion will be
-    a deliberate signal in a future PR.
+    Test now LOCKS coverage.
     """
     import json
     from pathlib import Path
@@ -458,13 +455,13 @@ def test_cex_deposits_seed_has_no_solana_or_tron_entries_today() -> None:
             ch = entry.get("chain", "(unset)")
             by_chain[ch] = by_chain.get(ch, 0) + 1
 
-    assert by_chain.get("solana", 0) == 0, (
-        f"Solana CEX deposit entries now exist ({by_chain.get('solana', 0)}). "
-        "Update test + docs/V031_TRON_SOLANA_DEPTH.md."
+    assert by_chain.get("solana", 0) >= 5, (
+        f"Solana CEX deposit coverage REGRESSED — expected >= 5, got "
+        f"{by_chain.get('solana', 0)}."
     )
-    assert by_chain.get("tron", 0) == 0, (
-        f"Tron CEX deposit entries now exist ({by_chain.get('tron', 0)}). "
-        "Update test + docs/V031_TRON_SOLANA_DEPTH.md."
+    assert by_chain.get("tron", 0) >= 5, (
+        f"Tron CEX deposit coverage REGRESSED — expected >= 5, got "
+        f"{by_chain.get('tron', 0)}."
     )
 
 

@@ -419,6 +419,21 @@ def run_trace(
             adapter.close()
         except Exception:  # noqa: BLE001
             pass
+
+    # v0.31.2 — dust-attack pattern filter (off by default).
+    #
+    # A perpetrator sending many sub-cent transfers to many distinct
+    # destinations from a single source address pollutes Section 5 of
+    # the brief with innocent-looking noise, burying the real path.
+    # When RECUPERO_DUST_ATTACK_FILTER=1, we identify those destination
+    # addresses and remove them from `unlabeled_counterparties` so the
+    # brief renderer doesn't include them in Section 5. The transfers
+    # themselves stay in `case.transfers` for the audit trail.
+    #
+    # OFF by default to avoid changing existing case-rendering tests.
+    # Operators turn it on per-case via the env var.
+    _apply_dust_attack_filter(case)
+
     return case
 
 
@@ -1154,6 +1169,88 @@ def _collect_unlabeled(transfers: list[Transfer]) -> list[Address]:
             seen.add(t.to_address)
             out.append(t.to_address)
     return out
+
+
+def _apply_dust_attack_filter(case: Case) -> None:
+    """v0.31.2 — filter dust-shower destinations from the brief's
+    counterparty list.
+
+    OFF by default (gated on `RECUPERO_DUST_ATTACK_FILTER=1`) to keep
+    existing case-rendering tests deterministic. When ON, identifies
+    destination addresses that participate in a fan-out shower (>=10
+    distinct sub-$1 destinations from a single source) and removes
+    them from `case.unlabeled_counterparties`. The transfers themselves
+    stay in `case.transfers` for the audit trail.
+
+    Env vars (all NaN/Inf-rejecting, clamped to safe ranges):
+      * RECUPERO_DUST_ATTACK_FILTER       — "1" enables (default off).
+      * RECUPERO_DUST_ATTACK_THRESHOLD_USD — default 1.00, clamped [0,100].
+      * RECUPERO_DUST_ATTACK_MIN_FANOUT   — default 10, clamped [3,1000].
+    """
+    flag = os.environ.get("RECUPERO_DUST_ATTACK_FILTER", "").strip().lower()
+    if flag not in {"1", "true", "yes", "on"}:
+        return
+
+    # Threshold env-var parsing — mirror RECUPERO_TRACE_DUST_USD's
+    # NaN/Inf-rejecting pattern from v0.31.1.
+    threshold_usd = Decimal("1.00")
+    raw_thr = os.environ.get("RECUPERO_DUST_ATTACK_THRESHOLD_USD")
+    if raw_thr is not None:
+        try:
+            env_thr = float(raw_thr)
+            import math as _m
+            if not _m.isfinite(env_thr) or env_thr < 0:
+                raise ValueError("non-finite or negative")
+            # Clamp to [0, 100] — anything above $100 starts catching
+            # legitimate small payments, anything negative is nonsense.
+            clamped = max(0.0, min(100.0, env_thr))
+            threshold_usd = Decimal(str(clamped))
+        except (TypeError, ValueError) as exc:
+            log.warning(
+                "RECUPERO_DUST_ATTACK_THRESHOLD_USD=%r rejected (%s); "
+                "falling back to default $1.00",
+                raw_thr, exc,
+            )
+
+    # Min-fanout env-var parsing.
+    min_fanout = 10
+    raw_fan = os.environ.get("RECUPERO_DUST_ATTACK_MIN_FANOUT")
+    if raw_fan is not None:
+        try:
+            env_fan = int(raw_fan)
+            # Clamp to [3, 1000]. Below 3 fires on legitimate change-back
+            # patterns; above 1000 misses real attacks that stayed
+            # modestly sized to evade detection.
+            min_fanout = max(3, min(1000, env_fan))
+        except (TypeError, ValueError):
+            log.warning(
+                "RECUPERO_DUST_ATTACK_MIN_FANOUT=%r is not an int; "
+                "falling back to default 10",
+                raw_fan,
+            )
+
+    # Lazy import — keep the dust-attack module out of the hot path
+    # when the filter is off (which is the default).
+    from recupero.trace.dust_attack import identify_dust_attack_destinations
+
+    flagged = identify_dust_attack_destinations(
+        case.transfers,
+        dust_threshold_usd=threshold_usd,
+        min_fanout=min_fanout,
+    )
+    if not flagged:
+        return
+
+    before = len(case.unlabeled_counterparties)
+    case.unlabeled_counterparties = [
+        a for a in case.unlabeled_counterparties if a not in flagged
+    ]
+    log.info(
+        "dust-attack filter removed %d counterparties from brief "
+        "(threshold=$%s, min_fanout=%d; %d -> %d)",
+        before - len(case.unlabeled_counterparties),
+        threshold_usd, min_fanout, before, len(case.unlabeled_counterparties),
+    )
 
 
 def _sum_usd(transfers: list[Transfer]) -> Decimal | None:

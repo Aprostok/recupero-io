@@ -263,27 +263,33 @@ def test_tron_keyed_bridge_db_lookup_works_when_populated() -> None:
     assert "ethereum" in handoffs[0].destination_chain_candidates
 
 
-def test_tron_keyed_bridge_db_is_empty_today() -> None:
-    """**Visible-gap pin.** The shipped ``bridges.json`` has zero
-    entries with ``chain: "tron"``. Consequence: Tron-originated
-    bridge handoffs (TRC-20 transfer landing on a Tron-side bridge
-    program) are silently undetected today.
+def test_tron_keyed_bridge_db_has_coverage() -> None:
+    """v0.31.2 — was previously a "visible-gap pin" asserting the
+    shipped bridges.json had ZERO Tron-keyed entries. Closed by the
+    v0.31.2 Tron+Solana seed-expansion pass:
+      * SunSwap Smart Router
+      * JustLend jTRX
+      * USDD PSM
+    All three confirmed externally (Tronscan + JustLend docs); the
+    Wormhole/Stargate/PolyNetwork bridges are deliberately NOT
+    deployed on Tron (verified against Wormhole SDK constants +
+    Stargate gitbook deployments + PolyNetwork config_mainnet.json),
+    so the Tron-side cross-asset hops are DEX/lending/PSM contracts,
+    which is why those are flagged ``category: "bridge"``.
 
-    This is a tracked gap; see
-    ``docs/V031_TRON_SOLANA_DEPTH.md`` and
-    ``docs/chain-coverage-status.md`` §Tron. When a future patch
-    adds Tron-side bridge entries, this assertion flips and the
-    test must be updated (deliberately — so a reviewer sees the
-    coverage change in the diff).
+    The test now LOCKS the coverage — if entries are accidentally
+    removed, this trips. To add more, just bump the count.
+    See ``docs/V031_2_TRON_SOLANA_SEEDS.md`` for the full provenance
+    table.
     """
     from recupero.trace.cross_chain import ingest_bridge_seeds
 
     db = ingest_bridge_seeds()
     tron_keys = [k for k in db if k[0] == Chain.tron]
-    assert tron_keys == [], (
-        f"Tron-keyed bridge rows now exist ({len(tron_keys)}): "
-        f"{tron_keys}. Update this test + docs/V031_TRON_SOLANA_DEPTH.md "
-        f"to acknowledge the new coverage."
+    assert len(tron_keys) >= 3, (
+        f"Tron-keyed bridge coverage REGRESSED — expected >= 3 entries, "
+        f"got {len(tron_keys)}. Check whether bridges.json entries were "
+        f"accidentally removed since v0.31.2."
     )
 
 

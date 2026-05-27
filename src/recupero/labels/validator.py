@@ -49,6 +49,10 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
             "chain", "_v029_1_chain_backfill", "last_verified_at",
             "_v030_chain_corrected",
             "_v031_addition", "_audit_status",
+            # v0.31.2 (Gap #5 — point-in-time labels): optional validity
+            # window. Default-None preserves "labeled forever from
+            # added_at" semantics for existing rows.
+            "valid_from", "valid_until",
         ],
     },
     "ransomware.json": {
@@ -71,6 +75,8 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
             "category", "subcategory", "source", "notes",
             "added_at", "confidence",
             "chain", "_v029_1_chain_backfill", "last_verified_at",
+            # v0.31.2 (Gap #5 — point-in-time labels).
+            "valid_from", "valid_until",
         ],
     },
     "cex_deposits.json": {
@@ -78,10 +84,21 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
         "required": ["address", "name"],
         # v0.29.1 (label-DB sweep): explicit `chain` + `last_verified_at`
         # for confidence decay (Recommendation #6).
+        # v0.31.2 (gap #7): `_v031_addition` + `_audit_status` track
+        # the Tron + Solana CEX-deposit seed expansion (pre-v0.31.2
+        # both chains were zero-keyed, so funds flowing into a Tron
+        # Binance hot wallet or a Solana Coinbase hot wallet surfaced
+        # as unlabeled EOAs).
         "optional": [
             "category", "source", "exchange", "confidence", "notes",
             "added_at",
             "chain", "_v029_1_chain_backfill", "last_verified_at",
+            "_v031_addition", "_audit_status",
+            # v0.31.2 (Gap #5 — point-in-time labels). Especially
+            # relevant for cex_deposits: exchange deposit addresses
+            # rotate, so a deposit labeled today wasn't necessarily
+            # one six months ago at theft-time.
+            "valid_from", "valid_until",
         ],
     },
     "bridges.json": {
@@ -91,12 +108,19 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
         # `_audit_status` track provenance for the expansion batches;
         # `last_verified_at` powers the confidence-decay test
         # (Recommendation #6).
+        # v0.31.2 (gap #6): `_v031_addition` tracks the Tron + Solana
+        # bridge seed expansion (pre-v0.31.2 both chains were zero-
+        # keyed for bridges.json, so handoffs to Wormhole-on-Tron or
+        # Wormhole-on-Solana surfaced as unlabeled EOAs).
         "optional": [
             "category", "source", "notes", "destinations",
             "chain", "contract", "confidence", "added_at",
             "follow_up_url", "supports_to_chains",
             "_v028_addition", "_v029_addition", "_v029_1_addition",
+            "_v031_addition",
             "_audit_status", "_v029_1_chain_backfill", "last_verified_at",
+            # v0.31.2 (Gap #5 — point-in-time labels).
+            "valid_from", "valid_until",
         ],
     },
     # Issuers map freezable-token contracts → the legal issuer who can
@@ -115,6 +139,8 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
             "jurisdiction", "delegates_to", "le_portal_url",
             "freeze_response_time_hours", "notes", "added_at", "source",
             "_v030_1_contact_note",
+            # v0.31.2 (Gap #5 — point-in-time labels).
+            "valid_from", "valid_until",
         ],
     },
 }

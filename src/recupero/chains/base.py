@@ -29,10 +29,25 @@ class ChainAdapter(ABC):
         # v0.20.0 (round-13 chain-coverage research): seven additional
         # EVM chains route through the same shared EvmAdapter — Etherscan
         # V2 multichain covers all of them via the chainid query parameter.
+        #
+        # v0.31.2: added the 6 v0.29.0/v0.31.0-promoted destinations —
+        # fantom (250), celo (42220), gnosis (100), moonbeam (1284),
+        # metis (1088), kava (2222). Pre-v0.31.2 these were ENUM
+        # members + had chainIDs wired in worker/watch_tick.py + had
+        # explorer URLs in _common.py, but the ADAPTER FACTORY didn't
+        # know about them — so when the BFS tried to follow a bridge
+        # handoff into one of these chains, ChainAdapter.for_chain
+        # raised NotImplementedError, which the cross-chain
+        # continuation block in tracer.py swallowed via its broad
+        # try/except. Net: the chain showed up as a candidate in the
+        # brief but the BFS silently did NOT continue. The handoff
+        # claim was real, the continuation was a lie.
         if chain in (
             Chain.arbitrum, Chain.bsc, Chain.polygon, Chain.base,
             Chain.optimism, Chain.avalanche, Chain.linea, Chain.blast,
             Chain.zksync, Chain.scroll, Chain.mantle,
+            Chain.fantom, Chain.celo, Chain.gnosis, Chain.moonbeam,
+            Chain.metis, Chain.kava,
         ):
             # Etherscan V2 unified API covers every EVM-compatible chain
             # via the chainid parameter — same client class, different

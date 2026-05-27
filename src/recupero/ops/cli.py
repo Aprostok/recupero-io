@@ -242,6 +242,23 @@ def cli() -> None:
         help="Skip live HTTP and use bundled snapshots (CI-safe).",
     )
 
+    # ----- retrace-scan (v0.31.2 Gap #14) ----- #
+    p_retrace_scan = sub.add_parser(
+        "retrace-scan",
+        help="Scan every case for re-trace candidates: cases whose "
+             "trace_completed_at predates a newer bridge / mixer / "
+             "exchange_deposit / exchange_hot_wallet / perpetrator "
+             "label that now matches a counterparty in the case. "
+             "REPORT-ONLY — writes data/retrace_candidates.json; "
+             "operator picks which cases to re-trace. Recommended "
+             "cadence: weekly cron after label-DB updates land.",
+    )
+    p_retrace_scan.add_argument(
+        "--out", default=None,
+        help="Output path for retrace_candidates.json (default "
+             "data/retrace_candidates.json).",
+    )
+
     # ----- hack-tracker ----- #
     # v0.20.0 (Phase D): daily hack-feed aggregator. Feature-flagged
     # OFF in production — operator must opt in via
@@ -707,6 +724,27 @@ def cli() -> None:
             output_path=_Path(args.output) if args.output else None,
             offline=bool(args.offline),
         ))
+
+    if args.command == "retrace-scan":
+        # v0.31.2 (Gap #14): observability cron. The same logic is also
+        # exposed as ``python scripts/retrace_backfill_scan.py`` and as
+        # ``python -m recupero.worker.retrace_backfill`` — this is the
+        # ops-CLI entry so operators get the command via the same
+        # surface they use for every other periodic task.
+        from pathlib import Path as _Path
+
+        from recupero.config import load_config
+        from recupero.worker.retrace_backfill import (
+            DEFAULT_OUT_RELATIVE,
+            run_backfill_scan,
+        )
+        cfg, _env = load_config()
+        out_path = (
+            _Path(args.out) if args.out else _Path(DEFAULT_OUT_RELATIVE)
+        )
+        n = run_backfill_scan(config=cfg, out_path=out_path)
+        print(f"retrace-scan: {n} candidate(s) → {out_path}")
+        sys.exit(0)
 
     if args.command == "hack-tracker":
         # v0.20.0 (Phase D): feature-flagged hack-feed aggregator.

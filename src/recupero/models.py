@@ -136,6 +136,41 @@ class Label(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
     notes: str | None = None
     added_at: datetime
+    # v0.31.2 (Gap #5 — point-in-time labels): optional validity window.
+    # `added_at` alone gives "labeled forever after added_at" semantics;
+    # populating these narrows that to "labeled only between
+    # [valid_from, valid_until]". Default None preserves the original
+    # forever-after-added_at behavior so existing seed files keep
+    # working unchanged.
+    #
+    # Forensically: an address that was an "exchange deposit" today
+    # may not have been one six months ago when the theft happened,
+    # so a brief grounded in today's labels can mislabel historical
+    # state. The trace-time lookup can now pass a point_in_time and
+    # the store will skip labels whose window doesn't cover it.
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+
+    @field_validator("valid_until")
+    @classmethod
+    def _check_validity_window(
+        cls, v: datetime | None, info: Any
+    ) -> datetime | None:
+        # Reject forensically-broken rows where the window closes before
+        # it opens. A seed author writing valid_from=2024-12-31 +
+        # valid_until=2024-01-01 has almost certainly swapped the dates,
+        # and silently accepting it would produce a label that never
+        # matches any point_in_time lookup.
+        if v is None:
+            return v
+        valid_from = info.data.get("valid_from")
+        if valid_from is not None and v < valid_from:
+            raise ValueError(
+                f"valid_until ({v.isoformat()}) must be >= valid_from "
+                f"({valid_from.isoformat()}); the window cannot close "
+                "before it opens"
+            )
+        return v
 
 
 class Counterparty(BaseModel):

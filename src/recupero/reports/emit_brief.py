@@ -1658,6 +1658,96 @@ def _build_class_action_section(case: Case, case_uuid: Any) -> dict[str, Any]:
         }
 
 
+def _build_cex_continuity_section(
+    case: Case,
+) -> list[dict[str, Any]]:
+    """v0.31.2 (Gap #15): CEX trace continuity leads.
+
+    When stolen funds land in a labeled CEX hot wallet the trace
+    stops (KYC opaque). This section surfaces investigative LEADS
+    when the SAME hot wallet emits an amount-matched outbound
+    transfer in a tight time window — a correlation operators can
+    pick up via subpoena, NOT a proven re-emergence claim.
+
+    OFF by default. Adapter calls cost API budget — opt in via
+    ``RECUPERO_CEX_CONTINUITY=1``. When disabled (default) this
+    returns ``[]`` immediately without any adapter calls.
+
+    Returns ``[]`` (empty list) when the feature is disabled OR
+    no qualifying leads are found. The emit_brief caller OMITS
+    the CEX_CONTINUITY_LEADS section key entirely on empty so
+    existing brief-key-set tests stay green.
+    """
+    try:
+        from recupero.trace.cex_continuity import (
+            env_continuity_enabled,
+            env_min_usd,
+            env_window_hours,
+            identify_cex_continuity_leads,
+            leads_to_brief_section,
+        )
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: cex_continuity module import failed: %s — "
+            "section omitted", exc,
+        )
+        return []
+
+    if not env_continuity_enabled():
+        log.debug(
+            "emit_brief: CEX continuity disabled "
+            "(RECUPERO_CEX_CONTINUITY not set to enable value)"
+        )
+        return []
+
+    try:
+        from recupero.chains.base import ChainAdapter
+        from recupero.config import load_config
+        from recupero.labels.store import LabelStore
+        cfg = load_config()
+        label_store: LabelStore | None
+        try:
+            label_store = LabelStore.load(cfg)
+        except Exception as exc:  # noqa: BLE001
+            log.debug(
+                "cex_continuity: label store load failed: %s; "
+                "no labeled CEXes — returning []", exc,
+            )
+            return []
+        try:
+            adapter = ChainAdapter.for_chain(case.chain, cfg)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "cex_continuity: adapter for chain %s unavailable: "
+                "%s — section omitted", case.chain, exc,
+            )
+            return []
+        try:
+            leads = identify_cex_continuity_leads(
+                case,
+                adapter=adapter,
+                label_store=label_store,
+                window_hours=env_window_hours(),
+                min_usd=env_min_usd(),
+            )
+        finally:
+            # Release the adapter's HTTP client — without this, opt-
+            # in operators running over thousands of cases would leak
+            # httpx clients until the FD limit hits (round-10 audit
+            # CRIT pattern for cross-chain continuation adapters).
+            try:
+                adapter.close()
+            except Exception:  # noqa: BLE001
+                pass
+        return leads_to_brief_section(leads)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: cex_continuity section build failed: %s — "
+            "section omitted", exc,
+        )
+        return []
+
+
 def emit_brief(
     case: Case,
     victim: VictimInfo,
@@ -1821,6 +1911,17 @@ def emit_brief(
     # --- Class-action / cross-victim correlation (v0.14.3) --- v0.20.0 Phase C
     class_action_opportunity = _build_class_action_section(case, _case_uuid)
 
+    # --- CEX trace continuity leads (v0.31.2, Gap #15) ---
+    # OFF by default. Opt-in via RECUPERO_CEX_CONTINUITY=1. When a
+    # large transfer lands in a labeled CEX hot wallet, fetch the
+    # hot wallet's outbound transfers in a short window and surface
+    # amount-matched candidates as LEADS (confidence=low). Not a
+    # proof of re-emergence; CEX hot wallets commingle funds.
+    # Returns [] when the feature is disabled OR no leads found —
+    # the brief dict OMITS the section key on empty so existing
+    # brief-key-set tests stay green.
+    cex_continuity_leads = _build_cex_continuity_section(case)
+
     # --- Final assembly ---
     brief = {
         "CASE_ID": editorial["CASE_ID"],
@@ -1934,6 +2035,19 @@ def emit_brief(
         # combined-loss figure + recommend coordinated multi-victim
         # action. Empty/untriggered when no qualifying overlap.
         "CLASS_ACTION_OPPORTUNITY": class_action_opportunity,
+        # v0.31.2 (Gap #15): CEX trace continuity LEADS. OFF by
+        # default — opt in via RECUPERO_CEX_CONTINUITY=1 (adapter
+        # calls cost money). When stolen funds land in a labeled
+        # CEX hot wallet, the trace stops there (KYC opaque). This
+        # section flags amount-matched outbound transfers from the
+        # SAME hot wallet within a tight time window as INVESTIGATIVE
+        # LEADS — never as proven destinations. The key is OMITTED
+        # from the brief on empty so existing brief-key-set tests
+        # stay green.
+        **(
+            {"CEX_CONTINUITY_LEADS": cex_continuity_leads}
+            if cex_continuity_leads else {}
+        ),
 
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],

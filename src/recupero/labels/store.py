@@ -77,7 +77,28 @@ class LabelStore:
         log.info("loaded %d labels", len(store._by_addr_lower))
         return store
 
-    def lookup(self, address: Address, chain: Chain = Chain.ethereum) -> Label | None:
+    def lookup(
+        self,
+        address: Address,
+        chain: Chain = Chain.ethereum,
+        *,
+        point_in_time: datetime | None = None,
+    ) -> Label | None:
+        """Resolve ``address`` to a Label, optionally as of ``point_in_time``.
+
+        v0.31.2 (Gap #5 — point-in-time labels): if ``point_in_time`` is
+        ``None`` (default) the lookup uses current-state semantics — a
+        label is considered active forever from its ``added_at`` — which
+        is the behavior every caller relied on before this version.
+
+        When ``point_in_time`` is given the store filters labels so only
+        those active at that timestamp are returned:
+          * ``added_at  >  point_in_time`` → label didn't exist yet
+          * ``valid_from > point_in_time`` (when set) → not yet active
+          * ``valid_until < point_in_time`` (when set) → already expired
+
+        Returns ``None`` if no active label is found.
+        """
         # For EVM chains, checksum-normalize first so a mixed-case input
         # matches a stored checksum form. For non-EVM, pass through (base58
         # case must be preserved exactly).
@@ -88,7 +109,34 @@ class LabelStore:
                 return None
         else:
             normalized = address
-        return self._by_addr_lower.get(_label_key(normalized))
+        label = self._by_addr_lower.get(_label_key(normalized))
+        if label is None:
+            return None
+
+        if point_in_time is None:
+            # Default: current-state semantics, every existing caller
+            # gets the same behavior they had before v0.31.2.
+            return label
+
+        # Point-in-time filtering. Compare via _coerce_aware_utc so a
+        # naive `point_in_time` doesn't crash against the timezone-aware
+        # added_at / valid_from / valid_until on the stored Label.
+        pit = _coerce_aware_utc(point_in_time)
+        added_at = _coerce_aware_utc(label.added_at)
+        if added_at is not None and pit is not None and added_at > pit:
+            # The label didn't exist yet at point_in_time.
+            return None
+        if label.valid_from is not None:
+            vf = _coerce_aware_utc(label.valid_from)
+            if vf is not None and pit is not None and vf > pit:
+                # Not yet active at point_in_time.
+                return None
+        if label.valid_until is not None:
+            vu = _coerce_aware_utc(label.valid_until)
+            if vu is not None and pit is not None and vu < pit:
+                # Already expired at point_in_time.
+                return None
+        return label
 
     def add(self, label: Label) -> None:
         # Try checksum (EVM); if that fails it's a non-EVM address and we
@@ -143,6 +191,12 @@ class LabelStore:
                     confidence=entry.get("confidence", "medium"),
                     notes=entry.get("notes"),
                     added_at=_parse_dt(entry.get("added_at")),
+                    # v0.31.2 (Gap #5): optional validity window. Pass
+                    # through only when the entry actually has the
+                    # field; absent fields stay None and preserve the
+                    # legacy "labeled forever after added_at" semantics.
+                    valid_from=_parse_dt_optional(entry.get("valid_from")),
+                    valid_until=_parse_dt_optional(entry.get("valid_until")),
                 )
             except (KeyError, ValueError, TypeError, AttributeError) as e:
                 log.warning("skipping malformed label in %s: %s", path, e)
@@ -163,3 +217,36 @@ def _parse_dt(s: str | None) -> datetime:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return datetime.now(UTC)
+
+
+def _parse_dt_optional(s: str | None) -> datetime | None:
+    """Parse an optional ISO-8601 string. Unlike _parse_dt, returns None
+    when the field is missing rather than defaulting to now() — for
+    valid_from / valid_until, "not specified" must mean "no constraint"
+    not "constraint = now"."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        # Bad ISO string in the optional window → treat as absent
+        # rather than crashing the whole load. Already-failing labels
+        # get logged + skipped at the outer try/except in _load_file.
+        return None
+
+
+def _coerce_aware_utc(dt: datetime | None) -> datetime | None:
+    """Promote a naive datetime to UTC-aware. Aware values pass through.
+
+    Without this, comparing a naive `point_in_time` (common in tests
+    and ad-hoc CLI use) to the timezone-aware datetimes stored on
+    Label would raise ``TypeError: can't compare offset-naive and
+    offset-aware datetimes`` and crash the lookup. Coercion to UTC
+    matches the rest of the codebase's "datetimes are always UTC"
+    invariant from models.py.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt

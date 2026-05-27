@@ -35,7 +35,16 @@ class TraceParams(BaseModel):
     # depth=3 or 4. Pass-2 perpetrator-forward tracing (v0.8.0+)
     # is the architectural fix for arbitrarily-deep cases; this
     # default change is the immediate-relief patch.
-    max_depth: int = 2
+    #
+    # v0.31.4 (Gap 2 — Hop-limit default): bumped 2 → 4 to match the
+    # honest-gaps audit recommendation. Modern laundering chains
+    # frequently run 4-6 hops via consolidation hubs and dust-scatter
+    # paths; depth=2 truncated those. The cost increase is bounded
+    # because of stop_at_exchange/mixer/bridge + the service-wallet
+    # outflow threshold + the deadline + the per-case transfer cap.
+    # Operators that want the legacy behavior can set
+    # RECUPERO_TRACE_MAX_HOPS=2.
+    max_depth: int = 4
     # dust_threshold_usd=10 (lowered from 50 in v0.7.4): with
     # depth=2 traversal, downstream destinations receive
     # proportional shares of the hub's outflows. A $50 floor

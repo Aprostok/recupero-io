@@ -22,6 +22,7 @@ from recupero import __version__
 from recupero.chains.base import ChainAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.labels.store import LabelStore
+from recupero.labels.store import lookup_pit_safe  # v0.31.4
 from recupero.models import (
     Address,
     Case,
@@ -1036,7 +1037,14 @@ def _trace_one_hop(
             continue
 
         # Label resolution
-        label = label_store.lookup(transfer.to_address, chain=adapter.chain)
+        # v0.31.4 (Gap 1a — point-in-time labels): pass incident_time so
+        # the label as it stood AT THE TIME OF THEFT is applied, not the
+        # label-DB's current state. Critical for older cases — a "this is
+        # a known mixer" claim in court has to mean "was a known mixer
+        # then," not "is one now."
+        label = lookup_pit_safe(label_store, transfer.to_address,
+            chain=adapter.chain,
+            point_in_time=incident_time,)
         try:
             is_contract = adapter.is_contract(transfer.to_address)
         except Exception as e:  # noqa: BLE001
@@ -1175,21 +1183,28 @@ def _apply_dust_attack_filter(case: Case) -> None:
     """v0.31.2 — filter dust-shower destinations from the brief's
     counterparty list.
 
-    OFF by default (gated on `RECUPERO_DUST_ATTACK_FILTER=1`) to keep
-    existing case-rendering tests deterministic. When ON, identifies
-    destination addresses that participate in a fan-out shower (>=10
-    distinct sub-$1 destinations from a single source) and removes
-    them from `case.unlabeled_counterparties`. The transfers themselves
-    stay in `case.transfers` for the audit trail.
+    ON by default since v0.31.4 (Gap 4). Identifies destination
+    addresses that participate in a fan-out shower (>=10 distinct
+    sub-$1 destinations from a single source) and removes them from
+    `case.unlabeled_counterparties`. The transfers themselves stay
+    in `case.transfers` for the audit trail.
+
+    Pre-v0.31.4 this was OFF-by-default to keep existing
+    case-rendering tests deterministic. Honest-gaps audit flagged
+    this: the filter is the right behavior for production. Tests
+    that need the legacy (unfiltered) shape set
+    RECUPERO_DUST_ATTACK_FILTER=0 explicitly.
 
     Env vars (all NaN/Inf-rejecting, clamped to safe ranges):
-      * RECUPERO_DUST_ATTACK_FILTER       — "1" enables (default off).
+      * RECUPERO_DUST_ATTACK_FILTER       — set to "0/false/no/off"
+                                            to disable (default ON).
       * RECUPERO_DUST_ATTACK_THRESHOLD_USD — default 1.00, clamped [0,100].
       * RECUPERO_DUST_ATTACK_MIN_FANOUT   — default 10, clamped [3,1000].
     """
     flag = os.environ.get("RECUPERO_DUST_ATTACK_FILTER", "").strip().lower()
-    if flag not in {"1", "true", "yes", "on"}:
+    if flag in {"0", "false", "no", "off"}:
         return
+    # Anything else — including unset / "" / "1" / "true" — enables.
 
     # Threshold env-var parsing — mirror RECUPERO_TRACE_DUST_USD's
     # NaN/Inf-rejecting pattern from v0.31.1.

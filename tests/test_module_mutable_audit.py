@@ -440,6 +440,15 @@ def test_singleton_flags_have_documented_idempotency():
         # portal/server.py: log-once flag for IP-extraction
         # misconfiguration. Race-worst-case = 2 log lines.
         ("portal/server.py", "_IP_MISCONFIG_WARNED"),
+        # v0.31.4 cron_scheduler.py: _SHUTDOWN is set only by
+        # _handler (SIGTERM/SIGINT). Signal handlers run in the
+        # main thread; the flag is checked by the main loop and
+        # the inner-sleep loop in run_scheduler. Race-worst-case
+        # = one extra tick before the loop notices. Idempotency:
+        # re-setting to True is a no-op. threading.Event would
+        # have been cleaner but the signal-handler/main-thread
+        # coupling makes the simple boolean flag adequate.
+        ("worker/cron_scheduler.py", "_SHUTDOWN"),
     }
     offenders: list[str] = []
     for py_path in SRC_ROOT.rglob("*.py"):

@@ -94,6 +94,7 @@ from recupero.models import Case, Chain, LabelCategory
 
 if TYPE_CHECKING:
     from recupero.labels.store import LabelStore
+from recupero.labels.store import lookup_pit_safe  # v0.31.4
 
 log = logging.getLogger(__name__)
 
@@ -557,18 +558,25 @@ def _stable_cluster_id(addresses: set[str]) -> str:
 
 
 def _is_skip_labeled(
-    addr: str, label_store: LabelStore | None, chain: Chain,
+    addr: str,
+    label_store: LabelStore | None,
+    chain: Chain,
+    *,
+    point_in_time: "datetime | None" = None,
 ) -> bool:
     """True if the address has an explicit label that excludes it
     from clustering (exchange / bridge / mixer / DeFi / staking).
 
     Returns False when label_store is None or the address has no
     label — those addresses remain eligible for clustering.
+
+    v0.31.4 (Gap 1a): ``point_in_time`` threads through to the
+    LabelStore lookup so the exclusion check uses historical state.
     """
     if label_store is None or not addr:
         return False
     try:
-        lbl = label_store.lookup(addr, chain=chain)
+        lbl = lookup_pit_safe(label_store, addr, chain=chain, point_in_time=point_in_time,)
     except Exception:  # noqa: BLE001 — never fail clustering on lookup error
         return False
     if lbl is None:
@@ -674,9 +682,9 @@ def compute_clusters_with_metadata(
         inputs_list = sorted(inputs)
         for i, a in enumerate(inputs_list):
             for b in inputs_list[i + 1:]:
-                if _is_skip_labeled(a, label_store, Chain.bitcoin):
+                if _is_skip_labeled(a, label_store, Chain.bitcoin, point_in_time=case.incident_time):
                     continue
-                if _is_skip_labeled(b, label_store, Chain.bitcoin):
+                if _is_skip_labeled(b, label_store, Chain.bitcoin, point_in_time=case.incident_time):
                     continue
                 edges.append((a, b, _PairSignal(
                     heuristic="co_spending",
@@ -702,7 +710,9 @@ def compute_clusters_with_metadata(
             if not src or not dst:
                 continue
             try:
-                lbl = label_store.lookup(t.from_address, chain=t.chain)
+                # v0.31.4 (Gap 1a) point-in-time
+                lbl = lookup_pit_safe(label_store, t.from_address, chain=t.chain,
+                    point_in_time=case.incident_time,)
             except Exception:  # noqa: BLE001
                 lbl = None
             if lbl is None:
@@ -715,7 +725,7 @@ def compute_clusters_with_metadata(
             # The receiving address is what we want to cluster; the
             # source is shared infrastructure (CEX). Skip if the
             # recipient itself is exchange / bridge / etc.
-            if _is_skip_labeled(dst, label_store, t.chain):
+            if _is_skip_labeled(dst, label_store, t.chain, point_in_time=case.incident_time):
                 continue
             cex_outflows[src].append((dst, t.block_time, t.chain))
 
@@ -770,9 +780,9 @@ def compute_clusters_with_metadata(
         # labels. Threshold of 5 matches the legacy clustering pass.
         if len(inflow_partners[src]) >= 5:
             continue
-        if _is_skip_labeled(src, label_store, chain):
+        if _is_skip_labeled(src, label_store, chain, point_in_time=case.incident_time):
             continue
-        if _is_skip_labeled(addr, label_store, chain):
+        if _is_skip_labeled(addr, label_store, chain, point_in_time=case.incident_time):
             continue
         funding_groups[src].append((addr, ts, chain))
 
@@ -811,19 +821,22 @@ def compute_clusters_with_metadata(
             if not src or not dst:
                 continue
             # Bridge out: t.to_address is a bridge
+            # v0.31.4 (Gap 1a) point-in-time
             try:
-                to_lbl = label_store.lookup(t.to_address, chain=t.chain)
+                to_lbl = lookup_pit_safe(label_store, t.to_address, chain=t.chain,
+                    point_in_time=case.incident_time,)
             except Exception:  # noqa: BLE001
                 to_lbl = None
             try:
-                from_lbl = label_store.lookup(t.from_address, chain=t.chain)
+                from_lbl = lookup_pit_safe(label_store, t.from_address, chain=t.chain,
+                    point_in_time=case.incident_time,)
             except Exception:  # noqa: BLE001
                 from_lbl = None
             if to_lbl is not None and to_lbl.category == LabelCategory.bridge:
-                if not _is_skip_labeled(src, label_store, t.chain):
+                if not _is_skip_labeled(src, label_store, t.chain, point_in_time=case.incident_time):
                     bridge_outs.append((src, t.block_time, t.chain))
             if from_lbl is not None and from_lbl.category == LabelCategory.bridge:
-                if not _is_skip_labeled(dst, label_store, t.chain):
+                if not _is_skip_labeled(dst, label_store, t.chain, point_in_time=case.incident_time):
                     bridge_ins.append((dst, t.block_time, t.chain))
 
     for sender, ts_out, chain_out in bridge_outs:

@@ -181,6 +181,13 @@ class LabelStore:
                     "skipping non-dict label entry in %s: %r", path, entry,
                 )
                 continue
+            # v0.31.4: structured section-divider rows like
+            # ``{"_section": "Hop Protocol"}`` are intentional
+            # documentation aids inside bridges.json. They carry no
+            # address (and no name); silently skip rather than logging
+            # a "malformed" warning that floods every load.
+            if "address" not in entry and "_section" in entry:
+                continue
             try:
                 label = Label(
                     address=entry["address"],
@@ -250,3 +257,58 @@ def _coerce_aware_utc(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=UTC)
     return dt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.31.4 (Gap 1a — point-in-time graceful degradation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def lookup_pit_safe(
+    label_store: object,
+    address: str,
+    chain: object = None,
+    *,
+    point_in_time: object = None,
+) -> object | None:
+    """Best-effort point-in-time lookup against any label-store-shape.
+
+    Production callers should USE THIS instead of calling
+    ``label_store.lookup(...)`` directly. It honors point-in-time
+    on the canonical LabelStore (which supports the kwarg) and
+    degrades cleanly to current-state on any label-store
+    implementation that doesn't (test fakes, minimal stubs, etc.).
+
+    Fallback chain:
+      1. ``lookup(addr, chain=chain, point_in_time=pit)`` — full
+         signature.
+      2. On TypeError → ``lookup(addr, chain=chain)`` — drop PIT.
+      3. On further TypeError → ``lookup(addr)`` — minimal shape.
+
+    Any non-TypeError exception inside the lookup returns ``None``;
+    label resolution must NEVER fail the trace.
+    """
+    if label_store is None or not address:
+        return None
+    try:
+        if chain is None:
+            return label_store.lookup(address, point_in_time=point_in_time)  # type: ignore[attr-defined]
+        return label_store.lookup(  # type: ignore[attr-defined]
+            address, chain=chain, point_in_time=point_in_time,
+        )
+    except TypeError:
+        pass
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        if chain is None:
+            return label_store.lookup(address)  # type: ignore[attr-defined]
+        return label_store.lookup(address, chain=chain)  # type: ignore[attr-defined]
+    except TypeError:
+        pass
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return label_store.lookup(address)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return None

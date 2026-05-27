@@ -36,6 +36,7 @@ from typing import Any
 
 from recupero.dormant.finder import DormantCandidate, TokenHolding
 from recupero.labels.store import LabelStore
+from recupero.labels.store import lookup_pit_safe  # v0.31.4
 from recupero.models import Case, Chain, Label, LabelCategory
 
 log = logging.getLogger(__name__)
@@ -311,7 +312,8 @@ def synthesize_onward_cex_subpoenas(
         if not to_addr:
             continue
         # Check if the to_address has a CEX label.
-        label = label_store.lookup(to_addr, chain=case.chain)
+        # v0.31.4 (Gap 1a): point-in-time lookup against case incident.
+        label = lookup_pit_safe(label_store, to_addr, chain=case.chain, point_in_time=case.incident_time,)
         if label is None:
             continue
         cat = (
@@ -873,7 +875,8 @@ def detect_exchange_deposits(
         # Per-transfer chain — needed both for the lookup and for
         # downstream chain-attribution of the deposit row.
         t_chain = t.chain if t.chain is not None else case.chain
-        label = label_store.lookup(to_addr_raw, chain=t_chain)
+        # v0.31.4 (Gap 1a): point-in-time lookup.
+        label = lookup_pit_safe(label_store, to_addr_raw, chain=t_chain, point_in_time=case.incident_time,)
         if label is None or label.category not in exchange_categories:
             continue
 

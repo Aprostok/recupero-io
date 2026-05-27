@@ -1311,7 +1311,12 @@ _LABEL_STORE_LOCK = _threading.Lock()
 _LABEL_STORE_LOAD_ATTEMPTED = [False]
 
 
-def _enrich_via_label_store(addr: str, chain: Any) -> tuple[str, str, str] | None:
+def _enrich_via_label_store(
+    addr: str,
+    chain: Any,
+    *,
+    point_in_time: Any = None,
+) -> tuple[str, str, str] | None:
     """v0.30.0 (F6): query the LabelStore at brief-render-time.
 
     The Case-on-disk has labels only for whatever was in the seed file
@@ -1327,7 +1332,7 @@ def _enrich_via_label_store(addr: str, chain: Any) -> tuple[str, str, str] | Non
     """
     try:
         from recupero.config import load_default_config
-        from recupero.labels.store import LabelStore
+        from recupero.labels.store import LabelStore, lookup_pit_safe
         from recupero.models import Chain
         store = _LABEL_STORE_CACHE[0]
         if store is None and not _LABEL_STORE_LOAD_ATTEMPTED[0]:
@@ -1345,7 +1350,10 @@ def _enrich_via_label_store(addr: str, chain: Any) -> tuple[str, str, str] | Non
         if store is None:
             return None
         chain_enum = chain if isinstance(chain, Chain) else Chain.ethereum
-        lbl = store.lookup(addr, chain=chain_enum)
+        # v0.31.4 (Gap 1a): pass point_in_time so the brief sees the
+        # label state as it was at the time of theft. Caller threads
+        # case.incident_time through.
+        lbl = lookup_pit_safe(store, addr, chain=chain_enum, point_in_time=point_in_time)
         if lbl is None:
             return None
         # Build a human-readable role from the label.
@@ -1470,7 +1478,14 @@ def _build_identified_wallets(
             else:
                 # v0.30.0 (F6.2): try the LIVE LabelStore — case may
                 # pre-date v0.29.x bridges.json expansion.
-                live = _enrich_via_label_store(t.to_address, t.chain)
+                # v0.31.4 (Gap 1a): point-in-time lookup so historical
+                # state of the label DB applies, not today's. Use the
+                # current iteration case's incident_time (`c`, not
+                # `case` — there is no `case` in this scope; `primary`
+                # is the primary case and `c` iterates [primary,*linked]).
+                live = _enrich_via_label_store(
+                    t.to_address, t.chain, point_in_time=c.incident_time,
+                )
                 if live is not None:
                     role = live[0]
                     row_class = ""

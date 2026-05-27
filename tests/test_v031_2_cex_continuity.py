@@ -607,19 +607,22 @@ def test_adapter_none_yields_zero_leads() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_env_continuity_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_env_continuity_enabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v0.31.4 (Gap 6): default-ON. Was default-OFF in v0.31.2."""
     monkeypatch.delenv("RECUPERO_CEX_CONTINUITY", raising=False)
-    assert env_continuity_enabled() is False
+    assert env_continuity_enabled() is True
 
 
 def test_env_continuity_enabled_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    for enable in ("1", "true", "yes", "on", "TRUE", "Yes"):
+    for enable in ("1", "true", "yes", "on", "TRUE", "Yes", "", "garbage"):
+        # v0.31.4: anything-not-explicit-off enables (default-ON contract).
         monkeypatch.setenv("RECUPERO_CEX_CONTINUITY", enable)
         assert env_continuity_enabled() is True, f"{enable!r} should enable"
 
 
 def test_env_continuity_disabled_values(monkeypatch: pytest.MonkeyPatch) -> None:
-    for disable in ("0", "false", "no", "off", "", "garbage"):
+    """v0.31.4: ONLY explicit opt-out values disable. Empty/garbage now enables."""
+    for disable in ("0", "false", "no", "off", "FALSE", "OFF"):
         monkeypatch.setenv("RECUPERO_CEX_CONTINUITY", disable)
         assert env_continuity_enabled() is False, f"{disable!r} should disable"
 

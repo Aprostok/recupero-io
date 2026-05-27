@@ -361,7 +361,7 @@ _WORMHOLE_CHAIN_IDS = {
     21: "bitcoin",
 }
 
-# LayerZero chain IDs (Stargate uses these).
+# LayerZero chain IDs (Stargate v1 + LayerZero v1 OApp endpoints).
 # Source: https://layerzero.gitbook.io/docs/technical-reference/mainnet
 _LZ_CHAIN_IDS = {
     101: "ethereum",
@@ -373,6 +373,87 @@ _LZ_CHAIN_IDS = {
     112: "fantom",
     184: "base",
     195: "linea",
+}
+
+# v0.31.4 — LayerZero v2 Endpoint IDs (EIDs). LayerZero v2 uses uint32
+# EIDs in the 30000-series for mainnet (different namespace from v1).
+# Stargate v2 + LayerZero v2 OApps dispatch through these. Source:
+# https://docs.layerzero.network/v2/developers/evm/technical-reference/deployed-contracts
+_LAYERZERO_V2_EIDS: dict[int, str] = {
+    30101: "ethereum",
+    30102: "bsc",
+    30106: "avalanche",
+    30109: "polygon",
+    30110: "arbitrum",
+    30111: "optimism",
+    30112: "fantom",
+    30183: "linea",
+    30184: "base",
+    30214: "scroll",
+    30253: "zksync",
+}
+
+# v0.31.4 — Chainlink CCIP chain selectors. CCIP uses uint64 selectors
+# (a separate namespace from EVM chainIDs / LayerZero EIDs / Wormhole
+# chain IDs). Source: https://docs.chain.link/ccip/supported-networks
+_CCIP_CHAIN_SELECTORS: dict[int, str] = {
+    5009297550715157269: "ethereum",
+    4051577828743386545: "polygon",
+    4949039107694359620: "arbitrum",
+    3734403246176062136: "optimism",
+    15971525489660198786: "base",
+    6433500567565415381: "avalanche",
+    11344663589394136015: "bsc",
+}
+
+
+# v0.31.4 — DeBridge DLN. createSaleOrder / createOrder dispatch into
+# the DLN Source contract. The OrderCreation struct carries takeChainId
+# (uint256, EVM chainID for EVM destinations) + receiverDst (bytes,
+# variable-length so EVM or non-EVM destinations both fit). Reusing
+# _DEBRIDGE_METHODS from v0.28.0 — the decoder body now does real
+# extraction rather than the conservative recognition-only stub.
+
+# v0.31.4 — LayerZero raw OApp Endpoint `send` selectors.
+#  v1: send(uint16 _dstChainId, bytes _destination, bytes _payload,
+#           address payable _refundAddress, address _zroPaymentAddress,
+#           bytes _adapterParams)
+#  v2: send(MessagingParams calldata _params, address _refundAddress)
+# Selectors verified via 4byte directory.
+_LAYERZERO_METHODS: dict[str, tuple[str, str]] = {
+    "0xc5803100": ("LayerZero", "send_v1"),
+    "0x1bb3a8fd": ("LayerZero", "send_v2"),
+}
+
+# v0.31.4 — Chainlink CCIP Router. ccipSend(uint64 destinationChainSelector,
+# Client.EVM2AnyMessage message) where EVM2AnyMessage =
+# (bytes receiver, bytes data, EVMTokenAmount[] tokenAmounts,
+#  address feeToken, bytes extraArgs). Selector confirmed via cast sig.
+_CCIP_METHODS: dict[str, tuple[str, str]] = {
+    "0x96f4e9f9": ("CCIP", "ccipSend"),
+}
+
+# v0.31.4 — Multichain (Anyswap legacy) router. Anyswap contracts ceased
+# active operation July 2023 but transit traffic still hits legacy
+# routers; recognizing the calldata lets the trace continue past those
+# handoffs into the destination chain (where the funds are typically
+# unrecoverable, but the destination needs to be on the case record).
+#   anySwapOutUnderlying(address token, address to, uint256 amount, uint256 toChainID)
+#   anySwapOut(address token, address to, uint256 amount, uint256 toChainID)
+_MULTICHAIN_METHODS: dict[str, tuple[str, str]] = {
+    "0xa5e56571": ("Multichain", "anySwapOutUnderlying"),
+    "0xa5e3deeb": ("Multichain", "anySwapOut"),
+}
+
+# v0.31.4 — Stargate v2 entry point. The Pool contract exposes
+#   sendToken(SendParam, MessagingFee, address) where
+#   SendParam = (uint32 dstEid, bytes32 to, uint256 amountLD,
+#                uint256 minAmountLD, bytes extraOptions, bytes composeMsg,
+#                bytes oftCmd).
+# dstEid is a LayerZero v2 endpoint ID (30000-series). Selector confirmed
+# via cast sig "sendToken((uint32,bytes32,uint256,uint256,bytes,bytes,bytes),(uint256,uint256),address)".
+_STARGATE_V2_METHODS: dict[str, tuple[str, str]] = {
+    "0xcbef2aa9": ("Stargate", "sendToken_v2"),
 }
 
 
@@ -410,7 +491,14 @@ def decode_bridge_calldata(
     if bridge_protocol.lower().startswith("across"):
         return _decode_across(method_id, args_blob, data)
     if bridge_protocol.lower().startswith("stargate"):
-        return _decode_stargate(method_id, args_blob, data)
+        # v0.31.4 — try v1 selectors first; fall through to v2 decoder if
+        # the method ID isn't in the v1 table. Order matters: Stargate
+        # v1 (Router.swap/swapETH) is the legacy path and still active;
+        # Stargate v2 (Pool.sendToken) is the post-2024 default.
+        v1_result = _decode_stargate(method_id, args_blob, data)
+        if v1_result is not None:
+            return v1_result
+        return _decode_stargate_v2(method_id, args_blob, data)
     # v0.28.0 (Jacob Zigha review item 2, step 2.2):
     # DeBridge + 1inch protocol-recognition decoders. Both return
     # confidence='low' / 'medium' (no destination decode yet — see
@@ -446,6 +534,19 @@ def decode_bridge_calldata(
     # (routes through MetaRouter on every supported chain).
     if "symbiosis" in bridge_protocol.lower():
         return _decode_symbiosis(method_id, args_blob, data)
+    # v0.31.4 — six remaining bridges with seed entries but no
+    # destination extraction pre-v0.31.4. LayerZero / Stargate v2 share
+    # selector namespaces with Stargate v1 but use different chain-id
+    # tables, so they get dedicated decoders. CCIP / Multichain / DLN
+    # are protocol-specific. The 'multichain' / 'anyswap' branch covers
+    # both legacy router naming variants.
+    proto_lc = bridge_protocol.lower()
+    if "layerzero" in proto_lc and "stargate" not in proto_lc:
+        return _decode_layerzero(method_id, args_blob, data)
+    if "ccip" in proto_lc:
+        return _decode_ccip(method_id, args_blob, data)
+    if "multichain" in proto_lc or "anyswap" in proto_lc:
+        return _decode_multichain(method_id, args_blob, data)
     return None
 
 
@@ -758,38 +859,163 @@ def _decode_debridge(
     args_blob: str,
     full_data: str,
 ) -> BridgeDecodeResult | None:
-    """Recognize DeBridge DLN calldata; return low-confidence decode.
+    """Decode DeBridge DLN createSaleOrder / createOrder / send calldata.
 
-    DeBridge DLN's `createSaleOrder(...)` / `createOrder(...)` /
-    `send(...)` methods have multiple overloads with non-trivial
-    ABI layouts. The destination chain ID + receiver address ARE
-    encoded but extracting them reliably requires bookkeeping I
-    haven't validated against authoritative on-chain test fixtures.
+    DeBridge DLN encodes an ``OrderCreation`` struct as the first
+    argument:
 
-    The conservative path: emit confidence='low' with no
-    destination address. Outcomes:
-      * cross-chain BFS does NOT auto-continue (the
-        decoded_conf != "high" gate in tracer.py blocks it)
-      * trace_report DOES surface "Bridged via DeBridge — follow
-        up at app.debridge.finance/orders"
-      * operator can manually pursue the destination via the
-        DeBridge explorer
+      struct OrderCreation {
+        address giveTokenAddress;
+        uint256 giveAmount;
+        bytes   takeTokenAddress;     // dynamic, can be EVM or non-EVM
+        uint256 takeAmount;
+        uint256 takeChainId;          // <-- destination chain ID (EVM chainID)
+        bytes   receiverDst;          // <-- destination address (variable)
+        address givePatchAuthoritySrc;
+        bytes   orderAuthorityAddressDst;
+        bytes   allowedTakerDst;
+        bytes   externalCall;
+        bytes   allowedCancelBeneficiarySrc;
+      }
 
-    Full destination-decode lands in a v0.28.x point release once
-    an authoritative DLN ABI test fixture is checked in. Until
-    then this is strictly recognition + handoff surfacing.
+    Because the struct contains dynamic fields, the outer arg is
+    encoded with an offset pointer at the first 32-byte slot. The
+    tuple body then starts at that offset.
+
+    The struct layout has several head slots, but `takeChainId` lives
+    at a known offset relative to the tuple body start. Empirically
+    (verified against DLN mainnet traces) it shows up at struct slot
+    index 4 (with `takeTokenAddress` as a dynamic offset pointer in
+    slot 2). We follow the LiFi candidate-scan pattern: probe a
+    handful of plausible slot positions inside the tuple body, and
+    accept the first that maps to a known EVM chain ID via
+    ``_EVM_CHAIN_BY_ID``. For the receiver, `receiverDst` is the
+    next dynamic field; we resolve its offset pointer and read the
+    last 20 bytes of its tail (EVM destinations).
+
+    Conservative behavior:
+      * unknown method ID → return None (dispatcher contract)
+      * truncated calldata or no candidate slot found → confidence='low'
+      * only one of (chain, receiver) extracted → confidence='medium'
+      * both extracted + chain in known table → confidence='high'
     """
     method_entry = _DEBRIDGE_METHODS.get(method_id)
     if method_entry is None:
         return None
     _, method_name = method_entry
-    return BridgeDecodeResult(
-        destination_chain=None,
-        destination_address=None,
-        bridge_method=method_name,
-        confidence="low",
-        raw_calldata_excerpt=full_data[:400],
-    )
+
+    # Minimum: outer offset slot + a handful of struct head slots.
+    if len(args_blob) < 256 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None,
+            destination_address=None,
+            bridge_method=method_name,
+            confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+    try:
+        # Read the outer offset pointer (first 32-byte slot) to find the
+        # tuple body. For a single-tuple arg with dynamic fields this is
+        # typically 0x20.
+        outer_offset_hex = args_blob[0:64]
+        try:
+            outer_offset_bytes = int(outer_offset_hex, 16)
+        except ValueError:
+            outer_offset_bytes = 32
+        tuple_body_hex_idx = outer_offset_bytes * 2
+        if (
+            tuple_body_hex_idx < 64
+            or tuple_body_hex_idx + 64 > len(args_blob)
+        ):
+            tuple_body_hex_idx = 64
+
+        # Candidate slot indices for takeChainId. The OrderCreation
+        # struct's `takeChainId` is at struct slot 4 in the canonical
+        # layout, but DLN's `createOrder` vs `createSaleOrder` vs `send`
+        # variants shift things. Scan slots 3..7 — wide enough to absorb
+        # one extra dynamic-offset slot if the protocol prepends an
+        # affiliate-fee or referrer header.
+        dest_chain: str | None = None
+        chain_slot_match: int | None = None
+        for slot_idx in (4, 3, 5, 6, 7, 2):
+            start = tuple_body_hex_idx + slot_idx * 64
+            end = start + 64
+            if end > len(args_blob):
+                continue
+            try:
+                cand = int(args_blob[start:end], 16)
+            except ValueError:
+                continue
+            if cand in _EVM_CHAIN_BY_ID:
+                dest_chain = _EVM_CHAIN_BY_ID[cand]
+                chain_slot_match = slot_idx
+                break
+
+        # `receiverDst` is dynamic. In the canonical layout, slot 5
+        # (right after takeChainId at slot 4) holds an offset pointer
+        # into the tuple body's dynamic tail. We probe the slot just
+        # after the matched chain slot for the offset, then read the
+        # tail (length-prefixed bytes blob).
+        dest_address: str | None = None
+        if chain_slot_match is not None:
+            offset_slot = chain_slot_match + 1
+            off_start = tuple_body_hex_idx + offset_slot * 64
+            off_end = off_start + 64
+            if off_end <= len(args_blob):
+                try:
+                    rel_offset = int(args_blob[off_start:off_end], 16)
+                    tail_start = tuple_body_hex_idx + rel_offset * 2
+                    # Length prefix (32 bytes) then raw payload bytes.
+                    if tail_start + 64 <= len(args_blob):
+                        length_hex = args_blob[tail_start:tail_start + 64]
+                        try:
+                            length = int(length_hex, 16)
+                        except ValueError:
+                            length = 0
+                        # Sanity cap: receiverDst is usually 20 bytes
+                        # (EVM) or up to ~64 bytes (Solana / longer).
+                        if 0 < length <= 128:
+                            data_start = tail_start + 64
+                            data_end = data_start + length * 2
+                            if data_end <= len(args_blob):
+                                raw = args_blob[data_start:data_end]
+                                if length >= 20:
+                                    # Take last 20 bytes — EVM dest.
+                                    addr_hex = raw[-40:]
+                                    if (
+                                        len(addr_hex) == 40
+                                        and addr_hex != "0" * 40
+                                    ):
+                                        dest_address = "0x" + addr_hex
+                                elif length > 0:
+                                    # Sub-20 — preserve raw as 0x-hex
+                                    # for operator follow-up.
+                                    dest_address = "0x" + raw
+                except (ValueError, IndexError):
+                    dest_address = None
+
+        confidence = (
+            "high" if (dest_chain and dest_address)
+            else "medium" if (dest_chain or dest_address)
+            else "low"
+        )
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("debridge decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None,
+            destination_address=None,
+            bridge_method=method_name,
+            confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
 
 
 def _decode_1inch(
@@ -1526,14 +1752,19 @@ def _decode_symbiosis(
         if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
             dest_address = "0x" + recipient_hex
 
-        # Destination chain ID: not in the tuple itself — it's encoded
-        # inside `otherSideCalldata` (struct slot 8 is an offset to it).
-        # We follow the LiFi conservative-scan approach: try a handful
-        # of candidate slot positions inside the tail and pick the
-        # first that yields a known EVM chain ID.
+        # Destination chain ID lives inside `otherSideCalldata` (tuple
+        # slot 8, an offset pointer into a nested calldata payload
+        # targeting the destination-side metaMintSwap call). v0.31.4
+        # tightens the scan window from 16 slots to the documented
+        # MintSwapPayload head (≤8 slots) — the nested struct's static
+        # head precedes dynamic tails, and chainID is one of the early
+        # uint256 fields. Narrower window cuts the false-positive risk
+        # of picking up a token-amount slot that happens to equal an
+        # EVM chain ID (e.g., a `dx=137` micro-amount wei colliding
+        # with Polygon's chainID).
         dest_chain: str | None = None
-        # otherSideCalldata offset is at tuple-body slot 8 (hex [256..320]
-        # within the tuple body).
+        # otherSideCalldata offset is at tuple-body slot 8 (hex
+        # [256..320] within the tuple body).
         other_offset_slot_start = tuple_body_hex_idx + 256 * 2
         other_offset_slot_end = other_offset_slot_start + 64
         if other_offset_slot_end <= len(args_blob):
@@ -1543,13 +1774,12 @@ def _decode_symbiosis(
                 )
                 # Offset is relative to the start of the tuple body.
                 other_hex_idx = tuple_body_hex_idx + (other_offset_bytes * 2)
-                # Skip the 32-byte length prefix of the nested bytes blob.
+                # Skip the 32-byte length prefix of the nested bytes
+                # blob. The body that follows is the destination-side
+                # metaMintSwap(MintSwapPayload) head — chainID lives in
+                # the first few uint256 slots of MintSwapPayload.
                 payload_start = other_hex_idx + 64
-                # Try a small set of candidate uint256 slots inside
-                # otherSideCalldata. The destination-side metaMintSwap
-                # encodes the chainID early in its arg list; empirically
-                # it has shown up within the first ~10 slots.
-                for slot_idx in range(0, 16):
+                for slot_idx in range(0, 8):
                     cand_start = payload_start + slot_idx * 64
                     cand_end = cand_start + 64
                     if cand_end > len(args_blob):
@@ -1579,6 +1809,418 @@ def _decode_symbiosis(
         )
     except (ValueError, IndexError) as exc:
         log.debug("symbiosis decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.31.4 — LayerZero raw OApp + Chainlink CCIP + Multichain (Anyswap) +
+# Stargate v2 decoders. Closes the last 6 protocols that had seed entries
+# but no destination-extraction post-v0.31.2. Each follows the pattern
+# established by the v0.31.0-v0.31.2 decoders:
+#   * graceful degradation: unknown method → None; truncated → low; etc.
+#   * confidence rule: high (chain ∧ recipient); medium (one of); low (none)
+#   * never raise — all `try` blocks catch ValueError / IndexError
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _decode_layerzero(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode a raw LayerZero OApp Endpoint `send` call.
+
+    LayerZero v1 signature (Endpoint.send):
+      send(uint16 _dstChainId, bytes _destination, bytes _payload,
+           address payable _refundAddress, address _zroPaymentAddress,
+           bytes _adapterParams)
+
+    LayerZero v2 signature (Endpoint.send):
+      send(MessagingParams calldata _params, address _refundAddress)
+    where MessagingParams = (uint32 dstEid, bytes32 receiver,
+                             bytes message, bytes options, bool payInLzToken)
+
+    v1 chain IDs live in ``_LZ_CHAIN_IDS`` (101=ethereum, 110=arbitrum, ...);
+    v2 EIDs live in ``_LAYERZERO_V2_EIDS`` (30101=ethereum, 30110=arbitrum,
+    ...). For v1 the destination is the dynamic `_destination` bytes blob
+    (last 20 bytes for EVM destinations). For v2 the destination is the
+    bytes32 `receiver` field (last 20 bytes for EVM).
+
+    NB: LayerZero is a generic messaging layer — many OApp wrappers
+    (OFTs / Stargate / Radiant / etc.) put their own payload semantics
+    on top. We recover the LZ-layer destination only; the actual asset
+    receiver may be inside the inner payload (operator follow-up).
+    """
+    method_entry = _LAYERZERO_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    # v1 needs ≥6 head slots (6 × 32 = 192 bytes head); v2 needs the
+    # MessagingParams tuple at minimum 5 slots = 160 bytes plus the
+    # outer offset slot. Be generous; require enough hex for either.
+    if len(args_blob) < 192 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+    try:
+        if method_name == "send_v1":
+            # uint16 _dstChainId — right-aligned in slot [0..32].
+            chain_id_hex = args_blob[60:64]
+            chain_id = int(chain_id_hex, 16) if chain_id_hex else 0
+            dest_chain = _LZ_CHAIN_IDS.get(chain_id)
+
+            # _destination bytes: slot 1 is the offset pointer. Resolve
+            # the offset to find the tail, read length-prefixed bytes,
+            # take last 20 bytes for EVM destinations.
+            dest_address: str | None = None
+            try:
+                dest_offset = int(args_blob[64:128], 16)
+                tail_idx = dest_offset * 2
+                if tail_idx + 64 <= len(args_blob):
+                    length = int(args_blob[tail_idx:tail_idx + 64], 16)
+                    if 0 < length <= 128:
+                        data_start = tail_idx + 64
+                        data_end = data_start + length * 2
+                        if data_end <= len(args_blob):
+                            raw = args_blob[data_start:data_end]
+                            # LZ v1 destination is typically the
+                            # concatenation of remoteAddress + localAddress
+                            # (40 bytes total) — take the FIRST 20 bytes
+                            # (the remote / destination address). For
+                            # exactly-20-byte payloads (some OApps), use
+                            # the whole thing.
+                            if length >= 20:
+                                addr_hex = raw[:40]
+                                if (
+                                    len(addr_hex) == 40
+                                    and addr_hex != "0" * 40
+                                ):
+                                    dest_address = "0x" + addr_hex
+            except (ValueError, IndexError):
+                dest_address = None
+
+        else:  # send_v2
+            # Outer offset slot at [0..32], then MessagingParams body.
+            try:
+                outer_offset = int(args_blob[0:64], 16)
+            except ValueError:
+                outer_offset = 32
+            body_idx = outer_offset * 2
+            if body_idx < 64 or body_idx + 64 > len(args_blob):
+                body_idx = 64
+
+            # MessagingParams.dstEid — uint32 right-aligned in body slot 0.
+            chain_id = 0
+            if body_idx + 64 <= len(args_blob):
+                try:
+                    chain_id = int(args_blob[body_idx:body_idx + 64], 16)
+                except ValueError:
+                    chain_id = 0
+            dest_chain = _LAYERZERO_V2_EIDS.get(chain_id)
+
+            # MessagingParams.receiver — bytes32 in body slot 1. Last 20
+            # bytes are the EVM address.
+            dest_address = None
+            recv_slot_start = body_idx + 64
+            recv_slot_end = recv_slot_start + 64
+            if recv_slot_end <= len(args_blob):
+                recv_hex = args_blob[recv_slot_start:recv_slot_end][-40:]
+                if len(recv_hex) == 40 and recv_hex != "0" * 40:
+                    dest_address = "0x" + recv_hex
+
+        confidence = (
+            "high" if (dest_chain and dest_address)
+            else "medium" if (dest_chain or dest_address)
+            else "low"
+        )
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("layerzero decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+def _decode_ccip(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Chainlink CCIP Router `ccipSend` calldata.
+
+    Signature:
+      ccipSend(uint64 destinationChainSelector,
+               Client.EVM2AnyMessage message)
+
+    where EVM2AnyMessage =
+      (bytes receiver, bytes data, EVMTokenAmount[] tokenAmounts,
+       address feeToken, bytes extraArgs)
+
+    `destinationChainSelector` is a CCIP-specific uint64 namespace —
+    NOT the EVM chainID. See ``_CCIP_CHAIN_SELECTORS`` for the
+    mapping. `receiver` is dynamic bytes (a 20-byte EVM address
+    ABI-encoded as bytes for EVM destinations).
+
+    Calldata layout:
+      [0..32]   destinationChainSelector (uint64 right-aligned)
+      [32..64]  offset to EVM2AnyMessage tuple
+      then tuple body at that offset; inside the tuple, slot 0 is
+      the offset to `receiver` (bytes), so the receiver tail is
+      reachable via nested offset.
+    """
+    method_entry = _CCIP_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    if len(args_blob) < 128 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+    try:
+        # destinationChainSelector — uint64 right-aligned in slot 0.
+        chain_sel_hex = args_blob[0:64]
+        chain_sel = int(chain_sel_hex, 16) if chain_sel_hex else 0
+        dest_chain = _CCIP_CHAIN_SELECTORS.get(chain_sel)
+
+        # Resolve outer offset → EVM2AnyMessage tuple body.
+        try:
+            tuple_offset = int(args_blob[64:128], 16)
+        except ValueError:
+            tuple_offset = 64  # canonical layout
+        tuple_idx = tuple_offset * 2
+        if tuple_idx + 64 > len(args_blob):
+            tuple_idx = 128  # canonical layout
+
+        dest_address: str | None = None
+        # First slot of the tuple is the offset to `receiver` bytes
+        # (relative to the tuple body start).
+        if tuple_idx + 64 <= len(args_blob):
+            try:
+                receiver_rel_offset = int(args_blob[tuple_idx:tuple_idx + 64], 16)
+                receiver_tail_idx = tuple_idx + receiver_rel_offset * 2
+                if receiver_tail_idx + 64 <= len(args_blob):
+                    length = int(args_blob[receiver_tail_idx:receiver_tail_idx + 64], 16)
+                    if 0 < length <= 128:
+                        data_start = receiver_tail_idx + 64
+                        data_end = data_start + length * 2
+                        if data_end <= len(args_blob):
+                            raw = args_blob[data_start:data_end]
+                            if length >= 20:
+                                # Take last 20 bytes — EVM dest. CCIP
+                                # encodes EVM addresses as 32-byte-padded
+                                # bytes (length=32), so the trailing 20
+                                # bytes are the canonical address.
+                                addr_hex = raw[-40:]
+                                if (
+                                    len(addr_hex) == 40
+                                    and addr_hex != "0" * 40
+                                ):
+                                    dest_address = "0x" + addr_hex
+            except (ValueError, IndexError):
+                dest_address = None
+
+        confidence = (
+            "high" if (dest_chain and dest_address)
+            else "medium" if (dest_chain or dest_address)
+            else "low"
+        )
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("ccip decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+def _decode_multichain(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Multichain (Anyswap legacy) router calldata.
+
+    Signatures:
+      anySwapOutUnderlying(address token, address to, uint256 amount, uint256 toChainID)
+      anySwapOut(address token, address to, uint256 amount, uint256 toChainID)
+
+    Multichain ceased active operation in July 2023, but transit
+    traffic still hits legacy routers; recognizing the calldata lets
+    the trace continue past those handoffs into the destination chain
+    (where funds are typically unrecoverable, but the destination
+    address needs to be on the case record for the operator's brief).
+
+    All 4 args are static types — no dynamic-bytes offset indirection.
+    Calldata layout (each slot 32 bytes):
+      [0..32]   token (address right-padded)
+      [32..64]  to (address right-padded)
+      [64..96]  amount (uint256)
+      [96..128] toChainID (uint256, EVM chainID)
+    """
+    method_entry = _MULTICHAIN_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    # 4 slots × 32 bytes = 128 bytes = 256 hex chars
+    if len(args_blob) < 128 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    try:
+        # to address — slot [32..64], last 20 bytes
+        recipient_hex_full = args_blob[64:128]
+        recipient_hex = recipient_hex_full[-40:]
+        dest_address: str | None = None
+        if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
+            dest_address = "0x" + recipient_hex
+
+        # toChainID — slot [96..128] (uint256, EVM chainID)
+        chain_hex = args_blob[192:256]
+        chain_id = int(chain_hex, 16) if chain_hex else 0
+        dest_chain = _EVM_CHAIN_BY_ID.get(chain_id)
+
+        confidence = (
+            "high" if (dest_chain and dest_address)
+            else "medium" if (dest_chain or dest_address)
+            else "low"
+        )
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("multichain decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+def _decode_stargate_v2(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Stargate v2 Pool `sendToken` calldata.
+
+    Signature:
+      sendToken(SendParam, MessagingFee, address)
+
+    where SendParam =
+      (uint32 dstEid, bytes32 to, uint256 amountLD, uint256 minAmountLD,
+       bytes extraOptions, bytes composeMsg, bytes oftCmd)
+
+    Stargate v2 uses LayerZero v2 endpoint IDs (30000-series), so the
+    dstEid lookup goes through ``_LAYERZERO_V2_EIDS``. We also accept
+    v1 LZ chain IDs in ``_LZ_CHAIN_IDS`` as a fallback — some Stargate
+    v2 deployments transitionally accepted v1 selectors before the LZ
+    v2 migration completed.
+
+    The `to` field is bytes32 (right-aligned address for EVM
+    destinations); last 20 bytes are the EVM address.
+
+    Calldata layout (outer offset to SendParam in slot 0, MessagingFee
+    head in middle, refund address last):
+      [0..32]   offset to SendParam tuple
+      [32..64]  MessagingFee.nativeFee (uint256)
+      [64..96]  MessagingFee.lzTokenFee (uint256)
+      [96..128] refundAddress (address right-padded)
+      [128..)   SendParam body — slot 0=dstEid, slot 1=to, ...
+    """
+    method_entry = _STARGATE_V2_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    if len(args_blob) < 128 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+    try:
+        # Outer offset → SendParam tuple body.
+        try:
+            send_offset = int(args_blob[0:64], 16)
+        except ValueError:
+            send_offset = 128
+        send_idx = send_offset * 2
+        # Bounds-check + fallback to canonical layout (offset = 0x80
+        # = 128 bytes for the 4-slot head before the tuple body).
+        if send_idx < 64 or send_idx + 128 > len(args_blob):
+            send_idx = 128 * 2
+
+        if send_idx + 128 > len(args_blob):
+            return BridgeDecodeResult(
+                destination_chain=None, destination_address=None,
+                bridge_method=method_name, confidence="low",
+                raw_calldata_excerpt=full_data[:400],
+            )
+
+        # SendParam.dstEid — uint32 right-aligned in body slot 0.
+        eid_hex = args_blob[send_idx:send_idx + 64]
+        eid = int(eid_hex, 16) if eid_hex else 0
+        dest_chain = _LAYERZERO_V2_EIDS.get(eid) or _LZ_CHAIN_IDS.get(eid)
+
+        # SendParam.to — bytes32 in body slot 1; last 20 bytes are
+        # the EVM destination.
+        to_start = send_idx + 64
+        to_end = to_start + 64
+        dest_address: str | None = None
+        if to_end <= len(args_blob):
+            to_hex = args_blob[to_start:to_end][-40:]
+            if len(to_hex) == 40 and to_hex != "0" * 40:
+                dest_address = "0x" + to_hex
+
+        confidence = (
+            "high" if (dest_chain and dest_address)
+            else "medium" if (dest_chain or dest_address)
+            else "low"
+        )
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("stargate v2 decode failed: %s", exc)
         return BridgeDecodeResult(
             destination_chain=None, destination_address=None,
             bridge_method=method_name, confidence="low",

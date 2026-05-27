@@ -588,6 +588,27 @@ def cli() -> None:
              "checkout 'Email' field pre-fill.",
     )
 
+    # ----- envvars (v0.31.4) ----- #
+    # Print the canonical RECUPERO_* env-var reference to stdout so
+    # operators can `recupero-ops envvars` and see the full list
+    # without leaving the terminal. The source of truth is
+    # docs/ENV_VARS.md; this command resolves it relative to the
+    # installed package OR the repo working tree, falling back
+    # gracefully when neither is available (e.g. in a stripped
+    # production wheel that excluded the doc tree).
+    p_envvars = sub.add_parser(
+        "envvars",
+        help="Print the canonical RECUPERO_* env-var reference "
+             "(docs/ENV_VARS.md). Use --index for the tabular index "
+             "only.",
+    )
+    p_envvars.add_argument(
+        "--index", action="store_true",
+        help="Print only the tabular index (name | default | type | "
+             "range | introduced | purpose) without the per-variable "
+             "long-form sections. Useful for piping to grep.",
+    )
+
     # ----- promote-freezable ----- #
     p_promote = sub.add_parser(
         "promote-freezable",
@@ -697,6 +718,77 @@ def cli() -> None:
         else:
             print(f"ERROR: no active token found with id={token_id}")
             sys.exit(1)
+
+    if args.command == "envvars":
+        # v0.31.4: print docs/ENV_VARS.md so operators can see the
+        # canonical RECUPERO_* env-var list without browsing GitHub.
+        # Doc resolution: walk up from this file looking for
+        # `docs/ENV_VARS.md` (works in editable install + repo checkout);
+        # if not found, try the importlib-resources path next to the
+        # installed `recupero` package (works in a non-editable wheel
+        # if the doc was shipped via package_data).
+        from pathlib import Path as _Path
+        doc_path: _Path | None = None
+        # 1. Repo working tree: src/recupero/ops/cli.py → parents[3] = repo root.
+        try:
+            here = _Path(__file__).resolve()
+            candidate = here.parents[3] / "docs" / "ENV_VARS.md"
+            if candidate.is_file():
+                doc_path = candidate
+        except (IndexError, OSError):
+            pass
+        # 2. Installed wheel sibling (less common, but supports a
+        #    future shipped-with-package doc).
+        if doc_path is None:
+            try:
+                pkg_root = _Path(__file__).resolve().parents[1]
+                candidate = pkg_root / "docs" / "ENV_VARS.md"
+                if candidate.is_file():
+                    doc_path = candidate
+            except (IndexError, OSError):
+                pass
+        if doc_path is None:
+            print(
+                "ERROR: docs/ENV_VARS.md not found relative to the "
+                "installed package or the repo checkout. This means "
+                "the build dropped the doc tree — re-run from a repo "
+                "clone or open the doc on GitHub.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        try:
+            text = doc_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"ERROR: failed to read {doc_path}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if args.index:
+            # Print only the lines between "## Index" and the next
+            # top-level section ("## Per-variable detail" or "## "
+            # generally). Markdown tables are still readable in a
+            # terminal; the index is small enough to scan visually.
+            lines = text.splitlines()
+            start = None
+            end = None
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if start is None and stripped == "## Index":
+                    start = i
+                    continue
+                if start is not None and i > start and stripped.startswith("## "):
+                    end = i
+                    break
+            if start is None:
+                # Doc shape changed — fall back to printing the
+                # whole file rather than silently emitting nothing.
+                print(text)
+            else:
+                # Skip the "## Index" line itself + any blank trailer
+                # lines before the next section.
+                snippet = "\n".join(lines[start:end]) if end else "\n".join(lines[start:])
+                print(snippet)
+            sys.exit(0)
+        print(text)
+        sys.exit(0)
 
     if args.command == "promote-freezable":
         from recupero.ops.commands import promote_freezable as cmd

@@ -47,6 +47,7 @@ from recupero.models import Case, Chain
 if TYPE_CHECKING:
     from recupero.chains.base import ChainAdapter
     from recupero.labels.store import LabelStore
+from recupero.labels.store import lookup_pit_safe  # v0.31.4
 
 log = logging.getLogger(__name__)
 
@@ -110,7 +111,11 @@ def _is_finite_decimal(value: Decimal | None) -> bool:
 
 
 def _resolve_cex_label(
-    address: str, chain: Chain, label_store: LabelStore | None,
+    address: str,
+    chain: Chain,
+    label_store: LabelStore | None,
+    *,
+    point_in_time: "datetime | None" = None,
 ) -> tuple[str, str] | None:
     """Return ``(cex_name, category)`` if ``address`` is a labeled CEX
     hot wallet / deposit address; ``None`` otherwise.
@@ -119,11 +124,15 @@ def _resolve_cex_label(
     user-supplied overrides). The category must be one of
     ``exchange_hot_wallet`` / ``exchange_deposit`` for the address to
     be considered a CEX endpoint.
+
+    v0.31.4 (Gap 1a): pass ``point_in_time`` so the label state AT THE
+    TIME OF THEFT is used. A CEX hot wallet labeled today wasn't
+    necessarily a CEX wallet 6 months ago.
     """
     if label_store is None or not address:
         return None
     try:
-        label = label_store.lookup(address, chain=chain)
+        label = lookup_pit_safe(label_store, address, chain=chain, point_in_time=point_in_time,)
     except Exception as exc:  # noqa: BLE001
         log.debug(
             "cex_continuity: label lookup raised for %s on %s: %s",
@@ -244,7 +253,12 @@ def identify_cex_continuity_leads(
         token_sym = (t.token.symbol or "").upper() if t.token else ""
         if token_sym in noisy_tokens:
             continue
-        resolved = _resolve_cex_label(t.to_address, t.chain, label_store)
+        # v0.31.4 (Gap 1a): use case.incident_time so the CEX label at
+        # the time of theft is applied, not today's.
+        resolved = _resolve_cex_label(
+            t.to_address, t.chain, label_store,
+            point_in_time=case.incident_time,
+        )
         if resolved is None:
             continue
         cex_name, category = resolved
@@ -506,15 +520,22 @@ def leads_to_brief_section(
 
 
 def env_continuity_enabled() -> bool:
-    """RECUPERO_CEX_CONTINUITY=1 (default OFF, opt-in).
+    """RECUPERO_CEX_CONTINUITY: default ON since v0.31.4 (Gap 6).
 
-    Adapter calls cost money, so this entire feature is gated behind
-    an explicit opt-in env var. Any of {"1", "true", "yes", "on"}
-    (case-insensitive) enables; anything else (including unset)
-    keeps it OFF.
+    Adapter calls cost money, but the leads are bounded at TOP-5
+    per case + min $100K USD + uncommon-token filter, so the
+    worst-case extra spend per case is small. To OPT OUT set the
+    env var to one of {"0", "false", "no", "off"}.
+
+    Pre-v0.31.4 this was default-OFF; in practice that meant the
+    feature was invisible (operators didn't know to enable it).
+    Honest-gaps audit flagged it as integration gap #2b.
     """
     raw = os.environ.get("RECUPERO_CEX_CONTINUITY", "").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    if raw in ("0", "false", "no", "off"):
+        return False
+    # Anything else — including unset / "" / "1" / "true" — enables.
+    return True
 
 
 def env_window_hours() -> float:

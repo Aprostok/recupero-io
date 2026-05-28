@@ -94,13 +94,21 @@
   The on-chain trace anchored at <code>{{ case_id }}</code> identifies the following address(es)
   under {{ target.recipient_name }}'s control:
 </p>
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-ST-2): per-address
+   evidence now includes tx_hashes (and observed_at windows + transfer
+   count) when the upstream `extract_subpoena_targets` carried them.
+   Without transaction-level evidence the CEX compliance team has
+   nothing to grep against in their internal records — the subpoena
+   gets rejected on review. Chain column kept prominent so a
+   multi-chain consolidated subpoena renders the chain for every row,
+   not just the case's primary chain. #}
 <table>
   <thead>
     <tr>
       <th style="width:22em;">Address</th>
       <th style="width:8em;">Chain</th>
       <th>Role</th>
-      <th class="amount">Amount (USD)</th>
+      <th class="amount">Amount (USD) &amp; Transaction Evidence</th>
     </tr>
   </thead>
   <tbody>
@@ -113,6 +121,15 @@
         {% if la.evidence and la.evidence|length > 0 %}
           {% for ev in la.evidence %}
             {% if ev.amount_usd %}${{ '{:,.2f}'.format(ev.amount_usd|float) }}{% endif %}
+            {% if ev.transfer_count %}<br><span style="font-size:8pt; color:#4b5563;">across {{ ev.transfer_count }} on-chain transfer{{ "s" if ev.transfer_count != 1 else "" }}</span>{% endif %}
+            {% if ev.first_observed_at or ev.last_observed_at %}<br><span style="font-size:8pt; color:#4b5563;">observed: {{ ev.first_observed_at or '?' }} — {{ ev.last_observed_at or '?' }}</span>{% endif %}
+            {% if ev.tx_hashes and ev.tx_hashes|length > 0 %}
+              <br><span style="font-size:8pt;">Tx hashes:<br>
+              {% for h in ev.tx_hashes %}
+                <code style="font-size:7pt; word-break: break-all;">{{ h }}</code>{% if not loop.last %}<br>{% endif %}
+              {% endfor %}
+              </span>
+            {% endif %}
             {% if not loop.last %}<br>{% endif %}
           {% endfor %}
         {% else %}—{% endif %}

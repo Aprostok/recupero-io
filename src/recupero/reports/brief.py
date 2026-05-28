@@ -621,14 +621,7 @@ def generate_briefs(
                 fallback_asset_type=asset_type,
             ),
             "amount_human": _fmt_decimal(theft_transfer.amount_decimal),
-            # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting via
-            # `_ensure_usd_prefix`. Pre-v0.32.1 the LE template had a
-            # split-brain currency format: `USD 21,317.94` on the cover
-            # next to `$29,273.63` in the same paragraph — read as two
-            # documents stapled together to a federal prosecutor.
-            # Templates now drop the literal "USD " prefix and let this
-            # value carry its own `$`.
-            "usd_value_at_theft": _ensure_usd_prefix(_fmt_usd(theft_transfer.usd_value_at_tx)),
+            "usd_value_at_theft": _fmt_usd(theft_transfer.usd_value_at_tx),
             # v0.20.2 (audit-round-3 R3-3): expose aggregate
             # across all theft_events so the headline asset block
             # renders the TOTAL stolen value on multi-event drains
@@ -643,15 +636,14 @@ def generate_briefs(
             # to the single-event value when the aggregate is exactly $0
             # (e.g., all events priced at zero). The correct fallback
             # condition is "no events had a priced usd_value_at_tx".
-            # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting.
-            "total_usd_value_at_theft": _ensure_usd_prefix(_fmt_usd(
+            "total_usd_value_at_theft": _fmt_usd(
                 sum(
                     (t.usd_value_at_tx for t in theft_events
                      if t.usd_value_at_tx is not None),
                     start=Decimal(0),
                 ) if any(t.usd_value_at_tx is not None for t in theft_events)
                 else theft_transfer.usd_value_at_tx,
-            )),
+            ),
             # v0.30.2 (V030_2_CORRECTNESS_AUDIT T1-A): pre-v0.30.2 this
             # summed `amount_decimal` across ALL theft_events as if they
             # were the same unit — 0.21 ETH + 20,610 USDT rendered as
@@ -724,9 +716,7 @@ def generate_briefs(
                 "to_address": t.to_address,
                 "amount_human": _fmt_decimal(t.amount_decimal),
                 "symbol": t.token.symbol,
-                # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting so
-                # the template can drop literal "USD " prefixes.
-                "usd_value": _ensure_usd_prefix(_fmt_usd(t.usd_value_at_tx)),
+                "usd_value": _fmt_usd(t.usd_value_at_tx),
                 "explorer_url": t.explorer_url,
                 "from_explorer_url": _address_explorer_url(t.from_address, t.chain),
                 "to_explorer_url": _address_explorer_url(t.to_address, t.chain),
@@ -735,14 +725,13 @@ def generate_briefs(
             for t in sorted(theft_events, key=lambda x: x.block_time)
         ],
         "theft_event_count": len(theft_events),
-        # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting.
-        "theft_event_total_usd": _ensure_usd_prefix(_fmt_usd(
+        "theft_event_total_usd": _fmt_usd(
             sum(
                 (t.usd_value_at_tx for t in theft_events
                  if t.usd_value_at_tx is not None),
                 start=Decimal(0),
             )
-        )),
+        ),
         "hops": [
             {
                 "tx_hash": h.tx_hash,
@@ -944,6 +933,17 @@ def generate_briefs(
     # The 2-arg form lets callers override the plural ending for
     # irregular nouns: `{{ n | pluralize("hop", "hops") }}`.
     env.filters["pluralize"] = _pluralize_filter
+    # v0.32.1 (LE-HIGH-1): single-prefix USD filter for the LE
+    # template. The shared ctx (consumed by both the issuer freeze
+    # letter AND the LE handoff) keeps `usd_value_at_theft` etc. as
+    # bare numerics ("21,317.94") because the issuer-letter template
+    # already prepends a literal "USD " — touching that here would
+    # double-stamp. The LE template instead drops its literal "USD "
+    # prefix and pipes the bare value through this filter, yielding
+    # the standard "$X,YYY.ZZ" rendering everywhere on the LE handoff
+    # so the cover never mixes `USD 21,317.94` next to `$29,273.63`
+    # on the same page.
+    env.filters["usd_prefix"] = _ensure_usd_prefix
     # XSS-audit defense-in-depth: register safe_url / safe_text
     # filters so href / src attributes in templates can neuter any
     # `javascript:` / `data:` / `vbscript:` URLs that slip through

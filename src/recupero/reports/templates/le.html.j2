@@ -87,11 +87,13 @@
          paragraphs below still show the primary event's USD,
          which is correct (each narrative paragraph describes one
          specific tx). #}
-      {# v0.32.1 (LE-HIGH-1): USD values carry their own `$X,YYY.ZZ`
-         prefix from `_ensure_usd_prefix` in brief.py. Dropping the
-         literal "USD " prose prefix here so the cover never renders
-         "USD 21,317.94" next to "$29,273.63" on the same page. #}
-      <dd>{{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>
+      {# v0.32.1 (LE-HIGH-1): pipe through the `usd_prefix` Jinja
+         filter (registered in brief.py for this template only) so
+         the cover renders `$X,YYY.ZZ` instead of `USD X,YYY.ZZ`,
+         matching every other USD render in this document. Pre-v0.32.1
+         this cover printed "USD 21,317.94" while the recovery line
+         below printed "$29,273.63" — two formats on one page. #}
+      <dd>{{ (asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft) | usd_prefix }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>
     </div>
     {# v0.21.0: recovery probability surfaced on the cover. AUSAs /
        FBI agents weigh case priority on this number before reading
@@ -134,7 +136,7 @@
 <div class="summary-box">
   <p style="margin:0 0 0.7em 0;">
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
-    {{ asset.symbol }} ({{ asset.usd_value_at_theft }} at the time of
+    {{ asset.symbol }} ({{ asset.usd_value_at_theft | usd_prefix }} at the time of
     transaction) was removed without authorization from
     {{ victim.name }}'s wallet
     {% if victim.citizenship %}(citizen of {{ victim.citizenship }}){% endif %}.
@@ -294,7 +296,7 @@
 <p class="small">
   This drain involved <strong>{{ theft_event_count }} unauthorized
   outbound transfers</strong> from the victim wallet within a 7-day
-  window, totaling <strong>{{ theft_event_total_usd }}</strong>.
+  window, totaling <strong>{{ theft_event_total_usd | usd_prefix }}</strong>.
   Each is listed below in chronological order. The "primary" event is
   the highest-USD transfer and is the headline transaction described
   in section 2.
@@ -307,7 +309,7 @@
       <time>{{ ev.timestamp_human }}</time> &nbsp;—&nbsp;
       <strong>{% if ev.is_primary %}Primary theft event.{% else %}Drain event.{% endif %}</strong>
       {{ ev.amount_human }} {{ ev.symbol }}
-      {% if ev.usd_value and ev.usd_value != '(unknown)' %}({{ ev.usd_value }}){% endif %}
+      {% if ev.usd_value and ev.usd_value != '(unknown)' %}({{ ev.usd_value | usd_prefix }}){% endif %}
       transferred from
       {% if ev.from_explorer_url %}<a class="mono" href="{{ ev.from_explorer_url|safe_url }}">{{ ev.from_address }}</a>{% else %}<span class="mono">{{ ev.from_address }}</span>{% endif %}
       to {% if ev.to_explorer_url %}<a class="mono" href="{{ ev.to_explorer_url|safe_url }}">{{ ev.to_address }}</a>{% else %}<span class="mono">{{ ev.to_address }}</span>{% endif %}.

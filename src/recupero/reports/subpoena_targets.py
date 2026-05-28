@@ -368,6 +368,38 @@ def extract_subpoena_targets(
                 "priority": "low",
             }
 
+        # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-ST-2): per-address
+        # evidence now includes tx_hashes + first/last block_time when
+        # the input carries them (OnwardCEXFlow surfaces these; raw
+        # `exchange_deposits` from emit_brief does not). A subpoena to
+        # Binance saying "this address received $X" with NO
+        # transaction-level evidence is rejected on compliance review
+        # — the compliance team needs the tx_hash to tie the on-chain
+        # deposit to an internal customer account. Pre-v0.32.1 the
+        # linked_address evidence only carried `amount_usd` +
+        # `label_source` so the rendered subpoena had nothing for the
+        # compliance team to grep against.
+        def _ev_from(ex_dict):  # noqa: ANN001 (closure-local; loose typing)
+            ev = {
+                "amount_usd": str(amt),
+                "label_source": ex_dict.get("source") or "label_db",
+            }
+            tx_hashes_raw = ex_dict.get("tx_hashes")
+            if isinstance(tx_hashes_raw, list):
+                ev["tx_hashes"] = [
+                    str(h) for h in tx_hashes_raw if isinstance(h, str)
+                ]
+            first_at = ex_dict.get("first_deposit_at") or ex_dict.get("first_flow_at")
+            last_at = ex_dict.get("last_deposit_at") or ex_dict.get("last_flow_at")
+            if isinstance(first_at, str) and first_at:
+                ev["first_observed_at"] = first_at
+            if isinstance(last_at, str) and last_at:
+                ev["last_observed_at"] = last_at
+            transfer_count = ex_dict.get("deposit_count") or ex_dict.get("transfer_count")
+            if isinstance(transfer_count, int) and transfer_count > 0:
+                ev["transfer_count"] = transfer_count
+            return ev
+
         recipient_key = recipient_info["recipient_name"]
         existing = cex_targets_by_recipient.get(recipient_key)
         if existing is not None:
@@ -377,10 +409,7 @@ def extract_subpoena_targets(
                 "address": addr,
                 "chain": ex.get("chain") or getattr(case, "chain", None) and case.chain.value,
                 "role": "off-ramp deposit (perpetrator-owned)",
-                "evidence": [{
-                    "amount_usd": str(amt),
-                    "label_source": ex.get("source") or "label_db",
-                }],
+                "evidence": [_ev_from(ex)],
             })
             # Aggregate total USD for sort ordering.
             existing["_total_usd"] += amt
@@ -398,10 +427,7 @@ def extract_subpoena_targets(
                     getattr(case, "chain", None) and case.chain.value
                 ),
                 "role": "off-ramp deposit (perpetrator-owned)",
-                "evidence": [{
-                    "amount_usd": str(amt),
-                    "label_source": ex.get("source") or "label_db",
-                }],
+                "evidence": [_ev_from(ex)],
             }],
             "expected_records": [
                 "subscriber identity (name, email, phone, country)",

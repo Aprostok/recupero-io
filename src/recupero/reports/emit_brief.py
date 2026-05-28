@@ -1559,6 +1559,10 @@ def _build_incident_classification_section(
                 "drainer_attribution": None,
                 "classification_confidence": "low",
                 "signals": [],
+                # v0.32.1 (CRIT-4): keep the events key in the
+                # fallback so downstream consumers can assume the
+                # shape regardless of whether detection succeeded.
+                "events": [],
             },
             None,
         )

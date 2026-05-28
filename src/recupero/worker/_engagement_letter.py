@@ -54,6 +54,7 @@ mechanics under your state's professional-services regulations.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -86,6 +87,12 @@ def render_engagement_letter(
     engagement_fee_usd: Decimal | None = None,
     contingency_pct: int | None = None,
     investigator_jurisdiction: str | None = None,
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-EL-1): the recovery-rate
+    # disclosure that the customer ack'd at intake must appear on the
+    # legal contract they sign. Compute lazily from the env-var Supabase
+    # DSN if not passed in. Optional override for tests + custom flows.
+    recovery_stats: "RecoveryStats | None" = None,  # noqa: UP037
+    recovery_stats_dsn: str | None = None,
 ) -> Path | None:
     """Render the Tier-2 engagement letter to ``briefs_dir`` and
     return its path. Returns None if rendering fails (logged as
@@ -117,6 +124,31 @@ def render_engagement_letter(
     if contingency_pct is None:
         contingency_pct = CONTINGENCY_PCT
 
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-EL-1): resolve recovery
+    # stats once here so the customer signs a contract that names the
+    # same Wilson-CI / industry-baseline number they ticked at intake.
+    # Lazy import — this module is loaded long before
+    # recovery_rate (which pulls psycopg) on cold-start paths, and
+    # the test harness should not require psycopg installed to render
+    # an engagement letter.
+    if recovery_stats is None:
+        try:
+            from recupero.monitoring.recovery_rate import compute_recovery_stats
+            dsn = (
+                recovery_stats_dsn
+                if recovery_stats_dsn is not None
+                else os.environ.get("SUPABASE_DB_URL", "")
+            )
+            recovery_stats = compute_recovery_stats(dsn=dsn or None)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "engagement_letter: compute_recovery_stats failed (%s); "
+                "rendering without inline recovery-rate stats — the "
+                "footer will still carry the disclosure boilerplate "
+                "but not the case-of-record numbers.", exc,
+            )
+            recovery_stats = None
+
     try:
         ctx = _build_context(
             case=case,
@@ -129,6 +161,7 @@ def render_engagement_letter(
             engagement_fee_usd=engagement_fee_usd,
             contingency_pct=contingency_pct,
             investigator_jurisdiction=investigator_jurisdiction,
+            recovery_stats=recovery_stats,
         )
 
         env = Environment(
@@ -178,6 +211,7 @@ def _build_context(
     engagement_fee_usd: Decimal,
     contingency_pct: int,
     investigator_jurisdiction: str | None,
+    recovery_stats: Any = None,  # RecoveryStats | None
 ) -> dict[str, Any]:
     """Build the Jinja context for the engagement letter."""
     from recupero import __version__ as software_version

@@ -81,7 +81,7 @@ def _mk_adapter(txs: list[dict] | None = None) -> BitcoinAdapter:
 
 
 @pytest.fixture(autouse=True)
-def _clear_registry() -> None:
+def _clear_registry():
     """Each test gets a fresh registry — tests are otherwise stateful."""
     clear_for_case()
     yield

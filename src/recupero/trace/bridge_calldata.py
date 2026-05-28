@@ -547,6 +547,32 @@ def decode_bridge_calldata(
         return _decode_ccip(method_id, args_blob, data)
     if "multichain" in proto_lc or "anyswap" in proto_lc:
         return _decode_multichain(method_id, args_blob, data)
+    # v0.32.1 JACOB_ADVERSARY_AUDIT_v032 M-6 close-out: rollup-canonical
+    # bridges. Pre-v0.32.1 these were labeled in bridges.json (so the BFS
+    # halted at the bridge) but no destination was extracted, leaving
+    # the operator with "destination candidates: polygon" and no
+    # actionable address. The adversary audit's Route 1 ($5M Polygon
+    # PoS escape) succeeded entirely through this gap. New decoders for:
+    #   * Polygon PoS RootChainManager (depositFor / depositEtherFor)
+    #   * Optimism L1StandardBridge (depositERC20{To}, depositETH{To})
+    #   * Arbitrum Inbox / L1ERC20Gateway (outboundTransfer{,CustomRefund},
+    #     depositEth)
+    #   * zkSync Era L1ERC20Bridge (deposit)
+    #   * Base L1StandardBridge (OP-Stack ABI; same selectors as Optimism)
+    # Use a space-normalized variant for the rollup-canonical matches —
+    # bridges.json names use spaces ("L1 Standard Bridge"); our internal
+    # convention is lowercased-no-spaces. Match against both.
+    proto_compact = proto_lc.replace(" ", "").replace("-", "").replace(":", "")
+    if "polygon" in proto_compact and ("pos" in proto_compact or "rootchainmanager" in proto_compact):
+        return _decode_polygon_pos(method_id, args_blob, data)
+    if "optimism" in proto_compact and "l1standardbridge" in proto_compact:
+        return _decode_optimism_l1(method_id, args_blob, data)
+    if "arbitrum" in proto_compact and ("inbox" in proto_compact or "gateway" in proto_compact):
+        return _decode_arbitrum_l1(method_id, args_blob, data)
+    if "zksync" in proto_compact and ("bridge" in proto_compact or "era" in proto_compact):
+        return _decode_zksync_l1(method_id, args_blob, data)
+    if "base" in proto_compact and "l1standardbridge" in proto_compact:
+        return _decode_base_l1(method_id, args_blob, data)
     return None
 
 
@@ -2292,6 +2318,238 @@ def _decode_stargate_v2(
         log.debug("stargate v2 decode failed: %s", exc)
         return BridgeDecodeResult(
             destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v0.32.1 — Rollup-canonical bridge decoders
+# Closes Adversary M-6 (the single highest-leverage CRIT in v0.32.0).
+# Pre-v0.32.1 these bridges were labeled but undecoded, so the BFS
+# halted at the bridge address with no actionable destination.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _extract_addr_slot(args_blob: str, slot_idx: int) -> str | None:
+    """Read a 32-byte slot (slot_idx 0-based) and treat its last 20
+    bytes as an EVM address. Return ``0x…`` lowercase, or ``None`` if
+    out of range or zero address."""
+    start = slot_idx * 64
+    end = start + 64
+    if end > len(args_blob):
+        return None
+    hex_addr = args_blob[start + 24:end]  # last 20 bytes = 40 hex chars
+    if len(hex_addr) != 40 or hex_addr == "0" * 40:
+        return None
+    return "0x" + hex_addr
+
+
+# Polygon PoS RootChainManager — Ethereum L1 side.
+_POLYGON_POS_METHODS = {
+    # depositFor(address user, address rootToken, bytes depositData)
+    "0xe3dec8fb": "depositFor",
+    # depositEtherFor(address user)
+    "0x4faa8a26": "depositEtherFor",
+}
+
+
+def _decode_polygon_pos(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Polygon PoS RootChainManager calldata.
+
+    Destination chain is always 'polygon' for both selectors. The
+    destination address is slot 0 (`user` parameter) in both methods.
+    """
+    method_name = _POLYGON_POS_METHODS.get(method_id)
+    if method_name is None:
+        return BridgeDecodeResult(
+            destination_chain="polygon", destination_address=None,
+            bridge_method="unknown", confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    try:
+        dest_addr = _extract_addr_slot(args_blob, 0)
+        return BridgeDecodeResult(
+            destination_chain="polygon",
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("polygon-pos decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain="polygon", destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+# Optimism L1StandardBridge — Ethereum L1 side. Same ABI as Base.
+_OP_STACK_METHODS = {
+    # depositERC20To(address _l1Token, address _l2Token, address _to,
+    #                uint256 _amount, uint32 _l2Gas, bytes _data)
+    "0x838b2520": ("depositERC20To", 2),    # _to is slot 2
+    # depositETHTo(address _to, uint32 _l2Gas, bytes _data)
+    "0x9a2ac6d5": ("depositETHTo", 0),       # _to is slot 0
+    # depositERC20(address _l1Token, address _l2Token, uint256 _amount,
+    #              uint32 _l2Gas, bytes _data) — recipient = msg.sender,
+    # not in calldata. Return medium confidence with no dest_address.
+    "0x58a997f6": ("depositERC20", None),
+    # depositETH(uint32 _l2Gas, bytes _data) — recipient = msg.sender.
+    "0xb1a1a882": ("depositETH", None),
+}
+
+
+def _decode_op_stack_l1(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+    dest_chain: str,
+) -> BridgeDecodeResult | None:
+    """Shared OP-Stack L1StandardBridge decoder. Optimism + Base share
+    this ABI (Base is OP Stack). ``dest_chain`` is either 'optimism'
+    or 'base'."""
+    entry = _OP_STACK_METHODS.get(method_id)
+    if entry is None:
+        return BridgeDecodeResult(
+            destination_chain=dest_chain, destination_address=None,
+            bridge_method="unknown", confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    method_name, dest_slot = entry
+    try:
+        if dest_slot is None:
+            # msg.sender path — we don't have it here. The trace's
+            # transaction-from address will be used by the BFS
+            # continuation logic when destination_address is None.
+            return BridgeDecodeResult(
+                destination_chain=dest_chain, destination_address=None,
+                bridge_method=method_name, confidence="medium",
+                raw_calldata_excerpt=full_data[:400],
+            )
+        dest_addr = _extract_addr_slot(args_blob, dest_slot)
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("%s decode failed: %s", dest_chain, exc)
+        return BridgeDecodeResult(
+            destination_chain=dest_chain, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+def _decode_optimism_l1(
+    method_id: str, args_blob: str, full_data: str,
+) -> BridgeDecodeResult | None:
+    return _decode_op_stack_l1(method_id, args_blob, full_data, "optimism")
+
+
+def _decode_base_l1(
+    method_id: str, args_blob: str, full_data: str,
+) -> BridgeDecodeResult | None:
+    return _decode_op_stack_l1(method_id, args_blob, full_data, "base")
+
+
+# Arbitrum L1ERC20Gateway + Inbox.
+_ARBITRUM_L1_METHODS = {
+    # outboundTransfer(address _l1Token, address _to, uint256 _amount,
+    #                  uint256 _maxGas, uint256 _gasPriceBid, bytes _data)
+    "0xd2ce7d65": ("outboundTransfer", 1),
+    # outboundTransferCustomRefund(address _l1Token, address _refundTo,
+    #                              address _to, uint256 _amount, ...)
+    "0x4fb1a07b": ("outboundTransferCustomRefund", 2),
+    # depositEth() on Inbox — recipient = msg.sender.
+    "0x439370b1": ("depositEth", None),
+}
+
+
+def _decode_arbitrum_l1(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Arbitrum L1 gateway / Inbox calldata. Destination chain
+    is always 'arbitrum'."""
+    entry = _ARBITRUM_L1_METHODS.get(method_id)
+    if entry is None:
+        return BridgeDecodeResult(
+            destination_chain="arbitrum", destination_address=None,
+            bridge_method="unknown", confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    method_name, dest_slot = entry
+    try:
+        if dest_slot is None:
+            return BridgeDecodeResult(
+                destination_chain="arbitrum", destination_address=None,
+                bridge_method=method_name, confidence="medium",
+                raw_calldata_excerpt=full_data[:400],
+            )
+        dest_addr = _extract_addr_slot(args_blob, dest_slot)
+        return BridgeDecodeResult(
+            destination_chain="arbitrum",
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("arbitrum-l1 decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain="arbitrum", destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+# zkSync Era L1ERC20Bridge.
+_ZKSYNC_L1_METHODS = {
+    # deposit(address _l2Receiver, address _l1Token, uint256 _amount,
+    #         uint256 _l2TxGasLimit, uint256 _l2TxGasPerPubdataByte,
+    #         address _refundRecipient)
+    "0xe8b99b1b": ("deposit", 0),
+}
+
+
+def _decode_zksync_l1(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode zkSync Era L1ERC20Bridge calldata. Destination chain
+    is always 'zksync_era'."""
+    entry = _ZKSYNC_L1_METHODS.get(method_id)
+    if entry is None:
+        return BridgeDecodeResult(
+            destination_chain="zksync_era", destination_address=None,
+            bridge_method="unknown", confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    method_name, dest_slot = entry
+    try:
+        dest_addr = _extract_addr_slot(args_blob, dest_slot)
+        return BridgeDecodeResult(
+            destination_chain="zksync_era",
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("zksync-l1 decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain="zksync_era", destination_address=None,
             bridge_method=method_name, confidence="low",
             raw_calldata_excerpt=full_data[:400],
         )

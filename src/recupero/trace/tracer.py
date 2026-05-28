@@ -844,6 +844,20 @@ def _continue_past_dex_and_bridges(
             # continuation leaked one or more httpx clients per
             # investigation — FD exhaustion over hours of operation.
             try:
+                # v0.32.1 JACOB_TRACE_AUDIT_v032 CRIT-3 close-out: use the
+                # earliest bridge-handoff time INTO this destination chain
+                # as the per-dst-chain incident anchor. Previously we
+                # passed the source-chain incident_time which caused
+                # _process_wave to apply incident_buffer_minutes WINDOW
+                # before the SRC theft (a window that excludes legitimate
+                # post-bridge outflows once the bridge takes more than a
+                # few hours to settle). Falling back to source incident
+                # time only if the dst_chain has no entry (defensive —
+                # shouldn't happen because by_chain population is from
+                # the same loop).
+                dst_anchor_time = earliest_src_time_by_chain.get(
+                    dst_chain, incident_time,
+                )
                 try:
                     xchain_results = _process_wave(
                         dst_seeds,
@@ -851,7 +865,7 @@ def _continue_past_dex_and_bridges(
                         label_store=label_store,
                         price_client=price_client,
                         policy=policy,
-                        incident_time=incident_time,
+                        incident_time=dst_anchor_time,
                         config=config,
                         evidence_dir=evidence_dir,
                         concurrency=trace_concurrency,

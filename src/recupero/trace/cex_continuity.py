@@ -69,6 +69,56 @@ _DEFAULT_NOISY_TOKENS: frozenset[str] = frozenset(
 _MAX_LEADS_PER_CASE = 5
 
 
+# v0.32.1 JACOB_TRACE_AUDIT_v032 HIGH-10 close-out: cross-token parity
+# match. Pre-v0.32.1 the matcher required EXACT token-symbol equality —
+# an adversary depositing USDT and withdrawing USDC at the same
+# exchange within minutes returned zero leads. Real-world routes use
+# this pattern routinely. The parity groups below are the asset
+# families that trade at ≈1:1 with each other (fees + slippage absorb
+# the residual). USD value comparison still applies (existing 5%
+# tolerance) — we just remove the strict-symbol gate when both tokens
+# belong to the same parity group.
+#
+# IMPORTANT: only "stable-to-stable", "ETH-to-ETH-derivative", and
+# "BTC-to-BTC-derivative" pairs go in here. Adding non-parity assets
+# (e.g. USDT ↔ BNB) would inject false positives — that's a DEX-trace
+# concern, not CEX continuity.
+_STABLE_PARITY = frozenset({
+    "USDT", "USDC", "USDC.E", "DAI", "BUSD", "TUSD", "FRAX", "USDP", "GUSD",
+    "USDD", "LUSD", "SUSD", "MIM", "USDE", "USDS", "USDJ", "PYUSD", "USDH",
+    "USDBC", "AXLUSDC", "USD1",
+})
+_ETH_PARITY = frozenset({
+    "ETH", "WETH", "STETH", "WSTETH", "RETH", "CBETH", "FRXETH", "SFRXETH",
+})
+_BTC_PARITY = frozenset({
+    "WBTC", "BTCB", "TBTC", "CBBTC", "RENBTC", "HBTC", "WBTC.E",
+})
+
+
+def _parity_group(symbol: str) -> str | None:
+    """Return ``"stable" | "eth" | "btc"`` if symbol is in a parity
+    group, else ``None``."""
+    s = (symbol or "").upper()
+    if s in _STABLE_PARITY:
+        return "stable"
+    if s in _ETH_PARITY:
+        return "eth"
+    if s in _BTC_PARITY:
+        return "btc"
+    return None
+
+
+def _are_at_parity(token_a: str, token_b: str) -> bool:
+    """True iff both tokens belong to the same parity group."""
+    if not token_a or not token_b:
+        return False
+    if token_a.upper() == token_b.upper():
+        return True
+    ga, gb = _parity_group(token_a), _parity_group(token_b)
+    return ga is not None and ga == gb
+
+
 @dataclass(frozen=True)
 class CexContinuityLead:
     """One investigative lead.
@@ -356,10 +406,21 @@ def identify_cex_continuity_leads(
                 row_token_symbol = (
                     getattr(row_token, "symbol", "") or ""
                 ).upper()
-                # Token-symbol match: only consider rows whose token
-                # symbol matches the deposit's. Without a unified pricer
-                # at this layer, cross-token matching would be noise.
-                if row_token_symbol != deposit_token:
+                # v0.32.1 HIGH-10 close-out: accept either exact-symbol
+                # equality OR parity-group equality. Parity groups cover
+                # stable-to-stable, ETH-to-ETH-derivative, and
+                # BTC-to-BTC-derivative pairs — the legitimate
+                # ≈1:1 substitutions an adversary uses to fragment same-
+                # exchange continuity by token. The existing USD
+                # tolerance still applies; we are NOT widening it. Any
+                # non-parity pair (e.g. USDT → BNB) remains filtered.
+                exact_match = (row_token_symbol == deposit_token)
+                parity_match = (
+                    not exact_match and _are_at_parity(
+                        deposit_token, row_token_symbol,
+                    )
+                )
+                if not (exact_match or parity_match):
                     continue
                 row_amount_raw = row.get("amount_raw", 0)
                 row_decimals = getattr(row_token, "decimals", None)

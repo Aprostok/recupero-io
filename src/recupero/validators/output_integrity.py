@@ -441,6 +441,52 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
                 detail=f"check itself crashed: {type(exc).__name__}: {exc}",
             )]
         result.violations.extend(violations)
+
+    # v0.32.1 JACOB_VALIDATOR_AUDIT_v032 — run semantic invariants G–P
+    # AFTER the structural checks. The structural module catches "wrong
+    # bytes written" at ~90%; the semantic module catches "bytes that
+    # look fine but disagree with each other or with the trace data".
+    # Failures here are isolated (one crash does not break the rest).
+    try:
+        from recupero.validators.semantic_integrity import (
+            run_semantic_invariants,
+        )
+        # Best-effort load of the case-level artifacts the semantic
+        # checks consume. Missing inputs degrade individual checks to
+        # no-ops rather than crashing the validator.
+        manifest = _safe_load_json(case_dir / "manifest.json") or freeze_brief
+        trace_evidence = _safe_load_json(case_dir / "trace_evidence.json")
+        recovery_disclosure = _safe_load_json(case_dir / "recovery_disclosure.json")
+        brief = freeze_brief
+        freeze_letters = freeze_asks if isinstance(freeze_asks, list) else None
+        # Gather rendered HTML files for the explorer-link check.
+        artifact_html_files: dict[str, str] = {}
+        if briefs_dir.is_dir():
+            for p in briefs_dir.glob("*.html"):
+                try:
+                    artifact_html_files[p.name] = _safe_read(p)
+                except Exception:  # noqa: BLE001
+                    continue
+        semantic_violations = run_semantic_invariants(
+            brief=brief,
+            freeze_letters=freeze_letters,
+            le_handoff=None,
+            trace_evidence=trace_evidence,
+            manifest=manifest,
+            recovery_disclosure=recovery_disclosure,
+            artifact_html_files=artifact_html_files,
+            prose_text=None,
+        )
+        result.checks_run.append("semantic_invariants_g_through_p")
+        result.violations.extend(semantic_violations)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("semantic_invariants dispatch crashed: %s", exc)
+        result.violations.append(Violation(
+            check="semantic_invariants_g_through_p",
+            severity="warning",
+            detail=f"dispatch crashed: {type(exc).__name__}: {exc}",
+        ))
+
     return result
 
 

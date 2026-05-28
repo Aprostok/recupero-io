@@ -331,36 +331,124 @@ def _record_job_failure(
         return 1
 
 
+def _looks_like_uuid(s: str) -> bool:
+    """Return True for 8-4-4-4-12 UUID-shaped strings (don't redact these)."""
+    import re as _re
+    return bool(_re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        s,
+    ))
+
+
+def _looks_like_address(s: str) -> bool:
+    """Return True for 0x-prefixed EVM-style addresses (don't redact)."""
+    return s.startswith("0x") and len(s) in (42, 66) and all(
+        c in "0123456789abcdefABCDEFx" for c in s
+    )
+
+
 def _safe_error_text(error: Exception) -> str:
     """Scrub + truncate an exception message for storage / webhook.
 
-    The webhook payload MUST NOT contain DSN credentials, API keys,
-    or other secrets. ``str(error)`` for a psycopg OperationalError
-    typically includes the full DSN. ``_common.db_connect`` already
-    redacts DSNs on the way up, but we belt-and-suspender here so a
-    direct exception bypassing that path still gets scrubbed.
+    v0.32.1 JACOB_SECURITY_AUDIT_v032 CRIT-2 close-out: the prior version
+    only redacted ``api_key|token|secret|password|bearer`` labels and DSN
+    URI credentials. Any cron exception that surfaced a bare vendor-key
+    (``sk_live_xxx``, ``re_xxx``, ``whsec_xxx``, ``AKIA…``, JWT, Slack
+    webhook URL, etc.) was shipped to Slack/Discord. This expansion also
+    redacts:
+
+    * Credentialed URI schemes beyond postgres: redis, mongodb, amqp,
+      sftp, ftp, mysql, smtp, https-with-basic-auth.
+    * Labeled secrets (existing).
+    * Vendor key prefixes (Stripe ``sk_live`` / ``sk_test`` / ``rk_live``
+      / ``pk_live``, Resend ``re_``, Anthropic ``sk-ant-``,
+      ``sk-proj-``, GitHub ``ghp_``/``ghs_``/``gho_``, AWS ``AKIA``/
+      ``ASIA``, Vercel ``vc_``, Slack ``xoxb-``, generic ``whsec_``).
+    * JWT pattern (three dot-separated base64url chunks starting ``eyJ``).
+    * Slack incoming-webhook URLs.
+    * Generic high-entropy 32+ char base64/hex chunks NOT matching the
+      UUID or 0x-address allow-lists.
+
+    The webhook payload MUST NOT contain DSN credentials, API keys, or
+    other secrets. ``_common.db_connect`` already redacts DSNs on the
+    way up, but we belt-and-suspender here so a direct exception
+    bypassing that path still gets scrubbed.
     """
     raw = f"{type(error).__name__}: {error}"
-    # Conservative redaction: anything that looks like a URI with
-    # credentials.
     import re
-    # postgresql://user:password@host:port/db → postgresql://***@host:port/db
+
+    # 1) Credentialed URI schemes — collapse user:pass@host to ***@host.
     raw = re.sub(
-        r"(postgres(?:ql)?://)[^@\s]+@",
+        r"((?:postgres(?:ql)?|redis|mongodb(?:\+srv)?|amqp(?:s)?|sftp|ftp|mysql|smtp|https?)://)"
+        r"[^@\s/]+@",
         r"\1***@",
         raw,
+        flags=re.IGNORECASE,
     )
-    # Common secret-shaped substrings: long base64-ish / hex chunks
-    # that don't look like UUIDs or addresses. Cheap heuristic — any
-    # token >= 32 alphanumeric chars without a vowel pattern gets
-    # masked. Avoid this being too aggressive: only redact tokens
-    # that have a key-like prefix.
+
+    # 2) Labeled secrets (existing behavior, plus authorization header).
     raw = re.sub(
-        r"(api[_-]?key|token|secret|password|bearer)[=:\s]+\S+",
+        r"(api[_-]?key|token|secret|password|passwd|bearer|authorization)"
+        r"[=:\s]+\S+",
         r"\1=***",
         raw,
         flags=re.IGNORECASE,
     )
+
+    # 3) JWT (three base64url segments separated by dots, starting eyJ).
+    raw = re.sub(
+        r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b",
+        "***JWT***",
+        raw,
+    )
+
+    # 4) Slack incoming-webhook URLs.
+    raw = re.sub(
+        r"https://hooks\.slack\.com/services/[A-Z0-9/]+",
+        "https://hooks.slack.com/services/***",
+        raw,
+    )
+
+    # 5) Vendor key prefixes. Match the prefix + a non-trivial suffix.
+    vendor_prefixes = [
+        r"sk_live_[A-Za-z0-9]{8,}",
+        r"sk_test_[A-Za-z0-9]{8,}",
+        r"rk_live_[A-Za-z0-9]{8,}",
+        r"pk_live_[A-Za-z0-9]{8,}",
+        r"whsec_[A-Za-z0-9]{8,}",
+        r"re_[A-Za-z0-9]{16,}",  # Resend
+        r"sk-ant-[A-Za-z0-9\-_]{16,}",
+        r"sk-proj-[A-Za-z0-9\-_]{16,}",
+        r"ghp_[A-Za-z0-9]{16,}",
+        r"ghs_[A-Za-z0-9]{16,}",
+        r"gho_[A-Za-z0-9]{16,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"ASIA[0-9A-Z]{16}",
+        r"vc_[A-Za-z0-9]{16,}",
+        r"xoxb-[A-Za-z0-9\-]{16,}",
+        r"xoxp-[A-Za-z0-9\-]{16,}",
+        r"xapp-[A-Za-z0-9\-]{16,}",
+    ]
+    for pat in vendor_prefixes:
+        raw = re.sub(pat, "***VENDOR_KEY***", raw)
+
+    # 6) Generic high-entropy 32+ char base64/hex chunks. Skip UUIDs and
+    # 0x-prefixed addresses by pattern-matching them first and masking
+    # by token-by-token replacement.
+    def _maybe_redact_token(match: re.Match) -> str:
+        token = match.group(0)
+        if _looks_like_uuid(token):
+            return token
+        if _looks_like_address(token):
+            return token
+        return "***HIGH_ENTROPY***"
+
+    raw = re.sub(
+        r"\b[A-Za-z0-9_\-+/=]{32,}\b",
+        _maybe_redact_token,
+        raw,
+    )
+
     return raw[:1000]
 
 

@@ -290,7 +290,8 @@ notification).</p>
     <tr>
       <td class="small">{{ h.block_time }}</td>
       <td>{{ h.bridge_name }}<br/><span class="small secondary">{{ h.bridge_protocol }}</span></td>
-      <td class="mono">{% if h.tx_explorer_url %}<a href="{{ h.tx_explorer_url|safe_url }}">{{ h.source_address[:10] }}…</a>{% else %}<span>{{ h.source_address[:10] }}…</span>{% endif %}</td>
+      {# v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address filter. #}
+      <td class="mono">{% if h.tx_explorer_url %}<a href="{{ h.tx_explorer_url|safe_url }}">{{ h.source_address | short_address(prefix=10, suffix=0) }}</a>{% else %}<span>{{ h.source_address | short_address(prefix=10, suffix=0) }}</span>{% endif %}</td>
       <td class="amount">{{ h.amount_usd or h.amount_decimal }}</td>
       <td>{{ h.token_symbol }}</td>
       <td class="small">{{ h.destination_chain_candidates | join(', ') if h.destination_chain_candidates else '(see bridge explorer)' }}</td>
@@ -338,7 +339,8 @@ notification).</p>
       <strong>{{ ev.heuristic }}</strong>
       ({{ ev.confidence }} confidence):
       {{ ev.details }}
-      {% if ev.related_address %}— via <span class="mono">{{ ev.related_address[:14] }}…</span>{% endif %}
+      {# v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address filter. #}
+      {% if ev.related_address %}— via <span class="mono">{{ ev.related_address | short_address(prefix=14, suffix=0) }}</span>{% endif %}
     </li>
     {% endfor %}
   </ul>
@@ -392,7 +394,8 @@ notification).</p>
   <tbody>
     {% for addr, data in (risk_assessment.addresses or {}).items() %}
     <tr>
-      <td class="mono">{{ addr[:14] }}…</td>
+      {# v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address filter. #}
+      <td class="mono">{{ addr | short_address(prefix=14, suffix=0) }}</td>
       <td class="amount">{{ data.score }}</td>
       <td>{{ data.verdict }}</td>
       <td class="small">

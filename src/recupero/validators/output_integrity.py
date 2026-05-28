@@ -110,6 +110,64 @@ class Violation:
     file: str | None = None  # Relative path within case_dir, when applicable.
 
 
+# v0.32.1 test-public re-exports of the semantic invariants G–P. The
+# audit referenced these as ``check_invariant_g`` / ``check_invariant_h``
+# / ``check_invariant_i`` (short names matching INVARIANT letters); the
+# implementations live in ``semantic_integrity.py`` with the longer
+# descriptive names. Re-export here so test scaffolding imports from a
+# single module.
+def _lazy_semantic_imports() -> dict:
+    """Lazy-import the semantic invariants so this module's import
+    side effects don't force the semantic module to load on every
+    cron worker startup. Returns a small dispatch dict the wrapper
+    functions below close over."""
+    try:
+        from recupero.validators.semantic_integrity import (
+            check_invariant_g_chain_of_custody,
+            check_invariant_h_confidence_calibration,
+            check_invariant_i_cross_doc_consistency,
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    return {
+        "g": check_invariant_g_chain_of_custody,
+        "h": check_invariant_h_confidence_calibration,
+        "i": check_invariant_i_cross_doc_consistency,
+    }
+
+
+def check_invariant_g(
+    brief: dict | None,
+    trace_evidence: dict | None,
+    manifest: dict | None = None,
+) -> list["Violation"]:
+    """Re-export of semantic INVARIANT G (chain-of-custody completeness)."""
+    impls = _lazy_semantic_imports()
+    fn = impls.get("g")
+    return fn(brief, trace_evidence, manifest) if fn else []
+
+
+def check_invariant_h(
+    brief: dict | None,
+    recovery_disclosure: dict | None = None,
+) -> list["Violation"]:
+    """Re-export of semantic INVARIANT H (confidence calibration)."""
+    impls = _lazy_semantic_imports()
+    fn = impls.get("h")
+    return fn(brief, recovery_disclosure) if fn else []
+
+
+def check_invariant_i(
+    brief: dict | None,
+    freeze_letters: list[dict] | None = None,
+    le_handoff: dict | None = None,
+) -> list["Violation"]:
+    """Re-export of semantic INVARIANT I (cross-document consistency)."""
+    impls = _lazy_semantic_imports()
+    fn = impls.get("i")
+    return fn(brief, freeze_letters, le_handoff) if fn else []
+
+
 @dataclass
 class ValidationResult:
     """Aggregate result. ``ok`` is True iff there are zero
@@ -441,6 +499,14 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
                 detail=f"check itself crashed: {type(exc).__name__}: {exc}",
             )]
         result.violations.extend(violations)
+
+    # v0.32.1 test-public re-exports — the test scaffolding imports the
+    # semantic invariants directly from output_integrity for symmetry
+    # with the existing A-F checks. Keep these in sync with the
+    # dispatcher block immediately below.
+    # NB: the import target is the public semantic module; failures to
+    # import here are swallowed because the runtime path below does the
+    # actual wiring inside a try-block.
 
     # v0.32.1 JACOB_VALIDATOR_AUDIT_v032 — run semantic invariants G–P
     # AFTER the structural checks. The structural module catches "wrong

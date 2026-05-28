@@ -41,6 +41,26 @@
 
 <h1>Subpoena Target — {{ target.recipient_name }}</h1>
 
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-ST-1): explicit
+   AUSA-signature-required gate at the top of the document. Pre-v0.32.1
+   the footer only said "operator-prepared evidence intended for
+   judicial / law-enforcement review. Not a public artifact." — that is
+   NOT a clear enough gate. A subpoena_target file rendered to PDF and
+   accidentally forwarded to a CEX compliance team by a non-lawyer
+   operator would be a malpractice-adjacent event. The banner mirrors
+   the "DRAFT — For AUSA Review & Issuance Only" treatment on
+   subpoena_request.html.j2 (the grand-jury draft template). #}
+<div style="margin:0.5em 0 1em 0; padding:0.75em 1em; background:#fee2e2; border:2px solid #991b1b; color:#991b1b; font-weight:700;">
+  DRAFT — DO NOT SERVE WITHOUT AUSA SIGNATURE.
+  This is an investigator-prepared evidence brief intended to assist an
+  Assistant United States Attorney's drafting of a grand-jury subpoena
+  duces tecum (or equivalent legal process). Recupero has no subpoena
+  authority. This document must NOT be transmitted to the recipient
+  until issued on government letterhead and signed by the assigned AUSA
+  or other competent issuing authority. Unauthorized transmission may
+  constitute unauthorized practice of law.
+</div>
+
 <div class="meta-row">
   <span><strong>Case:</strong> {{ case_id }}</span>
   <span><strong>Target ID:</strong> {{ target.target_id }}</span>
@@ -121,14 +141,50 @@
 </ul>
 
 <h2>4. Legal Authority</h2>
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-ST-1): correct the
+   grand-jury subpoena cite from 18 U.S.C. § 3486 to Federal Rule of
+   Criminal Procedure 17(c). Engineering judgment per audit:
+
+   18 U.S.C. § 3486 is the *administrative subpoena* authority for
+   specified federal investigations (healthcare fraud, child
+   exploitation, controlled substances, terrorism, certain federal
+   crimes against the US — 18 U.S.C. § 3486(a)(1)(A)(i)-(iv)). It
+   is NOT the general grand-jury subpoena authority. A grand-jury
+   subpoena issued under § 3486 for, say, a wire-fraud (18 U.S.C.
+   § 1343) predicate would be invalid.
+
+   Federal Rule of Criminal Procedure 17(c) is the correct authority
+   for a grand-jury subpoena duces tecum directed to a third-party
+   record custodian (e.g., a CEX, KYC provider, ISP). That is the
+   same authority cited by the parallel `subpoena_request.html.j2`
+   template (line 42-43) — the two templates now match.
+
+   Administrative-subpoena and seizure-order branches retained for
+   the rare in-scope predicates (HCF, etc.) so the operator can
+   override `target.instrument` to `'administrative_subpoena'` and
+   the right cite renders. #}
 <p>
   <strong>Instrument:</strong>
-  {% if target.instrument == 'grand_jury_subpoena' %}Grand jury subpoena (under 18 U.S.C. § 3486 or equivalent statutory authority){% elif target.instrument == 'seizure_order' %}Seizure order (post-identification — coordinated with prosecuting agency){% else %}{{ target.instrument or '(operator to specify)' }}{% endif %}.
+  {% if target.instrument == 'grand_jury_subpoena' %}Grand jury subpoena <em>duces tecum</em>, pursuant to <strong>Federal Rule of Criminal Procedure 17(c)</strong>, to be issued by the assigned Assistant United States Attorney upon impanelment of (or in connection with) a federal grand jury in the judicial district of appropriate venue{% elif target.instrument == 'administrative_subpoena' %}Administrative subpoena pursuant to <strong>18 U.S.C. § 3486</strong> (available only for the federal investigations enumerated in § 3486(a)(1)(A) — healthcare fraud, federal child-exploitation offenses, controlled-substance investigations under 21 U.S.C. § 876, and certain crimes against the United States; verify the predicate falls within § 3486 before relying on this instrument){% elif target.instrument == '2703_d_order' %}Court order pursuant to <strong>18 U.S.C. § 2703(d)</strong> (Stored Communications Act, for non-content records held by an electronic communication service / remote computing service){% elif target.instrument == 'seizure_order' %}Seizure order (post-identification — coordinated with prosecuting agency under 18 U.S.C. § 981 / § 982 civil or criminal forfeiture authority as applicable){% elif target.instrument == 'preservation_letter' %}Preservation request pursuant to <strong>18 U.S.C. § 2703(f)</strong> (90-day records-preservation; preliminary to a § 2703(d) order or Rule 17(c) subpoena){% else %}{{ target.instrument or '(operator to specify the issuing instrument and applicable statutory authority)' }}{% endif %}.
+</p>
+<p class="small" style="color:#4b5563;">
+  <strong>Note on statutory authority.</strong> The cite above is the
+  default for the selected <code>instrument</code>; the AUSA or
+  competent issuing authority retains final authority over the cite
+  used on the issued process. Recupero recommends the AUSA verify the
+  cite matches the predicate offense — in particular, 18 U.S.C. § 3486
+  is NOT the general grand-jury authority and applies only to the
+  enumerated federal investigations in § 3486(a)(1)(A). For
+  wire-fraud / money-laundering / general federal predicates, Federal
+  Rule of Criminal Procedure 17(c) is the correct grand-jury
+  authority.
 </p>
 <p>
   Delivery: this document is for in-person service or e-mail forwarding
   to the recipient's compliance team{% if target.recipient_compliance_email %}
-  at <code>{{ target.recipient_compliance_email }}</code>{% endif %}.
+  at <code>{{ target.recipient_compliance_email }}</code>{% endif %} —
+  <strong>only after the AUSA has signed and issued formal process
+  on government letterhead</strong>.
   Chain-of-custody verification: every linked address in section 2 is
   verifiable on-chain at the recipient's preferred block explorer.
 </p>
@@ -171,6 +227,22 @@
   with full transaction-level evidence retained for forensic
   cross-reference.
 </p>
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT MED-ST-1): explicit
+   no-subpoena-authority disclaimer. Mirrors the language in the
+   parallel `subpoena_request.html.j2` template (line 44-46). Without
+   this, a reader may infer Recupero has subpoena authority based on
+   the document's tone. The investigator's role is to surface
+   evidentiary basis — the AUSA's role is to issue the legal
+   process. #}
+<p style="margin-top:0.75em;">
+  <strong>Recupero's role.</strong> Recupero is a private investigation
+  service. Recupero has no subpoena authority and does not represent
+  itself as having the authority to compel records production from any
+  party. This document is provided to assist the assigned AUSA's
+  drafting of formal process; the AUSA must issue the final subpoena
+  on government letterhead before the records demand is enforceable
+  against {{ target.recipient_name }}.
+</p>
 {% if investigator and investigator.email %}
 <p>
   <strong>Investigator contact:</strong>
@@ -193,6 +265,12 @@
   <code>{{ target.target_id }}</code> · {{ generated_at }}.
   This document is operator-prepared evidence intended for
   judicial / law-enforcement review. Not a public artifact.
+  <br/><br/>
+  <strong>DRAFT — DO NOT SERVE WITHOUT AUSA SIGNATURE.</strong>
+  Recupero has no subpoena authority. This document is investigator-
+  prepared evidence to assist the assigned AUSA's drafting; it must
+  not be transmitted to {{ target.recipient_name }} until formal
+  process has been issued on government letterhead.
 </footer>
 
 </body>

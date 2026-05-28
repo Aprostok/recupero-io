@@ -1202,10 +1202,21 @@ def _intake_post_csrf_ok(request: Request) -> bool:
     import os as _os
     origin = (request.headers.get("origin", "") or "").strip()
     referer = (request.headers.get("referer", "") or "").strip()
-    # Non-browser caller — no Origin, no Referer. Treated as safe;
-    # curl/postman/server-side integrations.
+    # v0.32.1 JACOB_SECURITY_AUDIT_v032 HIGH-3 close-out: pre-v0.32.1
+    # the headerless case was unconditionally allowed (intended for
+    # curl + server-side integrations). The audit observed that ANY
+    # bot stripping both Origin AND Referer sailed through the gate
+    # AND the 5/min/IP rate-limit (bots rotate IPs). Now require an
+    # explicit opt-in env var (RECUPERO_INTAKE_ALLOW_HEADERLESS=true)
+    # for headerless POSTs. Default = reject. This preserves backward
+    # compatibility for ops teams that deliberately opt in, while
+    # closing the drive-by-bot path.
     if not origin and not referer:
-        return True
+        allow_headerless = (
+            _os.environ.get("RECUPERO_INTAKE_ALLOW_HEADERLESS", "")
+            .strip().lower() in ("1", "true", "yes", "on")
+        )
+        return allow_headerless
     raw_allow = (
         _os.environ.get("RECUPERO_INTAKE_ALLOWED_ORIGINS", "") or ""
     ).strip()
@@ -1610,6 +1621,77 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
         url=checkout_url,
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+# ---- Operator UI for the brief-review queue (v0.32.1) ---- #
+#
+# Pre-v0.32.1 the dispatcher review gate (recupero.dispatcher.review_api)
+# was API-only. The Jacob cross-cutting audit (§4) flagged this as a
+# deploy-blocker: every approve/reject required an on-call operator to
+# hand-craft a curl invocation with the admin-key header, at 2 AM,
+# inside a constrained ops window. ``/review-gate`` is the minimum-
+# viable operator console: list pending rows, click-through to the
+# artifact, approve / reject, surface the reviewer + completion
+# timestamp once a row is decided.
+#
+# The page is intentionally not gated by FastAPI middleware — the
+# state-changing calls under the hood (POST /v1/reviews/{id}/...)
+# all enforce the X-Recupero-Admin-Key check inside ``review_api``.
+# Serving the static HTML to anyone is a deliberate choice: it tells
+# an unauthenticated visitor "this is the gate" without leaking any
+# data (the queue load fetches from /v1/reviews/queue which DOES
+# require the header).
+
+
+@app.get(
+    "/review-gate",
+    response_class=HTMLResponse,
+    tags=["ops"],
+    summary=(
+        "Operator UI for the brief-review queue (v0.32.1). "
+        "State-changing actions remain gated by X-Recupero-Admin-Key "
+        "at the /v1/reviews/* API layer."
+    ),
+)
+async def review_gate_ui() -> HTMLResponse:
+    """Render the operator console for the dispatcher review gate.
+
+    The HTML is a static asset (``recupero.web.templates.review_gate.html``)
+    — no per-request templating context is needed because every dynamic
+    bit is fetched client-side from ``/v1/reviews/queue`` and posted
+    back to ``/v1/reviews/{id}/(approve|reject)`` with the admin key.
+
+    On any I/O error reading the template, returns a 503 with a short
+    message so the operator knows to fall back to curl.
+
+    TODO (Wave-4): wire a server-side render that proxies the queue
+    fetch through the same FastAPI process so an operator pasting an
+    admin key into the page form doesn't need to re-authenticate
+    when navigating to /review-gate. Signature:
+        ``async def review_gate_ui(x_recupero_admin_key: str | None = Header(None))``
+    """
+    from pathlib import Path
+
+    template_path = (
+        Path(__file__).resolve().parent.parent
+        / "web" / "templates" / "review_gate.html"
+    )
+    try:
+        html = template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning(
+            "review_gate_ui: template read failed (%s): %s",
+            template_path, exc,
+        )
+        return HTMLResponse(
+            content=(
+                "<h1>Review gate UI unavailable</h1>"
+                "<p>Template file could not be read; fall back to "
+                "<code>curl /v1/reviews/queue</code>.</p>"
+            ),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return HTMLResponse(content=html)
 
 
 # ---- Uvicorn entry point ---- #

@@ -369,8 +369,13 @@ def build_email_alert_body(
     counterparty_addr = payload.counterparty or "(unknown)"
     # Escape everything that flows into HTML body/attribute context.
     safe_trigger = _html.escape(payload.trigger_type)
+    # v0.32.1 (Jacob cross-cutting audit §3.1): canonical address
+    # truncation via short_address — keeps the email alert's address
+    # display byte-identical with the brief / LE-handoff rendering so
+    # operators can cross-reference the artifacts by eye.
+    from recupero.util.addr_format import short_address
     safe_address_short = _html.escape(
-        f"{payload.address[:10]}…{payload.address[-6:]}"
+        short_address(payload.address, prefix=10, suffix=6)
     )
     safe_chain = _html.escape(payload.chain)
     safe_counterparty_label = _html.escape(counterparty_label)

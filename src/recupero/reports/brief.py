@@ -172,6 +172,13 @@ class IssuerInfo:
     asset_description: str | None = None   # one-line technical description of asset
     kyc_required: bool = False             # was KYC required to acquire the asset originally?
     kyc_minimum: str | None = None         # e.g. "$125,000 USD"
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-4): issuer-specific
+    # freeze-posture note from the issuer DB (e.g. "Tether has frozen
+    # billions in USDT and is generally responsive…" / "USDD: DAO
+    # governance opaque, treat as limited"). Surfaced as a quoted
+    # paragraph in Section 6 of the rendered freeze letter so the
+    # compliance reviewer reads the same posture cue the operator sees.
+    freeze_notes: str | None = None
 
 
 # Sensible default for the Zigha case (Midas-issued msyrupUSDp)
@@ -250,20 +257,33 @@ def _resolve_theft_asset_issuer_name(
 _TOKEN_ASSET_DESCRIPTIONS: dict[str, str] = {
     # Ethereum mainnet — the contracts that drive ~95% of recovery
     # cases. Address-lowercased for chain-agnostic lookup.
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT, cross-doc consistency #1):
+    # Tether USDT is issued by Tether Operations Limited (BVI), NOT
+    # Tether Holdings Limited (a separate holding co). Circle was
+    # renamed from "Circle Internet Financial" to "Circle Internet
+    # Group, Inc." in the June 2025 IPO + re-domicile to NY. These
+    # entity names now match the corresponding `legal_name` field in
+    # issuers.json so the same letter renders the same legal entity in
+    # both the "Stolen Asset Details" row and the "Addressed To" cover
+    # meta.
     "0xdac17f958d2ee523a2206206994597c13d831ec7":
-        "USD-pegged stablecoin (ERC-20) issued by Tether Holdings Limited",
+        "USD-pegged stablecoin (ERC-20) issued by Tether Operations Limited",
     "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48":
-        "USD-pegged stablecoin (ERC-20) issued by Circle Internet Financial",
+        "USD-pegged stablecoin (ERC-20) issued by Circle Internet Group, Inc.",
     "0x6b175474e89094c44da98b954eedeac495271d0f":
         "Multi-collateralized USD-pegged stablecoin (ERC-20, MakerDAO/Sky Protocol)",
     "0x4fabb145d64652a948d72533023f6e7a623c7c53":
-        "USD-pegged stablecoin (ERC-20) issued by Paxos Trust Company (BUSD/Binance USD)",
+        "USD-pegged stablecoin (ERC-20) issued by Paxos Trust Company, LLC (BUSD/Binance USD)",
     "0x8e870d67f660d95d5be530380d0ec0bd388289e1":
-        "USDP — USD-pegged stablecoin (ERC-20) issued by Paxos Trust Company",
+        "USDP — USD-pegged stablecoin (ERC-20) issued by Paxos Trust Company, LLC",
     "0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2":
         "WETH (ERC-20 canonical wrapper for native Ether)",
     "0x2260fac5e5542a773aa44fbcfedf7c193bc2c599":
-        "WBTC (ERC-20 wrapper for Bitcoin custodied by BitGo Trust Company)",
+        "WBTC (ERC-20 wrapper for Bitcoin custodied by BitGo Trust Company, Inc. / BiT Global Trust Limited)",
+    # cbBTC — Coinbase wrapped BTC; custodian is the NYDFS-chartered
+    # trust co, NOT the US exchange operating subsidiary.
+    "0xcbb7c0006f23900c38eb856149f799620fcb8a4a":
+        "cbBTC (ERC-20 wrapper for Bitcoin custodied by Coinbase Custody Trust Company, LLC)",
 }
 
 
@@ -470,6 +490,15 @@ def generate_briefs(
     # rationale + reproducible-builds contract live with the helpers
     # so the orchestrator can read as orchestration.
     now = _resolve_render_time()
+
+    # v0.32.1 (LE-CRIT-3, LE-HIGH-6): pre-compute the investigator
+    # context dict + the configured-flag once so both the template
+    # block-gate (`_investigator_configured`) and the rendered
+    # investigator block see the same sanitized name. The flag is True
+    # iff the caller passed an InvestigatorInfo with a real name OR
+    # the RECUPERO_INVESTIGATOR_NAME env var is set — either path
+    # produces a signable attestation.
+    _investigator_ctx_for_render = _build_investigator_ctx(investigator)
     brief_id = _make_brief_id(primary_case.case_id, theft_transfer.tx_hash)
 
     ctx: dict[str, Any] = {
@@ -498,7 +527,13 @@ def generate_briefs(
         # timestamp on legal documents reads as templated/broken to LE
         # and lawyers. Strip the 'Z'; templates own the UTC marker.
         "generated_at": now.strftime("%Y-%m-%dT%H:%M:%S"),
-        "verified_at": now.strftime("%Y-%m-%d"),
+        # v0.32.1 (LE-HIGH-9): render verified_at at the same precision
+        # as every other timeline event (full UTC datetime). Pre-v0.32.1
+        # it was a date-only string while the rest of the timeline carried
+        # full %Y-%m-%d %H:%M:%S — a precision mismatch on the most-
+        # important "current state" event of the timeline read as
+        # templated/auto-generated to LE.
+        "verified_at": now.strftime("%Y-%m-%d %H:%M:%S UTC"),
         # v0.17.4 (round-10 audit HIGH): primary_chain populated for the
         # LE handoff template. Pre-v0.17.4 the template's
         # `{{ primary_chain | default("Ethereum") }}` silently rendered
@@ -525,8 +560,38 @@ def generate_briefs(
             if primary_case.trace_started_at else None
         ),
         "software_version": __version__,
-        "victim": victim.model_dump(),
-        "investigator": investigator.__dict__,
+        # v0.32.1 (LE-HIGH-5): sanitize any "TODO:" / "(unset)" /
+        # "(operator name not configured)" leak from AI editorial or
+        # unconfigured env into None so the template's `or "..."` falls
+        # back to the canonical fallback string instead of typesetting
+        # the debug placeholder in heavy serif on the legal cover.
+        "victim": _sanitize_dict_placeholders(
+            victim.model_dump(),
+            ("citizenship", "country", "state", "address",
+             "email", "phone", "legal_counsel", "legal_counsel_email",
+             "incident_summary"),
+        ),
+        # v0.32.1 (LE-CRIT-3, LE-HIGH-6): when the operator-name env var
+        # isn't configured, suppress the entire investigator name + email
+        # so the LE handoff doesn't render "(operator name not configured)
+        # — compliance@recupero.io" on the cover and signature block.
+        # An UNSIGNED watermark + an explicit placeholder-line in the
+        # signature block (rendered template-side via the
+        # `_investigator_configured` flag) signal "needs signature"
+        # rather than "this is a debug artifact".
+        #
+        # The gate is "does the passed-in InvestigatorInfo carry a
+        # real human name" — not just an env-var check. A test or
+        # direct CLI caller that injects a real InvestigatorInfo
+        # still renders the named block; only the default
+        # `(operator name not configured)` fallback (from an
+        # unconfigured Railway deploy) triggers the unsigned banner +
+        # placeholder-line branches.
+        "investigator": _investigator_ctx_for_render,
+        "_investigator_configured": (
+            _is_investigator_configured_safe()
+            or bool(_investigator_ctx_for_render["name"])
+        ),
         "asset": {
             "symbol": theft_transfer.token.symbol,
             "contract": theft_transfer.token.contract or "(native)",
@@ -556,7 +621,14 @@ def generate_briefs(
                 fallback_asset_type=asset_type,
             ),
             "amount_human": _fmt_decimal(theft_transfer.amount_decimal),
-            "usd_value_at_theft": _fmt_usd(theft_transfer.usd_value_at_tx),
+            # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting via
+            # `_ensure_usd_prefix`. Pre-v0.32.1 the LE template had a
+            # split-brain currency format: `USD 21,317.94` on the cover
+            # next to `$29,273.63` in the same paragraph — read as two
+            # documents stapled together to a federal prosecutor.
+            # Templates now drop the literal "USD " prefix and let this
+            # value carry its own `$`.
+            "usd_value_at_theft": _ensure_usd_prefix(_fmt_usd(theft_transfer.usd_value_at_tx)),
             # v0.20.2 (audit-round-3 R3-3): expose aggregate
             # across all theft_events so the headline asset block
             # renders the TOTAL stolen value on multi-event drains
@@ -571,14 +643,15 @@ def generate_briefs(
             # to the single-event value when the aggregate is exactly $0
             # (e.g., all events priced at zero). The correct fallback
             # condition is "no events had a priced usd_value_at_tx".
-            "total_usd_value_at_theft": _fmt_usd(
+            # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting.
+            "total_usd_value_at_theft": _ensure_usd_prefix(_fmt_usd(
                 sum(
                     (t.usd_value_at_tx for t in theft_events
                      if t.usd_value_at_tx is not None),
                     start=Decimal(0),
                 ) if any(t.usd_value_at_tx is not None for t in theft_events)
                 else theft_transfer.usd_value_at_tx,
-            ),
+            )),
             # v0.30.2 (V030_2_CORRECTNESS_AUDIT T1-A): pre-v0.30.2 this
             # summed `amount_decimal` across ALL theft_events as if they
             # were the same unit — 0.21 ETH + 20,610 USDT rendered as
@@ -592,6 +665,12 @@ def generate_briefs(
             # v0.30.2: explicit flag so templates can branch instead of
             # silently rendering an addition that doesn't make sense.
             "theft_assets_mixed": _theft_events_mixed_assets(theft_events),
+            # v0.32.1 (LE-CRIT-1): per-token rollup so the Stolen Asset
+            # Details section can render a per-asset breakdown sub-table
+            # when the drain spans multiple tokens, instead of the
+            # self-contradictory "Asset symbol: USDT / Amount: 2 events,
+            # mixed assets" pre-v0.32.1 render.
+            "theft_events_per_asset_summary": _build_theft_events_per_asset_summary(theft_events),
             "theft_event_count": len(theft_events),
             "is_multi_event": len(theft_events) > 1,
             "usd_value_current": asset_usd_value_current,
@@ -606,6 +685,10 @@ def generate_briefs(
             "secondary_role": issuer.secondary_role,
             "kyc_required": issuer.kyc_required,
             "kyc_minimum": issuer.kyc_minimum,
+            # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-4): expose the
+            # issuer-specific freeze-posture note so the template can
+            # render it in the new Section 6 (Freeze Posture).
+            "freeze_notes": issuer.freeze_notes,
         },
         # Address URLs are computed per-row so every raw address shown
         # in the letter is a click-through link in the rendered PDF.
@@ -641,7 +724,9 @@ def generate_briefs(
                 "to_address": t.to_address,
                 "amount_human": _fmt_decimal(t.amount_decimal),
                 "symbol": t.token.symbol,
-                "usd_value": _fmt_usd(t.usd_value_at_tx),
+                # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting so
+                # the template can drop literal "USD " prefixes.
+                "usd_value": _ensure_usd_prefix(_fmt_usd(t.usd_value_at_tx)),
                 "explorer_url": t.explorer_url,
                 "from_explorer_url": _address_explorer_url(t.from_address, t.chain),
                 "to_explorer_url": _address_explorer_url(t.to_address, t.chain),
@@ -650,13 +735,14 @@ def generate_briefs(
             for t in sorted(theft_events, key=lambda x: x.block_time)
         ],
         "theft_event_count": len(theft_events),
-        "theft_event_total_usd": _fmt_usd(
+        # v0.32.1 (LE-HIGH-1): unified `$X,YYY.ZZ` formatting.
+        "theft_event_total_usd": _ensure_usd_prefix(_fmt_usd(
             sum(
                 (t.usd_value_at_tx for t in theft_events
                  if t.usd_value_at_tx is not None),
                 start=Decimal(0),
             )
-        ),
+        )),
         "hops": [
             {
                 "tx_hash": h.tx_hash,
@@ -773,6 +859,20 @@ def generate_briefs(
             for raw in (all_issuers_freezable or [])
             if raw and isinstance(raw, dict)
         ] or None,
+        # v0.32.1 (LE-HIGH-7): secondary preservation targets — the
+        # OTHER issuers in this case besides the one this LE handoff is
+        # addressed to. Pre-v0.32.1 the LE handoff Section 6 (Recommended
+        # Actions / Immediate) only named the primary issuer; multi-
+        # issuer cases (USDC + USDT + DAI) shipped N separate handoff
+        # files each implying a single-issuer case. The LE recipient
+        # could miss that there were other issuers in scope unless they
+        # carefully read Section 4.2. Surfacing the secondary list in
+        # the Section 6 prose makes the multi-issuer scope visible
+        # without needing to spawn N handoffs.
+        "secondary_preservation_targets": _build_secondary_preservation_targets(
+            primary_issuer_name=issuer.name,
+            all_issuers_freezable=all_issuers_freezable,
+        ),
         # Law-enforcement filing-route recommendation. Only the LE
         # template uses this; the issuer freeze letter ignores the
         # ``le_routing`` context key. Built from victim's state +
@@ -1553,6 +1653,48 @@ def _build_identified_wallets(
     filtered = {k: v for k, v in seen.items() if _is_high_signal(k)}
     dropped = len(seen) - len(filtered)
 
+    # v0.32.1 (LE-HIGH-4): enrich unlabeled rows that are direct
+    # counterparties of the victim (hop_depth <= 1) with a more
+    # informative auto-note. Pre-v0.32.1 these rows displayed notes
+    # "—", reading as "Recupero couldn't identify two-thirds of the
+    # wallets". The data is already in addr_aggregates; just surface
+    # it. Burn / labeled rows keep their richer notes.
+    perp_hub_canon: str | None = None
+    perp_hub_usd: Decimal = Decimal(0)
+    for k, agg in addr_aggregates.items():
+        if agg["min_hop"] <= _SECTION_5_HOP_DEPTH_FLOOR and agg["usd_in"] > perp_hub_usd:
+            perp_hub_canon = k
+            perp_hub_usd = agg["usd_in"]
+    for k, row in filtered.items():
+        agg = addr_aggregates.get(k)
+        if agg is None:
+            continue
+        # Promote the highest-inflow direct-counterparty unlabeled row
+        # to a Perp-hub role so the most actionable row in the table
+        # carries a real role string instead of "Unlabeled (under
+        # investigation)". The data already drove this row to the
+        # FREEZABLE list / SectIon 4.1 — surfacing it here closes the
+        # "no perp role in Section 5" gap.
+        if (
+            k == perp_hub_canon
+            and row["role"] == "Unlabeled (under investigation)"
+        ):
+            row["role"] = "Perp hub — primary recipient of drain"
+            row["row_class"] = (row.get("row_class") or "") + " perp-row"
+            row["row_class"] = row["row_class"].strip()
+        # Auto-note for unlabeled rows at hop <= 1: "Direct counterparty
+        # of victim — USD inflow $X". This converts an empty "—" into
+        # informative context.
+        if (
+            row["notes"] in ("—", "")
+            and agg["min_hop"] <= _SECTION_5_HOP_DEPTH_FLOOR
+            and agg["usd_in"] > Decimal(0)
+        ):
+            row["notes"] = (
+                f"Direct counterparty of victim wallet — "
+                f"aggregate inflow ${agg['usd_in']:,.2f}"
+            )
+
     # Hard cap unlabeled rows in the filtered set.
     unlabeled_keys = [
         k for k, v in filtered.items()
@@ -1613,6 +1755,223 @@ def _theft_events_mixed_assets(theft_events: list) -> bool:
         if isinstance(sym, str) and sym.strip():
             symbols.add(sym.strip().upper())
     return len(symbols) > 1
+
+
+def _build_theft_events_per_asset_summary(theft_events: list) -> list[dict]:
+    """v0.32.1 (LE-CRIT-1): per-asset rollup for the Stolen Asset Details
+    table on mixed-asset drains.
+
+    Pre-v0.32.1 the "Amount" cell read "2 events, mixed assets" while the
+    "Asset symbol" / "Token contract" / "Issuer" rows above it locked to a
+    single token — a self-contradictory render. This helper groups the
+    theft_events by token symbol and emits a per-asset breakdown so the
+    template can render a small per-token table instead of mislabeling.
+
+    Output shape (one entry per token symbol present):
+      {
+        "symbol": "USDT",
+        "contract": "0xdAC1...1ec7" or None,
+        "amount_human": "20,610.34",
+        "usd_value_at_theft": "$20,610.34",
+        "event_count": 1,
+      }
+    Returns an empty list if no events.
+    """
+    if not theft_events:
+        return []
+    by_symbol: dict[str, dict] = {}
+    for t in theft_events:
+        token = getattr(t, "token", None)
+        sym = getattr(token, "symbol", None) if token else None
+        if not isinstance(sym, str) or not sym.strip():
+            sym = "(unknown)"
+        sym = sym.strip()
+        entry = by_symbol.setdefault(sym, {
+            "symbol": sym,
+            "contract": getattr(token, "contract", None) if token else None,
+            "_amount_total": Decimal(0),
+            "_usd_total": Decimal(0),
+            "_amount_has_value": False,
+            "_usd_has_value": False,
+            "event_count": 0,
+        })
+        amt = getattr(t, "amount_decimal", None)
+        if amt is not None and amt.is_finite():
+            entry["_amount_total"] += amt
+            entry["_amount_has_value"] = True
+        usd = getattr(t, "usd_value_at_tx", None)
+        if usd is not None and usd.is_finite():
+            entry["_usd_total"] += usd
+            entry["_usd_has_value"] = True
+        entry["event_count"] += 1
+
+    out: list[dict] = []
+    for sym, entry in by_symbol.items():
+        out.append({
+            "symbol": entry["symbol"],
+            "contract": entry["contract"],
+            "amount_human": (
+                _fmt_decimal(entry["_amount_total"])
+                if entry["_amount_has_value"] else "—"
+            ),
+            "usd_value_at_theft": (
+                _ensure_usd_prefix(f"{entry['_usd_total']:,.2f}")
+                if entry["_usd_has_value"] else "(unknown)"
+            ),
+            "event_count": entry["event_count"],
+        })
+    # Sort by USD desc for predictable rendering — largest first.
+    def _sort_key(e: dict) -> tuple[int, str]:
+        usd_str = e["usd_value_at_theft"]
+        if usd_str in ("(unknown)", "—"):
+            return (1, e["symbol"])
+        return (0, e["symbol"])
+    out.sort(key=_sort_key)
+    return out
+
+
+# v0.32.1 (LE-HIGH-5, LE-CRIT-3): operator/AI placeholder sanitizer.
+# AI editorial can emit "TODO: confirm victim's state/country" strings.
+# Default investigator config emits "(operator name not configured)".
+# Either rendered in the LE handoff reads as a debug placeholder to the
+# legal recipient. Treat any of these sentinels as None so the template's
+# `{{ field or "..." }}` fallback handles the display.
+_PLACEHOLDER_PATTERNS: tuple[str, ...] = (
+    "TODO:",
+    "TBD",
+    "(unset)",
+    "(operator name not configured)",
+    "<address>",
+    "<email>",
+    "(no value)",
+    "(not on record)",
+)
+
+
+def _sanitize_placeholder(value: Any) -> Any:
+    """Return ``value`` unless it matches a known TODO/placeholder
+    sentinel — in which case return None so the template's `or` fallback
+    is used. Non-strings pass through unchanged.
+
+    Matches case-sensitively at the start of the string after strip.
+    `"TBD"` matches the whole-string "TBD" exactly, while `"TODO:"`
+    catches any "TODO: <whatever>" prefix.
+    """
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped:
+        return None
+    for pat in _PLACEHOLDER_PATTERNS:
+        if pat.endswith(":"):
+            if stripped.startswith(pat):
+                return None
+        else:
+            if stripped == pat:
+                return None
+    return value
+
+
+def _sanitize_dict_placeholders(d: dict, keys: tuple[str, ...]) -> dict:
+    """In-place sanitize the named keys of ``d`` via
+    ``_sanitize_placeholder``. Returns ``d`` for chaining."""
+    for k in keys:
+        if k in d:
+            d[k] = _sanitize_placeholder(d[k])
+    return d
+
+
+# v0.32.1 (LE-CRIT-3, LE-HIGH-6): aliases the LE template treats as
+# "not a named human" and refuses to render in attestation context.
+# Adding to this set forces the unconfigured-investigator branch.
+_INVESTIGATOR_EMAIL_ALIASES: frozenset[str] = frozenset({
+    "compliance@recupero.io",
+    "legal@recupero.io",
+    "info@recupero.io",
+})
+
+
+def _build_secondary_preservation_targets(
+    *,
+    primary_issuer_name: str,
+    all_issuers_freezable: list | None,
+) -> list[dict]:
+    """v0.32.1 (LE-HIGH-7): collect the OTHER issuers in scope on a
+    multi-issuer case, so the LE handoff Section 6 prose can name every
+    preservation target — not just the issuer this letter is addressed
+    to.
+
+    Returns a list of {issuer_name, token, total_usd, freeze_capability}
+    dicts for every entry in ``all_issuers_freezable`` whose
+    ``issuer`` field is NOT equal to ``primary_issuer_name`` AND that
+    has a non-zero freezable or suspected total. Excludes pure-
+    UNRECOVERABLE entries since there's no preservation channel.
+
+    Returns empty list if no secondary issuers (single-issuer case or
+    no all_issuers_freezable passed) — template renders only the
+    primary target in that case.
+    """
+    if not all_issuers_freezable:
+        return []
+    secondaries: list[dict] = []
+    for raw in all_issuers_freezable:
+        if not raw or not isinstance(raw, dict):
+            continue
+        name = raw.get("issuer", "")
+        if not name or name == primary_issuer_name:
+            continue
+        # Skip pure-UNRECOVERABLE: no preservation pathway, doesn't
+        # belong in a "send a preservation request" list.
+        total_usd = raw.get("total_usd") or "$0"
+        suspected = raw.get("total_suspected_usd") or "$0"
+        if total_usd in ("$0", "0", "$0.00") and suspected in ("$0", "0", "$0.00"):
+            continue
+        secondaries.append({
+            "issuer_name": name,
+            "token": raw.get("token") or "—",
+            "total_usd": total_usd,
+            "total_suspected_usd": suspected,
+            "freeze_capability": raw.get("freeze_capability") or "UNKNOWN",
+            "contact_email": raw.get("contact_email") or "",
+        })
+    return secondaries
+
+
+def _build_investigator_ctx(investigator: InvestigatorInfo) -> dict:
+    """v0.32.1 (LE-CRIT-3, LE-HIGH-6): build the investigator context
+    dict, suppressing the legacy ``(operator name not configured)``
+    sentinel + the generic ``compliance@recupero.io`` alias.
+
+    When the operator-name env var isn't set, the canonical name field
+    carries the literal sentinel string. The LE template then rendered
+    that string under a 10%-opacity watermark on the cover + signature
+    block — a debug-placeholder leak that immediately destroyed
+    credibility. Pre-v0.32.1 there was no name-suppression at the
+    context layer; the template tried to render the sentinel and
+    relied on the watermark to obscure it (it didn't, at 10%).
+
+    Post-v0.32.1: the context dict carries empty-string name + email
+    when either is unconfigured. The template branches on
+    ``_investigator_configured`` to render either the named-human
+    block (configured) or a placeholder-line + UNSIGNED banner
+    (unconfigured).
+    """
+    raw_name = (getattr(investigator, "name", "") or "").strip()
+    raw_email = (getattr(investigator, "email", "") or "").strip()
+    sanitized_name = _sanitize_placeholder(raw_name) or ""
+    # Treat generic aliases as "no named contact" so the LE handoff
+    # cover doesn't render `compliance@recupero.io` (an alias, not a
+    # named investigator) as the chain-of-custody contact.
+    if raw_email.lower() in _INVESTIGATOR_EMAIL_ALIASES:
+        sanitized_email = ""
+    else:
+        sanitized_email = _sanitize_placeholder(raw_email) or ""
+    return {
+        "name": sanitized_name,
+        "organization": getattr(investigator, "organization", "") or "",
+        "email": sanitized_email,
+        "phone": getattr(investigator, "phone", None),
+    }
 
 
 def _aggregate_theft_amount_human(theft_events: list, theft_transfer) -> str:

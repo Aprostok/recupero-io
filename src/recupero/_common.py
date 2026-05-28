@@ -296,22 +296,19 @@ def short_addr(addr: str | None) -> str:
     """Truncate an address for display: 0xAAAAbb...XXXXyyyy -> 0xAAAAbb…yyyy.
 
     v0.16.10 (round-9 output-artifacts MEDIUM): canonical implementation.
-    Pre-v0.16.10 every module had its own (slightly different) truncator:
-    reports/brief.py used 0xABCDEFGH…WXYZ (8+ellipsis+4); reports/
-    emit_brief.py used 0xAAAAbb…XXXXyyyy (6+ellipsis+4). The same
-    address rendered differently in different artifacts, breaking
-    operator diffing across the brief and LE handoff.
+    v0.32.1 (Jacob cross-cutting audit §3.1): delegates to
+    :func:`recupero.util.addr_format.short_address` — the single source
+    of truth for display-truncation. Kept as a thin alias so legacy
+    callers (reports/brief.py, reports/emit_brief.py, worker/_flow_diagram.py,
+    monitoring/dispatcher.py, ...) continue to work without churn.
 
     Convention: 6 leading + ellipsis + 4 trailing for any address >=
-    12 chars; shorter strings are returned unchanged. Works for EVM
+    11 chars; shorter strings are returned unchanged. Works for EVM
     hex, Solana/Tron/Bitcoin base58 — all consumers can pass through
     without per-chain branching.
     """
-    if not addr:
-        return ""
-    if len(addr) < 12:
-        return addr
-    return f"{addr[:6]}…{addr[-4:]}"
+    from recupero.util.addr_format import short_address
+    return short_address(addr)
 
 
 # ---- Link-like path detection (symlinks + Windows junctions) ---- #

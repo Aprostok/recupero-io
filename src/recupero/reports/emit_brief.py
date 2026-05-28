@@ -731,6 +731,17 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
         symbol = None
         capability = None
         primary_contact = None
+        # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2 / CRIT-FR-4): pull
+        # corporate legal-entity name + posture notes from the first ask
+        # that carries them. Issuer entries in freeze_asks.json now carry
+        # these fields end-to-end from issuers.json seed → IssuerEntry →
+        # serialized ask → here → the FREEZABLE issuer dict → IssuerInfo →
+        # the template. None means an issuer DB entry didn't supply them
+        # (or an old freeze_asks.json from before v0.32.1).
+        legal_name: str | None = None
+        corporate_jurisdiction: str | None = None
+        issuer_freeze_notes: str | None = None
+        issuer_seed_jurisdiction: str | None = None
         holdings = []
 
         for a in asks:
@@ -769,6 +780,25 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
                 capability = a.get("freeze_capability")
             if primary_contact is None:
                 primary_contact = a.get("primary_contact")
+            # v0.32.1 (CRIT-FR-2 / CRIT-FR-4): pull-through from the
+            # first ask carrying these fields. They live on the issuer,
+            # not the holding, so any ask is representative.
+            if legal_name is None:
+                ln = a.get("legal_name")
+                if isinstance(ln, str) and ln.strip():
+                    legal_name = ln
+            if corporate_jurisdiction is None:
+                cj = a.get("corporate_jurisdiction")
+                if isinstance(cj, str) and cj.strip():
+                    corporate_jurisdiction = cj
+            if issuer_freeze_notes is None:
+                fn = a.get("freeze_notes")
+                if isinstance(fn, str) and fn.strip():
+                    issuer_freeze_notes = fn
+            if issuer_seed_jurisdiction is None:
+                sj = a.get("jurisdiction")
+                if isinstance(sj, str) and sj.strip():
+                    issuer_seed_jurisdiction = sj
             holdings.append({
                 "address": addr,
                 # v0.17.4 (round-10 audit HIGH): per-holding chain.
@@ -832,6 +862,16 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             "portal_url": meta.get("portal_url", ""),
             "typical_response_time": meta.get("typical_response_time", "Variable"),
             "freeze_note": meta.get("freeze_note", ""),
+            # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2 / CRIT-FR-4):
+            # corporate legal name + freeze-posture notes from issuers.json,
+            # threaded through freeze_asks.json. Downstream consumers
+            # (`_issuer_info_for` in worker/_deliverables.py) read these
+            # to populate `IssuerInfo.name` (legal entity), `.jurisdiction`,
+            # and the new `freeze_notes` field rendered in Section 6.
+            "legal_name": legal_name,
+            "corporate_jurisdiction": corporate_jurisdiction,
+            "freeze_notes": issuer_freeze_notes,
+            "issuer_jurisdiction": issuer_seed_jurisdiction,
             # Aggregate evidence_mode for the letter template.
             "evidence_mode": evidence_mode,
             "historical_count": n_historical,

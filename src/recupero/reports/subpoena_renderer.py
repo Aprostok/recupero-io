@@ -131,14 +131,15 @@ def render_subpoena_artifacts(
         autoescape=select_autoescape(["html", "j2"]),
         keep_trailing_newline=True,
     )
-    # safe_url filter — reuse the same canonical implementation as
-    # the freeze-letter templates. Defensive: if the helper isn't
-    # available, fall back to a pass-through.
+    # safe_url + short_address filters — reuse the same canonical
+    # implementations as the freeze-letter templates. Defensive: if
+    # the helper module isn't available, fall back to pass-throughs.
     try:
-        from recupero.reports._jinja_filters import safe_url
-        env.filters["safe_url"] = safe_url
+        from recupero.reports._jinja_filters import register_safe_filters
+        register_safe_filters(env)
     except Exception:  # noqa: BLE001
         env.filters["safe_url"] = lambda u: u
+        env.filters["short_address"] = lambda a: a or ""
 
     # ── Per-target rendering ──
     try:

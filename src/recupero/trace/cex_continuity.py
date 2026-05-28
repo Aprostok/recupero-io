@@ -95,6 +95,13 @@ _BTC_PARITY = frozenset({
     "WBTC", "BTCB", "TBTC", "CBBTC", "RENBTC", "HBTC", "WBTC.E",
 })
 
+# v0.32.1 test-public aliases for the test scaffolding. Same data,
+# uppercased public names. The trace audit doc references these as
+# the canonical export names.
+STABLECOIN_PARITY_GROUPS = _STABLE_PARITY
+ETH_PARITY_GROUPS = _ETH_PARITY
+BTC_PARITY_GROUPS = _BTC_PARITY
+
 
 def _parity_group(symbol: str) -> str | None:
     """Return ``"stable" | "eth" | "btc"`` if symbol is in a parity

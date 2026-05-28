@@ -79,6 +79,17 @@ def _safe_ms_to_datetime(ts_ms: Any) -> datetime:
 _TRONSCAN_BASE = "https://tronscan.org/#"
 
 
+# v0.32.1 (CRIT-2): native TRX pseudo-token constants. Native TRX has
+# no contract address; the tracer's data model wants a TokenRef on
+# every Transfer. We synthesize a TokenRef with contract=None,
+# symbol="TRX", decimals=6 (SUN-precision; 1 TRX = 1e6 SUN), and the
+# canonical CoinGecko ID. Mirrors how the EVM adapter handles native
+# ETH and how the Bitcoin adapter handles native BTC.
+TRX_SYMBOL = "TRX"
+TRX_DECIMALS = 6
+TRX_COINGECKO_ID = "tron"
+
+
 class TronAdapter(ChainAdapter):
     """Tron mainnet adapter (USDT-TRC20 + other TRC-20 tokens)."""
 
@@ -163,25 +174,60 @@ class TronAdapter(ChainAdapter):
         self, from_address: Address, start_block: int,
         *, max_results: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Native TRX outflows.
+        """Native TRX outflows (v0.32.1, CRIT-2).
 
-        v0.12.0 returns ``[]`` (not implemented). The tracer treats
-        this as "no native outflows", which is correct for our
-        primary use case (USDT-TRC20 laundering). TRX itself moves
-        relatively little laundering volume because gas-fee
-        bandwidth requires holding TRX in the destination wallet —
-        scammers route through stablecoins instead.
+        Pre-v0.32.1 returned ``[]`` — every Tron case with TRX activity
+        (gas reserves, SunSwap stake, JustLend collateral, native swaps)
+        silently appeared inactive. Now implemented via TronGrid's
+        ``/v1/accounts/{addr}/transactions`` endpoint with
+        ``only_from=true`` server-side filter.
 
-        TODO(v0.12.x): wire to /v1/accounts/{addr}/transactions for
-        the TRX transfer history. Tron returns these under
-        ``raw_data.contract[].parameter.value`` with type
-        TransferContract — needs unwrapping logic similar to TRC-20.
+        TronGrid returns Tron transactions in their wire form. Native
+        TRX transfers carry ``raw_data.contract[0].type == "TransferContract"``;
+        the payload at ``raw_data.contract[0].parameter.value`` has
+        ``{owner_address, to_address, amount}`` with the amount in SUN
+        (1 TRX = 1,000,000 SUN). Other contract types
+        (TriggerSmartContract for TRC-20, TransferAssetContract for
+        TRC-10, FreezeBalanceContract for staking) are filtered out
+        here — TRC-20 already flows through fetch_erc20_outflows.
+
+        ``start_block`` is interpreted (per block_at_or_before above)
+        as a unix-seconds anchor and converted to milliseconds for
+        TronGrid's min_timestamp parameter, mirroring the TRC-20 path.
+
+        Defensive: a malformed response per-row is logged and skipped;
+        the call returns whatever rows DID normalize rather than
+        crashing the BFS hop (RIGOR-Jacob I pattern).
         """
-        log.debug(
-            "fetch_native_outflows: TRX native not implemented for v0.12.0; "
-            "returning empty list for %s", from_address,
-        )
-        return []
+        try:
+            addr = normalize_tron_address(from_address)
+        except Exception as e:  # noqa: BLE001
+            log.warning("invalid tron address %r: %s", from_address, e)
+            return []
+
+        min_timestamp_ms = int(start_block) * 1000 if start_block > 0 else None
+        try:
+            raw = self.client.get_native_transactions(
+                addr, only_from=True, min_timestamp=min_timestamp_ms,
+            )
+        except TronGridError as e:
+            log.warning("trx native fetch failed for %s: %s", addr, e)
+            return []
+
+        out: list[dict[str, Any]] = []
+        for tx in raw:
+            try:
+                norm = self._normalize_native_trx(tx, expected_from=addr)
+            except (KeyError, ValueError, TypeError) as e:
+                log.warning(
+                    "trx native normalization failed (tx=%s): %s",
+                    (tx.get("txID") if isinstance(tx, dict) else "?"), e,
+                )
+                continue
+            if norm is None:
+                continue
+            out.append(norm)
+        return out
 
     def fetch_erc20_outflows(
         self, from_address: Address, start_block: int,
@@ -421,6 +467,127 @@ class TronAdapter(ChainAdapter):
         }
 
 
+    def _normalize_native_trx(
+        self,
+        tx: dict[str, Any],
+        *,
+        expected_from: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Convert a TronGrid native-transaction envelope into the
+        tracer's normalized Transfer dict shape (v0.32.1, CRIT-2).
+
+        Filters non-TransferContract types (TRC-20 calls, staking,
+        votes, etc.) and direction mismatches. Returns None if the
+        tx is not a usable native-TRX outflow.
+        """
+        if not isinstance(tx, dict):
+            return None
+
+        # txID is at the top level; raw_data carries the contract list.
+        tx_id = tx.get("txID") or tx.get("transaction_id") or ""
+        if not isinstance(tx_id, str) or not tx_id:
+            return None
+
+        raw_data = tx.get("raw_data")
+        if not isinstance(raw_data, dict):
+            return None
+        contracts = raw_data.get("contract")
+        if not isinstance(contracts, list) or not contracts:
+            return None
+        # Native TRX transfers have exactly one contract entry of
+        # type TransferContract. Multi-contract txs are rare on Tron
+        # but theoretically possible — we walk them and emit only
+        # for native rows.
+        contract = contracts[0]
+        if not isinstance(contract, dict):
+            return None
+        contract_type = contract.get("type")
+        if contract_type != "TransferContract":
+            # Skip TriggerSmartContract (TRC-20), FreezeBalanceContract,
+            # TransferAssetContract (TRC-10), etc.
+            return None
+
+        parameter = contract.get("parameter")
+        if not isinstance(parameter, dict):
+            return None
+        value = parameter.get("value")
+        if not isinstance(value, dict):
+            return None
+
+        # owner_address / to_address are HEX in raw_data; convert to
+        # base58check before comparison + storage so everything
+        # downstream sees a single canonical form.
+        owner_hex = value.get("owner_address")
+        to_hex = value.get("to_address")
+        if not isinstance(owner_hex, str) or not isinstance(to_hex, str):
+            return None
+        try:
+            owner_b58 = normalize_tron_address(owner_hex)
+        except Exception:  # noqa: BLE001
+            return None
+        try:
+            to_b58 = normalize_tron_address(to_hex)
+        except Exception:  # noqa: BLE001
+            return None
+
+        if expected_from and owner_b58 != expected_from:
+            return None
+        # Drop self-transfers — they're not laundering signals.
+        if owner_b58 == to_b58:
+            return None
+
+        amount_sun = value.get("amount")
+        try:
+            amount_raw = int(amount_sun)
+        except (TypeError, ValueError):
+            return None
+        if amount_raw <= 0:
+            return None
+
+        # Timestamp lives at the top level for the /v1/transactions
+        # endpoint (block_timestamp in ms).
+        block_ts_ms = tx.get("block_timestamp")
+        if not isinstance(block_ts_ms, (int, float)):
+            # Some pagination responses omit it on certain rows; the
+            # row is then unusable for time-windowed analysis.
+            return None
+        block_time = _safe_ms_to_datetime(block_ts_ms)
+
+        # block_number — TronGrid native txns response surfaces this
+        # via raw_data.ref_block_bytes / ref_block_hash but NOT as
+        # an explicit block height. The /v1/transactions endpoint
+        # rarely includes a `blockNumber` field; we default to 0
+        # rather than burn an extra request per row to resolve.
+        # Downstream comparisons that need exact block ordering
+        # fall back to block_time which IS authoritative.
+        block_number_raw = tx.get("blockNumber") or tx.get("block_number") or 0
+        try:
+            block_number = int(block_number_raw)
+        except (TypeError, ValueError):
+            block_number = 0
+
+        token = TokenRef(
+            chain=Chain.tron,
+            contract=None,
+            symbol=TRX_SYMBOL,
+            decimals=TRX_DECIMALS,
+            coingecko_id=TRX_COINGECKO_ID,
+        )
+
+        return {
+            "chain": Chain.tron,
+            "tx_hash": tx_id,
+            "block_number": block_number,
+            "block_time": block_time,
+            "log_index": None,
+            "from": owner_b58,
+            "to": to_b58,
+            "token": token,
+            "amount_raw": amount_raw,
+            "explorer_url": self.explorer_tx_url(tx_id),
+        }
+
+
 # CoinGecko ID for the major TRC-20 tokens. Used so the pricing
 # stage can fetch USD values without round-tripping through the
 # pricing-cache fallback. The list is short and well-known —
@@ -439,4 +606,7 @@ _COINGECKO_ID_BY_TRC20: dict[str, str] = {
 
 __all__ = (
     "TronAdapter",
+    "TRX_SYMBOL",
+    "TRX_DECIMALS",
+    "TRX_COINGECKO_ID",
 )

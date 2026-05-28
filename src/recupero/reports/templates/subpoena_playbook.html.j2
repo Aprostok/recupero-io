@@ -99,9 +99,11 @@
     <strong>Linked addresses:</strong>
     {% for la in t.linked_addresses %}
       {% set _addr = la.address|default('', true) %}
+      {# v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address
+         filter; ascii_safe=True for the playbook PDF font safety. #}
       <code class="mono">
         {%- if _addr and _addr is string and _addr|length >= 20 -%}
-          {{ _addr[:14] }}...{{ _addr[-6:] }}
+          {{ _addr | short_address(prefix=14, suffix=6, ascii_safe=True) }}
         {%- else -%}
           {{ _addr or '(no address)' }}
         {%- endif -%}
@@ -155,9 +157,11 @@
     <strong>Linked addresses:</strong>
     {% for la in t.linked_addresses %}
       {% set _addr = la.address|default('', true) %}
+      {# v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address
+         filter; ascii_safe=True for the playbook PDF font safety. #}
       <code class="mono">
         {%- if _addr and _addr is string and _addr|length >= 20 -%}
-          {{ _addr[:14] }}...{{ _addr[-6:] }}
+          {{ _addr | short_address(prefix=14, suffix=6, ascii_safe=True) }}
         {%- else -%}
           {{ _addr or '(no address)' }}
         {%- endif -%}

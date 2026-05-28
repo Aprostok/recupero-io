@@ -71,21 +71,49 @@ SUBPOENA_USD_THRESHOLD = Decimal("1000")
 # subpoena_recipient_overrides.json at case dir. Curated minimally
 # for the v0.28.0 ship; expand from Chainalysis / TRM directories in
 # a v0.28.x label DB expansion.
+# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-ST-2): Coinbase / Binance
+# entity-name correctness notes.
+#
+# COINBASE: there are FOUR distinct legal entities under the Coinbase
+# umbrella that an investigator might reasonably address:
+#   1. Coinbase Global, Inc. — publicly-traded holding co (NASDAQ: COIN)
+#   2. Coinbase, Inc. — the US exchange operating subsidiary (the
+#      customer-facing US exchange; holder of state MTLs)
+#   3. Coinbase Custody Trust Company, LLC — NYDFS-chartered limited-
+#      purpose trust company; institutional custody + the cbBTC issuer
+#   4. Coinbase Europe Limited / Coinbase Ireland Limited — EU operations
+#
+# For a US grand-jury subpoena targeting US-customer account records,
+# "Coinbase, Inc." (the operating subsidiary) is the correct entity.
+# For a cbBTC token blacklist or institutional-custody freeze, the
+# correct entity is "Coinbase Custody Trust Company, LLC" — see the
+# cbBTC entry in issuers.json. For an EU customer the right entity is
+# Coinbase Europe Limited. The hardcoded entry below is the US-customer
+# default; operators MUST verify the right entity per case via the
+# `subpoena_recipient_overrides.json` mechanism if the customer is EU /
+# the records target is cbBTC / institutional-custody.
+#
+# BINANCE: "Binance Holdings" is the umbrella holding co cited on the
+# 2023 DOJ resolution. For US-customer records the relevant entity may
+# instead be Binance.US (BAM Trading Services Inc.); for international
+# customer records, Binance Capital Management Co., Ltd. (the Cayman
+# entity) is the practical issuing target. The hardcoded entry below is
+# the international / general-records default.
 _KNOWN_CEX_COMPLIANCE = {
-    "mexc":      ("MEXC Global",       "compliance@mexc.com",     "Seychelles", 30, "medium"),
-    "binance":   ("Binance Holdings",  "leinquiries@binance.com", "Cayman Islands", 21, "high"),
-    "coinbase":  ("Coinbase, Inc.",    "subpoenas@coinbase.com",  "USA",        14, "high"),
-    "kraken":    ("Kraken",            "complianceeu@kraken.com", "USA",        21, "high"),
-    "bybit":     ("Bybit",             "compliance@bybit.com",    "Dubai",      30, "medium"),
-    "kucoin":    ("KuCoin",            "compliance@kucoin.com",   "Seychelles", 30, "medium"),
-    "okx":       ("OKX",               "compliance@okx.com",      "Seychelles", 30, "medium"),
-    "gate.io":   ("Gate.io",           "compliance@gate.io",      "Cayman",     30, "medium"),
-    "bitget":    ("Bitget",            "compliance@bitget.com",   "Seychelles", 30, "medium"),
-    "huobi":     ("Huobi / HTX",       "compliance@htx.com",      "Seychelles", 30, "low"),
-    "htx":       ("Huobi / HTX",       "compliance@htx.com",      "Seychelles", 30, "low"),
-    "crypto.com": ("Crypto.com",       "compliance@crypto.com",   "Singapore",  21, "high"),
-    "gemini":    ("Gemini",            "compliance@gemini.com",   "USA",        14, "high"),
-    "bitstamp":  ("Bitstamp",          "compliance@bitstamp.net", "Luxembourg", 21, "high"),
+    "mexc":      ("MEXC Global Limited",                       "compliance@mexc.com",     "Seychelles", 30, "medium"),
+    "binance":   ("Binance Holdings Limited",                  "leinquiries@binance.com", "Cayman Islands", 21, "high"),
+    "coinbase":  ("Coinbase, Inc.",                            "subpoenas@coinbase.com",  "United States (Delaware; operating subsidiary of Coinbase Global, Inc., NASDAQ: COIN)", 14, "high"),
+    "kraken":    ("Payward, Inc. (d/b/a Kraken)",              "complianceeu@kraken.com", "United States (California)", 21, "high"),
+    "bybit":     ("Bybit Fintech Limited",                     "compliance@bybit.com",    "British Virgin Islands (operational HQ Dubai)",      30, "medium"),
+    "kucoin":    ("Mek Global Limited (d/b/a KuCoin)",         "compliance@kucoin.com",   "Seychelles", 30, "medium"),
+    "okx":       ("OKX (Aux Cayes FinTech Co. Ltd.)",          "compliance@okx.com",      "Seychelles / Cayman Islands", 30, "medium"),
+    "gate.io":   ("Gate Technology Inc. (d/b/a Gate.io)",      "compliance@gate.io",      "Cayman Islands",     30, "medium"),
+    "bitget":    ("Bitget Limited",                            "compliance@bitget.com",   "Seychelles", 30, "medium"),
+    "huobi":     ("HBT International Limited (d/b/a HTX)",     "compliance@htx.com",      "Seychelles", 30, "low"),
+    "htx":       ("HBT International Limited (d/b/a HTX)",     "compliance@htx.com",      "Seychelles", 30, "low"),
+    "crypto.com": ("Foris DAX MT Limited (d/b/a Crypto.com)",  "compliance@crypto.com",   "Malta / Singapore",  21, "high"),
+    "gemini":    ("Gemini Trust Company, LLC",                 "compliance@gemini.com",   "United States (New York; NYDFS-chartered trust)",        14, "high"),
+    "bitstamp":  ("Bitstamp Limited",                          "compliance@bitstamp.net", "Luxembourg", 21, "high"),
 }
 
 

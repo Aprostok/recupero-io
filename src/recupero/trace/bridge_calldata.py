@@ -2555,7 +2555,21 @@ def _decode_zksync_l1(
         )
 
 
+# v0.32.1 test-public aliases. The tests in
+# ``tests/test_bridge_calldata_canonical.py`` import the per-bridge
+# selector tables directly; the OP-Stack-shared table is exposed under
+# both _OPTIMISM_L1_METHODS and _BASE_L1_METHODS for symmetry.
+_OPTIMISM_L1_METHODS = _OP_STACK_METHODS
+_BASE_L1_METHODS = _OP_STACK_METHODS
+
+
 __all__ = (
     "BridgeDecodeResult",
     "decode_bridge_calldata",
+    "_POLYGON_POS_METHODS",
+    "_OPTIMISM_L1_METHODS",
+    "_BASE_L1_METHODS",
+    "_OP_STACK_METHODS",
+    "_ARBITRUM_L1_METHODS",
+    "_ZKSYNC_L1_METHODS",
 )

@@ -662,20 +662,49 @@ def compute_clusters_with_metadata(
     # -- H1: Co-spending on Bitcoin ---------------------------- #
     # Group Bitcoin transfers by tx_hash; multiple distinct
     # from_address values on the same tx implies common input
-    # ownership. NB: the current Bitcoin adapter only retains the
-    # first input address per tx (see chains/bitcoin/adapter.py),
-    # so this heuristic fires only when the SAME txid is seen
-    # from multiple expansion seeds during the trace. The MVP
-    # version is intentionally narrow — see V031_CLUSTERING_DESIGN
-    # for the upstream model change needed to detect the full input
-    # set.
+    # ownership.
+    #
+    # v0.32.1 (CRIT-1 + HIGH-11 fix): the heuristic now reads from
+    # the bitcoin.inputs_registry, which the BitcoinAdapter populates
+    # with the FULL input-address set for every tx it normalizes.
+    # Pre-v0.32.1 this loop only saw transfers whose from_address
+    # matched a queried-seed address (the adapter dropped the other
+    # N-1 inputs to ``first_input_addr`` only) — so the canonical
+    # co-spending edge almost never fired. With the registry, a
+    # 5-input tx where the trace visited any of the 5 input addresses
+    # yields edges across all C(5, 2) = 10 pairs.
+    from recupero.chains.bitcoin.inputs_registry import (
+        lookup as _btc_lookup_inputs,
+    )
+    btc_tx_hashes: set[str] = set()
+    for t in case.transfers:
+        if t.chain != Chain.bitcoin:
+            continue
+        if t.tx_hash:
+            btc_tx_hashes.add(t.tx_hash)
+
     btc_inputs_by_tx: dict[str, set[str]] = defaultdict(set)
+    for tx_hash in btc_tx_hashes:
+        # Prefer the registry (full input set captured at adapter
+        # boundary). Fall back to whatever the case's transfers
+        # surface — for tests / cases where the adapter wasn't run
+        # and the registry is empty.
+        registry_inputs = _btc_lookup_inputs(tx_hash)
+        if registry_inputs:
+            for raw_addr in registry_inputs:
+                canonical = _ck(raw_addr)
+                if canonical:
+                    btc_inputs_by_tx[tx_hash].add(canonical)
+    # Belt-and-suspender: also add any from_addresses seen via the
+    # case's transfers themselves (covers legacy cases where the
+    # registry wasn't populated, e.g. cases loaded from disk).
     for t in case.transfers:
         if t.chain != Chain.bitcoin:
             continue
         src = _ck(t.from_address)
-        if src:
+        if src and t.tx_hash:
             btc_inputs_by_tx[t.tx_hash].add(src)
+
     for tx_hash, inputs in btc_inputs_by_tx.items():
         if len(inputs) < 2:
             continue

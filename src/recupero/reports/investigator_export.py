@@ -29,6 +29,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# v0.32.1 (Jacob cross-cutting audit §3.1): canonical address truncation
+# so the CSV / JSON the investigator opens shows the same `0xABCD…1234`
+# form they read in the brief PDF and the LE handoff letter.
+from recupero.util.addr_format import short_address
+
 log = logging.getLogger(__name__)
 
 
@@ -444,8 +449,11 @@ def _findings_from_freezable(brief: dict[str, Any]) -> list[InvestigatorFinding]
                 if ev_type == "historical_inflow"
                 else "current balance"
             )
+            # v0.32.1 (Jacob cross-cutting audit §3.1): canonical
+            # short_address — uniform across CSV, brief, LE handoff.
             headline = (
-                f"{headline_verb} {usd_amt} {token} at {addr[:10]}... "
+                f"{headline_verb} {usd_amt} {token} at "
+                f"{short_address(addr, prefix=10, suffix=0, ascii_safe=True)} "
                 f"via {issuer} (capability: {capability or 'unknown'}; "
                 f"{evidence_phrase})"
             )
@@ -575,7 +583,10 @@ def _findings_from_indirect_exposure(brief: dict[str, Any]) -> list[Investigator
                 f"hop_count={hop_count}; "
                 f"path: source → "
                 + " → ".join(
-                    a[:10] + "..."
+                    # v0.32.1 (Jacob cross-cutting audit §3.1):
+                    # canonical short_address, ascii-safe variant for
+                    # CSV/JSON consumers that may not render U+2026.
+                    short_address(a, prefix=10, suffix=0, ascii_safe=True)
                     for a in (top_path.get("path_addresses") or [])
                 )
                 + (
@@ -813,8 +824,11 @@ def _findings_from_destinations(brief: dict[str, Any]) -> list[InvestigatorFindi
         counterparty_slug = role.lower().replace(" ", "_").replace("/", "_")[:64]
         # Trim trailing punctuation / extra whitespace; keep the
         # human-readable form in counterparty_name.
+        # v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address.
         headline = (
-            f"Destination {addr[:10]}... received {usd_received} ({role})"
+            f"Destination "
+            f"{short_address(addr, prefix=10, suffix=0, ascii_safe=True)} "
+            f"received {usd_received} ({role})"
         )
         # Notes carry the supplementary held-now number + any
         # AI editorial / mechanical note so the operator has full

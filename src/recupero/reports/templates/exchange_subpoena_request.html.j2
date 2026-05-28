@@ -131,8 +131,9 @@ on the public blockchain.
   <tbody>
     {% for flow in flows %}
     <tr>
-      <td class="mono">{% if flow.upstream_explorer_url %}<a href="{{ flow.upstream_explorer_url|safe_url }}">{{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }}</a>{% else %}<span>{{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }}</span>{% endif %}</td>
-      <td class="mono">{% if flow.cex_explorer_url %}<a href="{{ flow.cex_explorer_url|safe_url }}">{{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }}</a>{% else %}<span>{{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }}</span>{% endif %}</td>
+      {# v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address filter. #}
+      <td class="mono">{% if flow.upstream_explorer_url %}<a href="{{ flow.upstream_explorer_url|safe_url }}">{{ flow.upstream_address | short_address(prefix=10, suffix=6) }}</a>{% else %}<span>{{ flow.upstream_address | short_address(prefix=10, suffix=6) }}</span>{% endif %}</td>
+      <td class="mono">{% if flow.cex_explorer_url %}<a href="{{ flow.cex_explorer_url|safe_url }}">{{ flow.cex_address | short_address(prefix=10, suffix=6) }}</a>{% else %}<span>{{ flow.cex_address | short_address(prefix=10, suffix=6) }}</span>{% endif %}</td>
       <td>{{ flow.token_symbol }}</td>
       <td class="amount mono">{{ flow.flow_usd_value }}</td>
       <td class="amount mono">{{ flow.transfer_count }}</td>
@@ -160,7 +161,7 @@ explorer:</p>
 <ul style="font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 0.85em;">
 {% for flow in flows %}
 {% for tx in flow.tx_hashes %}
-  <li>{{ tx }}<span class="secondary"> · {{ flow.upstream_address[:10] }}…{{ flow.upstream_address[-6:] }} → {{ flow.cex_address[:10] }}…{{ flow.cex_address[-6:] }} · {{ flow.token_symbol }}</span></li>
+  <li>{{ tx }}<span class="secondary"> · {{ flow.upstream_address | short_address(prefix=10, suffix=6) }} → {{ flow.cex_address | short_address(prefix=10, suffix=6) }} · {{ flow.token_symbol }}</span></li>
 {% endfor %}
 {% endfor %}
 </ul>

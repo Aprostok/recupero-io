@@ -82,7 +82,11 @@
   <dl class="cover-meta">
     <div class="cover-meta-item">
       <dt>Addressed To</dt>
-      <dd>{{ issuer.name }}<span class="secondary">Compliance &amp; Security<br/>{{ issuer.contact_email }}</span></dd>
+      {# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2): issuer.name is
+         the corporate legal entity (e.g. "Tether Operations Limited"),
+         resolved from issuers.json via `_issuer_info_for`. Falls back
+         to the bare short tag for issuers without seed data. #}
+      <dd>{{ issuer.name }}<span class="secondary">Compliance &amp; Security{% if issuer.contact_email %}<br/>{{ issuer.contact_email }}{% endif %}</span></dd>
     </div>
     <div class="cover-meta-item">
       <dt>Prepared By</dt>
@@ -118,6 +122,31 @@
     {% endif %}
   </dl>
 </section>
+
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-1): subject line +
+   salutation + reference-quote (HIGH-FR-3) inserted ABOVE Section 1.
+   A real compliance team triages on the FIRST line of body text —
+   pre-v0.32.1 they saw "Strictly Private & Confidential" (letterhead
+   chrome, not a subject) and routed it to the unverified-sender bin.
+   Now there's a clear "RE:" line, a "Dear [Issuer] Compliance Team,"
+   salutation, and an explicit "Please quote this reference number on
+   reply" line so compliance can route their response back into a
+   thread we track. #}
+<p class="subject" style="margin:1.5em 0 0.3em 0; font-weight:600;">
+  <strong>RE: URGENT — Voluntary compliance freeze request{% if issuer_freezable %} ·
+  {{ issuer_freezable.total_usd_freezable }} in {{ issuer_freezable.token }} held at
+  {{ issuer_freezable.freezable_count }} {{ "address" if issuer_freezable.freezable_count == 1 else "addresses" }}{% else %} · {{ asset.amount_human }} {{ asset.symbol }}{% endif %}
+  · Case <code>{{ case_id }}</code></strong>
+</p>
+<p style="margin:0.3em 0 0.3em 0;">
+  Dear {{ issuer.short_name }} Compliance Team,
+</p>
+<p class="small" style="margin:0 0 1em 0; color:#4B5563;">
+  Please quote reference <code>{{ brief_id }}</code> (Recupero case
+  <code>{{ case_id }}</code>) on any reply or internal ticket. Replies
+  to the requesting party should be directed to the contact-of-record
+  in Section 8 of this letter.
+</p>
 
 <div class="summary-box urgent">
   <p style="margin:0">
@@ -553,14 +582,48 @@
   preserved before further dissipation occurs.
 </p>
 
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-4 + HIGH-FR-1):
+   Section 6 now ALWAYS renders when EITHER freeze_notes or
+   regulatory_framework is present. Pre-v0.32.1 Section 6 only rendered
+   when `issuer.regulatory_framework` was set — and that was only set
+   for Midas (HIGH-FR-1). The Tether (BVI), Circle (NY/MA), Coinbase
+   (NYDFS trust), Paxos (NYDFS trust) framings are now seeded in
+   issuers.json and threaded through to `IssuerInfo.jurisdiction` /
+   `.regulatory_framework`, so the section renders for every seeded
+   issuer.
+
+   The issuer-specific freeze-posture note (`freeze_notes` from
+   issuers.json) is surfaced here as well — CRIT-FR-4 closed. A
+   compliance reviewer reads the same hand-curated posture cue the
+   operator sees in the seed DB. Pre-v0.32.1 this lived in
+   issuers.json but the data never reached the rendered letter
+   (grep `freeze_notes` in `**/*.j2` returned zero hits). #}
+{% if issuer.freeze_notes or issuer.regulatory_framework %}
+<h2>6. Issuer Context &amp; Freeze Posture</h2>
 {% if issuer.regulatory_framework %}
-<h2>6. Regulatory Context</h2>
 <p>
-  {{ issuer.name }} operates under {{ issuer.regulatory_framework }}.
-  Cooperation with a precautionary hold pending law-enforcement engagement
-  is consistent with the consumer- and investor-protection obligations
-  embedded in that framework.
+  {{ issuer.name }} is incorporated / regulated in
+  {{ issuer.regulatory_framework }}. Cooperation with a precautionary
+  hold pending law-enforcement engagement is consistent with the
+  consumer- and investor-protection obligations embedded in that
+  framework.
 </p>
+{% endif %}
+{% if issuer.freeze_notes %}
+<div class="summary-box" style="background:#F9FAFB; border-left:4px solid #4B5563; padding:0.75em 1em; margin:0.75em 0;">
+  <p style="margin:0 0 0.4em 0;"><strong>Recupero's published posture note for this issuer:</strong></p>
+  <p style="margin:0; font-style:italic; color:#374151;">
+    {{ issuer.freeze_notes }}
+  </p>
+  <p class="small" style="margin:0.5em 0 0 0; color:#6B7280;">
+    The above is Recupero's internal posture note (from our issuer
+    database) provided for transparency — not an authoritative
+    statement of {{ issuer.short_name }}'s policy. {{ issuer.short_name }}'s
+    compliance team retains full discretion on the action taken in
+    response to this request.
+  </p>
+</div>
+{% endif %}
 {% endif %}
 
 <h2>7. Verification</h2>
@@ -587,6 +650,35 @@
   {% if investigator.phone %}<tr><th>Phone</th><td>{{ investigator.phone }}</td></tr>{% endif %}
   <tr><th>Reply expected</th><td>Acknowledgement within 24 hours; substantive response within 72 hours</td></tr>
 </table>
+
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-3): explicit
+   legal-posture disclaimer above the footer. Pre-v0.32.1 the
+   compliance reviewer had no clear signal on whether this letter is
+   (a) a voluntary courtesy request from a private investigator,
+   (b) a legal demand from victim's counsel, or (c) an LE-sponsored
+   ask — the "voluntary precautionary freeze pending law-enforcement
+   engagement" hint was buried at line ~70 of the rendered output.
+   The new paragraph makes the posture unambiguous: Recupero is an
+   investigation service, this letter is voluntary, formal process
+   comes from the prosecuting agency listed in the LE handoff. Mirrors
+   the engagement-letter footer language (engagement_letter.html.j2
+   l.314-320). #}
+<p class="small" style="margin-top:2em; padding:0.75em 1em; background:#F3F4F6; border:1px solid #D1D5DB; color:#374151;">
+  <strong>Legal posture &amp; status of this letter.</strong>
+  Recupero is an investigation service, not a law firm, and does not
+  provide legal advice. This letter is a voluntary compliance request
+  from a private investigator on behalf of the victim of record above
+  — it is NOT a subpoena, court order, seizure warrant, or any other
+  form of formal legal process. {{ issuer.short_name }} is under no
+  legal obligation to act on this request. For formal legal process,
+  please coordinate with the prosecuting agency identified in the
+  parallel law-enforcement handoff package (case
+  <code>{{ case_id }}</code>), or contact the requesting party listed
+  in Section 8 to identify the assigned AUSA / agent. Recupero treats
+  any reply from {{ issuer.short_name }} as confidential and shares
+  it only with the victim's legal counsel and the assigned
+  prosecuting agency.
+</p>
 
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>

@@ -212,9 +212,16 @@ def format_aggregate_markdown(r: AggregateResult) -> str:
     lines.append("")
     lines.append("| Asset | Contract | # Transfers | Total amount | Total USD |")
     lines.append("|-------|----------|-------------|--------------|-----------|")
+    # v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address
+    # so the aggregate-markdown table renders contract addresses with the
+    # same shape the brief / LE handoff use elsewhere.
+    from recupero.util.addr_format import short_address as _short_address
     for s in r.by_asset:
         contract = s.contract or "(native)"
-        contract_short = contract[:10] + "..." if len(contract) > 14 else contract
+        contract_short = (
+            _short_address(contract, prefix=10, suffix=0, ascii_safe=True)
+            if len(contract) > 14 else contract
+        )
         usd_str = f"${s.total_usd:,.2f}"
         if s.has_unpriced_transfers:
             usd_str += " *"

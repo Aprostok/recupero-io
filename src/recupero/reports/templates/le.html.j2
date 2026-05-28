@@ -7,6 +7,18 @@
 </head>
 <body{% if draft %} class="draft" data-draft-label="{{ draft_label | default('DRAFT') }}"{% endif %}>
 
+{# v0.32.1 (LE-CRIT-3): top-of-document banner when the operator
+   identity isn't configured. The diagonal UNSIGNED watermark at 22%
+   opacity (raised from 10% in v0.32.1) is the primary signal; this
+   banner is the belt-and-suspenders second signal so an operator
+   skimming the cover before transmission cannot miss the unsigned
+   state. Hidden when the investigator is configured. #}
+{% if not _investigator_configured %}
+<div class="unsigned-banner">
+  UNSIGNED — Operator identity not configured. Do not transmit. The §9 Investigator Attestation requires a named, accountable human; configure RECUPERO_INVESTIGATOR_NAME and re-render before sending this package to law enforcement.
+</div>
+{% endif %}
+
 <section class="cover">
   <div class="cover-letterhead">
     <div class="cover-wordmark">
@@ -36,7 +48,18 @@
     </div>
     <div class="cover-meta-item">
       <dt>Prepared By</dt>
-      <dd>{{ investigator.name }}<span class="secondary">{{ investigator.organization }}<br/>{{ investigator.email }}</span></dd>
+      {# v0.32.1 (LE-CRIT-3, LE-HIGH-6): when the operator-identity env
+         vars aren't set, brief.py sanitizes investigator.name and the
+         compliance@recupero.io alias to empty strings. Render an
+         explicit placeholder-line so the visible artifact reads as
+         "this needs a signature" rather than literally typesetting the
+         debug-placeholder string "(operator name not configured)" in
+         heavy serif under a 10%-opacity watermark. #}
+      {% if _investigator_configured and investigator.name %}
+      <dd>{{ investigator.name }}<span class="secondary">{{ investigator.organization }}{% if investigator.email %}<br/>{{ investigator.email }}{% endif %}</span></dd>
+      {% else %}
+      <dd><span class="placeholder-line">[Operator pending assignment]</span><span class="secondary">{{ investigator.organization }}<br/>Named investigator must be configured before transmission.</span></dd>
+      {% endif %}
     </div>
     <div class="cover-meta-item">
       <dt>Case Number</dt>
@@ -64,7 +87,11 @@
          paragraphs below still show the primary event's USD,
          which is correct (each narrative paragraph describes one
          specific tx). #}
-      <dd>USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>
+      {# v0.32.1 (LE-HIGH-1): USD values carry their own `$X,YYY.ZZ`
+         prefix from `_ensure_usd_prefix` in brief.py. Dropping the
+         literal "USD " prose prefix here so the cover never renders
+         "USD 21,317.94" next to "$29,273.63" on the same page. #}
+      <dd>{{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}<span class="secondary">{{ asset.symbol }} on {{ primary_chain | default("Ethereum") }}</span></dd>
     </div>
     {# v0.21.0: recovery probability surfaced on the cover. AUSAs /
        FBI agents weigh case priority on this number before reading
@@ -75,7 +102,7 @@
     {% if recovery_estimate and recovery_estimate.get('expected_recovered_usd') %}
     <div class="cover-meta-item">
       <dt>Estimated Recoverable</dt>
-      <dd>{{ recovery_estimate.get('expected_recovered_usd') }}<span class="secondary">range {{ recovery_estimate.get('expected_recovered_low_usd') or '—' }} – {{ recovery_estimate.get('expected_recovered_high_usd') or '—' }} (90% CI){% if recovery_estimate.get('probability_any_recovery_90d') is not none %} · {{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }} probability of any recovery within 90d{% endif %}</span></dd>
+      <dd>{{ recovery_estimate.get('expected_recovered_usd') }}<span class="secondary">{% if recovery_estimate.get('expected_recovered_low_usd') and recovery_estimate.get('expected_recovered_high_usd') %}range {{ recovery_estimate.get('expected_recovered_low_usd') }} – {{ recovery_estimate.get('expected_recovered_high_usd') }} (90% CI){% endif %}{% if recovery_estimate.get('probability_any_recovery_90d') is not none %}{% if recovery_estimate.get('expected_recovered_low_usd') and recovery_estimate.get('expected_recovered_high_usd') %} · {% endif %}{{ "%.0f%%"|format(recovery_estimate.get('probability_any_recovery_90d') * 100) }} probability of any recovery within 90d{% endif %}</span></dd>
     </div>
     {% endif %}
     <div class="cover-meta-item">
@@ -107,7 +134,7 @@
 <div class="summary-box">
   <p style="margin:0 0 0.7em 0;">
     On {{ theft_event.timestamp_human }} UTC, {{ asset.amount_human }}
-    {{ asset.symbol }} (USD {{ asset.usd_value_at_theft }} at the time of
+    {{ asset.symbol }} ({{ asset.usd_value_at_theft }} at the time of
     transaction) was removed without authorization from
     {{ victim.name }}'s wallet
     {% if victim.citizenship %}(citizen of {{ victim.citizenship }}){% endif %}.
@@ -164,7 +191,7 @@
     investigating current disposition of the documented receipts
     and pausing redemption of any balances that remain. We recommend
     that a preservation request be issued to {{ issuer.short_name }}
-    as a matter of priority, citing the addresses listed in section 5.
+    as a matter of priority, citing the addresses listed in section 4.1.
   </p>
   {% elif issuer_freezable.evidence_mode == "mixed" %}
   <p style="margin:0 0 0.7em 0;">
@@ -195,7 +222,7 @@
     pausing redemption of the confirmed positions and investigating
     the historical-receipt addresses. We recommend that a preservation
     request be issued to {{ issuer.short_name }} as a matter of
-    priority, citing the addresses listed in section 5.
+    priority, citing the addresses listed in section 4.1.
   </p>
   {% else %}
   <p style="margin:0 0 0.7em 0;">
@@ -225,7 +252,7 @@
     pausing redemption of the recoverable positions. We recommend
     that a preservation request be issued to {{ issuer.short_name }}
     as a matter of priority, citing the addresses listed in
-    section 5 of this package.
+    section 4.1 of this package.
   </p>
   {% endif %}
   {% else %}
@@ -267,7 +294,7 @@
 <p class="small">
   This drain involved <strong>{{ theft_event_count }} unauthorized
   outbound transfers</strong> from the victim wallet within a 7-day
-  window, totaling <strong>USD {{ theft_event_total_usd }}</strong>.
+  window, totaling <strong>{{ theft_event_total_usd }}</strong>.
   Each is listed below in chronological order. The "primary" event is
   the highest-USD transfer and is the headline transaction described
   in section 2.
@@ -280,7 +307,7 @@
       <time>{{ ev.timestamp_human }}</time> &nbsp;—&nbsp;
       <strong>{% if ev.is_primary %}Primary theft event.{% else %}Drain event.{% endif %}</strong>
       {{ ev.amount_human }} {{ ev.symbol }}
-      {% if ev.usd_value and ev.usd_value != '(unknown)' %}(USD {{ ev.usd_value }}){% endif %}
+      {% if ev.usd_value and ev.usd_value != '(unknown)' %}({{ ev.usd_value }}){% endif %}
       transferred from
       {% if ev.from_explorer_url %}<a class="mono" href="{{ ev.from_explorer_url|safe_url }}">{{ ev.from_address }}</a>{% else %}<span class="mono">{{ ev.from_address }}</span>{% endif %}
       to {% if ev.to_explorer_url %}<a class="mono" href="{{ ev.to_explorer_url|safe_url }}">{{ ev.to_address }}</a>{% else %}<span class="mono">{{ ev.to_address }}</span>{% endif %}.
@@ -318,7 +345,7 @@
     {{ "wallet" if issuer_freezable.historical_count == 1 else "wallets" }}
     under {{ issuer.short_name }}'s issuance authority during the
     documented theft trail; current balances pending issuer
-    verification. Specific addresses enumerated in section 5.
+    verification. Specific addresses enumerated in section 4.1.
     {% elif issuer_freezable.evidence_mode == "mixed" %}
     <strong>Current state.</strong>
     {{ issuer_freezable.total_usd_freezable }} in
@@ -328,7 +355,7 @@
     balances + {{ issuer_freezable.historical_count }} historical
     receipts) under {{ issuer.short_name }}'s issuance authority.
     Specific addresses + per-address evidence type enumerated in
-    section 5.
+    section 4.1.
     {% else %}
     <strong>Current state.</strong> Recoverable funds totaling
     {{ issuer_freezable.total_usd_freezable }} held as
@@ -340,7 +367,7 @@
     (plus {{ issuer_freezable.investigate_count }} additional
     {{ issuer_freezable.token }} positions under KYC verification).
     {% else %}.{% endif %}
-    Specific addresses enumerated in section 5.
+    Specific addresses enumerated in section 4.1.
     {% endif %}
     {% else %}
     <strong>Current state.</strong> Position remains in
@@ -365,6 +392,55 @@
 {% endif %}
 
 <h2>4. Stolen Asset Details</h2>
+{# v0.32.1 (LE-CRIT-1): on mixed-asset drains (e.g. 0.21 ETH +
+   20,610 USDT in the same drain cluster), the single-asset table
+   produced a self-contradictory render: "Asset symbol: USDT / Token
+   contract: 0xdAC1...1ec7 (USDT) / Amount: 2 events, mixed assets /
+   USD value: $21,317.94". The reader couldn't tell whether $21,317.94
+   was USDT-only, ETH-only, or both. Now: when theft_assets_mixed is
+   True, render a per-asset breakdown sub-table that lists each token
+   on its own row, and a SUMMARY-ONLY top section (USD aggregate +
+   pointer-to-timeline). Single-asset drains keep the original
+   detailed table. #}
+{% if asset.theft_assets_mixed %}
+<table class="evidence">
+  <tr><th>Drain composition</th><td>{{ asset.theft_event_count }} unauthorized transfers spanning multiple token types (see per-asset breakdown below and the per-event timeline in section 3)</td></tr>
+  <tr><th>Aggregate USD value at time of theft</th><td class="amount">{{ asset.total_usd_value_at_theft }}</td></tr>
+  {% if issuer.jurisdiction %}<tr><th>Primary freeze-target issuer jurisdiction</th><td>{{ issuer.jurisdiction }}</td></tr>{% endif %}
+</table>
+
+<h3>4.0 Per-asset breakdown</h3>
+<table class="evidence">
+  <thead>
+    <tr>
+      <th>Token symbol</th>
+      <th>Token contract</th>
+      <th class="amount">Amount</th>
+      <th class="amount">USD at time of theft</th>
+      <th>Events</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in asset.theft_events_per_asset_summary %}
+    <tr>
+      <td><strong>{{ entry.symbol }}</strong></td>
+      <td class="mono">{{ entry.contract or "(native)" }}</td>
+      <td class="amount mono">{{ entry.amount_human }} {{ entry.symbol }}</td>
+      <td class="amount mono">{{ entry.usd_value_at_theft }}</td>
+      <td>{{ entry.event_count }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="small">
+  The drain consists of multiple token types; the per-asset breakdown
+  above is authoritative for amounts and per-token USD. The "Aggregate
+  USD value" cell above sums every priced event regardless of token —
+  it is NOT a single-token amount. The section&nbsp;3 timeline
+  enumerates every event individually with its specific tx hash,
+  block timestamp, and counterparty.
+</p>
+{% else %}
 <table class="evidence">
   <tr><th>Asset symbol</th>           <td>{{ asset.symbol }}</td></tr>
   <tr><th>Token contract address</th> <td>{% if asset_contract_explorer_url %}<a class="mono" href="{{ asset_contract_explorer_url|safe_url }}">{{ asset.contract }}</a>{% else %}<span class="mono">{{ asset.contract }}</span>{% endif %}</td></tr>
@@ -374,16 +450,19 @@
   <tr><th>Asset description</th>      <td>{{ asset.description }}</td></tr>
   {# v0.20.2 (audit-round-3 R3-3): evidence table rolls up to the
      full multi-event total when applicable; the narrative above
-     enumerates each event. #}
+     enumerates each event. v0.32.1 (LE-HIGH-1): USD values now carry
+     their own `$X,YYY.ZZ` prefix from `_ensure_usd_prefix` in
+     brief.py, so the template no longer prepends a literal "USD ". #}
   <tr><th>Amount{% if asset.is_multi_event %} (total across {{ asset.theft_event_count }} events){% endif %}</th>                 <td class="amount">{{ asset.total_amount_human if asset.is_multi_event else asset.amount_human }}</td></tr>
-  <tr><th>USD value at time of theft</th><td class="amount">USD {{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}</td></tr>
+  <tr><th>USD value at time of theft</th><td class="amount">{{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}</td></tr>
   {% if asset.usd_value_current %}
-  <tr><th>USD value (current estimate)</th><td class="amount">USD {{ asset.usd_value_current }}</td></tr>
+  <tr><th>USD value (current estimate)</th><td class="amount">{{ asset.usd_value_current }}</td></tr>
   {% endif %}
   {% if issuer.kyc_required %}
   <tr><th>KYC requirement at acquisition</th><td>Yes — {{ issuer.short_name }} required full identity verification{% if issuer.kyc_minimum %} with minimum subscription of {{ issuer.kyc_minimum }}{% endif %}</td></tr>
   {% endif %}
 </table>
+{% endif %}
 
 {% if issuer_freezable %}
 <h2>4.1 Recoverable Positions under {{ issuer.short_name }}'s Authority</h2>
@@ -445,18 +524,38 @@
   </tbody>
 </table>
 <p class="small">
-  <strong>FREEZABLE</strong> positions are
-  ({{ issuer_freezable.freezable_count }} addresses,
-  {{ issuer_freezable.total_usd_freezable }} total) confirmed-held
-  in wallets that have no matching KYC subscription on file with
+  {# v0.32.1 (LE-HIGH-2): rewrite the previous grammar-broken
+     "FREEZABLE positions are (4 addresses, $X total) confirmed-held
+     in wallets that have no matching KYC subscription" — which
+     parsed as "are CONFIRMED-HELD" via a stray hyphenated compound
+     modifier. v0.32.1 (LE-HIGH-3): the "no matching KYC subscription
+     ... not via subscription" framing is FALSE for non-RWA issuers
+     (USDT/USDC/DAI/WETH — none of which have a "subscription"
+     mechanism). Now branched on issuer.kyc_required so the false
+     legal claim doesn't ship to LE on the 90%+ of cases that aren't
+     Midas-shape. #}
+  The <strong>{{ issuer_freezable.freezable_count }} FREEZABLE
+  {% if issuer_freezable.freezable_count == 1 %}position{% else %}positions{% endif %}</strong>
+  above represent {{ issuer_freezable.total_usd_freezable }} held at
+  addresses
+  {% if issuer.kyc_required %}
+  that have no matching KYC subscription on file with
   {{ issuer.short_name }} — they were received via direct on-chain
-  transfer, not via subscription. These are the highest-priority
-  targets for an immediate preservation request.
+  transfer, not via the issuer's KYC-gated subscription pathway.
+  {% else %}
+  with no customer-of-record on file at {{ issuer.short_name }};
+  freezing requires {{ issuer.short_name }}'s discretionary compliance
+  review of the recipient address rather than identity verification
+  of an existing customer.
+  {% endif %}
+  These are the highest-priority targets for an immediate
+  preservation request.
   {% if issuer_freezable.has_investigate %}
-  <strong>INVESTIGATE</strong> positions
-  ({{ issuer_freezable.investigate_count }} addresses representing
-  {{ issuer_freezable.total_usd_suspected }} INVESTIGATE-tier) require KYC verification at
-  {{ issuer.short_name }} before status can be confirmed.
+  The <strong>{{ issuer_freezable.investigate_count }} INVESTIGATE
+  {% if issuer_freezable.investigate_count == 1 %}position{% else %}positions{% endif %}</strong>
+  ({{ issuer_freezable.total_usd_suspected }} INVESTIGATE-tier)
+  require KYC verification at {{ issuer.short_name }} before status
+  can be confirmed.
   {% endif %}
   Freeze capability assessment: <strong>{{ issuer_freezable.freeze_capability }}</strong>.
 </p>
@@ -753,7 +852,8 @@
     {% for L in live_status.letters %}
     <tr>
       <td><strong>{{ L.issuer }}</strong></td>
-      <td class="mono small">{{ L.target_address[:10] }}…{{ L.target_address[-6:] }}</td>
+      {# v0.32.1 (Jacob cross-cutting audit §3.1): canonical short_address filter. #}
+      <td class="mono small">{{ L.target_address | short_address(prefix=10, suffix=6) }}</td>
       <td>{{ L.asset_symbol }}</td>
       <td class="amount">{{ L.requested_freeze_usd_human }}</td>
       <td>{{ L.days_since_sent }}d ({{ L.sent_at_human }})</td>
@@ -981,6 +1081,36 @@
     {% endif %}
     {% endif %}
   </li>
+  {% if secondary_preservation_targets %}
+  {# v0.32.1 (LE-HIGH-7): on multi-issuer cases, name every additional
+     preservation target so the LE recipient cannot miss that there
+     are other issuers in scope. Pre-v0.32.1 the LE handoff for Tether
+     listed only "preservation request to Tether"; the Circle handoff
+     was a separate file the recipient may never have opened. Now: the
+     SAME LE handoff names every additional preservation target with
+     a clear "(addressed in a parallel preservation request)" pointer
+     so the recipient knows the scope is broader than the primary
+     issuer named on the cover. #}
+  <li>
+    <strong>Parallel preservation requests:</strong> this case
+    involves recoverable positions across multiple issuers. In addition
+    to the primary {{ issuer.name }} preservation request, equivalent
+    preservation requests should be issued to:
+    <ul>
+      {% for sec in secondary_preservation_targets %}
+      <li>
+        <strong>{{ sec.issuer_name }}</strong>
+        ({{ sec.token }}; {{ sec.total_usd }} FREEZABLE{% if sec.total_suspected_usd and sec.total_suspected_usd not in ("$0", "$0.00") %} + {{ sec.total_suspected_usd }} INVESTIGATE{% endif %})
+        — freeze capability <strong>{{ sec.freeze_capability }}</strong>{% if sec.contact_email %}; suggested contact <span class="mono">{{ sec.contact_email }}</span>{% endif %}. Per-address detail in section 4.2.
+      </li>
+      {% endfor %}
+    </ul>
+    Each issuer's protocol-level authority extends only to its own
+    token; a request to {{ issuer.short_name }} cannot freeze
+    {% for sec in secondary_preservation_targets %}{{ sec.token }}{% if not loop.last %}/{% endif %}{% endfor %}
+    holdings.
+  </li>
+  {% endif %}
   {% if issuer.secondary_party and issuer.secondary_role %}
   <li>
     Copy {{ issuer.secondary_party }}, who manages the underlying
@@ -1107,16 +1237,32 @@
 </table>
 {% endif %}
 
-{% if le_routing.notes %}
+{# v0.32.1 (LE-HIGH-10): always render a Filing notes block — even when
+   the routing builder produced no specific notes — so the LE recipient
+   sees an explicit follow-up channel and the section doesn't read as
+   "Recupero didn't bother to include filing guidance". The first
+   default note is the standard "available for follow-up" line. #}
 <div class="summary-box">
   <p style="margin:0 0 0.5em 0;"><strong>Filing notes:</strong></p>
   <ul style="margin:0;">
-    {% for note in le_routing.notes %}
-    <li class="small">{{ note }}</li>
-    {% endfor %}
+    {% if le_routing.notes %}
+      {% for note in le_routing.notes %}
+      <li class="small">{{ note }}</li>
+      {% endfor %}
+    {% endif %}
+    <li class="small">
+      Recupero is available for follow-up clarifications, supplemental
+      data requests (raw chain state, monitoring alerts, additional
+      cluster members), or to coordinate parallel filings via the
+      investigator contact listed on the cover.
+    </li>
+    <li class="small">
+      Re-rendering this brief after each issuer response will surface
+      live freeze status (section 5.5) and updated recovery forecasts
+      (section 5.4) without requiring a new evidence pull.
+    </li>
   </ul>
 </div>
-{% endif %}
 {% endif %}
 
 <h2>7. Service Providers Involved</h2>
@@ -1178,8 +1324,23 @@
   </p>
   <div class="signature-line"></div>
   <div class="signature-fields">
+    {# v0.32.1 (LE-CRIT-3): suppress the literal
+       "(operator name not configured)" sentinel in the signature
+       block. brief.py sanitizes investigator.name to empty string
+       when env is unconfigured; render explicit signature-line
+       blanks here so the visible artifact reads as a real waiting-
+       for-signature affidavit, not a debug placeholder under a
+       watermark. The signature blanks (heavy underscore line + the
+       Date / Signature labels) come from the standard §1746-style
+       affidavit footer for unsigned packages. #}
+    {% if _investigator_configured and investigator.name %}
     <strong>{{ investigator.name }}</strong> · {{ investigator.organization }}<br/>
     Date: __________________________
+    {% else %}
+    Signature: <span class="placeholder-line">&nbsp;</span><br/>
+    Printed name: <span class="placeholder-line">&nbsp;</span> · {{ investigator.organization }}<br/>
+    Date: <span class="placeholder-line">&nbsp;</span>
+    {% endif %}
   </div>
 </div>
 

@@ -117,9 +117,16 @@ def cost_per_call(provider: str) -> Decimal:
 # Env-var resolution
 # ---------------------------------------------------------------------------
 
-_DEFAULT_BUDGET_USD = Decimal("0.50")
+# v0.32.1 — JACOB_ADVERSARY_AUDIT_v032 Route 3 mitigation. The pre-fix
+# default of $0.50/case and a $100 ceiling made it impossible for ops
+# to fund a deep enough trace on a $50M-tier APT case (the adversary
+# spends $5K+ consultant fees; we couldn't even spend $1). Defaults
+# bumped to $10,000/case with a $50,000 ceiling. Real-world per-case
+# API spend never approaches these on healthy traces; the high default
+# is intended as "your budget is whatever the case needs up to $10K".
+_DEFAULT_BUDGET_USD = Decimal("10000.0")
 _BUDGET_MIN = Decimal("0.01")
-_BUDGET_MAX = Decimal("100.0")
+_BUDGET_MAX = Decimal("50000.0")
 
 
 def resolve_budget_from_env() -> Decimal:

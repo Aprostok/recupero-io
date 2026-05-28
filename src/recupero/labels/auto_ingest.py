@@ -318,14 +318,103 @@ class CandidateLabel:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# v0.32.1 JACOB_SECURITY_AUDIT_v032 HIGH-1 close-out:
+# SSRF defense for the daily label ingest. Allow-list of upstream hosts,
+# https-only scheme, DNS-resolve + private-IP block, no redirects, 10MB
+# body cap. The original implementation accepted arbitrary URLs; a
+# malicious upstream redirect (or DNS rebind) to 169.254.169.254 (cloud
+# metadata) would have been followed by httpx without any defense.
+_AUTO_INGEST_ALLOWED_HOSTS = frozenset({
+    "api.llama.fi",
+    "apilist.tronscanapi.com",
+    "public-api.solscan.io",
+    "api.solscan.io",
+    "api.etherscan.io",
+})
+
+# Hard cap on the response body. Realistic upstream JSON is <2MB; the
+# 10MB cap is a 5× safety margin that still blocks the "billion-laughs"
+# / OOM class of bug.
+_AUTO_INGEST_MAX_BODY_BYTES = 10 * 1024 * 1024
+
+
+def _ssrf_validate_url(url: str) -> tuple[bool, str]:
+    """Return ``(ok, reason)`` for the SSRF gate.
+
+    Rules:
+      * Scheme MUST be https.
+      * Host MUST be in ``_AUTO_INGEST_ALLOWED_HOSTS``.
+      * Host MUST NOT resolve to a private / loopback / link-local /
+        reserved IP address (DNS-rebind defense).
+    """
+    try:
+        from urllib.parse import urlparse
+    except ImportError:
+        return (False, "urlparse import failed")
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        return (False, "url parse failed")
+    if parsed.scheme != "https":
+        return (False, f"non-https scheme: {parsed.scheme!r}")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return (False, "empty host")
+    if host not in _AUTO_INGEST_ALLOWED_HOSTS:
+        return (False, f"host {host!r} not in allow-list")
+    # DNS resolve and refuse private / loopback / link-local / reserved.
+    import ipaddress
+    import socket
+    try:
+        addrs = socket.getaddrinfo(host, parsed.port or 443)
+    except OSError as exc:
+        return (False, f"dns resolve failed: {exc}")
+    for entry in addrs:
+        sockaddr = entry[4]
+        if not sockaddr:
+            continue
+        raw_ip = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            return (False, f"unparseable resolved ip: {raw_ip!r}")
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return (False, f"resolved to private/reserved ip: {raw_ip}")
+    return (True, "ok")
+
+
 def _safe_http_get_json(url: str, *, source_name: str) -> Any:
     """Issue a GET and return parsed JSON. Any failure → log WARN,
     return None. NEVER raises — the daily pipeline must continue even
     when an upstream is down.
+
+    v0.32.1 HIGH-1: SSRF-hardened. Validates host allow-list + scheme
+    + private-IP block BEFORE the network call, disables redirects, and
+    caps response body size.
     """
+    ok, reason = _ssrf_validate_url(url)
+    if not ok:
+        log.warning(
+            "label auto-ingest: %s URL %r refused by SSRF gate: %s",
+            source_name, url, reason,
+        )
+        return None
     try:
         import httpx
-        with httpx.Client(timeout=_HTTP_TIMEOUT_SEC) as client:
+        # follow_redirects=False — refuse to chase a 3xx Location. A
+        # malicious upstream redirecting to 169.254.169.254 would have
+        # bypassed the host-allow-list otherwise.
+        with httpx.Client(
+            timeout=_HTTP_TIMEOUT_SEC,
+            follow_redirects=False,
+        ) as client:
             resp = client.get(url)
         if resp.status_code != 200:
             log.warning(
@@ -333,7 +422,29 @@ def _safe_http_get_json(url: str, *, source_name: str) -> Any:
                 source_name, resp.status_code,
             )
             return None
-        return resp.json()
+        # Body cap — refuse responses larger than the limit.
+        try:
+            body = resp.content
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "label auto-ingest: %s body read failed: %s",
+                source_name, exc,
+            )
+            return None
+        if len(body) > _AUTO_INGEST_MAX_BODY_BYTES:
+            log.warning(
+                "label auto-ingest: %s body %d bytes > cap %d — skipping",
+                source_name, len(body), _AUTO_INGEST_MAX_BODY_BYTES,
+            )
+            return None
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            log.warning(
+                "label auto-ingest: %s JSON decode failed: %s",
+                source_name, exc,
+            )
+            return None
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "label auto-ingest: %s unreachable (%s: %s) — skipping",

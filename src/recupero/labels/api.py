@@ -170,14 +170,30 @@ def promote_label_candidate(
     candidate_id: int,
     req: PromoteRequest,
     x_recupero_admin_key: str | None = Header(default=None),
+    x_recupero_promote_confirm: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _require_admin_auth(x_recupero_admin_key)
     _dsn_or_503()  # raises 503 if unset
+    # v0.32.1 CRIT-1 close-out: require the operator to echo the
+    # candidate-row SHA-256 in X-Recupero-Promote-Confirm. Mismatch /
+    # missing → 400 (fail closed) before any field validation.
+    if (
+        x_recupero_promote_confirm is None
+        or not x_recupero_promote_confirm.strip()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "missing X-Recupero-Promote-Confirm header — "
+                "must echo the sha256 of the candidate row you viewed"
+            ),
+        )
     try:
         result = auto_ingest.promote_candidate(
             candidate_id=candidate_id,
             reviewer=req.reviewer_email,
             confidence=req.confidence,
+            confirm_sha256=x_recupero_promote_confirm.strip().lower(),
         )
     except ValueError as exc:
         # 404 for "not found", 409 for "already promoted/rejected"

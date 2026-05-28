@@ -22,6 +22,7 @@ from recupero import __version__
 from recupero.chains.base import ChainAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.labels.store import LabelStore
+from recupero.labels.store import lookup_pit_safe  # v0.31.4
 from recupero.models import (
     Address,
     Case,
@@ -30,6 +31,10 @@ from recupero.models import (
     ExchangeEndpoint,
     LabelCategory,
     Transfer,
+)
+from recupero.observability.api_budget import (
+    BudgetExceededError,
+    CaseBudget,
 )
 from recupero.pricing.coingecko import CoinGeckoClient, PriceResult
 from recupero.trace.evidence import write_evidence_receipt
@@ -61,6 +66,30 @@ def _normalize_address(chain: Chain, address: Address) -> Address:
     if _is_evm_chain(chain):
         return to_checksum_address(address)
     return address
+
+
+def _attach_budget_to_adapter(adapter: ChainAdapter, budget: CaseBudget) -> None:
+    """Best-effort propagation of the per-case API budget to whichever
+    HTTP client the adapter holds.
+
+    Different adapters expose different attribute names — EVM /
+    Solana / Tron all bind a ``self.client``; the Bitcoin adapter
+    binds a ``self.esplora``. We walk the small known surface and
+    attach the budget where we find it. Unknown shapes are silently
+    skipped (budget tracking is best-effort — never crash the trace
+    over a missing attribute).
+    """
+    for attr in ("client", "esplora", "fallback_client"):
+        sub = getattr(adapter, attr, None)
+        if sub is None:
+            continue
+        try:
+            sub.budget = budget
+        except Exception:  # noqa: BLE001 — defensive, never raise out
+            log.debug(
+                "budget attach skipped for adapter=%s attr=%s",
+                type(adapter).__name__, attr,
+            )
 
 
 def _address_visited_key(chain: Chain, address: Address) -> str:
@@ -105,13 +134,65 @@ def run_trace(
         incident_time = incident_time.replace(tzinfo=UTC)
     seed_address = _normalize_address(chain, seed_address)
 
+    # v0.32 — per-case API budget. One CaseBudget per case, propagated
+    # to every chain + pricing client. When the cap trips, BFS catches
+    # the BudgetExceededError, marks the case partial_budget_hit, and
+    # exits gracefully — same shape as the deadline-timeout path.
+    case_budget = CaseBudget.from_env(case_id=case_id)
+
     adapter = ChainAdapter.for_chain(chain, (config, env))
+    # Best-effort budget propagation. The adapter holds an HTTP client
+    # constructed during ChainAdapter.for_chain; we attach the budget
+    # to that nested client AFTER construction so we don't have to
+    # plumb the budget through every adapter ctor signature.
+    _attach_budget_to_adapter(adapter, case_budget)
     label_store = LabelStore.load(config)
     cache_dir = Path(config.storage.data_dir) / "prices_cache"
-    price_client = CoinGeckoClient(config, env, cache_dir)
+    price_client = CoinGeckoClient(config, env, cache_dir, budget=case_budget)
+
+    # v0.31.0 — env-var overrides for the two BFS knobs operators most
+    # often want to tune per-case. Both fall back to the config-yaml
+    # defaults (TraceParams.max_depth=2, dust_threshold_usd=10) so the
+    # behavior is unchanged when the env vars are absent.
+    #   * RECUPERO_TRACE_MAX_HOPS — bump for deep-laundering cases
+    #     (Zigha-shape paths can run 4-6 hops via consolidation hubs).
+    #   * RECUPERO_TRACE_DUST_USD — lower for sub-cent dust-attack
+    #     studies, raise for whale-volume cases where $10 noise gets
+    #     too much attention.
+    # Both are clamped to safe ranges: max_hops ∈ [1, 8], dust ∈ [0, 1e6].
+    cfg_max_depth = config.trace.max_depth
+    try:
+        env_max_hops = int(os.environ.get("RECUPERO_TRACE_MAX_HOPS", str(cfg_max_depth)))
+        cfg_max_depth = max(1, min(8, env_max_hops))
+    except (TypeError, ValueError):
+        log.warning(
+            "RECUPERO_TRACE_MAX_HOPS=%r is not an int; falling back to config (%d)",
+            os.environ.get("RECUPERO_TRACE_MAX_HOPS"), config.trace.max_depth,
+        )
+
+    cfg_dust = config.trace.dust_threshold_usd
+    try:
+        env_dust_raw = os.environ.get("RECUPERO_TRACE_DUST_USD")
+        if env_dust_raw is not None:
+            env_dust = float(env_dust_raw)
+            # Reject NaN / ±Inf / negative — these would silently break
+            # the filter (NaN comparison is always False, so EVERY
+            # transfer would slip the dust gate; -inf would clamp to 0
+            # via max(0, -inf) and silently disable the filter while
+            # masking the operator misconfig).
+            import math as _m
+            if not _m.isfinite(env_dust) or env_dust < 0:
+                raise ValueError("non-finite or negative")
+            cfg_dust = min(1_000_000.0, env_dust)
+    except (TypeError, ValueError) as exc:
+        log.warning(
+            "RECUPERO_TRACE_DUST_USD=%r rejected (%s); falling back to config ($%s)",
+            os.environ.get("RECUPERO_TRACE_DUST_USD"), exc, config.trace.dust_threshold_usd,
+        )
+
     policy = TracePolicy(
-        max_depth=config.trace.max_depth,
-        dust_threshold_usd=Decimal(str(config.trace.dust_threshold_usd)),
+        max_depth=cfg_max_depth,
+        dust_threshold_usd=Decimal(str(cfg_dust)),
         stop_at_exchange=config.trace.stop_at_exchange,
     )
     # Override stop_at_contract / stop_at_bridge / service_wallet threshold
@@ -194,6 +275,12 @@ def run_trace(
     current_wave: list[tuple[Address, int]] = [(seed_address, 0)]
     addresses_processed = 0
     wave_number = 0
+    # v0.32 — track whether the BFS exited due to the per-case API
+    # budget cap. Same graceful-degradation shape as deadline_hit /
+    # transfer_cap_hit. Records into case.config_used so the brief
+    # can render the "trace incomplete — budget exhausted" banner.
+    budget_hit = False
+    budget_hit_provider: str | None = None
 
     while current_wave:
         # v0.16.11: cooperative deadline check between waves. We don't
@@ -233,17 +320,31 @@ def run_trace(
         # Errors from a single address don't fail the wave — the worker
         # function catches and returns ([], False) so the rest of the
         # wave's work isn't wasted.
-        wave_results = _process_wave(
-            current_wave,
-            adapter=adapter,
-            label_store=label_store,
-            price_client=price_client,
-            policy=policy,
-            incident_time=incident_time,
-            config=config,
-            evidence_dir=case_dir / "tx_evidence",
-            concurrency=trace_concurrency,
-        )
+        try:
+            wave_results = _process_wave(
+                current_wave,
+                adapter=adapter,
+                label_store=label_store,
+                price_client=price_client,
+                policy=policy,
+                incident_time=incident_time,
+                config=config,
+                evidence_dir=case_dir / "tx_evidence",
+                concurrency=trace_concurrency,
+            )
+        except BudgetExceededError as exc:
+            # v0.32 — per-case API budget tripped mid-wave. Same
+            # graceful-degradation contract as deadline_hit: bail out
+            # of the BFS, record the marker, and let the brief
+            # render a "trace incomplete — budget exhausted" banner.
+            budget_hit = True
+            budget_hit_provider = exc.provider
+            log.warning(
+                "trace API budget hit ($%s spent / $%s budget) after "
+                "%d wave(s) on provider=%s; exiting partial.",
+                exc.spent_usd, exc.budget_usd, wave_number, exc.provider,
+            )
+            break
 
         # --- Aggregate results + build next wave (single-threaded) ---
         for from_addr, depth, hop_transfers, is_service_wallet in wave_results:
@@ -315,11 +416,32 @@ def run_trace(
             "trace_transfer_cap": max_transfers,
             "trace_waves_completed": wave_number,
         }
+    elif budget_hit:
+        # v0.32 — per-case API budget exhausted. Surface the marker
+        # AND the per-provider breakdown so the brief shows the
+        # operator exactly where the dollars went.
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "partial_budget_hit",
+            "trace_budget_provider": budget_hit_provider,
+            "trace_waves_completed": wave_number,
+        }
     else:
         case.config_used = {
             **(case.config_used or {}),
             "trace_status": "complete",
         }
+
+    # v0.32 — always surface the per-case API budget snapshot under
+    # case.config_used["api_budget"]. This is the breakdown the brief
+    # and the audit trail will render, regardless of whether the cap
+    # was hit. When the budget is disabled (RECUPERO_API_BUDGET_USD_PER_CASE=0)
+    # the snapshot still lands but enabled=False makes the brief
+    # renderer skip the section.
+    case.config_used = {
+        **(case.config_used or {}),
+        "api_budget": case_budget.snapshot(),
+    }
 
     log.info(
         "primary trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs status=%s",
@@ -369,6 +491,20 @@ def run_trace(
             is_contract_cache=is_contract_cache,
             trace_concurrency=trace_concurrency,
         )
+    except BudgetExceededError as exc:
+        # v0.32 — budget tripped during the DEX/bridge continuation
+        # pass. Mark partial and let cleanup run via the finally block.
+        log.warning(
+            "trace API budget hit during continuation pass ($%s / $%s, "
+            "provider=%s); exiting partial.",
+            exc.spent_usd, exc.budget_usd, exc.provider,
+        )
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "partial_budget_hit",
+            "trace_budget_provider": exc.provider,
+            "api_budget": case_budget.snapshot(),
+        }
     finally:
         try:
             price_client.close()
@@ -378,6 +514,21 @@ def run_trace(
             adapter.close()
         except Exception:  # noqa: BLE001
             pass
+
+    # v0.31.2 — dust-attack pattern filter (off by default).
+    #
+    # A perpetrator sending many sub-cent transfers to many distinct
+    # destinations from a single source address pollutes Section 5 of
+    # the brief with innocent-looking noise, burying the real path.
+    # When RECUPERO_DUST_ATTACK_FILTER=1, we identify those destination
+    # addresses and remove them from `unlabeled_counterparties` so the
+    # brief renderer doesn't include them in Section 5. The transfers
+    # themselves stay in `case.transfers` for the audit trail.
+    #
+    # OFF by default to avoid changing existing case-rendering tests.
+    # Operators turn it on per-case via the env var.
+    _apply_dust_attack_filter(case)
+
     return case
 
 
@@ -497,11 +648,38 @@ def _continue_past_dex_and_bridges(
 
     # Track cross-chain seeds separately because they need their OWN
     # adapter (different chain) — they don't share the source-chain
-    # adapter's wave loop. Shape: list[(chain, address, depth_hint)].
-    cross_chain_seeds: list[tuple[Chain, Address, int]] = []
+    # adapter's wave loop. Shape: list[(chain, address, depth_hint,
+    # source_bridge_block_time)]. The trailing block_time enables the
+    # v0.31.0 cross-chain time-window filter (drop dst transfers
+    # outside [source_bridge_time, +window] hours).
+    cross_chain_seeds: list[tuple[Chain, Address, int, datetime]] = []
     # v0.17.4 (round-10 audit HIGH): dedup cross-chain seeds so the
     # same destination doesn't get traced twice. Keyed on (chain, addr).
     cross_chain_visited: set[tuple[str, str]] = set()
+
+    # v0.31.0 — Configurable cross-chain time window. Default 24h
+    # past the source bridge tx; 0 disables the filter (legacy
+    # behavior). Clamped to [0, 720] hours (30d max — bridge handoffs
+    # can hop in seconds or hours, never months in real cases).
+    try:
+        xchain_window_h = float(os.environ.get(
+            "RECUPERO_CROSSCHAIN_WINDOW_HOURS", "24",
+        ))
+        # Reject NaN / ±Inf. v0.31.1: the earlier check only rejected
+        # +Infinity (and NaN via self-inequality); -Infinity would slip
+        # through, then `max(0, -inf) = 0` silently disabled the filter
+        # and masked the operator misconfig. Use math.isfinite to catch
+        # both infinities + NaN in one call.
+        import math as _m
+        if not _m.isfinite(xchain_window_h):
+            raise ValueError("non-finite")
+        xchain_window_h = max(0.0, min(720.0, xchain_window_h))
+    except (TypeError, ValueError):
+        log.warning(
+            "RECUPERO_CROSSCHAIN_WINDOW_HOURS=%r rejected; using default 24h",
+            os.environ.get("RECUPERO_CROSSCHAIN_WINDOW_HOURS"),
+        )
+        xchain_window_h = 24.0
 
     for handoff in handoffs:
         # Same-chain destination from decoded calldata.
@@ -556,7 +734,20 @@ def _continue_past_dex_and_bridges(
             if xkey in cross_chain_visited:
                 continue
             cross_chain_visited.add(xkey)
-            cross_chain_seeds.append((dest_chain, decoded_addr, 1))
+            # v0.31.0: stash the source-chain bridge tx block_time so the
+            # post-wave filter can drop dst transfers that fall outside
+            # RECUPERO_CROSSCHAIN_WINDOW_HOURS of the handoff. Parsed
+            # from handoff.block_time_iso ('Z'-terminated UTC ISO). On
+            # any parse failure we fall back to the case incident_time
+            # (forensically safe — case-wide window applies).
+            try:
+                src_iso = handoff.block_time_iso.replace("Z", "+00:00")
+                src_block_time = datetime.fromisoformat(src_iso)
+                if src_block_time.tzinfo is None:
+                    src_block_time = src_block_time.replace(tzinfo=UTC)
+            except (TypeError, ValueError, AttributeError):
+                src_block_time = incident_time
+            cross_chain_seeds.append((dest_chain, decoded_addr, 1, src_block_time))
 
     if not continuation_seeds and not cross_chain_seeds:
         return
@@ -619,14 +810,23 @@ def _continue_past_dex_and_bridges(
                 max_xchain, len(cross_chain_seeds),
             )
             cross_chain_seeds = cross_chain_seeds[:max_xchain]
-        # Group by destination chain.
+        # Group by destination chain. Also retain the per-chain
+        # source-bridge block_times so the post-wave window filter can
+        # gate on the earliest handoff timestamp for the chain (a
+        # single chain might be the destination of multiple bridges
+        # at different times — take the earliest to maximize coverage).
         by_chain: dict[Chain, list[tuple[Address, int]]] = {}
-        for (dst_chain, dst_addr, depth_hint) in cross_chain_seeds:
+        earliest_src_time_by_chain: dict[Chain, datetime] = {}
+        for (dst_chain, dst_addr, depth_hint, src_time) in cross_chain_seeds:
             by_chain.setdefault(dst_chain, []).append((dst_addr, depth_hint))
+            cur = earliest_src_time_by_chain.get(dst_chain)
+            if cur is None or src_time < cur:
+                earliest_src_time_by_chain[dst_chain] = src_time
 
         log.info(
-            "cross-chain BFS continuation: %d seed(s) across %d chain(s)",
-            len(cross_chain_seeds), len(by_chain),
+            "cross-chain BFS continuation: %d seed(s) across %d chain(s) "
+            "(window=%.1fh)",
+            len(cross_chain_seeds), len(by_chain), xchain_window_h,
         )
 
         for dst_chain, dst_seeds in by_chain.items():
@@ -662,8 +862,33 @@ def _continue_past_dex_and_bridges(
                         dst_chain.value, exc,
                     )
                     continue
-                for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
-                    new_transfers.extend(hop_transfers)
+                # v0.31.0: per-chain time-window filter. When
+                # xchain_window_h > 0 we drop destination-chain
+                # transfers that fall outside [src_bridge_time,
+                # src_bridge_time + window]. window=0 disables the
+                # filter (legacy behavior). 'src_bridge_time' is the
+                # earliest handoff into this destination chain so
+                # later seeds with later source times are still
+                # covered.
+                src_time = earliest_src_time_by_chain.get(dst_chain)
+                if xchain_window_h > 0 and src_time is not None:
+                    window_end = src_time + timedelta(hours=xchain_window_h)
+                    dropped = 0
+                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                        for tx in hop_transfers:
+                            if src_time <= tx.block_time <= window_end:
+                                new_transfers.append(tx)
+                            else:
+                                dropped += 1
+                    if dropped:
+                        log.info(
+                            "cross-chain window filter (%.1fh) dropped %d "
+                            "out-of-range transfers on %s",
+                            xchain_window_h, dropped, dst_chain.value,
+                        )
+                else:
+                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                        new_transfers.extend(hop_transfers)
             finally:
                 try:
                     dst_adapter.close()
@@ -906,7 +1131,14 @@ def _trace_one_hop(
             continue
 
         # Label resolution
-        label = label_store.lookup(transfer.to_address, chain=adapter.chain)
+        # v0.31.4 (Gap 1a — point-in-time labels): pass incident_time so
+        # the label as it stood AT THE TIME OF THEFT is applied, not the
+        # label-DB's current state. Critical for older cases — a "this is
+        # a known mixer" claim in court has to mean "was a known mixer
+        # then," not "is one now."
+        label = lookup_pit_safe(label_store, transfer.to_address,
+            chain=adapter.chain,
+            point_in_time=incident_time,)
         try:
             is_contract = adapter.is_contract(transfer.to_address)
         except Exception as e:  # noqa: BLE001
@@ -1039,6 +1271,95 @@ def _collect_unlabeled(transfers: list[Transfer]) -> list[Address]:
             seen.add(t.to_address)
             out.append(t.to_address)
     return out
+
+
+def _apply_dust_attack_filter(case: Case) -> None:
+    """v0.31.2 — filter dust-shower destinations from the brief's
+    counterparty list.
+
+    ON by default since v0.31.4 (Gap 4). Identifies destination
+    addresses that participate in a fan-out shower (>=10 distinct
+    sub-$1 destinations from a single source) and removes them from
+    `case.unlabeled_counterparties`. The transfers themselves stay
+    in `case.transfers` for the audit trail.
+
+    Pre-v0.31.4 this was OFF-by-default to keep existing
+    case-rendering tests deterministic. Honest-gaps audit flagged
+    this: the filter is the right behavior for production. Tests
+    that need the legacy (unfiltered) shape set
+    RECUPERO_DUST_ATTACK_FILTER=0 explicitly.
+
+    Env vars (all NaN/Inf-rejecting, clamped to safe ranges):
+      * RECUPERO_DUST_ATTACK_FILTER       — set to "0/false/no/off"
+                                            to disable (default ON).
+      * RECUPERO_DUST_ATTACK_THRESHOLD_USD — default 1.00, clamped [0,100].
+      * RECUPERO_DUST_ATTACK_MIN_FANOUT   — default 10, clamped [3,1000].
+    """
+    flag = os.environ.get("RECUPERO_DUST_ATTACK_FILTER", "").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return
+    # Anything else — including unset / "" / "1" / "true" — enables.
+
+    # Threshold env-var parsing — mirror RECUPERO_TRACE_DUST_USD's
+    # NaN/Inf-rejecting pattern from v0.31.1.
+    threshold_usd = Decimal("1.00")
+    raw_thr = os.environ.get("RECUPERO_DUST_ATTACK_THRESHOLD_USD")
+    if raw_thr is not None:
+        try:
+            env_thr = float(raw_thr)
+            import math as _m
+            if not _m.isfinite(env_thr) or env_thr < 0:
+                raise ValueError("non-finite or negative")
+            # Clamp to [0, 100] — anything above $100 starts catching
+            # legitimate small payments, anything negative is nonsense.
+            clamped = max(0.0, min(100.0, env_thr))
+            threshold_usd = Decimal(str(clamped))
+        except (TypeError, ValueError) as exc:
+            log.warning(
+                "RECUPERO_DUST_ATTACK_THRESHOLD_USD=%r rejected (%s); "
+                "falling back to default $1.00",
+                raw_thr, exc,
+            )
+
+    # Min-fanout env-var parsing.
+    min_fanout = 10
+    raw_fan = os.environ.get("RECUPERO_DUST_ATTACK_MIN_FANOUT")
+    if raw_fan is not None:
+        try:
+            env_fan = int(raw_fan)
+            # Clamp to [3, 1000]. Below 3 fires on legitimate change-back
+            # patterns; above 1000 misses real attacks that stayed
+            # modestly sized to evade detection.
+            min_fanout = max(3, min(1000, env_fan))
+        except (TypeError, ValueError):
+            log.warning(
+                "RECUPERO_DUST_ATTACK_MIN_FANOUT=%r is not an int; "
+                "falling back to default 10",
+                raw_fan,
+            )
+
+    # Lazy import — keep the dust-attack module out of the hot path
+    # when the filter is off (which is the default).
+    from recupero.trace.dust_attack import identify_dust_attack_destinations
+
+    flagged = identify_dust_attack_destinations(
+        case.transfers,
+        dust_threshold_usd=threshold_usd,
+        min_fanout=min_fanout,
+    )
+    if not flagged:
+        return
+
+    before = len(case.unlabeled_counterparties)
+    case.unlabeled_counterparties = [
+        a for a in case.unlabeled_counterparties if a not in flagged
+    ]
+    log.info(
+        "dust-attack filter removed %d counterparties from brief "
+        "(threshold=$%s, min_fanout=%d; %d -> %d)",
+        before - len(case.unlabeled_counterparties),
+        threshold_usd, min_fanout, before, len(case.unlabeled_counterparties),
+    )
 
 
 def _sum_usd(transfers: list[Transfer]) -> Decimal | None:

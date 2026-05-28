@@ -35,7 +35,16 @@ class TraceParams(BaseModel):
     # depth=3 or 4. Pass-2 perpetrator-forward tracing (v0.8.0+)
     # is the architectural fix for arbitrarily-deep cases; this
     # default change is the immediate-relief patch.
-    max_depth: int = 2
+    #
+    # v0.31.4 (Gap 2 — Hop-limit default): bumped 2 → 4 to match the
+    # honest-gaps audit recommendation. Modern laundering chains
+    # frequently run 4-6 hops via consolidation hubs and dust-scatter
+    # paths; depth=2 truncated those. The cost increase is bounded
+    # because of stop_at_exchange/mixer/bridge + the service-wallet
+    # outflow threshold + the deadline + the per-case transfer cap.
+    # Operators that want the legacy behavior can set
+    # RECUPERO_TRACE_MAX_HOPS=2.
+    max_depth: int = 4
     # dust_threshold_usd=10 (lowered from 50 in v0.7.4): with
     # depth=2 traversal, downstream destinations receive
     # proportional shares of the hub's outflows. A $50 floor
@@ -241,6 +250,99 @@ class MantleParams(BaseModel):
     coingecko_native_id: str = "mantle"
 
 
+# v0.31.2 — six v0.29.0-promoted destination chains. All route through
+# Etherscan V2 multichain via chain_id. Profiles verified against
+# Etherscan V2 multichain docs + Chainalysis 2024-2025 stolen-fund
+# destination reports. Each was previously LABEL-ONLY (the BFS
+# raised NotImplementedError when trying to follow a bridge handoff
+# into them); v0.31.2 wires the adapter routing.
+
+
+class FantomParams(BaseModel):
+    """Fantom Opera — Etherscan V2 unified API, chain_id=250.
+    Native gas token is FTM (CoinGecko id `fantom`)."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 250
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "FTM"
+    native_decimals: int = 18
+    explorer_base: str = "https://ftmscan.com"
+    coingecko_platform: str = "fantom"
+    coingecko_native_id: str = "fantom"
+
+
+class CeloParams(BaseModel):
+    """Celo — Etherscan V2 unified API, chain_id=42220.
+    Native gas token is CELO. After 2025 L2 migration, the chain
+    remained EVM-compatible with the same chain_id."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 42220
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "CELO"
+    native_decimals: int = 18
+    explorer_base: str = "https://celoscan.io"
+    coingecko_platform: str = "celo"
+    coingecko_native_id: str = "celo"
+
+
+class GnosisParams(BaseModel):
+    """Gnosis Chain (formerly xDai) — Etherscan V2 unified API,
+    chain_id=100. Native gas token is xDAI (stable, pegged to USD)."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 100
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "xDAI"
+    native_decimals: int = 18
+    explorer_base: str = "https://gnosisscan.io"
+    coingecko_platform: str = "xdai"
+    coingecko_native_id: str = "xdai"
+
+
+class MoonbeamParams(BaseModel):
+    """Moonbeam (Polkadot parachain, EVM-compatible) — Etherscan V2
+    unified API, chain_id=1284. Native gas token is GLMR."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 1284
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "GLMR"
+    native_decimals: int = 18
+    explorer_base: str = "https://moonscan.io"
+    coingecko_platform: str = "moonbeam"
+    coingecko_native_id: str = "moonbeam"
+
+
+class MetisParams(BaseModel):
+    """Metis Andromeda — Etherscan V2 unified API, chain_id=1088.
+    Native gas token is METIS."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 1088
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "METIS"
+    native_decimals: int = 18
+    explorer_base: str = "https://andromeda-explorer.metis.io"
+    coingecko_platform: str = "metis-andromeda"
+    coingecko_native_id: str = "metis-token"
+
+
+class KavaParams(BaseModel):
+    """Kava EVM — Etherscan V2 unified API, chain_id=2222.
+    Native gas token is KAVA. Tendermint consensus + EVM rollup."""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 2222
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "KAVA"
+    native_decimals: int = 18
+    explorer_base: str = "https://kavascan.com"
+    coingecko_platform: str = "kava"
+    coingecko_native_id: str = "kava"
+
+
 class PricingParams(BaseModel):
     provider: str = "coingecko"
     requests_per_second: float = 0.5
@@ -276,6 +378,13 @@ class RecuperoConfig(BaseModel):
     zksync: ZksyncParams = Field(default_factory=ZksyncParams)
     scroll: ScrollParams = Field(default_factory=ScrollParams)
     mantle: MantleParams = Field(default_factory=MantleParams)
+    # v0.31.2 — 6 v0.29.0-promoted destination chains.
+    fantom: FantomParams = Field(default_factory=FantomParams)
+    celo: CeloParams = Field(default_factory=CeloParams)
+    gnosis: GnosisParams = Field(default_factory=GnosisParams)
+    moonbeam: MoonbeamParams = Field(default_factory=MoonbeamParams)
+    metis: MetisParams = Field(default_factory=MetisParams)
+    kava: KavaParams = Field(default_factory=KavaParams)
     pricing: PricingParams = Field(default_factory=PricingParams)
     storage: StorageParams = Field(default_factory=StorageParams)
     logging: LoggingParams = Field(default_factory=LoggingParams)

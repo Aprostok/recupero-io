@@ -248,6 +248,15 @@ def load_high_risk_db(
     try:
         from recupero.trace.ofac_sync import load_ofac_csv
         for entry in load_ofac_csv():
+            # v0.31.5: an entry with `removed_at_utc` set was previously
+            # OFAC-listed but has since been removed from the upstream
+            # feed (e.g. Tornado Cash partial 2024 ruling). It stays
+            # in the CSV for the historical record but MUST NOT enter
+            # the risk-scoring DB — flagging a de-listed address as
+            # currently sanctioned is a false positive that could
+            # crater a freeze request's credibility.
+            if entry.removed_at_utc:
+                continue
             if entry.address in out:
                 continue  # curated entry wins
             out[entry.address] = HighRiskEntry(

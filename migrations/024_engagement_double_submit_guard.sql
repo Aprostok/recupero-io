@@ -1,4 +1,15 @@
--- 015_engagement_double_submit_guard.sql
+-- 024_engagement_double_submit_guard.sql
+--
+-- v0.30.2 RENAMED from 015_engagement_double_submit_guard.sql to close
+-- a duplicate-migration-number bug (V030_2_SECURITY_AUDIT.md T1-A).
+-- Pre-v0.30.2 the filename collided with 015_case_tokens_hmac_constraints.sql;
+-- on a glob-sorted apply_migration.py run, lexical order would
+-- silently determine which 015_* landed first on a fresh deploy
+-- machine, and an operator who only re-ran "the failing one" could
+-- land prod with only one of the pair applied. Renumbered to 024 to
+-- preserve apply-after-everything-else ordering (the engagement
+-- guard touches engagement_signatures which has no dependency on
+-- the case_tokens HMAC work).
 --
 -- v0.16.12 — Close the engagement double-submit race.
 --

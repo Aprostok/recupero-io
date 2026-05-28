@@ -77,7 +77,28 @@ class LabelStore:
         log.info("loaded %d labels", len(store._by_addr_lower))
         return store
 
-    def lookup(self, address: Address, chain: Chain = Chain.ethereum) -> Label | None:
+    def lookup(
+        self,
+        address: Address,
+        chain: Chain = Chain.ethereum,
+        *,
+        point_in_time: datetime | None = None,
+    ) -> Label | None:
+        """Resolve ``address`` to a Label, optionally as of ``point_in_time``.
+
+        v0.31.2 (Gap #5 — point-in-time labels): if ``point_in_time`` is
+        ``None`` (default) the lookup uses current-state semantics — a
+        label is considered active forever from its ``added_at`` — which
+        is the behavior every caller relied on before this version.
+
+        When ``point_in_time`` is given the store filters labels so only
+        those active at that timestamp are returned:
+          * ``added_at  >  point_in_time`` → label didn't exist yet
+          * ``valid_from > point_in_time`` (when set) → not yet active
+          * ``valid_until < point_in_time`` (when set) → already expired
+
+        Returns ``None`` if no active label is found.
+        """
         # For EVM chains, checksum-normalize first so a mixed-case input
         # matches a stored checksum form. For non-EVM, pass through (base58
         # case must be preserved exactly).
@@ -88,7 +109,44 @@ class LabelStore:
                 return None
         else:
             normalized = address
-        return self._by_addr_lower.get(_label_key(normalized))
+        label = self._by_addr_lower.get(_label_key(normalized))
+        if label is None:
+            return None
+
+        if point_in_time is None:
+            # Default: current-state semantics, every existing caller
+            # gets the same behavior they had before v0.31.2.
+            # v0.32 (Tier-1 gap #2 — CEX hot-wallet rotation): the
+            # EFFECTIVE confidence is decayed when added_at is old and
+            # the label hasn't been refreshed. Stored value stays
+            # intact so a brief can render "original=high, effective=
+            # medium". The returned Label is a copy with the decayed
+            # confidence.
+            return _decayed_copy(label)
+
+        # Point-in-time filtering. Compare via _coerce_aware_utc so a
+        # naive `point_in_time` doesn't crash against the timezone-aware
+        # added_at / valid_from / valid_until on the stored Label.
+        pit = _coerce_aware_utc(point_in_time)
+        added_at = _coerce_aware_utc(label.added_at)
+        if added_at is not None and pit is not None and added_at > pit:
+            # The label didn't exist yet at point_in_time.
+            return None
+        if label.valid_from is not None:
+            vf = _coerce_aware_utc(label.valid_from)
+            if vf is not None and pit is not None and vf > pit:
+                # Not yet active at point_in_time.
+                return None
+        if label.valid_until is not None:
+            vu = _coerce_aware_utc(label.valid_until)
+            if vu is not None and pit is not None and vu < pit:
+                # Already expired at point_in_time.
+                return None
+        # v0.32: apply confidence decay even on point-in-time lookups —
+        # the policy is "this label, as of now, is worth this much"
+        # and the same logic applies whether the request is current-
+        # state or historical.
+        return _decayed_copy(label, now=pit)
 
     def add(self, label: Label) -> None:
         # Try checksum (EVM); if that fails it's a non-EVM address and we
@@ -133,6 +191,13 @@ class LabelStore:
                     "skipping non-dict label entry in %s: %r", path, entry,
                 )
                 continue
+            # v0.31.4: structured section-divider rows like
+            # ``{"_section": "Hop Protocol"}`` are intentional
+            # documentation aids inside bridges.json. They carry no
+            # address (and no name); silently skip rather than logging
+            # a "malformed" warning that floods every load.
+            if "address" not in entry and "_section" in entry:
+                continue
             try:
                 label = Label(
                     address=entry["address"],
@@ -143,6 +208,12 @@ class LabelStore:
                     confidence=entry.get("confidence", "medium"),
                     notes=entry.get("notes"),
                     added_at=_parse_dt(entry.get("added_at")),
+                    # v0.31.2 (Gap #5): optional validity window. Pass
+                    # through only when the entry actually has the
+                    # field; absent fields stay None and preserve the
+                    # legacy "labeled forever after added_at" semantics.
+                    valid_from=_parse_dt_optional(entry.get("valid_from")),
+                    valid_until=_parse_dt_optional(entry.get("valid_until")),
                 )
             except (KeyError, ValueError, TypeError, AttributeError) as e:
                 log.warning("skipping malformed label in %s: %s", path, e)
@@ -163,3 +234,123 @@ def _parse_dt(s: str | None) -> datetime:
         return datetime.fromisoformat(s.replace("Z", "+00:00"))
     except ValueError:
         return datetime.now(UTC)
+
+
+def _parse_dt_optional(s: str | None) -> datetime | None:
+    """Parse an optional ISO-8601 string. Unlike _parse_dt, returns None
+    when the field is missing rather than defaulting to now() — for
+    valid_from / valid_until, "not specified" must mean "no constraint"
+    not "constraint = now"."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        # Bad ISO string in the optional window → treat as absent
+        # rather than crashing the whole load. Already-failing labels
+        # get logged + skipped at the outer try/except in _load_file.
+        return None
+
+
+def _decayed_copy(label: Label | None, *, now: datetime | None = None) -> Label | None:
+    """Return a Label whose ``confidence`` reflects the v0.32
+    confidence-decay policy.
+
+    Pure: the input is never mutated, the returned object is either
+    the same label (no decay applied) or a Pydantic ``model_copy``
+    with the new confidence. ``None`` in → ``None`` out so callers can
+    chain without a separate None-check.
+    """
+    if label is None:
+        return None
+    try:
+        from recupero.labels.confidence_decay import apply_decay_to_label
+    except Exception:  # noqa: BLE001
+        # If the decay module can't be imported (test scaffolding /
+        # circular import), pass the label through unchanged — decay
+        # must never break a lookup.
+        return label
+    if now is None:
+        now = datetime.now(UTC)
+    try:
+        effective = apply_decay_to_label(label, now=now)
+    except Exception:  # noqa: BLE001
+        return label
+    if effective == label.confidence or effective not in ("high", "medium", "low"):
+        return label
+    try:
+        return label.model_copy(update={"confidence": effective})
+    except Exception:  # noqa: BLE001
+        return label
+
+
+def _coerce_aware_utc(dt: datetime | None) -> datetime | None:
+    """Promote a naive datetime to UTC-aware. Aware values pass through.
+
+    Without this, comparing a naive `point_in_time` (common in tests
+    and ad-hoc CLI use) to the timezone-aware datetimes stored on
+    Label would raise ``TypeError: can't compare offset-naive and
+    offset-aware datetimes`` and crash the lookup. Coercion to UTC
+    matches the rest of the codebase's "datetimes are always UTC"
+    invariant from models.py.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    return dt
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.31.4 (Gap 1a — point-in-time graceful degradation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def lookup_pit_safe(
+    label_store: object,
+    address: str,
+    chain: object = None,
+    *,
+    point_in_time: object = None,
+) -> object | None:
+    """Best-effort point-in-time lookup against any label-store-shape.
+
+    Production callers should USE THIS instead of calling
+    ``label_store.lookup(...)`` directly. It honors point-in-time
+    on the canonical LabelStore (which supports the kwarg) and
+    degrades cleanly to current-state on any label-store
+    implementation that doesn't (test fakes, minimal stubs, etc.).
+
+    Fallback chain:
+      1. ``lookup(addr, chain=chain, point_in_time=pit)`` — full
+         signature.
+      2. On TypeError → ``lookup(addr, chain=chain)`` — drop PIT.
+      3. On further TypeError → ``lookup(addr)`` — minimal shape.
+
+    Any non-TypeError exception inside the lookup returns ``None``;
+    label resolution must NEVER fail the trace.
+    """
+    if label_store is None or not address:
+        return None
+    try:
+        if chain is None:
+            return label_store.lookup(address, point_in_time=point_in_time)  # type: ignore[attr-defined]
+        return label_store.lookup(  # type: ignore[attr-defined]
+            address, chain=chain, point_in_time=point_in_time,
+        )
+    except TypeError:
+        pass
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        if chain is None:
+            return label_store.lookup(address)  # type: ignore[attr-defined]
+        return label_store.lookup(address, chain=chain)  # type: ignore[attr-defined]
+    except TypeError:
+        pass
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        return label_store.lookup(address)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return None

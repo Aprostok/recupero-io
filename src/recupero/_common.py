@@ -13,11 +13,15 @@ happen in one place.
 
 from __future__ import annotations
 
+import logging
 import os
 import re as _re_module
 from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # Pre-compiled DSN-password regex used by `redact_dsn` AND by the
 # `db_connect` exception-message scrubber. Defined here at module top
@@ -104,6 +108,17 @@ ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "zksync":      "https://explorer.zksync.io/address/",
     "scroll":      "https://scrollscan.com/address/",
     "mantle":      "https://mantlescan.xyz/address/",
+    # v0.31.0: 6 chains promoted from destination-only to full adapter
+    # coverage. Each routes through Etherscan V2 multichain. The
+    # block-explorer URLs here are the chain's CANONICAL public
+    # explorer (not the Etherscan-V2 endpoint), used in brief prose
+    # and address-link rendering. Verified via WebFetch 2026-05-26.
+    "fantom":      "https://ftmscan.com/address/",
+    "celo":        "https://celoscan.io/address/",
+    "gnosis":      "https://gnosisscan.io/address/",
+    "moonbeam":    "https://moonscan.io/address/",
+    "metis":       "https://andromeda-explorer.metis.io/address/",
+    "kava":        "https://kavascan.com/address/",
 }
 
 
@@ -131,6 +146,13 @@ EXPLORER_NAME_BY_CHAIN: dict[str, str] = {
     "zksync":      "zkSync Explorer",
     "scroll":      "ScrollScan",
     "mantle":      "MantleScan",
+    # v0.31.0: promoted destination chains.
+    "fantom":      "FtmScan",
+    "celo":        "Celoscan",
+    "gnosis":      "GnosisScan",
+    "moonbeam":    "Moonscan",
+    "metis":       "Metis Andromeda Explorer",
+    "kava":        "KavaScan",
 }
 
 
@@ -292,6 +314,46 @@ def short_addr(addr: str | None) -> str:
     return f"{addr[:6]}…{addr[-4:]}"
 
 
+# ---- Link-like path detection (symlinks + Windows junctions) ---- #
+
+
+def is_link_like(path: Path) -> bool:
+    """True if ``path`` is a symbolic link OR a Windows NTFS junction.
+
+    v0.31.3 (Windows path-traversal hardening): pre-v0.31.3 every
+    safety-net call site used only ``Path.is_symlink()``, which
+    returns ``False`` for NTFS junctions on Windows. That left a
+    Windows-specific path-traversal hole: ``mklink /J`` doesn't even
+    require admin / Developer Mode, so an attacker who could write
+    one directory inside the data-dir tree could plant a junction
+    pointing anywhere and bypass every "is this a symlink?" guard.
+
+    ``os.path.isjunction`` was added in Python 3.12. On older
+    interpreters it doesn't exist; we feature-detect and degrade
+    cleanly. On POSIX, ``isjunction`` is always ``False``, so the
+    helper collapses to the legacy ``is_symlink`` semantics — no
+    behavior change on Linux / Mac.
+
+    Defensive: any OSError from the underlying stat is swallowed
+    (returns False). The caller's own write/read code will surface
+    a real-FS error in a moment if there's a deeper problem.
+    """
+    try:
+        if path.is_symlink():
+            return True
+    except OSError:
+        return False
+    try:
+        # Python 3.12+ — os.path.isjunction. Feature-detect for
+        # older interpreters where it's missing.
+        isjunction = getattr(os.path, "isjunction", None)
+        if isjunction is not None and isjunction(str(path)):
+            return True
+    except OSError:
+        return False
+    return False
+
+
 # ---- Atomic file writes ---- #
 
 
@@ -322,6 +384,11 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
         following an operator-placed redirect to an unrelated
         directory has caused recovery-snapshot corruption in
         ops-incidents. Cheaper to fail loud.
+      * v0.31.3: also reject Windows NTFS junctions via
+        ``is_link_like`` — pre-v0.31.3 only ``is_symlink`` was
+        checked, which returns False for junctions, leaving a
+        Windows-specific path-traversal hole (`mklink /J` doesn't
+        even require admin / Developer Mode).
       * Tempfile name is unique (``tempfile.mkstemp``) so concurrent
         writers targeting the SAME path (e.g. two brief generators
         racing on brief.html) don't clobber each other's tempfile
@@ -333,7 +400,7 @@ def atomic_write_text(path: Path, content: str, *, encoding: str = "utf-8") -> N
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    if path.is_symlink():
+    if is_link_like(path):
         raise ValueError(
             f"refusing to write to symlink at {path}; delete the link "
             f"and retry (wave-3 symlink-following guard)"
@@ -455,6 +522,13 @@ def db_connect(dsn: str, **overrides: Any):
 # investigator-identity env var lives in one place.
 
 
+# v0.30.0 (F7 — brief read-through): the unconfigured-name placeholder
+# is a sentinel that the brief-render path checks to decide whether to
+# stamp a DRAFT banner. Keep it as a single canonical string so a typo
+# can't bypass the gate.
+INVESTIGATOR_NAME_UNCONFIGURED = "(operator name not configured)"
+
+
 def investigator_defaults() -> dict[str, str]:
     """Resolve investigator identity from env at call-time.
 
@@ -470,7 +544,7 @@ def investigator_defaults() -> dict[str, str]:
     return {
         "INVESTIGATOR_NAME": (
             os.environ.get("RECUPERO_INVESTIGATOR_NAME", "").strip()
-            or "(operator name not configured)"
+            or INVESTIGATOR_NAME_UNCONFIGURED
         ),
         "INVESTIGATOR_EMAIL": (
             os.environ.get("RECUPERO_INVESTIGATOR_EMAIL", "").strip()
@@ -489,6 +563,83 @@ def investigator_defaults() -> dict[str, str]:
             os.environ.get("RECUPERO_INVESTIGATOR_WEB", "recupero.io")
         ),
     }
+
+
+def resolve_render_time() -> datetime:
+    """Resolve the wall-clock-or-pinned render timestamp.
+
+    Honors ``SOURCE_DATE_EPOCH`` for reproducible-builds workflows so
+    re-rendering the same case on the same code produces byte-identical
+    artifacts.
+
+    v0.30.4 (V030_2_CORRECTNESS_AUDIT T2-A): moved from `brief.py` into
+    `_common.py` so every renderer can share the implementation. Pre-
+    v0.30.4 only `brief.py` and `recovery_snapshot.py` honored
+    SOURCE_DATE_EPOCH; 7 other renderers (cluster_handoff, aggregate,
+    ai_editorial, cooperation_dashboard, legal_requests,
+    subpoena_renderer, law_firm_dashboard) used bare
+    ``datetime.now(UTC)`` and broke byte-reproducibility of multi-
+    artifact bundles. All 7 now route here.
+
+    On parse failure (invalid SOURCE_DATE_EPOCH), falls back to
+    wall-clock with a warning.
+    """
+    src_epoch = os.environ.get("SOURCE_DATE_EPOCH", "").strip()
+    if src_epoch:
+        try:
+            return datetime.fromtimestamp(int(src_epoch), tz=UTC)
+        except (ValueError, TypeError):
+            log.warning(
+                "SOURCE_DATE_EPOCH=%r is not a valid integer epoch; "
+                "falling back to wall-clock", src_epoch,
+            )
+    return datetime.now(UTC)
+
+
+def is_investigator_configured() -> bool:
+    """v0.30.0 (F7): True iff RECUPERO_INVESTIGATOR_NAME is set to a
+    non-empty value.
+
+    The §9 Investigator Attestation block is the most legally-significant
+    paragraph in the LE handoff package (sworn statement, signs the
+    chain of custody). Pre-v0.30.0 unconfigured deploys silently shipped
+    "(operator name not configured)" in that block — which renders the
+    attestation legally useless (no human accountable) and signals to
+    the recipient that the package is generated by software with no
+    review.
+
+    Callers use this predicate to decide whether to stamp a DRAFT
+    banner on the brief. The strict-mode helper `require_investigator_
+    configured()` raises rather than returning False — useful as a
+    production deploy gate / CI assertion.
+    """
+    raw = os.environ.get("RECUPERO_INVESTIGATOR_NAME", "").strip()
+    return bool(raw) and raw != INVESTIGATOR_NAME_UNCONFIGURED
+
+
+def require_investigator_configured() -> None:
+    """v0.30.0 (F7): raise RuntimeError if the operator-name env var
+    isn't set. Suitable as a production deploy preflight check.
+
+    Pre-flight intent: a Railway/Render deploy where
+    ``RECUPERO_REQUIRE_INVESTIGATOR=1`` is set will fail to start if
+    the investigator name is missing — preventing a deploy from
+    silently shipping unsigned briefs to a real customer. Dev /
+    sandbox deploys leave the env var unset and the function never
+    runs; only strict-mode operators call it.
+    """
+    if is_investigator_configured():
+        return
+    raise RuntimeError(
+        "RECUPERO_INVESTIGATOR_NAME is not configured. "
+        "Briefs shipped without a configured operator name carry an "
+        "unsigned §9 Investigator Attestation block, which is legally "
+        "ineffective and damages credibility with LE / issuer "
+        "recipients. Set RECUPERO_INVESTIGATOR_NAME to a real human "
+        "name before running brief generation in production. "
+        "(To bypass this check in development, unset "
+        "RECUPERO_REQUIRE_INVESTIGATOR.)"
+    )
 
 
 # ---- Boolean env-var parsing ---- #
@@ -616,6 +767,15 @@ __all__ = (
     "db_connect",
     "env_truthy",
     "investigator_defaults",
+    # v0.30.1 (round-N T1-B): F7 investigator-gate helpers must be in
+    # __all__ so `from recupero._common import *` exposes them — without
+    # this, the deploy gate is bypassable via wildcard import.
+    "is_investigator_configured",
+    "require_investigator_configured",
+    "INVESTIGATOR_NAME_UNCONFIGURED",
+    # v0.30.4 (V030_2_CORRECTNESS_AUDIT T2-A): shared render-time
+    # helper used by 8 renderers for SOURCE_DATE_EPOCH coverage.
+    "resolve_render_time",
     "pooled_dsn",
     "redact_dsn",
     "aggregate_evidence_mode_from_entries",

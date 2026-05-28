@@ -779,6 +779,241 @@ MUTATIONS: list[Mutation] = [
             "test_invariant_d_catches_self_reference_cycle"
         ),
     ),
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # v0.31.x extension — 10 mutations covering the v0.31.0/.1/.2 surfaces
+    # the audit flagged as having ZERO mutation coverage:
+    #   * dust_attack (3 — ratio guard, min_fanout default, threshold direction)
+    #   * cex_continuity (3 — window direction, abs() drop, noisy-token flip)
+    #   * bridge decoders (3 — Connext domain slot, LiFi receiver offset,
+    #                      Symbiosis recipient slot)
+    #   * label store (1 — point_in_time added_at boundary)
+    # Each targets a VALUE/THRESHOLD/BOUNDARY change a real bug-shape might
+    # produce; the named test in tests/test_v031_*.py MUST detect it.
+    # ─────────────────────────────────────────────────────────────────────────
+    Mutation(
+        # dust_attack: the 2x confidence guard is what keeps the detector
+        # from sweeping up a legitimate consolidation hub that received
+        # 1 big payment + 30 sub-routed change-backs. Weakening the guard
+        # from `>= 2x` to `>= 1x` flips the "big-payment + dust-noise"
+        # case from "suppressed (correct)" to "fires (false positive)" —
+        # so the consolidation hub would land in `flagged` instead of
+        # being preserved in the brief.
+        #
+        # The case test sends 10 dust + 10 non-dust (ratio = 1.0). With
+        # the guard at `2 * non_dust`, ratio 1.0 < 2.0 → suppress (test
+        # expects empty set). After mutation the comparison becomes
+        # `>= 1 * non_dust` so ratio 1.0 >= 1.0 → fire (test fails).
+        name="v0.31.2 dust_attack: 2x ratio guard weakened to 1x",
+        file_path=REPO_ROOT / "src/recupero/trace/dust_attack.py",
+        find="if len(dust_dests) < 2 * len(non_dust_dests):",
+        replace_with=(
+            "if len(dust_dests) < 1 * len(non_dust_dests):  "
+            "# MUTATION: ratio guard weakened — false positives"
+        ),
+        test_target=(
+            "tests/test_v031_2_dust_attack.py::"
+            "test_confidence_guard_dust_not_dominating_non_dust"
+        ),
+    ),
+    Mutation(
+        # dust_attack: default `min_fanout=10` is the smallest fan-out
+        # that catches published dust-shower attacks while staying above
+        # any legitimate change-back behavior. Off-by-one to `11` means
+        # a perpetrator running an exact-10-destination shower (the
+        # threshold case the test pins) slips through.
+        #
+        # The pinned test sends 20 distinct dust destinations — well
+        # over both 10 and 11. So the off-by-one to 11 wouldn't catch.
+        # Move the default UP enough that a 10-destination shower no
+        # longer fires: default=21 means the 20-destination test will
+        # fail (expects flagged={20 addrs}, gets empty set).
+        name="v0.31.2 dust_attack: min_fanout default raised above 20",
+        file_path=REPO_ROOT / "src/recupero/trace/dust_attack.py",
+        find="    min_fanout: int = 10,",
+        replace_with=(
+            "    min_fanout: int = 21,  "
+            "# MUTATION: default raised — 20-dest shower no longer fires"
+        ),
+        test_target=(
+            "tests/test_v031_2_dust_attack.py::"
+            "test_classic_dust_shower_20_destinations_all_flagged"
+        ),
+    ),
+    Mutation(
+        # dust_attack: the threshold compare is `usd < threshold` so
+        # dust is STRICTLY below the cutoff. Flipping to `usd <=`
+        # changes the boundary semantics — a transfer at exactly
+        # $1.00 (the default threshold) flips from non-dust to dust.
+        # The custom-threshold test at $10 with $9.99 transfers needs
+        # `<` to fire correctly (and `<=` ALSO fires here — equivalent
+        # mutant on THAT test). For non-equivalence we need a test
+        # that puts a transfer AT the threshold boundary.
+        #
+        # Re-target to a test that has transfers at $5.00 with default
+        # $1.00 threshold (`test_above_threshold_transfers_not_flagged`).
+        # Flipping the operator changes the threshold-compare result
+        # for the AT-boundary case but not here. So instead the safest
+        # mutation that the EXISTING shower test catches is to flip
+        # the *direction*: change `usd < threshold` to `usd > threshold`.
+        # That makes a $0.001 dust transfer go to the NON-dust bucket,
+        # the test "classic_dust_shower_20_destinations_all_flagged"
+        # then expects 20 flagged dust but gets 0 → fail.
+        name="v0.31.2 dust_attack: threshold compare direction inverted",
+        file_path=REPO_ROOT / "src/recupero/trace/dust_attack.py",
+        find="        if usd < threshold:",
+        replace_with=(
+            "        if usd > threshold:  "
+            "# MUTATION: direction flipped — dust becomes non-dust"
+        ),
+        test_target=(
+            "tests/test_v031_2_dust_attack.py::"
+            "test_classic_dust_shower_20_destinations_all_flagged"
+        ),
+    ),
+    Mutation(
+        # cex_continuity: the window guard is `if row_block_time >
+        # window_end: continue` — skip outflows that fall AFTER the
+        # window. Inverting to `<` skips outflows INSIDE the window;
+        # the 2h amount-matched outflow (well inside default 6h) would
+        # be filtered out, and the matched-lead test expects exactly
+        # one lead.
+        name="v0.31.2 cex_continuity: window-end direction inverted",
+        file_path=REPO_ROOT / "src/recupero/trace/cex_continuity.py",
+        find="                if row_block_time > window_end:",
+        replace_with=(
+            "                if row_block_time < window_end:  "
+            "# MUTATION: in-window outflows now skipped"
+        ),
+        test_target=(
+            "tests/test_v031_2_cex_continuity.py::"
+            "test_amount_matched_outflow_in_window_yields_one_lead"
+        ),
+    ),
+    Mutation(
+        # cex_continuity: amount-tolerance check is `|dep - cand| /
+        # dep <= tol`. Dropping the abs() means a candidate with
+        # 4x the deposit (way over) computes `dep - 4*dep = -3*dep`
+        # → pct = -3 → -3 <= 0.05 → True (always matches for
+        # candidates LARGER than the deposit). The mismatch test
+        # (5 WBTC dep, 20 WBTC outflow) expects [] but would now
+        # produce a (false) lead.
+        name="v0.31.2 cex_continuity: abs() dropped from tolerance check",
+        file_path=REPO_ROOT / "src/recupero/trace/cex_continuity.py",
+        find="        diff = abs(deposit_usd - candidate_usd)",
+        replace_with=(
+            "        diff = (deposit_usd - candidate_usd)  "
+            "# MUTATION: abs() dropped — over-amount always matches"
+        ),
+        test_target=(
+            "tests/test_v031_2_cex_continuity.py::"
+            "test_amount_mismatch_outside_tolerance_yields_zero_leads"
+        ),
+    ),
+    Mutation(
+        # cex_continuity: the noisy-token check is
+        # `if token_sym in noisy_tokens: continue` — SKIP USDC/USDT
+        # deposits (too statistically noisy to claim continuity).
+        # Inverting to `not in` flips the filter: ONLY noisy tokens
+        # pass, so the USDC deposit (which the test expects to be
+        # SKIPPED with zero leads + no adapter call) now becomes a
+        # candidate, the adapter IS called, and a lead may be
+        # produced → test asserts adapter NOT called, fails.
+        name="v0.31.2 cex_continuity: noisy_tokens membership inverted",
+        file_path=REPO_ROOT / "src/recupero/trace/cex_continuity.py",
+        find="        if token_sym in noisy_tokens:",
+        replace_with=(
+            "        if token_sym not in noisy_tokens:  "
+            "# MUTATION: only noisy tokens pass — opposite of intent"
+        ),
+        test_target=(
+            "tests/test_v031_2_cex_continuity.py::"
+            "test_noisy_token_usdc_yields_zero_leads"
+        ),
+    ),
+    Mutation(
+        # Connext decoder: the domain-ID extraction slot is
+        # `args_blob[0:64]` (first 32-byte word). Shifting to
+        # `args_blob[32:96]` reads the recipient address as the
+        # domain-ID, which won't be in `_CONNEXT_DOMAIN_IDS` so
+        # `dest_chain` becomes None — the Optimism happy-path test
+        # asserts destination_chain == "optimism" and fails.
+        name="v0.31.0 Connext decoder: domain-ID slot shifted by one word",
+        file_path=REPO_ROOT / "src/recupero/trace/bridge_calldata.py",
+        find="        domain_hex = args_blob[0:64]",
+        replace_with=(
+            "        domain_hex = args_blob[32:96]  "
+            "# MUTATION: domain-ID slot shifted; reads recipient as domain"
+        ),
+        test_target=(
+            "tests/test_v031_decoders.py::"
+            "test_connext_xcall_decodes_optimism"
+        ),
+    ),
+    Mutation(
+        # LiFi decoder: the BridgeData receiver/chain-ID offsets for
+        # the no-swap facet are `(160 * 2, 224 * 2)`. Shifting the
+        # receiver offset to `(192 * 2, 224 * 2)` reads the
+        # minAmount slot as the receiver — the address is no longer
+        # 20-byte right-padded so the dest_address comes back as
+        # 0x000... which the decoder treats as a sentinel and
+        # rejects, ultimately returning low-confidence with no
+        # destination. The Polygon happy-path test expects
+        # confidence='high' + dest_address='0x99...99' → fails.
+        name="v0.31.0 LiFi decoder: receiver offset shifted +32B",
+        file_path=REPO_ROOT / "src/recupero/trace/bridge_calldata.py",
+        find="        (160 * 2, 224 * 2),   # BridgeData at offset 0 (start-bridge-only)",
+        replace_with=(
+            "        (192 * 2, 224 * 2),   "
+            "# MUTATION: receiver offset shifted; happy path now low-conf"
+        ),
+        test_target=(
+            "tests/test_v031_decoders.py::"
+            "test_lifi_start_bridge_tokens_via_stargate_polygon"
+        ),
+    ),
+    Mutation(
+        # Symbiosis decoder: `relayRecipient` is at struct slot 7
+        # inside the inlined tuple body, hex index 224*2 (=448)
+        # beyond `tuple_body_hex_idx`. Shifting to `200*2` (=400)
+        # reads from inside the `amount`/`nativeIn` slots, which
+        # are not the recipient — the extracted `dest_address`
+        # becomes the wrong 20-byte slice, not matching the
+        # `0xbbbb...bb` recipient the Polygon happy-path test
+        # asserts. Confidence drops accordingly.
+        name="v0.31.2 Symbiosis decoder: relayRecipient slot offset shifted",
+        file_path=REPO_ROOT / "src/recupero/trace/bridge_calldata.py",
+        find="        recv_slot_start = tuple_body_hex_idx + 224 * 2",
+        replace_with=(
+            "        recv_slot_start = tuple_body_hex_idx + 200 * 2  "
+            "# MUTATION: relayRecipient slot shifted -24B"
+        ),
+        test_target=(
+            "tests/test_v031_2_symbiosis_decoder.py::"
+            "test_symbiosis_metaroute_polygon_high_confidence"
+        ),
+    ),
+    Mutation(
+        # LabelStore.lookup point_in_time: the added_at-before-pit
+        # filter is `if added_at > pit: return None`. Inverting to
+        # `<` makes the filter trigger when the label EXISTED at
+        # the timestamp instead of when it didn't — so a 2023-06-01
+        # PIT against a 2024-01-01-added label returns the label
+        # (back-stamping a 2024 label onto 2023 transfers, the bug
+        # the v0.31.2 Gap #5 fix closed). The "before added_at"
+        # test asserts None → fails.
+        name="v0.31.2 LabelStore: point_in_time added_at direction flipped",
+        file_path=REPO_ROOT / "src/recupero/labels/store.py",
+        find="if added_at is not None and pit is not None and added_at > pit:",
+        replace_with=(
+            "if added_at is not None and pit is not None and added_at < pit:  "
+            "# MUTATION: direction flipped — labels back-stamp onto pre-add transfers"
+        ),
+        test_target=(
+            "tests/test_v031_2_point_in_time_labels.py::"
+            "TestNoValidityWindow::test_before_added_at_returns_none"
+        ),
+    ),
 ]
 
 

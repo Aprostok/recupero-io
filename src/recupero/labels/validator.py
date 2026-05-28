@@ -37,7 +37,23 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
     "mixers.json": {
         "wrapping": "list",
         "required": ["address", "name", "category"],
-        "optional": ["source", "confidence", "notes", "added_at"],
+        # v0.29.1 (label-DB sweep): explicit chain + provenance markers.
+        # v0.30.0: `_v030_chain_corrected` records the audit-driven
+        # correction for the Tornado-Cash-BSC mislabel.
+        # v0.31.0: `_v031_addition` + `_audit_status` track the
+        # mixer-expansion batch (RAILGUN multi-chain, Aztec, Privacy
+        # Pools, Nocturne, etc.) — same provenance pattern bridges.json
+        # already uses for its expansion batches.
+        "optional": [
+            "source", "confidence", "notes", "added_at",
+            "chain", "_v029_1_chain_backfill", "last_verified_at",
+            "_v030_chain_corrected",
+            "_v031_addition", "_audit_status",
+            # v0.31.2 (Gap #5 — point-in-time labels): optional validity
+            # window. Default-None preserves "labeled forever from
+            # added_at" semantics for existing rows.
+            "valid_from", "valid_until",
+        ],
     },
     "ransomware.json": {
         "wrapping": "addresses",
@@ -51,26 +67,60 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
     "defi_protocols.json": {
         "wrapping": "list",
         "required": ["address", "name"],
+        # v0.29.1 (label-DB sweep, Recommendation #7): explicit `chain`
+        # field — backfilled by scripts/_v029_1_label_db_sweep.py so an
+        # ad-hoc audit query can ask "what's our defi_protocols coverage
+        # on chain X?" and get a real answer.
         "optional": [
             "category", "subcategory", "source", "notes",
             "added_at", "confidence",
+            "chain", "_v029_1_chain_backfill", "last_verified_at",
+            # v0.31.2 (Gap #5 — point-in-time labels).
+            "valid_from", "valid_until",
         ],
     },
     "cex_deposits.json": {
         "wrapping": "list",
         "required": ["address", "name"],
+        # v0.29.1 (label-DB sweep): explicit `chain` + `last_verified_at`
+        # for confidence decay (Recommendation #6).
+        # v0.31.2 (gap #7): `_v031_addition` + `_audit_status` track
+        # the Tron + Solana CEX-deposit seed expansion (pre-v0.31.2
+        # both chains were zero-keyed, so funds flowing into a Tron
+        # Binance hot wallet or a Solana Coinbase hot wallet surfaced
+        # as unlabeled EOAs).
         "optional": [
             "category", "source", "exchange", "confidence", "notes",
             "added_at",
+            "chain", "_v029_1_chain_backfill", "last_verified_at",
+            "_v031_addition", "_audit_status",
+            # v0.31.2 (Gap #5 — point-in-time labels). Especially
+            # relevant for cex_deposits: exchange deposit addresses
+            # rotate, so a deposit labeled today wasn't necessarily
+            # one six months ago at theft-time.
+            "valid_from", "valid_until",
         ],
     },
     "bridges.json": {
         "wrapping": "list",
         "required": ["address", "name"],
+        # v0.29.1 additions: `_v029_addition` / `_v029_1_addition` /
+        # `_audit_status` track provenance for the expansion batches;
+        # `last_verified_at` powers the confidence-decay test
+        # (Recommendation #6).
+        # v0.31.2 (gap #6): `_v031_addition` tracks the Tron + Solana
+        # bridge seed expansion (pre-v0.31.2 both chains were zero-
+        # keyed for bridges.json, so handoffs to Wormhole-on-Tron or
+        # Wormhole-on-Solana surfaced as unlabeled EOAs).
         "optional": [
             "category", "source", "notes", "destinations",
             "chain", "contract", "confidence", "added_at",
             "follow_up_url", "supports_to_chains",
+            "_v028_addition", "_v029_addition", "_v029_1_addition",
+            "_v031_addition",
+            "_audit_status", "_v029_1_chain_backfill", "last_verified_at",
+            # v0.31.2 (Gap #5 — point-in-time labels).
+            "valid_from", "valid_until",
         ],
     },
     # Issuers map freezable-token contracts → the legal issuer who can
@@ -82,10 +132,15 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
     "issuers.json": {
         "wrapping": "tokens",
         "required": ["chain", "contract", "symbol", "issuer", "freeze_capability"],
+        # v0.30.1: `_v030_1_contact_note` records inline provenance for
+        # contact-data corrections from the V030_CONTACT_AUDIT.md sweep.
         "optional": [
             "freeze_notes", "primary_contact", "secondary_contact",
             "jurisdiction", "delegates_to", "le_portal_url",
             "freeze_response_time_hours", "notes", "added_at", "source",
+            "_v030_1_contact_note",
+            # v0.31.2 (Gap #5 — point-in-time labels).
+            "valid_from", "valid_until",
         ],
     },
 }
@@ -333,6 +388,17 @@ def _validate_entries(
             # the `0x...` EVM form.
             from recupero._common import canonical_address_key
             addr_key = canonical_address_key(addr)
+            # v0.29.1: dup-detection is (chain, address) keyed, not
+            # address-only. Many bridges deterministically deploy at the
+            # same address across chains (LiFi Diamond, Squid Router,
+            # Synapse Router all share an address on Eth / Arb / Op /
+            # Polygon / etc). Pre-v0.29.1 the validator flagged those
+            # as duplicate-address warnings, drowning real curation
+            # gaps in deterministic-deploy noise. Keying on (chain,
+            # address) means "the same address with the same chain
+            # appears twice" is the actual error condition.
+            chain_for_key = entry.get("chain") or "ethereum"
+            addr_key = (chain_for_key, addr_key)
             if addr_key in seen_addresses:
                 # Duplicates are surfaced as WARNINGS rather than
                 # errors. The seed files have some pre-existing

@@ -243,7 +243,15 @@ def _extract_perp_hub(case: Case) -> dict[str, Any] | None:
         if _ck(t.from_address) == seed_canon:
             to_raw = t.to_address
             to_canon = _ck(to_raw)
-            if t.usd_value_at_tx is not None:
+            # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): mirror the
+            # _trace_report.py:209 NaN-guard pattern. Pre-v0.30.3, a
+            # single Decimal('NaN') usd_value_at_tx (from a hand-edited
+            # cache, a future non-CoinGecko adapter, or a corrupt
+            # case-on-disk) poisoned per_addr_usd[to_canon] and
+            # propagated into the max()-based perp-hub selection on the
+            # LE handoff cover — yielding a randomly-chosen "largest
+            # outflow" destination because NaN comparisons are False.
+            if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
                 per_addr_usd[to_canon] += t.usd_value_at_tx
             if (
                 to_canon not in per_addr_first_seen
@@ -289,6 +297,14 @@ def _parse_dust_threshold() -> Decimal:
     raw = os.environ.get("RECUPERO_DESTINATION_DUST_USD", "1000.00").strip()
     try:
         val = Decimal(raw)
+        # v0.30.3 (V030_2_CORRECTNESS_AUDIT T3-B): Decimal("NaN") /
+        # Decimal("Infinity") parse successfully but `val < 0` returns
+        # False per IEEE 754, so the pre-v0.30.3 guard let non-finite
+        # thresholds through. A NaN threshold makes EVERY destination
+        # fail `received >= NaN` (False), collapsing the destination
+        # list to freeze-target-only entries.
+        if not val.is_finite():
+            raise ValueError("non-finite threshold (NaN/Inf)")
         if val < 0:
             raise ValueError("negative threshold")
         return val
@@ -375,7 +391,12 @@ def _extract_destinations(
         if not to or to == seed_canon:
             continue
         per_addr_display.setdefault(to, to_raw)
-        if t.usd_value_at_tx is not None:
+        # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum so
+        # a single NaN doesn't poison the destination's received-USD
+        # bucket. Without this, the `received >= dust_threshold` filter
+        # behaves unpredictably for any address that received any
+        # NaN-priced transfer.
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             per_addr_received[to] += t.usd_value_at_tx
         if t.token and t.token.symbol:
             per_addr_tokens[to].add(t.token.symbol)
@@ -903,7 +924,15 @@ def _compute_total_drained(case: Case) -> Decimal:
     seed_lower = _ck(case.seed_address)
     total = Decimal("0")
     for t in case.transfers:
-        if _ck(t.from_address) == seed_lower and t.usd_value_at_tx is not None:
+        # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only. Without
+        # this, a single Decimal('NaN') usd_value_at_tx poisons the
+        # running total and the LE cover renders the headline as
+        # "USD $NaN stolen" in front of a federal agent.
+        if (
+            _ck(t.from_address) == seed_lower
+            and t.usd_value_at_tx is not None
+            and t.usd_value_at_tx.is_finite()
+        ):
             total += t.usd_value_at_tx
     return total
 
@@ -1304,6 +1333,59 @@ def _build_entity_clusters_section(
         return {"clusters": [], "unclustered_addresses": []}
 
 
+def _build_wallet_clusters_section(case: Case) -> dict[str, Any]:
+    """v0.31.0: minimum-viable wallet clustering (Gap #4 of the
+    trace-completeness assessment).
+
+    Complements the legacy v0.9 ENTITY_CLUSTERS section with stricter
+    heuristics and stable sha256-derived cluster IDs. Returns
+    ``{"clusters": [...]}`` populated only when 2+ identified
+    addresses in the case cluster together via one of the MVP
+    heuristics (co-spending, common CEX withdrawal ≤1h, common
+    funding ≤1h, bridge round-trip). Otherwise returns
+    ``{"clusters": []}``.
+
+    Cluster IDs are sha256-derived so two runs over the same case
+    JSON produce identical IDs — important for cross-references
+    in the PDF brief + AI editorial templates.
+
+    Best-effort: any failure (label store unavailable, heuristic
+    crash) degrades to an empty list rather than poisoning the
+    whole brief render.
+    """
+    try:
+        from recupero.trace.clustering import compute_clusters_with_metadata
+
+        # Best-effort label load. If config or labels are unavailable
+        # we still run with label_store=None (the funding heuristic
+        # still fires; only the CEX / bridge passes are label-gated).
+        label_store: Any = None
+        try:
+            from recupero.config import load_config
+            from recupero.labels.store import LabelStore
+            label_store = LabelStore.load(load_config())
+        except Exception as exc:  # noqa: BLE001
+            log.debug(
+                "emit_brief: label store load failed for wallet clustering "
+                "(%s); running without label suppression", exc,
+            )
+            label_store = None
+
+        clusters = compute_clusters_with_metadata(
+            case, label_store=label_store,
+        )
+        # Spec: only surface a section when 2+ identified addresses
+        # cluster together. compute_clusters_with_metadata already
+        # filters singletons, so any non-empty list satisfies that.
+        return {"clusters": clusters}
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: wallet clusters section build failed: %s — "
+            "falling back to empty", exc,
+        )
+        return {"clusters": []}
+
+
 def _build_risk_assessment_section(
     case: Case,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -1368,6 +1450,50 @@ def _build_indirect_exposure_section(
         }
 
 
+def _build_indirect_exposure_v031_section(
+    case: Case, high_risk_db: dict[str, Any],
+) -> dict[str, Any] | None:
+    """v0.31.0 MVP: flat per-address 4-hop weight-decayed exposure scoring.
+
+    Complementary to the v0.10.0 INDIRECT_EXPOSURE section above.
+    Closes gap #3 from the trace-completeness assessment (TRM /
+    Chainalysis 4-hop weight-decayed exposure scoring): direct-only
+    scoring missed the 2-hop-removed mixer / OFAC address; this
+    section surfaces it.
+
+    Returns ``None`` when no scored address crosses the 0.1
+    surface_threshold — the brief omits the section entirely rather
+    than emit a noisy empty block. Otherwise returns a top-10 ranked
+    list with primary_label_category + hops_from_victim + exposure_score
+    + total_usd_flow per entry.
+
+    Wired against the v0.31 MVP scorer in
+    ``recupero.trace.indirect_exposure``. high_risk_db is reused
+    as the label_store (it's a ``{address: HighRiskEntry}`` dict;
+    the scorer's resolver handles both LabelStore and plain-dict
+    shapes). Catches the previously-invisible "victim → drainer →
+    laundering hop → mixer" 3-hop case.
+    """
+    try:
+        from recupero.trace.indirect_exposure import (
+            compute_label_exposure_scores,
+            label_exposure_scores_to_brief_section,
+        )
+        scores = compute_label_exposure_scores(
+            case, label_store=high_risk_db, max_hops=4, decay=0.5,
+        )
+        return label_exposure_scores_to_brief_section(
+            case, scores, label_store=high_risk_db,
+            top_n=10, surface_threshold=0.1,
+        )
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: v0.31 indirect exposure section build failed: %s — "
+            "omitting section", exc,
+        )
+        return None
+
+
 def _build_incident_classification_section(
     case: Case, high_risk_db: dict[str, Any],
 ) -> tuple[dict[str, Any], Any]:
@@ -1414,6 +1540,35 @@ def _build_dex_swaps_section(case: Case) -> list[dict[str, Any]]:
             "back to empty", exc,
         )
         return []
+
+
+def _build_mev_signals_section(case: Case) -> dict[str, Any]:
+    """v0.31.0 (Gap #9): MEV / sandwich-attack obfuscation detection.
+
+    Flags hops whose tx-shape indicates Flashbots bundle / sandwich /
+    JIT-LP / MEV-builder-source funding. Detection only — manual
+    investigator follow-up needed per signal. Brief renders the
+    MEV-obfuscated-transfers panel only when at least one signal
+    clears confidence ≥ 0.5; sub-threshold counts roll up into the
+    summary line for transparency."""
+    try:
+        from recupero.trace.mev_detection import (
+            detect_mev_signals,
+            mev_signals_to_brief_section,
+        )
+        signals = detect_mev_signals(case)
+        return mev_signals_to_brief_section(signals)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: mev signals section build failed: %s — "
+            "falling back to empty", exc,
+        )
+        return {
+            "detected": False,
+            "signal_count": 0,
+            "suppressed_low_confidence_count": 0,
+            "signals": [],
+        }
 
 
 def _build_cross_case_correlation_section(
@@ -1501,6 +1656,96 @@ def _build_class_action_section(case: Case, case_uuid: Any) -> dict[str, Any]:
             "shared_addresses": [],
             "investigator_note": "",
         }
+
+
+def _build_cex_continuity_section(
+    case: Case,
+) -> list[dict[str, Any]]:
+    """v0.31.2 (Gap #15): CEX trace continuity leads.
+
+    When stolen funds land in a labeled CEX hot wallet the trace
+    stops (KYC opaque). This section surfaces investigative LEADS
+    when the SAME hot wallet emits an amount-matched outbound
+    transfer in a tight time window — a correlation operators can
+    pick up via subpoena, NOT a proven re-emergence claim.
+
+    OFF by default. Adapter calls cost API budget — opt in via
+    ``RECUPERO_CEX_CONTINUITY=1``. When disabled (default) this
+    returns ``[]`` immediately without any adapter calls.
+
+    Returns ``[]`` (empty list) when the feature is disabled OR
+    no qualifying leads are found. The emit_brief caller OMITS
+    the CEX_CONTINUITY_LEADS section key entirely on empty so
+    existing brief-key-set tests stay green.
+    """
+    try:
+        from recupero.trace.cex_continuity import (
+            env_continuity_enabled,
+            env_min_usd,
+            env_window_hours,
+            identify_cex_continuity_leads,
+            leads_to_brief_section,
+        )
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: cex_continuity module import failed: %s — "
+            "section omitted", exc,
+        )
+        return []
+
+    if not env_continuity_enabled():
+        log.debug(
+            "emit_brief: CEX continuity disabled "
+            "(RECUPERO_CEX_CONTINUITY not set to enable value)"
+        )
+        return []
+
+    try:
+        from recupero.chains.base import ChainAdapter
+        from recupero.config import load_config
+        from recupero.labels.store import LabelStore
+        cfg = load_config()
+        label_store: LabelStore | None
+        try:
+            label_store = LabelStore.load(cfg)
+        except Exception as exc:  # noqa: BLE001
+            log.debug(
+                "cex_continuity: label store load failed: %s; "
+                "no labeled CEXes — returning []", exc,
+            )
+            return []
+        try:
+            adapter = ChainAdapter.for_chain(case.chain, cfg)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "cex_continuity: adapter for chain %s unavailable: "
+                "%s — section omitted", case.chain, exc,
+            )
+            return []
+        try:
+            leads = identify_cex_continuity_leads(
+                case,
+                adapter=adapter,
+                label_store=label_store,
+                window_hours=env_window_hours(),
+                min_usd=env_min_usd(),
+            )
+        finally:
+            # Release the adapter's HTTP client — without this, opt-
+            # in operators running over thousands of cases would leak
+            # httpx clients until the FD limit hits (round-10 audit
+            # CRIT pattern for cross-chain continuation adapters).
+            try:
+                adapter.close()
+            except Exception:  # noqa: BLE001
+                pass
+        return leads_to_brief_section(leads)
+    except Exception as exc:  # noqa: BLE001 — non-fatal
+        log.warning(
+            "emit_brief: cex_continuity section build failed: %s — "
+            "section omitted", exc,
+        )
+        return []
 
 
 def emit_brief(
@@ -1606,6 +1851,13 @@ def emit_brief(
     # --- Entity clustering (v0.9.0) --- v0.20.0 Phase C: extracted
     entity_clusters = _build_entity_clusters_section(case, freezable)
 
+    # --- Wallet clustering MVP (v0.31.0) ---
+    # Complements ENTITY_CLUSTERS with tighter heuristics (Gap #4 of
+    # the trace-completeness assessment). Stable sha256-derived
+    # cluster IDs so cross-references in the brief survive re-emits.
+    # Returns {"clusters": []} when nothing clusters together.
+    wallet_clusters = _build_wallet_clusters_section(case)
+
     # --- Risk scoring (v0.9.1 + v0.10.0) --- v0.20.0 Phase C: extracted.
     # high_risk_db is returned alongside risk_assessment because the
     # next two subsystems (indirect_exposure, drainer_detection) need
@@ -1614,6 +1866,16 @@ def emit_brief(
 
     # --- Indirect exposure (v0.10.0) --- v0.20.0 Phase C: extracted
     indirect_exposure = _build_indirect_exposure_section(case, high_risk_db)
+
+    # --- Indirect exposure MVP (v0.31.0) --- complementary scoring.
+    # The v0.10.0 section above carries the rich path-level attribution
+    # (per-source IndirectPath records). This section adds the flat
+    # 4-hop weight-decayed top-10 ranking that closes gap #3 from the
+    # trace-completeness assessment. Returns None when no score crosses
+    # the surface threshold, in which case the section key is omitted.
+    indirect_exposure_v031 = _build_indirect_exposure_v031_section(
+        case, high_risk_db,
+    )
 
     # --- Drainer / incident classification (v0.10.1) --- v0.20.0 Phase C
     # Returns the brief-section view + the raw drainer_findings (the
@@ -1625,6 +1887,13 @@ def emit_brief(
 
     # --- DEX swap unwrapping (v0.10.2) --- v0.20.0 Phase C: extracted
     dex_swaps = _build_dex_swaps_section(case)
+
+    # --- MEV / sandwich obfuscation detection (v0.31.0, Gap #9) ---
+    # Detection-only flag for hops whose tx-shape indicates Flashbots
+    # bundle / sandwich / JIT-LP / MEV-builder-source funding. We do
+    # not pretend to unwrap; the brief surfaces the flag so the
+    # investigator picks up manual follow-up.
+    mev_signals = _build_mev_signals_section(case)
 
     # --- Cross-case correlation (v0.11.0) --- v0.20.0 Phase C: extracted
     # The recidivist-lookup against the cumulative
@@ -1641,6 +1910,17 @@ def emit_brief(
 
     # --- Class-action / cross-victim correlation (v0.14.3) --- v0.20.0 Phase C
     class_action_opportunity = _build_class_action_section(case, _case_uuid)
+
+    # --- CEX trace continuity leads (v0.31.2, Gap #15) ---
+    # OFF by default. Opt-in via RECUPERO_CEX_CONTINUITY=1. When a
+    # large transfer lands in a labeled CEX hot wallet, fetch the
+    # hot wallet's outbound transfers in a short window and surface
+    # amount-matched candidates as LEADS (confidence=low). Not a
+    # proof of re-emergence; CEX hot wallets commingle funds.
+    # Returns [] when the feature is disabled OR no leads found —
+    # the brief dict OMITS the section key on empty so existing
+    # brief-key-set tests stay green.
+    cex_continuity_leads = _build_cex_continuity_section(case)
 
     # --- Final assembly ---
     brief = {
@@ -1685,6 +1965,18 @@ def emit_brief(
         # evidence so the investigator can verify the heuristic
         # fired correctly.
         "ENTITY_CLUSTERS": entity_clusters,
+        # v0.31.0: MVP wallet clustering (Gap #4 of the trace-
+        # completeness assessment). Tighter heuristics than the v0.9
+        # ENTITY_CLUSTERS pass (co-spending on Bitcoin, common CEX
+        # withdrawal ≤1h, common funding ≤1h, bridge round-trip)
+        # with stable sha256-derived cluster IDs. Only present when
+        # 2+ addresses cluster together; otherwise the key is
+        # OMITTED so existing consumers that assert on key sets stay
+        # happy.
+        **(
+            {"WALLET_CLUSTERS": wallet_clusters}
+            if wallet_clusters.get("clusters") else {}
+        ),
         # v0.9.1: risk scoring (direct counterparty). Per-address
         # OFAC + mixer + darknet exposure. SANCTIONED on any direct
         # OFAC contact (dispositive — Treasury's 50% Rule).
@@ -1695,6 +1987,19 @@ def emit_brief(
         # shape as RISK_ASSESSMENT but with hop_count + path on
         # each entry.
         "INDIRECT_EXPOSURE": indirect_exposure,
+        # v0.31.0: MVP 4-hop weight-decayed exposure scoring. Flat
+        # {address: score} ranking that surfaces previously-invisible
+        # 2/3-hop-removed mixer / OFAC / ransomware / darknet_market
+        # / scam addresses. Closes gap #3 from the trace-completeness
+        # assessment (TRM / Chainalysis parity at MVP fidelity). The
+        # key is OMITTED from the brief when no scored address crosses
+        # the 0.1 surface threshold (so existing tests / consumers
+        # that assert on key sets stay happy). LE handoff template
+        # consumes this in a later release.
+        **(
+            {"INDIRECT_EXPOSURE_V031": indirect_exposure_v031}
+            if indirect_exposure_v031 is not None else {}
+        ),
         # v0.10.1: incident classification (drainer vs other).
         # Surfaces whether this looks like a wallet-drainer scam
         # (approval exploit pattern) vs an address-typo / social
@@ -1706,6 +2011,15 @@ def emit_brief(
         # investigator action note. Lets the trace continue
         # past 1inch/Uniswap/CoW routers.
         "DEX_SWAPS": dex_swaps,
+        # v0.31.0 (Gap #9): MEV / sandwich-attack obfuscation detection.
+        # Surfaces hops whose tx-shape indicates Flashbots bundle /
+        # sandwich / JIT-LP / MEV-builder-source funding. DETECT only —
+        # the brief renders a "MEV-obfuscated transfers" panel when at
+        # least one signal clears confidence ≥ 0.5 with a per-hop
+        # investigator follow-up note. We don't pretend to unwrap (TRM
+        # gets that via full block-shape reconstruction we lack); we
+        # honestly flag the trace-discontinuity.
+        "MEV_SIGNALS": mev_signals,
         # v0.11.0: cross-case correlation. For every address in
         # this case, this section reports prior appearances across
         # ALL previously-traced cases (read from the cumulative
@@ -1721,6 +2035,19 @@ def emit_brief(
         # combined-loss figure + recommend coordinated multi-victim
         # action. Empty/untriggered when no qualifying overlap.
         "CLASS_ACTION_OPPORTUNITY": class_action_opportunity,
+        # v0.31.2 (Gap #15): CEX trace continuity LEADS. OFF by
+        # default — opt in via RECUPERO_CEX_CONTINUITY=1 (adapter
+        # calls cost money). When stolen funds land in a labeled
+        # CEX hot wallet, the trace stops there (KYC opaque). This
+        # section flags amount-matched outbound transfers from the
+        # SAME hot wallet within a tight time window as INVESTIGATIVE
+        # LEADS — never as proven destinations. The key is OMITTED
+        # from the brief on empty so existing brief-key-set tests
+        # stay green.
+        **(
+            {"CEX_CONTINUITY_LEADS": cex_continuity_leads}
+            if cex_continuity_leads else {}
+        ),
 
         "INCIDENT_NARRATIVE_RECUPERO": editorial["INCIDENT_NARRATIVE_RECUPERO"],
         "INCIDENT_NARRATIVE_FIRST_PERSON": editorial["INCIDENT_NARRATIVE_FIRST_PERSON"],

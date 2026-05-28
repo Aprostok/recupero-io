@@ -30,9 +30,42 @@ from recupero.worker._deliverables import build_all_deliverables  # noqa: E402
 
 
 def main() -> int:
-    fixture = Path(r"C:\Users\apros\Downloads\recupero-io\data\cases\ALEC-TEST-2026")
-    if not fixture.exists():
-        print(f"FAIL: fixture not found at {fixture}")
+    # v0.30.2 (V030_2_SELF_AUDIT T1-B): pre-v0.30.2 the fixture path was
+    # hardcoded to the author's Windows laptop, making the preflight
+    # CI-broken and Railway-broken — `scripts/deploy_preflight.py`
+    # subprocess-invokes this script, and on any host that isn't the
+    # original author's laptop the smoke gate fails with "fixture not
+    # found" 100% of the time.
+    # Resolution order:
+    #   1. $RECUPERO_FIXTURES_DIR/ALEC-TEST-2026   (operator override)
+    #   2. <worktree>/data/cases/ALEC-TEST-2026     (in-repo)
+    #   3. <worktree>/../data/cases/ALEC-TEST-2026  (sibling layout)
+    #   4. ~/data/cases/ALEC-TEST-2026              (user-home fallback)
+    #   5. legacy author-laptop path (kept for back-compat; harmless
+    #      when absent on every other machine)
+    import os
+    candidates: list[Path] = []
+    env_dir = os.environ.get("RECUPERO_FIXTURES_DIR", "").strip()
+    if env_dir:
+        candidates.append(Path(env_dir) / "ALEC-TEST-2026")
+    candidates.append(WORKTREE / "data" / "cases" / "ALEC-TEST-2026")
+    candidates.append(WORKTREE.parent / "data" / "cases" / "ALEC-TEST-2026")
+    candidates.append(Path.home() / "data" / "cases" / "ALEC-TEST-2026")
+    candidates.append(Path(r"C:\Users\apros\Downloads\recupero-io\data\cases\ALEC-TEST-2026"))
+
+    fixture: Path | None = None
+    for cand in candidates:
+        if cand.exists():
+            fixture = cand
+            break
+    if fixture is None:
+        print(
+            "FAIL: ALEC-TEST-2026 fixture not found in any of the "
+            "candidate locations:\n  "
+            + "\n  ".join(str(c) for c in candidates)
+            + "\nSet RECUPERO_FIXTURES_DIR to override, or stage the "
+            "fixture under data/cases/ in the repo / worker pod."
+        )
         return 1
 
     out_root = HERE / "_smoke_deliverables_out"

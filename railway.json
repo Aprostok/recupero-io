@@ -10,5 +10,6 @@
     "restartPolicyMaxRetries": 10,
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 60
-  }
+  },
+  "_v031_4_note": "Deploy the cron scheduler as a SECOND Railway service pointing at the same repo. Use startCommand: 'recupero-cron'. The two services share the same Dockerfile + env; only the entrypoint differs."
 }

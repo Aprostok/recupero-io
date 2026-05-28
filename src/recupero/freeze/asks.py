@@ -36,6 +36,7 @@ from typing import Any
 
 from recupero.dormant.finder import DormantCandidate, TokenHolding
 from recupero.labels.store import LabelStore
+from recupero.labels.store import lookup_pit_safe  # v0.31.4
 from recupero.models import Case, Chain, Label, LabelCategory
 
 log = logging.getLogger(__name__)
@@ -311,7 +312,8 @@ def synthesize_onward_cex_subpoenas(
         if not to_addr:
             continue
         # Check if the to_address has a CEX label.
-        label = label_store.lookup(to_addr, chain=case.chain)
+        # v0.31.4 (Gap 1a): point-in-time lookup against case incident.
+        label = lookup_pit_safe(label_store, to_addr, chain=case.chain, point_in_time=case.incident_time,)
         if label is None:
             continue
         cat = (
@@ -344,9 +346,14 @@ def synthesize_onward_cex_subpoenas(
             "last_flow_at": t.block_time,
             "tx_hashes": [],
         })
-        if t.usd_value_at_tx is not None:
+        # v0.30.4 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum on
+        # the onward-flow USD bucket. A NaN poisons the per-issuer
+        # asks accumulator; the freeze letter then shows `$NaN` as
+        # the amount we're asking the issuer to freeze.
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             bucket["flow_usd_value"] += t.usd_value_at_tx
-        bucket["flow_amount_decimal"] += t.amount_decimal
+        if t.amount_decimal is not None and t.amount_decimal.is_finite():
+            bucket["flow_amount_decimal"] += t.amount_decimal
         bucket["transfer_count"] += 1
         bucket["tx_hashes"].append(t.tx_hash)
         if t.block_time < bucket["first_flow_at"]:
@@ -728,9 +735,13 @@ def synthesize_historical_freeze_asks(
             "earliest_block_time": t.block_time,
             "explorer_url": t.explorer_url,
         })
-        if t.usd_value_at_tx is not None:
+        # v0.30.4 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum on
+        # the historical-inflow USD bucket. Same defense-in-depth as
+        # the flow_usd_value bucket above.
+        if t.usd_value_at_tx is not None and t.usd_value_at_tx.is_finite():
             bucket["total_usd"] += t.usd_value_at_tx
-        bucket["total_amount_decimal"] += t.amount_decimal
+        if t.amount_decimal is not None and t.amount_decimal.is_finite():
+            bucket["total_amount_decimal"] += t.amount_decimal
         bucket["transfer_count"] += 1
         if t.block_time < bucket["earliest_block_time"]:
             bucket["earliest_block_time"] = t.block_time
@@ -864,7 +875,8 @@ def detect_exchange_deposits(
         # Per-transfer chain — needed both for the lookup and for
         # downstream chain-attribution of the deposit row.
         t_chain = t.chain if t.chain is not None else case.chain
-        label = label_store.lookup(to_addr_raw, chain=t_chain)
+        # v0.31.4 (Gap 1a): point-in-time lookup.
+        label = lookup_pit_safe(label_store, to_addr_raw, chain=t_chain, point_in_time=case.incident_time,)
         if label is None or label.category not in exchange_categories:
             continue
 

@@ -325,6 +325,9 @@ class CoinGeckoClient:
         cache_dir: Path | None = None,
         *,
         dsn: str | None = None,
+        # v0.32 — optional per-case API budget tracker. See
+        # ``observability/api_budget.py`` for the contract.
+        budget: object | None = None,
     ) -> None:
         """Create the client with either a Postgres or file-system cache.
 
@@ -350,6 +353,9 @@ class CoinGeckoClient:
 
         self.cfg = config
         self.api_key = env.COINGECKO_API_KEY
+        # v0.32 per-case API budget. Propagated to the lazy-loaded
+        # DeFiLlama fallback so both providers share the cap.
+        self.budget = budget
         self.cache = make_price_cache(
             dsn=effective_dsn if effective_dsn else None,
             cache_dir=cache_dir,
@@ -372,8 +378,97 @@ class CoinGeckoClient:
         # don't collide. Seeded from the static map.
         self._contract_id_cache: dict[tuple[Chain, str], str | None] = dict(_CONTRACT_TO_CG)
 
+        # v0.31.5 — secondary provider chain. Lazy-loaded so the
+        # CoinGecko-only cache path (set `RECUPERO_PRICING_FALLBACK=none`)
+        # doesn't pay the DeFiLlama client's httpx-client + tempdir
+        # creation cost. Bind the cache_dir for the lazy ctor.
+        self._fallback_cache_dir = cache_dir
+        self._fallback_dsn = dsn
+        self._defillama_client: object | None = None
+        raw_fb = os.environ.get("RECUPERO_PRICING_FALLBACK", "defillama")
+        # Accept None/empty as the default; any value other than
+        # `none` (case-insensitive) leaves the fallback on. The
+        # forward-compat shape lets us add e.g. `coinpaprika` later
+        # without a flag-day change to the parser.
+        self._fallback_enabled = (raw_fb or "defillama").strip().lower() != "none"
+
     def close(self) -> None:
         self._client.close()
+        if self._defillama_client is not None:
+            try:
+                self._defillama_client.close()  # type: ignore[attr-defined]
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _try_fallback(self, token: TokenRef, when: datetime) -> PriceResult | None:
+        """Lazy-init the DeFiLlama client and attempt a fallback lookup.
+
+        Returns a ``PriceResult`` with ``usd_value`` set on success;
+        ``None`` on miss / disabled / non-fatal error so the caller
+        can fall through to the documented "no price" branch.
+
+        Stablecoin par + spoof-suspicion is handled by the caller
+        before this point — by the time we're here, CoinGecko has
+        already told us "no data" or "rate limited".
+        """
+        # Use getattr with safe defaults so test scaffolding that
+        # constructs the client via __new__() (bypassing __init__) —
+        # see test_coingecko_adversarial_prices._build_client — still
+        # exercises the existing CoinGecko-only path. A missing
+        # _fallback_enabled flag is treated as "disabled" so the
+        # legacy assertion behavior is preserved.
+        if not getattr(self, "_fallback_enabled", False):
+            return None
+        client = self._get_defillama_client()
+        if client is None:
+            return None
+        try:
+            result = client.get_price_at(
+                chain=token.chain,
+                contract=token.contract,
+                symbol=token.symbol,
+                ts=when,
+                coingecko_id=token.coingecko_id,
+            )
+        except Exception as e:  # noqa: BLE001 — fallback must never crash trace
+            log.debug("defillama fallback raised for %s: %s", token.symbol, e)
+            return None
+        if result is None or result.usd_value is None:
+            return None
+        # Translate DeFiLlama's PriceResult into the CoinGecko-side
+        # PriceResult so callers don't need to special-case provenance.
+        return PriceResult(
+            usd_value=result.usd_value,
+            source=result.source,
+            error=None,
+        )
+
+    def _get_defillama_client(self) -> object | None:
+        """Lazy import + construct so the CoinGecko-only path stays light."""
+        if self._defillama_client is not None:
+            return self._defillama_client
+        try:
+            from recupero.pricing.defillama import DeFiLlamaClient
+        except ImportError as e:
+            log.debug("defillama fallback module unavailable: %s", e)
+            return None
+        try:
+            self._defillama_client = DeFiLlamaClient(
+                config=self.cfg,
+                env=RecuperoEnv(),  # picks up env-var freshness on first call
+                cache_dir=self._fallback_cache_dir,
+                dsn=self._fallback_dsn,
+                # v0.32 — propagate the per-case API budget so the
+                # fallback also counts toward the cap (defillama
+                # itself is free per the cost model, but recording
+                # the call count surfaces the burn rate to the
+                # operator regardless).
+                budget=getattr(self, "budget", None),
+            )
+        except Exception as e:  # noqa: BLE001 — construction must never crash trace
+            log.debug("defillama fallback construction failed: %s", e)
+            return None
+        return self._defillama_client
 
     # ---------- Public API ----------
 
@@ -477,16 +572,37 @@ class CoinGeckoClient:
             # pair — every subsequent run read None back and never re-fetched.
             # Cache only holds confirmed "CoinGecko returned a valid response
             # with no USD price for this date" (handled below as usd=None).
+            #
+            # v0.31.5 fallback: transient CoinGecko failure (rate limit,
+            # network) is the most common reason the brief's USD column
+            # goes dark. Try DeFiLlama before giving up.
+            fallback = self._try_fallback(token, when)
+            if fallback is not None:
+                return fallback
             return PriceResult(usd_value=None, source=None, error=f"fetch_error: {e}")
 
         # `usd is None` here means CoinGecko's response parsed successfully
         # but had no market_data.current_price.usd — a real "no data for this
         # date" answer (e.g. token didn't exist yet on that day). Safe to cache.
         self.cache.put(key, {"usd": str(usd) if usd is not None else None})
+        if usd is not None:
+            return PriceResult(
+                usd_value=Decimal(str(usd)),
+                source=key,
+                error=None,
+            )
+
+        # CoinGecko returned a clean "no data" response. Try the
+        # secondary provider (v0.31.5 fallback chain) so a single
+        # rate-limit / unsupported-token hiccup doesn't render the
+        # brief's Section 4 USD column as `(unpriced)`.
+        fallback = self._try_fallback(token, when)
+        if fallback is not None:
+            return fallback
         return PriceResult(
-            usd_value=Decimal(str(usd)) if usd is not None else None,
+            usd_value=None,
             source=key,
-            error=None if usd is not None else "no_price_data",
+            error="no_price_data",
         )
 
     # ---------- Internals ----------
@@ -543,6 +659,12 @@ class CoinGeckoClient:
         url = f"{self._base_url()}/coins/{platform}/contract/{contract_canon}"
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=self._auth_params())
+        # v0.32 per-case API budget. getattr with default None defends
+        # against test scaffolding that constructs the client via
+        # __new__() (bypassing __init__) — see test_coingecko_adversarial_prices.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("coingecko")
         if resp.status_code == 404:
             return None
         if resp.status_code == 429:
@@ -568,6 +690,12 @@ class CoinGeckoClient:
         params = {"date": date_str, "localization": "false", **self._auth_params()}
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=params)
+        # v0.32 per-case API budget. getattr with default None defends
+        # against test scaffolding that constructs the client via
+        # __new__() (bypassing __init__) — see test_coingecko_adversarial_prices.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("coingecko")
         if resp.status_code == 429:
             # Tenacity handles the actual backoff (exponential 2→30s); raising
             # immediately lets the next caller share the cooldown rather than
@@ -680,6 +808,12 @@ class CoinGeckoClient:
         params = {"ids": cg_id, "vs_currencies": "usd", **self._auth_params()}
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=params)
+        # v0.32 per-case API budget. getattr with default None defends
+        # against test scaffolding that constructs the client via
+        # __new__() (bypassing __init__) — see test_coingecko_adversarial_prices.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("coingecko")
         if resp.status_code == 429:
             time.sleep(15)
             raise httpx.TransportError("rate limited")

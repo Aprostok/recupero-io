@@ -102,6 +102,43 @@
     text-transform: uppercase; color: var(--ink-quiet); margin: 0 0 10px;
   }
   .reassurance li { margin: 6px 0; font-size: 14px; }
+
+  /* v0.32 Tier-0 gap #2 — recovery-rate disclosure block.
+     Visually distinct (warm border, slight tint) so the customer
+     cannot miss it; lives ABOVE the checkout button so they read
+     the number before they reach for the credit card. */
+  .recovery-disclosure {
+    border: 2px solid var(--gold);
+    background: #FFFBF2;
+    border-radius: 6px;
+    padding: 18px 20px;
+    margin: 24px 0;
+  }
+  .recovery-disclosure h3 {
+    font-size: 13px; font-weight: 700; letter-spacing: 0.10em;
+    text-transform: uppercase; color: var(--ink);
+    margin: 0 0 12px;
+  }
+  .recovery-disclosure .rate-line {
+    font-size: 17px; font-weight: 600; color: var(--ink);
+    margin: 0 0 8px; line-height: 1.4;
+  }
+  .recovery-disclosure .rate-detail {
+    font-size: 14px; color: var(--ink-soft); margin: 0 0 12px;
+  }
+  .recovery-disclosure .ack-row {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 12px; background: rgba(255,255,255,0.6);
+    border-radius: 4px; margin-top: 14px;
+  }
+  .recovery-disclosure .ack-row input[type="checkbox"] {
+    margin-top: 3px; flex-shrink: 0;
+    width: 18px; height: 18px;
+  }
+  .recovery-disclosure .ack-row label {
+    font-size: 14px; font-weight: 500; color: var(--ink);
+    margin: 0; cursor: pointer;
+  }
 </style>
 </head>
 <body>
@@ -191,6 +228,55 @@
                 required maxlength="2000"
                 placeholder="e.g. Phishing site drained my wallet on May 5; I signed what I thought was a routine swap…">{{ form.description or '' }}</textarea>
     </div>
+
+    {# v0.32 Tier-0 gap #2 — honest recovery-rate disclosure.
+       Rendered ABOVE the checkout button so the customer reads
+       the number before they reach for the credit card. The
+       checkbox is HTML5-required AND server-side-validated in
+       the POST handler. #}
+    {% if recovery_stats %}
+    <div class="recovery-disclosure">
+      <h3>Honest recovery-rate disclosure</h3>
+      {% if recovery_stats.is_our_data %}
+        <p class="rate-line">
+          We recover stolen funds for
+          <strong>{{ "%.0f"|format(recovery_stats.full_recovery_rate * 100) }}%</strong>
+          (95% CI:
+          {{ "%.0f"|format(recovery_stats.full_recovery_rate_ci_low * 100) }}%–{{ "%.0f"|format(recovery_stats.full_recovery_rate_ci_high * 100) }}%)
+          of cases.
+        </p>
+        <p class="rate-detail">
+          Based on our last {{ recovery_stats.sample_size }} closed cases
+          ({{ recovery_stats.n_full_recovery }} full recoveries,
+          {{ recovery_stats.n_partial_recovery }} partial freezes,
+          {{ recovery_stats.n_zero_recovery }} zero recoveries).
+          {% if recovery_stats.median_recovery_usd %}
+          Median recovery on wins: ${{ "{:,.0f}".format(recovery_stats.median_recovery_usd) }}.
+          {% endif %}
+        </p>
+      {% else %}
+        <p class="rate-line">
+          The crypto-recovery industry baseline is approximately
+          <strong>{{ "%.0f"|format(recovery_stats.full_recovery_rate * 100) }}% full-recovery</strong>
+          and ~7% partial-recovery
+          <span class="small">(Chainalysis 2024)</span>.
+        </p>
+        <p class="rate-detail">
+          We have {{ recovery_stats.sample_size }} closed case{% if recovery_stats.sample_size != 1 %}s{% endif %} of our own;
+          we will publish our own rate once we reach 30+ closed cases.
+        </p>
+      {% endif %}
+      <div class="ack-row">
+        <input type="checkbox" id="acknowledge_disclosure"
+               name="acknowledge_disclosure" value="yes" required
+               {% if form.acknowledge_disclosure == 'yes' %}checked{% endif %}>
+        <label for="acknowledge_disclosure">
+          I understand that paying for this diagnostic does
+          <strong>NOT</strong> guarantee recovery of my funds.
+        </label>
+      </div>
+    </div>
+    {% endif %}
 
     <div class="button-row">
       <button type="submit" class="primary">

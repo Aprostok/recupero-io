@@ -79,21 +79,36 @@ IC3 = LEContact(
     ),
 )
 
+# v0.30.1 (go-live preflight item #5 — contact audit V030_CONTACT_AUDIT.md):
+# `cryptocurrency@fbi.gov` could not be corroborated against any 2026 FBI/IC3
+# published source. The VAU is an internal FBI unit; the publicly-documented
+# intake channel for crypto cases is IC3. We retain the FBI_VAU contact card
+# as guidance for the >$100K escalation path (operators historically use it),
+# but mark the email as unverified and route operators to the IC3 +
+# field-office combo as the published channel. Treat as a SOFTER, NOT
+# OFFICIAL handoff — never claim this is the official VAU email in client
+# correspondence.
 FBI_VAU = LEContact(
-    name="FBI Virtual Assets Unit (VAU)",
+    name="FBI Virtual Assets Unit (VAU) — informal escalation",
     jurisdiction="Federal (US)",
     email="cryptocurrency@fbi.gov",
     description=(
-        "The FBI's dedicated cryptocurrency unit. Forward the LE handoff "
-        "PDF directly to the contact email. For high-value cases "
-        "(>$100K), this is materially faster than IC3 alone — the VAU "
-        "triages directly and engages the field office that the "
-        "perpetrator's identified service providers (exchanges, "
-        "stablecoin issuers) are within reach of."
+        "Informal escalation path for high-value cases (>$100K). The "
+        "officially-published FBI cryptocurrency intake channel is IC3 "
+        "(complaint.ic3.gov), and the VAU is an internal FBI unit "
+        "rather than a public intake; "
+        "`cryptocurrency@fbi.gov` is commonly cited by industry but "
+        "we have NOT independently verified it via an FBI publication "
+        "in 2026. Use this contact only AFTER an IC3 filing exists, "
+        "and pair it with engaging the FBI field office geographically "
+        "closest to the victim or to the perpetrator's identified "
+        "service providers. If the address bounces, do not retry — "
+        "fall back to field-office direct contact."
     ),
     expected_response=(
-        "Typically 5-10 business days for an initial response on cases "
-        "with quantified loss and identified service providers."
+        "Unspecified. IC3 acknowledgement is immediate; VAU follow-up "
+        "is best-effort and dependent on whether the case clusters "
+        "with active investigations."
     ),
 )
 
@@ -272,6 +287,39 @@ _FBI_VAU_THRESHOLD_USD = Decimal("100000")    # >= $100k loss → recommend FBI 
 _SECRET_SERVICE_THRESHOLD_USD = Decimal("1000000")  # >= $1M → add Secret Service ECTF
 
 
+def _parse_citizenship_country_state(
+    raw: str | None,
+) -> tuple[str | None, str | None]:
+    """Parse a free-form citizenship/country string into (country, state).
+
+    Intake captures `citizenship` as a single free-form field like:
+      "USA (Texas)"          → ("USA", "Texas")
+      "United States (CA)"   → ("United States", "CA")
+      "Germany"              → ("Germany", None)
+      "USA"                  → ("USA", None)
+
+    Pre-v0.30.0 the LE-routing logic compared `citizenship` directly
+    against a fixed set of US synonyms — so "USA (Texas)" was
+    classified as non-US and a US victim got the international-fallback
+    routing with an empty contact column. This helper closes the gap.
+    """
+    if not isinstance(raw, str):
+        return (None, None)
+    text = raw.strip()
+    if not text:
+        return (None, None)
+    # Pull a parenthesized suffix as state.
+    state: str | None = None
+    if "(" in text and text.endswith(")"):
+        head, _, tail = text.rpartition("(")
+        candidate_state = tail[:-1].strip()
+        head = head.strip()
+        if candidate_state and head:
+            text = head
+            state = candidate_state
+    return (text, state)
+
+
 def recommend_le_routes(
     *,
     state: str | None,
@@ -283,20 +331,45 @@ def recommend_le_routes(
 
     All inputs are optional — the function returns a sensible plan
     even with no victim location data + no loss amount.
+
+    v0.30.0 (F3/F4 — brief read-through): country is now parsed via
+    `_parse_citizenship_country_state` so a victim record with
+    `citizenship="USA (Texas)"` and `country=None`, `state=None`
+    correctly resolves to US + Texas — pre-v0.30.0 the literal-string
+    compare misclassified US victims as international and emitted an
+    empty-contact-column INTERNATIONAL_FALLBACK route.
     """
     plan = LERoutingPlan()
 
+    parsed_country, parsed_state = _parse_citizenship_country_state(country)
+    effective_country = parsed_country or country
+    # `state` arg always wins over a parenthesized state extracted from
+    # the country string — operator-set fields are more authoritative
+    # than parsed free-form input.
+    if not state and parsed_state:
+        state = parsed_state
+
     # Country normalization. Default to US (most cases). Anything that
     # doesn't look like the US gets the international fallback.
-    country_norm = (country or "US").strip().upper()
-    is_us = country_norm in ("US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA")
+    country_norm = (effective_country or "US").strip().upper()
+    is_us = country_norm in (
+        "US", "USA", "U.S.", "U.S.A.",
+        "UNITED STATES", "UNITED STATES OF AMERICA", "AMERICA",
+    )
 
     if not is_us:
         plan.primary_routes.append(INTERNATIONAL_FALLBACK)
+        # v0.30.1 (round-N T1-D): pre-v0.30.1 the note formatted with
+        # the RAW `country` arg, which could be None, "Germany (Berlin)"
+        # (re-rendering the parenthesized state inside the note), or
+        # other unparsed shapes. Use the parsed country with a graceful
+        # "(unspecified)" fallback so the rendered note never says
+        # "outside the US (None)" or doubles up the parens.
+        display_country = (parsed_country or country or "").strip() or "(unspecified)"
         plan.notes.append(
-            f"Victim located outside the US ({country}). Filing channels "
-            "are country-specific; this report's generic guidance is a "
-            "starting point only."
+            f"Victim located outside the US ({display_country}). Filing "
+            "channels are country-specific; this report's generic "
+            "guidance is a starting point only."
         )
         return plan
 
@@ -324,6 +397,26 @@ def recommend_le_routes(
             "have a consumer-protection or cybercrime unit that "
             "supplements IC3."
         )
+
+    # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-C): NaN/Inf guard.
+    # `Decimal('NaN') >= 1000000` returns False per IEEE 754, so a
+    # NaN total_loss_usd silently SKIPS both FBI VAU and Secret Service
+    # ECTF escalation on a high-value case. Symmetrically,
+    # `Decimal('Infinity') >= 1000000` returns True and the f-string
+    # then renders 'Loss of $Infinity' into the LE handoff note. Both
+    # paths leak forensic garbage; the only safe behavior is to refuse
+    # to escalate on non-finite loss and leave a diagnostic breadcrumb
+    # in the routing notes so an operator sees why.
+    if total_loss_usd is not None and not total_loss_usd.is_finite():
+        plan.notes.append(
+            "Loss-tier escalation skipped: total_loss_usd is non-finite "
+            "(NaN/Inf), likely a pricing-cache poison or a hand-edited "
+            "case file. Investigator should manually decide whether the "
+            "case warrants FBI VAU / Secret Service ECTF engagement and "
+            "verify the underlying USD math before transmitting this "
+            "handoff package."
+        )
+        return plan
 
     # Loss-tier escalations
     if total_loss_usd is not None:

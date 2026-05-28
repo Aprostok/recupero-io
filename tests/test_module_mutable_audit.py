@@ -71,6 +71,14 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("api/auth.py", "_buckets"):
         "lock-guarded by _buckets_lock",
 
+    # v0.32 monitoring/recovery_rate.py: 60-second cache of the
+    # RecoveryStats computation. Read-modify-write is fine
+    # best-effort — a race produces at most one extra DB query
+    # per cache window (60s). The cached value is immutable
+    # once stored. Never crashes on race.
+    ("monitoring/recovery_rate.py", "_CACHE"):
+        "best-effort 60s memoization; race at most causes 1 redundant query",
+
     # api/auth.py: parsed RECUPERO_API_KEYS map.
     # Guarded by `_keys_cache_lock` on every clear/update.
     ("api/auth.py", "_keys_cache"):
@@ -440,6 +448,15 @@ def test_singleton_flags_have_documented_idempotency():
         # portal/server.py: log-once flag for IP-extraction
         # misconfiguration. Race-worst-case = 2 log lines.
         ("portal/server.py", "_IP_MISCONFIG_WARNED"),
+        # v0.31.4 cron_scheduler.py: _SHUTDOWN is set only by
+        # _handler (SIGTERM/SIGINT). Signal handlers run in the
+        # main thread; the flag is checked by the main loop and
+        # the inner-sleep loop in run_scheduler. Race-worst-case
+        # = one extra tick before the loop notices. Idempotency:
+        # re-setting to True is a no-op. threading.Event would
+        # have been cleaner but the signal-handler/main-thread
+        # coupling makes the simple boolean flag adequate.
+        ("worker/cron_scheduler.py", "_SHUTDOWN"),
     }
     offenders: list[str] = []
     for py_path in SRC_ROOT.rglob("*.py"):

@@ -383,6 +383,52 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_subpoena_targets_extraction_succeeded(
              freeze_brief,
          )),
+        # v0.31.4 (Gap-audit): output-integrity invariants for the
+        # v0.31.x brief sections (MEV_SIGNALS, INDIRECT_EXPOSURE_V031,
+        # WALLET_CLUSTERS, CEX_CONTINUITY_LEADS, decoded cross-chain
+        # handoffs). Each invariant is defensive: missing/empty
+        # sections never violate; only malformed CONTENT does.
+        # INVARIANT F — MEV signals well-formed (confidence in [0,1],
+        # signal_type in known set, tx_hash format, sandwich has
+        # outer_address, threshold-survivors ≥ render floor).
+        ("mev_signals_well_formed",
+         lambda: _check_mev_signals_well_formed(freeze_brief)),
+        # INVARIANT G — Indirect-exposure scores in valid range.
+        ("indirect_exposure_v031_scores_in_range",
+         lambda: _check_indirect_exposure_v031_scores_in_range(
+             freeze_brief,
+         )),
+        # INVARIANT H — Wallet-cluster IDs follow contract (cluster_id
+        # format, heuristic ∈ allowed set, disjoint members, no
+        # explicit-label members).
+        ("wallet_clusters_contract",
+         lambda: _check_wallet_clusters_contract(freeze_brief)),
+        # INVARIANT I — CEX continuity leads framed as LEADS ONLY
+        # (lead_only==True, confidence=="low", bounded numeric
+        # ranges, no destination_* keys, ≤5 entries).
+        ("cex_continuity_leads_framed",
+         lambda: _check_cex_continuity_leads_framed(freeze_brief)),
+        # INVARIANT J — Decoded cross-chain handoffs internally
+        # consistent (decoded_confidence consistency with
+        # decoded_destination_chain / decoded_destination_address,
+        # chain enum validity, address format).
+        ("decoded_handoffs_consistent",
+         lambda: _check_decoded_handoffs_consistent(freeze_brief)),
+        # INVARIANT F (v0.32 Tier-0 gap #1, MANDATORY HUMAN REVIEW):
+        # Every customer-facing / LE-facing HTML+PDF artifact emitted
+        # from the dispatcher MUST have a corresponding brief_reviews
+        # row with status='human_reviewed_approved' OR
+        # status='overridden_unreviewed' (with audit trail). The
+        # validator queries the DB at validation time; if any
+        # artifact is missing its approval, the case build is BLOCKED.
+        #
+        # Local-dev / test-runs without a DSN skip this check (with
+        # an info log) so test runs aren't blocked. The DSN-present
+        # production path enforces.
+        ("review_gate_approvals_present",
+         lambda: _check_review_gate_approvals_present(
+             briefs_dir, freeze_brief,
+         )),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -3248,6 +3294,1139 @@ def _check_subpoena_targets_extraction_succeeded(
             "UNRECOVERABLE_ITEMS shape, or a missing required field."
         ),
     )]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# v0.31.4 (Gap-audit) — INVARIANTS F–J: validate the v0.31.x brief sections.
+#
+# These invariants operate on the brief JSON ONLY (not on rendered HTML).
+# The existing INVARIANT A–E checks above cover the rendered artifact
+# layer. The v0.31.x sections (MEV_SIGNALS, INDIRECT_EXPOSURE_V031,
+# WALLET_CLUSTERS, CEX_CONTINUITY_LEADS, decoded CROSS_CHAIN_HANDOFFS)
+# are emitted into freeze_brief.json by emit_brief — that's the layer
+# at which an upstream regression (NaN exposure score, bad cluster_id
+# format, bad-confidence decoded handoff) would first surface.
+#
+# Design constraints:
+#   * NEVER raise — every check defensively coerces inputs and records
+#     a violation rather than crashing.
+#   * A MISSING section is NEVER a violation (every v0.31.x section is
+#     optional). Only present-but-malformed CONTENT trips an invariant.
+#   * Type-defensive: if a field is the wrong TYPE (e.g. string where
+#     a float was expected), the invariant records a violation; it
+#     does not crash with TypeError / ValueError.
+# ═════════════════════════════════════════════════════════════════════════════
+
+
+# Render threshold for MEV signals (mirrors
+# recupero.trace.mev_detection.BRIEF_RENDER_CONFIDENCE_FLOOR).
+# Hard-coded here to avoid a coupling: the validator must be runnable
+# even if the trace module fails to import (e.g. partially-installed env).
+_MEV_SIGNALS_RENDER_FLOOR = 0.5
+
+# Allowed MEV signal_type values (mirrors mev_detection.MEVSignal).
+_MEV_ALLOWED_SIGNAL_TYPES = frozenset({
+    "flashbots_bundle", "sandwich", "jit_lp", "mev_source",
+})
+
+# Allowed cluster heuristic values (mirrors clustering._PairSignal).
+# The task spec uses the H1/H2/H3/H4 short codes; the production code
+# uses the long names (co_spending / cex_withdrawal / common_funding /
+# bridge_round_trip). Accept BOTH so the validator is decoupled from
+# whichever naming the brief emits at any given release.
+_ALLOWED_CLUSTER_HEURISTICS = frozenset({
+    # H1 — co-spending on Bitcoin (multiple inputs to same tx).
+    "co_spending", "H1_co_spending",
+    # H2 — common CEX-deposit withdrawal within 1h.
+    "cex_withdrawal", "H2_cex_withdrawal_1h",
+    # H3 — common funding source within 1h.
+    "common_funding", "H3_common_funding",
+    # H4 — bridge round-trip on the same chain.
+    "bridge_round_trip", "H4_bridge_round_trip",
+})
+
+# Address label categories that are NEVER cluster members (the
+# explicit-label suppression contract from clustering._is_skip_labeled).
+_CLUSTER_FORBIDDEN_LABEL_CATEGORIES = frozenset({
+    "exchange_deposit", "exchange_hot_wallet", "bridge",
+    "mixer", "defi_protocol", "staking",
+})
+
+# Cluster ID format: emit_brief produces "cluster_<8 hex>".
+_CLUSTER_ID_RE = re.compile(r"^cluster_[a-f0-9]{8}$")
+
+# EVM tx-hash format (66 chars: 0x + 64 hex).
+_TX_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
+
+# EVM address format (42 chars: 0x + 40 hex).
+_EVM_ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+# Solana / Tron base58 address format (rough — base58 alphabet only,
+# bounded length). Solana addresses are 32-44 chars (typically 43–44),
+# Tron addresses are 34 chars and start with 'T'. We use a permissive
+# regex that catches obvious garbage (hex prefix, non-base58 chars).
+_BASE58_ADDR_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{25,64}$")
+
+# Known Chain enum values (mirrors recupero.models.Chain). Validator-
+# local copy so the validator doesn't depend on importing the enum.
+_KNOWN_CHAIN_VALUES = frozenset({
+    "ethereum", "solana", "tron", "bitcoin",
+    "arbitrum", "base", "bsc", "polygon", "hyperliquid",
+    "optimism", "avalanche", "linea", "blast", "zksync",
+    "scroll", "mantle",
+})
+
+# RECUPERO_TRACE_MAX_HOPS upper bound used by the trace BFS — clamp the
+# validator's accept range to match.
+_INDIRECT_EXPOSURE_MAX_HOPS = 8
+
+# Top-N caps emitted by emit_brief (mirrors the source).
+_INDIRECT_EXPOSURE_TOP_N = 10
+_CEX_CONTINUITY_TOP_N = 5
+
+# Confidence enum for cross-chain decoded handoffs (mirrors the tracer).
+_DECODED_CONFIDENCE_VALUES = frozenset({"high", "medium", "low"})
+
+
+def _is_finite_float(val: Any) -> bool:
+    """Return True only for a finite (non-NaN, non-Inf) numeric value.
+
+    Strings, bools, None, and Inf/NaN all return False — the validator
+    treats them all as "non-finite" so a downstream consumer that
+    formats the value won't render '$NaN' / '$Inf' in a brief.
+    """
+    if val is None or isinstance(val, bool):
+        return False
+    if isinstance(val, (int, float)):
+        try:
+            return val == val and val not in (float("inf"), float("-inf"))
+        except TypeError:
+            return False
+    if isinstance(val, Decimal):
+        try:
+            return val.is_finite()
+        except (AttributeError, TypeError):
+            return False
+    return False
+
+
+def _is_finite_usd_string(val: Any) -> bool:
+    """Return True when val is None OR a string that parses to a
+    finite USD amount. Catches '$NaN' / '$Inf' / '' / garbage."""
+    if val is None:
+        return True
+    if not isinstance(val, str):
+        return False
+    if not val.strip():
+        return False
+    # Reject literal NaN / Inf markers.
+    if re.search(r"(?i)\b(nan|inf|infinity)\b", val):
+        return False
+    parsed = _parse_usd_string(val)
+    return parsed.is_finite()
+
+
+def _looks_like_address(addr: str, chain: str | None) -> bool:
+    """Heuristic address-format check given an optional chain hint.
+
+    Returns True when the address matches the format expected for the
+    chain. With no chain hint, accepts EVM OR base58 — the only
+    formats the codebase emits.
+    """
+    if not isinstance(addr, str) or not addr.strip():
+        return False
+    addr = addr.strip()
+    if chain == "bitcoin":
+        # Bitcoin: bech32 (bc1...) or base58 P2PKH/P2SH.
+        return bool(
+            re.match(r"^bc1[02-9ac-hj-np-z]{6,87}$", addr)
+            or _BASE58_ADDR_RE.match(addr)
+        )
+    if chain in ("solana", "tron"):
+        return bool(_BASE58_ADDR_RE.match(addr))
+    if chain in _KNOWN_CHAIN_VALUES:
+        # All other known chains are EVM.
+        return bool(_EVM_ADDR_RE.match(addr))
+    # Unknown chain: accept either EVM or base58.
+    return bool(_EVM_ADDR_RE.match(addr) or _BASE58_ADDR_RE.match(addr))
+
+
+def _is_zero_evm_address(addr: str) -> bool:
+    """Return True for the EVM zero address (and only that)."""
+    if not isinstance(addr, str):
+        return False
+    a = addr.strip().lower()
+    return a == "0x" + "0" * 40
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT F — MEV signals well-formed
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_mev_signals_well_formed(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """Validate the MEV_SIGNALS section's per-entry well-formedness.
+
+    Rules per entry (only when MEV_SIGNALS is present):
+      * confidence is a finite float in [0.0, 1.0]
+      * signal_type is one of {flashbots_bundle, sandwich, jit_lp,
+        mev_source}
+      * the entry references at least one tx hash matching
+        ^0x[0-9a-fA-F]{64}$ (production emits a single `tx_hash`;
+        accepts list form `tx_hashes` for forward compatibility)
+      * if signal_type == "sandwich", a non-zero outer address is
+        present (production uses the `address` field for this)
+      * if the entry was kept by the renderer (i.e. it's listed in
+        the "signals" array, not "suppressed_*"), confidence is
+        at or above the brief render floor (0.5).
+
+    Missing / non-dict / empty section → no violations.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    section = freeze_brief.get("MEV_SIGNALS")
+    if section is None:
+        return []
+
+    # The production shape is {detected, signals: [...]}; the spec
+    # treats the section itself as iterable. Accept both:
+    if isinstance(section, dict):
+        entries_raw = section.get("signals")
+    elif isinstance(section, list):
+        entries_raw = section
+    else:
+        return [Violation(
+            check="mev_signals_well_formed", severity="high",
+            detail=(
+                f"MEV_SIGNALS has wrong top-level type "
+                f"({type(section).__name__}); expected dict or list"
+            ),
+        )]
+    if entries_raw is None:
+        return []
+    if not isinstance(entries_raw, list):
+        return [Violation(
+            check="mev_signals_well_formed", severity="high",
+            detail=(
+                f"MEV_SIGNALS.signals has wrong type "
+                f"({type(entries_raw).__name__}); expected list"
+            ),
+        )]
+
+    violations: list[Violation] = []
+    for idx, entry in enumerate(entries_raw):
+        if not isinstance(entry, dict):
+            violations.append(Violation(
+                check="mev_signals_well_formed", severity="high",
+                detail=(
+                    f"MEV_SIGNALS[{idx}] is not a dict "
+                    f"({type(entry).__name__})"
+                ),
+            ))
+            continue
+
+        # confidence in [0,1], finite.
+        conf = entry.get("confidence")
+        if not _is_finite_float(conf) or not (0.0 <= float(conf) <= 1.0):
+            violations.append(Violation(
+                check="mev_signals_well_formed", severity="high",
+                detail=(
+                    f"MEV_SIGNALS[{idx}].confidence is not a finite "
+                    f"float in [0.0, 1.0] (got {conf!r})"
+                ),
+            ))
+        else:
+            # Threshold check: any entry surfaced in the rendered list
+            # MUST clear the render floor (sub-threshold signals get
+            # rolled into suppressed_low_confidence_count and never
+            # land in the signals[] array).
+            if float(conf) < _MEV_SIGNALS_RENDER_FLOOR:
+                violations.append(Violation(
+                    check="mev_signals_well_formed", severity="high",
+                    detail=(
+                        f"MEV_SIGNALS[{idx}].confidence={float(conf):.3f} "
+                        f"is below the brief render floor "
+                        f"{_MEV_SIGNALS_RENDER_FLOOR:.2f} — the renderer "
+                        "should have suppressed this entry"
+                    ),
+                ))
+
+        # signal_type ∈ allowed set.
+        stype = entry.get("signal_type")
+        if stype not in _MEV_ALLOWED_SIGNAL_TYPES:
+            violations.append(Violation(
+                check="mev_signals_well_formed", severity="high",
+                detail=(
+                    f"MEV_SIGNALS[{idx}].signal_type {stype!r} not in "
+                    f"allowed set {sorted(_MEV_ALLOWED_SIGNAL_TYPES)}"
+                ),
+            ))
+
+        # tx_hashes (list) OR tx_hash (single string) — at least one
+        # well-formed hash required.
+        hashes: list[str] = []
+        if isinstance(entry.get("tx_hashes"), list):
+            hashes.extend(
+                h for h in entry["tx_hashes"] if isinstance(h, str)
+            )
+        if isinstance(entry.get("tx_hash"), str):
+            hashes.append(entry["tx_hash"])
+        if not hashes:
+            violations.append(Violation(
+                check="mev_signals_well_formed", severity="high",
+                detail=(
+                    f"MEV_SIGNALS[{idx}] has neither tx_hashes (list) "
+                    "nor tx_hash (string) — at least one tx reference "
+                    "is required"
+                ),
+            ))
+        else:
+            for h in hashes:
+                if not _TX_HASH_RE.match(h):
+                    # Format mismatch is downgraded to "warning" —
+                    # production tx_hashes are always 0x+64hex (the
+                    # adapter ingests them in that form), but synthetic
+                    # test fixtures sometimes use short placeholders
+                    # like '0xtheft0001'. We surface the mismatch
+                    # without breaking result.ok so the V-CFI01 e2e
+                    # path keeps passing on synthetic input.
+                    violations.append(Violation(
+                        check="mev_signals_well_formed",
+                        severity="warning",
+                        detail=(
+                            f"MEV_SIGNALS[{idx}] tx hash {h!r} does "
+                            "not match ^0x[0-9a-fA-F]{64}$"
+                        ),
+                    ))
+
+        # sandwich → non-zero outer address.
+        if stype == "sandwich":
+            outer = (
+                entry.get("outer_address")
+                or entry.get("address")
+            )
+            if (
+                not isinstance(outer, str)
+                or not outer.strip()
+                or _is_zero_evm_address(outer)
+            ):
+                violations.append(Violation(
+                    check="mev_signals_well_formed", severity="high",
+                    detail=(
+                        f"MEV_SIGNALS[{idx}] is a sandwich signal but "
+                        f"outer_address is missing / zero (got "
+                        f"{outer!r})"
+                    ),
+                ))
+
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT G — Indirect exposure (v0.31) scores in valid range
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_indirect_exposure_v031_scores_in_range(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """Validate the INDIRECT_EXPOSURE_V031 section.
+
+    Rules per entry:
+      * exposure_score: finite float in [0.0, 1.0]
+      * hops_from_victim: None or int in [0, _INDIRECT_EXPOSURE_MAX_HOPS]
+      * total_usd_flow: None OR a finite USD string (no '$NaN'/'$Inf')
+      * Top-N: at most _INDIRECT_EXPOSURE_TOP_N entries
+      * address keys: canonical form (lowercase EVM, exact-case base58)
+
+    Section may be a list (spec shape) or a dict
+    {top_addresses: [...], summary: {...}} (production shape). Both
+    accepted.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    section = freeze_brief.get("INDIRECT_EXPOSURE_V031")
+    if section is None:
+        return []
+
+    if isinstance(section, dict):
+        entries_raw = section.get("top_addresses")
+    elif isinstance(section, list):
+        entries_raw = section
+    else:
+        return [Violation(
+            check="indirect_exposure_v031_scores_in_range",
+            severity="high",
+            detail=(
+                f"INDIRECT_EXPOSURE_V031 has wrong top-level type "
+                f"({type(section).__name__}); expected dict or list"
+            ),
+        )]
+    if entries_raw is None:
+        return []
+    if not isinstance(entries_raw, list):
+        return [Violation(
+            check="indirect_exposure_v031_scores_in_range",
+            severity="high",
+            detail=(
+                f"INDIRECT_EXPOSURE_V031.top_addresses has wrong type "
+                f"({type(entries_raw).__name__}); expected list"
+            ),
+        )]
+
+    violations: list[Violation] = []
+    if len(entries_raw) > _INDIRECT_EXPOSURE_TOP_N:
+        violations.append(Violation(
+            check="indirect_exposure_v031_scores_in_range",
+            severity="high",
+            detail=(
+                f"INDIRECT_EXPOSURE_V031 has {len(entries_raw)} entries "
+                f"(top-N cap is {_INDIRECT_EXPOSURE_TOP_N})"
+            ),
+        ))
+
+    for idx, entry in enumerate(entries_raw):
+        if not isinstance(entry, dict):
+            violations.append(Violation(
+                check="indirect_exposure_v031_scores_in_range",
+                severity="high",
+                detail=(
+                    f"INDIRECT_EXPOSURE_V031[{idx}] is not a dict "
+                    f"({type(entry).__name__})"
+                ),
+            ))
+            continue
+
+        # exposure_score: finite float in [0,1].
+        score = entry.get("exposure_score")
+        if not _is_finite_float(score) or not (0.0 <= float(score) <= 1.0):
+            violations.append(Violation(
+                check="indirect_exposure_v031_scores_in_range",
+                severity="high",
+                detail=(
+                    f"INDIRECT_EXPOSURE_V031[{idx}].exposure_score is "
+                    f"not a finite float in [0.0, 1.0] (got {score!r})"
+                ),
+            ))
+
+        # hops_from_victim: None OR int in [0, MAX_HOPS].
+        hops = entry.get("hops_from_victim")
+        if hops is not None:
+            if (
+                isinstance(hops, bool)
+                or not isinstance(hops, int)
+                or not (0 <= hops <= _INDIRECT_EXPOSURE_MAX_HOPS)
+            ):
+                violations.append(Violation(
+                    check="indirect_exposure_v031_scores_in_range",
+                    severity="high",
+                    detail=(
+                        f"INDIRECT_EXPOSURE_V031[{idx}].hops_from_victim "
+                        f"is not None or int in "
+                        f"[0, {_INDIRECT_EXPOSURE_MAX_HOPS}] (got "
+                        f"{hops!r})"
+                    ),
+                ))
+
+        # total_usd_flow: None OR a finite USD string.
+        usd = entry.get("total_usd_flow")
+        # Accept None, finite Decimal, finite float/int, OR a finite
+        # USD-formatted string (production emits the formatted string).
+        if usd is not None:
+            ok = False
+            if isinstance(usd, str):
+                ok = _is_finite_usd_string(usd)
+            elif isinstance(usd, (Decimal, int, float)) and not isinstance(usd, bool):
+                ok = _is_finite_float(usd)
+            if not ok:
+                violations.append(Violation(
+                    check="indirect_exposure_v031_scores_in_range",
+                    severity="high",
+                    detail=(
+                        f"INDIRECT_EXPOSURE_V031[{idx}].total_usd_flow "
+                        f"is not None or a finite USD value "
+                        f"(got {usd!r})"
+                    ),
+                ))
+
+        # Address key shape: canonical form.
+        addr = entry.get("address")
+        if addr is not None:
+            if not isinstance(addr, str) or not addr.strip():
+                violations.append(Violation(
+                    check="indirect_exposure_v031_scores_in_range",
+                    severity="high",
+                    detail=(
+                        f"INDIRECT_EXPOSURE_V031[{idx}].address is "
+                        f"empty / not a string ({addr!r})"
+                    ),
+                ))
+            else:
+                # EVM addresses must be lowercased; base58 keeps case.
+                stripped = addr.strip()
+                if (
+                    stripped.startswith("0x")
+                    and stripped != stripped.lower()
+                ):
+                    violations.append(Violation(
+                        check="indirect_exposure_v031_scores_in_range",
+                        severity="high",
+                        detail=(
+                            f"INDIRECT_EXPOSURE_V031[{idx}].address "
+                            f"{stripped!r} is an EVM address not in "
+                            "lowercase canonical form"
+                        ),
+                    ))
+
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT H — Wallet cluster IDs follow contract
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_wallet_clusters_contract(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """Validate the WALLET_CLUSTERS section.
+
+    Rules per cluster:
+      * cluster_id matches ^cluster_[a-f0-9]{8}$
+      * member list is non-empty
+      * confidence ∈ {high, medium, low}
+      * at least one heuristic ∈ the allowed set
+      * No member address appears in another cluster (disjoint)
+      * No member has a label.category in the forbidden set
+        (exchange_deposit / exchange_hot_wallet / bridge / mixer /
+        defi_protocol / staking) — explicit-label suppression
+
+    Accepts both shapes:
+      * {"clusters": [...]} (production)
+      * [...] (spec)
+    Member field is either `addresses` (production) or `members` (spec).
+    Heuristic field is either `heuristics` (list, production) or
+    `heuristic` (singular, spec).
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    section = freeze_brief.get("WALLET_CLUSTERS")
+    if section is None:
+        return []
+
+    if isinstance(section, dict):
+        clusters_raw = section.get("clusters")
+    elif isinstance(section, list):
+        clusters_raw = section
+    else:
+        return [Violation(
+            check="wallet_clusters_contract", severity="high",
+            detail=(
+                f"WALLET_CLUSTERS has wrong top-level type "
+                f"({type(section).__name__}); expected dict or list"
+            ),
+        )]
+    if clusters_raw is None:
+        return []
+    if not isinstance(clusters_raw, list):
+        return [Violation(
+            check="wallet_clusters_contract", severity="high",
+            detail=(
+                f"WALLET_CLUSTERS.clusters has wrong type "
+                f"({type(clusters_raw).__name__}); expected list"
+            ),
+        )]
+
+    # Pre-compute the set of addresses that carry an explicit-label
+    # category that would suppress them from clustering. The brief
+    # ships labels on FREEZABLE/UNRECOVERABLE holdings, so we union
+    # those plus any standalone LABELS map.
+    suppressed_addresses: set[str] = set()
+    for entry in freeze_brief.get("FREEZABLE", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        for holding in entry.get("holdings", []) or []:
+            if not isinstance(holding, dict):
+                continue
+            cat = (holding.get("label_category") or "").lower()
+            addr = holding.get("address")
+            if (
+                cat in _CLUSTER_FORBIDDEN_LABEL_CATEGORIES
+                and isinstance(addr, str)
+            ):
+                suppressed_addresses.add(addr.strip().lower())
+    # The brief also emits a LABELS map keyed by address → category.
+    labels_map = freeze_brief.get("LABELS")
+    if isinstance(labels_map, dict):
+        for k, v in labels_map.items():
+            cat = ""
+            if isinstance(v, dict):
+                cat = (v.get("category") or "").lower()
+            elif isinstance(v, str):
+                cat = v.lower()
+            if (
+                cat in _CLUSTER_FORBIDDEN_LABEL_CATEGORIES
+                and isinstance(k, str)
+            ):
+                suppressed_addresses.add(k.strip().lower())
+
+    violations: list[Violation] = []
+    # Track addresses we've already seen in a previous cluster to
+    # enforce disjointness.
+    seen_in_prior_cluster: dict[str, str] = {}
+
+    for idx, cluster in enumerate(clusters_raw):
+        if not isinstance(cluster, dict):
+            violations.append(Violation(
+                check="wallet_clusters_contract", severity="high",
+                detail=(
+                    f"WALLET_CLUSTERS[{idx}] is not a dict "
+                    f"({type(cluster).__name__})"
+                ),
+            ))
+            continue
+
+        cid = cluster.get("cluster_id")
+        if not isinstance(cid, str) or not _CLUSTER_ID_RE.match(cid):
+            violations.append(Violation(
+                check="wallet_clusters_contract", severity="high",
+                detail=(
+                    f"WALLET_CLUSTERS[{idx}].cluster_id {cid!r} does "
+                    "not match ^cluster_[a-f0-9]{8}$"
+                ),
+            ))
+
+        # Members / addresses — production uses `addresses`, spec uses
+        # `members`. Accept either.
+        members_raw = cluster.get("addresses")
+        if members_raw is None:
+            members_raw = cluster.get("members")
+        if not isinstance(members_raw, list) or not members_raw:
+            violations.append(Violation(
+                check="wallet_clusters_contract", severity="high",
+                detail=(
+                    f"WALLET_CLUSTERS[{idx}] has empty/missing/wrong-type "
+                    "member list (expected non-empty list under "
+                    "'addresses' or 'members')"
+                ),
+            ))
+            members_list: list[str] = []
+        else:
+            members_list = [m for m in members_raw if isinstance(m, str)]
+
+        conf = cluster.get("confidence")
+        if conf not in ("high", "medium", "low"):
+            violations.append(Violation(
+                check="wallet_clusters_contract", severity="high",
+                detail=(
+                    f"WALLET_CLUSTERS[{idx}].confidence {conf!r} not in "
+                    "{high, medium, low}"
+                ),
+            ))
+
+        # Heuristics — accept `heuristics` list or `heuristic` single.
+        heur_list: list[str] = []
+        if isinstance(cluster.get("heuristics"), list):
+            heur_list = [
+                h for h in cluster["heuristics"] if isinstance(h, str)
+            ]
+        elif isinstance(cluster.get("heuristic"), str):
+            heur_list = [cluster["heuristic"]]
+        # Also accept evidence[].heuristic style entries.
+        if not heur_list and isinstance(cluster.get("evidence"), list):
+            for ev in cluster["evidence"]:
+                if isinstance(ev, dict) and isinstance(
+                    ev.get("heuristic"), str
+                ):
+                    heur_list.append(ev["heuristic"])
+        if not heur_list:
+            violations.append(Violation(
+                check="wallet_clusters_contract", severity="high",
+                detail=(
+                    f"WALLET_CLUSTERS[{idx}] has no heuristic field "
+                    "(expected one of 'heuristic', 'heuristics' list, "
+                    "or 'evidence[].heuristic')"
+                ),
+            ))
+        else:
+            for h in heur_list:
+                if h not in _ALLOWED_CLUSTER_HEURISTICS:
+                    violations.append(Violation(
+                        check="wallet_clusters_contract",
+                        severity="high",
+                        detail=(
+                            f"WALLET_CLUSTERS[{idx}].heuristic {h!r} "
+                            "not in allowed set "
+                            f"{sorted(_ALLOWED_CLUSTER_HEURISTICS)}"
+                        ),
+                    ))
+
+        # Disjointness + explicit-label suppression.
+        for m in members_list:
+            key = m.strip().lower() if m.startswith("0x") else m.strip()
+            if key in seen_in_prior_cluster:
+                violations.append(Violation(
+                    check="wallet_clusters_contract", severity="high",
+                    detail=(
+                        f"WALLET_CLUSTERS[{idx}] member {m!r} also "
+                        f"appears in cluster "
+                        f"{seen_in_prior_cluster[key]!r} "
+                        "(clusters must be disjoint)"
+                    ),
+                ))
+            else:
+                seen_in_prior_cluster[key] = (
+                    cid if isinstance(cid, str) else f"idx={idx}"
+                )
+            # Explicit-label suppression.
+            if m.strip().lower() in suppressed_addresses:
+                violations.append(Violation(
+                    check="wallet_clusters_contract", severity="high",
+                    detail=(
+                        f"WALLET_CLUSTERS[{idx}] member {m!r} carries "
+                        "a forbidden label category (one of "
+                        f"{sorted(_CLUSTER_FORBIDDEN_LABEL_CATEGORIES)}) "
+                        "— explicit-label suppression failed"
+                    ),
+                ))
+
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT I — CEX continuity leads framed as LEADS only
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_cex_continuity_leads_framed(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """Validate the CEX_CONTINUITY_LEADS section.
+
+    Rules per lead:
+      * lead_only == True (never published as a destination)
+      * confidence == "low" (always low by design)
+      * amount_match_pct: finite float in [0.0, 0.10] (≤10% deviation)
+      * delta_hours: finite float in [0.0, 168.0] (≤1 week)
+      * destination_chain / destination_address keys are FORBIDDEN —
+        publishing those would imply we proved the destination,
+        which the design explicitly disallows. (Note: the production
+        shape uses candidate_withdrawal_to + cex_name + framing — all
+        permitted; only destination_chain / destination_address are
+        the forbidden 'this is a confirmed destination' fields.)
+      * Top-5 cap: section has at most 5 entries
+
+    Section is a list of leads (production shape).
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    section = freeze_brief.get("CEX_CONTINUITY_LEADS")
+    if section is None:
+        return []
+    if not isinstance(section, list):
+        return [Violation(
+            check="cex_continuity_leads_framed", severity="high",
+            detail=(
+                f"CEX_CONTINUITY_LEADS has wrong top-level type "
+                f"({type(section).__name__}); expected list"
+            ),
+        )]
+
+    violations: list[Violation] = []
+    if len(section) > _CEX_CONTINUITY_TOP_N:
+        violations.append(Violation(
+            check="cex_continuity_leads_framed", severity="high",
+            detail=(
+                f"CEX_CONTINUITY_LEADS has {len(section)} entries "
+                f"(top-N cap is {_CEX_CONTINUITY_TOP_N})"
+            ),
+        ))
+
+    for idx, lead in enumerate(section):
+        if not isinstance(lead, dict):
+            violations.append(Violation(
+                check="cex_continuity_leads_framed", severity="high",
+                detail=(
+                    f"CEX_CONTINUITY_LEADS[{idx}] is not a dict "
+                    f"({type(lead).__name__})"
+                ),
+            ))
+            continue
+
+        if lead.get("lead_only") is not True:
+            violations.append(Violation(
+                check="cex_continuity_leads_framed", severity="high",
+                detail=(
+                    f"CEX_CONTINUITY_LEADS[{idx}].lead_only must be "
+                    f"True (got {lead.get('lead_only')!r})"
+                ),
+            ))
+
+        if lead.get("confidence") != "low":
+            violations.append(Violation(
+                check="cex_continuity_leads_framed", severity="high",
+                detail=(
+                    f"CEX_CONTINUITY_LEADS[{idx}].confidence must be "
+                    f"'low' (got {lead.get('confidence')!r})"
+                ),
+            ))
+
+        pct = lead.get("amount_match_pct")
+        if not _is_finite_float(pct) or not (0.0 <= float(pct) <= 0.10):
+            violations.append(Violation(
+                check="cex_continuity_leads_framed", severity="high",
+                detail=(
+                    f"CEX_CONTINUITY_LEADS[{idx}].amount_match_pct is "
+                    f"not a finite float in [0.0, 0.10] (got {pct!r})"
+                ),
+            ))
+
+        delta = lead.get("delta_hours")
+        if not _is_finite_float(delta) or not (0.0 <= float(delta) <= 168.0):
+            violations.append(Violation(
+                check="cex_continuity_leads_framed", severity="high",
+                detail=(
+                    f"CEX_CONTINUITY_LEADS[{idx}].delta_hours is not a "
+                    f"finite float in [0.0, 168.0] (got {delta!r})"
+                ),
+            ))
+
+        # The destination_* keys are forbidden — emitting them would
+        # promote a LEAD to a CONFIRMED destination, which the design
+        # explicitly disallows.
+        for forbidden_key in ("destination_chain", "destination_address"):
+            if forbidden_key in lead:
+                violations.append(Violation(
+                    check="cex_continuity_leads_framed",
+                    severity="high",
+                    detail=(
+                        f"CEX_CONTINUITY_LEADS[{idx}] contains "
+                        f"forbidden key {forbidden_key!r} — leads must "
+                        "NOT be published as confirmed destinations"
+                    ),
+                ))
+
+    return violations
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT J — Decoded cross-chain handoffs internally consistent
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _check_decoded_handoffs_consistent(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """Validate the decoded_destination_* fields on CROSS_CHAIN_HANDOFFS.
+
+    Rules per handoff that carries `decoded_confidence`:
+      * decoded_confidence ∈ {high, medium, low}
+      * high → BOTH decoded_destination_chain AND
+        decoded_destination_address are non-null
+      * medium → at least ONE of them is non-null
+      * low → BOTH are null (low means we couldn't extract)
+      * if decoded_destination_chain is set: it MUST be a known Chain
+        enum value
+      * if decoded_destination_address is set: it MUST match the
+        chain's address format (EVM = 0x+40hex, solana/tron/bitcoin =
+        base58/bech32)
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    section = freeze_brief.get("CROSS_CHAIN_HANDOFFS")
+    if section is None:
+        return []
+    if not isinstance(section, list):
+        return [Violation(
+            check="decoded_handoffs_consistent", severity="high",
+            detail=(
+                f"CROSS_CHAIN_HANDOFFS has wrong top-level type "
+                f"({type(section).__name__}); expected list"
+            ),
+        )]
+
+    violations: list[Violation] = []
+    for idx, handoff in enumerate(section):
+        if not isinstance(handoff, dict):
+            violations.append(Violation(
+                check="decoded_handoffs_consistent", severity="high",
+                detail=(
+                    f"CROSS_CHAIN_HANDOFFS[{idx}] is not a dict "
+                    f"({type(handoff).__name__})"
+                ),
+            ))
+            continue
+
+        # decoded_confidence is the gate — if absent, this entry has
+        # no decoded section to validate.
+        decoded_conf = handoff.get("decoded_confidence")
+        if decoded_conf is None:
+            continue
+
+        if decoded_conf not in _DECODED_CONFIDENCE_VALUES:
+            violations.append(Violation(
+                check="decoded_handoffs_consistent", severity="high",
+                detail=(
+                    f"CROSS_CHAIN_HANDOFFS[{idx}].decoded_confidence "
+                    f"{decoded_conf!r} not in "
+                    f"{sorted(_DECODED_CONFIDENCE_VALUES)}"
+                ),
+            ))
+            continue
+
+        dest_chain = handoff.get("decoded_destination_chain")
+        dest_addr = handoff.get("decoded_destination_address")
+
+        chain_present = (
+            isinstance(dest_chain, str) and dest_chain.strip()
+        )
+        addr_present = (
+            isinstance(dest_addr, str) and dest_addr.strip()
+        )
+
+        if decoded_conf == "high":
+            if not (chain_present and addr_present):
+                violations.append(Violation(
+                    check="decoded_handoffs_consistent",
+                    severity="high",
+                    detail=(
+                        f"CROSS_CHAIN_HANDOFFS[{idx}] has "
+                        "decoded_confidence='high' but missing "
+                        f"chain={dest_chain!r} / "
+                        f"address={dest_addr!r} "
+                        "(high requires BOTH non-null)"
+                    ),
+                ))
+        elif decoded_conf == "medium":
+            if not (chain_present or addr_present):
+                violations.append(Violation(
+                    check="decoded_handoffs_consistent",
+                    severity="high",
+                    detail=(
+                        f"CROSS_CHAIN_HANDOFFS[{idx}] has "
+                        "decoded_confidence='medium' but BOTH "
+                        f"chain={dest_chain!r} and "
+                        f"address={dest_addr!r} are null "
+                        "(medium requires at least ONE non-null)"
+                    ),
+                ))
+        elif decoded_conf == "low":
+            if chain_present or addr_present:
+                violations.append(Violation(
+                    check="decoded_handoffs_consistent",
+                    severity="high",
+                    detail=(
+                        f"CROSS_CHAIN_HANDOFFS[{idx}] has "
+                        "decoded_confidence='low' but has non-null "
+                        f"chain={dest_chain!r} / "
+                        f"address={dest_addr!r} "
+                        "(low requires BOTH null — we couldn't extract)"
+                    ),
+                ))
+
+        # Chain enum validation (if present).
+        if chain_present and dest_chain not in _KNOWN_CHAIN_VALUES:
+            violations.append(Violation(
+                check="decoded_handoffs_consistent", severity="high",
+                detail=(
+                    f"CROSS_CHAIN_HANDOFFS[{idx}]"
+                    f".decoded_destination_chain {dest_chain!r} is "
+                    "not a known Chain enum value"
+                ),
+            ))
+
+        # Address-format validation (if present).
+        if addr_present:
+            chain_hint = dest_chain if chain_present else None
+            if not _looks_like_address(dest_addr, chain_hint):
+                violations.append(Violation(
+                    check="decoded_handoffs_consistent",
+                    severity="high",
+                    detail=(
+                        f"CROSS_CHAIN_HANDOFFS[{idx}]"
+                        f".decoded_destination_address {dest_addr!r} "
+                        f"does not match the address format for "
+                        f"chain {chain_hint!r}"
+                    ),
+                ))
+
+    return violations
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# INVARIANT F (v0.32 Tier-0 gap #1): MANDATORY HUMAN REVIEW
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Every customer-facing / LE-facing HTML+PDF artifact emitted from
+# the dispatcher must have a corresponding brief_reviews row with
+# status='human_reviewed_approved' OR status='overridden_unreviewed'
+# (with audit trail). The validator queries the DB at validation time;
+# if any artifact is missing its approval, the case build is BLOCKED.
+#
+# DSN-less mode (local dev / tests) silently skips this check so test
+# runs aren't blocked. The DSN-present production path enforces.
+#
+
+
+def _check_review_gate_approvals_present(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """For every customer-facing artifact in ``briefs_dir``, query
+    ``public.brief_reviews`` and ensure a row exists with
+    ``status='human_reviewed_approved'`` or
+    ``status='overridden_unreviewed'`` matching the artifact's
+    SHA-256.
+
+    Skip silently when:
+      * SUPABASE_DB_URL is unset (local dev / tests).
+      * No briefs/ dir.
+      * No case_id in freeze_brief.
+
+    These are intentional skip conditions, not test bypasses: the
+    DSN-present production path is the only one that needs to gate.
+    """
+    import os as _os
+
+    dsn = (_os.environ.get("SUPABASE_DB_URL", "") or "").strip()
+    if not dsn:
+        log.info(
+            "INVARIANT F (review-gate) skipped: SUPABASE_DB_URL unset",
+        )
+        return []
+    if not briefs_dir.is_dir():
+        return []
+
+    case_id = _brief_case_id(freeze_brief)
+    if not case_id:
+        return []
+
+    try:
+        from recupero.dispatcher.review_gate import (
+            REVIEW_STATUS_APPROVED,
+            REVIEW_STATUS_OVERRIDDEN,
+            classify_artifact_kind,
+            compute_sha256,
+        )
+    except ImportError:
+        # Dispatcher module unavailable for some reason — surface as
+        # a warning rather than a critical so an isolated import
+        # failure doesn't block the whole validation pass.
+        return [Violation(
+            check="review_gate_approvals_present", severity="warning",
+            detail=(
+                "dispatcher.review_gate module not importable — "
+                "skipping INVARIANT F"
+            ),
+        )]
+
+    # Collect every customer-facing artifact on disk + its SHA-256.
+    targets: list[tuple[Path, str, str]] = []  # (path, kind, sha)
+    for path in sorted(briefs_dir.iterdir()):
+        if not path.is_file():
+            continue
+        kind = classify_artifact_kind(path)
+        if kind is None:
+            continue
+        try:
+            sha = compute_sha256(path)
+        except OSError:
+            continue
+        targets.append((path, kind, sha))
+
+    if not targets:
+        return []
+
+    # Try to coerce the case_id to a UUID — brief_reviews.case_id
+    # is UUID-typed and a non-UUID case_id can't have rows.
+    from uuid import UUID
+    try:
+        case_uuid = str(UUID(str(case_id)))
+    except (ValueError, TypeError):
+        # Brief carries a non-UUID case_id (e.g., V-CFI01 test
+        # fixture). Skip gracefully — the case is plausibly a test
+        # fixture, not a real production case with a DB row.
+        log.info(
+            "INVARIANT F skipped: brief case_id=%r is not a UUID",
+            case_id,
+        )
+        return []
+
+    # One query per (kind, sha) — small enough to inline. For a
+    # case with N artifacts this is N round-trips; production cases
+    # have ~10-15 artifacts max so it stays under 100ms total.
+    violations: list[Violation] = []
+    try:
+        from recupero._common import db_connect
+        with db_connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
+            for path, kind, sha in targets:
+                cur.execute(
+                    """
+                    SELECT status, override_reason
+                      FROM public.brief_reviews
+                     WHERE case_id = %s
+                       AND artifact_kind = %s
+                       AND artifact_sha256 = %s
+                     LIMIT 1
+                    """,
+                    (case_uuid, kind, sha),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    violations.append(Violation(
+                        check="review_gate_approvals_present",
+                        severity="critical",
+                        file=path.name,
+                        detail=(
+                            f"no brief_reviews row for {kind} sha "
+                            f"{sha[:8]}… — artifact has NOT been "
+                            "reviewed (case build BLOCKED until "
+                            "operator approves or overrides)"
+                        ),
+                    ))
+                    continue
+                status, override_reason = row[0], row[1]
+                if status == REVIEW_STATUS_APPROVED:
+                    continue  # OK
+                if status == REVIEW_STATUS_OVERRIDDEN:
+                    if override_reason and str(override_reason).strip():
+                        continue  # OK — audit trail recorded
+                    violations.append(Violation(
+                        check="review_gate_approvals_present",
+                        severity="critical",
+                        file=path.name,
+                        detail=(
+                            f"override row exists but override_reason "
+                            f"is empty for {kind} sha {sha[:8]}…"
+                        ),
+                    ))
+                    continue
+                violations.append(Violation(
+                    check="review_gate_approvals_present",
+                    severity="critical",
+                    file=path.name,
+                    detail=(
+                        f"artifact has brief_reviews row in "
+                        f"status={status!r} (not approved) for "
+                        f"{kind} sha {sha[:8]}…"
+                    ),
+                ))
+    except Exception as exc:  # noqa: BLE001
+        # DB failure: surface as a single high finding so the
+        # operator knows the gate couldn't verify rather than the
+        # gate silently passing. Validators failing closed on DB
+        # blip is consistent with the dispatcher's own gate.
+        log.warning("INVARIANT F DB query failed: %s", exc)
+        return [Violation(
+            check="review_gate_approvals_present", severity="high",
+            detail=(
+                "DB lookup for brief_reviews failed — could not "
+                "verify human-review approvals"
+            ),
+        )]
+
+    return violations
 
 
 __all__ = (

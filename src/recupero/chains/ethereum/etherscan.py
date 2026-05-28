@@ -75,6 +75,12 @@ class EtherscanClient:
         # continue handles retries, but raising the per-call ceiling here
         # means most slow calls succeed instead of needing retry.
         timeout_seconds: float = 60.0,
+        # v0.32 — per-case API budget tracker. When provided, the
+        # client calls ``budget.record("etherscan")`` after every
+        # successful HTTP response. A budget=None or budget.enabled
+        # == False makes this a no-op; the tracer constructs one
+        # CaseBudget per case and passes it through to every adapter.
+        budget: object | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("ETHERSCAN_API_KEY is required")
@@ -82,6 +88,7 @@ class EtherscanClient:
         self.api_base = api_base
         self.chain_id = chain_id
         self.limiter = _RateLimiter(requests_per_second)
+        self.budget = budget
         # Split connect/read timeouts: a slow-DNS host must not block the
         # worker for the full read window (60s). Connect cap = 10s — any
         # public Etherscan endpoint resolves + handshakes well under that.
@@ -372,6 +379,13 @@ class EtherscanClient:
         self.limiter.wait()
         log.debug("etherscan call", extra={"params": {k: v for k, v in params.items() if k != "apikey"}})
         resp = self._client.get(self.api_base, params=params)
+        # v0.32 — per-case API budget. Record BEFORE shape / status
+        # checks so rate-limited retries also count. getattr-with-default
+        # defends against tests that construct the client via __new__()
+        # (see ``test_etherscan_response_shape``).
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("etherscan")
         if resp.status_code == 429:
             raise EtherscanRateLimitError("HTTP 429")
         # v0.18.5 (round-11 chains-CRIT-004): 5xx → retryable. A

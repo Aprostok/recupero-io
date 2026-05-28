@@ -79,6 +79,33 @@ app = FastAPI(
     redoc_url="/redoc" if not _docs_locked_in_production() else None,
 )
 
+# v0.32 Tier-0 gap #1 — human-review API surface for the dispatch
+# gate. Gated by RECUPERO_ADMIN_KEY (X-Recupero-Admin-Key header);
+# returns 503 when the env var is unset so an unconfigured deploy
+# can't accidentally publish the queue.
+try:
+    from recupero.dispatcher.review_api import router as _review_router
+    app.include_router(_review_router)
+except Exception as _exc:  # noqa: BLE001
+    # Don't take down the API on a review-module import failure —
+    # other endpoints (screen / token-risk / monitoring) must still
+    # work. The /v1/reviews/* surface returns 404 in this state.
+    log.warning(
+        "review API not registered (import failed): %s", _exc,
+    )
+
+# v0.32 Tier-1 gaps #1 + #2 — label auto-ingest review surface.
+# Same admin-key auth + 503-on-import-failure shape as the review
+# API above. Operators promote/reject candidates pulled overnight by
+# the recupero-cron `label_auto_ingest` job.
+try:
+    from recupero.labels.api import router as _labels_router
+    app.include_router(_labels_router)
+except Exception as _exc:  # noqa: BLE001
+    log.warning(
+        "label-candidates API not registered (import failed): %s", _exc,
+    )
+
 
 # ---- Request / response models ---- #
 
@@ -1296,7 +1323,13 @@ def _render_intake_html(
 
     Pulled into a helper so the GET and POST routes share the same
     template path and the test suite can render the form directly.
+
+    v0.32 — also computes the recovery-rate disclosure block.
+    ``compute_recovery_stats`` caches results for 60s and degrades
+    to the industry baseline if the DB is unreachable, so this is
+    always safe to call from the hot path. NEVER blocks render.
     """
+    import os
     from pathlib import Path
 
     from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -1311,9 +1344,41 @@ def _render_intake_html(
     # XSS defense-in-depth filters.
     from recupero.reports._jinja_filters import register_safe_filters
     register_safe_filters(env)
+
+    # v0.32 Tier-0 gap #2: compute the honest recovery-rate disclosure.
+    # Wraps any unexpected exception so render is always safe — the
+    # caller path is unauthenticated public traffic.
+    try:
+        from recupero.monitoring.recovery_rate import compute_recovery_stats
+        dsn = os.environ.get("SUPABASE_DB_URL", "").strip() or None
+        recovery_stats = compute_recovery_stats(dsn=dsn)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("intake: recovery-rate disclosure compute failed: %s", exc)
+        # Defense in depth — fall back to the industry baseline shape
+        # directly so the template's `is_our_data` branch still works.
+        from recupero.monitoring.recovery_rate import (
+            INDUSTRY_BASELINE_LABEL,
+            INDUSTRY_FULL_RECOVERY_RATE,
+            RecoveryStats,
+        )
+        recovery_stats = RecoveryStats(
+            sample_size=0,
+            n_full_recovery=0,
+            n_partial_recovery=0,
+            n_zero_recovery=0,
+            full_recovery_rate=INDUSTRY_FULL_RECOVERY_RATE,
+            full_recovery_rate_ci_low=INDUSTRY_FULL_RECOVERY_RATE,
+            full_recovery_rate_ci_high=INDUSTRY_FULL_RECOVERY_RATE,
+            is_our_data=False,
+            industry_baseline_used=INDUSTRY_BASELINE_LABEL,
+            median_recovery_usd=None,
+            median_time_to_recovery_days=None,
+        )
+
     return env.get_template("intake.html.j2").render(
         form=form or {},
         error=error,
+        recovery_stats=recovery_stats,
     )
 
 
@@ -1349,6 +1414,7 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
     incident_date: str = Form(...),
     description: str = Form(...),
     country: str = Form(default=""),
+    acknowledge_disclosure: str = Form(default=""),
 ) -> Any:
     """Validate the intake form + create the `cases` row + return the
     diagnostic Payment Link URL.
@@ -1415,7 +1481,35 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
         "incident_date": incident_date,
         "description": description,
         "country": country,
+        "acknowledge_disclosure": acknowledge_disclosure,
     }
+
+    # v0.32 Tier-0 gap #2: server-side validation of the recovery-rate
+    # disclosure checkbox. HTML5 `required` is a UX hint but trivially
+    # bypassable (curl, dev-tools, JS-disabled browsers). The legal
+    # audit-trail value of `recovery_disclosures` depends on this
+    # affirmative acknowledgment being IMPOSSIBLE to bypass without
+    # an explicit checkbox-checked POST.
+    if acknowledge_disclosure != "yes":
+        log.info(
+            "/v1/intake POST: rejecting submission missing acknowledge_disclosure "
+            "checkbox (ip=%s email=%s)",
+            client_ip, client_email,
+        )
+        return HTMLResponse(
+            content=_render_intake_html(
+                form=raw_form,
+                error={
+                    "field": "acknowledge_disclosure",
+                    "detail": (
+                        "Please tick the box confirming you understand "
+                        "that paying for this diagnostic does NOT "
+                        "guarantee recovery of your funds."
+                    ),
+                },
+            ),
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
 
     # 1. Validate.
     try:
@@ -1453,6 +1547,30 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Something went wrong creating your case. Please try again.",
         ) from None
+
+    # v0.32 Tier-0 gap #2: write the legal audit-trail row recording
+    # that THIS customer saw THIS specific rate at THIS time and
+    # affirmatively acknowledged it. Best-effort — never blocks the
+    # checkout flow on an audit-write failure (logged at WARN for
+    # ops follow-up).
+    try:
+        from recupero.monitoring.recovery_rate import (
+            compute_recovery_stats,
+            log_disclosure,
+        )
+        shown_stats = compute_recovery_stats(dsn=dsn)
+        log_disclosure(
+            case_id=str(case_id),
+            stats=shown_stats,
+            dsn=dsn,
+            acknowledged=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "/v1/intake POST: recovery-disclosure audit log failed "
+            "for case=%s: %s",
+            case_id, exc,
+        )
 
     # 3. Build the diagnostic Stripe Checkout URL.
     try:

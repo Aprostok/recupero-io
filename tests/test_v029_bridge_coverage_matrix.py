@@ -126,6 +126,54 @@ COVERAGE_MATRIX: list[tuple[str, str]] = [
     # Chainlink CCIP (Arbitrum coverage — high-volume destination).
     ("chainlink.+ccip", "ethereum"),
     ("chainlink.+ccip", "arbitrum"),
+    # v0.29.1 additions — additional protocol families added in the
+    # TRM-parity push. Each (family, chain) cell pinned by the
+    # corresponding _v029_1_expand_more_bridges.py source.
+    # Connext / Everclear — hub-and-spoke fast-finality.
+    ("connext",    "ethereum"),
+    ("connext",    "arbitrum"),
+    ("connext",    "optimism"),
+    ("connext",    "base"),
+    ("connext",    "polygon"),
+    ("connext",    "bsc"),
+    # Axelar Gateway — GMP + token bridge, deterministic deploys.
+    ("axelar",     "ethereum"),
+    ("axelar",     "arbitrum"),
+    ("axelar",     "optimism"),
+    ("axelar",     "base"),
+    ("axelar",     "polygon"),
+    ("axelar",     "bsc"),
+    ("axelar",     "avalanche"),
+    ("axelar",     "fantom"),
+    # LiFi Diamond — aggregator. Single deterministic address across
+    # most EVM chains; forensically important because LiFi-routed
+    # transfers land at the diamond first.
+    ("lifi",       "ethereum"),
+    ("lifi",       "arbitrum"),
+    ("lifi",       "optimism"),
+    ("lifi",       "base"),
+    ("lifi",       "polygon"),
+    ("lifi",       "bsc"),
+    # Celer cBridge — liquidity-network bridge.
+    ("celer|cbridge", "ethereum"),
+    ("celer|cbridge", "arbitrum"),
+    ("celer|cbridge", "optimism"),
+    ("celer|cbridge", "polygon"),
+    ("celer|cbridge", "bsc"),
+    # Symbiosis — permissionless cross-chain swap.
+    ("symbiosis",  "ethereum"),
+    ("symbiosis",  "arbitrum"),
+    ("symbiosis",  "polygon"),
+    ("symbiosis",  "bsc"),
+    # Squid Router (Axelar-based) — broader chain coverage.
+    ("squid",      "ethereum"),
+    ("squid",      "arbitrum"),
+    ("squid",      "polygon"),
+    # Synapse — expanded beyond Ethereum.
+    ("synapse",    "arbitrum"),
+    ("synapse",    "optimism"),
+    ("synapse",    "polygon"),
+    ("synapse",    "bsc"),
 ]
 
 
@@ -178,9 +226,12 @@ def test_coverage_matrix_row_has_seed_entry(family: str, chain: str) -> None:
 
 
 def test_coverage_matrix_minimum_size() -> None:
-    """The matrix itself must not shrink silently. v0.29 ships
-    with ~40 entries; pin the floor."""
-    PINNED_MIN = 40
+    """The matrix itself must not shrink silently.
+
+    v0.29.0 shipped with ~40 entries; v0.29.1 added Connext / Axelar /
+    LiFi / Celer / Symbiosis / Squid / Synapse rows, pushing the
+    floor to ~75. Pin the new floor."""
+    PINNED_MIN = 75
     assert len(COVERAGE_MATRIX) >= PINNED_MIN, (
         f"COVERAGE_MATRIX has {len(COVERAGE_MATRIX)} entries; "
         f"pin requires at least {PINNED_MIN}. If you intentionally "
@@ -243,17 +294,23 @@ def test_high_confidence_entries_have_source_url() -> None:
 
 
 def test_v029_addition_count_reasonable() -> None:
-    """v0.29 added Stargate Pool routers + Wormhole TokenBridges +
-    Hop L2 bridges. Pin the expansion count."""
-    v029_entries = [
-        e for e in _load_entries()
-        if e.get("_v029_addition")
-    ]
-    PINNED_MIN = 40
-    assert len(v029_entries) >= PINNED_MIN, (
-        f"Expected at least {PINNED_MIN} v0.29 additions; got "
+    """v0.29.0 added Stargate Pool routers + Wormhole TokenBridges +
+    Hop L2 bridges. v0.29.1 added Connext / Axelar / LiFi / Celer /
+    Symbiosis / Squid / Synapse. Pin BOTH expansion counts so a
+    regression in either expansion script trips a test."""
+    v029_entries = [e for e in _load_entries() if e.get("_v029_addition")]
+    v029_1_entries = [e for e in _load_entries() if e.get("_v029_1_addition")]
+    PINNED_MIN_V029 = 40
+    PINNED_MIN_V029_1 = 50
+    assert len(v029_entries) >= PINNED_MIN_V029, (
+        f"Expected at least {PINNED_MIN_V029} v0.29.0 additions; got "
         f"{len(v029_entries)}. Likely a silent regression in "
         f"scripts/_v029_expand_bridges.py."
+    )
+    assert len(v029_1_entries) >= PINNED_MIN_V029_1, (
+        f"Expected at least {PINNED_MIN_V029_1} v0.29.1 additions; got "
+        f"{len(v029_1_entries)}. Likely a silent regression in "
+        f"scripts/_v029_1_expand_more_bridges.py."
     )
 
 

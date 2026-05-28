@@ -223,11 +223,16 @@ def test_no_within_file_exact_duplicate_addresses() -> None:
             if not isinstance(addr, str) or not addr:
                 continue
             key = addr.lower() if addr.startswith("0x") else addr
-            # For issuers.json and bridges.json the unique key is
-            # (chain, contract|address); allow the same address
-            # under different chains (deterministic deploys are
-            # the rule, not exception, for modern protocols).
-            if path.name in ("issuers.json", "bridges.json"):
+            # For issuers.json, bridges.json, and mixers.json the unique
+            # key is (chain, contract|address); allow the same address
+            # under different chains (deterministic deploys are the
+            # rule, not exception, for modern protocols).
+            # v0.31.0: mixers.json added — RAILGUN's Relay contract is
+            # the canonical example: same 0xFA70…4B9 deployed via
+            # CREATE2 to Ethereum + Arbitrum + BSC + Polygon. Pre-v0.31
+            # only Ethereum was indexed; the multi-chain expansion
+            # surfaced the legitimate per-chain duplicates.
+            if path.name in ("issuers.json", "bridges.json", "mixers.json"):
                 chain = e.get("chain", "")
                 key = f"{chain}:{key}"
             if key in seen:

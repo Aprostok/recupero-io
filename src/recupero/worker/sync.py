@@ -75,7 +75,10 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
         # (e.g. /etc/passwd, a host-mounted secret) under the bucket
         # prefix. The case_dir contract is "files this worker wrote"
         # — symlinks have no legitimate use.
-        if path.is_symlink():
+        # v0.31.3 — use is_link_like so Windows NTFS junctions are also
+        # skipped (Path.is_symlink returns False for junctions).
+        from recupero._common import is_link_like
+        if is_link_like(path):
             log.warning("skipping symlink in case_dir: %s", path)
             continue
         # Per-file size cap — refuse oversized files BEFORE

@@ -71,20 +71,14 @@ class Chain(str, Enum):
     zksync = "zksync"
     scroll = "scroll"
     mantle = "mantle"
-    # v0.29.0 (label-DB completeness audit): chains where the bridge
-    # ingestor needs to recognize destinations even though we don't
-    # yet have a full EVM adapter for them. The bridges.json now
-    # carries Stargate / Wormhole / Hop pool routers on these
-    # chains, and ingest_bridge_seeds would silently drop entries
-    # whose chain value wasn't in the enum.
-    #
-    # No adapter coverage yet — these are "destination-only" chains:
-    # if a Zigha-shape trace bridges OUT to fantom/celo/gnosis, we
-    # surface the handoff (operator pursues via the destination
-    # block explorer) but don't auto-continue the BFS. The Chain
-    # enum membership is what makes the destination labelable.
-    # Add the matching adapter in a later release if these become
-    # frequent.
+    # v0.29.0 added as label-only destination chains.
+    # v0.31.0 PROMOTED to full adapter coverage: all 6 now route
+    # through the EVM adapter via Etherscan V2 multichain (chainIDs
+    # wired in `worker/watch_tick._CHAIN_ID_BY_NAME`). The BFS
+    # auto-continues onto these chains when a bridge handoff resolves
+    # there, instead of stopping at the bridge contract on the source
+    # chain. Verified chainIDs: fantom 250, celo 42220, gnosis 100,
+    # moonbeam 1284, metis 1088, kava 2222 (Etherscan V2 multichain).
     fantom = "fantom"
     celo = "celo"
     gnosis = "gnosis"
@@ -142,6 +136,41 @@ class Label(BaseModel):
     confidence: Literal["high", "medium", "low"] = "medium"
     notes: str | None = None
     added_at: datetime
+    # v0.31.2 (Gap #5 — point-in-time labels): optional validity window.
+    # `added_at` alone gives "labeled forever after added_at" semantics;
+    # populating these narrows that to "labeled only between
+    # [valid_from, valid_until]". Default None preserves the original
+    # forever-after-added_at behavior so existing seed files keep
+    # working unchanged.
+    #
+    # Forensically: an address that was an "exchange deposit" today
+    # may not have been one six months ago when the theft happened,
+    # so a brief grounded in today's labels can mislabel historical
+    # state. The trace-time lookup can now pass a point_in_time and
+    # the store will skip labels whose window doesn't cover it.
+    valid_from: datetime | None = None
+    valid_until: datetime | None = None
+
+    @field_validator("valid_until")
+    @classmethod
+    def _check_validity_window(
+        cls, v: datetime | None, info: Any
+    ) -> datetime | None:
+        # Reject forensically-broken rows where the window closes before
+        # it opens. A seed author writing valid_from=2024-12-31 +
+        # valid_until=2024-01-01 has almost certainly swapped the dates,
+        # and silently accepting it would produce a label that never
+        # matches any point_in_time lookup.
+        if v is None:
+            return v
+        valid_from = info.data.get("valid_from")
+        if valid_from is not None and v < valid_from:
+            raise ValueError(
+                f"valid_until ({v.isoformat()}) must be >= valid_from "
+                f"({valid_from.isoformat()}); the window cannot close "
+                "before it opens"
+            )
+        return v
 
 
 class Counterparty(BaseModel):

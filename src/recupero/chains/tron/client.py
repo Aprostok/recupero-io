@@ -125,10 +125,13 @@ class TronGridClient:
         requests_per_second: float = 8.0,
         timeout_seconds: float = 30.0,
         http_client: httpx.Client | None = None,
+        # v0.32 — optional per-case API budget tracker.
+        budget: object | None = None,
     ) -> None:
         self.api_key = api_key or ""
         self.base_url = base_url.rstrip("/")
         self.limiter = _RateLimiter(requests_per_second)
+        self.budget = budget
         # http_client injection point — lets tests pass a respx-
         # mocked Client without monkey-patching httpx globally.
         # Split connect vs read timeout: a slow-DNS / hung-TCP-handshake
@@ -345,6 +348,11 @@ class TronGridClient:
             # mid-pagination — TronGrid pagination at page 12 of 50
             # would silently drop pages 12+ on one bad request.
             raise TronGridRateLimitError(f"network error: {e}") from e
+        # v0.32 per-case API budget. getattr-with-default defends
+        # against tests that construct via __new__().
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("trongrid")
         if resp.status_code == 429:
             ra = resp.headers.get("Retry-After", "(none)")
             log.info("trongrid 429 rate limit; retry-after=%s", ra)
@@ -411,6 +419,11 @@ class TronGridClient:
         except httpx.RequestError as e:
             # v0.18.5 (round-11 chains-CRIT-005): network errors → retryable.
             raise TronGridRateLimitError(f"network error: {e}") from e
+        # v0.32 per-case API budget. getattr-with-default defends
+        # against tests that construct via __new__().
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("trongrid")
         if resp.status_code == 429:
             ra = resp.headers.get("Retry-After", "(none)")
             log.info("trongrid 429 rate limit; retry-after=%s", ra)

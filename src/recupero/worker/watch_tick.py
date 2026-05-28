@@ -73,6 +73,19 @@ _CHAIN_ID_BY_NAME: dict[str, int] = {
     "zksync":    324,
     "scroll":    534352,
     "mantle":    5000,
+    # v0.31.0 — destination-only chains promoted to full adapter coverage.
+    # Pre-v0.31.0 these existed in `models.py::Chain` (so seed labels
+    # could carry chain=<fantom/celo/...>) but the BFS stopped at the
+    # bridge handoff because no Etherscan-V2 chainID was wired. Now the
+    # EVM adapter routes through Etherscan V2 for all 6 — proven by the
+    # V2 multichain coverage docs that list each.
+    # Sources: etherscan.io/v2/chainlist, chainlist.org.
+    "fantom":    250,
+    "celo":      42220,
+    "gnosis":    100,
+    "moonbeam":  1284,
+    "metis":     1088,
+    "kava":      2222,
 }
 
 # Chains that need a non-EVM snapshot path. The watch_tick loop

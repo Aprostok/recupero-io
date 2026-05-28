@@ -58,25 +58,31 @@ def test_syrup_usdt_yes_freeze() -> None:
 # ---- Frax ---- #
 
 
-def test_frax_limited_via_governance() -> None:
-    """FRAX has algorithmic + governance components. Freeze is
-    technically possible via a governance vote but slow."""
+def test_frax_no_contract_freeze() -> None:
+    """v0.30.1 (V030_CONTACT_AUDIT correction): FRAX/FXS contracts have
+    NO blacklist or pause primitives per Frax's own published docs.
+    Pre-v0.30.1 we mistakenly labeled this 'limited' implying contract-
+    level governance freeze is possible — it is NOT. The protocol is
+    governance-only; any freeze is achievable only via a slow community
+    vote that lacks legal-process traction.
+    """
     db = load_issuer_db()
     entry = _by_symbol(db, "FRAX")
-    assert entry.freeze_capability == "limited"
+    assert entry.freeze_capability == "no"
     assert entry.issuer == "Frax Finance"
-    # The notes should mention the slow path so operators know
-    # not to expect a 24-hour turnaround.
-    assert "slow" in entry.freeze_notes.lower() or (
-        "governance" in entry.freeze_notes.lower()
+    # The notes should explain why "no" — contract-level absence.
+    assert "no contract freeze" in entry.freeze_notes.lower() or (
+        "governance-only" in entry.freeze_notes.lower()
     )
 
 
-def test_sfrax_limited_inherits_frax() -> None:
-    """Staked FRAX has the same governance constraints as FRAX."""
+def test_sfrax_no_contract_freeze_inherits_frax() -> None:
+    """Staked FRAX inherits the no-contract-freeze status from FRAX
+    itself. v0.30.1 correction (same V030_CONTACT_AUDIT rationale as
+    FRAX above)."""
     db = load_issuer_db()
     entry = _by_symbol(db, "sFRAX")
-    assert entry.freeze_capability == "limited"
+    assert entry.freeze_capability == "no"
     assert entry.issuer == "Frax Finance"
 
 

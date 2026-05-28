@@ -25,6 +25,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from recupero._common import atomic_write_text, resolve_render_time
 from recupero.models import Case
 
 log = logging.getLogger(__name__)
@@ -238,7 +239,7 @@ def format_aggregate_markdown(r: AggregateResult) -> str:
 def write_aggregate_json(r: AggregateResult, out_path: Path) -> None:
     """Write the full aggregate (with all per-transfer detail) to disk."""
     data = {
-        "generated_at": datetime.now(UTC).isoformat(),
+        "generated_at": resolve_render_time().isoformat(),
         "cases_examined": r.cases_examined,
         "perpetrators": r.perpetrators,
         "total_usd": str(r.total_usd),
@@ -256,4 +257,14 @@ def write_aggregate_json(r: AggregateResult, out_path: Path) -> None:
         "by_victim_wallet": {k: str(v) for k, v in r.by_victim_wallet.items()},
         "matched_transfers": r.matched_transfers,
     }
-    out_path.write_text(json.dumps(data, indent=2, allow_nan=False, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    # v0.30.4 (V030_2_CORRECTNESS_AUDIT T2-C): every other report
+    # writer uses `_common.atomic_write_text`; aggregate JSON was
+    # shipping through bare `Path.write_text`. A worker SIGKILL
+    # mid-write leaves a truncated `aggregate_<timestamp>.json` on
+    # disk that the next CLI invocation reads and treats as
+    # authoritative. Same fix as v0.20.13 R17-C for
+    # emit_editorial_template.
+    atomic_write_text(
+        out_path,
+        json.dumps(data, indent=2, allow_nan=False, ensure_ascii=False, sort_keys=True),
+    )

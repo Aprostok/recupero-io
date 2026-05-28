@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "recupero"
-version = "0.27.1"
+version = "0.32.0"
 description = "Trace stolen crypto from a victim wallet to law-enforcement-actionable endpoints"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -126,6 +126,7 @@ recupero = "recupero.cli:app"
 recupero-worker = "recupero.worker.main:cli"
 recupero-ops = "recupero.ops.cli:cli"
 recupero-api = "recupero.api.app:main"
+recupero-cron = "recupero.worker.cron_scheduler:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

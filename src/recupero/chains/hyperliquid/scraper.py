@@ -22,7 +22,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from recupero.chains.hyperliquid.client import HyperliquidClient, HyperliquidLedgerEvent
+from recupero.chains.hyperliquid.client import (
+    HyperliquidClient,
+    HyperliquidLedgerEvent,
+    _is_hex_address,
+    resolve_unknown_destination,
+)
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import (
     Case,
@@ -174,12 +179,31 @@ def _events_to_transfers(
         # Direction: negative delta = outflow (withdraw / send)
         #            positive delta = inflow (deposit / receive)
         is_outflow = evt.usdc_delta < 0
+        # v0.31.5: BEFORE emitting the placeholder, try a best-effort
+        # re-query of the Hyperliquid info API to recover a missing
+        # ``destination``. The primary scrape path occasionally lands
+        # a row with ``delta.destination`` absent; the re-query hits the
+        # same endpoint with a tighter time window and sometimes returns
+        # the field. Resolution is purely additive — any failure
+        # (network, malformed JSON, non-hex result) falls through to
+        # the original placeholder, preserving the v0.17.5 BFS-terminal
+        # behavior that ``_is_synthetic_placeholder`` relies on.
+        raw_dest: str | None = evt.destination
+        if is_outflow and not _is_hex_address(raw_dest):
+            resolved = resolve_unknown_destination(user_address, evt.when)
+            if resolved is not None and _is_hex_address(resolved):
+                raw_dest = resolved
+                log.info(
+                    "hyperliquid resolved unknown_destination user=%s "
+                    "event=%s -> %s",
+                    user_address, evt.hash, resolved,
+                )
         # Adversarial-hardening: sanitize attacker-controlled ``destination``
         # so CRLF / NUL / control bytes can't poison Transfer.from_address
         # / to_address (which downstream renderers interpolate into log
         # lines, CSV cells, freeze-letter bodies).
         clean_dest = _sanitize_address_field(
-            evt.destination,
+            raw_dest,
             fallback=("hyperliquid:unknown_destination" if is_outflow
                       else "hyperliquid:unknown_source"),
         )

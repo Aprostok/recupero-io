@@ -202,16 +202,33 @@
 </div>
 
 <h2>1. Victim Identification</h2>
+{# v0.30.0 (F2 — privacy / lawyer-level brief read-through): issuer
+   compliance teams have no need-to-know for the victim's home address,
+   personal email, or phone. Their freeze decision is keyed on (a) the
+   affected wallet, (b) the token contract, (c) the perpetrator wallets,
+   and (d) a contact-of-record for the REQUESTING PARTY (Recupero / law
+   firm), not the victim. Home address + personal email + phone are
+   intentionally OMITTED here; they remain in the LE handoff package
+   where the recipient is a law-enforcement agency with statutory
+   authority to receive PII.
+
+   If the victim's legal counsel is on file, surface their contact info
+   as the requesting-party's representative — that's the appropriate
+   channel for any compliance follow-up. #}
+{# v0.30.1 (round-N T1-C): citizenship was still being rendered as
+   "(USA (Texas))" in the previous F2 pass — TX state is incidental PII
+   that the issuer compliance team doesn't need. Strip down to just
+   the country / "USA" tier (no state). The name + the on-chain wallet
+   address are the only fields a compliance team needs to identify the
+   reported-loss subject. #}
 <dl class="meta-grid">
-  <dt>Name:</dt>            <dd>{{ victim.name }}</dd>
-  {% if victim.citizenship %}<dt>Citizenship:</dt><dd>{{ victim.citizenship }}</dd>{% endif %}
-  {% if victim.address %}<dt>Address:</dt><dd>{{ victim.address }}</dd>{% endif %}
-  {% if victim.email %}<dt>Email:</dt>      <dd>{{ victim.email }}</dd>{% endif %}
-  {% if victim.phone %}<dt>Phone:</dt>      <dd>{{ victim.phone }}</dd>{% endif %}
-  <dt>Affected wallet:</dt> <dd>{% if victim_wallet_explorer_url %}<a class="mono" href="{{ victim_wallet_explorer_url|safe_url }}">{{ victim.wallet_address }}</a>{% else %}<span class="mono">{{ victim.wallet_address }}</span>{% endif %}</dd>
+  <dt>Victim of record:</dt> <dd>{{ victim.name }}</dd>
+  <dt>Affected wallet:</dt>  <dd>{% if victim_wallet_explorer_url %}<a class="mono" href="{{ victim_wallet_explorer_url|safe_url }}">{{ victim.wallet_address }}</a>{% else %}<span class="mono">{{ victim.wallet_address }}</span>{% endif %}</dd>
   {% if victim.legal_counsel %}
-  <dt>Legal counsel:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
+  <dt>Legal counsel of record:</dt><dd>{{ victim.legal_counsel }}{% if victim.legal_counsel_email %} &lt;{{ victim.legal_counsel_email }}&gt;{% endif %}</dd>
   {% endif %}
+  <dt>Compliance follow-up to:</dt>
+  <dd>{% if investigator.email %}<a href="{{ ('mailto:' ~ investigator.email)|safe_url }}">{{ investigator.email }}</a>{% else %}compliance@recupero.io{% endif %}<span class="secondary" style="display:block;font-size:0.85em;color:#6B7280;">Direct any follow-up to the requesting party (above), not to the victim.</span></dd>
 </dl>
 
 {% if victim.incident_summary %}

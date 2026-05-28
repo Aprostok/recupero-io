@@ -180,7 +180,6 @@ def test_corrupt_dotenv_does_not_crash_session(tmp_path, monkeypatch):
 # ---- Hunt #5: symlinked .env should not silently get followed ---- #
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="symlink perms vary on Windows")
 def test_symlinked_dotenv_does_not_leak_arbitrary_file(tmp_path, monkeypatch):
     """Hunt #5: if ``./.env`` is a symlink to ``/etc/passwd`` (or any
     non-env file), ``_candidate_dotenv_paths`` returns it and
@@ -190,7 +189,16 @@ def test_symlinked_dotenv_does_not_leak_arbitrary_file(tmp_path, monkeypatch):
     has no ``=`` so the fallback parser rejects it; for python-dotenv
     it returns no usable values. Either way, ``root`` or ``daemon``
     must NOT end up in os.environ.
+
+    v0.31.3 — was previously skipped on Windows ("symlink perms vary").
+    Now uses the cross-platform link helper. The dotenv loader doesn't
+    care WHAT kind of link it is, only that ``is_file()`` follows it,
+    so on Windows we use the file-symlink path (which requires Dev
+    Mode) and gracefully skip ONLY if neither symlinks nor a fallback
+    are available.
     """
+    from tests._link_helper import LinkUnsupported, make_file_link
+
     target = tmp_path / "passwd_like"
     target.write_text(
         "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n",
@@ -198,9 +206,9 @@ def test_symlinked_dotenv_does_not_leak_arbitrary_file(tmp_path, monkeypatch):
     )
     link = tmp_path / ".env"
     try:
-        os.symlink(target, link)
-    except (OSError, NotImplementedError):
-        pytest.skip("symlink not permitted in this sandbox")
+        make_file_link(target, link)
+    except LinkUnsupported as e:
+        pytest.skip(f"file symlink unavailable: {e}")
 
     monkeypatch.setenv("RECUPERO_DOTENV_PATH", str(link))
 

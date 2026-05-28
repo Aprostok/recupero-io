@@ -136,6 +136,39 @@ def cli() -> None:
         help="Free-form reason recorded in change_summary for audit.",
     )
 
+    # ----- close-case (v0.32 Tier-0 gap #2) ----- #
+    # Gated case-close: cases CANNOT transition to status='closed'
+    # without a documented outcome. The outcome is what drives the
+    # recovery-rate disclosure on /v1/intake, so silent informal closes
+    # would corrupt the published rate. See
+    # recupero.ops.commands.close_case for the gate logic.
+    p_close_case = sub.add_parser(
+        "close-case",
+        help="Close a case with a documented outcome. REQUIRED before "
+             "the case can be marked status='closed'; without an outcome "
+             "row the recovery-rate disclosure on /v1/intake undercounts "
+             "the denominator.",
+    )
+    p_close_case.add_argument(
+        "--case", dest="case_id", required=True,
+        help="UUID of the case to close.",
+    )
+    p_close_case.add_argument(
+        "--outcome", required=True,
+        choices=("full_recovery", "partial_recovery", "no_recovery", "dropped"),
+        help="Outcome category. full_recovery requires --recovered-usd.",
+    )
+    p_close_case.add_argument(
+        "--recovered-usd", dest="recovered_usd", default=None,
+        help="Dollar amount returned to the victim. REQUIRED for "
+             "--outcome full_recovery; optional otherwise.",
+    )
+    p_close_case.add_argument(
+        "--note", default=None,
+        help="Free-form operator note attached to the synthetic "
+             "freeze_outcomes audit row.",
+    )
+
     # ----- send-freeze-letters ----- #
     p_freeze = sub.add_parser(
         "send-freeze-letters",
@@ -218,6 +251,45 @@ def cli() -> None:
         help="Download the latest OFAC SDN List from treasury.gov "
              "and update the local crypto-address CSV used by "
              "risk-scoring. Recommended cadence: weekly via cron.",
+    )
+
+    # ----- bridge-sync (v0.29.1 Recommendation #5) ----- #
+    p_bridge_sync = sub.add_parser(
+        "bridge-sync",
+        help="Audit the local bridges.json against L2Beat + DefiLlama "
+             "and write bridges_diff.json listing (protocol, chain) "
+             "pairs we don't yet cover. REPORT-ONLY — operator triages "
+             "and adds verified addresses in a follow-up commit. "
+             "Recommended cadence: weekly via cron.",
+    )
+    p_bridge_sync.add_argument(
+        "--output", default=None,
+        help="Output path for bridges_diff.json (default ./bridges_diff.json).",
+    )
+    p_bridge_sync.add_argument(
+        "--bridges", default=None,
+        help="Override path to bridges.json (default ships-with-package).",
+    )
+    p_bridge_sync.add_argument(
+        "--offline", action="store_true",
+        help="Skip live HTTP and use bundled snapshots (CI-safe).",
+    )
+
+    # ----- retrace-scan (v0.31.2 Gap #14) ----- #
+    p_retrace_scan = sub.add_parser(
+        "retrace-scan",
+        help="Scan every case for re-trace candidates: cases whose "
+             "trace_completed_at predates a newer bridge / mixer / "
+             "exchange_deposit / exchange_hot_wallet / perpetrator "
+             "label that now matches a counterparty in the case. "
+             "REPORT-ONLY — writes data/retrace_candidates.json; "
+             "operator picks which cases to re-trace. Recommended "
+             "cadence: weekly cron after label-DB updates land.",
+    )
+    p_retrace_scan.add_argument(
+        "--out", default=None,
+        help="Output path for retrace_candidates.json (default "
+             "data/retrace_candidates.json).",
     )
 
     # ----- hack-tracker ----- #
@@ -549,6 +621,27 @@ def cli() -> None:
              "checkout 'Email' field pre-fill.",
     )
 
+    # ----- envvars (v0.31.4) ----- #
+    # Print the canonical RECUPERO_* env-var reference to stdout so
+    # operators can `recupero-ops envvars` and see the full list
+    # without leaving the terminal. The source of truth is
+    # docs/ENV_VARS.md; this command resolves it relative to the
+    # installed package OR the repo working tree, falling back
+    # gracefully when neither is available (e.g. in a stripped
+    # production wheel that excluded the doc tree).
+    p_envvars = sub.add_parser(
+        "envvars",
+        help="Print the canonical RECUPERO_* env-var reference "
+             "(docs/ENV_VARS.md). Use --index for the tabular index "
+             "only.",
+    )
+    p_envvars.add_argument(
+        "--index", action="store_true",
+        help="Print only the tabular index (name | default | type | "
+             "range | introduced | purpose) without the per-variable "
+             "long-form sections. Useful for piping to grep.",
+    )
+
     # ----- promote-freezable ----- #
     p_promote = sub.add_parser(
         "promote-freezable",
@@ -606,6 +699,16 @@ def cli() -> None:
             reason=args.reason, dsn=_require_dsn(),
         ))
 
+    if args.command == "close-case":
+        from recupero.ops.commands import close_case as cmd
+        sys.exit(cmd.run(
+            case_id=_parse_uuid(args.case_id, field_name="case_id"),
+            outcome=args.outcome,
+            recovered_usd_raw=args.recovered_usd,
+            note=args.note,
+            dsn=_require_dsn(),
+        ))
+
     if args.command == "send-freeze-letters":
         from recupero.ops.commands import send_freeze_letters as cmd
         sys.exit(cmd.run(
@@ -659,6 +762,77 @@ def cli() -> None:
             print(f"ERROR: no active token found with id={token_id}")
             sys.exit(1)
 
+    if args.command == "envvars":
+        # v0.31.4: print docs/ENV_VARS.md so operators can see the
+        # canonical RECUPERO_* env-var list without browsing GitHub.
+        # Doc resolution: walk up from this file looking for
+        # `docs/ENV_VARS.md` (works in editable install + repo checkout);
+        # if not found, try the importlib-resources path next to the
+        # installed `recupero` package (works in a non-editable wheel
+        # if the doc was shipped via package_data).
+        from pathlib import Path as _Path
+        doc_path: _Path | None = None
+        # 1. Repo working tree: src/recupero/ops/cli.py → parents[3] = repo root.
+        try:
+            here = _Path(__file__).resolve()
+            candidate = here.parents[3] / "docs" / "ENV_VARS.md"
+            if candidate.is_file():
+                doc_path = candidate
+        except (IndexError, OSError):
+            pass
+        # 2. Installed wheel sibling (less common, but supports a
+        #    future shipped-with-package doc).
+        if doc_path is None:
+            try:
+                pkg_root = _Path(__file__).resolve().parents[1]
+                candidate = pkg_root / "docs" / "ENV_VARS.md"
+                if candidate.is_file():
+                    doc_path = candidate
+            except (IndexError, OSError):
+                pass
+        if doc_path is None:
+            print(
+                "ERROR: docs/ENV_VARS.md not found relative to the "
+                "installed package or the repo checkout. This means "
+                "the build dropped the doc tree — re-run from a repo "
+                "clone or open the doc on GitHub.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        try:
+            text = doc_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"ERROR: failed to read {doc_path}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        if args.index:
+            # Print only the lines between "## Index" and the next
+            # top-level section ("## Per-variable detail" or "## "
+            # generally). Markdown tables are still readable in a
+            # terminal; the index is small enough to scan visually.
+            lines = text.splitlines()
+            start = None
+            end = None
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                if start is None and stripped == "## Index":
+                    start = i
+                    continue
+                if start is not None and i > start and stripped.startswith("## "):
+                    end = i
+                    break
+            if start is None:
+                # Doc shape changed — fall back to printing the
+                # whole file rather than silently emitting nothing.
+                print(text)
+            else:
+                # Skip the "## Index" line itself + any blank trailer
+                # lines before the next section.
+                snippet = "\n".join(lines[start:end]) if end else "\n".join(lines[start:])
+                print(snippet)
+            sys.exit(0)
+        print(text)
+        sys.exit(0)
+
     if args.command == "promote-freezable":
         from recupero.ops.commands import promote_freezable as cmd
         sys.exit(cmd.run(
@@ -676,6 +850,36 @@ def cli() -> None:
     if args.command == "ofac-sync":
         from recupero.ops.commands import ofac_sync_cmd as cmd
         sys.exit(cmd.run())
+
+    if args.command == "bridge-sync":
+        from pathlib import Path as _Path
+        from recupero.ops.commands import bridge_sync_cmd as bs
+        sys.exit(bs.run(
+            bridges_path=_Path(args.bridges) if args.bridges else None,
+            output_path=_Path(args.output) if args.output else None,
+            offline=bool(args.offline),
+        ))
+
+    if args.command == "retrace-scan":
+        # v0.31.2 (Gap #14): observability cron. The same logic is also
+        # exposed as ``python scripts/retrace_backfill_scan.py`` and as
+        # ``python -m recupero.worker.retrace_backfill`` — this is the
+        # ops-CLI entry so operators get the command via the same
+        # surface they use for every other periodic task.
+        from pathlib import Path as _Path
+
+        from recupero.config import load_config
+        from recupero.worker.retrace_backfill import (
+            DEFAULT_OUT_RELATIVE,
+            run_backfill_scan,
+        )
+        cfg, _env = load_config()
+        out_path = (
+            _Path(args.out) if args.out else _Path(DEFAULT_OUT_RELATIVE)
+        )
+        n = run_backfill_scan(config=cfg, out_path=out_path)
+        print(f"retrace-scan: {n} candidate(s) → {out_path}")
+        sys.exit(0)
 
     if args.command == "hack-tracker":
         # v0.20.0 (Phase D): feature-flagged hack-feed aggregator.

@@ -104,6 +104,15 @@ def _profile_for(chain: Chain, cfg: RecuperoConfig) -> EvmChainProfile:
         Chain.zksync:    "zksync",
         Chain.scroll:    "scroll",
         Chain.mantle:    "mantle",
+        # v0.31.2 — 6 v0.29.0-promoted destination chains. Identical
+        # profile shape; the chain-id parameter routes through Etherscan
+        # V2 multichain.
+        Chain.fantom:    "fantom",
+        Chain.celo:      "celo",
+        Chain.gnosis:    "gnosis",
+        Chain.moonbeam:  "moonbeam",
+        Chain.metis:     "metis",
+        Chain.kava:      "kava",
     }
     if chain in _EXTENDED_EVM_CHAINS:
         attr = _EXTENDED_EVM_CHAINS[chain]

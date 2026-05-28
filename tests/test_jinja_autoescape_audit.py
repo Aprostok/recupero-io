@@ -143,15 +143,13 @@ def test_every_jinja_environment_autoescapes_html_j2():
     assert not offenders, "\n  ".join(offenders)
 
 
-@pytest.mark.parametrize("py_file", _iter_python_files(), ids=lambda p: p.name)
-def test_no_autoescape_false_blocks(py_file: Path):
-    """No template should contain `{% autoescape false %}` — that's
-    an opt-out hatch that bypasses Jinja's XSS protection inside the
-    block. If a legitimate need arises, it requires explicit security
-    review (and this test should be updated with a justified ALLOW).
-    """
-    if py_file.suffix == ".py":
-        pytest.skip("only template files")
+# v0.31.3 — removed parametrized stub. The original test parametrized
+# over EVERY .py file in src/recupero, then pytest.skip()'d each one
+# because the test only cared about .j2 templates — producing 171
+# spurious SKIPs on every run and zero actual assertions (the real
+# .j2 check is in test_templates_have_no_unsafe_autoescape_false
+# below, which iterates _SRC_ROOT.rglob("*.j2") directly). The stub
+# is removed; the substantive test remains.
 
 
 def test_templates_have_no_unsafe_autoescape_false():

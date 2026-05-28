@@ -160,7 +160,9 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     # fine, BUT an operator typically created that symlink as a
     # redirect to a shared location — silently breaking the redirect
     # is surprising. Refuse and let the operator delete + reconfigure.
-    if path.is_symlink():
+    # v0.31.3 — also catch Windows NTFS junctions (see is_link_like docstring).
+    from recupero._common import is_link_like
+    if is_link_like(path):
         raise ValueError(
             f"refusing to write to symlink at {path}; delete the link "
             f"and retry (wave-3 symlink-following guard)"
@@ -305,7 +307,11 @@ class CaseStore:
         # OUTSIDE cases_root, but a symlink pointing to ANOTHER case
         # (e.g. cases/foo/case.json -> cases/bar/case.json) would slip
         # through resolve()-only checks. lstat is symlink-aware.
-        if path.is_symlink():
+        # v0.31.3 — use is_link_like so Windows NTFS junctions are
+        # also rejected (Path.is_symlink returns False for junctions,
+        # which left a Windows-only path-traversal hole).
+        from recupero._common import is_link_like
+        if is_link_like(path):
             raise ValueError(
                 f"refusing to read symlink at {path} (wave-3 "
                 f"symlink-following guard)"
@@ -320,7 +326,7 @@ class CaseStore:
                     break
             except OSError:
                 break
-            if parent.is_symlink():
+            if is_link_like(parent):
                 raise ValueError(
                     f"refusing to traverse symlinked parent {parent} for "
                     f"case_id {case_id!r} (wave-3 symlink-following guard)"

@@ -1,4 +1,9 @@
--- 016_freeze_letters_unique_hardening.sql
+-- 025_freeze_letters_unique_hardening.sql
+--
+-- v0.30.2 RENAMED from 016_freeze_letters_unique_hardening.sql to close
+-- the duplicate-migration-number bug (V030_2_SECURITY_AUDIT.md T1-A).
+-- See 024_engagement_double_submit_guard.sql header for the full
+-- explanation.
 --
 -- v0.16.12 — Tighten the freeze_letters_sent UNIQUE so wallet-trace
 -- rows (case_id IS NULL) don't bypass idempotency.

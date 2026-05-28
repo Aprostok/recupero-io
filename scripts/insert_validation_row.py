@@ -76,6 +76,13 @@ def main() -> int:
     args = parser.parse_args()
 
     load_dotenv(override=True)
+    # v0.30.2 (V030_2_SCRIPTS_AUDIT T1-A): refuse to run against a
+    # prod-shaped DSN unless the operator explicitly opts in via
+    # RECUPERO_ALLOW_PROD_DSN=1. Pre-v0.30.2 an operator running this
+    # locally with a `.env` containing a Supabase prod DSN would
+    # silently insert validation rows into prod.
+    from _prod_dsn_guard import assert_not_prod_dsn  # noqa: E402
+    assert_not_prod_dsn("insert_validation_row: INSERT public.cases + investigations")
     dsn = _pooled_dsn(os.environ["SUPABASE_DB_URL"])
 
     today = datetime.now(timezone.utc).date()

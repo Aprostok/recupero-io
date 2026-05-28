@@ -916,3 +916,89 @@ def test_v_cfi01_e2e_passes_validator(v_cfi01_case_dir):
     assert result.ok, (
         f"validator found violations:\n{result.summary_text()}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INVARIANT F (v0.32 Tier-0 gap #1): MANDATORY HUMAN REVIEW
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_invariant_f_skipped_when_dsn_unset(tmp_path, monkeypatch):
+    """No DSN configured → INVARIANT F is a silent no-op so test
+    suites + local-dev runs aren't blocked."""
+    monkeypatch.delenv("SUPABASE_DB_URL", raising=False)
+    case_dir = _build_minimal_good_case(tmp_path)
+    result = validate_case_output(case_dir)
+    # No violations from the review-gate check.
+    review_violations = [
+        v for v in result.violations
+        if v.check == "review_gate_approvals_present"
+    ]
+    assert review_violations == []
+
+
+def test_invariant_f_skipped_when_case_id_not_uuid(tmp_path, monkeypatch):
+    """The minimal fixture uses CASE_ID='TEST' (not a UUID); INVARIANT
+    F must skip rather than blow up, even with a DSN configured."""
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgres://fake/db")
+    case_dir = _build_minimal_good_case(tmp_path)
+    # Patch db_connect so the real driver isn't hit if the early-skip
+    # in INVARIANT F somehow fails.
+    monkeypatch.setattr(
+        "recupero._common.db_connect",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError("db_connect should not be called"),
+        ),
+    )
+    result = validate_case_output(case_dir)
+    review_violations = [
+        v for v in result.violations
+        if v.check == "review_gate_approvals_present"
+    ]
+    assert review_violations == []
+
+
+def test_invariant_f_flags_missing_approval(tmp_path, monkeypatch):
+    """With a UUID case_id + DSN configured + no DB rows → every
+    customer-facing artifact trips a critical violation."""
+    from uuid import uuid4
+    monkeypatch.setenv("SUPABASE_DB_URL", "postgres://fake/db")
+    case_dir = _build_minimal_good_case(tmp_path)
+    # Swap CASE_ID for a real UUID so the validator actually queries.
+    fb_path = case_dir / "freeze_brief.json"
+    fb = json.loads(fb_path.read_text(encoding="utf-8"))
+    fb["CASE_ID"] = str(uuid4())
+    _write_lf(fb_path, json.dumps(fb))
+
+    # Patch db_connect to return no matching rows (empty SELECT).
+    class _NoRowsCursor:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, *a, **k): pass
+        def fetchone(self): return None
+        def fetchall(self): return []
+
+    class _NoRowsConn:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def cursor(self): return _NoRowsCursor()
+
+    monkeypatch.setattr(
+        "recupero._common.db_connect",
+        lambda *a, **k: _NoRowsConn(),
+    )
+    result = validate_case_output(case_dir)
+    review_violations = [
+        v for v in result.violations
+        if v.check == "review_gate_approvals_present"
+    ]
+    # Expect at least one critical for the trace_report / victim_summary /
+    # engagement_letter / freeze_request / le_handoff files.
+    assert review_violations, (
+        "expected critical violations for missing review rows"
+    )
+    assert all(
+        v.severity == "critical" for v in review_violations
+    )
+    # Case build is BLOCKED.
+    assert not result.ok

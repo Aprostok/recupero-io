@@ -54,25 +54,29 @@ def _make_stub_store() -> MagicMock:
 # 1. symlink escape
 # ----------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    sys.platform == "win32" and not os.environ.get("RECUPERO_ALLOW_SYMLINK_TEST"),
-    reason="symlink creation on Windows requires Developer Mode / SeCreateSymbolicLink",
-)
 def test_symlink_to_outside_file_is_skipped(tmp_path: Path) -> None:
-    """A symlink in case_dir that points at a file outside case_dir
-    must NOT be uploaded — read_bytes() would otherwise dereference
-    the link and ship the target's content to the bucket."""
+    """A link in case_dir that points outside case_dir must NOT be
+    uploaded — read_bytes() would otherwise dereference the link and
+    ship the target's content to the bucket.
+
+    v0.31.3: on Windows we test BOTH a file symlink (when Dev Mode is
+    enabled — falls back gracefully if not) AND a directory junction
+    via the companion test below. Production guard is the same:
+    ``is_link_like`` catches both.
+    """
+    from tests._link_helper import LinkUnsupported, make_file_link
+
     case_dir = tmp_path / "case"
     case_dir.mkdir()
     secret = tmp_path / "outside_secret.txt"
     secret.write_text("ROOT-PASSWORD-SHOULD-NEVER-LEAVE-DISK")
 
-    # plant a symlink under case_dir/ pointing at the outside secret
+    # Plant a link under case_dir/ pointing at the outside secret.
     link = case_dir / "leak.txt"
     try:
-        link.symlink_to(secret)
-    except OSError as e:
-        pytest.skip(f"cannot create symlink on this platform: {e}")
+        make_file_link(secret, link)
+    except LinkUnsupported as e:
+        pytest.skip(f"file link unavailable: {e}")
 
     store = _make_stub_store()
     worker_sync.upload_case_dir(case_dir, store)
@@ -85,6 +89,49 @@ def test_symlink_to_outside_file_is_skipped(tmp_path: Path) -> None:
     for call in store._upload.call_args_list:
         assert b"ROOT-PASSWORD" not in (call.args[1] if len(call.args) > 1 else b""), (
             f"symlink target content leaked through _upload: {call}"
+        )
+
+
+def test_junction_to_outside_dir_is_skipped(tmp_path: Path) -> None:
+    """v0.31.3 — Windows-only companion to the symlink test above.
+
+    On Windows an NTFS junction (``mklink /J``) does NOT require Dev
+    Mode / admin to create. Pre-v0.31.3 ``upload_case_dir`` checked
+    only ``Path.is_symlink()`` which returns False for junctions, so
+    an attacker could plant a junction pointing at any directory and
+    every file under it would be uploaded. ``is_link_like`` now
+    catches junctions — this test pins the fix.
+    """
+    if sys.platform != "win32":
+        pytest.skip("junctions are a Windows NTFS concept")
+
+    from tests._link_helper import LinkUnsupported, make_dir_link
+
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    secret_dir = tmp_path / "outside_secret_dir"
+    secret_dir.mkdir()
+    (secret_dir / "secret.txt").write_text(
+        "ROOT-PASSWORD-SHOULD-NEVER-LEAVE-DISK"
+    )
+
+    # Plant a directory junction under case_dir/ pointing at secret_dir.
+    link = case_dir / "leak_dir"
+    try:
+        make_dir_link(secret_dir, link)
+    except LinkUnsupported as e:
+        pytest.skip(f"junction unavailable: {e}")
+
+    store = _make_stub_store()
+    worker_sync.upload_case_dir(case_dir, store)
+
+    for call in store.write_text.call_args_list:
+        assert "ROOT-PASSWORD" not in str(call), (
+            f"junction target content leaked through write_text: {call}"
+        )
+    for call in store._upload.call_args_list:
+        assert b"ROOT-PASSWORD" not in (call.args[1] if len(call.args) > 1 else b""), (
+            f"junction target content leaked through _upload: {call}"
         )
 
 

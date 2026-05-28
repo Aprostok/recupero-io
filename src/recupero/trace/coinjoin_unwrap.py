@@ -1,20 +1,63 @@
-"""Probabilistic CoinJoin unwrap (v0.14.0).
+"""Probabilistic CoinJoin unwrap (v0.14.0; extended v0.31.0).
 
-When a Bitcoin trace lands in a CoinJoin transaction (Wasabi,
-Samourai Whirlpool, JoinMarket), pre-v0.14.0 the adapter DETECTED
-the pattern and stopped — the trace dead-ended at the CoinJoin
-boundary. This module follows the trail with confidence intervals.
+When a Bitcoin trace lands in a CoinJoin transaction (Wasabi 1.0,
+Wasabi 2.0/WabiSabi, Samourai Whirlpool, JoinMarket), pre-v0.14.0
+the adapter DETECTED the pattern and stopped — the trace
+dead-ended at the CoinJoin boundary.
+
+v0.14.0 introduced the equal-output round detection plus the
+participant-hypothesis enumerator: for fixed-denomination protocols
+(Wasabi 1.0, Whirlpool, JoinMarket) we can rank the input/output
+pairings by amount-fit + cardinality + self-mix signals.
+
+v0.31.0 EXTENDS the detector to recognize three additional shapes:
+
+  * Wasabi 2.0 (WabiSabi) — many-in / many-out at arbitrary
+    denominations. There is no equal-output cluster to anchor the
+    round amount, so the v0.14.0 enumerator does not fire. v0.31.0
+    detects the SHAPE (≥10 inputs, ≥10 outputs, no dominant single
+    output amount) and surfaces a `CoinjoinDetection` flagging the
+    tx as a mixing hop. Post-mix output recovery is infeasible
+    on-chain — it requires the coordinator's anonymity-set graph,
+    which Wasabi does not publish — so `most_likely_output` is
+    always `None` with a forensic note.
+
+  * Samourai Whirlpool (strict 5×5) — 5-in / 5-out where every
+    output is one of the four published pool denominations
+    (0.001, 0.01, 0.05, 0.5 BTC). The v0.14.0 enumerator already
+    fires on the 5/5 shape; v0.31.0 adds the pool-denomination
+    cross-check so we don't false-positive on coincidental 5×5
+    structures.
+
+  * Mercury Layer (statechain) — v0.31.5 adds HEURISTIC pattern
+    detection. Full unwrap is still infeasible (the Statechain
+    Entity's transition graph is private to the SE operator), but
+    the on-chain SHAPE is distinctive: 1-input / 1-output, both
+    P2TR (witness v1), output value = input value minus a small
+    fixed SE fee (typically 100-2000 sats). We flag matching txs
+    as "possible Mercury Layer statechain operation" with a
+    medium-confidence (0.55) signal on shape alone, raised to high
+    confidence (0.85) when the input address matches a curated
+    list of known SE addresses. The forensic note tells the
+    investigator to query the SE operator directly for the actual
+    state-transition recipient. See `docs/V031_COINJOIN_EXPANSION.md`
+    for the full rationale.
 
 How CoinJoin works (briefly)
 ----------------------------
 
 Multiple participants contribute UTXOs as inputs to a single
-transaction. The transaction produces equal-value outputs (the
-"round" or "denomination") so the on-chain linkage between any
-specific input and output is obscured. Whoever contributed N times
-the round amount in inputs receives N round-output UTXOs.
+transaction. The transaction produces outputs (equal-value in
+Wasabi 1.0 / Whirlpool / JoinMarket; ARBITRARY in WabiSabi) so the
+on-chain linkage between any specific input and output is obscured.
+Whoever contributed N times the round amount in inputs receives N
+round-output UTXOs (Wasabi 1.0 / Whirlpool / JoinMarket); under
+WabiSabi the participant receives any sum-equivalent set of
+outputs whose denominations are chosen by the coordinator.
 
-Wasabi: ~0.1 BTC denomination, 100+ inputs, mixed amounts.
+Wasabi 1.0: ~0.1 BTC denomination, 50-100+ inputs, equal outputs.
+Wasabi 2.0 (WabiSabi): 10-400+ inputs, arbitrary denominations,
+  no equal-output cluster.
 Samourai Whirlpool: 0.001 / 0.01 / 0.05 / 0.5 BTC pools,
   fixed 5-in / 5-out.
 JoinMarket: variable, 2-15 participants, market-discovery layer.
@@ -114,23 +157,66 @@ _MAX_INPUT_SUBSET_SIZE = 6
 # blowups on 100+ input txs.
 _MAX_HYPOTHESES_PER_TX = 200
 
+# --- v0.31.0 detection thresholds --- #
+
+# Wasabi 2.0 / WabiSabi: many-in / many-out, no dominant output.
+# Empirical floors from the WabiSabi paper + observed mainnet
+# rounds (mid-2023 onward). Below 10 in/out the shape is too
+# ambiguous vs. plain consolidation txs.
+_WASABI2_MIN_INPUTS = 10
+_WASABI2_MIN_OUTPUTS = 10
+
+# If a single output amount carries more than this fraction of the
+# total output value, it's too dominant to be a coinjoin mix —
+# likely a sweep / change-heavy tx instead.
+_WASABI2_MAX_DOMINANT_OUTPUT_FRAC = 0.20
+
+# Samourai Whirlpool: four published pool denominations. Tx5 ladder
+# (post-mix outputs share the same denomination as the input).
+# Source: Samourai Wallet docs, "Whirlpool Pool Sizes".
+_WHIRLPOOL_POOL_DENOMS_SATS: tuple[int, ...] = (
+    100_000,         # 0.001 BTC
+    1_000_000,       # 0.01 BTC
+    5_000_000,       # 0.05 BTC
+    50_000_000,      # 0.5 BTC
+)
+# Tolerance around each pool denomination — Whirlpool outputs are
+# exact, but we leave a 1-sat cushion for any rounding noise from
+# upstream parsing.
+_WHIRLPOOL_DENOM_TOLERANCE_SATS = 1
+
 
 # ---- Types ---- #
 
 
 @dataclass(frozen=True)
 class UTXOInput:
-    """One input to a CoinJoin tx."""
+    """One input to a CoinJoin tx.
+
+    ``script_hex`` (v0.31.5) is the lowercase-hex serialized
+    scriptPubKey of the *prevout* this input spends. It is OPTIONAL
+    so legacy callers (which only carry address+value) keep working.
+    The Mercury Layer detector consults this field to recognize
+    P2TR (witness v1, prefix ``5120`` + 32-byte program). Other
+    detectors do not read it.
+    """
     address: str
     value_sats: int
+    script_hex: str | None = None
 
 
 @dataclass(frozen=True)
 class UTXOOutput:
-    """One output of a CoinJoin tx."""
+    """One output of a CoinJoin tx.
+
+    ``script_hex`` (v0.31.5) is the lowercase-hex serialized
+    scriptPubKey, optional for the same back-compat reason as
+    :class:`UTXOInput`.
+    """
     address: str
     value_sats: int
     output_index: int
+    script_hex: str | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +249,72 @@ class UnwrapResult:
     participant_count_estimate: int
     hypotheses: list[CoinJoinHypothesis]
     warnings: list[str] = field(default_factory=list)
+
+
+# Stable protocol identifiers for the v0.31.0 detection interface.
+# These are written to the brief and consumed by downstream
+# operator UI — DO NOT rename without a brief schema bump.
+PROTOCOL_WASABI_1 = "wasabi_1"
+PROTOCOL_WASABI_2 = "wasabi_2"
+PROTOCOL_WHIRLPOOL = "whirlpool"
+PROTOCOL_JOINMARKET = "joinmarket"
+PROTOCOL_MERCURY_LAYER = "mercury_layer"
+PROTOCOL_UNKNOWN = "unknown"
+
+
+# --- v0.31.5 Mercury Layer constants --- #
+#
+# Mercury Layer (CommerceBlock) is a Bitcoin statechain. State
+# transitions happen OFF-CHAIN; the only on-chain events are
+# `state_init` (deposit into the statechain) and `state_withdraw`
+# (exit). Both are 1-input/1-output P2TR txs with a small fee paid
+# to the Statechain Entity (SE) operator. The pattern is shape-only;
+# full unwrap requires the SE operator's private database.
+#
+# Curated set of historically-observed Mercury Layer SE addresses.
+# Populating this set raises detection confidence from 0.55 to 0.85
+# on a shape match. The set is intentionally empty in the shipped
+# build — operators / future PRs can extend it (env var or seeded
+# file) without code changes. Shape detection works without it.
+_MERCURY_KNOWN_SE_INPUTS: frozenset[str] = frozenset()
+
+# Mercury SE fee range. The operator typically charges between
+# 100 and 2000 sats; below 100 sats the difference is consistent
+# with miner-only fees on a tiny P2TR transfer (not Mercury), and
+# above 2000 sats it's outside observed mainnet behavior and more
+# likely a regular P2TR send with a generous fee.
+_MERCURY_FEE_RANGE_SATS: tuple[int, int] = (100, 2000)
+
+# P2TR (witness v1) scriptPubKey signature: ``OP_1`` (0x51) followed
+# by a 32-byte push (0x20). Total serialized length is therefore
+# 1 + 1 + 32 = 34 bytes = 68 hex chars.
+_P2TR_SCRIPT_PREFIX = "5120"
+_P2TR_SCRIPT_HEX_LEN = 68
+
+
+@dataclass(frozen=True)
+class CoinjoinDetection:
+    """v0.31.0 detection-only result for a coinjoin tx.
+
+    Distinct from `UnwrapResult` (which enumerates participant
+    hypotheses for fixed-denomination protocols). This type answers
+    a simpler, more honest question: "is this tx a coinjoin, and if
+    so, which protocol?"
+
+    `most_likely_output` is intentionally `None` for every shipped
+    detector. Identifying the post-mix output for a specific input
+    address requires off-chain coordinator data (Wasabi sub-round
+    graph, Whirlpool Tx0 history, JoinMarket fidelity-bond DB).
+    None of that is available from the on-chain tx alone. The
+    forensic note explains this to the brief reader.
+    """
+    protocol: str                    # one of PROTOCOL_* constants
+    input_address: str
+    tx_hash: str
+    all_outputs: tuple[UTXOOutput, ...]
+    confidence: float                # 0.0 .. 1.0
+    forensic_note: str
+    most_likely_output: str | None = None
 
 
 # ---- Detection ---- #
@@ -216,6 +368,11 @@ def classify_coinjoin_pattern(
       * Wasabi (1.0/2.0): 50+ inputs, large round-output cluster,
         round amount near 0.1 BTC (10,000,000 sats) historically.
       * Generic: anything else that has 3+ equal outputs.
+
+    NOTE (v0.31.0): kept intentionally loose for back-compat with
+    the v0.14.0 enumerator path. The stricter shape-based detector
+    that distinguishes Wasabi 1.0 vs 2.0 lives in
+    `detect_coinjoin()` below.
     """
     n_in = len(inputs)
     n_out = len(outputs)
@@ -233,6 +390,312 @@ def classify_coinjoin_pattern(
     if 2 <= n_in < 50 and n_round_out >= 3:
         return "joinmarket"
     return "generic"
+
+
+# ---- v0.31.0: tx-shape detectors ---- #
+
+
+def _dominant_output_fraction(outputs: list[UTXOOutput]) -> float:
+    """Fraction of total output value carried by the single most-
+    common output AMOUNT (not address).
+
+    Used to reject txs that *look* big-and-many-out but actually
+    have a single dominant amount — those are typically sweeps or
+    payouts, not WabiSabi mixes. Returns 0.0 for empty outputs to
+    avoid NaN propagation.
+    """
+    if not outputs:
+        return 0.0
+    total = sum(o.value_sats for o in outputs)
+    if total <= 0:
+        return 0.0
+    by_amount: dict[int, int] = defaultdict(int)
+    for o in outputs:
+        by_amount[o.value_sats] += o.value_sats
+    largest_bucket = max(by_amount.values())
+    return largest_bucket / total
+
+
+def _is_whirlpool_pool_denomination(value_sats: int) -> bool:
+    """True iff ``value_sats`` matches one of the four published
+    Whirlpool pool denominations (within 1-sat tolerance)."""
+    for denom in _WHIRLPOOL_POOL_DENOMS_SATS:
+        if abs(value_sats - denom) <= _WHIRLPOOL_DENOM_TOLERANCE_SATS:
+            return True
+    return False
+
+
+def _is_strict_whirlpool(
+    inputs: list[UTXOInput], outputs: list[UTXOOutput],
+) -> tuple[bool, int | None]:
+    """Whirlpool requires:
+      * exactly 5 inputs and 5 outputs
+      * ALL outputs share the same value
+      * that value is one of the four published pool denominations
+
+    Returns (matched, pool_denom_sats).
+    """
+    if len(inputs) != 5 or len(outputs) != 5:
+        return False, None
+    first_value = outputs[0].value_sats
+    if not all(
+        abs(o.value_sats - first_value) <= _WHIRLPOOL_DENOM_TOLERANCE_SATS
+        for o in outputs
+    ):
+        return False, None
+    if not _is_whirlpool_pool_denomination(first_value):
+        return False, None
+    return True, first_value
+
+
+def _is_wasabi1_fixed_denom(
+    inputs: list[UTXOInput], outputs: list[UTXOOutput],
+) -> tuple[bool, int | None, int | None]:
+    """Wasabi 1.0: large equal-output cluster (10+ outputs at the
+    same value), many inputs.
+
+    Returns (matched, round_amount_sats, round_output_count).
+    """
+    rounds = detect_round_amounts(outputs)
+    if not rounds:
+        return False, None, None
+    round_amount, round_outputs = rounds[0]
+    if len(inputs) >= 10 and len(round_outputs) >= 10:
+        return True, round_amount, len(round_outputs)
+    return False, None, None
+
+
+def _is_wasabi2_wabisabi(
+    inputs: list[UTXOInput], outputs: list[UTXOOutput],
+) -> bool:
+    """Wasabi 2.0 (WabiSabi): many-in / many-out with NO dominant
+    output amount.
+
+    The distinguishing signal vs Wasabi 1.0 is the absence of a
+    fixed-denomination cluster — WabiSabi assigns arbitrary
+    output amounts negotiated per-round.
+    """
+    if len(inputs) < _WASABI2_MIN_INPUTS:
+        return False
+    if len(outputs) < _WASABI2_MIN_OUTPUTS:
+        return False
+    if _dominant_output_fraction(outputs) > _WASABI2_MAX_DOMINANT_OUTPUT_FRAC:
+        return False
+    # Exclude Wasabi 1.0 — if there's a large equal-output cluster,
+    # this is the older protocol, not WabiSabi.
+    is_w1, _amt, _cnt = _is_wasabi1_fixed_denom(inputs, outputs)
+    if is_w1:
+        return False
+    return True
+
+
+def _is_p2tr_script(script_hex: str | None) -> bool:
+    """True iff ``script_hex`` looks like a P2TR (taproot) scriptPubKey.
+
+    P2TR outputs serialize as ``OP_1`` (0x51) followed by ``OP_PUSHBYTES_32``
+    (0x20) and a 32-byte x-only pubkey — total 34 bytes = 68 hex chars,
+    prefixed by ``5120``. We tolerate uppercase hex and leading/trailing
+    whitespace. ``None`` and empty string return ``False`` so callers
+    that lack script-level data simply opt out of the detector.
+    """
+    if not script_hex:
+        return False
+    s = script_hex.lower().strip()
+    if not s.startswith(_P2TR_SCRIPT_PREFIX):
+        return False
+    return len(s) == _P2TR_SCRIPT_HEX_LEN
+
+
+def _is_mercury_layer(
+    inputs: list[UTXOInput],
+    outputs: list[UTXOOutput],
+) -> tuple[bool, int | None, bool]:
+    """Heuristic Mercury Layer (statechain) detector.
+
+    A Mercury Layer `state_init` / `state_withdraw` transaction has a
+    very specific on-chain shape:
+
+      * exactly 1 input, 1 output
+      * BOTH the spent input prevout AND the new output are P2TR
+        (witness v1 / Taproot)
+      * output_value = input_value - small_SE_fee, with the fee
+        falling in :data:`_MERCURY_FEE_RANGE_SATS` (100..2000 sats)
+
+    This SHAPE alone is enough to flag the tx with medium confidence
+    (0.55). If the input address is in :data:`_MERCURY_KNOWN_SE_INPUTS`
+    we raise confidence to 0.85 — that's the SE operator's well-known
+    address acting as the prevout.
+
+    Returns
+    -------
+    ``(matched, se_fee_sats, known_se_address)`` — a 3-tuple. The
+    fee is ``None`` when ``matched`` is ``False``. ``known_se_address``
+    is always a ``bool``.
+
+    Note
+    ----
+    This is HEURISTIC. Plain P2TR-to-P2TR transfers between two
+    Taproot wallets with a 100-2000 sat miner fee will also match
+    the shape. That is acceptable — the forensic note generated by
+    :func:`detect_coinjoin` clearly says "possible Mercury Layer"
+    and tells the operator to verify with the SE database. False
+    positives are visible and falsifiable; false negatives (missing
+    a real Mercury hop) silently break trace integrity, so we err
+    toward flagging.
+    """
+    if len(inputs) != 1 or len(outputs) != 1:
+        return False, None, False
+    inp = inputs[0]
+    out = outputs[0]
+    # Both sides must be P2TR. We use getattr+default so a UTXOInput
+    # constructed positionally (pre-v0.31.5 caller) returns None and
+    # cleanly fails the script check rather than AttributeError.
+    if not _is_p2tr_script(getattr(inp, "script_hex", None)):
+        return False, None, False
+    if not _is_p2tr_script(getattr(out, "script_hex", None)):
+        return False, None, False
+    fee = inp.value_sats - out.value_sats
+    fee_min, fee_max = _MERCURY_FEE_RANGE_SATS
+    if not (fee_min <= fee <= fee_max):
+        return False, None, False
+    known = inp.address in _MERCURY_KNOWN_SE_INPUTS
+    return True, fee, known
+
+
+def detect_coinjoin(
+    *,
+    tx_hash: str,
+    input_address: str,
+    inputs: list[UTXOInput],
+    outputs: list[UTXOOutput],
+) -> CoinjoinDetection | None:
+    """Detect the coinjoin protocol used by a tx, by shape only.
+
+    Returns a `CoinjoinDetection` if the tx matches one of:
+      * Wasabi 1.0 (fixed-denomination equal-output cluster)
+      * Wasabi 2.0 / WabiSabi (many-in/many-out, no dominant amount)
+      * Samourai Whirlpool (strict 5×5 at a published pool denom)
+
+    Returns `None` for txs that look like ordinary transfers
+    (1-in/1-out, 2-in/3-out, etc.) — we do NOT speculatively flag
+    every multi-output tx as a coinjoin. False positives mislead
+    the operator; false negatives just leave the regular trace path
+    intact, which is the safer default.
+
+    `most_likely_output` on the returned detection is ALWAYS `None`.
+    Per-input → per-output recovery requires off-chain coordinator
+    data we do not have. The forensic note explains this for the
+    brief reader.
+    """
+    if not inputs or not outputs:
+        return None
+
+    all_outputs_t = tuple(outputs)
+
+    # 1. Whirlpool — strict 5×5 at a pool denomination.
+    is_wp, pool_denom = _is_strict_whirlpool(inputs, outputs)
+    if is_wp:
+        pool_btc = (pool_denom or 0) / 1e8
+        return CoinjoinDetection(
+            protocol=PROTOCOL_WHIRLPOOL,
+            input_address=input_address,
+            tx_hash=tx_hash,
+            all_outputs=all_outputs_t,
+            confidence=0.95,
+            forensic_note=(
+                f"Samourai Whirlpool 5x5 mix at the {pool_btc:.4f} BTC "
+                "pool denomination. Post-mix output recovery is not "
+                "possible from on-chain data: Whirlpool's anonymity "
+                "set within a single Tx0/Tx5 round is 5, and the "
+                "input/output pairing is intentionally indeterminate "
+                "by design. Flag this hop and recommend operator "
+                "manual review of downstream peel chains."
+            ),
+            most_likely_output=None,
+        )
+
+    # 2. Wasabi 1.0 — fixed-denomination equal-output cluster.
+    is_w1, w1_round, w1_count = _is_wasabi1_fixed_denom(inputs, outputs)
+    if is_w1:
+        round_btc = (w1_round or 0) / 1e8
+        return CoinjoinDetection(
+            protocol=PROTOCOL_WASABI_1,
+            input_address=input_address,
+            tx_hash=tx_hash,
+            all_outputs=all_outputs_t,
+            confidence=0.90,
+            forensic_note=(
+                f"Wasabi 1.0 CoinJoin: {w1_count} equal outputs at "
+                f"{round_btc:.4f} BTC each across {len(inputs)} "
+                "inputs. The probabilistic unwrap enumerator "
+                "(see `unwrap_coinjoin`) can rank participant "
+                "hypotheses by amount-fit + cardinality. Recommend "
+                "the operator inspect the top-N hypotheses and "
+                "cross-check against known wallet clusters."
+            ),
+            most_likely_output=None,
+        )
+
+    # 3. Wasabi 2.0 (WabiSabi) — many-in / many-out, no dominant.
+    if _is_wasabi2_wabisabi(inputs, outputs):
+        return CoinjoinDetection(
+            protocol=PROTOCOL_WASABI_2,
+            input_address=input_address,
+            tx_hash=tx_hash,
+            all_outputs=all_outputs_t,
+            confidence=0.75,
+            forensic_note=(
+                f"Wasabi 2.0 / WabiSabi-shape CoinJoin: {len(inputs)} "
+                f"inputs into {len(outputs)} outputs with arbitrary "
+                "denominations (no dominant output amount). Post-mix "
+                "output recovery is INFEASIBLE on-chain — WabiSabi "
+                "uses per-round credential-issuance graphs that the "
+                "coordinator does not publish. Treat as a mixing "
+                "boundary: flag the hop, surface in the brief, and "
+                "recommend operator manual review with off-chain "
+                "exchange/coordinator subpoena if available."
+            ),
+            most_likely_output=None,
+        )
+
+    # 4. Mercury Layer statechain — 1-in/1-out P2TR with SE fee.
+    # Checked last because the shape (1/1) is the cheapest to test
+    # and the most likely to false-positive on ordinary P2TR sends;
+    # we want the more-distinctive multi-party shapes above to win
+    # whenever they could plausibly match (they can't on a 1/1 tx,
+    # but the ordering documents the precedence).
+    mercury_ok, se_fee, known_se = _is_mercury_layer(inputs, outputs)
+    if mercury_ok:
+        confidence = 0.85 if known_se else 0.55
+        if known_se:
+            confidence_note = (
+                "Source is a known Mercury Layer SE address "
+                "(high confidence). "
+            )
+        else:
+            confidence_note = (
+                "Shape match without SE-address confirmation "
+                "(medium confidence). "
+            )
+        return CoinjoinDetection(
+            protocol=PROTOCOL_MERCURY_LAYER,
+            input_address=input_address,
+            tx_hash=tx_hash,
+            all_outputs=all_outputs_t,
+            confidence=confidence,
+            forensic_note=(
+                f"Possible Mercury Layer statechain operation: "
+                f"1-in/1-out P2TR with {se_fee}-sat SE fee. "
+                + confidence_note
+                + "Full unwrap requires the SE operator's private "
+                "database; investigator should query the SE "
+                "operator (CommerceBlock) directly to identify "
+                "the post-transition beneficial owner."
+            ),
+            most_likely_output=None,
+        )
+
+    return None
 
 
 # ---- Hypothesis enumeration ---- #
@@ -496,13 +959,53 @@ def unwrap_to_brief_section(result: UnwrapResult | None) -> dict[str, Any]:
     }
 
 
+def detection_to_brief_section(
+    detection: CoinjoinDetection | None,
+) -> dict[str, Any]:
+    """Serialize a `CoinjoinDetection` for the brief's
+    COINJOIN_DETECTION section (v0.31.0 addition).
+
+    Separate from `unwrap_to_brief_section` because the two answer
+    different questions: `unwrap_to_brief_section` lists ranked
+    participant hypotheses; `detection_to_brief_section` reports
+    the boolean fact "this hop crossed a known mixer" plus the
+    forensic explanation.
+    """
+    if detection is None:
+        return {
+            "detected": False,
+            "protocol": None,
+            "tx_hash": None,
+        }
+    return {
+        "detected": True,
+        "protocol": detection.protocol,
+        "tx_hash": detection.tx_hash,
+        "input_address": detection.input_address,
+        "all_output_addresses": [o.address for o in detection.all_outputs],
+        "output_count": len(detection.all_outputs),
+        "confidence": round(detection.confidence, 3),
+        "forensic_note": detection.forensic_note,
+        "most_likely_output": detection.most_likely_output,
+    }
+
+
 __all__ = (
     "UTXOInput",
     "UTXOOutput",
     "CoinJoinHypothesis",
     "UnwrapResult",
+    "CoinjoinDetection",
+    "PROTOCOL_WASABI_1",
+    "PROTOCOL_WASABI_2",
+    "PROTOCOL_WHIRLPOOL",
+    "PROTOCOL_JOINMARKET",
+    "PROTOCOL_MERCURY_LAYER",
+    "PROTOCOL_UNKNOWN",
     "detect_round_amounts",
     "classify_coinjoin_pattern",
+    "detect_coinjoin",
     "unwrap_coinjoin",
     "unwrap_to_brief_section",
+    "detection_to_brief_section",
 )

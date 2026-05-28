@@ -62,11 +62,15 @@ class HeliusClient:
         api_key: str,
         requests_per_second: float = 10.0,
         timeout_seconds: float = 30.0,
+        # v0.32 — optional per-case API budget tracker. See
+        # EtherscanClient.__init__ for the contract.
+        budget: object | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("HELIUS_API_KEY is required")
         self.api_key = api_key
         self.limiter = _RateLimiter(requests_per_second)
+        self.budget = budget
         # Split connect vs read timeout: a slow-DNS / hung-TCP-handshake
         # against api.helius.xyz must not block the worker for the full
         # 30s read window. Connect cap = 10s.
@@ -166,6 +170,10 @@ class HeliusClient:
         params = {"api-key": self.api_key}
         payload = {"transactions": [signature]}
         resp = self._client.post(url, params=params, json=payload)
+        # v0.32 per-case API budget.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("helius")
         if resp.status_code == 429:
             raise HeliusRateLimitError("HTTP 429")
         if resp.status_code == 401:
@@ -211,6 +219,11 @@ class HeliusClient:
             params["before"] = before
         url = f"{self.BASE}/v0/addresses/{address}/transactions"
         resp = self._client.get(url, params=params)
+        # v0.32 per-case API budget. getattr-with-default defends
+        # against tests that construct via __new__().
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("helius")
         if resp.status_code == 429:
             raise HeliusRateLimitError("HTTP 429")
         if resp.status_code == 401:
@@ -259,6 +272,10 @@ class HeliusClient:
         url = f"{self.RPC}/?api-key={self.api_key}"
         payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params or []}
         resp = self._client.post(url, json=payload)
+        # v0.32 — see ``_fetch_page`` for the budget contract.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("helius")
         if resp.status_code == 429:
             raise HeliusRateLimitError("HTTP 429")
         if resp.status_code == 401:

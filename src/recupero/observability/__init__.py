@@ -12,6 +12,12 @@ Enable via:
 
 from __future__ import annotations
 
+from recupero.observability.api_budget import (
+    BudgetExceededError,
+    CaseBudget,
+    cost_per_call,
+    resolve_budget_from_env,
+)
 from recupero.observability.metrics import (
     METRICS,
     metrics_endpoint_text,
@@ -29,4 +35,8 @@ __all__ = (
     "record_claim",
     "record_stage_duration",
     "start_metrics_server",
+    "BudgetExceededError",
+    "CaseBudget",
+    "cost_per_call",
+    "resolve_budget_from_env",
 )

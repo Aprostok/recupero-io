@@ -62,6 +62,7 @@ Defensive design
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import os
 import tempfile
@@ -206,6 +207,21 @@ class OFACCryptoEntry:
     sdn_entry_name: str    # e.g., "LAZARUS GROUP" or the SDN's primary name
     sdn_entry_id: str      # OFAC's UID for the entry
     listing_date: str      # ISO date if available; "" otherwise
+    removed_at_utc: str = ""  # ISO timestamp set when an address that was
+    # previously present in the CSV is no longer in the upstream feed.
+    # Empty for live entries. Persisted across sync runs so a once-listed
+    # address never silently vanishes from the historical record.
+
+
+def _meta_path_for(csv_path: Path) -> Path:
+    """Companion `.meta.json` sidecar path for the OFAC CSV.
+
+    v0.31.5: we don't want to change the CSV schema (existing consumers
+    parse the 5-column shape), so freshness data lives in a sidecar.
+    Reading the sidecar lets the cron / stale-label alert detect "OFAC
+    hasn't been refreshed in N days" without parsing the CSV.
+    """
+    return csv_path.with_name(csv_path.name + ".meta.json")
 
 
 @dataclass(frozen=True)
@@ -219,18 +235,48 @@ class SyncResult:
     stale: bool = False  # true if we couldn't reach the feed
 
 
+class OFACSyncError(RuntimeError):
+    """Raised by ``sync_ofac_sdn(..., strict=True)`` when any step
+    of the sync fails (network unreachable, parse error, write
+    failure). The cron scheduler uses strict mode so the failure
+    surfaces as an ``ERROR`` log line + operator alert rather than
+    silently degrading.
+
+    The wrapped ``SyncResult`` is attached as ``.result`` for
+    callers that want to inspect the partial state."""
+
+    def __init__(self, message: str, result: SyncResult | None = None) -> None:
+        super().__init__(message)
+        self.result = result
+
+
 def sync_ofac_sdn(
     *,
     url: str = OFAC_SDN_XML_URL,
     output_path: Path | None = None,
     timeout_sec: int = 60,
+    strict: bool = False,
 ) -> SyncResult:
     """Download the OFAC SDN XML, extract crypto-address entries,
     and write to a CSV.
 
-    Returns a SyncResult. Does NOT raise — failures log a warning
-    and return success=False. The caller (CLI / cron) decides
-    whether to retry.
+    By default returns a SyncResult and never raises — failures log
+    a warning and return ``success=False``. This is the legacy CLI
+    contract (the ``recupero-ops ofac-sync`` console script reports
+    via printed lines + exit codes).
+
+    v0.31.5: pass ``strict=True`` to raise ``OFACSyncError`` on any
+    failure (network unreachable, parse error, write failure). The
+    cron job uses this so the scheduler logs a loud ``ERROR`` and
+    operators get paged when Treasury can't be reached. In the
+    silent-success-False mode a borked endpoint could go unnoticed
+    for weeks — exactly the freshness gap docs/V031_3_HONEST_GAPS.md
+    §5c flagged.
+
+    Side effect: on a successful sync we also write a sidecar
+    ``<csv>.meta.json`` containing ``last_synced_utc``,
+    ``entries_written``, and the source ``url`` — read by the
+    stale-label alert + the cron health probe.
 
     Use:
       from recupero.trace.ofac_sync import sync_ofac_sdn
@@ -241,6 +287,20 @@ def sync_ofac_sdn(
     out_path = output_path or DEFAULT_OFAC_CSV_PATH
     fetched_at = datetime.now(UTC).isoformat()
 
+    def _fail(msg: str, *, stale: bool = False, entries_written: int = 0) -> SyncResult:
+        """Compose a failure SyncResult; in strict mode raise instead."""
+        result = SyncResult(
+            success=False,
+            entries_written=entries_written,
+            output_path=out_path,
+            fetched_at=fetched_at,
+            error_message=msg,
+            stale=stale,
+        )
+        if strict:
+            raise OFACSyncError(f"OFAC sync failed: {msg}", result=result)
+        return result
+
     # RIGOR-2a: URL scheme/host allowlist BEFORE any urlopen. This
     # closes file://, ftp://, gopher://, and cloud-metadata SSRF
     # vectors when a misconfigured env-var / typo / future
@@ -248,13 +308,7 @@ def sync_ofac_sdn(
     refusal = _validate_url(url)
     if refusal is not None:
         log.warning("ofac sync: %s (url=%r)", refusal, url)
-        return SyncResult(
-            success=False,
-            entries_written=0,
-            output_path=out_path,
-            fetched_at=fetched_at,
-            error_message=refusal,
-        )
+        return _fail(refusal)
 
     try:
         log.info("ofac sync: fetching %s", url)
@@ -279,64 +333,56 @@ def sync_ofac_sdn(
                 "(possible memory-bomb / wrong URL)"
             )
             log.warning("ofac sync: %s", msg)
-            return SyncResult(
-                success=False,
-                entries_written=0,
-                output_path=out_path,
-                fetched_at=fetched_at,
-                error_message=msg,
-            )
+            return _fail(msg)
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
         log.warning("ofac sync: feed unreachable (%s) — using stale data", exc)
-        return SyncResult(
-            success=False,
-            entries_written=0,
-            output_path=out_path,
-            fetched_at=fetched_at,
-            error_message=str(exc),
-            stale=True,
-        )
+        return _fail(str(exc), stale=True)
     except Exception as exc:  # noqa: BLE001
         log.warning("ofac sync: unexpected error (%s)", exc)
-        return SyncResult(
-            success=False,
-            entries_written=0,
-            output_path=out_path,
-            fetched_at=fetched_at,
-            error_message=str(exc),
-        )
+        return _fail(str(exc))
 
     try:
-        entries = _extract_crypto_entries(xml_bytes)
+        new_entries = _extract_crypto_entries(xml_bytes)
     except Exception as exc:  # noqa: BLE001
         log.warning("ofac sync: XML parse failed (%s)", exc)
-        return SyncResult(
-            success=False,
-            entries_written=0,
-            output_path=out_path,
-            fetched_at=fetched_at,
-            error_message=f"parse failed: {exc}",
-        )
+        return _fail(f"parse failed: {exc}")
+
+    # v0.31.5: merge with the previous CSV so that addresses which
+    # WERE listed but have since been removed from the upstream feed
+    # get a ``removed_at_utc`` timestamp rather than silently vanishing.
+    # This preserves the historical record — a compliance audit asking
+    # "was this address ever OFAC-listed?" can still answer yes.
+    merged_entries = _merge_with_previous(out_path, new_entries, fetched_at)
 
     try:
-        _write_csv_atomic(out_path, entries)
+        _write_csv_atomic(out_path, merged_entries)
     except Exception as exc:  # noqa: BLE001
         log.warning("ofac sync: CSV write failed (%s)", exc)
-        return SyncResult(
-            success=False,
-            entries_written=len(entries),
-            output_path=out_path,
-            fetched_at=fetched_at,
-            error_message=f"write failed: {exc}",
+        return _fail(f"write failed: {exc}", entries_written=len(merged_entries))
+
+    # v0.31.5: write the freshness sidecar. Best-effort: a meta-write
+    # failure does NOT fail the sync (the CSV is the source of truth).
+    live_count = sum(1 for e in merged_entries if not e.removed_at_utc)
+    removed_count = len(merged_entries) - live_count
+    try:
+        _write_meta_atomic(
+            out_path,
+            last_synced_utc=fetched_at,
+            entries_written=live_count,
+            entries_removed=removed_count,
+            source_url=url,
         )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ofac sync: meta sidecar write failed (%s)", exc)
 
     log.info(
-        "ofac sync: wrote %d crypto-address entries to %s",
-        len(entries), out_path,
+        "ofac sync: wrote %d crypto-address entries to %s "
+        "(%d live, %d removed-from-feed)",
+        len(merged_entries), out_path, live_count, removed_count,
     )
     return SyncResult(
         success=True,
-        entries_written=len(entries),
+        entries_written=live_count,
         output_path=out_path,
         fetched_at=fetched_at,
     )
@@ -393,6 +439,7 @@ def load_ofac_csv(
                     sdn_entry_name=row.get("sdn_entry_name", ""),
                     sdn_entry_id=row.get("sdn_entry_id", ""),
                     listing_date=row.get("listing_date", ""),
+                    removed_at_utc=(row.get("removed_at_utc") or "").strip(),
                 ))
         return out
     except Exception as exc:  # noqa: BLE001
@@ -524,24 +571,36 @@ def _is_evm_address(addr: str) -> bool:
 
 def _write_csv_atomic(out_path: Path, entries: list[OFACCryptoEntry]) -> None:
     """Write the CSV via temp-file-rename to avoid leaving a half-
-    written file if the process crashes mid-write."""
+    written file if the process crashes mid-write.
+
+    v0.31.5: rows are sorted by (chain, address) for byte-stable
+    output. Re-running the sync with identical upstream data MUST
+    yield an identical file — otherwise a diff-on-cron-output
+    monitoring strategy floods with phantom churn.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
         prefix="ofac_sdn_",
         suffix=".csv.tmp",
         dir=str(out_path.parent),
     )
+    # Deterministic ordering: by (chain, address). Both fields are
+    # already canonicalized (EVM lowercased; chain lowercased) so
+    # the sort is byte-stable across runs.
+    sorted_entries = sorted(
+        entries, key=lambda e: (e.chain, e.address, e.sdn_entry_id),
+    )
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
                 "address", "chain", "sdn_entry_name",
-                "sdn_entry_id", "listing_date",
+                "sdn_entry_id", "listing_date", "removed_at_utc",
             ])
-            for e in entries:
+            for e in sorted_entries:
                 writer.writerow([
                     e.address, e.chain, e.sdn_entry_name,
-                    e.sdn_entry_id, e.listing_date,
+                    e.sdn_entry_id, e.listing_date, e.removed_at_utc,
                 ])
         os.replace(tmp_name, out_path)
     except Exception:
@@ -553,11 +612,171 @@ def _write_csv_atomic(out_path: Path, entries: list[OFACCryptoEntry]) -> None:
         raise
 
 
+def _merge_with_previous(
+    csv_path: Path,
+    new_entries: list[OFACCryptoEntry],
+    fetched_at: str,
+) -> list[OFACCryptoEntry]:
+    """Merge freshly-extracted entries with the previous CSV.
+
+    Behavior:
+      * Live entries (present in ``new_entries``) win — their fields
+        come from the upstream feed.
+      * Entries that were in the previous CSV but are absent from the
+        upstream feed get marked with ``removed_at_utc = fetched_at``
+        and retained.
+      * Entries that were already marked ``removed_at_utc`` in the
+        previous CSV keep their original removal timestamp (idempotent
+        on re-sync — re-running over the same upstream data must NOT
+        bump removal timestamps).
+
+    Returns a merged list (unsorted; sorting happens at write time).
+    """
+    if not csv_path.exists():
+        return list(new_entries)
+    # Read the previous CSV directly (bypasses load_ofac_csv's
+    # staleness-warn side effect and lowercases-on-load behavior, both
+    # of which we want here for the comparison only).
+    prev_by_key: dict[tuple[str, str, str], OFACCryptoEntry] = {}
+    try:
+        with csv_path.open("r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                addr = (row.get("address") or "").strip()
+                if not addr:
+                    continue
+                chain = (row.get("chain") or "ethereum").lower()
+                normalized_addr = addr.lower() if _is_evm_address(addr) else addr
+                sdn_id = (row.get("sdn_entry_id") or "").strip()
+                key = (chain, normalized_addr, sdn_id)
+                prev_by_key[key] = OFACCryptoEntry(
+                    address=normalized_addr,
+                    chain=chain,
+                    sdn_entry_name=row.get("sdn_entry_name", ""),
+                    sdn_entry_id=sdn_id,
+                    listing_date=row.get("listing_date", ""),
+                    removed_at_utc=(row.get("removed_at_utc") or "").strip(),
+                )
+    except Exception as exc:  # noqa: BLE001
+        # Corrupt CSV: don't propagate removed-tracking, just emit
+        # the fresh list. We log so operators see it.
+        log.warning(
+            "ofac sync: previous CSV unreadable (%s); skipping removed-tracking",
+            exc,
+        )
+        return list(new_entries)
+
+    new_keys: set[tuple[str, str, str]] = set()
+    merged: list[OFACCryptoEntry] = []
+    for e in new_entries:
+        key = (e.chain, e.address, e.sdn_entry_id)
+        new_keys.add(key)
+        # A previously-removed entry that's back in the feed: clear
+        # the removed_at_utc marker.
+        merged.append(OFACCryptoEntry(
+            address=e.address,
+            chain=e.chain,
+            sdn_entry_name=e.sdn_entry_name,
+            sdn_entry_id=e.sdn_entry_id,
+            listing_date=e.listing_date,
+            removed_at_utc="",
+        ))
+
+    for key, prev in prev_by_key.items():
+        if key in new_keys:
+            continue
+        # Was in previous CSV, not in new feed → mark removed.
+        # Preserve the original removal timestamp if already set
+        # (idempotency: a re-sync over identical data MUST NOT
+        # bump the stored timestamp).
+        removed_ts = prev.removed_at_utc or fetched_at
+        merged.append(OFACCryptoEntry(
+            address=prev.address,
+            chain=prev.chain,
+            sdn_entry_name=prev.sdn_entry_name,
+            sdn_entry_id=prev.sdn_entry_id,
+            listing_date=prev.listing_date,
+            removed_at_utc=removed_ts,
+        ))
+    return merged
+
+
+def _write_meta_atomic(
+    csv_path: Path,
+    *,
+    last_synced_utc: str,
+    entries_written: int,
+    entries_removed: int,
+    source_url: str,
+) -> None:
+    """Write the `<csv>.meta.json` freshness sidecar atomically.
+
+    Schema (additive-only):
+      {
+        "last_synced_utc": "2026-05-27T04:00:00+00:00",
+        "entries_written": 412,        # live entries in this run
+        "entries_removed": 3,          # entries with removed_at_utc set
+        "source_url": "https://www.treasury.gov/ofac/downloads/sdn.xml",
+        "schema_version": 1
+      }
+
+    Read by the cron health probe + stale-label alert; consumers
+    that don't know about the sidecar are unaffected (CSV remains
+    the source of truth)."""
+    meta_path = _meta_path_for(csv_path)
+    payload = {
+        "last_synced_utc": last_synced_utc,
+        "entries_written": int(entries_written),
+        "entries_removed": int(entries_removed),
+        "source_url": source_url,
+        "schema_version": 1,
+    }
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix="ofac_meta_",
+        suffix=".json.tmp",
+        dir=str(meta_path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+            f.write("\n")
+        os.replace(tmp_name, meta_path)
+    except Exception:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+def read_ofac_meta(csv_path: Path | None = None) -> dict | None:
+    """Read the freshness sidecar for the OFAC CSV.
+
+    Returns the parsed JSON dict (with ``last_synced_utc``,
+    ``entries_written``, ``entries_removed``, ``source_url``,
+    ``schema_version``) or ``None`` if the sidecar doesn't exist or
+    is unreadable. Used by the cron health probe + stale-label
+    alert to detect "OFAC hasn't been refreshed in N days."
+    """
+    path = csv_path or DEFAULT_OFAC_CSV_PATH
+    meta_path = _meta_path_for(path)
+    if not meta_path.exists():
+        return None
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ofac sync: meta sidecar at %s unreadable: %s", meta_path, exc)
+        return None
+
+
 __all__ = (
     "OFACCryptoEntry",
+    "OFACSyncError",
     "SyncResult",
     "sync_ofac_sdn",
     "load_ofac_csv",
+    "read_ofac_meta",
     "OFAC_SDN_XML_URL",
     "DEFAULT_OFAC_CSV_PATH",
 )

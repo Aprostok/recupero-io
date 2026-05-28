@@ -50,7 +50,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from recupero._common import atomic_write_text
+from recupero._common import atomic_write_text, resolve_render_time
 
 log = logging.getLogger(__name__)
 
@@ -104,14 +104,19 @@ def _safe_filename_segment(name: str | None, *, fallback: str = "unknown") -> st
             out_chars.append("_")
         # Everything else (including `.`) is dropped.
     safe = "".join(out_chars).strip("._-")
+    # v0.30.4 (Jacob hypothesis flake): lowercase BEFORE the 64-char cap.
+    # Turkish dotted-I U+0130 lowercases to "i̇" (Latin i + combining
+    # diacritical mark) — 2 codepoints instead of 1. Pre-v0.30.4 we
+    # truncated to 64 chars FIRST, then lowercased, so an input of
+    # exactly 64 dotted-I characters expanded to 65 after the lowercase.
+    # The Hypothesis adversarial fuzzer found this corner case
+    # (test_safe_filename_segment_caps_at_64). Swapping the order makes
+    # the cap an actual cap: lowercase first, THEN truncate.
+    safe = safe.lower()
     safe = safe[:64]
     if not safe:
         return fallback
-    # Lowercase to match the long-standing filename convention. The
-    # original pre-Z4 code lowercased the exchange name; this sanitizer
-    # is a stricter replacement and must preserve that behavior so URLs
-    # / shell-safety expectations (and locked-contract tests) hold.
-    return safe.lower()
+    return safe
 
 
 def _safe_total_usd(values: list[Any]) -> float:
@@ -230,7 +235,7 @@ def render_legal_request(
 def _build_base_context(brief: dict[str, Any]) -> dict[str, Any]:
     """Pull the shared (non-perpetrator-specific) context out of the
     brief. Used as the base for each template render."""
-    now_iso = datetime.now(UTC).isoformat(timespec="seconds")
+    now_iso = resolve_render_time().isoformat(timespec="seconds")
     incident_date = brief.get("INCIDENT_DATE") or ""
     return {
         "case_id": brief.get("CASE_ID") or "(case-id missing)",

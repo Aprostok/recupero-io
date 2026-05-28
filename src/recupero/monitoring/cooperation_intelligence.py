@@ -98,6 +98,40 @@ _BLACK_HOLE_MIN_LETTERS = 3
 # cooperation panel for that issuer.
 _MIN_LETTERS_FOR_CONFIDENT_PROFILE = 3
 
+# v0.31.1: minimum sample size before symmetric trimming of
+# `avg_response_hours`. Below this, trimming a single value can drop
+# 50% of the data and produce a less-informative average than the
+# raw mean. The threshold matches the "you have enough data to
+# trust the trim" rule of thumb used in operational statistics —
+# 10 observations is the smallest n where 10/10 trimming still
+# leaves 8 representative values.
+_MIN_LETTERS_FOR_TRIMMED_MEAN = 10
+
+
+def _trimmed_mean(values: list[float], *, trim_frac: float = 0.10) -> float:
+    """Symmetric trimmed mean.
+
+    Drops the smallest and largest ``trim_frac`` fraction of values
+    before averaging. When ``len(values) < _MIN_LETTERS_FOR_TRIMMED_MEAN``,
+    returns the untrimmed mean — trimming a tiny sample is more
+    destructive than informative.
+
+    Defensive: returns ``float('nan')`` on empty input (caller already
+    gates on this; the explicit NaN return makes that contract obvious).
+    """
+    if not values:
+        return float("nan")
+    n = len(values)
+    if n < _MIN_LETTERS_FOR_TRIMMED_MEAN:
+        return float(statistics.mean(values))
+    k = int(n * trim_frac)
+    if k <= 0:
+        return float(statistics.mean(values))
+    trimmed = sorted(values)[k:n - k]
+    if not trimmed:  # paranoia — shouldn't happen with k < n/2
+        return float(statistics.mean(values))
+    return float(statistics.mean(trimmed))
+
 
 # Recommended legal instrument values -- matches the existing
 # letter_tier CHECK constraint in freeze_letters_sent
@@ -448,7 +482,19 @@ def build_cooperation_profile(
             # future statistics.median patch or float-precision
             # surprise can't sneak a non-finite value out the door.
             _median = float(statistics.median(freeze_response_hours))
-            _avg = float(statistics.mean(freeze_response_hours))
+            # v0.31.1 (deeper-audit Bug E close-out): trimmed mean.
+            # One pathological outlier (operator opened a case, forgot
+            # it for 5 years, finally got a response → 50,000h) used
+            # to pull the published avg from ~24h to ~5500h. The LE
+            # template then read "Coinbase responds in 5500h on
+            # average" — operationally misleading.
+            #
+            # Strategy: when n >= 10, drop the smallest 10% AND the
+            # largest 10% (symmetric trim). Below n=10 we keep the
+            # plain mean — too few samples to trim safely. The median
+            # is published untrimmed alongside so the operator still
+            # sees the full-distribution central tendency.
+            _avg = _trimmed_mean(freeze_response_hours, trim_frac=0.10)
             _fastest = float(min(freeze_response_hours))
             _slowest = float(max(freeze_response_hours))
             if math.isfinite(_median):

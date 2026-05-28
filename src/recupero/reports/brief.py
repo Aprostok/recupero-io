@@ -193,6 +193,12 @@ MIDAS_ISSUER = IssuerInfo(
     asset_description="Midas-issued ERC-20 wrapper token representing a pre-deposit position in Maple Finance's syrupUSDT institutional credit strategy on the Plasma blockchain",
     kyc_required=True,
     kyc_minimum="USD 125,000",
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-4): freeze posture note,
+    # consistent with the issuers.json seed for the msyrupUSDp contract.
+    freeze_notes=(
+        "Midas issues mSyrup* tokens via permissioned mint/redeem and "
+        "can freeze specific holders. EU-regulated (BaFin)."
+    ),
 )
 
 
@@ -513,11 +519,24 @@ def generate_briefs(
         # attestation. Stamp UNSIGNED across every page so an operator
         # never accidentally transmits a brief that lacks a signing
         # human.
-        "draft": draft or (not _is_investigator_configured_safe()),
+        # v0.32.1 (LE-CRIT-3): unify the draft/UNSIGNED gate with the
+        # investigator-configured flag below. Pre-v0.32.1 a caller that
+        # passed a real InvestigatorInfo directly (e.g. test_brief.py,
+        # direct CLI override) still got `draft=True` + the UNSIGNED
+        # watermark because the env-var-only check ignored the passed-in
+        # value. Now: draft watermark is suppressed whenever EITHER the
+        # env-var is set OR the caller supplied a real human name.
+        "draft": draft or not (
+            _is_investigator_configured_safe()
+            or bool(_investigator_ctx_for_render["name"])
+        ),
         "draft_label": (
             draft_label
             or ("UNSIGNED — DO NOT TRANSMIT"
-                if not _is_investigator_configured_safe()
+                if not (
+                    _is_investigator_configured_safe()
+                    or bool(_investigator_ctx_for_render["name"])
+                )
                 else "DRAFT")
         ),
         # v0.19.1 (round-12 PDF-CRIT-4): the 23 templates that render this
@@ -968,7 +987,16 @@ def generate_briefs(
             f"on historical-receipt cases. Underlying error: {_exc!r}"
         ) from _exc
 
-    maple_html = env.get_template(issuer_template).render(**ctx)
+    # v0.32.1 (LE-CRIT-3, LE-HIGH-6): the LE handoff gets the sanitized
+    # investigator ctx (placeholder-line + UNSIGNED banner when env
+    # unconfigured). The issuer freeze letter goes to issuer compliance
+    # teams who already know Recupero as a company; the legacy
+    # `compliance@recupero.io` alias is still a valid contact for
+    # them. Pass the raw `__dict__` to the issuer template to preserve
+    # its pre-v0.32.1 behavior and apply LE-specific sanitization only
+    # to the LE render.
+    maple_ctx = {**ctx, "investigator": investigator.__dict__}
+    maple_html = env.get_template(issuer_template).render(**maple_ctx)
     le_html = env.get_template("le.html.j2").render(**ctx)
 
     briefs_dir = case_dir / "briefs"

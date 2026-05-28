@@ -56,6 +56,17 @@ log = logging.getLogger(__name__)
 _DEFAULT_WINDOW_HOURS = 6.0
 _DEFAULT_MIN_USD = Decimal("100000")
 _DEFAULT_AMOUNT_TOLERANCE_PCT = 0.05
+# v0.32.1 HIGH-10: per-parity tolerance — stable parity is tighter
+# (USDT↔USDC trades at <0.2% slippage routinely; 1.5% is the
+# conservative bound that lets in real laundering routes but not
+# noise). ETH/BTC parity derivatives slip a bit more (staking
+# yields drift the underlying); 1% is empirically right.
+_STABLE_PARITY_TOLERANCE_PCT = 0.015
+_ETH_PARITY_TOLERANCE_PCT = 0.010
+_BTC_PARITY_TOLERANCE_PCT = 0.010
+# Tier 3 cross-chain window is tighter than the default — cross-chain
+# CEX rails are sub-hour by design, so anything beyond 4h is noise.
+_TIER3_CROSS_CHAIN_WINDOW_HOURS = 4.0
 # Tokens noisy enough that an amount-match in a short window is
 # almost certainly coincidence. CEX hot wallets process millions
 # of dollars of USDT / USDC per minute; a $250K match in 2h is
@@ -95,12 +106,38 @@ _BTC_PARITY = frozenset({
     "WBTC", "BTCB", "TBTC", "CBBTC", "RENBTC", "HBTC", "WBTC.E",
 })
 
-# v0.32.1 test-public aliases for the test scaffolding. Same data,
-# uppercased public names. The trace audit doc references these as
-# the canonical export names.
-STABLECOIN_PARITY_GROUPS = _STABLE_PARITY
-ETH_PARITY_GROUPS = _ETH_PARITY
-BTC_PARITY_GROUPS = _BTC_PARITY
+# v0.32.1 test-public aliases for the test scaffolding. The audit's
+# canonical shape is ``dict[Chain, frozenset[str]]`` (per-chain parity
+# entries) so cross-chain Tier-3 logic can ask "is USDC valid on
+# polygon?" — the parity-tables-per-chain shape lets the cross-chain
+# match enforce that the candidate token actually exists on the
+# candidate chain. Until per-chain divergence ships, every chain has
+# the same parity set.
+def _per_chain_table(symbols: frozenset[str]) -> "dict[Chain, frozenset[str]]":
+    chains = (
+        Chain.ethereum, Chain.tron, Chain.bsc, Chain.polygon,
+        Chain.arbitrum, Chain.optimism, Chain.base, Chain.avalanche,
+        Chain.solana,
+    )
+    return {c: symbols for c in chains}
+
+
+STABLECOIN_PARITY_GROUPS: "dict[Chain, frozenset[str]]" = (
+    _per_chain_table(_STABLE_PARITY)
+)
+ETH_PARITY_GROUPS: "dict[Chain, frozenset[str]]" = (
+    _per_chain_table(_ETH_PARITY)
+)
+BTC_PARITY_GROUPS: "dict[Chain, frozenset[str]]" = {
+    # WBTC-family lives mostly on EVM mainnets.
+    Chain.ethereum: _BTC_PARITY,
+    Chain.bsc: _BTC_PARITY,
+    Chain.polygon: _BTC_PARITY,
+    Chain.arbitrum: _BTC_PARITY,
+    Chain.optimism: _BTC_PARITY,
+    Chain.base: _BTC_PARITY,
+    Chain.avalanche: _BTC_PARITY,
+}
 
 
 def _parity_group(symbol: str) -> str | None:
@@ -130,9 +167,16 @@ def _are_at_parity(token_a: str, token_b: str) -> bool:
 class CexContinuityLead:
     """One investigative lead.
 
-    DELIBERATELY confidence='low'. The brief section that consumes
-    these is framed as 'LEAD ONLY — same-hot-wallet correlation,
-    not proven re-emergence.' Operators decide whether to follow up.
+    The brief section that consumes these is framed as 'LEAD ONLY —
+    same-hot-wallet correlation, not proven re-emergence.' Operators
+    decide whether to follow up.
+
+    v0.32.1 HIGH-10 close-out adds tiered confidence:
+
+      * 'high'   — Tier 1: same symbol, same chain.
+      * 'medium' — Tier 2: same parity group, same chain.
+      * 'low'    — Tier 3: same parity group, DIFFERENT chain (4h
+                   window). Also covers the legacy single-tier path.
     """
     deposit_tx_hash: str
     deposit_address: str          # CEX hot wallet (the to_address of the deposit)
@@ -146,7 +190,13 @@ class CexContinuityLead:
     candidate_block_time: datetime
     delta_hours: float
     amount_match_pct: float        # |dep - wth| / dep, expressed as a fraction
-    confidence: str                # always "low" — by design
+    confidence: str                # "high" | "medium" | "low"
+    # v0.32.1 HIGH-10: cross-token + cross-chain parity metadata.
+    candidate_token_symbol: str = ""
+    candidate_chain: "Chain | None" = None
+    parity_group: str | None = None        # "stable" | "eth" | "btc" | None
+    parity_match: dict[str, str] | None = None  # {"deposit_asset","withdrawal_asset","parity_group"}
+    cross_chain_parity: bool = False
 
 
 def _is_finite_decimal(value: Decimal | None) -> bool:
@@ -308,7 +358,15 @@ def identify_cex_continuity_leads(
         if usd_val < min_usd_d:
             continue
         token_sym = (t.token.symbol or "").upper() if t.token else ""
-        if token_sym in noisy_tokens:
+        # v0.32.1 HIGH-10: noisy-token gate now applies ONLY when the
+        # token is not part of a parity group. Noisy stables (USDT,
+        # USDC, DAI) and noisy ETH still produce Tier-2/3 leads via
+        # the cross-token parity matcher; the noise problem was the
+        # SAME-symbol coincidence (millions of $250K USDT moves per
+        # hour), and the parity gate already disqualifies those by
+        # requiring a different symbol. Tier 1 same-symbol on USDT
+        # remains gated.
+        if token_sym in noisy_tokens and _parity_group(token_sym) is None:
             continue
         # v0.31.4 (Gap 1a): use case.incident_time so the CEX label at
         # the time of theft is applied, not today's.
@@ -344,7 +402,13 @@ def identify_cex_continuity_leads(
         deposit_usd: Decimal = deposit.usd_value_at_tx  # validated above
         deposit_time: datetime = deposit.block_time
         deposit_addr: str = deposit.to_address
-        window_end = deposit_time + timedelta(hours=window_h)
+        deposit_chain: Chain = deposit.chain
+        # Same-chain window: default (6h). Cross-chain (Tier 3) is
+        # checked tightly later — fetch outflows out to the larger of
+        # the two so we don't drop cross-chain rows here.
+        window_end = deposit_time + timedelta(
+            hours=max(window_h, _TIER3_CROSS_CHAIN_WINDOW_HOURS),
+        )
 
         # Resolve the start block from the deposit's block_number — we
         # only need outflows AT OR AFTER the deposit block. Adapters may
@@ -413,21 +477,109 @@ def identify_cex_continuity_leads(
                 row_token_symbol = (
                     getattr(row_token, "symbol", "") or ""
                 ).upper()
-                # v0.32.1 HIGH-10 close-out: accept either exact-symbol
-                # equality OR parity-group equality. Parity groups cover
-                # stable-to-stable, ETH-to-ETH-derivative, and
-                # BTC-to-BTC-derivative pairs — the legitimate
-                # ≈1:1 substitutions an adversary uses to fragment same-
-                # exchange continuity by token. The existing USD
-                # tolerance still applies; we are NOT widening it. Any
-                # non-parity pair (e.g. USDT → BNB) remains filtered.
+                # Candidate chain (may differ from deposit_chain for Tier 3
+                # cross-chain rails).
+                row_chain_raw = row.get("chain")
+                row_chain: Chain | None
+                if isinstance(row_chain_raw, Chain):
+                    row_chain = row_chain_raw
+                elif isinstance(row_chain_raw, str):
+                    try:
+                        row_chain = Chain(row_chain_raw.lower())
+                    except ValueError:
+                        row_chain = None
+                else:
+                    row_chain = None
+                same_chain = (row_chain is not None and row_chain == deposit_chain)
+
+                # v0.32.1 HIGH-10 close-out: tiered matching.
+                #   Tier 1 — same symbol, same chain → 'high' / 5% tol.
+                #   Tier 2 — same parity group, same chain → 'medium' /
+                #            per-parity tol (1.5% stable, 1.0% ETH/BTC).
+                #   Tier 3 — same parity group, DIFFERENT chain → 'low' /
+                #            per-parity tol, 4h window only.
+                # Any non-parity pair (e.g. USDT → BNB) remains filtered.
                 exact_match = (row_token_symbol == deposit_token)
-                parity_match = (
+                parity = (
                     not exact_match and _are_at_parity(
                         deposit_token, row_token_symbol,
                     )
                 )
-                if not (exact_match or parity_match):
+                if not (exact_match or parity):
+                    continue
+
+                # Determine tier + per-tier window/tolerance/confidence.
+                tier_window_h: float
+                tier_tol_pct: float
+                tier_confidence: str
+                tier_parity_group: str | None = None
+                tier_parity_match: dict[str, str] | None = None
+                tier_cross_chain = False
+
+                if exact_match and same_chain:
+                    # Tier 1
+                    tier_window_h = window_h
+                    tier_tol_pct = tol_pct
+                    tier_confidence = "high"
+                elif parity and same_chain:
+                    # Tier 2
+                    pg = _parity_group(deposit_token)
+                    if pg is None:
+                        continue
+                    tier_window_h = window_h
+                    tier_tol_pct = {
+                        "stable": _STABLE_PARITY_TOLERANCE_PCT,
+                        "eth": _ETH_PARITY_TOLERANCE_PCT,
+                        "btc": _BTC_PARITY_TOLERANCE_PCT,
+                    }[pg]
+                    tier_confidence = "medium"
+                    tier_parity_group = pg
+                    tier_parity_match = {
+                        "deposit_asset": deposit_token,
+                        "withdrawal_asset": row_token_symbol,
+                        "parity_group": pg,
+                    }
+                elif parity and not same_chain:
+                    # Tier 3 — cross-chain. Require row_chain to be in the
+                    # parity table for the matched group; if the candidate
+                    # token doesn't exist on the candidate chain, skip.
+                    pg = _parity_group(deposit_token)
+                    if pg is None or row_chain is None:
+                        continue
+                    table = {
+                        "stable": STABLECOIN_PARITY_GROUPS,
+                        "eth": ETH_PARITY_GROUPS,
+                        "btc": BTC_PARITY_GROUPS,
+                    }[pg]
+                    if row_chain not in table or row_token_symbol not in table[row_chain]:
+                        continue
+                    tier_window_h = _TIER3_CROSS_CHAIN_WINDOW_HOURS
+                    tier_tol_pct = {
+                        "stable": _STABLE_PARITY_TOLERANCE_PCT,
+                        "eth": _ETH_PARITY_TOLERANCE_PCT,
+                        "btc": _BTC_PARITY_TOLERANCE_PCT,
+                    }[pg]
+                    tier_confidence = "low"
+                    tier_parity_group = pg
+                    tier_parity_match = {
+                        "deposit_asset": deposit_token,
+                        "withdrawal_asset": row_token_symbol,
+                        "parity_group": pg,
+                    }
+                    tier_cross_chain = True
+                else:
+                    # exact_match + different chain — legacy single-tier
+                    # path, treat as low-confidence cross-chain Tier 1
+                    # equivalent.
+                    tier_window_h = _TIER3_CROSS_CHAIN_WINDOW_HOURS
+                    tier_tol_pct = tol_pct
+                    tier_confidence = "low"
+                    tier_cross_chain = True
+
+                # Per-tier window enforcement (re-check after the broader
+                # outer fetch window).
+                tier_window_end = deposit_time + timedelta(hours=tier_window_h)
+                if row_block_time > tier_window_end:
                     continue
                 row_amount_raw = row.get("amount_raw", 0)
                 row_decimals = getattr(row_token, "decimals", None)
@@ -471,7 +623,7 @@ def identify_cex_continuity_leads(
                     continue
 
                 matched, match_pct = _within_tolerance(
-                    deposit_usd, candidate_usd, tol_pct,
+                    deposit_usd, candidate_usd, tier_tol_pct,
                 )
                 if not matched:
                     continue
@@ -494,7 +646,12 @@ def identify_cex_continuity_leads(
                     candidate_block_time=row_block_time,
                     delta_hours=delta_hours,
                     amount_match_pct=match_pct,
-                    confidence="low",
+                    confidence=tier_confidence,
+                    candidate_token_symbol=row_token_symbol,
+                    candidate_chain=row_chain,
+                    parity_group=tier_parity_group,
+                    parity_match=tier_parity_match,
+                    cross_chain_parity=tier_cross_chain,
                 )
                 leads.append(lead)
             except Exception as exc:  # noqa: BLE001 — defensive
@@ -537,7 +694,61 @@ def leads_to_brief_section(
             if _is_finite_decimal(lead.candidate_amount_usd)
             else None
         )
-        out.append({
+        # v0.32.1 HIGH-10: surface parity + cross-chain metadata so
+        # operators / downstream serializers see WHY this is a lead.
+        candidate_chain_str = (
+            lead.candidate_chain.value
+            if lead.candidate_chain is not None
+            else None
+        )
+        candidate_token_symbol = (
+            lead.candidate_token_symbol or lead.deposit_token_symbol
+        )
+        if lead.parity_match and lead.cross_chain_parity:
+            inv_note = (
+                f"Cross-chain re-emergence lead: {lead.deposit_token_symbol} "
+                f"deposit ({dep_usd or '(unknown USD)'}) at {lead.cex_name} "
+                f"hot wallet {lead.deposit_address[:10]}... at "
+                f"{lead.deposit_block_time.isoformat().replace('+00:00', 'Z')}. "
+                f"The SAME exchange emitted {cand_usd or '(unknown USD)'} "
+                f"{candidate_token_symbol} on "
+                f"{candidate_chain_str or 'unknown chain'} to "
+                f"{lead.candidate_withdrawal_to[:10]}... "
+                f"{lead.delta_hours:.1f}h later "
+                f"(parity group: {lead.parity_group}; "
+                f"amount match: {lead.amount_match_pct * 100:.2f}%). "
+                "LEAD ONLY — investigator should subpoena the CEX for "
+                "the deposit's KYC + cross-reference; do NOT publish "
+                "this candidate as a confirmed destination."
+            )
+        elif lead.parity_match:
+            inv_note = (
+                f"Cross-token re-emergence lead: {lead.deposit_token_symbol} "
+                f"→ {candidate_token_symbol} at {lead.cex_name} "
+                f"hot wallet {lead.deposit_address[:10]}... "
+                f"(parity group: {lead.parity_group}; "
+                f"amount match: {lead.amount_match_pct * 100:.2f}%; "
+                f"{lead.delta_hours:.1f}h later). "
+                "LEAD ONLY — investigator should subpoena the CEX for "
+                "the deposit's KYC + cross-reference; do NOT publish "
+                "this candidate as a confirmed destination."
+            )
+        else:
+            inv_note = (
+                f"Funds landed at {lead.cex_name} hot wallet "
+                f"{lead.deposit_address[:10]}... at "
+                f"{lead.deposit_block_time.isoformat().replace('+00:00', 'Z')}. "
+                f"The SAME hot wallet later emitted "
+                f"{cand_usd or '(unknown USD)'} {lead.deposit_token_symbol} "
+                f"to {lead.candidate_withdrawal_to[:10]}... "
+                f"{lead.delta_hours:.1f}h later "
+                f"(amount match: {lead.amount_match_pct * 100:.2f}%). "
+                "LEAD ONLY — investigator should subpoena the CEX for "
+                "the deposit's KYC + cross-reference; do NOT publish "
+                "this candidate as a confirmed destination."
+            )
+
+        entry: dict[str, Any] = {
             "lead_only": True,
             "framing": (
                 "LEAD ONLY — same-hot-wallet correlation, not proven "
@@ -563,20 +774,14 @@ def leads_to_brief_section(
             ),
             "delta_hours": round(lead.delta_hours, 3),
             "amount_match_pct": round(lead.amount_match_pct, 4),
-            "investigator_note": (
-                f"Funds landed at {lead.cex_name} hot wallet "
-                f"{lead.deposit_address[:10]}... at "
-                f"{lead.deposit_block_time.isoformat().replace('+00:00', 'Z')}. "
-                f"The SAME hot wallet later emitted "
-                f"{cand_usd or '(unknown USD)'} {lead.deposit_token_symbol} "
-                f"to {lead.candidate_withdrawal_to[:10]}... "
-                f"{lead.delta_hours:.1f}h later "
-                f"(amount match: {lead.amount_match_pct * 100:.2f}%). "
-                "LEAD ONLY — investigator should subpoena the CEX for "
-                "the deposit's KYC + cross-reference; do NOT publish "
-                "this candidate as a confirmed destination."
-            ),
-        })
+            "candidate_token_symbol": candidate_token_symbol,
+            "candidate_chain": candidate_chain_str,
+            "parity_group": lead.parity_group,
+            "parity_match": lead.parity_match,
+            "cross_chain_parity": lead.cross_chain_parity,
+            "investigator_note": inv_note,
+        }
+        out.append(entry)
     return out
 
 

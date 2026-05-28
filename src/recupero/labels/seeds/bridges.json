@@ -253,6 +253,34 @@
     "chain": "ethereum"
   },
   {
+    "address": "0x4dbd4fc535ac27206064b6804e1fbcc1c5b8ee18",
+    "name": "Arbitrum: DelayedInbox",
+    "category": "bridge",
+    "source": "arbitrum_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum"
+    ],
+    "follow_up_url": "https://arbiscan.io",
+    "notes": "Arbitrum One DelayedInbox — canonical L1 entry point for forced inclusion txs (v0.32.1 audit).",
+    "added_at": "2026-05-25T00:00:00Z",
+    "chain": "ethereum"
+  },
+  {
+    "address": "0x57891966931eb4bb6fb81430e6ce0a03aabde063",
+    "name": "zkSync Era: L1ERC20Bridge",
+    "category": "bridge",
+    "source": "zksync_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "zksync"
+    ],
+    "follow_up_url": "https://explorer.zksync.io",
+    "notes": "zkSync Era L1ERC20Bridge — canonical L1 entry point for ERC-20 deposits to zkSync Era (v0.32.1 audit).",
+    "added_at": "2026-05-25T00:00:00Z",
+    "chain": "ethereum"
+  },
+  {
     "address": "0xa3a7b6f88361f48403514059f1f16c8e78d60eec",
     "name": "Arbitrum: L1ERC20Gateway",
     "category": "bridge",

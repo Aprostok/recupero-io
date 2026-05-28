@@ -1758,6 +1758,27 @@ def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:
         else None
     )
 
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-FR-2): per-issuer KYC-
+    # asymmetry framing. Pre-v0.32.1 the KYC asymmetry block (Section
+    # KYC asymmetry in issuer_freeze_request.html.j2 line 238) only
+    # rendered for Midas. For Coinbase cbBTC, the mint/issuance path
+    # goes through Coinbase Custody KYC (institutional customers KYC at
+    # mint) — a perpetrator wallet receiving cbBTC via on-chain
+    # transfer never went through Coinbase KYC at issuance. That is a
+    # genuine KYC asymmetry argument and supports the freeze ask.
+    # Other freezable stablecoins (Tether USDT, Circle USDC) issue
+    # via fiat-on-ramp KYC at the originating account but don't have a
+    # KYC-tied mint per-address, so the asymmetry argument is weaker —
+    # keep them at kyc_required=False for now.
+    name_lower = name.lower()
+    kyc_required = False
+    kyc_minimum: str | None = None
+    if "coinbase" in name_lower:
+        kyc_required = True
+        kyc_minimum = (
+            "Coinbase Custody institutional KYC at cbBTC mint"
+        )
+
     # freeze_brief.json's contact key is literally "contact_email" (see
     # the v0.2.0 schema in freeze_brief.json — earlier code looked up
     # "primary_contact" and always got the empty fallback, which is why
@@ -1787,7 +1808,8 @@ def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:
         secondary_party=None,
         secondary_role=None,
         asset_description=None,
-        kyc_required=False,
-        kyc_minimum=None,
+        # v0.32.1 (HIGH-FR-2): per-issuer KYC asymmetry framing.
+        kyc_required=kyc_required,
+        kyc_minimum=kyc_minimum,
         freeze_notes=freeze_notes,
     )

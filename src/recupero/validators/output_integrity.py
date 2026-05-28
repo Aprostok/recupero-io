@@ -110,62 +110,346 @@ class Violation:
     file: str | None = None  # Relative path within case_dir, when applicable.
 
 
-# v0.32.1 test-public re-exports of the semantic invariants G–P. The
-# audit referenced these as ``check_invariant_g`` / ``check_invariant_h``
-# / ``check_invariant_i`` (short names matching INVARIANT letters); the
-# implementations live in ``semantic_integrity.py`` with the longer
-# descriptive names. Re-export here so test scaffolding imports from a
-# single module.
-def _lazy_semantic_imports() -> dict:
-    """Lazy-import the semantic invariants so this module's import
-    side effects don't force the semantic module to load on every
-    cron worker startup. Returns a small dispatch dict the wrapper
-    functions below close over."""
-    try:
-        from recupero.validators.semantic_integrity import (
-            check_invariant_g_chain_of_custody,
-            check_invariant_h_confidence_calibration,
-            check_invariant_i_cross_doc_consistency,
-        )
-    except Exception:  # noqa: BLE001
-        return {}
-    return {
-        "g": check_invariant_g_chain_of_custody,
-        "h": check_invariant_h_confidence_calibration,
-        "i": check_invariant_i_cross_doc_consistency,
-    }
+# v0.32.1 test-public semantic invariants G/H/I. Signatures:
+#   check_invariant_g(case_dir, brief)
+#   check_invariant_h(brief)
+#   check_invariant_i(case_dir, brief)
+#
+# Each returns a list[Violation]. These are wired into
+# validate_case_output's checks_run list under their canonical
+# identifiers (``invariant_g_chain_of_custody`` etc).
 
 
 def check_invariant_g(
+    case_dir: "Path | str | None",
     brief: dict | None,
-    trace_evidence: dict | None,
-    manifest: dict | None = None,
 ) -> list["Violation"]:
-    """Re-export of semantic INVARIANT G (chain-of-custody completeness)."""
-    impls = _lazy_semantic_imports()
-    fn = impls.get("g")
-    return fn(brief, trace_evidence, manifest) if fn else []
+    """INVARIANT G — Chain-of-custody completeness.
+
+    Every brief-cited DESTINATIONS[].address must be reachable from
+    the seed (VICTIM_WALLET_FULL) via the brief's
+    ``trace_evidence.transactions`` list (or the
+    ``trace_evidence.json`` file on disk under ``case_dir``).
+    """
+    if brief is None:
+        return []
+    destinations: list[dict] = []
+    raw_dests = brief.get("DESTINATIONS")
+    if isinstance(raw_dests, list):
+        for d in raw_dests:
+            if isinstance(d, dict) and d.get("address"):
+                destinations.append(d)
+
+    if not destinations:
+        return []
+
+    # Pull transactions from embedded trace_evidence OR from disk.
+    transactions: list[dict] = []
+    embedded = brief.get("trace_evidence")
+    if isinstance(embedded, dict):
+        txs = embedded.get("transactions")
+        if isinstance(txs, list):
+            transactions = [t for t in txs if isinstance(t, dict)]
+    if not transactions and case_dir is not None:
+        try:
+            p = Path(case_dir) / "trace_evidence.json"
+            if p.is_file():
+                data = json.loads(p.read_text(encoding="utf-8"))
+                txs = data.get("transactions") if isinstance(data, dict) else None
+                if isinstance(txs, list):
+                    transactions = [t for t in txs if isinstance(t, dict)]
+        except (OSError, json.JSONDecodeError, ValueError):
+            transactions = []
+
+    seed_raw = brief.get("VICTIM_WALLET_FULL") or brief.get("seed_address")
+    if not seed_raw:
+        # No seed → every destination is unsupported by construction.
+        return [Violation(
+            check="invariant_g_chain_of_custody", severity="critical",
+            detail=(
+                "Brief claims destinations but provides no seed address "
+                "(VICTIM_WALLET_FULL). Chain-of-custody is unverifiable."
+            ),
+        )]
+    seed = str(seed_raw).lower()
+
+    # Build adjacency map. Each tx: from_address → to_address.
+    graph: dict[str, set[str]] = {}
+    for tx in transactions:
+        f = (tx.get("from_address") or "").lower()
+        t = (tx.get("to_address") or "").lower()
+        if not f or not t:
+            continue
+        graph.setdefault(f, set()).add(t)
+
+    # BFS from seed.
+    reachable: set[str] = {seed}
+    frontier: list[str] = [seed]
+    while frontier:
+        cur = frontier.pop(0)
+        for nxt in graph.get(cur, ()):
+            if nxt not in reachable:
+                reachable.add(nxt)
+                frontier.append(nxt)
+
+    violations: list[Violation] = []
+    for d in destinations:
+        addr = str(d.get("address") or "").lower()
+        if not addr:
+            continue
+        if addr not in reachable:
+            violations.append(Violation(
+                check="invariant_g_chain_of_custody", severity="critical",
+                detail=(
+                    f"Brief claims destination {addr} but it is not "
+                    f"reachable from the seed via the trace transactions."
+                ),
+            ))
+    return violations
 
 
-def check_invariant_h(
-    brief: dict | None,
-    recovery_disclosure: dict | None = None,
-) -> list["Violation"]:
-    """Re-export of semantic INVARIANT H (confidence calibration)."""
-    impls = _lazy_semantic_imports()
-    fn = impls.get("h")
-    return fn(brief, recovery_disclosure) if fn else []
+def check_invariant_h(brief: dict | None) -> list["Violation"]:
+    """INVARIANT H — Confidence calibration.
+
+    Two rules:
+      * If RECOVERY_RATE.wilson_lower < 0.05 AND there is at least one
+        DESTINATIONS entry with confidence=='high', emit a WARNING
+        (per-lead high-conf claim disagrees with aggregate base rate).
+      * Every high-confidence destination MUST cite ≥ 2 distinct
+        independent evidence sources. Evidence_sources can be a list
+        of strings (treated as raw types) or list of {"type": ...}
+        dicts; duplicates by type count as ONE.
+    """
+    if brief is None:
+        return []
+    violations: list[Violation] = []
+    rec_rate = brief.get("RECOVERY_RATE") or {}
+    wilson_lower = None
+    if isinstance(rec_rate, dict):
+        try:
+            wilson_lower = float(rec_rate.get("wilson_lower"))
+        except (TypeError, ValueError):
+            wilson_lower = None
+
+    destinations = brief.get("DESTINATIONS") or []
+    high_conf: list[dict] = [
+        d for d in destinations
+        if isinstance(d, dict)
+        and str(d.get("confidence", "")).lower() == "high"
+    ]
+
+    if wilson_lower is not None and wilson_lower < 0.05 and high_conf:
+        violations.append(Violation(
+            check="invariant_h_confidence_calibration", severity="warning",
+            detail=(
+                f"Aggregate Wilson lower bound is {wilson_lower:.1%} (<5%) but "
+                f"{len(high_conf)} high-confidence destination(s) cited. "
+                "Per-lead claims may overstate aggregate base rate."
+            ),
+        ))
+
+    for d in high_conf:
+        sources = d.get("evidence_sources")
+        unique_types: set[str] = set()
+        if isinstance(sources, list):
+            for s in sources:
+                if isinstance(s, str) and s.strip():
+                    unique_types.add(s.strip())
+                elif isinstance(s, dict):
+                    t = s.get("type")
+                    if isinstance(t, str) and t.strip():
+                        unique_types.add(t.strip())
+        n = len(unique_types)
+        if n < 2:
+            addr = d.get("address") or "?"
+            violations.append(Violation(
+                check="invariant_h_confidence_calibration", severity="critical",
+                detail=(
+                    f"High-confidence destination {addr} cites only {n} "
+                    f"independent evidence source(s); requires >= 2."
+                ),
+            ))
+    return violations
 
 
 def check_invariant_i(
+    case_dir: "Path | str | None",
     brief: dict | None,
-    freeze_letters: list[dict] | None = None,
-    le_handoff: dict | None = None,
 ) -> list["Violation"]:
-    """Re-export of semantic INVARIANT I (cross-document consistency)."""
-    impls = _lazy_semantic_imports()
-    fn = impls.get("i")
-    return fn(brief, freeze_letters, le_handoff) if fn else []
+    """INVARIANT I — Cross-document consistency.
+
+    Compare the brief against the freeze_request_*.html and
+    le_handoff_*.html files in ``case_dir/briefs/``. Mismatches in
+    CASE_ID, victim name, total USD ($100 tol), addresses, incident
+    date, or exchange name fire a critical.
+    """
+    if brief is None or case_dir is None:
+        return []
+    case_path = Path(case_dir)
+    briefs_dir = case_path / "briefs"
+    if not briefs_dir.is_dir():
+        return []
+
+    htmls: list[tuple[str, str]] = []  # (filename, content)
+    for p in sorted(briefs_dir.glob("freeze_request_*.html")):
+        try:
+            htmls.append((p.name, p.read_text(encoding="utf-8")))
+        except OSError:
+            pass
+    for p in sorted(briefs_dir.glob("le_handoff_*.html")):
+        try:
+            htmls.append((p.name, p.read_text(encoding="utf-8")))
+        except OSError:
+            pass
+    if not htmls:
+        return []
+
+    violations: list[Violation] = []
+    case_id = str(brief.get("CASE_ID") or "").strip()
+    victim_name = (
+        str(brief.get("VICTIM_NAME")
+            or (brief.get("victim") or {}).get("name") or "")
+        .strip()
+    )
+    incident_date = str(brief.get("INCIDENT_DATE") or "").strip()
+    incident_ts = str(brief.get("INCIDENT_TIMESTAMP_UTC") or "").strip()
+    total_usd_raw = brief.get("TOTAL_LOSS_USD") or brief.get("TOTAL_FREEZABLE_USD")
+    total_usd = _parse_usd_string(total_usd_raw)
+    # Collect every address the brief references.
+    brief_addrs: set[str] = set()
+    for d in brief.get("DESTINATIONS", []) or []:
+        if isinstance(d, dict):
+            a = d.get("address")
+            if isinstance(a, str):
+                brief_addrs.add(a.lower())
+    for f in brief.get("FREEZABLE", []) or []:
+        if isinstance(f, dict):
+            for h in f.get("holdings", []) or []:
+                if isinstance(h, dict):
+                    a = h.get("address")
+                    if isinstance(a, str):
+                        brief_addrs.add(a.lower())
+    seed = str(brief.get("VICTIM_WALLET_FULL") or "").lower()
+    if seed:
+        brief_addrs.add(seed)
+    # Exchanges claimed in the brief.
+    brief_exchanges: set[str] = set()
+    for e in brief.get("EXCHANGES", []) or []:
+        if isinstance(e, dict):
+            n = e.get("name")
+            if isinstance(n, str) and n.strip():
+                brief_exchanges.add(n.strip().lower())
+    for f in brief.get("FREEZABLE", []) or []:
+        if isinstance(f, dict):
+            iss = f.get("issuer")
+            if isinstance(iss, str) and iss.strip():
+                brief_exchanges.add(iss.strip().lower())
+
+    for fname, content in htmls:
+        lower = content.lower()
+        # CASE_ID
+        if case_id and case_id not in content:
+            violations.append(Violation(
+                check="invariant_i_cross_document_consistency",
+                severity="critical", file=fname,
+                detail=(
+                    f"document does not cite brief case_id {case_id!r}"
+                ),
+            ))
+        # Victim name
+        if victim_name and victim_name.lower() not in lower:
+            violations.append(Violation(
+                check="invariant_i_cross_document_consistency",
+                severity="critical", file=fname,
+                detail=f"document does not cite victim name {victim_name!r}",
+            ))
+        # Total USD ($100 tolerance)
+        if total_usd > 0:
+            doc_totals = _extract_dollar_amounts(content)
+            ok = any(
+                abs(amount - total_usd) <= Decimal("100")
+                for amount in doc_totals
+            )
+            if not ok:
+                formatted = f"${total_usd:,.2f}"
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity="critical", file=fname,
+                    detail=(
+                        f"document total usd does not match brief "
+                        f"{formatted} within $100 tolerance"
+                    ),
+                ))
+        # Addresses — at least one brief address must appear.
+        if brief_addrs:
+            found_any = any(a in lower for a in brief_addrs)
+            if not found_any:
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity="critical", file=fname,
+                    detail=(
+                        "document does not cite any subject address from "
+                        "the brief"
+                    ),
+                ))
+        # Incident date — either the long-form or ISO date string.
+        if incident_date or incident_ts:
+            d_long = incident_date.lower() if incident_date else None
+            d_iso10 = incident_ts[:10] if incident_ts else None
+            ok = (
+                (d_long is not None and d_long in lower)
+                or (d_iso10 is not None and d_iso10 in content)
+            )
+            if not ok:
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity="critical", file=fname,
+                    detail=(
+                        f"document does not cite the brief incident date "
+                        f"{incident_date or incident_ts!r}"
+                    ),
+                ))
+        # Exchange / issuer slug taken from the filename must match a brief
+        # exchange/issuer.
+        slug = ""
+        if fname.startswith("freeze_request_"):
+            rest = fname[len("freeze_request_"):]
+            slug = rest.split("_", 1)[0]
+        elif fname.startswith("le_handoff_"):
+            rest = fname[len("le_handoff_"):]
+            slug = rest.split("_", 1)[0]
+        slug = slug.lower()
+        if slug and brief_exchanges:
+            slug_compact = slug.replace("_", "")
+            matched = any(
+                slug_compact in e.replace(" ", "").replace("-", "").lower()
+                or e.replace(" ", "").replace("-", "").lower() in slug_compact
+                for e in brief_exchanges
+            )
+            if not matched:
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity="critical", file=fname,
+                    detail=(
+                        f"document exchange/issuer slug {slug!r} does not "
+                        f"match any brief exchange: {sorted(brief_exchanges)}"
+                    ),
+                ))
+    return violations
+
+
+_DOLLAR_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
+
+
+def _extract_dollar_amounts(text: str) -> list[Decimal]:
+    out: list[Decimal] = []
+    for m in _DOLLAR_RE.finditer(text):
+        try:
+            v = Decimal(m.group(1).replace(",", ""))
+            out.append(v)
+        except (InvalidOperation, ValueError):
+            continue
+    return out
 
 
 @dataclass
@@ -487,6 +771,16 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_review_gate_approvals_present(
              briefs_dir, freeze_brief,
          )),
+        # v0.32.1 — three semantic invariants the audit referenced by
+        # letter (G / H / I). Each is a self-contained check; wired into
+        # checks_run so callers can confirm the new validations executed
+        # (test_dispatcher_runs_all_invariants_including_g_h_i).
+        ("invariant_g_chain_of_custody",
+         lambda: check_invariant_g(case_dir, freeze_brief)),
+        ("invariant_h_confidence_calibration",
+         lambda: check_invariant_h(freeze_brief)),
+        ("invariant_i_cross_document_consistency",
+         lambda: check_invariant_i(case_dir, freeze_brief)),
     ]
     for name, fn in checks:
         result.checks_run.append(name)

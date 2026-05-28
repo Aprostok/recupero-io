@@ -91,7 +91,9 @@ def render_engagement_letter(
     # disclosure that the customer ack'd at intake must appear on the
     # legal contract they sign. Compute lazily from the env-var Supabase
     # DSN if not passed in. Optional override for tests + custom flows.
-    recovery_stats: "RecoveryStats | None" = None,  # noqa: UP037
+    # Type loosened to `Any` to avoid an import-time dependency on
+    # monitoring.recovery_rate (which pulls psycopg).
+    recovery_stats: Any = None,
     recovery_stats_dsn: str | None = None,
 ) -> Path | None:
     """Render the Tier-2 engagement letter to ``briefs_dir`` and
@@ -232,12 +234,83 @@ def _build_context(
         freezable_entries,
     )
 
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-EL-1): render the
+    # recovery-rate disclosure that the customer ticked at intake INTO
+    # the legal contract they sign. Mirror the
+    # intake.html.j2 disclosure so a lawyer reading the engagement
+    # letter sees the same number as the customer saw at checkout.
+    # Industry-baseline path (sample < 30) → quote Chainalysis as the
+    # honest floor. Our-data path → quote our Wilson-95% CI.
+    recovery_disclosure: dict[str, Any] = {
+        "available": False,
+        "summary_html": "",
+    }
+    if recovery_stats is not None:
+        try:
+            is_our_data = bool(getattr(recovery_stats, "is_our_data", False))
+            if is_our_data:
+                pct = float(recovery_stats.full_recovery_rate) * 100.0
+                low = float(recovery_stats.full_recovery_rate_ci_low) * 100.0
+                high = float(recovery_stats.full_recovery_rate_ci_high) * 100.0
+                n_total = int(recovery_stats.sample_size)
+                n_full = int(recovery_stats.n_full_recovery)
+                recovery_disclosure = {
+                    "available": True,
+                    "is_our_data": True,
+                    "sample_size": n_total,
+                    "n_full_recovery": n_full,
+                    "rate_pct_text": f"{pct:.1f}%",
+                    "ci_low_pct_text": f"{low:.1f}%",
+                    "ci_high_pct_text": f"{high:.1f}%",
+                    "summary_html": (
+                        f"Recupero has closed <strong>{n_total}</strong> "
+                        f"cases. Of those, "
+                        f"<strong>{n_full}</strong> resulted in full "
+                        f"recovery (funds returned to the victim) — a "
+                        f"<strong>{pct:.1f}%</strong> full-recovery rate, "
+                        f"with a 95% Wilson confidence interval of "
+                        f"[<strong>{low:.1f}%</strong>, "
+                        f"<strong>{high:.1f}%</strong>]."
+                    ),
+                }
+            else:
+                recovery_disclosure = {
+                    "available": True,
+                    "is_our_data": False,
+                    "industry_label": (
+                        getattr(recovery_stats, "industry_baseline_used", "")
+                        or "Chainalysis 2024 industry baseline"
+                    ),
+                    "industry_rate_pct_text": "~3% full-recovery, ~7% partial-recovery",
+                    "summary_html": (
+                        "Recupero has fewer than 30 closed cases. In lieu "
+                        "of our own statistically meaningful rate, this "
+                        "engagement letter discloses the published "
+                        "industry baseline: "
+                        "<strong>~3% full-recovery</strong> and "
+                        "<strong>~7% partial-recovery</strong> for crypto "
+                        "theft cases involving centralized exchanges "
+                        "(source: Chainalysis 2024 Crypto Crime Report). "
+                        "Recupero will publish its own rate once sample "
+                        "size reaches 30 closed cases."
+                    ),
+                }
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "engagement_letter: recovery_stats render failed (%s); "
+                "the contract will not name the rate but will still "
+                "carry the disclosure boilerplate", exc,
+            )
+            recovery_disclosure = {"available": False, "summary_html": ""}
+
     return {
         "case_id": case.case_id,
         "case": case,
         "victim": victim.model_dump(),
         "investigator": investigator.__dict__,
         "investigator_jurisdiction": investigator_jurisdiction,
+        # v0.32.1 (CRIT-EL-1): wired into Section 3 of the template.
+        "recovery_disclosure": recovery_disclosure,
         # v0.19.1 (round-12 PDF-CRIT-5): use canonical chain display
         # name so engagement letter, customer email, and LE handoff
         # all render "BNB Chain" / "Hyperliquid" instead of "Bsc".

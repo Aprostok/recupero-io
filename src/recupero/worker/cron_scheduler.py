@@ -539,7 +539,11 @@ def _post_error_webhook(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
+def build_cron_healthz_payload(
+    *,
+    dsn: str | None = None,
+    include_error_message: bool = False,
+) -> dict:
     """Return the JSON payload served at GET /cron/healthz.
 
     Shape::
@@ -614,6 +618,8 @@ def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
     for name in expected_jobs:
         row = rows_by_job.get(name)
         last_success = row["last_success_utc"] if row else None
+        last_error_utc_raw = row["last_error_utc"] if row else None
+        last_error_msg = row["last_error_message"] if row else None
         failures = row["consecutive_failures"] if row else 0
         if last_success is None:
             status = "down"
@@ -628,7 +634,7 @@ def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
                 status = "stale"
             else:
                 status = "ok"
-        job_states[name] = {
+        state: dict = {
             "last_success_utc": (
                 last_success.isoformat().replace("+00:00", "Z")
                 if last_success else None
@@ -639,6 +645,22 @@ def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
             "consecutive_failures": int(failures),
             "status": status,
         }
+        if include_error_message:
+            # Admin-only payload (v0.32.1 HIGH-5): surface the
+            # last_error_message + last_error_utc. The public
+            # /cron/healthz never includes these fields.
+            err_utc_iso: str | None = None
+            if last_error_utc_raw is not None:
+                _e = last_error_utc_raw
+                if hasattr(_e, "tzinfo") and _e.tzinfo is None:
+                    _e = _e.replace(tzinfo=UTC)
+                try:
+                    err_utc_iso = _e.isoformat().replace("+00:00", "Z")
+                except AttributeError:
+                    err_utc_iso = str(_e)
+            state["last_error_utc"] = err_utc_iso
+            state["last_error_message"] = last_error_msg
+        job_states[name] = state
         # Roll-up: down beats stale beats ok.
         if status == "down":
             worst_status = "down"

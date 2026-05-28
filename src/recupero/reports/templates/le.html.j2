@@ -407,7 +407,7 @@
 {% if asset.theft_assets_mixed %}
 <table class="evidence">
   <tr><th>Drain composition</th><td>{{ asset.theft_event_count }} unauthorized transfers spanning multiple token types (see per-asset breakdown below and the per-event timeline in section 3)</td></tr>
-  <tr><th>Aggregate USD value at time of theft</th><td class="amount">{{ asset.total_usd_value_at_theft }}</td></tr>
+  <tr><th>Aggregate USD value at time of theft</th><td class="amount">{{ asset.total_usd_value_at_theft | usd_prefix }}</td></tr>
   {% if issuer.jurisdiction %}<tr><th>Primary freeze-target issuer jurisdiction</th><td>{{ issuer.jurisdiction }}</td></tr>{% endif %}
 </table>
 
@@ -456,9 +456,9 @@
      their own `$X,YYY.ZZ` prefix from `_ensure_usd_prefix` in
      brief.py, so the template no longer prepends a literal "USD ". #}
   <tr><th>Amount{% if asset.is_multi_event %} (total across {{ asset.theft_event_count }} events){% endif %}</th>                 <td class="amount">{{ asset.total_amount_human if asset.is_multi_event else asset.amount_human }}</td></tr>
-  <tr><th>USD value at time of theft</th><td class="amount">{{ asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft }}</td></tr>
+  <tr><th>USD value at time of theft</th><td class="amount">{{ (asset.total_usd_value_at_theft if asset.is_multi_event else asset.usd_value_at_theft) | usd_prefix }}</td></tr>
   {% if asset.usd_value_current %}
-  <tr><th>USD value (current estimate)</th><td class="amount">{{ asset.usd_value_current }}</td></tr>
+  <tr><th>USD value (current estimate)</th><td class="amount">{{ asset.usd_value_current | usd_prefix }}</td></tr>
   {% endif %}
   {% if issuer.kyc_required %}
   <tr><th>KYC requirement at acquisition</th><td>Yes — {{ issuer.short_name }} required full identity verification{% if issuer.kyc_minimum %} with minimum subscription of {{ issuer.kyc_minimum }}{% endif %}</td></tr>

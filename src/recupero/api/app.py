@@ -106,6 +106,17 @@ except Exception as _exc:  # noqa: BLE001
         "label-candidates API not registered (import failed): %s", _exc,
     )
 
+# v0.32.1 HIGH-5 — admin-gated /v1/cron/jobs endpoint. Public
+# /cron/healthz strips last_error_message; admins use this endpoint
+# to retrieve the full payload including the redacted error text.
+try:
+    from recupero.api.cron_admin_api import router as _cron_admin_router
+    app.include_router(_cron_admin_router)
+except Exception as _exc:  # noqa: BLE001
+    log.warning(
+        "cron admin API not registered (import failed): %s", _exc,
+    )
+
 
 # ---- Request / response models ---- #
 

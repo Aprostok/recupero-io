@@ -563,15 +563,30 @@ def decode_bridge_calldata(
     # bridges.json names use spaces ("L1 Standard Bridge"); our internal
     # convention is lowercased-no-spaces. Match against both.
     proto_compact = proto_lc.replace(" ", "").replace("-", "").replace(":", "")
-    if "polygon" in proto_compact and ("pos" in proto_compact or "rootchainmanager" in proto_compact):
+    if "polygon" in proto_compact and (
+        "pos" in proto_compact
+        or "rootchainmanager" in proto_compact
+        or "erc20predicate" in proto_compact
+    ):
         return _decode_polygon_pos(method_id, args_blob, data)
-    if "optimism" in proto_compact and "l1standardbridge" in proto_compact:
+    if "optimism" in proto_compact and (
+        "l1standardbridge" in proto_compact
+        or "l2standardbridge" in proto_compact
+    ):
         return _decode_optimism_l1(method_id, args_blob, data)
-    if "arbitrum" in proto_compact and ("inbox" in proto_compact or "gateway" in proto_compact):
+    if "arbitrum" in proto_compact and (
+        "inbox" in proto_compact
+        or "gateway" in proto_compact
+    ):
         return _decode_arbitrum_l1(method_id, args_blob, data)
-    if "zksync" in proto_compact and ("bridge" in proto_compact or "era" in proto_compact):
+    if "zksync" in proto_compact and (
+        "bridge" in proto_compact or "era" in proto_compact
+    ):
         return _decode_zksync_l1(method_id, args_blob, data)
-    if "base" in proto_compact and "l1standardbridge" in proto_compact:
+    if "base" in proto_compact and (
+        "l1standardbridge" in proto_compact
+        or "l2standardbridge" in proto_compact
+    ):
         return _decode_base_l1(method_id, args_blob, data)
     return None
 
@@ -2366,11 +2381,10 @@ def _decode_polygon_pos(
     """
     method_name = _POLYGON_POS_METHODS.get(method_id)
     if method_name is None:
-        return BridgeDecodeResult(
-            destination_chain="polygon", destination_address=None,
-            bridge_method="unknown", confidence="low",
-            raw_calldata_excerpt=full_data[:400],
-        )
+        # Unknown selector under a recognised protocol → dispatcher
+        # contract returns None (caller falls back to the
+        # bridges.json candidate list).
+        return None
     try:
         dest_addr = _extract_addr_slot(args_blob, 0)
         return BridgeDecodeResult(
@@ -2402,6 +2416,10 @@ _OP_STACK_METHODS = {
     "0x58a997f6": ("depositERC20", None),
     # depositETH(uint32 _l2Gas, bytes _data) — recipient = msg.sender.
     "0xb1a1a882": ("depositETH", None),
+    # withdrawTo(address _l2Token, address _to, uint256 _amount,
+    #            uint32 _l1Gas, bytes _data) — L2-side: recipient is on
+    # ethereum (the L1 side). Slot 1 = _to.
+    "0xa3a79548": ("withdrawTo", 1),
 }
 
 
@@ -2413,7 +2431,12 @@ def _decode_op_stack_l1(
 ) -> BridgeDecodeResult | None:
     """Shared OP-Stack L1StandardBridge decoder. Optimism + Base share
     this ABI (Base is OP Stack). ``dest_chain`` is either 'optimism'
-    or 'base'."""
+    or 'base'.
+
+    Special case: ``withdrawTo`` runs on the L2 side; the destination
+    of the funds is the L1 side (ethereum), so the chain is overridden
+    regardless of which OP-Stack the L2 belongs to.
+    """
     entry = _OP_STACK_METHODS.get(method_id)
     if entry is None:
         return BridgeDecodeResult(
@@ -2422,28 +2445,30 @@ def _decode_op_stack_l1(
             raw_calldata_excerpt=full_data[:400],
         )
     method_name, dest_slot = entry
+    # withdrawTo is an L2-side method — destination is L1 (ethereum).
+    effective_chain = "ethereum" if method_name == "withdrawTo" else dest_chain
     try:
         if dest_slot is None:
             # msg.sender path — we don't have it here. The trace's
             # transaction-from address will be used by the BFS
             # continuation logic when destination_address is None.
             return BridgeDecodeResult(
-                destination_chain=dest_chain, destination_address=None,
+                destination_chain=effective_chain, destination_address=None,
                 bridge_method=method_name, confidence="medium",
                 raw_calldata_excerpt=full_data[:400],
             )
         dest_addr = _extract_addr_slot(args_blob, dest_slot)
         return BridgeDecodeResult(
-            destination_chain=dest_chain,
+            destination_chain=effective_chain,
             destination_address=dest_addr,
             bridge_method=method_name,
             confidence="high" if dest_addr else "medium",
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:
-        log.debug("%s decode failed: %s", dest_chain, exc)
+        log.debug("%s decode failed: %s", effective_chain, exc)
         return BridgeDecodeResult(
-            destination_chain=dest_chain, destination_address=None,
+            destination_chain=effective_chain, destination_address=None,
             bridge_method=method_name, confidence="low",
             raw_calldata_excerpt=full_data[:400],
         )
@@ -2532,7 +2557,7 @@ def _decode_zksync_l1(
     entry = _ZKSYNC_L1_METHODS.get(method_id)
     if entry is None:
         return BridgeDecodeResult(
-            destination_chain="zksync_era", destination_address=None,
+            destination_chain="zksync", destination_address=None,
             bridge_method="unknown", confidence="low",
             raw_calldata_excerpt=full_data[:400],
         )
@@ -2540,7 +2565,7 @@ def _decode_zksync_l1(
     try:
         dest_addr = _extract_addr_slot(args_blob, dest_slot)
         return BridgeDecodeResult(
-            destination_chain="zksync_era",
+            destination_chain="zksync",
             destination_address=dest_addr,
             bridge_method=method_name,
             confidence="high" if dest_addr else "medium",
@@ -2549,7 +2574,7 @@ def _decode_zksync_l1(
     except (ValueError, IndexError) as exc:
         log.debug("zksync-l1 decode failed: %s", exc)
         return BridgeDecodeResult(
-            destination_chain="zksync_era", destination_address=None,
+            destination_chain="zksync", destination_address=None,
             bridge_method=method_name, confidence="low",
             raw_calldata_excerpt=full_data[:400],
         )

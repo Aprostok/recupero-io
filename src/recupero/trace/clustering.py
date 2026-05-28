@@ -188,6 +188,32 @@ def cluster_addresses(
     if not case.transfers:
         return [], []
 
+    # v0.32.1 W1 (round-2 adversary M-5 wire-up): per-case randomized
+    # thresholds for the two clustering knobs an adversary reads from
+    # source and games (``_SHARED_INFRA_PARTNER_THRESHOLD`` = 5 and
+    # ``_MIN_CLUSTERING_USD`` = $100). Both fall back to the module
+    # defaults if randomization fails (missing secret, etc.) — never
+    # break clustering over a security wire-up.
+    shared_infra_threshold: int = _SHARED_INFRA_PARTNER_THRESHOLD
+    min_clustering_usd: Decimal = _MIN_CLUSTERING_USD
+    if getattr(case, "case_id", None):
+        try:
+            from recupero.security.per_case_randomization import case_threshold
+            shared_infra_threshold = case_threshold(
+                case.case_id, "shared_infra_partner",
+                base_value=_SHARED_INFRA_PARTNER_THRESHOLD,
+            )
+            min_clustering_usd = Decimal(str(case_threshold(
+                case.case_id, "min_clustering_usd",
+                base_value=int(_MIN_CLUSTERING_USD),
+            )))
+        except Exception as exc:  # noqa: BLE001 — never break clustering
+            log.debug(
+                "clustering per-case threshold randomization failed "
+                "(case=%r): %s; falling back to fixed defaults",
+                getattr(case, "case_id", None), exc,
+            )
+
     # v0.17.9 (round-10 forensic HIGH): canonical address keying so
     # base58 chains (Solana/Tron/Bitcoin) cluster against case-preserved
     # forms. Pre-v0.17.9 the seed_lower / src.lower() / dst.lower()
@@ -210,7 +236,7 @@ def cluster_addresses(
     all_addresses: set[str] = set()
 
     for t in case.transfers:
-        if t.usd_value_at_tx is None or t.usd_value_at_tx < _MIN_CLUSTERING_USD:
+        if t.usd_value_at_tx is None or t.usd_value_at_tx < min_clustering_usd:
             continue
         src = _ck(t.from_address)
         dst = _ck(t.to_address)
@@ -234,7 +260,7 @@ def cluster_addresses(
     shared_infra: set[str] = set()
     for addr in all_addresses:
         partners = inflow_sources[addr] | outflow_destinations[addr]
-        if len(partners) >= _SHARED_INFRA_PARTNER_THRESHOLD:
+        if len(partners) >= shared_infra_threshold:
             shared_infra.add(addr)
     log.debug("clustering: %d shared-infrastructure addresses identified",
               len(shared_infra))
@@ -305,7 +331,7 @@ def cluster_addresses(
     # appear elsewhere in the case AND the amounts are
     # "self-fund" looking (round numbers).
     for t in case.transfers:
-        if t.usd_value_at_tx is None or t.usd_value_at_tx < _MIN_CLUSTERING_USD:
+        if t.usd_value_at_tx is None or t.usd_value_at_tx < min_clustering_usd:
             continue
         src = _ck(t.from_address)
         dst = _ck(t.to_address)

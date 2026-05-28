@@ -85,6 +85,20 @@ class Chain(str, Enum):
     moonbeam = "moonbeam"
     metis = "metis"
     kava = "kava"
+    # v0.32.1 W5 (round-2 adversary Route 1' close-out): additional
+    # rollup-canonical L2 destination chains. Each has a labeled
+    # canonical bridge in bridges.json + a decoder dispatch in
+    # bridge_calldata.py. Without these enum members the cross-chain
+    # BFS continuation in tracer.py would fail to instantiate the
+    # destination adapter and silently produce no continuation.
+    #
+    # NB: polygon_zkevm, opbnb, manta are LABEL-only destinations for
+    # now (no full adapter via watch_tick). The Chain enum entry is
+    # what bridges.json needs to be loaded WITHOUT being silently
+    # dropped by the validator.
+    polygon_zkevm = "polygon_zkevm"
+    opbnb = "opbnb"
+    manta = "manta"
 
 
 class LabelCategory(str, Enum):

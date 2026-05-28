@@ -91,6 +91,20 @@ class PromoteRequest(BaseModel):
     # verified). Required to be explicit — leaving it as 'low' should
     # be a deliberate choice, not a defaulted afterthought.
     confidence: str = Field(default="medium")
+    # v0.32.1 W3 (round-2 security CRIT-1 wire-up): optional confirm
+    # hash field in the body. The canonical surface for the pin is
+    # ``X-Recupero-Promote-Confirm`` (so an admin-key compromise that
+    # doesn't ALSO know the row hash can't promote). The body field
+    # is accepted as a convenience for tooling that finds it awkward
+    # to set custom headers; if BOTH the body field and the header
+    # are present they MUST match. If only the body field is set, it
+    # is used as the pin.
+    confirm_sha256: str | None = Field(default=None, max_length=64)
+    # v0.32.1 W2 ops-emergency escape hatch. Bypasses the multi-source
+    # gate for high-impact label categories. Audit-logged at the
+    # auto_ingest layer. Default False so the gate is always on
+    # unless an operator deliberately disables it.
+    bypass_multi_source: bool = Field(default=False)
 
     @field_validator("reviewer_email")
     @classmethod
@@ -105,6 +119,21 @@ class PromoteRequest(BaseModel):
         if v not in ("low", "medium", "high"):
             raise ValueError(
                 f"confidence {v!r} must be one of low/medium/high"
+            )
+        return v
+
+    @field_validator("confirm_sha256")
+    @classmethod
+    def _validate_confirm_sha256(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        v = v.strip().lower()
+        if not v:
+            return None
+        # Must be 64 hex chars (sha256 hex digest length).
+        if len(v) != 64 or not all(c in "0123456789abcdef" for c in v):
+            raise ValueError(
+                "confirm_sha256 must be a 64-char hex sha256 digest"
             )
         return v
 
@@ -174,26 +203,44 @@ def promote_label_candidate(
 ) -> dict[str, Any]:
     _require_admin_auth(x_recupero_admin_key)
     _dsn_or_503()  # raises 503 if unset
-    # v0.32.1 CRIT-1 close-out: require the operator to echo the
-    # candidate-row SHA-256 in X-Recupero-Promote-Confirm. Mismatch /
-    # missing → 400 (fail closed) before any field validation.
-    if (
-        x_recupero_promote_confirm is None
-        or not x_recupero_promote_confirm.strip()
-    ):
+    # v0.32.1 CRIT-1 + W3 close-out: require the operator to echo the
+    # candidate-row SHA-256. Accept either:
+    #   * the X-Recupero-Promote-Confirm header (canonical surface);
+    #   * the ``confirm_sha256`` body field (convenience for tooling).
+    # If both are present they MUST match — otherwise 400 (fail closed).
+    # At least ONE must be present.
+    header_pin = (
+        x_recupero_promote_confirm.strip().lower()
+        if x_recupero_promote_confirm is not None
+        and x_recupero_promote_confirm.strip()
+        else None
+    )
+    body_pin = req.confirm_sha256  # already normalized + validated
+    if header_pin is None and body_pin is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "missing X-Recupero-Promote-Confirm header — "
-                "must echo the sha256 of the candidate row you viewed"
+                "missing confirm pin — supply X-Recupero-Promote-Confirm "
+                "header or ``confirm_sha256`` body field with the sha256 "
+                "of the candidate row you viewed"
             ),
         )
+    if header_pin is not None and body_pin is not None and header_pin != body_pin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "confirm_sha256 mismatch between header and body — "
+                "send only one, or ensure both are identical"
+            ),
+        )
+    effective_pin = header_pin if header_pin is not None else body_pin
     try:
         result = auto_ingest.promote_candidate(
             candidate_id=candidate_id,
             reviewer=req.reviewer_email,
             confidence=req.confidence,
-            confirm_sha256=x_recupero_promote_confirm.strip().lower(),
+            confirm_sha256=effective_pin,
+            bypass_multi_source=req.bypass_multi_source,
         )
     except ValueError as exc:
         # 404 for "not found", 409 for "already promoted/rejected"

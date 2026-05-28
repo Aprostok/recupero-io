@@ -161,14 +161,76 @@ def run_trace(
     #     too much attention.
     # Both are clamped to safe ranges: max_hops ∈ [1, 8], dust ∈ [0, 1e6].
     cfg_max_depth = config.trace.max_depth
+    # v0.32.1+ "industry-best mode": the hard ceiling was 8 hops, which
+    # is below what real laundering operators use (Lazarus / DPRK routes
+    # typically span 10-20 hops; complex APT routes can hit 50+). The
+    # ceiling is now operator-controllable via
+    # ``RECUPERO_TRACE_MAX_HOPS_HARD_CEILING`` (default 64) so a $50M
+    # case can drive a deep trace without artificial truncation. The
+    # config default still pins the BFS to a sensible 6-hop start; ops
+    # bump RECUPERO_TRACE_MAX_HOPS per case.
+    try:
+        hard_ceiling = int(
+            os.environ.get("RECUPERO_TRACE_MAX_HOPS_HARD_CEILING", "64")
+        )
+    except (TypeError, ValueError):
+        hard_ceiling = 64
+    hard_ceiling = max(1, hard_ceiling)
     try:
         env_max_hops = int(os.environ.get("RECUPERO_TRACE_MAX_HOPS", str(cfg_max_depth)))
-        cfg_max_depth = max(1, min(8, env_max_hops))
+        cfg_max_depth = max(1, min(hard_ceiling, env_max_hops))
     except (TypeError, ValueError):
         log.warning(
             "RECUPERO_TRACE_MAX_HOPS=%r is not an int; falling back to config (%d)",
             os.environ.get("RECUPERO_TRACE_MAX_HOPS"), config.trace.max_depth,
         )
+
+    # v0.32.1 W4 (round-2 CRIT-NEW-2 wire-up): adaptive depth. Pre-W4
+    # this was dead-code; tracer.py clamped to ``min(8, env_max_hops)``
+    # regardless of case severity. With adaptive_depth wired, a $50M
+    # theft case is allowed to descend to depth 12 (severity bump +
+    # budget headroom), while a $50K case stays shallow. Falls back to
+    # the env+config-driven ceiling on any error — never break the
+    # trace over a depth-policy module.
+    if os.environ.get("RECUPERO_ADAPTIVE_DEPTH", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        try:
+            from recupero.trace.adaptive_depth import compute_max_depth
+            budget_snap = case_budget.snapshot() if case_budget else {}
+            budget_remaining = float(
+                budget_snap.get("budget_remaining_usd", 0.0) or 0.0
+            )
+            case_meta: dict[str, Any] = {}
+            # The Case model doesn't carry theft_amount_usd until after
+            # trace completes (operator inputs it on intake, scrapers
+            # surface it). Best-effort: read from config_used if the
+            # caller populated it, or from env override.
+            theft_env = os.environ.get("RECUPERO_CASE_THEFT_USD")
+            if theft_env is not None:
+                try:
+                    case_meta["theft_amount_usd"] = float(theft_env)
+                except (TypeError, ValueError):
+                    pass
+            adaptive = compute_max_depth(
+                case_metadata=case_meta or None,
+                api_budget_remaining_usd=budget_remaining,
+            )
+            # Use the adaptive value as the ceiling unless the operator
+            # has explicitly capped it lower via the env var. Never
+            # exceed adaptive_depth's HARD_CEILING (16).
+            cfg_max_depth = max(1, min(16, adaptive, cfg_max_depth)) if (
+                "RECUPERO_TRACE_MAX_HOPS" in os.environ
+            ) else max(1, min(16, adaptive))
+            log.info(
+                "adaptive depth: case_meta=%s budget=$%s → max_depth=%d",
+                case_meta, budget_remaining, cfg_max_depth,
+            )
+        except Exception as exc:  # noqa: BLE001 — never break trace
+            log.debug(
+                "adaptive_depth compute failed (%s); falling back to %d",
+                exc, cfg_max_depth,
+            )
 
     cfg_dust = config.trace.dust_threshold_usd
     try:
@@ -1356,10 +1418,15 @@ def _apply_dust_attack_filter(case: Case) -> None:
     # when the filter is off (which is the default).
     from recupero.trace.dust_attack import identify_dust_attack_destinations
 
+    # v0.32.1 W1 (round-2 adversary M-5 wire-up): pass case_id so the
+    # min_fanout threshold is per-case randomized under HMAC. Without
+    # the case_id the function falls back to the fixed default (BC for
+    # tests + ad-hoc analysis scripts).
     flagged = identify_dust_attack_destinations(
         case.transfers,
         dust_threshold_usd=threshold_usd,
         min_fanout=min_fanout,
+        case_id=case.case_id,
     )
     if not flagged:
         return

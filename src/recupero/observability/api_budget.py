@@ -1,11 +1,16 @@
 """Per-case API budget tracker. v0.32 — closes Tier-1 gap #4 from
 ``docs/WHY_RECUPERO_WOULD_FAIL.md`` §1.4.
 
-Tracks cumulative API spend per case across all providers. When the
-case exceeds ``RECUPERO_API_BUDGET_USD_PER_CASE`` (default $0.50),
-the next adapter call raises ``BudgetExceededError``. The tracer
-catches this and records ``trace_status=partial_budget_hit``, similar
-to the existing ``partial_deadline_hit`` behavior.
+Default $0 = no budget tracking. Operators can opt in via
+``RECUPERO_API_BUDGET_USD_PER_CASE=<dollars>``. Industry-best mode
+(v0.32.1+) runs without a budget cap — the tracker is built to reach
+50-hop laundering destinations and an artificial dollar cap defeats
+that goal. When tracking IS enabled (operator sets a positive USD
+value), this module tracks cumulative API spend per case across all
+providers; once the case exceeds the cap, the next adapter call
+raises ``BudgetExceededError``. The tracer catches this and records
+``trace_status=partial_budget_hit``, mirroring the existing
+``partial_deadline_hit`` behavior.
 
 Per-provider cost models (verified against published pricing as of
 2026-05):
@@ -117,33 +122,37 @@ def cost_per_call(provider: str) -> Decimal:
 # Env-var resolution
 # ---------------------------------------------------------------------------
 
-# v0.32.1 — JACOB_ADVERSARY_AUDIT_v032 Route 3 mitigation. The pre-fix
-# default of $0.50/case and a $100 ceiling made it impossible for ops
-# to fund a deep enough trace on a $50M-tier APT case (the adversary
-# spends $5K+ consultant fees; we couldn't even spend $1). Defaults
-# bumped to $10,000/case with a $50,000 ceiling. Real-world per-case
-# API spend never approaches these on healthy traces; the high default
-# is intended as "your budget is whatever the case needs up to $10K".
-_DEFAULT_BUDGET_USD = Decimal("10000.0")
+# v0.32.1+ — "industry-best mode" default. The pre-fix default of
+# $0.50/case made it impossible to fund a deep enough trace on a $50M
+# APT case (the adversary spends $5K+ in consultant fees; we couldn't
+# spend $1). v0.32.1 then bumped to $10K with a $50K ceiling. The
+# follow-on "industry-best" pass disables budget tracking entirely by
+# default: Recupero must reach destinations Reactor would, even on
+# 50-hop laundering, and an artificial dollar cap is the wrong knob to
+# enforce that. Operators can still opt in to per-case tracking by
+# setting ``RECUPERO_API_BUDGET_USD_PER_CASE`` to a positive value.
+# The ceiling is held at $1M so any operator override below that is
+# accepted without clamping.
+_DEFAULT_BUDGET_USD = Decimal("0")
 _BUDGET_MIN = Decimal("0.01")
-_BUDGET_MAX = Decimal("50000.0")
+_BUDGET_MAX = Decimal("1000000.0")
 
 
 def resolve_budget_from_env() -> Decimal:
     """Resolve ``RECUPERO_API_BUDGET_USD_PER_CASE`` with safe clamping.
 
-    * Default: $0.50
-    * Range: [$0.01, $100.0] — values outside this clamp to a default
-      with a WARN. Below $0.01 makes the cap useless (1 call kills
-      the trace); above $100 is operator confusion (no real per-case
-      cost will reach that figure).
+    * Default: $0 (DISABLED — industry-best mode runs without a cap).
+    * Range: [$0.01, $1,000,000.0] when explicitly set — values outside
+      this clamp to the default with a WARN. Below $0.01 makes the cap
+      useless (1 call kills the trace); above $1M is almost certainly
+      an operator typo.
     * Non-finite (NaN / Inf), non-numeric, negative all reject with a
       WARN and fall back to the default. v0.31.x "Jacob-style"
       pattern: operators who typo a value get a loud warning, never
       a silently-poisoned trace.
-    * Empty / unset → default.
+    * Empty / unset → default (disabled).
     * The literal ``0`` is honored as "disable tracking" without a
-      WARN — it's a deliberate test / CLI escape hatch, not a typo.
+      WARN — explicit opt-out matches the implicit default.
     """
     raw = (os.environ.get("RECUPERO_API_BUDGET_USD_PER_CASE", "") or "").strip()
     if not raw:

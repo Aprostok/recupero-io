@@ -96,6 +96,7 @@ def identify_dust_attack_destinations(
     *,
     dust_threshold_usd: Decimal = Decimal("1.00"),
     min_fanout: int = 10,
+    case_id: str | None = None,
 ) -> set[str]:
     """Return the set of destination addresses that received only
     dust-shower transfers (<$1 USD, part of a fan-out of >=10 distinct
@@ -114,6 +115,11 @@ def identify_dust_attack_destinations(
             above any legitimate change-back behavior (which fans out
             to at most 2-3 addresses per swap) and below the smallest
             published dust-shower attacks (50-200 destinations).
+        case_id: Optional case identifier. When provided, the
+            ``min_fanout`` is per-case randomized via HMAC under a
+            server-held secret (``RECUPERO_RANDOMIZATION_SECRET``).
+            Defeats the audit's M-5 adversary who picks ``fanout-1``
+            after reading the source.
 
     Returns:
         Set of `to_address` strings that should be filtered from the
@@ -159,6 +165,31 @@ def identify_dust_attack_destinations(
             fanout = 10
     except (TypeError, ValueError):
         fanout = 10
+
+    # v0.32.1 W1 (round-2 adversary audit M-5): per-case randomized
+    # min_fanout. When a case_id is provided, the fixed default above
+    # is perturbed by ±30% via HMAC(case_id, "dust_min_fanout", secret).
+    # An adversary reading the source still knows the BASE value but
+    # cannot predict the actual per-case threshold without the
+    # server-held secret — picking fanout=9 no longer reliably evades.
+    # Caller chain: tracer.py → _apply_dust_attack_filter(case) →
+    # identify_dust_attack_destinations(case_id=case.case_id). The
+    # default kwarg is None to preserve backwards compat: tests and
+    # ad-hoc analysis scripts that don't pass case_id get the same
+    # behavior as v0.32.0. The dust_threshold_usd value is intentionally
+    # NOT randomized — its $1 base would degenerate under integer jitter
+    # (the bounded ±30% jitter on base=1 maps to {1,1,1,1}). Adversary
+    # cost is concentrated in the fanout dimension.
+    if case_id:
+        try:
+            from recupero.security.per_case_randomization import case_threshold
+            fanout = case_threshold(case_id, "dust_min_fanout", base_value=fanout)
+        except Exception as exc:  # noqa: BLE001 — never break the trace
+            log.debug(
+                "per-case threshold randomization failed for case %r: %s; "
+                "falling back to fixed default fanout=%d",
+                case_id, exc, fanout,
+            )
 
     # source_address -> {"dust": set[to_addr], "non_dust": set[to_addr]}
     by_source: dict[str, dict[str, set[str]]] = {}

@@ -797,6 +797,7 @@ def promote_candidate(
     dsn: str | None = None,
     seeds_dir: Path | None = None,
     confirm_sha256: str | None = None,
+    bypass_multi_source: bool = False,
 ) -> dict[str, Any]:
     """Append the candidate to the appropriate seeds JSON and mark
     the candidate row as ``status='promoted'``.
@@ -853,6 +854,56 @@ def promote_candidate(
                 f"changed since you viewed it (expected {expected[:12]}…, "
                 f"got {actual[:12]}…). Re-fetch the candidate and retry."
             )
+
+    # v0.32.1 W2 (round-2 adversary M-1 wire-up): multi-source
+    # confirmation gate for HIGH-IMPACT label categories
+    # (exchange_hot_wallet, bridge, mixer, sanctioned, ofac, custodian,
+    # exchange_deposit). Pre-W2 these checks shipped as dead code; the
+    # promote endpoint accepted a single-source candidate and wrote the
+    # seed file. JACOB_ADVERSARY_AUDIT_v032 poisoning attacks P1-P4
+    # (DeFiLlama fake-bridge, Tronscan tag spoofing) succeed entirely
+    # through this gap. The bypass kwarg is audit-logged at INFO; ops
+    # emergencies set it when they need to force a high-impact promote
+    # during an active incident response.
+    if bypass_multi_source:
+        log.info(
+            "label PROMOTE multi-source bypass — candidate=%s reviewer=%s "
+            "category=%s. Audit trail required.",
+            candidate_id, reviewer, row.get("proposed_category"),
+        )
+    else:
+        try:
+            from recupero.labels.multi_source_confirm import (
+                requires_multi_source_confirm,
+                confirm_via_secondary_sources,
+            )
+        except Exception as exc:  # noqa: BLE001 — never break promote on import
+            log.warning(
+                "multi_source_confirm import failed (%s); skipping gate",
+                exc,
+            )
+        else:
+            if requires_multi_source_confirm(row):
+                result = confirm_via_secondary_sources(
+                    address=row["address"],
+                    claimed_category=row["proposed_category"],
+                    claimed_name=row["proposed_name"],
+                    sources_seen=[row["source"]],
+                    chain=row["chain"],
+                )
+                if not result.accepted or result.confidence == "low":
+                    raise ValueError(
+                        f"multi-source confirm rejected: {result.reason} "
+                        "High-impact label categories require 2+ "
+                        "independent sources. Set bypass_multi_source=True "
+                        "to override (audit-logged)."
+                    )
+                log.info(
+                    "multi-source confirm PASSED — candidate=%s category=%s "
+                    "confidence=%s sources=%s",
+                    candidate_id, row["proposed_category"],
+                    result.confidence, result.supporting_sources,
+                )
 
     seed_file = _CATEGORY_TO_SEED_FILE.get(row["proposed_category"])
     if seed_file is None:

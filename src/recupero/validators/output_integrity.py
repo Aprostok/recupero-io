@@ -4470,12 +4470,19 @@ def _check_cex_continuity_leads_framed(
                 ),
             ))
 
-        if lead.get("confidence") != "low":
+        # v0.32.1 HIGH-10 close-out: leads now carry tiered confidence
+        # (high/medium/low) per audit. Tier 2/3 cross-token / cross-chain
+        # leads are explicitly framed as LEADS (lead_only=True, the
+        # framing prose, no destination_* keys) but the confidence label
+        # mirrors the tier. Accept the full set instead of pinning to
+        # "low" — the lead_only + framing fields carry the "never publish
+        # as confirmed destination" contract.
+        if lead.get("confidence") not in ("high", "medium", "low"):
             violations.append(Violation(
                 check="cex_continuity_leads_framed", severity="high",
                 detail=(
-                    f"CEX_CONTINUITY_LEADS[{idx}].confidence must be "
-                    f"'low' (got {lead.get('confidence')!r})"
+                    f"CEX_CONTINUITY_LEADS[{idx}].confidence must be one of "
+                    f"high/medium/low (got {lead.get('confidence')!r})"
                 ),
             ))
 

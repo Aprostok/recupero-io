@@ -172,6 +172,7 @@ def test_post_invalid_email_returns_422_with_error_banner(api_client):
         "incident_date": "2026-05-01",
         "description": "drained",
         "country": "US",
+        "acknowledge_disclosure": "yes",
     })
     assert resp.status_code == 422, (
         f"expected 422 on invalid email, got {resp.status_code}"
@@ -242,6 +243,7 @@ def test_post_invalid_chain_returns_422(api_client):
         "seed_address": "0x" + "a" * 40,
         "incident_date": "2026-05-01",
         "description": "drained",
+        "acknowledge_disclosure": "yes",
     })
     assert resp.status_code == 422
 
@@ -256,6 +258,7 @@ def test_post_future_incident_date_rejected(api_client):
         "seed_address": "0x" + "a" * 40,
         "incident_date": "2099-01-01",  # far future
         "description": "drained",
+        "acknowledge_disclosure": "yes",
     })
     assert resp.status_code == 422, (
         "future incident_date must be rejected (v0.25.1 CRIT A-1)"
@@ -271,6 +274,7 @@ def test_post_long_description_rejected(api_client):
         "seed_address": "0x" + "a" * 40,
         "incident_date": "2026-05-01",
         "description": "x" * 2500,  # > 2000
+        "acknowledge_disclosure": "yes",
     })
     assert resp.status_code == 422, (
         "description > 2000 chars must be rejected (v0.25.1 HIGH A-3) "
@@ -413,6 +417,7 @@ def test_post_happy_path_303_redirect_to_stripe(api_client):
                 "incident_date": "2026-05-01",
                 "description": "drained at 3am",
                 "country": "US",
+                "acknowledge_disclosure": "yes",
             },
             follow_redirects=False,
         )

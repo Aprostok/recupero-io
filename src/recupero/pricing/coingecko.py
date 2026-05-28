@@ -325,6 +325,9 @@ class CoinGeckoClient:
         cache_dir: Path | None = None,
         *,
         dsn: str | None = None,
+        # v0.32 — optional per-case API budget tracker. See
+        # ``observability/api_budget.py`` for the contract.
+        budget: object | None = None,
     ) -> None:
         """Create the client with either a Postgres or file-system cache.
 
@@ -350,6 +353,9 @@ class CoinGeckoClient:
 
         self.cfg = config
         self.api_key = env.COINGECKO_API_KEY
+        # v0.32 per-case API budget. Propagated to the lazy-loaded
+        # DeFiLlama fallback so both providers share the cap.
+        self.budget = budget
         self.cache = make_price_cache(
             dsn=effective_dsn if effective_dsn else None,
             cache_dir=cache_dir,
@@ -452,6 +458,12 @@ class CoinGeckoClient:
                 env=RecuperoEnv(),  # picks up env-var freshness on first call
                 cache_dir=self._fallback_cache_dir,
                 dsn=self._fallback_dsn,
+                # v0.32 — propagate the per-case API budget so the
+                # fallback also counts toward the cap (defillama
+                # itself is free per the cost model, but recording
+                # the call count surfaces the burn rate to the
+                # operator regardless).
+                budget=getattr(self, "budget", None),
             )
         except Exception as e:  # noqa: BLE001 — construction must never crash trace
             log.debug("defillama fallback construction failed: %s", e)
@@ -647,6 +659,12 @@ class CoinGeckoClient:
         url = f"{self._base_url()}/coins/{platform}/contract/{contract_canon}"
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=self._auth_params())
+        # v0.32 per-case API budget. getattr with default None defends
+        # against test scaffolding that constructs the client via
+        # __new__() (bypassing __init__) — see test_coingecko_adversarial_prices.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("coingecko")
         if resp.status_code == 404:
             return None
         if resp.status_code == 429:
@@ -672,6 +690,12 @@ class CoinGeckoClient:
         params = {"date": date_str, "localization": "false", **self._auth_params()}
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=params)
+        # v0.32 per-case API budget. getattr with default None defends
+        # against test scaffolding that constructs the client via
+        # __new__() (bypassing __init__) — see test_coingecko_adversarial_prices.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("coingecko")
         if resp.status_code == 429:
             # Tenacity handles the actual backoff (exponential 2→30s); raising
             # immediately lets the next caller share the cooldown rather than
@@ -784,6 +808,12 @@ class CoinGeckoClient:
         params = {"ids": cg_id, "vs_currencies": "usd", **self._auth_params()}
         self.limiter.wait()
         resp = self._client.get(url, headers=self._headers(), params=params)
+        # v0.32 per-case API budget. getattr with default None defends
+        # against test scaffolding that constructs the client via
+        # __new__() (bypassing __init__) — see test_coingecko_adversarial_prices.
+        _b = getattr(self, "budget", None)
+        if _b is not None:
+            _b.record("coingecko")
         if resp.status_code == 429:
             time.sleep(15)
             raise httpx.TransportError("rate limited")

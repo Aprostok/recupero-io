@@ -609,6 +609,42 @@ def build_all_deliverables(
         written=written,
     )
 
+    # v0.32 Tier-0 gap #1 — MANDATORY HUMAN REVIEW GATE.
+    #
+    # For each customer-facing / LE-facing HTML+PDF artifact, insert
+    # an ``awaiting_review`` row in ``brief_reviews``. The dispatcher
+    # refuses to send the artifact until status flips to
+    # ``human_reviewed_approved`` (or an explicit override).
+    #
+    # SHA-256 of the on-disk bytes pins the review identity:
+    # re-rendering with different content creates a new
+    # awaiting_review row that must be approved separately. This is
+    # what prevents "approve once, ship a different version" — the
+    # whole reason INVARIANTS A-E (shape) are insufficient and the
+    # human gate exists.
+    #
+    # Best-effort: a DB blip won't kill the building_package stage,
+    # but the dispatcher gate WILL refuse to send without a matching
+    # row, so the operator will see the failure when the email-send
+    # actually tries to fire.
+    try:
+        from recupero.dispatcher import insert_review_rows_for_deliverables
+        n_review_rows = insert_review_rows_for_deliverables(
+            case_id=getattr(case, "case_id", None),
+            paths=written,
+        )
+        if n_review_rows:
+            log.info(
+                "review gate: inserted %d awaiting_review row(s)",
+                n_review_rows,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "review gate: insert_review_rows_for_deliverables "
+            "failed (non-fatal — dispatcher will catch missing "
+            "approvals at send time): %s", exc,
+        )
+
     # Auto-send the victim-summary letter to the victim. Skipped on
     # wallet traces (no real victim email), on cases without a
     # victim email (operator didn't capture one), and on cases
@@ -850,6 +886,17 @@ def _maybe_auto_send_victim_summary(
             email_type="victim_summary",
             attachments=attachments,
             preview_text=preview,
+            # v0.32 Tier-0 gap #1: review gate. case_id pins the
+            # brief_reviews row; review_artifact_path is the
+            # victim_summary HTML we are about to send. The gate
+            # refuses to send unless an approved review row exists
+            # for the artifact's exact SHA-256.  victim_summary is
+            # classified as the 'brief' artifact_kind (covers both
+            # trace_report + victim_summary as the customer-facing
+            # case brief).
+            review_case_id=case_id,
+            review_artifact_kind="brief",
+            review_artifact_path=summary_html_path,
         )
         masked_to = _mask_email_for_log(victim.email)
         if result.success:

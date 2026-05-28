@@ -136,6 +136,39 @@ def cli() -> None:
         help="Free-form reason recorded in change_summary for audit.",
     )
 
+    # ----- close-case (v0.32 Tier-0 gap #2) ----- #
+    # Gated case-close: cases CANNOT transition to status='closed'
+    # without a documented outcome. The outcome is what drives the
+    # recovery-rate disclosure on /v1/intake, so silent informal closes
+    # would corrupt the published rate. See
+    # recupero.ops.commands.close_case for the gate logic.
+    p_close_case = sub.add_parser(
+        "close-case",
+        help="Close a case with a documented outcome. REQUIRED before "
+             "the case can be marked status='closed'; without an outcome "
+             "row the recovery-rate disclosure on /v1/intake undercounts "
+             "the denominator.",
+    )
+    p_close_case.add_argument(
+        "--case", dest="case_id", required=True,
+        help="UUID of the case to close.",
+    )
+    p_close_case.add_argument(
+        "--outcome", required=True,
+        choices=("full_recovery", "partial_recovery", "no_recovery", "dropped"),
+        help="Outcome category. full_recovery requires --recovered-usd.",
+    )
+    p_close_case.add_argument(
+        "--recovered-usd", dest="recovered_usd", default=None,
+        help="Dollar amount returned to the victim. REQUIRED for "
+             "--outcome full_recovery; optional otherwise.",
+    )
+    p_close_case.add_argument(
+        "--note", default=None,
+        help="Free-form operator note attached to the synthetic "
+             "freeze_outcomes audit row.",
+    )
+
     # ----- send-freeze-letters ----- #
     p_freeze = sub.add_parser(
         "send-freeze-letters",
@@ -664,6 +697,16 @@ def cli() -> None:
         sys.exit(cmd.run(
             investigation_id=_parse_uuid(args.investigation_id),
             reason=args.reason, dsn=_require_dsn(),
+        ))
+
+    if args.command == "close-case":
+        from recupero.ops.commands import close_case as cmd
+        sys.exit(cmd.run(
+            case_id=_parse_uuid(args.case_id, field_name="case_id"),
+            outcome=args.outcome,
+            recovered_usd_raw=args.recovered_usd,
+            note=args.note,
+            dsn=_require_dsn(),
         ))
 
     if args.command == "send-freeze-letters":

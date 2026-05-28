@@ -1,0 +1,756 @@
+"""Auto-ingest new bridge contracts + CEX hot wallets from Etherscan,
+Tronscan, and Solscan public tag APIs. Closes Tier-1 gaps #1 + #2 from
+the pre-mortem.
+
+Two-stage workflow:
+  1. Daily cron job pulls new candidate labels from upstream tag APIs
+     and writes them to `label_candidates` table (status='pending_review').
+  2. Operator reviews via the API (`/v1/labels/candidates`) and either
+     PROMOTES (writes to bridges.json/cex_deposits.json) or REJECTS
+     (records reason, never re-suggested for that address).
+
+Sources:
+  * Etherscan address tags (free tier): https://api.etherscan.io/api?module=label&action=getlabels
+    NOTE: Etherscan doesn't actually publish bulk tags free — use the
+    address-info endpoint per known protocols + scrape the public
+    pages where allowed. The simpler interim: read Etherscan V2's
+    contract-source endpoint for known protocol routers and parse the
+    `ContractName` field.
+  * Tronscan: https://apilist.tronscanapi.com/api/contracts (public tags)
+  * Solscan: https://public-api.solscan.io/account/{addr} (public tags)
+  * DeFiLlama: https://api.llama.fi/protocols (new-protocol feed
+    filtered to category="Bridges" or "Crypto Exchange")
+
+Defensive: any source unreachable → log WARN, skip that source, continue.
+Net total candidates per day capped at 100 to avoid review-queue overflow.
+
+INGEST IS NOT AUTO-PROMOTE. A new candidate lands at
+``proposed_confidence='low'`` with ``status='pending_review'``. An
+operator must explicitly promote via
+``POST /v1/labels/candidates/{id}/promote`` (which appends to the
+version-controlled seeds JSON) before the address starts showing up
+in briefs as a labeled bridge / exchange. Skipping the review step
+would let a tag-spammer inject bogus labels straight into operator
+output; that's the load-bearing safety property of this pipeline.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import os
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Per-day cap on total candidates persisted across all sources. Keeps
+# the operator review queue from overflowing when an upstream tag API
+# starts returning thousands of new addresses overnight (typically a
+# sign of a sync bug, not a real labeling event).
+_DEFAULT_DAILY_CAP = 100
+
+# Per-source HTTP timeout — every source is a single GET, so 10s is
+# generous. The pipeline runs once per day at 02:00 UTC and is not
+# latency-sensitive; we'd rather wait 30s total than miss labels
+# behind a momentarily-slow upstream.
+_HTTP_TIMEOUT_SEC = 10.0
+
+# DeFiLlama categories we care about. Names taken verbatim from
+# https://api.llama.fi/protocols — case-sensitive.
+_LLAMA_BRIDGE_CATEGORIES = ("Bridge", "Bridges", "Cross Chain")
+_LLAMA_CEX_CATEGORIES = ("CEX", "Centralized Exchange", "Crypto Exchange")
+
+
+def _daily_cap() -> int:
+    """Read ``RECUPERO_LABEL_AUTO_INGEST_DAILY_CAP`` from env, clamped
+    to a sane range. Bad input → default with WARN."""
+    raw = (os.environ.get("RECUPERO_LABEL_AUTO_INGEST_DAILY_CAP") or "").strip()
+    if not raw:
+        return _DEFAULT_DAILY_CAP
+    try:
+        val = int(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "RECUPERO_LABEL_AUTO_INGEST_DAILY_CAP=%r is not an int — "
+            "using default %d", raw, _DEFAULT_DAILY_CAP,
+        )
+        return _DEFAULT_DAILY_CAP
+    if val <= 0 or val > 10000:
+        log.warning(
+            "RECUPERO_LABEL_AUTO_INGEST_DAILY_CAP=%d out of range "
+            "[1, 10000] — using default %d", val, _DEFAULT_DAILY_CAP,
+        )
+        return _DEFAULT_DAILY_CAP
+    return val
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CandidateLabel — the in-memory shape produced by every source
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class CandidateLabel:
+    """One pending label candidate, pre-persistence.
+
+    All fields except ``raw_metadata`` and ``source_url`` are required.
+    ``proposed_confidence`` is ALWAYS 'low' for newly-ingested rows —
+    operators upgrade to medium/high during promotion based on their
+    own verification (chain explorer, protocol docs, etc.).
+    """
+
+    address: str
+    chain: str  # Chain enum value as string; sources may emit non-EVM
+    proposed_category: str  # 'bridge' / 'exchange_hot_wallet' / 'exchange_deposit'
+    proposed_name: str
+    source: str  # e.g. 'tronscan_tag', 'defillama_new_protocol'
+    source_url: str = ""
+    proposed_confidence: str = "low"
+    raw_metadata: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.address or not isinstance(self.address, str):
+            raise ValueError("CandidateLabel.address must be a non-empty string")
+        if not self.chain or not isinstance(self.chain, str):
+            raise ValueError("CandidateLabel.chain must be a non-empty string")
+        if self.proposed_category not in (
+            "bridge", "exchange_hot_wallet", "exchange_deposit",
+        ):
+            raise ValueError(
+                f"CandidateLabel.proposed_category {self.proposed_category!r} "
+                "must be one of bridge / exchange_hot_wallet / exchange_deposit"
+            )
+        if self.proposed_confidence not in ("low", "medium", "high"):
+            raise ValueError(
+                f"CandidateLabel.proposed_confidence "
+                f"{self.proposed_confidence!r} must be one of low/medium/high"
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Source fetchers — each one is defensive and never raises
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _safe_http_get_json(url: str, *, source_name: str) -> Any:
+    """Issue a GET and return parsed JSON. Any failure → log WARN,
+    return None. NEVER raises — the daily pipeline must continue even
+    when an upstream is down.
+    """
+    try:
+        import httpx
+        with httpx.Client(timeout=_HTTP_TIMEOUT_SEC) as client:
+            resp = client.get(url)
+        if resp.status_code != 200:
+            log.warning(
+                "label auto-ingest: %s returned HTTP %d — skipping",
+                source_name, resp.status_code,
+            )
+            return None
+        return resp.json()
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "label auto-ingest: %s unreachable (%s: %s) — skipping",
+            source_name, type(exc).__name__, exc,
+        )
+        return None
+
+
+def fetch_candidate_bridges() -> list[CandidateLabel]:
+    """Pull bridge-protocol candidates from DeFiLlama + Tronscan.
+
+    Returns a list of CandidateLabel rows, each pre-validated. Order
+    is source-deterministic so the daily cap drops the same overflow
+    rows on every re-run.
+    """
+    out: list[CandidateLabel] = []
+
+    # ── DeFiLlama: every protocol with category in _LLAMA_BRIDGE_CATEGORIES
+    llama = _safe_http_get_json(
+        "https://api.llama.fi/protocols",
+        source_name="defillama_protocols",
+    )
+    if isinstance(llama, list):
+        for proto in llama:
+            if not isinstance(proto, dict):
+                continue
+            category = proto.get("category")
+            if category not in _LLAMA_BRIDGE_CATEGORIES:
+                continue
+            name = proto.get("name") or ""
+            address = proto.get("address") or ""
+            chains = proto.get("chains") or []
+            if not (isinstance(address, str) and address):
+                continue
+            # DeFiLlama puts the chain as the first element of `chains`
+            # when there's only one; multi-chain rows we map to the
+            # first chain and emit one candidate (operator can add
+            # other chains on promotion).
+            chain = "ethereum"
+            if isinstance(chains, list) and chains:
+                first = chains[0]
+                if isinstance(first, str) and first:
+                    chain = first.lower()
+            try:
+                out.append(CandidateLabel(
+                    address=address,
+                    chain=chain,
+                    proposed_category="bridge",
+                    proposed_name=str(name)[:200] or "(unnamed bridge)",
+                    source="defillama_new_protocol",
+                    source_url=f"https://defillama.com/protocol/{proto.get('slug', '')}",
+                    raw_metadata={
+                        "defillama_id": proto.get("id"),
+                        "category": category,
+                        "chains": chains,
+                    },
+                ))
+            except ValueError as exc:
+                log.debug(
+                    "label auto-ingest: skipping malformed DeFiLlama row: %s",
+                    exc,
+                )
+
+    # ── Tronscan: bridge contracts tagged on Tronscan
+    tron = _safe_http_get_json(
+        "https://apilist.tronscanapi.com/api/contracts?contract_type=bridge",
+        source_name="tronscan_bridges",
+    )
+    if isinstance(tron, dict):
+        for row in tron.get("data") or []:
+            if not isinstance(row, dict):
+                continue
+            address = row.get("address") or ""
+            name = row.get("name") or row.get("tag1") or ""
+            if not (isinstance(address, str) and address):
+                continue
+            try:
+                out.append(CandidateLabel(
+                    address=address,
+                    chain="tron",
+                    proposed_category="bridge",
+                    proposed_name=str(name)[:200] or "(unnamed Tron bridge)",
+                    source="tronscan_tag",
+                    source_url=f"https://tronscan.org/#/contract/{address}",
+                    raw_metadata={"tronscan_raw": row},
+                ))
+            except ValueError as exc:
+                log.debug(
+                    "label auto-ingest: skipping malformed Tronscan row: %s",
+                    exc,
+                )
+
+    return out
+
+
+def fetch_candidate_cex_deposits() -> list[CandidateLabel]:
+    """Pull candidate CEX hot wallets + deposit addresses from Tronscan,
+    Solscan, and Etherscan address-info per known partner exchanges.
+    """
+    out: list[CandidateLabel] = []
+
+    # ── Tronscan: exchange-tagged contracts
+    tron = _safe_http_get_json(
+        "https://apilist.tronscanapi.com/api/contracts?contract_type=exchange",
+        source_name="tronscan_exchanges",
+    )
+    if isinstance(tron, dict):
+        for row in tron.get("data") or []:
+            if not isinstance(row, dict):
+                continue
+            address = row.get("address") or ""
+            name = row.get("name") or row.get("tag1") or ""
+            if not (isinstance(address, str) and address):
+                continue
+            # Hot-wallet vs deposit: Tronscan tag1 typically contains
+            # "Hot Wallet" or "Deposit" in the human-readable name.
+            # Default to exchange_hot_wallet; operator promotes with
+            # category change if needed.
+            name_lc = str(name).lower()
+            category = (
+                "exchange_deposit" if "deposit" in name_lc
+                else "exchange_hot_wallet"
+            )
+            try:
+                out.append(CandidateLabel(
+                    address=address,
+                    chain="tron",
+                    proposed_category=category,
+                    proposed_name=str(name)[:200] or "(unnamed Tron exchange)",
+                    source="tronscan_tag",
+                    source_url=f"https://tronscan.org/#/contract/{address}",
+                    raw_metadata={"tronscan_raw": row},
+                ))
+            except ValueError as exc:
+                log.debug(
+                    "label auto-ingest: skipping malformed Tronscan exchange row: %s",
+                    exc,
+                )
+
+    # ── Solscan: exchange-tagged accounts (the public-api endpoint
+    # returns one address at a time; we walk a known seed-list of
+    # exchange root accounts to discover hot wallets they're moving
+    # to. For the v0.32 bootstrap we accept the existing seeds as
+    # the discovery surface — a future revision can subscribe to
+    # Solscan's webhook feed.)
+    # We hit the labels feed if it exists, else fall through silent.
+    sol = _safe_http_get_json(
+        "https://public-api.solscan.io/account/labels?category=exchange",
+        source_name="solscan_exchanges",
+    )
+    if isinstance(sol, list):
+        for row in sol:
+            if not isinstance(row, dict):
+                continue
+            address = row.get("address") or ""
+            name = row.get("label") or row.get("name") or ""
+            if not (isinstance(address, str) and address):
+                continue
+            try:
+                out.append(CandidateLabel(
+                    address=address,
+                    chain="solana",
+                    proposed_category="exchange_hot_wallet",
+                    proposed_name=str(name)[:200] or "(unnamed Solana exchange)",
+                    source="solscan_tag",
+                    source_url=f"https://solscan.io/account/{address}",
+                    raw_metadata={"solscan_raw": row},
+                ))
+            except ValueError as exc:
+                log.debug(
+                    "label auto-ingest: skipping malformed Solscan row: %s",
+                    exc,
+                )
+
+    # ── DeFiLlama CEX feed
+    llama = _safe_http_get_json(
+        "https://api.llama.fi/protocols",
+        source_name="defillama_cex",
+    )
+    if isinstance(llama, list):
+        for proto in llama:
+            if not isinstance(proto, dict):
+                continue
+            category = proto.get("category")
+            if category not in _LLAMA_CEX_CATEGORIES:
+                continue
+            name = proto.get("name") or ""
+            address = proto.get("address") or ""
+            chains = proto.get("chains") or []
+            if not (isinstance(address, str) and address):
+                continue
+            chain = "ethereum"
+            if isinstance(chains, list) and chains:
+                first = chains[0]
+                if isinstance(first, str) and first:
+                    chain = first.lower()
+            try:
+                out.append(CandidateLabel(
+                    address=address,
+                    chain=chain,
+                    proposed_category="exchange_hot_wallet",
+                    proposed_name=str(name)[:200] or "(unnamed CEX)",
+                    source="defillama_new_protocol",
+                    source_url=f"https://defillama.com/protocol/{proto.get('slug', '')}",
+                    raw_metadata={
+                        "defillama_id": proto.get("id"),
+                        "category": category,
+                        "chains": chains,
+                    },
+                ))
+            except ValueError as exc:
+                log.debug(
+                    "label auto-ingest: skipping malformed DeFiLlama CEX row: %s",
+                    exc,
+                )
+
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Persistence — write to label_candidates with dedup
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def persist_candidates(
+    candidates: list[CandidateLabel],
+    *,
+    dsn: str | None = None,
+    daily_cap: int | None = None,
+) -> int:
+    """Persist `candidates` to ``public.label_candidates``.
+
+    Deduplicates on ``(chain, address)`` — a row that already exists
+    (in ANY status — pending, promoted, rejected, expired) is skipped
+    silently. Operators have already made a call about it.
+
+    Returns the number of NEW rows actually inserted (i.e., not the
+    input length — duplicates are subtracted).
+
+    The daily-cap clamp is applied AFTER de-duplication so already-
+    reviewed rows don't waste the budget.
+    """
+    if daily_cap is None:
+        daily_cap = _daily_cap()
+    if dsn is None:
+        dsn = (os.environ.get("SUPABASE_DB_URL") or "").strip()
+    if not candidates:
+        return 0
+
+    # Apply daily cap. Order-preserving so re-runs drop the same tail.
+    capped = candidates[:daily_cap]
+    if len(candidates) > daily_cap:
+        log.warning(
+            "label auto-ingest: %d candidates exceeds daily cap %d — "
+            "dropping %d",
+            len(candidates), daily_cap, len(candidates) - daily_cap,
+        )
+
+    if not dsn:
+        log.info(
+            "label auto-ingest: SUPABASE_DB_URL unset — would have "
+            "persisted %d candidates (local-dev no-op)", len(capped),
+        )
+        return 0
+
+    inserted = 0
+    sql = """
+    INSERT INTO public.label_candidates (
+        address, chain, proposed_category, proposed_name,
+        proposed_confidence, source, source_url, raw_metadata
+    )
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+    ON CONFLICT (chain, address) DO NOTHING
+    RETURNING id
+    """
+    try:
+        from recupero._common import db_connect
+        with db_connect(dsn) as conn, conn.cursor() as cur:
+            for c in capped:
+                cur.execute(sql, (
+                    c.address, c.chain, c.proposed_category, c.proposed_name,
+                    c.proposed_confidence, c.source, c.source_url,
+                    json.dumps(c.raw_metadata, default=str),
+                ))
+                if cur.fetchone() is not None:
+                    inserted += 1
+    except Exception as exc:  # noqa: BLE001
+        log.error(
+            "label auto-ingest: persist failed (%s: %s) — %d rows "
+            "may have been written before the error",
+            type(exc).__name__, exc, inserted,
+        )
+        return inserted
+
+    log.info(
+        "label auto-ingest: persisted %d new candidates "
+        "(of %d submitted, %d were duplicates)",
+        inserted, len(capped), len(capped) - inserted,
+    )
+    return inserted
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Promotion / rejection — operator-driven
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+_SEEDS_DIR = Path(__file__).parent / "seeds"
+
+
+# Map proposed_category → which seed file the promoted entry lands in.
+# CEX hot wallets AND deposits both go into cex_deposits.json — the
+# file holds both shapes (its existing rows mix both categories).
+_CATEGORY_TO_SEED_FILE = {
+    "bridge": "bridges.json",
+    "exchange_hot_wallet": "cex_deposits.json",
+    "exchange_deposit": "cex_deposits.json",
+}
+
+
+def _read_candidate(
+    candidate_id: int, dsn: str,
+) -> dict[str, Any] | None:
+    """Fetch one candidate row by id. Returns None if not found."""
+    from recupero._common import db_connect
+    sql = """
+    SELECT id, address, chain, proposed_category, proposed_name,
+           proposed_confidence, source, source_url, raw_metadata, status
+      FROM public.label_candidates
+     WHERE id = %s
+    """
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, (candidate_id,))
+        row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0], "address": row[1], "chain": row[2],
+        "proposed_category": row[3], "proposed_name": row[4],
+        "proposed_confidence": row[5], "source": row[6],
+        "source_url": row[7], "raw_metadata": row[8], "status": row[9],
+    }
+
+
+def promote_candidate(
+    candidate_id: int,
+    reviewer: str,
+    *,
+    confidence: str = "medium",
+    dsn: str | None = None,
+    seeds_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Append the candidate to the appropriate seeds JSON and mark
+    the candidate row as ``status='promoted'``.
+
+    Confidence defaults to 'medium' on promotion — operators reviewing
+    an upstream tag have enough evidence to bump above the 'low' default
+    of pending rows, but 'high' is reserved for primary-source
+    verification (the protocol team's own docs, the exchange's own
+    confirmation, etc.). The promotion endpoint accepts a different
+    confidence via its body.
+
+    Raises ValueError if the candidate is already promoted/rejected
+    or doesn't exist (the caller — the API endpoint — turns this into
+    a 404 / 409).
+    """
+    if dsn is None:
+        dsn = (os.environ.get("SUPABASE_DB_URL") or "").strip()
+    if not dsn:
+        raise RuntimeError(
+            "promote_candidate requires SUPABASE_DB_URL to be set"
+        )
+    if seeds_dir is None:
+        seeds_dir = _SEEDS_DIR
+    if confidence not in ("low", "medium", "high"):
+        raise ValueError(
+            f"confidence {confidence!r} must be one of low/medium/high"
+        )
+
+    row = _read_candidate(candidate_id, dsn)
+    if row is None:
+        raise ValueError(f"candidate {candidate_id} not found")
+    if row["status"] != "pending_review":
+        raise ValueError(
+            f"candidate {candidate_id} is already {row['status']!r}; "
+            "only pending_review rows can be promoted"
+        )
+
+    seed_file = _CATEGORY_TO_SEED_FILE.get(row["proposed_category"])
+    if seed_file is None:
+        raise ValueError(
+            f"no seed-file mapping for category {row['proposed_category']!r}"
+        )
+    seed_path = seeds_dir / seed_file
+
+    new_entry: dict[str, Any] = {
+        "address": row["address"],
+        "name": row["proposed_name"],
+        "category": row["proposed_category"],
+        "source": f"auto_ingest:{row['source']}",
+        "confidence": confidence,
+        "added_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        "chain": row["chain"],
+        "_v032_auto_ingest": True,
+    }
+    # The bridges.json schema flags 'category' as optional and elides it
+    # from required, while cex_deposits.json keeps it. Both schemas accept
+    # the field, so we always emit it for explicitness.
+
+    _append_to_seed_file(seed_path, new_entry)
+
+    from recupero._common import db_connect
+    sql = """
+    UPDATE public.label_candidates
+       SET status = 'promoted',
+           reviewer_email = %s,
+           reviewed_at_utc = NOW()
+     WHERE id = %s AND status = 'pending_review'
+    RETURNING id
+    """
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, (reviewer, candidate_id))
+        if cur.fetchone() is None:
+            # Lost a race with another promoter — already moved out
+            # of pending_review. The seed-file append is idempotent at
+            # the JSON list level (duplicate addresses warn but don't
+            # break loading), so we tolerate it.
+            log.warning(
+                "label auto-ingest: candidate %d transitioned out of "
+                "pending_review during promote — seed file still appended",
+                candidate_id,
+            )
+
+    return {**row, "promoted_to": str(seed_path), "promoted_entry": new_entry}
+
+
+def reject_candidate(
+    candidate_id: int,
+    reviewer: str,
+    reason: str,
+    *,
+    dsn: str | None = None,
+) -> dict[str, Any]:
+    """Mark candidate as rejected. ``reason`` is required (callers
+    enforce min_length at the request layer)."""
+    if dsn is None:
+        dsn = (os.environ.get("SUPABASE_DB_URL") or "").strip()
+    if not dsn:
+        raise RuntimeError(
+            "reject_candidate requires SUPABASE_DB_URL to be set"
+        )
+    if not reason or not reason.strip():
+        raise ValueError("reject_candidate requires a non-empty reason")
+
+    row = _read_candidate(candidate_id, dsn)
+    if row is None:
+        raise ValueError(f"candidate {candidate_id} not found")
+    if row["status"] != "pending_review":
+        raise ValueError(
+            f"candidate {candidate_id} is already {row['status']!r}; "
+            "only pending_review rows can be rejected"
+        )
+
+    from recupero._common import db_connect
+    sql = """
+    UPDATE public.label_candidates
+       SET status = 'rejected',
+           reviewer_email = %s,
+           review_notes = %s,
+           reviewed_at_utc = NOW()
+     WHERE id = %s AND status = 'pending_review'
+    RETURNING id
+    """
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, (reviewer, reason[:4000], candidate_id))
+        affected = cur.fetchone()
+    if affected is None:
+        raise ValueError(
+            f"candidate {candidate_id} could not be marked rejected "
+            "(lost race with another reviewer)"
+        )
+    return {**row, "rejection_reason": reason}
+
+
+def _append_to_seed_file(seed_path: Path, entry: dict[str, Any]) -> None:
+    """Append `entry` to the JSON-list seed file at `seed_path`.
+
+    The on-disk shape of bridges.json and cex_deposits.json is a flat
+    JSON list of objects. We read, append, write — atomically via
+    ``_common.atomic_write_text`` so a partial write can't corrupt the
+    seed file.
+    """
+    from recupero._common import atomic_write_text
+
+    if seed_path.exists():
+        existing = json.loads(seed_path.read_text(encoding="utf-8-sig"))
+        if not isinstance(existing, list):
+            raise RuntimeError(
+                f"seed file {seed_path} is not a JSON list; refusing to "
+                "auto-append"
+            )
+    else:
+        existing = []
+
+    existing.append(entry)
+    atomic_write_text(
+        seed_path,
+        json.dumps(existing, indent=2, ensure_ascii=False) + "\n",
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cron entry point — orchestrates the daily pull
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def run_daily_pull() -> dict[str, int]:
+    """Pull bridges + CEX candidates, dedupe, persist.
+
+    Returns a small summary dict the cron driver can log:
+    ``{"bridges_seen": N, "cex_seen": M, "persisted": K}``.
+    """
+    log.info("label auto-ingest: starting daily pull")
+    bridges = fetch_candidate_bridges()
+    cex = fetch_candidate_cex_deposits()
+    total = bridges + cex
+    persisted = persist_candidates(total)
+    log.info(
+        "label auto-ingest: daily pull done — bridges=%d cex=%d persisted=%d",
+        len(bridges), len(cex), persisted,
+    )
+    return {
+        "bridges_seen": len(bridges),
+        "cex_seen": len(cex),
+        "persisted": persisted,
+    }
+
+
+def list_candidates(
+    *,
+    status: str = "pending_review",
+    limit: int = 100,
+    dsn: str | None = None,
+) -> list[dict[str, Any]]:
+    """Fetch candidate rows for the operator review UI / API."""
+    if dsn is None:
+        dsn = (os.environ.get("SUPABASE_DB_URL") or "").strip()
+    if not dsn:
+        return []
+    # Defensive bounds — the API caller already clamps, but persistence
+    # callers might not.
+    limit = max(1, min(int(limit or 100), 500))
+    if status not in ("pending_review", "promoted", "rejected", "expired"):
+        raise ValueError(f"unknown status {status!r}")
+
+    from recupero._common import db_connect
+    sql = """
+    SELECT id, address, chain, proposed_category, proposed_name,
+           proposed_confidence, source, source_url, raw_metadata,
+           status, review_notes, reviewer_email, reviewed_at_utc,
+           created_at_utc
+      FROM public.label_candidates
+     WHERE status = %s
+     ORDER BY created_at_utc DESC
+     LIMIT %s
+    """
+    out: list[dict[str, Any]] = []
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, (status, limit))
+        for r in cur.fetchall():
+            out.append({
+                "id": r[0], "address": r[1], "chain": r[2],
+                "proposed_category": r[3], "proposed_name": r[4],
+                "proposed_confidence": r[5], "source": r[6],
+                "source_url": r[7], "raw_metadata": r[8],
+                "status": r[9], "review_notes": r[10],
+                "reviewer_email": r[11],
+                "reviewed_at_utc": (
+                    r[12].isoformat() if r[12] is not None else None
+                ),
+                "created_at_utc": (
+                    r[13].isoformat() if r[13] is not None else None
+                ),
+            })
+    return out
+
+
+__all__ = (
+    "CandidateLabel",
+    "fetch_candidate_bridges",
+    "fetch_candidate_cex_deposits",
+    "persist_candidates",
+    "promote_candidate",
+    "reject_candidate",
+    "run_daily_pull",
+    "list_candidates",
+)

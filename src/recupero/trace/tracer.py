@@ -32,6 +32,10 @@ from recupero.models import (
     LabelCategory,
     Transfer,
 )
+from recupero.observability.api_budget import (
+    BudgetExceededError,
+    CaseBudget,
+)
 from recupero.pricing.coingecko import CoinGeckoClient, PriceResult
 from recupero.trace.evidence import write_evidence_receipt
 from recupero.trace.policies import TracePolicy
@@ -62,6 +66,30 @@ def _normalize_address(chain: Chain, address: Address) -> Address:
     if _is_evm_chain(chain):
         return to_checksum_address(address)
     return address
+
+
+def _attach_budget_to_adapter(adapter: ChainAdapter, budget: CaseBudget) -> None:
+    """Best-effort propagation of the per-case API budget to whichever
+    HTTP client the adapter holds.
+
+    Different adapters expose different attribute names — EVM /
+    Solana / Tron all bind a ``self.client``; the Bitcoin adapter
+    binds a ``self.esplora``. We walk the small known surface and
+    attach the budget where we find it. Unknown shapes are silently
+    skipped (budget tracking is best-effort — never crash the trace
+    over a missing attribute).
+    """
+    for attr in ("client", "esplora", "fallback_client"):
+        sub = getattr(adapter, attr, None)
+        if sub is None:
+            continue
+        try:
+            sub.budget = budget
+        except Exception:  # noqa: BLE001 — defensive, never raise out
+            log.debug(
+                "budget attach skipped for adapter=%s attr=%s",
+                type(adapter).__name__, attr,
+            )
 
 
 def _address_visited_key(chain: Chain, address: Address) -> str:
@@ -106,10 +134,21 @@ def run_trace(
         incident_time = incident_time.replace(tzinfo=UTC)
     seed_address = _normalize_address(chain, seed_address)
 
+    # v0.32 — per-case API budget. One CaseBudget per case, propagated
+    # to every chain + pricing client. When the cap trips, BFS catches
+    # the BudgetExceededError, marks the case partial_budget_hit, and
+    # exits gracefully — same shape as the deadline-timeout path.
+    case_budget = CaseBudget.from_env(case_id=case_id)
+
     adapter = ChainAdapter.for_chain(chain, (config, env))
+    # Best-effort budget propagation. The adapter holds an HTTP client
+    # constructed during ChainAdapter.for_chain; we attach the budget
+    # to that nested client AFTER construction so we don't have to
+    # plumb the budget through every adapter ctor signature.
+    _attach_budget_to_adapter(adapter, case_budget)
     label_store = LabelStore.load(config)
     cache_dir = Path(config.storage.data_dir) / "prices_cache"
-    price_client = CoinGeckoClient(config, env, cache_dir)
+    price_client = CoinGeckoClient(config, env, cache_dir, budget=case_budget)
 
     # v0.31.0 — env-var overrides for the two BFS knobs operators most
     # often want to tune per-case. Both fall back to the config-yaml
@@ -236,6 +275,12 @@ def run_trace(
     current_wave: list[tuple[Address, int]] = [(seed_address, 0)]
     addresses_processed = 0
     wave_number = 0
+    # v0.32 — track whether the BFS exited due to the per-case API
+    # budget cap. Same graceful-degradation shape as deadline_hit /
+    # transfer_cap_hit. Records into case.config_used so the brief
+    # can render the "trace incomplete — budget exhausted" banner.
+    budget_hit = False
+    budget_hit_provider: str | None = None
 
     while current_wave:
         # v0.16.11: cooperative deadline check between waves. We don't
@@ -275,17 +320,31 @@ def run_trace(
         # Errors from a single address don't fail the wave — the worker
         # function catches and returns ([], False) so the rest of the
         # wave's work isn't wasted.
-        wave_results = _process_wave(
-            current_wave,
-            adapter=adapter,
-            label_store=label_store,
-            price_client=price_client,
-            policy=policy,
-            incident_time=incident_time,
-            config=config,
-            evidence_dir=case_dir / "tx_evidence",
-            concurrency=trace_concurrency,
-        )
+        try:
+            wave_results = _process_wave(
+                current_wave,
+                adapter=adapter,
+                label_store=label_store,
+                price_client=price_client,
+                policy=policy,
+                incident_time=incident_time,
+                config=config,
+                evidence_dir=case_dir / "tx_evidence",
+                concurrency=trace_concurrency,
+            )
+        except BudgetExceededError as exc:
+            # v0.32 — per-case API budget tripped mid-wave. Same
+            # graceful-degradation contract as deadline_hit: bail out
+            # of the BFS, record the marker, and let the brief
+            # render a "trace incomplete — budget exhausted" banner.
+            budget_hit = True
+            budget_hit_provider = exc.provider
+            log.warning(
+                "trace API budget hit ($%s spent / $%s budget) after "
+                "%d wave(s) on provider=%s; exiting partial.",
+                exc.spent_usd, exc.budget_usd, wave_number, exc.provider,
+            )
+            break
 
         # --- Aggregate results + build next wave (single-threaded) ---
         for from_addr, depth, hop_transfers, is_service_wallet in wave_results:
@@ -357,11 +416,32 @@ def run_trace(
             "trace_transfer_cap": max_transfers,
             "trace_waves_completed": wave_number,
         }
+    elif budget_hit:
+        # v0.32 — per-case API budget exhausted. Surface the marker
+        # AND the per-provider breakdown so the brief shows the
+        # operator exactly where the dollars went.
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "partial_budget_hit",
+            "trace_budget_provider": budget_hit_provider,
+            "trace_waves_completed": wave_number,
+        }
     else:
         case.config_used = {
             **(case.config_used or {}),
             "trace_status": "complete",
         }
+
+    # v0.32 — always surface the per-case API budget snapshot under
+    # case.config_used["api_budget"]. This is the breakdown the brief
+    # and the audit trail will render, regardless of whether the cap
+    # was hit. When the budget is disabled (RECUPERO_API_BUDGET_USD_PER_CASE=0)
+    # the snapshot still lands but enabled=False makes the brief
+    # renderer skip the section.
+    case.config_used = {
+        **(case.config_used or {}),
+        "api_budget": case_budget.snapshot(),
+    }
 
     log.info(
         "primary trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs status=%s",
@@ -411,6 +491,20 @@ def run_trace(
             is_contract_cache=is_contract_cache,
             trace_concurrency=trace_concurrency,
         )
+    except BudgetExceededError as exc:
+        # v0.32 — budget tripped during the DEX/bridge continuation
+        # pass. Mark partial and let cleanup run via the finally block.
+        log.warning(
+            "trace API budget hit during continuation pass ($%s / $%s, "
+            "provider=%s); exiting partial.",
+            exc.spent_usd, exc.budget_usd, exc.provider,
+        )
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "partial_budget_hit",
+            "trace_budget_provider": exc.provider,
+            "api_budget": case_budget.snapshot(),
+        }
     finally:
         try:
             price_client.close()

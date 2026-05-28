@@ -137,6 +137,32 @@ def start_health_server(check_fn: Callable[[], tuple[bool, dict]]) -> ThreadingH
         def _serve(self, *, write_body: bool) -> None:
             if self.path == "/healthz":
                 self._respond(200, {"alive": True}, write_body=write_body)
+            elif self.path == "/cron/healthz":
+                # v0.32 cron HA (Tier-1 gap #3): per-job health summary
+                # for external uptime monitors (Better Uptime, Pingdom).
+                # No auth — the payload carries job names + success
+                # timestamps but no PII. Status-code conventions:
+                #   200  payload.status == "ok"
+                #   200  payload.status == "degraded"  (job stale but others ok)
+                #   503  payload.status == "down"      (any job >168h, or never succeeded)
+                # Monitors typically alarm on non-2xx; "degraded" stays
+                # 200 so the alarm only fires on a real outage. Operators
+                # who want to alarm on degraded too can hit the payload
+                # JSON and parse status.
+                try:
+                    from recupero.worker.cron_scheduler import (
+                        build_cron_healthz_payload,
+                    )
+                    payload = build_cron_healthz_payload()
+                except Exception as e:  # noqa: BLE001
+                    self._respond(
+                        503,
+                        {"status": "down", "error": f"healthz failed: {e}"},
+                        write_body=write_body,
+                    )
+                    return
+                code = 503 if payload.get("status") == "down" else 200
+                self._respond(code, payload, write_body=write_body)
             elif self.path == "/metrics":
                 # v0.17.0 (observability OBS-4): Prometheus text-format
                 # metrics. Public — operators expect /metrics to be

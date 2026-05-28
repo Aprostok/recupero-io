@@ -414,6 +414,21 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
         # chain enum validity, address format).
         ("decoded_handoffs_consistent",
          lambda: _check_decoded_handoffs_consistent(freeze_brief)),
+        # INVARIANT F (v0.32 Tier-0 gap #1, MANDATORY HUMAN REVIEW):
+        # Every customer-facing / LE-facing HTML+PDF artifact emitted
+        # from the dispatcher MUST have a corresponding brief_reviews
+        # row with status='human_reviewed_approved' OR
+        # status='overridden_unreviewed' (with audit trail). The
+        # validator queries the DB at validation time; if any
+        # artifact is missing its approval, the case build is BLOCKED.
+        #
+        # Local-dev / test-runs without a DSN skip this check (with
+        # an info log) so test runs aren't blocked. The DSN-present
+        # production path enforces.
+        ("review_gate_approvals_present",
+         lambda: _check_review_gate_approvals_present(
+             briefs_dir, freeze_brief,
+         )),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -4236,6 +4251,180 @@ def _check_decoded_handoffs_consistent(
                         f"chain {chain_hint!r}"
                     ),
                 ))
+
+    return violations
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# INVARIANT F (v0.32 Tier-0 gap #1): MANDATORY HUMAN REVIEW
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# Every customer-facing / LE-facing HTML+PDF artifact emitted from
+# the dispatcher must have a corresponding brief_reviews row with
+# status='human_reviewed_approved' OR status='overridden_unreviewed'
+# (with audit trail). The validator queries the DB at validation time;
+# if any artifact is missing its approval, the case build is BLOCKED.
+#
+# DSN-less mode (local dev / tests) silently skips this check so test
+# runs aren't blocked. The DSN-present production path enforces.
+#
+
+
+def _check_review_gate_approvals_present(
+    briefs_dir: Path, freeze_brief: dict | None,
+) -> list[Violation]:
+    """For every customer-facing artifact in ``briefs_dir``, query
+    ``public.brief_reviews`` and ensure a row exists with
+    ``status='human_reviewed_approved'`` or
+    ``status='overridden_unreviewed'`` matching the artifact's
+    SHA-256.
+
+    Skip silently when:
+      * SUPABASE_DB_URL is unset (local dev / tests).
+      * No briefs/ dir.
+      * No case_id in freeze_brief.
+
+    These are intentional skip conditions, not test bypasses: the
+    DSN-present production path is the only one that needs to gate.
+    """
+    import os as _os
+
+    dsn = (_os.environ.get("SUPABASE_DB_URL", "") or "").strip()
+    if not dsn:
+        log.info(
+            "INVARIANT F (review-gate) skipped: SUPABASE_DB_URL unset",
+        )
+        return []
+    if not briefs_dir.is_dir():
+        return []
+
+    case_id = _brief_case_id(freeze_brief)
+    if not case_id:
+        return []
+
+    try:
+        from recupero.dispatcher.review_gate import (
+            REVIEW_STATUS_APPROVED,
+            REVIEW_STATUS_OVERRIDDEN,
+            classify_artifact_kind,
+            compute_sha256,
+        )
+    except ImportError:
+        # Dispatcher module unavailable for some reason — surface as
+        # a warning rather than a critical so an isolated import
+        # failure doesn't block the whole validation pass.
+        return [Violation(
+            check="review_gate_approvals_present", severity="warning",
+            detail=(
+                "dispatcher.review_gate module not importable — "
+                "skipping INVARIANT F"
+            ),
+        )]
+
+    # Collect every customer-facing artifact on disk + its SHA-256.
+    targets: list[tuple[Path, str, str]] = []  # (path, kind, sha)
+    for path in sorted(briefs_dir.iterdir()):
+        if not path.is_file():
+            continue
+        kind = classify_artifact_kind(path)
+        if kind is None:
+            continue
+        try:
+            sha = compute_sha256(path)
+        except OSError:
+            continue
+        targets.append((path, kind, sha))
+
+    if not targets:
+        return []
+
+    # Try to coerce the case_id to a UUID — brief_reviews.case_id
+    # is UUID-typed and a non-UUID case_id can't have rows.
+    from uuid import UUID
+    try:
+        case_uuid = str(UUID(str(case_id)))
+    except (ValueError, TypeError):
+        # Brief carries a non-UUID case_id (e.g., V-CFI01 test
+        # fixture). Skip gracefully — the case is plausibly a test
+        # fixture, not a real production case with a DB row.
+        log.info(
+            "INVARIANT F skipped: brief case_id=%r is not a UUID",
+            case_id,
+        )
+        return []
+
+    # One query per (kind, sha) — small enough to inline. For a
+    # case with N artifacts this is N round-trips; production cases
+    # have ~10-15 artifacts max so it stays under 100ms total.
+    violations: list[Violation] = []
+    try:
+        from recupero._common import db_connect
+        with db_connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
+            for path, kind, sha in targets:
+                cur.execute(
+                    """
+                    SELECT status, override_reason
+                      FROM public.brief_reviews
+                     WHERE case_id = %s
+                       AND artifact_kind = %s
+                       AND artifact_sha256 = %s
+                     LIMIT 1
+                    """,
+                    (case_uuid, kind, sha),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    violations.append(Violation(
+                        check="review_gate_approvals_present",
+                        severity="critical",
+                        file=path.name,
+                        detail=(
+                            f"no brief_reviews row for {kind} sha "
+                            f"{sha[:8]}… — artifact has NOT been "
+                            "reviewed (case build BLOCKED until "
+                            "operator approves or overrides)"
+                        ),
+                    ))
+                    continue
+                status, override_reason = row[0], row[1]
+                if status == REVIEW_STATUS_APPROVED:
+                    continue  # OK
+                if status == REVIEW_STATUS_OVERRIDDEN:
+                    if override_reason and str(override_reason).strip():
+                        continue  # OK — audit trail recorded
+                    violations.append(Violation(
+                        check="review_gate_approvals_present",
+                        severity="critical",
+                        file=path.name,
+                        detail=(
+                            f"override row exists but override_reason "
+                            f"is empty for {kind} sha {sha[:8]}…"
+                        ),
+                    ))
+                    continue
+                violations.append(Violation(
+                    check="review_gate_approvals_present",
+                    severity="critical",
+                    file=path.name,
+                    detail=(
+                        f"artifact has brief_reviews row in "
+                        f"status={status!r} (not approved) for "
+                        f"{kind} sha {sha[:8]}…"
+                    ),
+                ))
+    except Exception as exc:  # noqa: BLE001
+        # DB failure: surface as a single high finding so the
+        # operator knows the gate couldn't verify rather than the
+        # gate silently passing. Validators failing closed on DB
+        # blip is consistent with the dispatcher's own gate.
+        log.warning("INVARIANT F DB query failed: %s", exc)
+        return [Violation(
+            check="review_gate_approvals_present", severity="high",
+            detail=(
+                "DB lookup for brief_reviews failed — could not "
+                "verify human-review approvals"
+            ),
+        )]
 
     return violations
 

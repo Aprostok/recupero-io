@@ -168,6 +168,10 @@ class DeFiLlamaClient:
         cache_dir: Path | None = None,
         *,
         dsn: str | None = None,
+        # v0.32 — optional per-case API budget tracker. DeFiLlama
+        # has zero per-call cost in the budget model but we still
+        # surface the call count to the operator via the breakdown.
+        budget: object | None = None,
     ) -> None:
         """Create the client with a CoinGecko-shape cache.
 
@@ -188,6 +192,8 @@ class DeFiLlamaClient:
         # has no API key. Bind it so it's available if a future
         # premium endpoint shows up.
         self.env = env
+        # v0.32 per-case API budget tracker.
+        self.budget = budget
 
         # Append a subdir so DeFiLlama cache files don't collide with
         # CoinGecko's in the same parent dir (different content, same
@@ -345,6 +351,11 @@ class DeFiLlamaClient:
         url = f"{self.BASE_URL}/prices/historical/{ts}/{coin_key}"
         self.limiter.wait()
         resp = self._client.get(url)
+        # v0.32 per-case API budget. DeFiLlama itself is free in the
+        # cost model, but the breakdown surfaces the call count so
+        # operators see fallback burn even if the dollars stay at 0.
+        if getattr(self, "budget", None) is not None:
+            self.budget.record("defillama")
         # Any HTTP failure is a miss — the calling layer falls
         # through to "no price".
         if resp.status_code >= 400:

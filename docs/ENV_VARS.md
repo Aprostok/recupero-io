@@ -75,6 +75,7 @@ their own section.
 | `RECUPERO_INVESTIGATOR_PHONE` | unset | str | phone | v0.20.0 | Optional operator phone number. |
 | `RECUPERO_DESTINATION_DUST_USD` | `1000.00` | Decimal | `>= 0`, finite | v0.20.x | See "dust / CEX-continuity". |
 | `RECUPERO_AI_MAX_USD_PER_CALL` | `2.00` | Decimal | `> 0` | v0.17.8 | Per-call USD ceiling on AI editorial calls; `0` disables (logged WARN). |
+| `RECUPERO_API_BUDGET_USD_PER_CASE` | `0.50` | Decimal | `[0.01, 100.0]`, finite | v0.32 | Per-case API spend cap across all providers. Setting to `0` disables tracking. Tier-1 gap #4 — closes the "one whale case burns the day's free tier" failure mode. |
 | `RECUPERO_P_ANY_CALIBRATION_JSON` | unset | JSON | object | v0.21.x | Override default p_any calibration constants (recovery scorer). |
 | `RECUPERO_PRICING_FALLBACK` | `defillama` | str | `defillama` / `none` | v0.31.5 | Secondary historical-price provider. `none` disables the fallback chain (CoinGecko only). |
 | **Worker / scheduler** | | | | | |
@@ -90,12 +91,18 @@ their own section.
 | `RECUPERO_WALLET_TRACE_LOOKBACK_DAYS` | (see pipeline default) | int | `>= 1` | v0.20.x | Per-chain wallet-trace lookback window. |
 | `RECUPERO_BLOCK_TAG` | `finalized` | str | `finalized/latest/safe` | v0.19.x | EVM eth_call block tag for current-balance snapshots. |
 | `RECUPERO_DATA_DIR` | `./data` | path | writable dir | v0.31.4 | Data-output root for the cron scheduler's stale-label report and any other on-disk artifacts. Defaults to the working directory's `./data` when unset. |
+| `RECUPERO_CRON_ALERT_WEBHOOK_URL` | unset | str | URL | v0.32 | Slack-shape webhook URL the cron scheduler POSTs to when a job hits `consecutive_failures >= 2`. Unset → silent (operators still see /cron/healthz). Accepts Discord/PagerDuty/OpsGenie that consume the same payload shape. |
+| `RECUPERO_CRON_LEASE_SECONDS` | `300` | int | `> 0` | v0.32 | Postgres lock lease duration for cron leader election. Way longer than any expected job runtime; raising past 600 risks a dead replica hogging a job after SIGKILL until the lease expires. |
+| `RECUPERO_CRON_HEALTHZ_STALE_HOURS` | `25` | float | `> 0`, finite | v0.32 | Hours since `last_success_utc` before /cron/healthz marks a job "stale" (degraded). Default 25 gives the 24h jobs a 1h grace window. >168h is hard-down regardless. |
+| `RECUPERO_LABEL_AUTO_INGEST_DAILY_CAP` | `100` | int | `[1, 10000]` | v0.32 | Max number of candidate labels the daily auto-ingest cron will persist per run. Hard cap protects the operator review queue from upstream tag-API flushes. |
+| `RECUPERO_LABEL_DECAY_DAYS` | `180` | int | `[1, 3650]` | v0.32 | Confidence-decay window (days). A `high` label un-refreshed for this many days is effectively `medium` at lookup time; one tier per window, floored at `low`. Stored value never mutates. |
 | **Watch / monitor / digest cron** | | | | | |
 | `RECUPERO_WATCH_DELTA_USD_THRESHOLD` | `100` | Decimal | `>= 0` | v0.16.x | Min USD delta between snapshots to record as a material change. |
 | `RECUPERO_WATCH_MIN_INTERVAL_SEC` | `43200` (12h) | int | `>= 0` | v0.16.x | Cooldown between snapshots of the same standard-tier wallet. |
 | `RECUPERO_WATCH_HOT_INTERVAL_SEC` | `3600` (1h) | int | `>= 0` | v0.16.x | Cooldown for hot-tier wallets. |
 | `RECUPERO_WATCH_PARALLELISM` | `4` | int | `>= 1` | v0.16.x | Per-chain thread-pool size for the watch tick. |
 | `RECUPERO_STALE_REVIEW_THRESHOLD_HOURS` | `24` | int | `>= 0` | v0.16.x | Hours after which a `status=awaiting_review` row surfaces on the dashboard. |
+| `RECUPERO_REVIEW_SLA_HOURS` | `24` | int | `[1, 720]` | v0.32 | SLA hours after which an `awaiting_review` brief is flagged overdue by the hourly review-SLA cron job. Falls back to 24h on parse failure / out-of-range. |
 | `RECUPERO_STALE_ENGAGEMENT_THRESHOLD_DAYS` | `30` | int | `>= 0` | v0.21.x | Days after which an unclosed engagement surfaces as overdue. |
 | `RECUPERO_MONITOR_MAX_SUBS_PER_TICK` | `50` | int | `> 0` | v0.27.x | Subscription rows polled per monitor tick. |
 | `RECUPERO_MONITOR_MAX_ACTIVITY_PER_SUB` | `25` | int | `> 0` | v0.27.x | Activity events evaluated per subscription per tick. |
@@ -358,6 +365,38 @@ picks up new values without a worker restart.
 Per-call USD ceiling on AI editorial calls. Default $2.00. Set to 0
 to disable (logged as WARN — runaway retries will burn real budget).
 
+#### `RECUPERO_API_BUDGET_USD_PER_CASE`
+
+v0.32 (Tier-1 gap #4 from `docs/WHY_RECUPERO_WOULD_FAIL.md` §1.4).
+Per-case API spend cap across all upstream providers (Etherscan,
+Helius, TronGrid, Alchemy, CoinGecko, DeFiLlama). Read at the top of
+the tracer (`src/recupero/observability/api_budget.py`,
+`src/recupero/trace/tracer.py`). Default $0.50, clamped to
+`[$0.01, $100.0]`.
+
+The cost model is pessimistic by design — each provider's per-call
+cost is rounded UP to the nearest order of magnitude so we cap
+BEFORE real overage charges hit. See `_COST_MODEL` in
+`api_budget.py` for the exact figures.
+
+When the cap is exceeded, the next adapter call raises
+`BudgetExceededError`. The tracer catches that and marks the case
+`trace_status=partial_budget_hit` with the per-provider breakdown
+recorded under `case.config_used["api_budget"]`. The brief renders a
+"trace incomplete — budget exhausted" banner (same shape as the
+deadline-hit path).
+
+* **Failure modes:** non-finite (NaN / Inf), non-numeric, or
+  out-of-range values reject with a WARN and fall back to default
+  $0.50. Negative values are rejected loud. Zero is honored as
+  "disable tracking" without a warning — it's the documented
+  test / CLI escape hatch.
+* **When to override:** raise to $2.00-$5.00 for whale-case
+  diagnostic runs where deep BFS is worth the spend; lower to
+  $0.10 for quick exploratory runs that shouldn't ever hit the
+  paid tier. Set to `0` in test scaffolding and one-off CLI runs
+  where the cap would just add noise.
+
 #### `RECUPERO_P_ANY_CALIBRATION_JSON`
 
 JSON object overriding the documented `p_any` calibration constants
@@ -400,6 +439,76 @@ so the stale-label report survives container restarts.
 Routed through `_common.atomic_write_text`, which honors the v0.31.3
 `is_link_like` guard — junctions and symlinks at the output path are
 rejected loud rather than silently dereferenced.
+
+#### `RECUPERO_CRON_ALERT_WEBHOOK_URL`
+
+v0.32 (Tier-1 gap #3 from `docs/WHY_RECUPERO_WOULD_FAIL.md` §1.3).
+Slack-shape incoming-webhook URL the cron scheduler POSTs to when a
+job's `consecutive_failures` counter (tracked in
+`public.cron_jobs_lock`) reaches 2 or more. The payload is a generic
+`text` + `attachments[].fields[]` shape that Discord, PagerDuty, and
+OpsGenie incoming webhooks also accept verbatim.
+
+* **Failure modes:** unset → no webhook is fired; failures are still
+  journaled in `cron_jobs_lock` and surfaced by `/cron/healthz`. A
+  bad URL (DNS failure / 5xx / timeout) logs a WARN and is otherwise
+  silent — the alerting mechanism must never crash the scheduler.
+* **What we DON'T send:** the payload runs through `_safe_error_text`
+  which scrubs `postgres://user:pass@host` credentials and any
+  `api_key=…` / `token=…` / `bearer …` token-shaped substrings.
+
+#### `RECUPERO_CRON_LEASE_SECONDS`
+
+v0.32 cron HA. How long the leader holds the lock on a job_name row
+in `public.cron_jobs_lock` before a peer can steal it via the
+expiry path. Default 300s — well above the longest expected
+single-job runtime (OFAC sync, ~60s). Setting it too low risks two
+replicas firing the same job back-to-back; too high makes a dead
+leader hold the job for longer than necessary.
+
+* **Failure modes:** non-int / <= 0 → fall back to 300 with a WARN.
+
+#### `RECUPERO_CRON_HEALTHZ_STALE_HOURS`
+
+v0.32 cron HA. Hours since `last_success_utc` before
+`GET /cron/healthz` flips a job's `status` from `"ok"` to `"stale"`.
+Default 25 — gives the 24h daily jobs a 1h grace window past their
+expected cadence. Jobs > 168h fresh are reported `"down"`
+regardless.
+
+* **Failure modes:** non-finite / <= 0 → fall back to 25 with a WARN.
+* **When to override:** lower to ~12 for ops teams running every job
+  every 6h who want a tight alarm window; raise past 168 only for
+  jobs that legitimately run weekly with no grace expected.
+
+#### `RECUPERO_LABEL_AUTO_INGEST_DAILY_CAP`
+
+v0.32 (Tier-1 gaps #1 + #2 from `docs/WHY_RECUPERO_WOULD_FAIL.md`
+§1.1 + §1.2). Maximum number of candidate labels persisted per daily
+auto-ingest run by the `recupero-cron` `label_auto_ingest` job. The
+cap is applied AFTER de-duplication so already-reviewed addresses
+don't waste the budget.
+
+* **Failure modes:** non-int / out-of-range → fall back to 100 with a
+  WARN.
+* **When to override:** raise when an operator is actively burning
+  down a backlog (250 is sane); lower to 25 if a fresh deploy needs a
+  smaller review surface while the team gets used to the workflow.
+
+#### `RECUPERO_LABEL_DECAY_DAYS`
+
+v0.32 (Tier-1 gap #2). Confidence-decay window in days. A label with
+`stored confidence='high'` that hasn't been refreshed for this many
+days is reported by `LabelStore.lookup` with effective
+`confidence='medium'`; another window → `low`; floor at `low`. The
+seed file is NEVER mutated — decay happens at lookup time so the
+operator's git diffs stay quiet.
+
+* **Failure modes:** non-int / out-of-range → fall back to 180 with a
+  WARN.
+* **When to override:** lower to 90 in high-rotation environments
+  where CEX hot wallets cycle quarterly; raise past 365 if your seed
+  file is hand-curated weekly and the decay is just noise.
 
 #### `RECUPERO_HEARTBEAT_INTERVAL_SEC`, `RECUPERO_STALE_AFTER_SEC`, `RECUPERO_POLL_IDLE_SEC`, `RECUPERO_POLL_MAX_SEC`
 

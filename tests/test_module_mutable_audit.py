@@ -71,6 +71,14 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("api/auth.py", "_buckets"):
         "lock-guarded by _buckets_lock",
 
+    # v0.32 monitoring/recovery_rate.py: 60-second cache of the
+    # RecoveryStats computation. Read-modify-write is fine
+    # best-effort — a race produces at most one extra DB query
+    # per cache window (60s). The cached value is immutable
+    # once stored. Never crashes on race.
+    ("monitoring/recovery_rate.py", "_CACHE"):
+        "best-effort 60s memoization; race at most causes 1 redundant query",
+
     # api/auth.py: parsed RECUPERO_API_KEYS map.
     # Guarded by `_keys_cache_lock` on every clear/update.
     ("api/auth.py", "_keys_cache"):

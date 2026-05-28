@@ -116,7 +116,13 @@ class LabelStore:
         if point_in_time is None:
             # Default: current-state semantics, every existing caller
             # gets the same behavior they had before v0.31.2.
-            return label
+            # v0.32 (Tier-1 gap #2 — CEX hot-wallet rotation): the
+            # EFFECTIVE confidence is decayed when added_at is old and
+            # the label hasn't been refreshed. Stored value stays
+            # intact so a brief can render "original=high, effective=
+            # medium". The returned Label is a copy with the decayed
+            # confidence.
+            return _decayed_copy(label)
 
         # Point-in-time filtering. Compare via _coerce_aware_utc so a
         # naive `point_in_time` doesn't crash against the timezone-aware
@@ -136,7 +142,11 @@ class LabelStore:
             if vu is not None and pit is not None and vu < pit:
                 # Already expired at point_in_time.
                 return None
-        return label
+        # v0.32: apply confidence decay even on point-in-time lookups —
+        # the policy is "this label, as of now, is worth this much"
+        # and the same logic applies whether the request is current-
+        # state or historical.
+        return _decayed_copy(label, now=pit)
 
     def add(self, label: Label) -> None:
         # Try checksum (EVM); if that fails it's a non-EVM address and we
@@ -240,6 +250,38 @@ def _parse_dt_optional(s: str | None) -> datetime | None:
         # rather than crashing the whole load. Already-failing labels
         # get logged + skipped at the outer try/except in _load_file.
         return None
+
+
+def _decayed_copy(label: Label | None, *, now: datetime | None = None) -> Label | None:
+    """Return a Label whose ``confidence`` reflects the v0.32
+    confidence-decay policy.
+
+    Pure: the input is never mutated, the returned object is either
+    the same label (no decay applied) or a Pydantic ``model_copy``
+    with the new confidence. ``None`` in → ``None`` out so callers can
+    chain without a separate None-check.
+    """
+    if label is None:
+        return None
+    try:
+        from recupero.labels.confidence_decay import apply_decay_to_label
+    except Exception:  # noqa: BLE001
+        # If the decay module can't be imported (test scaffolding /
+        # circular import), pass the label through unchanged — decay
+        # must never break a lookup.
+        return label
+    if now is None:
+        now = datetime.now(UTC)
+    try:
+        effective = apply_decay_to_label(label, now=now)
+    except Exception:  # noqa: BLE001
+        return label
+    if effective == label.confidence or effective not in ("high", "medium", "low"):
+        return label
+    try:
+        return label.model_copy(update={"confidence": effective})
+    except Exception:  # noqa: BLE001
+        return label
 
 
 def _coerce_aware_utc(dt: datetime | None) -> datetime | None:

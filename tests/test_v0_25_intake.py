@@ -38,6 +38,9 @@ def _good_form(**overrides) -> dict:
         "incident_date": "2026-05-01",
         "description": "Phishing site drained my wallet on May 1.",
         "country": "United States",
+        # v0.32 Tier-0 gap #2: recovery-rate disclosure ack is now
+        # a required checkbox on POST /v1/intake.
+        "acknowledge_disclosure": "yes",
     }
     form.update(overrides)
     return form
@@ -218,6 +221,14 @@ def intake_client(monkeypatch):
         "RECUPERO_STRIPE_DIAGNOSTIC_PAYMENT_LINK",
         "https://buy.stripe.com/test_diagnostic_link",
     )
+    # Reset the IP rate-limiter bucket so adjacent test files (v0.32
+    # added a second intake test suite) don't blow our budget.
+    try:
+        from recupero.api import app as _api_app
+        if hasattr(_api_app, "_intake_rl_state"):
+            _api_app._intake_rl_state.clear()
+    except Exception:  # noqa: BLE001
+        pass
     # Disable auth optionalness — intake routes are public anyway.
     from recupero.api.app import app
     return TestClient(app, follow_redirects=False)

@@ -340,6 +340,17 @@ def send_email(
     preview_text: str | None = None,
     sent_by: str = "worker:auto",
     dsn: str | None = None,
+    # v0.32 — Tier-0 gap #1 mandatory human-review gate inputs.
+    # Pass a case_id + the on-disk artifact path that this email is
+    # delivering and the LAST-GATE check refuses to send unless an
+    # approved (or audited-override) brief_reviews row exists for the
+    # artifact's exact SHA-256. None/None skips the gate so internal
+    # ops emails (digest summaries, audit notifications) that don't
+    # carry a case artifact still flow. Local-dev without a DSN also
+    # skips the gate (the gate logs WARN and returns).
+    review_case_id: UUID | str | None = None,
+    review_artifact_kind: str | None = None,
+    review_artifact_path: Path | None = None,
 ) -> EmailResult:
     """Send one email via Resend. Logs the attempt to emails_sent
     regardless of outcome.
@@ -352,6 +363,16 @@ def send_email(
     base64-encoded and attached. Resend's REST API caps total
     message size around 40MB — caller should filter to the
     intended attachments before calling.
+
+    Tier-0 review gate (v0.32): when ``review_case_id``,
+    ``review_artifact_kind``, AND ``review_artifact_path`` are all
+    supplied, the LAST gate before send is a call to
+    ``recupero.dispatcher.require_review_approved``. If no approved
+    review row matches the artifact's SHA-256, the send is REFUSED
+    and ``BriefNotReviewedError`` propagates (the EmailResult never
+    materializes — the caller gets the exception).  Local dev
+    without ``SUPABASE_DB_URL`` skips the gate with a WARN log so
+    test runs aren't blocked.
     """
     # Adversarial-input guard. Run BEFORE the disable switch /
     # API-key check so the caller gets a consistent rejection
@@ -389,6 +410,29 @@ def send_email(
         cc = [a for a in cc if _validate_email_address(a)]
     if bcc is not None:
         bcc = [a for a in bcc if _validate_email_address(a)]
+
+    # v0.32 Tier-0 gap #1 — MANDATORY HUMAN REVIEW GATE.
+    #
+    # This is the LAST gate before the artifact leaves the system.
+    # By contract the dispatcher refuses the send unless an approved
+    # (or audited-override) brief_reviews row exists for the artifact's
+    # exact SHA-256. The gate raises BriefNotReviewedError on refusal,
+    # which propagates up to the caller — DO NOT catch it here.
+    # Internal-ops emails (digest summary etc.) without a case
+    # artifact pass review_artifact_path=None and bypass the gate.
+    # Local dev without a DSN also short-circuits inside the gate.
+    if (
+        review_case_id is not None
+        and review_artifact_kind is not None
+        and review_artifact_path is not None
+    ):
+        from recupero.dispatcher import require_review_approved
+        require_review_approved(
+            case_id=review_case_id,
+            artifact_kind=review_artifact_kind,
+            artifact_path=review_artifact_path,
+            dsn=dsn,
+        )
 
     # Honor the disable switch for local dev / testing.
     # v0.16.10 (round-9 worker LOW): accept any truthy variant

@@ -29,12 +29,18 @@ v0.31.0 EXTENDS the detector to recognize three additional shapes:
     cross-check so we don't false-positive on coincidental 5×5
     structures.
 
-  * Mercury Layer (statechain) — DEFERRED. Mercury is fundamentally
-    off-chain: the on-chain `state_init` / `state_withdraw` txs are
-    plain 1-in / 1-out P2TR with no tx-shape signal. Detection
-    requires the Mercury statechain entity's (SE) database — which
-    is private to the SE operator — so we cannot detect Mercury
-    from on-chain data alone. See `docs/V031_COINJOIN_EXPANSION.md`
+  * Mercury Layer (statechain) — v0.31.5 adds HEURISTIC pattern
+    detection. Full unwrap is still infeasible (the Statechain
+    Entity's transition graph is private to the SE operator), but
+    the on-chain SHAPE is distinctive: 1-input / 1-output, both
+    P2TR (witness v1), output value = input value minus a small
+    fixed SE fee (typically 100-2000 sats). We flag matching txs
+    as "possible Mercury Layer statechain operation" with a
+    medium-confidence (0.55) signal on shape alone, raised to high
+    confidence (0.85) when the input address matches a curated
+    list of known SE addresses. The forensic note tells the
+    investigator to query the SE operator directly for the actual
+    state-transition recipient. See `docs/V031_COINJOIN_EXPANSION.md`
     for the full rationale.
 
 How CoinJoin works (briefly)
@@ -185,17 +191,32 @@ _WHIRLPOOL_DENOM_TOLERANCE_SATS = 1
 
 @dataclass(frozen=True)
 class UTXOInput:
-    """One input to a CoinJoin tx."""
+    """One input to a CoinJoin tx.
+
+    ``script_hex`` (v0.31.5) is the lowercase-hex serialized
+    scriptPubKey of the *prevout* this input spends. It is OPTIONAL
+    so legacy callers (which only carry address+value) keep working.
+    The Mercury Layer detector consults this field to recognize
+    P2TR (witness v1, prefix ``5120`` + 32-byte program). Other
+    detectors do not read it.
+    """
     address: str
     value_sats: int
+    script_hex: str | None = None
 
 
 @dataclass(frozen=True)
 class UTXOOutput:
-    """One output of a CoinJoin tx."""
+    """One output of a CoinJoin tx.
+
+    ``script_hex`` (v0.31.5) is the lowercase-hex serialized
+    scriptPubKey, optional for the same back-compat reason as
+    :class:`UTXOInput`.
+    """
     address: str
     value_sats: int
     output_index: int
+    script_hex: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,7 +258,38 @@ PROTOCOL_WASABI_1 = "wasabi_1"
 PROTOCOL_WASABI_2 = "wasabi_2"
 PROTOCOL_WHIRLPOOL = "whirlpool"
 PROTOCOL_JOINMARKET = "joinmarket"
+PROTOCOL_MERCURY_LAYER = "mercury_layer"
 PROTOCOL_UNKNOWN = "unknown"
+
+
+# --- v0.31.5 Mercury Layer constants --- #
+#
+# Mercury Layer (CommerceBlock) is a Bitcoin statechain. State
+# transitions happen OFF-CHAIN; the only on-chain events are
+# `state_init` (deposit into the statechain) and `state_withdraw`
+# (exit). Both are 1-input/1-output P2TR txs with a small fee paid
+# to the Statechain Entity (SE) operator. The pattern is shape-only;
+# full unwrap requires the SE operator's private database.
+#
+# Curated set of historically-observed Mercury Layer SE addresses.
+# Populating this set raises detection confidence from 0.55 to 0.85
+# on a shape match. The set is intentionally empty in the shipped
+# build — operators / future PRs can extend it (env var or seeded
+# file) without code changes. Shape detection works without it.
+_MERCURY_KNOWN_SE_INPUTS: frozenset[str] = frozenset()
+
+# Mercury SE fee range. The operator typically charges between
+# 100 and 2000 sats; below 100 sats the difference is consistent
+# with miner-only fees on a tiny P2TR transfer (not Mercury), and
+# above 2000 sats it's outside observed mainnet behavior and more
+# likely a regular P2TR send with a generous fee.
+_MERCURY_FEE_RANGE_SATS: tuple[int, int] = (100, 2000)
+
+# P2TR (witness v1) scriptPubKey signature: ``OP_1`` (0x51) followed
+# by a 32-byte push (0x20). Total serialized length is therefore
+# 1 + 1 + 32 = 34 bytes = 68 hex chars.
+_P2TR_SCRIPT_PREFIX = "5120"
+_P2TR_SCRIPT_HEX_LEN = 68
 
 
 @dataclass(frozen=True)
@@ -437,6 +489,79 @@ def _is_wasabi2_wabisabi(
     return True
 
 
+def _is_p2tr_script(script_hex: str | None) -> bool:
+    """True iff ``script_hex`` looks like a P2TR (taproot) scriptPubKey.
+
+    P2TR outputs serialize as ``OP_1`` (0x51) followed by ``OP_PUSHBYTES_32``
+    (0x20) and a 32-byte x-only pubkey — total 34 bytes = 68 hex chars,
+    prefixed by ``5120``. We tolerate uppercase hex and leading/trailing
+    whitespace. ``None`` and empty string return ``False`` so callers
+    that lack script-level data simply opt out of the detector.
+    """
+    if not script_hex:
+        return False
+    s = script_hex.lower().strip()
+    if not s.startswith(_P2TR_SCRIPT_PREFIX):
+        return False
+    return len(s) == _P2TR_SCRIPT_HEX_LEN
+
+
+def _is_mercury_layer(
+    inputs: list[UTXOInput],
+    outputs: list[UTXOOutput],
+) -> tuple[bool, int | None, bool]:
+    """Heuristic Mercury Layer (statechain) detector.
+
+    A Mercury Layer `state_init` / `state_withdraw` transaction has a
+    very specific on-chain shape:
+
+      * exactly 1 input, 1 output
+      * BOTH the spent input prevout AND the new output are P2TR
+        (witness v1 / Taproot)
+      * output_value = input_value - small_SE_fee, with the fee
+        falling in :data:`_MERCURY_FEE_RANGE_SATS` (100..2000 sats)
+
+    This SHAPE alone is enough to flag the tx with medium confidence
+    (0.55). If the input address is in :data:`_MERCURY_KNOWN_SE_INPUTS`
+    we raise confidence to 0.85 — that's the SE operator's well-known
+    address acting as the prevout.
+
+    Returns
+    -------
+    ``(matched, se_fee_sats, known_se_address)`` — a 3-tuple. The
+    fee is ``None`` when ``matched`` is ``False``. ``known_se_address``
+    is always a ``bool``.
+
+    Note
+    ----
+    This is HEURISTIC. Plain P2TR-to-P2TR transfers between two
+    Taproot wallets with a 100-2000 sat miner fee will also match
+    the shape. That is acceptable — the forensic note generated by
+    :func:`detect_coinjoin` clearly says "possible Mercury Layer"
+    and tells the operator to verify with the SE database. False
+    positives are visible and falsifiable; false negatives (missing
+    a real Mercury hop) silently break trace integrity, so we err
+    toward flagging.
+    """
+    if len(inputs) != 1 or len(outputs) != 1:
+        return False, None, False
+    inp = inputs[0]
+    out = outputs[0]
+    # Both sides must be P2TR. We use getattr+default so a UTXOInput
+    # constructed positionally (pre-v0.31.5 caller) returns None and
+    # cleanly fails the script check rather than AttributeError.
+    if not _is_p2tr_script(getattr(inp, "script_hex", None)):
+        return False, None, False
+    if not _is_p2tr_script(getattr(out, "script_hex", None)):
+        return False, None, False
+    fee = inp.value_sats - out.value_sats
+    fee_min, fee_max = _MERCURY_FEE_RANGE_SATS
+    if not (fee_min <= fee <= fee_max):
+        return False, None, False
+    known = inp.address in _MERCURY_KNOWN_SE_INPUTS
+    return True, fee, known
+
+
 def detect_coinjoin(
     *,
     tx_hash: str,
@@ -529,6 +654,43 @@ def detect_coinjoin(
                 "boundary: flag the hop, surface in the brief, and "
                 "recommend operator manual review with off-chain "
                 "exchange/coordinator subpoena if available."
+            ),
+            most_likely_output=None,
+        )
+
+    # 4. Mercury Layer statechain — 1-in/1-out P2TR with SE fee.
+    # Checked last because the shape (1/1) is the cheapest to test
+    # and the most likely to false-positive on ordinary P2TR sends;
+    # we want the more-distinctive multi-party shapes above to win
+    # whenever they could plausibly match (they can't on a 1/1 tx,
+    # but the ordering documents the precedence).
+    mercury_ok, se_fee, known_se = _is_mercury_layer(inputs, outputs)
+    if mercury_ok:
+        confidence = 0.85 if known_se else 0.55
+        if known_se:
+            confidence_note = (
+                "Source is a known Mercury Layer SE address "
+                "(high confidence). "
+            )
+        else:
+            confidence_note = (
+                "Shape match without SE-address confirmation "
+                "(medium confidence). "
+            )
+        return CoinjoinDetection(
+            protocol=PROTOCOL_MERCURY_LAYER,
+            input_address=input_address,
+            tx_hash=tx_hash,
+            all_outputs=all_outputs_t,
+            confidence=confidence,
+            forensic_note=(
+                f"Possible Mercury Layer statechain operation: "
+                f"1-in/1-out P2TR with {se_fee}-sat SE fee. "
+                + confidence_note
+                + "Full unwrap requires the SE operator's private "
+                "database; investigator should query the SE "
+                "operator (CommerceBlock) directly to identify "
+                "the post-transition beneficial owner."
             ),
             most_likely_output=None,
         )
@@ -838,6 +1000,7 @@ __all__ = (
     "PROTOCOL_WASABI_2",
     "PROTOCOL_WHIRLPOOL",
     "PROTOCOL_JOINMARKET",
+    "PROTOCOL_MERCURY_LAYER",
     "PROTOCOL_UNKNOWN",
     "detect_round_amounts",
     "classify_coinjoin_pattern",

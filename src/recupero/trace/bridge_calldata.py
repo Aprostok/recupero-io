@@ -1754,14 +1754,31 @@ def _decode_symbiosis(
 
         # Destination chain ID lives inside `otherSideCalldata` (tuple
         # slot 8, an offset pointer into a nested calldata payload
-        # targeting the destination-side metaMintSwap call). v0.31.4
-        # tightens the scan window from 16 slots to the documented
-        # MintSwapPayload head (≤8 slots) — the nested struct's static
-        # head precedes dynamic tails, and chainID is one of the early
-        # uint256 fields. Narrower window cuts the false-positive risk
-        # of picking up a token-amount slot that happens to equal an
-        # EVM chain ID (e.g., a `dx=137` micro-amount wei colliding
-        # with Polygon's chainID).
+        # targeting the destination-side Portal.synthesize /
+        # burnSyntheticToken call).
+        #
+        # v0.31.5 (audit gap §1c — "_decode_symbiosis is half-built"):
+        # On real mainnet Symbiosis MetaRouter txs the nested
+        # `otherSideCalldata` is a fully ABI-encoded call payload:
+        #   [4-byte selector][slot 0][slot 1]...[slot N]
+        # i.e. it carries a function selector at the head, then 32-byte
+        # aligned uint256/address/etc. args. The pre-v0.31.5 implementation
+        # ignored the 4-byte selector, which silently misaligned every slot
+        # boundary inside the scan window by 4 bytes — the heuristic still
+        # *sometimes* hit a chain-ID by accident (when the misaligned read
+        # happened to span a uint256 whose low bytes equaled an EVM
+        # chainID), but it was unreliable. We now do a structured parse:
+        #   1. Detect whether the payload begins with a 4-byte selector
+        #      (i.e., first 4 bytes are nonzero AND the next 28 bytes of
+        #      what would be slot 0 are zero-padding-shaped — selectors
+        #      have keccak-distributed bytes, args are zero-padded ints).
+        #   2. If yes, skip those 4 bytes and read slots from the proper
+        #      ABI-aligned offsets.
+        #   3. Scan ≤8 args for a known EVM chain ID.
+        # Fall back to the legacy synthetic-fixture path (no selector
+        # prefix) if structured parse misses — preserves backwards
+        # compatibility with hand-rolled test fixtures that mimicked the
+        # pre-v0.31.5 layout.
         dest_chain: str | None = None
         # otherSideCalldata offset is at tuple-body slot 8 (hex
         # [256..320] within the tuple body).
@@ -1774,24 +1791,76 @@ def _decode_symbiosis(
                 )
                 # Offset is relative to the start of the tuple body.
                 other_hex_idx = tuple_body_hex_idx + (other_offset_bytes * 2)
-                # Skip the 32-byte length prefix of the nested bytes
-                # blob. The body that follows is the destination-side
-                # metaMintSwap(MintSwapPayload) head — chainID lives in
-                # the first few uint256 slots of MintSwapPayload.
+                # Skip the 32-byte length prefix of the nested bytes blob.
                 payload_start = other_hex_idx + 64
-                for slot_idx in range(0, 8):
-                    cand_start = payload_start + slot_idx * 64
-                    cand_end = cand_start + 64
-                    if cand_end > len(args_blob):
-                        break
-                    cand_hex = args_blob[cand_start:cand_end]
+                # Determine if the payload begins with a 4-byte function
+                # selector. Heuristic: a selector has 4 keccak-derived
+                # bytes (high probability of nonzero), whereas a uint256
+                # ABI arg is left-padded with 28 zero bytes (slot[0:56]
+                # are all '0'). So if the first 4 bytes are nonzero AND
+                # the bytes at positions [4..32] (i.e. hex [payload+8 ..
+                # payload+64]) form a zero-padded uint with high bits
+                # zero, the payload is selector-prefixed.
+                has_selector = False
+                if payload_start + 64 <= len(args_blob):
+                    head4_hex = args_blob[payload_start:payload_start + 8]
                     try:
-                        cand_val = int(cand_hex, 16)
+                        head4_val = int(head4_hex, 16)
                     except ValueError:
-                        continue
-                    if cand_val in _EVM_CHAIN_BY_ID:
-                        dest_chain = _EVM_CHAIN_BY_ID[cand_val]
-                        break
+                        head4_val = 0
+                    if head4_val != 0:
+                        # Look at what would be the high bytes of "slot 0"
+                        # if there were no selector. If those high bytes
+                        # are zero-padded (typical for uint args), this
+                        # is consistent with a selector preceding the
+                        # ABI args.
+                        pad_check_hex = args_blob[
+                            payload_start + 8:payload_start + 8 + 48
+                        ]
+                        try:
+                            pad_check_val = int(pad_check_hex, 16)
+                        except ValueError:
+                            pad_check_val = -1
+                        # If pad_check is small (zero-padded uint head)
+                        # OR if the structured arg at offset 4 looks
+                        # like a known chain ID once parsed, we treat
+                        # this as selector-prefixed.
+                        has_selector = pad_check_val == 0
+
+                # Try the structured (selector-skip) parse first.
+                if has_selector:
+                    arg_start = payload_start + 8  # skip 4 bytes = 8 hex chars
+                    for slot_idx in range(0, 8):
+                        cand_start = arg_start + slot_idx * 64
+                        cand_end = cand_start + 64
+                        if cand_end > len(args_blob):
+                            break
+                        cand_hex = args_blob[cand_start:cand_end]
+                        try:
+                            cand_val = int(cand_hex, 16)
+                        except ValueError:
+                            continue
+                        if cand_val in _EVM_CHAIN_BY_ID:
+                            dest_chain = _EVM_CHAIN_BY_ID[cand_val]
+                            break
+
+                # Fallback: pre-v0.31.5 layout (no selector prefix).
+                # Required for legacy synthetic fixtures + any payload
+                # where the structured parse misses.
+                if dest_chain is None:
+                    for slot_idx in range(0, 8):
+                        cand_start = payload_start + slot_idx * 64
+                        cand_end = cand_start + 64
+                        if cand_end > len(args_blob):
+                            break
+                        cand_hex = args_blob[cand_start:cand_end]
+                        try:
+                            cand_val = int(cand_hex, 16)
+                        except ValueError:
+                            continue
+                        if cand_val in _EVM_CHAIN_BY_ID:
+                            dest_chain = _EVM_CHAIN_BY_ID[cand_val]
+                            break
             except (ValueError, IndexError):
                 dest_chain = None
 

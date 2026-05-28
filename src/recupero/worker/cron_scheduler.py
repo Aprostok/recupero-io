@@ -115,18 +115,24 @@ def _next_weekly(weekday: int, hour_utc: int, minute_utc: int = 0) -> Callable[[
 
 
 def _job_ofac_sync() -> None:
-    """Refresh OFAC sanctions data."""
+    """Refresh OFAC sanctions data.
+
+    v0.31.5: calls ``sync_ofac_sdn(strict=True)`` directly so any
+    failure (network unreachable, parse error, write failure) raises
+    ``OFACSyncError``. The scheduler's per-job ``except Exception``
+    then logs at ERROR level + records the failure — operators see
+    a loud signal instead of a silently-stale sanctions DB.
+
+    The CLI ``recupero-ops ofac-sync`` retains its legacy "print +
+    exit-code" contract for interactive operator use; the cron path
+    needs raise-on-fail so monitoring can act."""
     log.info("cron: running OFAC sync")
-    from recupero.ops.commands import ofac_sync_cmd
-    # The command has its own main() / __main__; call the function form.
-    if hasattr(ofac_sync_cmd, "run"):
-        ofac_sync_cmd.run()
-    elif hasattr(ofac_sync_cmd, "main"):
-        ofac_sync_cmd.main()
-    else:
-        # Fallback — invoke the module's CLI entry.
-        import runpy
-        runpy.run_module("recupero.ops.commands.ofac_sync_cmd", run_name="__main__")
+    from recupero.trace.ofac_sync import sync_ofac_sdn
+    result = sync_ofac_sdn(strict=True)
+    log.info(
+        "cron: OFAC sync ok — %d live entries, fetched_at=%s",
+        result.entries_written, result.fetched_at,
+    )
 
 
 def _job_retrace_backfill() -> None:

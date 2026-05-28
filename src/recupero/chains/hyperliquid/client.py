@@ -22,11 +22,13 @@ from the Transfer abstraction. Callers use it to produce case files directly.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
+from functools import lru_cache
 from typing import Any
 
 import httpx
@@ -223,6 +225,163 @@ class HyperliquidClient:
         if not isinstance(data, list):
             raise HyperliquidError(f"Unexpected Hyperliquid response: {data}")
         return data
+
+
+# ---------- v0.31.5: best-effort destination resolution ---------- #
+#
+# When the primary ledger fetch path emits ``destination=None`` (the field is
+# missing from the API response we observed), the scraper emits a synthetic
+# placeholder ``hyperliquid:unknown_destination`` that the BFS treats as a
+# dead-end. That's forensically correct given we couldn't resolve it — but
+# it means EVERY missing-destination event becomes a lost trace.
+#
+# This module exposes a best-effort resolver. It re-queries the
+# userNonFundingLedgerUpdates info endpoint for ``user`` and looks for a
+# row within ±10 minutes of the event's ``block_time`` that carries a
+# ``destination`` field. If found and the value passes a strict 0x-hex
+# shape check, we return it; otherwise None.
+#
+# Defensive contract — failures NEVER raise:
+#   * httpx errors → None (scraper falls back to placeholder)
+#   * Malformed JSON → None
+#   * Returned value not a proper 0x-hex address → None
+#   * Process-level 1 rps rate limit so a 50-event scrape can't DoS the API
+#   * 5s timeout per call
+#   * LRU(256) cache keyed on (user, block_time_iso) — re-runs of the
+#     same trace don't hammer the API
+#
+# Important: ``_is_synthetic_placeholder`` semantics are UNCHANGED — once a
+# placeholder is emitted, the BFS still treats it as terminal. We just emit
+# fewer of them.
+
+
+_RESOLUTION_WINDOW_MS = 10 * 60 * 1000  # ±10 minutes
+_RESOLVE_TIMEOUT_S = 5.0
+_RESOLVE_LIMITER = _RateLimiter(rps=1.0)
+_HEX_ADDRESS_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
+
+
+def _is_hex_address(value: Any) -> bool:
+    """Strict 0x-hex EVM address shape check.
+
+    Hyperliquid bridge destinations land on Arbitrum, so the value
+    is expected to be a standard 20-byte EVM address. Any other
+    shape — non-string, missing 0x, wrong length, non-hex chars,
+    a Recupero-internal sentinel like ``hyperliquid:...`` — fails.
+    """
+    if not isinstance(value, str):
+        return False
+    return bool(_HEX_ADDRESS_RE.match(value))
+
+
+@lru_cache(maxsize=256)
+def _resolve_unknown_destination_cached(
+    user_address: str,
+    block_time_iso: str,
+) -> str | None:
+    """Cached best-effort destination resolver.
+
+    Args:
+        user_address: the Hyperliquid user whose ledger we're querying.
+        block_time_iso: ISO-8601 UTC timestamp of the unresolved event.
+            We use the string form so it's hashable for ``lru_cache``.
+
+    Returns:
+        A lowercase 0x-hex address if a match was found, else None.
+
+    Defensive: ANY exception (httpx network, JSON shape, datetime
+    parse) → None. Callers fall back to the synthetic placeholder.
+    """
+    try:
+        # Parse block_time and compute the ±10min window in ms-since-epoch.
+        try:
+            block_time = datetime.fromisoformat(block_time_iso)
+            if block_time.tzinfo is None:
+                block_time = block_time.replace(tzinfo=UTC)
+        except (ValueError, TypeError):
+            return None
+        target_ms = int(block_time.timestamp() * 1000)
+        window_lo = target_ms - _RESOLUTION_WINDOW_MS
+        window_hi = target_ms + _RESOLUTION_WINDOW_MS
+
+        _RESOLVE_LIMITER.wait()
+        with httpx.Client(timeout=_RESOLVE_TIMEOUT_S) as client:
+            resp = client.post(
+                f"{HyperliquidClient.BASE}/info",
+                json={
+                    "type": "userNonFundingLedgerUpdates",
+                    "user": user_address,
+                    "startTime": window_lo,
+                    "endTime": window_hi,
+                },
+            )
+            if resp.status_code != 200:
+                return None
+            try:
+                data = resp.json()
+            except Exception:  # noqa: BLE001
+                return None
+
+        if not isinstance(data, list):
+            return None
+
+        # Find the row whose timestamp is closest to our target inside the
+        # window, AND that carries a destination field. Closest-first so a
+        # noisy ±10min window with multiple withdrawals picks the most
+        # plausible match.
+        best: tuple[int, str] | None = None  # (abs_dt_ms, address)
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            try:
+                row_time_ms = int(row.get("time", 0))
+            except (TypeError, ValueError):
+                continue
+            if not (window_lo <= row_time_ms <= window_hi):
+                continue
+            delta = row.get("delta")
+            if not isinstance(delta, dict):
+                continue
+            dest = delta.get("destination") or delta.get("to")
+            if not _is_hex_address(dest):
+                continue
+            dt_ms = abs(row_time_ms - target_ms)
+            if best is None or dt_ms < best[0]:
+                best = (dt_ms, dest.lower())
+
+        return best[1] if best is not None else None
+    except Exception as e:  # noqa: BLE001
+        # Truly defensive — any failure surfaces as "couldn't resolve".
+        log.debug(
+            "hyperliquid resolve_unknown_destination failed for user=%s: %s",
+            user_address, e,
+        )
+        return None
+
+
+def resolve_unknown_destination(
+    user_address: str,
+    block_time: datetime,
+) -> str | None:
+    """Best-effort: try to recover a missing ``delta.destination`` for an
+    outflow event by re-querying the user's ledger around ``block_time``.
+
+    Returns the destination address (lowercase 0x-hex) on success, or
+    ``None`` if no candidate row exists within ±10 minutes. NEVER raises.
+
+    This is a thin public wrapper around ``_resolve_unknown_destination_cached``
+    so the cache key (which must be hashable) is constructed in one place.
+    """
+    if not isinstance(user_address, str) or not user_address:
+        return None
+    if not isinstance(block_time, datetime):
+        return None
+    if block_time.tzinfo is None:
+        block_time = block_time.replace(tzinfo=UTC)
+    return _resolve_unknown_destination_cached(
+        user_address.lower(),
+        block_time.isoformat(),
+    )
 
 
 def _parse_ledger_event(raw: dict[str, Any]) -> HyperliquidLedgerEvent | None:

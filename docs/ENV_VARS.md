@@ -76,6 +76,7 @@ their own section.
 | `RECUPERO_DESTINATION_DUST_USD` | `1000.00` | Decimal | `>= 0`, finite | v0.20.x | See "dust / CEX-continuity". |
 | `RECUPERO_AI_MAX_USD_PER_CALL` | `2.00` | Decimal | `> 0` | v0.17.8 | Per-call USD ceiling on AI editorial calls; `0` disables (logged WARN). |
 | `RECUPERO_P_ANY_CALIBRATION_JSON` | unset | JSON | object | v0.21.x | Override default p_any calibration constants (recovery scorer). |
+| `RECUPERO_PRICING_FALLBACK` | `defillama` | str | `defillama` / `none` | v0.31.5 | Secondary historical-price provider. `none` disables the fallback chain (CoinGecko only). |
 | **Worker / scheduler** | | | | | |
 | `RECUPERO_HEARTBEAT_INTERVAL_SEC` | `30` | float | `> 0`, finite | v0.18.x | Per-row heartbeat cadence for worker liveness. |
 | `RECUPERO_STALE_AFTER_SEC` | `300` | int | `> 0` | v0.18.x | Reaper threshold — claim is considered stale after this many seconds. |
@@ -362,6 +363,26 @@ to disable (logged as WARN — runaway retries will burn real budget).
 JSON object overriding the documented `p_any` calibration constants
 used by the recovery scorer. Missing keys fall back to defaults;
 NaN/Inf values are rejected per-key with a debug log.
+
+#### `RECUPERO_PRICING_FALLBACK`
+
+v0.31.5. Selector for the secondary historical-price provider used
+when CoinGecko returns no price (rate-limited, token unsupported, or
+network error). Default `defillama` — the only supported alternate
+provider today. Set to `none` (case-insensitive) to disable the
+fallback entirely; in that case a CoinGecko miss falls straight
+through to `(unpriced)` in the brief.
+
+* **Failure modes:** any value other than `none` is treated as
+  `defillama`. Unset / empty also defaults to `defillama`. A
+  misconfigured DeFiLlama URL or runtime construction error logs a
+  DEBUG and the pricing path silently falls back to "(unpriced)" —
+  the fallback layer must never crash the trace.
+* **When to override:** set `none` when running an air-gapped trace
+  (no outbound HTTP) or when the CoinGecko Pro key already covers
+  every token in the case (no fallback budget needed). The
+  `source` column on each transfer in `case.json` records which
+  provider actually answered.
 
 ### Worker / scheduler
 

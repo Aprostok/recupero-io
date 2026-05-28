@@ -34,18 +34,32 @@ SEVERITY_BUMP_TIER_2 = 10_000_000  # > $10M → depth 10
 
 # Budget headroom: large budget remaining → can afford deeper trace.
 BUDGET_HEADROOM_BUMP = 100.0  # > $100 remaining → depth 12
-BUDGET_STARVATION_CAP = 5.0  # < $5 remaining → cap at 4
+# v0.32.1+ industry-best mode: budget starvation no longer collapses
+# the trace to a shallow 4 hops. Recupero now ships budget-disabled by
+# default, so a "starved" budget is the normal case. Keep the gate at
+# 16 (a sensible safe floor) rather than 4 — operators who explicitly
+# opt in to per-case budget tracking get the conservative behavior only
+# when they've ALSO chosen to cap depth via RECUPERO_TRACE_MAX_HOPS.
+BUDGET_STARVATION_CAP = 5.0  # < $5 remaining → floor at 16 (was 4)
+BUDGET_STARVATION_FLOOR_DEPTH = 16  # was 4 in v0.32.0
 
-# Hard ceiling — even with infinite budget and a $1B theft, never
-# descend deeper than this. Beyond depth 16 the frontier blows up
-# combinatorially and the brief becomes unreadable.
-HARD_CEILING = 16
+# Hard ceiling — operators reach for this when they want to chase a
+# 30-50 hop APT laundering chain end-to-end. v0.32.1+ industry-best
+# mode raised the ceiling 16 → 64 so Recupero reaches destinations
+# Reactor caps around 12. The frontier-size guard below still keeps
+# combinatorial blow-up bounded; the depth ceiling alone never
+# justifies stopping the trace.
+HARD_CEILING = 64
 
-# Frontier-size guard: if BFS frontier exceeds this at depth>=8,
+# Frontier-size guard: if BFS frontier exceeds this at depth>=16,
 # refuse to expand further. Prevents one popular CEX address from
 # turning the trace into a graph of the entire ecosystem.
-FRONTIER_REFUSE_AT_DEPTH = 8
-FRONTIER_REFUSE_SIZE = 10_000
+# v0.32.1+ industry-best mode: relaxed the guard so deep traces with
+# legitimately bushy fanouts (CEX hot-wallet sprays, mixer post-pool
+# disbursement) aren't artificially truncated. Was (depth>=8, size>10k);
+# now (depth>=16, size>100k).
+FRONTIER_REFUSE_AT_DEPTH = 16
+FRONTIER_REFUSE_SIZE = 100_000
 
 
 def _theft_amount(case_metadata: dict[str, Any] | None) -> float:
@@ -83,8 +97,9 @@ def compute_max_depth(
       - +2 if theft > $1M.
       - +2 more if theft > $10M (so $10M+ caps at 10 from severity).
       - +2 if budget > $100 (so $10M+ with healthy budget can hit 12).
-      - If budget < $5, hard cap at 4 (recovery starved).
-      - Never exceed HARD_CEILING.
+      - If budget < $5, floor at BUDGET_STARVATION_FLOOR_DEPTH (16 in
+        industry-best mode — the budget no longer gates depth).
+      - Never exceed HARD_CEILING (64 in industry-best mode).
     """
     theft = _theft_amount(case_metadata)
 
@@ -96,14 +111,20 @@ def compute_max_depth(
     except (ValueError, TypeError):
         budget = 0.0
 
-    # Budget starvation: short-circuit before applying severity bumps.
+    # v0.32.1+ industry-best mode: budget starvation no longer collapses
+    # the trace. The default ships with budget tracking DISABLED so
+    # ``budget < BUDGET_STARVATION_CAP`` is the normal case. Return the
+    # starvation floor (16 hops, up from 4) which is still deeper than
+    # the default base — that's intentional: a budget-disabled industry-
+    # best deployment should NEVER lose hops to budget pressure.
     if budget < BUDGET_STARVATION_CAP:
         log.debug(
-            "compute_max_depth: budget %s < %s, capping at 4",
+            "compute_max_depth: budget %s < %s, flooring at %d",
             budget,
             BUDGET_STARVATION_CAP,
+            BUDGET_STARVATION_FLOOR_DEPTH,
         )
-        return 4
+        return BUDGET_STARVATION_FLOOR_DEPTH
 
     depth = DEFAULT_MAX_DEPTH
 
@@ -135,8 +156,10 @@ def should_descend_further(
 
     Two stop conditions:
       - current_depth >= max_depth (always stop)
-      - frontier_size > 10_000 AND current_depth >= 8
-        (combinatorial blow-up guard; explained at FRONTIER_REFUSE_*)
+      - frontier_size > FRONTIER_REFUSE_SIZE AND
+        current_depth >= FRONTIER_REFUSE_AT_DEPTH
+        (combinatorial blow-up guard; explained at FRONTIER_REFUSE_*).
+        Industry-best defaults: refuse when (depth>=16, size>100_000).
     """
     if not isinstance(current_depth, int) or current_depth < 0:
         return False

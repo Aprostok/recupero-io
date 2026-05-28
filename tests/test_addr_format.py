@@ -127,14 +127,19 @@ def test_long_string_truncates_normally():
 def test_custom_prefix_suffix():
     """Caller can request a different prefix/suffix size."""
     addr = "0xABCDEF1234567890ABCDEF1234567890ABCDEF12"
-    assert short_address(addr, prefix=8, suffix=6) == "0xABCDEF…BCDEF12"
+    # Slice semantics: addr[:8] + … + addr[-6:]. The "0x" is counted
+    # in the prefix slice, so prefix=8 => "0xABCDEF" and suffix=6 =>
+    # the last 6 chars "CDEF12".
+    assert short_address(addr, prefix=8, suffix=6) == "0xABCDEF…CDEF12"
 
 
 def test_zero_suffix():
     """suffix=0 yields prefix-only output (no tail)."""
     addr = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1"
     out = short_address(addr, prefix=10, suffix=0)
-    assert out == "0x742d35Cc66…"
+    # Slice semantics: addr[:10] (the "0x" is counted in the prefix) +
+    # … + no tail. addr[:10] == "0x742d35Cc".
+    assert out == "0x742d35Cc…"
 
 
 def test_negative_prefix_raises():

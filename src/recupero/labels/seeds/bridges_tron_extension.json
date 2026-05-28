@@ -1,7 +1,7 @@
 {
-  "__schema_note__": "Extension seed file for JACOB_ADVERSARY_AUDIT_v032 Route 2 mitigation (M-7). Tron-side canonical bridges that bridges.json (main) was missing. Schema matches bridges.json (address, name, category, source, confidence, supports_to_chains, follow_up_url, notes, added_at, chain) plus a 'verified' boolean indicating whether the listed contract address has been confirmed against an authoritative source — when 'verified' is false, the entry serves as a placeholder for the auto-ingest pipeline / operator review queue to corroborate. TODO: merge into bridges.json in wave-4 once auto_ingest.py multi-source-confirm changes (Module 2) are stable.",
+  "__schema_note__": "HOLD-OUT staging file. NOT loaded by the label store. Stages Tron-side canonical bridges the v0.32.1 adversary audit (M-7) flagged as missing seeds. Entries are operator-review candidates: most carry verified=false and low/medium confidence and MUST be re-confirmed against Tronscan / each protocol's own docs before being promoted into bridges.json. Schema parity with bridges.json is pinned by tests/test_tron_bridge_extension.py.",
   "__merge_target__": "src/recupero/labels/seeds/bridges.json",
-  "__wave__": "v0.32.1-adversary-M-7",
+  "__wave__": "v0_32_1_adversary_audit_M_7",
   "entries": [
     {
       "address": "TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
@@ -13,7 +13,7 @@
         "ethereum"
       ],
       "follow_up_url": "https://tronscan.org/#/contract/TLa2f6VPqDgRE67v1736s7bJ8Ray5wYjU7",
-      "notes": "JustLink data-oracle + cross-chain bridge entry in the Tron-Ethereum JUST Foundation ecosystem (Justin Sun). Used as a TRON→ETH transit path historically for USDJ and stablecoin flows. Confidence medium because JustLink has multiple contracts and the canonical bridge entry point has not been re-verified post-2024; an operator promote should re-confirm against tronscan.org before relying on this for freeze decisions.",
+      "notes": "JustLink data-oracle + cross-chain bridge entry in the Tron-Ethereum JUST Foundation ecosystem (Justin Sun). Used as a TRON->ETH transit path historically for USDJ and stablecoin flows. Confidence medium because JustLink has multiple contracts and the canonical bridge entry point has not been re-verified post-2024; an operator promote should re-confirm against tronscan.org before relying on this for freeze decisions.",
       "added_at": "2026-05-28T00:00:00Z",
       "chain": "tron",
       "verified": false,
@@ -54,12 +54,12 @@
         "base"
       ],
       "follow_up_url": "https://wormhole.com/docs/products/reference/contract-addresses/",
-      "notes": "Placeholder for the Wormhole Token Bridge on Tron. The adversary audit explicitly called out the absence of a `TWaP...` entry; the prefix is a plausible Tron-specific Wormhole deployment but the exact base58 is NOT confirmed. JACOB_ADVERSARY_AUDIT_v032 Step 2 references this as a missing seed. Confidence LOW + verified=false — this entry is intentionally a hold-out so the operator review queue surfaces the gap and an operator runs WebFetch against wormhole.com docs to fill in the actual address. Do NOT promote into bridges.json until verified against Wormhole's own SDK consts file.",
+      "notes": "Placeholder for the Wormhole Token Bridge on Tron. The adversary audit explicitly called out the absence of a `TWaP...` entry; the prefix is a plausible Tron-specific Wormhole deployment but the exact base58 is NOT confirmed. JACOB_ADVERSARY_AUDIT_v032 Step 2 references this as a missing seed. Confidence LOW + verified=false - this entry is intentionally a hold-out so the operator review queue surfaces the gap and an operator runs WebFetch against wormhole.com docs to fill in the actual address. Do NOT promote into bridges.json until verified against Wormhole's own SDK consts file.",
       "added_at": "2026-05-28T00:00:00Z",
       "chain": "tron",
       "verified": false,
       "_v032_1_audit_M_7_addition": true,
-      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER ADDRESS — Wormhole's Tron deployment exists per docs but the exact base58 contract address requires WebFetch from wormhole.com/docs/products/reference/contract-addresses/ to confirm. Listed at low confidence to keep the gap visible in operator review."
+      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER ADDRESS - Wormhole's Tron deployment exists per docs but the exact base58 contract address requires WebFetch from wormhole.com/docs/products/reference/contract-addresses/ to confirm. Listed at low confidence to keep the gap visible in operator review."
     },
     {
       "address": "TS7Aqd75LprBKkPPxVLuZ8WWEyULEQFF1U",
@@ -75,12 +75,12 @@
         "solana"
       ],
       "follow_up_url": "https://allbridge.io/",
-      "notes": "Allbridge Tron-side bridge contract. Allbridge ('Classic' v1) historically supports Tron as a source/destination chain for USDT and USDC bridging. JACOB_ADVERSARY_AUDIT_v032 Route 2 references Allbridge Tron-side as a missing seed. Confidence LOW + verified=false — placeholder address pending WebFetch from allbridge.io docs.",
+      "notes": "Allbridge Tron-side bridge contract. Allbridge ('Classic' v1) historically supports Tron as a source/destination chain for USDT and USDC bridging. JACOB_ADVERSARY_AUDIT_v032 Route 2 references Allbridge Tron-side as a missing seed. Confidence LOW + verified=false - placeholder address pending WebFetch from allbridge.io docs.",
       "added_at": "2026-05-28T00:00:00Z",
       "chain": "tron",
       "verified": false,
       "_v032_1_audit_M_7_addition": true,
-      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER — need allbridge.io/docs or core.allbridge.io contract list to confirm Tron-side entry address"
+      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER - need allbridge.io/docs or core.allbridge.io contract list to confirm Tron-side entry address"
     },
     {
       "address": "TPzPQUNCvCStBkewg3yT9dHcT5kxYJEHYK",
@@ -96,12 +96,12 @@
         "avalanche"
       ],
       "follow_up_url": "https://etherscan.io/address/0x0000000000000000000000000000000000000000",
-      "notes": "Multichain (formerly Anyswap) Tron-side bridge. Multichain ceased operations in mid-2023 following the CEO arrest in China; the contracts are NON-ACTIVE for new flows but historical $400M+ stuck-funds are still associated with the addresses. Surfacing the address still matters for retrospective traces. Confidence LOW + verified=false — the exact Tron-side router is poorly documented post-shutdown.",
+      "notes": "Multichain (formerly Anyswap) Tron-side bridge. Multichain ceased operations in mid-2023 following the CEO arrest in China; the contracts are NON-ACTIVE for new flows but historical $400M+ stuck-funds are still associated with the addresses. Surfacing the address still matters for retrospective traces. Confidence LOW + verified=false - the exact Tron-side router is poorly documented post-shutdown.",
       "added_at": "2026-05-28T00:00:00Z",
       "chain": "tron",
       "verified": false,
       "_v032_1_audit_M_7_addition": true,
-      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER — Multichain post-mortem reports and SlowMist incident analyses are the best sources for the Tron-side router address"
+      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER - Multichain post-mortem reports and SlowMist incident analyses are the best sources for the Tron-side router address"
     },
     {
       "address": "TWWnJUz1NX3rEZkkqZeYg4xzGqYJzkLgUf",
@@ -113,12 +113,12 @@
         "tron"
       ],
       "follow_up_url": "https://sun.io/",
-      "notes": "SunSwap V2 router — the Uniswap-V2-fork DEX on Tron, distinct from the Smart Router already in bridges.json. SunSwap V2 is the highest-volume DEX on Tron and the natural cross-asset hop (USDT-TRC20 ⇄ USDD ⇄ TRX ⇄ JST) in any Tron laundering flow. Labeled category=bridge to put it on the BFS path (following the JustLend precedent). Confidence LOW + verified=false — placeholder for operator review.",
+      "notes": "SunSwap V2 router - the Uniswap-V2-fork DEX on Tron, distinct from the Smart Router already in bridges.json. SunSwap V2 is the highest-volume DEX on Tron and the natural cross-asset hop (USDT-TRC20 <-> USDD <-> TRX <-> JST) in any Tron laundering flow. Labeled category=bridge to put it on the BFS path (following the JustLend precedent). Confidence LOW + verified=false - placeholder for operator review.",
       "added_at": "2026-05-28T00:00:00Z",
       "chain": "tron",
       "verified": false,
       "_v032_1_audit_M_7_addition": true,
-      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER — needs sun.io / SunSwap GitHub deployment manifest verification"
+      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER - needs sun.io / SunSwap GitHub deployment manifest verification"
     },
     {
       "address": "TJEuSMoC7tbs99XkbGhSDk7cM1xnxR931s",
@@ -130,12 +130,12 @@
         "tron"
       ],
       "follow_up_url": "https://docs.usdd.io/",
-      "notes": "USDD mint/burn module (TRX-collateralized minting path), distinct from the PSM (USDT/USDC stable-swap path) already in bridges.json (TXDk8mbtRbXeYuMNS83CfKPaYYT8XWv9Hz). Mint = lock TRX → receive USDD; Burn = burn USDD → unlock TRX. The mint/burn module is the laundering path for converting TRX-denominated funds into USDD without touching a USDT/USDC PSM trail. Confidence LOW + verified=false — placeholder.",
+      "notes": "USDD mint/burn module (TRX-collateralized minting path), distinct from the PSM (USDT/USDC stable-swap path) already in bridges.json (TXDk8mbtRbXeYuMNS83CfKPaYYT8XWv9Hz). Mint = lock TRX -> receive USDD; Burn = burn USDD -> unlock TRX. The mint/burn module is the laundering path for converting TRX-denominated funds into USDD without touching a USDT/USDC PSM trail. Confidence LOW + verified=false - PLACEHOLDER address (synthetic, not a real deployment); operator must replace with the verified contract before any promote.",
       "added_at": "2026-05-28T00:00:00Z",
       "chain": "tron",
       "verified": false,
       "_v032_1_audit_M_7_addition": true,
-      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER — needs docs.usdd.io / USDD GitHub repo verification of the mint/burn contract address"
+      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER - SYNTHETIC address, NOT a real deployment. Needs docs.usdd.io / USDD GitHub repo verification of the mint/burn contract address before promote."
     },
     {
       "address": "TJEuSMoC7tbs99XkbGhSDk7cM1xnxR932T",
@@ -151,12 +151,12 @@
         "ontology"
       ],
       "follow_up_url": "https://poly.network/",
-      "notes": "PolyNetwork Tron-side bridge — historic / partially deprecated post the August 2021 $611M exploit and subsequent re-deployment cycles. Still appears in retrospective trace cases involving funds that crossed PolyNetwork before / during 2021-2023. Confidence LOW + verified=false — placeholder.",
+      "notes": "PolyNetwork Tron-side bridge - historic / partially deprecated post the August 2021 $611M exploit and subsequent re-deployment cycles. Still appears in retrospective trace cases involving funds that crossed PolyNetwork before / during 2021-2023. Confidence LOW + verified=false - PLACEHOLDER address (synthetic, not a real deployment); operator must replace with the verified contract before any promote.",
       "added_at": "2026-05-28T00:00:00Z",
       "chain": "tron",
       "verified": false,
       "_v032_1_audit_M_7_addition": true,
-      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER — exact Tron-side PolyNetwork router needs poly.network docs or post-exploit forensic reports for confirmation"
+      "_audit_status": "manual_unverified_v0_32_1: PLACEHOLDER - SYNTHETIC address, NOT a real deployment. Exact Tron-side PolyNetwork router needs poly.network docs or post-exploit forensic reports for confirmation before promote."
     }
   ]
 }

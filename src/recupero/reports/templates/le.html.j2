@@ -526,11 +526,12 @@
   </tbody>
 </table>
 <p class="small">
-  {# v0.32.1 (LE-HIGH-2): rewrite the previous grammar-broken
-     "FREEZABLE positions are (4 addresses, $X total) confirmed-held
-     in wallets that have no matching KYC subscription" — which
-     parsed as "are CONFIRMED-HELD" via a stray hyphenated compound
-     modifier. v0.32.1 (LE-HIGH-3): the "no matching KYC subscription
+  {# v0.32.1 (LE-HIGH-2): rewrite the previous grammar-broken footer
+     that joined "confirmed" and "held" with a stray hyphen, producing
+     a compound modifier that parsed as "the positions are CONFIRMED
+     in wallets" rather than the intended "are confirmed to be held in
+     wallets". The corrected prose below carries no hyphenated compound.
+     v0.32.1 (LE-HIGH-3): the "no matching KYC subscription
      ... not via subscription" framing is FALSE for non-RWA issuers
      (USDT/USDC/DAI/WETH — none of which have a "subscription"
      mechanism). Now branched on issuer.kyc_required so the false

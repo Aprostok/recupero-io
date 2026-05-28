@@ -181,9 +181,18 @@ def test_only_known_safe_filters_used():
         `<!--` / `-->` sequences escaped at the data layer. The
         browser doesn't execute the block; we JSON.parse the
         textContent. Safe.
+      * engagement_letter.html.j2 — `recovery_disclosure.summary_html`
+        is a server-built HTML fragment assembled in
+        worker/_engagement_letter.py from a hardcoded template string
+        with ONLY numeric interpolations (full_recovery_rate as
+        `{pct:.1f}%`, sample_size / n_full_recovery as int). No field
+        is attacker- or user-influenced, so the embedded `<strong>`
+        markup is trusted and `|safe` is required to render it as bold
+        rather than escaped angle brackets. Safe.
     """
     KNOWN_SAFE: dict[str, set[int]] = {
         "src/recupero/reports/templates/interactive_graph.html.j2": {233},
+        "src/recupero/reports/templates/engagement_letter.html.j2": {185},
     }
 
     # Word-boundary match: `|safe` and `| safe` (raw safe filter)

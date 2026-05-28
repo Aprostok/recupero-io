@@ -51,6 +51,7 @@ know the trace's reliability ceiling for Bitcoin cases.
 from __future__ import annotations
 
 import logging
+import threading
 from datetime import UTC, datetime
 from typing import Any
 
@@ -60,6 +61,115 @@ from recupero.chains.bitcoin.esplora import EsploraClient, EsploraError
 from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 
 log = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Synthetic-CoinJoin provenance registry (v0.32.1 round-2 CRIT-NEW-3)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Round-1 CRIT-NEW-3 closure: the CoinJoin-unwrap path in
+# ``_unwrap_coinjoin_to_transfers`` emits Transfer-shaped dicts whose
+# amounts are *probabilistic* (a hypothesis's total_output_value_sats
+# divided evenly across the hypothesized output addresses). The
+# tracer's ``_build_transfer`` constructs ``Transfer`` records from a
+# whitelisted set of keys — extra dict keys like
+# ``_synthetic_coinjoin_unwrap`` are silently dropped.
+#
+# Consequence pre-v0.32.1-round-2: the brief renders these synthetic
+# rows indistinguishably from directly-observed transfers, so the LE
+# reader sees a confident "$X moved from addr A to addr B" sentence
+# that is actually an unwrap heuristic with confidence 0.4-0.7.
+#
+# Workaround within the v0.32.1 fix scope (tracer.py is locked):
+# mirror the ``inputs_registry`` pattern — record the tx_hash +
+# output-address of every synthetic Transfer emitted, and expose a
+# lookup helper the brief / LE renderer can call. The model field
+# would be the cleaner long-term fix; this registry is the shippable
+# one. ``mark_synthetic`` is idempotent and thread-safe.
+
+_SYNTHETIC_COINJOIN_KEYS: set[tuple[str, str]] = set()
+_SYNTHETIC_COINJOIN_META: dict[tuple[str, str], dict[str, Any]] = {}
+_SYNTHETIC_LOCK = threading.Lock()
+
+
+def mark_synthetic_coinjoin(
+    tx_hash: str,
+    to_address: str,
+    *,
+    confidence_score: float | None = None,
+    rationale: str | None = None,
+) -> None:
+    """Record that ``(tx_hash, to_address)`` is a synthetic
+    CoinJoin-unwrap row, not an on-chain observed transfer.
+
+    Called by ``_unwrap_coinjoin_to_transfers`` for every synthetic
+    Transfer-shaped dict it emits. Brief / LE renderers MUST call
+    ``is_synthetic_coinjoin`` on every Bitcoin Transfer they're about
+    to display and tag the row with a "[CoinJoin unwrap heuristic, not
+    on-chain transfer]" badge when it returns True.
+    """
+    if not isinstance(tx_hash, str) or not tx_hash:
+        return
+    if not isinstance(to_address, str) or not to_address:
+        return
+    key = (tx_hash, to_address)
+    with _SYNTHETIC_LOCK:
+        _SYNTHETIC_COINJOIN_KEYS.add(key)
+        meta: dict[str, Any] = {}
+        if confidence_score is not None:
+            meta["confidence_score"] = confidence_score
+        if rationale is not None:
+            meta["rationale"] = rationale
+        if meta:
+            _SYNTHETIC_COINJOIN_META[key] = meta
+
+
+def is_synthetic_coinjoin(tx_hash: str, to_address: str) -> bool:
+    """Return True iff ``(tx_hash, to_address)`` was emitted as a
+    probabilistic CoinJoin unwrap (not a direct on-chain transfer).
+
+    Brief / LE renderers SHOULD call this for every Bitcoin Transfer
+    row and prefix the line with a "[CoinJoin unwrap heuristic, not
+    on-chain transfer]" tag when True so the reader can tell apart
+    confident on-chain evidence from probabilistic unwrap inference.
+    """
+    if not isinstance(tx_hash, str) or not tx_hash:
+        return False
+    if not isinstance(to_address, str) or not to_address:
+        return False
+    with _SYNTHETIC_LOCK:
+        return (tx_hash, to_address) in _SYNTHETIC_COINJOIN_KEYS
+
+
+def synthetic_coinjoin_metadata(
+    tx_hash: str, to_address: str
+) -> dict[str, Any]:
+    """Return the confidence_score + rationale for a synthetic
+    CoinJoin row, or empty dict if the row was not registered as
+    synthetic (or carried no metadata).
+    """
+    if not isinstance(tx_hash, str) or not tx_hash:
+        return {}
+    if not isinstance(to_address, str) or not to_address:
+        return {}
+    with _SYNTHETIC_LOCK:
+        return dict(_SYNTHETIC_COINJOIN_META.get((tx_hash, to_address), {}))
+
+
+def clear_synthetic_coinjoin_registry() -> None:
+    """Reset the registry. For tests and between-case cleanup."""
+    with _SYNTHETIC_LOCK:
+        _SYNTHETIC_COINJOIN_KEYS.clear()
+        _SYNTHETIC_COINJOIN_META.clear()
+
+
+def synthetic_coinjoin_registry_size() -> int:
+    """Number of synthetic (tx_hash, to_address) pairs registered.
+
+    For tests + observability.
+    """
+    with _SYNTHETIC_LOCK:
+        return len(_SYNTHETIC_COINJOIN_KEYS)
 
 
 def _safe_unix_to_datetime(ts: Any) -> datetime:
@@ -587,6 +697,24 @@ class BitcoinAdapter(ChainAdapter):
                     "_unwrap_confidence_score": hyp.confidence_score,
                     "_unwrap_rationale": hyp.rationale,
                 })
+                # v0.32.1 round-2 CRIT-NEW-3: persist the synthetic
+                # provenance to the module-level registry. The dict
+                # keys above (``_synthetic_coinjoin_unwrap`` etc.) are
+                # stripped by ``tracer._build_transfer`` because the
+                # ``Transfer`` model has ``extra="forbid"`` and only a
+                # whitelisted set of keys is read. The registry
+                # survives the strip; brief / LE renderers consult it
+                # via ``is_synthetic_coinjoin(tx_hash, to_address)`` to
+                # tag the row with "[CoinJoin unwrap heuristic, not
+                # on-chain transfer]" so the LE reader does not mistake
+                # a probabilistic unwrap for confident on-chain
+                # evidence.
+                mark_synthetic_coinjoin(
+                    tx_id,
+                    out_addr,
+                    confidence_score=hyp.confidence_score,
+                    rationale=hyp.rationale,
+                )
 
         # Log non-actionable hypotheses for operator review.
         non_actionable = [
@@ -625,4 +753,12 @@ __all__ = (
     "BitcoinAdapter",
     "BTC_DECIMALS",
     "BTC_SYMBOL",
+    # v0.32.1 round-2 CRIT-NEW-3: synthetic-CoinJoin provenance API
+    # consumed by brief / LE renderers to tag probabilistic unwrap
+    # rows so they are not mistaken for on-chain evidence.
+    "mark_synthetic_coinjoin",
+    "is_synthetic_coinjoin",
+    "synthetic_coinjoin_metadata",
+    "clear_synthetic_coinjoin_registry",
+    "synthetic_coinjoin_registry_size",
 )

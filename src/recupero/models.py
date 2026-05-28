@@ -99,6 +99,17 @@ class Chain(str, Enum):
     polygon_zkevm = "polygon_zkevm"
     opbnb = "opbnb"
     manta = "manta"
+    # v0.32.1+ (Cap-C): Cosmos / IBC chains. Minimal read-only
+    # coverage via Mintscan / LCD endpoints. The enum entry is
+    # shared by Cosmos Hub, Osmosis, Injective, etc. — the
+    # CosmosAdapter dispatches per-zone via the address bech32
+    # prefix (``cosmos1...``, ``osmo1...``, ``inj1...``).
+    #
+    # NOT YET wired into ChainAdapter.for_chain — the BFS does not
+    # call into Cosmos until wave-7 integration. The enum entry
+    # exists so Case / Transfer records can carry the chain
+    # identifier without a Pydantic rejection.
+    cosmos = "cosmos"
 
 
 class LabelCategory(str, Enum):

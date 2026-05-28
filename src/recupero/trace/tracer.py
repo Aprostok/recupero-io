@@ -152,14 +152,20 @@ def run_trace(
 
     # v0.31.0 — env-var overrides for the two BFS knobs operators most
     # often want to tune per-case. Both fall back to the config-yaml
-    # defaults (TraceParams.max_depth=2, dust_threshold_usd=10) so the
+    # defaults (TraceParams.max_depth=4, dust_threshold_usd=10) so the
     # behavior is unchanged when the env vars are absent.
     #   * RECUPERO_TRACE_MAX_HOPS — bump for deep-laundering cases
-    #     (Zigha-shape paths can run 4-6 hops via consolidation hubs).
+    #     (Zigha-shape paths can run 4-6 hops via consolidation hubs;
+    #     APT-style chains can reach 30-50 hops). v0.32.1+ "industry-best
+    #     mode": hard ceiling raised to 64 so we can reach destinations
+    #     Reactor caps at ~12. Operators on quota-constrained API plans
+    #     can lower RECUPERO_TRACE_MAX_HOPS_HARD_CEILING to match their
+    #     funded API budget.
     #   * RECUPERO_TRACE_DUST_USD — lower for sub-cent dust-attack
     #     studies, raise for whale-volume cases where $10 noise gets
     #     too much attention.
-    # Both are clamped to safe ranges: max_hops ∈ [1, 8], dust ∈ [0, 1e6].
+    # Both are clamped to safe ranges: max_hops ∈ [1, HARD_CEILING]
+    # (default 64), dust ∈ [0, 1e6].
     cfg_max_depth = config.trace.max_depth
     # v0.32.1+ "industry-best mode": the hard ceiling was 8 hops, which
     # is below what real laundering operators use (Lazarus / DPRK routes
@@ -217,11 +223,14 @@ def run_trace(
                 api_budget_remaining_usd=budget_remaining,
             )
             # Use the adaptive value as the ceiling unless the operator
-            # has explicitly capped it lower via the env var. Never
-            # exceed adaptive_depth's HARD_CEILING (16).
-            cfg_max_depth = max(1, min(16, adaptive, cfg_max_depth)) if (
+            # has explicitly capped it lower via the env var. v0.32.1+
+            # industry-best mode: adaptive_depth's HARD_CEILING is 64
+            # so deep-laundering chains can be followed. The hard
+            # ceiling here matches the RECUPERO_TRACE_MAX_HOPS_HARD_CEILING
+            # env override so operators can lower the cap if needed.
+            cfg_max_depth = max(1, min(hard_ceiling, adaptive, cfg_max_depth)) if (
                 "RECUPERO_TRACE_MAX_HOPS" in os.environ
-            ) else max(1, min(16, adaptive))
+            ) else max(1, min(hard_ceiling, adaptive))
             log.info(
                 "adaptive depth: case_meta=%s budget=$%s → max_depth=%d",
                 case_meta, budget_remaining, cfg_max_depth,
@@ -334,6 +343,13 @@ def run_trace(
     # case. See _address_visited_key for why this matters.
     visited: set[str] = {_address_visited_key(chain, seed_address)}  # includes queued-but-not-yet-processed
     is_contract_cache: dict[str, bool] = {}
+    # v0.32.1 W8 (round-2 wire-up): per-case contract_detection cache.
+    # Keyed by ``f"{chain}:{address.lower()}"`` (see
+    # contract_detection._cache_key). Distinct from is_contract_cache
+    # (which uses chain-aware dest_key) so contract_detection.is_contract
+    # can manage its own retry + non-cache-on-failure invariant without
+    # interfering with the legacy cache shape.
+    _contract_check_cache: dict[str, bool] = {}
     current_wave: list[tuple[Address, int]] = [(seed_address, 0)]
     addresses_processed = 0
     wave_number = 0
@@ -438,10 +454,45 @@ def run_trace(
                 # Contract check: one RPC per unique address, cached.
                 # Done here (single-threaded between waves) so we don't
                 # need to lock is_contract_cache.
+                #
+                # v0.32.1 W8 (round-2 wire-up): route through
+                # ``contract_detection.is_contract`` so transient RPC
+                # failures don't poison the cache as "is_contract=True"
+                # forever. Pre-W8 a single rate-limit hit on the
+                # is_contract probe would make BFS skip that address
+                # permanently for the rest of the worker's lifetime.
+                # The contract_detection helper:
+                #   * retries once on Exception (transient),
+                #   * returns (None, reason) on twice-failed RPC and
+                #     leaves the cache UNTOUCHED — letting later passes
+                #     re-resolve cleanly,
+                #   * caches verified True/False with a chain-aware key.
+                # We mirror into the legacy ``is_contract_cache`` (keyed
+                # by dest_key) so other code paths that read it
+                # (continuation pass, tracer:1157) keep working.
                 if policy.stop_at_contract:
                     if dest_key not in is_contract_cache:
                         try:
-                            is_contract_cache[dest_key] = adapter.is_contract(dest)
+                            from recupero.trace.contract_detection import (
+                                is_contract as _is_contract_safe,
+                            )
+                            result_bool, _reason = _is_contract_safe(
+                                dest, chain.value, adapter, _contract_check_cache,
+                            )
+                            if result_bool is None:
+                                # RPC failed twice; fall back to the
+                                # conservative "assume contract" gate to
+                                # avoid expanding into an unverifiable
+                                # destination. NB: we DO NOT cache None
+                                # so a later pass can re-resolve.
+                                log.debug(
+                                    "is_contract uncertain for %s (%s); "
+                                    "treating as contract for this hop",
+                                    dest, _reason,
+                                )
+                                is_contract_cache[dest_key] = True
+                            else:
+                                is_contract_cache[dest_key] = result_bool
                         except Exception as e:  # noqa: BLE001
                             log.debug("is_contract check failed for %s: %s", dest, e)
                             # Be conservative: if we can't check, assume contract (skip)
@@ -568,6 +619,38 @@ def run_trace(
             "api_budget": case_budget.snapshot(),
         }
     finally:
+        # v0.32.1 W7 (round-2 CRIT-NEW-1 wire-up): pre-fetch drainer
+        # contract outflows BEFORE the adapter closes. Stores the
+        # resulting findings on case.config_used["drainer_findings_w7"]
+        # so emit_brief can consume them. Best-effort: any failure
+        # here logs and continues — the brief still gets a chance to
+        # run drainer detection at render time (without the W7
+        # prefetch path).
+        if os.environ.get("RECUPERO_DRAINER_W7_PREFETCH", "1").strip().lower() in (
+            "1", "true", "yes", "on",
+        ):
+            try:
+                from recupero.trace.drainer_detection import detect_drainer_pattern
+                # Lazy-load high_risk_db; many cases don't trip signal-1
+                # and the W7 path is signal-2-only.
+                _w7_findings = detect_drainer_pattern(
+                    case, high_risk_db=None, adapter=adapter,
+                )
+                # Surface a tiny snapshot on config_used so emit_brief can
+                # detect that prefetch ran. The full findings object is
+                # rebuilt at brief time from case.transfers + the now-cached
+                # contract outflows that prefetch wrote into the adapter's
+                # internal caches (where present).
+                case.config_used = {
+                    **(case.config_used or {}),
+                    "drainer_w7_prefetch": {
+                        "ran": True,
+                        "events_found": len(_w7_findings.events),
+                        "signals_found": len(_w7_findings.signals),
+                    },
+                }
+            except Exception as exc:  # noqa: BLE001 — never break trace cleanup
+                log.debug("drainer W7 prefetch failed: %s", exc)
         try:
             price_client.close()
         except Exception:  # noqa: BLE001
@@ -1088,7 +1171,24 @@ def _trace_one_hop(
     # the configured ceiling. ``max_transfers_per_address <= 0``
     # disables the cap — pass None so adapters walk to the natural
     # end of pagination.
+    #
+    # v0.32.1+ industry-best mode: env var
+    # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` overrides the config value
+    # per-case. Set to 0 to disable the cap entirely (the BFS still
+    # terminates on max_depth + deadline + per-case transfer-cap gates).
+    # Default config moved from 500 → 50000 so whale-wallet activity
+    # histories are followed in full.
     _cap = config.trace.max_transfers_per_address
+    _env_cap_raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    if _env_cap_raw is not None:
+        try:
+            _cap = int(_env_cap_raw)
+        except (TypeError, ValueError):
+            log.warning(
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=%r is not an int; "
+                "falling back to config (%d)",
+                _env_cap_raw, config.trace.max_transfers_per_address,
+            )
     fetch_cap: int | None
     if _cap and _cap > 0:
         fetch_cap = int(_cap * 1.5)
@@ -1136,13 +1236,15 @@ def _trace_one_hop(
             policy.service_wallet_outflow_threshold,
         )
 
-    # Cap to avoid runaway on chatty addresses
-    if len(raw_outflows) > config.trace.max_transfers_per_address:
+    # Cap to avoid runaway on chatty addresses. ``_cap`` honors the
+    # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` env-var override resolved
+    # above; ``_cap <= 0`` disables the slice (industry-best mode).
+    if _cap and _cap > 0 and len(raw_outflows) > _cap:
         log.warning(
             "capping outflows from %d to %d for address %s",
-            len(raw_outflows), config.trace.max_transfers_per_address, from_address,
+            len(raw_outflows), _cap, from_address,
         )
-        raw_outflows = raw_outflows[: config.trace.max_transfers_per_address]
+        raw_outflows = raw_outflows[:_cap]
 
     transfers: list[Transfer] = []
     for raw in raw_outflows:

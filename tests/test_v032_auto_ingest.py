@@ -314,7 +314,8 @@ def test_promote_endpoint_writes_to_bridges_json(
     fake_db.rows_for_fetchone = [
         # First call is _read_candidate SELECT:
         (
-            42, "0xNEWBRIDGE", "ethereum", "bridge", "Newly Tagged",
+            42, "0x000000000000000000000000000000000000dEaD", "ethereum",
+            "bridge", "Newly Tagged",
             "low", "defillama_new_protocol",
             "https://defillama.com/...", {}, "pending_review",
         ),
@@ -334,7 +335,7 @@ def test_promote_endpoint_writes_to_bridges_json(
     after = json.loads(bridges_path.read_text(encoding="utf-8"))
     assert len(after) == 2
     new_entry = after[-1]
-    assert new_entry["address"] == "0xNEWBRIDGE"
+    assert new_entry["address"] == "0x000000000000000000000000000000000000dEaD"
     assert new_entry["category"] == "bridge"
     assert new_entry["confidence"] == "medium"
     assert new_entry["_v032_auto_ingest"] is True

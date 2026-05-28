@@ -20,7 +20,9 @@ trace:
   incident_buffer_minutes: 60
 
   # Maximum number of transfers to follow per address (sanity cap).
-  max_transfers_per_address: 500
+  # v0.32.1+ industry-best mode: bumped 500 → 50000 so whale-wallet
+  # traces follow the full activity history. Set 0 to disable.
+  max_transfers_per_address: 50000
 
 ethereum:
   # Etherscan API v2 endpoint (multichain). chainid=1 is mainnet.

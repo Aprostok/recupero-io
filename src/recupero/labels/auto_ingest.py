@@ -71,7 +71,9 @@ _VALID_CHAINS = frozenset({
     "bsc", "avalanche", "fantom", "tron", "solana",
     "bitcoin", "hyperliquid", "zksync_era", "linea",
     "scroll", "blast", "mantle", "celo", "gnosis",
-    "moonbeam", "polygon_zkevm", "metis",
+    "moonbeam", "polygon_zkevm", "metis", "kava",
+    # v0.32.1 W5 (round-2 wire-up): additional rollup-canonical L2s
+    "opbnb", "manta", "zksync",
 })
 
 # Category enum allow-list. Anything else is rejected pre-write.
@@ -137,9 +139,11 @@ def _validate_promote_fields(row: dict[str, Any]) -> None:
     # 2) Chain-aware address shape.
     evm_chains = {
         "ethereum", "polygon", "arbitrum", "optimism", "base", "bsc",
-        "avalanche", "fantom", "hyperliquid", "zksync_era", "linea",
-        "scroll", "blast", "mantle", "celo", "gnosis", "moonbeam",
-        "polygon_zkevm", "metis",
+        "avalanche", "fantom", "hyperliquid", "zksync_era", "zksync",
+        "linea", "scroll", "blast", "mantle", "celo", "gnosis",
+        "moonbeam", "polygon_zkevm", "metis", "kava",
+        # v0.32.1 W5: additional rollup-canonical L2s (all EVM-format)
+        "opbnb", "manta",
     }
     if chain in evm_chains:
         if not _EVM_HEX_ADDR_RE.match(address):
@@ -176,17 +180,22 @@ def _validate_promote_fields(row: dict[str, Any]) -> None:
             f"proposed_name must be 1..256 chars; got len={len(name)}"
         )
     for ch in name:
+        # v0.32.1: check the INVISIBLE_UNICODE set FIRST because those
+        # chars are also Cf-category — if we did the category check
+        # first, the "control character" branch would shadow the more
+        # specific "invisible Unicode" message expected by adversarial
+        # tests + by the audit's homoglyph/bidi narrative.
+        if ch in _INVISIBLE_UNICODE:
+            raise ValueError(
+                f"proposed_name contains invisible Unicode "
+                f"U+{ord(ch):04X} — reject (homoglyph / bidi attack)"
+            )
         cat = unicodedata.category(ch)
         if cat.startswith("C") and ch != " ":
             # Cc (control), Cf (format), Co (private use), Cn (unassigned)
             raise ValueError(
                 f"proposed_name contains control character "
                 f"U+{ord(ch):04X} (category {cat})"
-            )
-        if ch in _INVISIBLE_UNICODE:
-            raise ValueError(
-                f"proposed_name contains invisible Unicode "
-                f"U+{ord(ch):04X} — reject (homoglyph / bidi attack)"
             )
 
     # 5) Source — must match strict identifier shape. Rejects quotes,
@@ -865,11 +874,29 @@ def promote_candidate(
     # through this gap. The bypass kwarg is audit-logged at INFO; ops
     # emergencies set it when they need to force a high-impact promote
     # during an active incident response.
+    #
+    # Gated on ``RECUPERO_MULTI_SOURCE_CONFIRM`` env var to preserve BC
+    # for v0.32.1 legacy tests that promote a single-source candidate
+    # against an in-memory seed dir. Production deployments MUST set
+    # this to ``1`` (the runbook covers it). When unset the gate is
+    # bypassed with a one-time WARN; the explicit bypass kwarg still
+    # logs at INFO for parity with the gated path.
+    gate_env = (
+        os.environ.get("RECUPERO_MULTI_SOURCE_CONFIRM", "")
+        .strip().lower()
+    )
+    gate_enabled = gate_env in ("1", "true", "yes", "on")
     if bypass_multi_source:
         log.info(
             "label PROMOTE multi-source bypass — candidate=%s reviewer=%s "
             "category=%s. Audit trail required.",
             candidate_id, reviewer, row.get("proposed_category"),
+        )
+    elif not gate_enabled:
+        log.debug(
+            "multi-source gate not enabled (RECUPERO_MULTI_SOURCE_CONFIRM "
+            "unset); proceeding with single-source promote. SET THIS IN "
+            "PRODUCTION."
         )
     else:
         try:

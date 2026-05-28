@@ -41,6 +41,7 @@ from jinja2 import (
 )
 
 from recupero.reports._jinja_filters import register_safe_filters
+from recupero.reports.brief import _register_filters
 
 _TEMPLATES = (
     Path(__file__).resolve().parent.parent
@@ -77,7 +78,14 @@ def _build_env() -> Environment:
         # in the test fixture should NOT mask a real injection.
         undefined=ChainableUndefined,
     )
-    register_safe_filters(env)
+    # Register the SAME filter set production uses (pluralize,
+    # usd_prefix, safe_url, safe_text, short_address). brief.py's
+    # `_register_filters` is the single source of truth — calling it
+    # here keeps the adversarial-render env from drifting out of sync
+    # and raising `No filter named 'usd_prefix'` on le.html.j2, which
+    # the production env renders fine. register_safe_filters is still
+    # imported above and exercised directly by the safe_url unit tests.
+    _register_filters(env)
     return env
 
 

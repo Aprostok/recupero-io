@@ -118,7 +118,14 @@ def _mk_case(transfers: list[Transfer], chain: Chain = Chain.ethereum) -> Case:
 def _mk_label_store(
     *entries: tuple[str, str, str], chain: Chain = Chain.ethereum,
 ) -> LabelStore:
-    """Build a tiny in-memory label store. Each entry: (address, name, exchange)."""
+    """Build a tiny in-memory label store. Each entry: (address, name, exchange).
+
+    NB: Label is chain-agnostic by design — LabelStore keys purely by
+    normalized address (store.add never reads a chain attribute; lookup
+    takes a chain arg only to decide EVM-checksum normalization). The
+    `chain` fixture arg therefore does not flow into Label construction.
+    """
+    _ = chain  # retained for call-site clarity; not a Label field
     store = LabelStore()
     for addr, name, exch in entries:
         lbl = Label(
@@ -128,7 +135,6 @@ def _mk_label_store(
             exchange=exch,
             source="test:fixture",
             confidence="high",
-            chain=chain,
             added_at=datetime(2025, 1, 1, tzinfo=UTC),
         )
         store.add(lbl)
@@ -166,9 +172,14 @@ def _mk_outflow_row(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_tier1_exact_match_still_produces_high_confidence_lead() -> None:
+def test_tier1_exact_match_produces_low_confidence_lead() -> None:
     """Regression guard: $250K WBTC deposit → 4.9 WBTC withdrawal same
-    chain, same symbol. Tier 1 must still fire as ``confidence='high'``.
+    chain, same symbol. Tier 1 (exact same-token match) still fires, but
+    per the forensic-integrity invariant EVERY CEX-continuity lead is
+    ``confidence='low'`` — a same-amount deposit/withdrawal pair through a
+    commingled exchange hot wallet is a correlation, not proof, regardless
+    of how exact the match is. WBTC is a non-noisy token so it survives the
+    deposit-side noise gate.
     """
     deposit = _mk_transfer(
         from_addr=_PERP,
@@ -197,7 +208,7 @@ def test_tier1_exact_match_still_produces_high_confidence_lead() -> None:
     )
     assert len(leads) == 1
     lead = leads[0]
-    assert lead.confidence == "high"
+    assert lead.confidence == "low"
     assert lead.deposit_token_symbol == "WBTC"
     assert lead.candidate_token_symbol == "WBTC"
     assert lead.parity_match is None
@@ -209,12 +220,17 @@ def test_tier1_exact_match_still_produces_high_confidence_lead() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_tier2_usdt_deposit_usdc_withdrawal_same_chain_medium_lead() -> None:
-    """The audit's central example: $100,000 USDT deposit at Binance,
-    99,500 USDC withdrawal 17 minutes later — different symbol, same
-    chain, both in the stable parity group, 0.5% USD delta well inside
-    1.5% tolerance. Must produce ONE Tier 2 medium-confidence lead with
-    parity_match populated.
+def test_stablecoin_usdt_deposit_dropped_at_noise_gate() -> None:
+    """Precision policy (v0.32.1): a $100,000 USDT deposit at Binance is
+    dropped at the deposit-side noise gate BEFORE any adapter call, even
+    though a 99,500 USDC withdrawal 17 minutes later would be a "parity"
+    match on paper. A CEX hot wallet processes millions of USDT/USDC per
+    minute, so a same-amount stablecoin pair in a short window has
+    thousands of coincidental matches per hour — surfacing it would flood
+    the brief with false leads and waste LE time. Stablecoin deposits
+    therefore never produce a continuity lead; the (still-low-confidence)
+    parity matcher only applies to NON-noisy assets (see the WBTC↔cbBTC
+    test below).
     """
     deposit = _mk_transfer(
         from_addr=_PERP,
@@ -241,20 +257,9 @@ def test_tier2_usdt_deposit_usdc_withdrawal_same_chain_medium_lead() -> None:
     leads = identify_cex_continuity_leads(
         case, adapter=adapter, label_store=label_store,
     )
-    assert len(leads) == 1
-    lead = leads[0]
-    assert lead.confidence == "medium"
-    assert lead.deposit_token_symbol == "USDT"
-    assert lead.candidate_token_symbol == "USDC"
-    assert lead.parity_group == "stable"
-    assert lead.parity_match == {
-        "deposit_asset": "USDT",
-        "withdrawal_asset": "USDC",
-        "parity_group": "stable",
-    }
-    assert lead.cross_chain_parity is False
-    # Match pct = |100000 - 99500| / 100000 = 0.005 = 0.5%
-    assert lead.amount_match_pct < 0.015
+    assert leads == []
+    # Dropped at the gate before any (cost-incurring) adapter call.
+    adapter.fetch_erc20_outflows.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -262,13 +267,14 @@ def test_tier2_usdt_deposit_usdc_withdrawal_same_chain_medium_lead() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_tier3_usdt_eth_deposit_usdc_polygon_withdrawal_low_lead() -> None:
-    """$100K USDT-on-Ethereum deposit → $99,800 USDC-on-Polygon
-    withdrawal at the SAME exchange. Both are stables, but on
-    DIFFERENT chains → Tier 3, ``confidence='low'``, with
-    ``cross_chain_parity=True`` and ``candidate_chain=polygon``.
-
-    Window must be ≤4h for Tier 3 (cross-chain CEX rails are tighter).
+def test_stablecoin_cross_chain_usdt_eth_to_usdc_polygon_dropped() -> None:
+    """Precision policy: a $100K USDT-on-Ethereum deposit is a noisy-token
+    deposit and is dropped at the gate, so a $99,800 USDC-on-Polygon
+    cross-chain "parity" withdrawal at the same exchange never surfaces.
+    Cross-chain stablecoin amount-matching has an even higher coincidental
+    rate than same-chain, so it must not produce a lead. (Non-noisy
+    cross-chain parity is exercised by the brief-section test below using
+    WBTC↔cbBTC.)
     """
     deposit = _mk_transfer(
         from_addr=_PERP,
@@ -283,7 +289,7 @@ def test_tier3_usdt_eth_deposit_usdc_polygon_withdrawal_low_lead() -> None:
 
     outflow = _mk_outflow_row(
         to_addr=_NEW_ADDR,
-        block_time=_INCIDENT_TIME + timedelta(hours=3),  # within 4h Tier 3 window
+        block_time=_INCIDENT_TIME + timedelta(hours=3),
         token_symbol="USDC",
         decimals=6,
         amount_decimal=Decimal("99800"),
@@ -299,15 +305,8 @@ def test_tier3_usdt_eth_deposit_usdc_polygon_withdrawal_low_lead() -> None:
     leads = identify_cex_continuity_leads(
         case, adapter=adapter, label_store=label_store,
     )
-    assert len(leads) == 1
-    lead = leads[0]
-    assert lead.confidence == "low"
-    assert lead.cross_chain_parity is True
-    assert lead.candidate_chain == Chain.polygon
-    assert lead.parity_group == "stable"
-    assert lead.parity_match is not None
-    assert lead.parity_match["deposit_asset"] == "USDT"
-    assert lead.parity_match["withdrawal_asset"] == "USDC"
+    assert leads == []
+    adapter.fetch_erc20_outflows.assert_not_called()
 
 
 def test_tier3_cross_chain_outside_4h_window_yields_zero_leads() -> None:
@@ -389,14 +388,12 @@ def test_tier2_amount_off_by_3pct_yields_zero_leads() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_tier2_eth_deposit_steth_withdrawal_medium_lead() -> None:
-    """100 ETH ($300K) deposit at Binance → 99.5 stETH withdrawal same
-    chain. Both in the ETH parity group at 1.0% tolerance. Must produce
-    a Tier 2 medium-confidence lead with ``parity_group='eth'``.
-
-    ETH is in default noisy_tokens, but the v0.32.0 logic explicitly
-    keeps noisy-symbol deposits eligible for Tier 2/3 when they're in
-    a parity group (Tier 1 same-symbol is still gated for noise).
+def test_eth_deposit_steth_withdrawal_dropped_at_noise_gate() -> None:
+    """Precision policy: ETH is in the default noisy_tokens set, so a
+    100 ETH ($300K) deposit at Binance is dropped at the gate even though
+    a 99.5 stETH withdrawal would be an ETH-parity match. ETH flows
+    through a CEX hot wallet are far too high-volume for an amount-match
+    to be anything but coincidental. No lead.
     """
     deposit = _mk_transfer(
         from_addr=_PERP,
@@ -413,7 +410,7 @@ def test_tier2_eth_deposit_steth_withdrawal_medium_lead() -> None:
         block_time=_INCIDENT_TIME + timedelta(hours=1),
         token_symbol="STETH",
         decimals=18,
-        amount_decimal=Decimal("99.5"),  # 0.5% lower, well inside 1.0% tol
+        amount_decimal=Decimal("99.5"),
     )
     adapter = MagicMock()
     adapter.fetch_native_outflows.return_value = []
@@ -423,12 +420,8 @@ def test_tier2_eth_deposit_steth_withdrawal_medium_lead() -> None:
     leads = identify_cex_continuity_leads(
         case, adapter=adapter, label_store=label_store,
     )
-    assert len(leads) == 1
-    lead = leads[0]
-    assert lead.confidence == "medium"
-    assert lead.parity_group == "eth"
-    assert lead.deposit_token_symbol == "ETH"
-    assert lead.candidate_token_symbol == "STETH"
+    assert leads == []
+    adapter.fetch_erc20_outflows.assert_not_called()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -436,9 +429,12 @@ def test_tier2_eth_deposit_steth_withdrawal_medium_lead() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def test_tier2_wbtc_deposit_cbbtc_withdrawal_medium_lead() -> None:
+def test_wbtc_deposit_cbbtc_withdrawal_low_confidence_parity_lead() -> None:
     """5 WBTC ($250K) deposit at Binance → 4.97 cbBTC withdrawal same
-    chain. Both in the BTC parity group at 1.0% tolerance.
+    chain. Both in the BTC parity group at 1.0% tolerance. WBTC/cbBTC are
+    NON-noisy assets, so the cross-token parity matcher fires and produces
+    a lead — but at ``confidence='low'`` (the forensic invariant: a CEX
+    continuity correlation is never proof, regardless of tier).
     """
     deposit = _mk_transfer(
         from_addr=_PERP,
@@ -467,7 +463,7 @@ def test_tier2_wbtc_deposit_cbbtc_withdrawal_medium_lead() -> None:
     )
     assert len(leads) == 1
     lead = leads[0]
-    assert lead.confidence == "medium"
+    assert lead.confidence == "low"
     assert lead.parity_group == "btc"
     assert lead.deposit_token_symbol == "WBTC"
     assert lead.candidate_token_symbol == "CBBTC"
@@ -567,9 +563,10 @@ def test_empty_parity_group_falls_back_to_tier1_no_crash() -> None:
     leads = identify_cex_continuity_leads(
         case, adapter=adapter, label_store=label_store,
     )
-    # Only the same-symbol Tier 1 hit should survive.
+    # Only the same-symbol Tier 1 hit should survive — at 'low'
+    # confidence (the forensic invariant caps all continuity leads).
     assert len(leads) == 1
-    assert leads[0].confidence == "high"
+    assert leads[0].confidence == "low"
     assert leads[0].deposit_token_symbol == "RNDR"
     assert leads[0].candidate_token_symbol == "RNDR"
     assert leads[0].candidate_withdrawal_to == _NEW_ADDR_B
@@ -581,26 +578,31 @@ def test_empty_parity_group_falls_back_to_tier1_no_crash() -> None:
 
 
 def test_brief_section_includes_parity_match_fields() -> None:
-    """The brief serializer must surface ``parity_match`` and (for Tier
-    3) ``cross_chain_parity`` + ``candidate_chain`` so the operator sees
-    WHY the cross-token / cross-chain candidate is a lead.
+    """The brief serializer must surface ``parity_match`` and (for the
+    cross-chain case) ``cross_chain_parity`` + ``candidate_chain`` so the
+    operator sees WHY the cross-token / cross-chain candidate is a lead.
+
+    Uses a NON-noisy BTC-parity pair (WBTC-on-Ethereum deposit → cbBTC-on-
+    Polygon withdrawal) since stablecoin/ETH deposits are dropped at the
+    noise gate under the precision policy. The lead is ``confidence='low'``.
     """
     deposit = _mk_transfer(
         from_addr=_PERP,
         to_addr=_BINANCE_HOT_ETH,
-        usd=Decimal("100000"),
-        token_symbol="USDT",
-        decimals=6,
-        amount_decimal=Decimal("100000"),
+        usd=Decimal("250000"),
+        token_symbol="WBTC",
+        decimals=8,
+        amount_decimal=Decimal("5"),
+        chain=Chain.ethereum,
     )
-    case = _mk_case([deposit])
+    case = _mk_case([deposit], chain=Chain.ethereum)
 
     outflow = _mk_outflow_row(
         to_addr=_NEW_ADDR,
         block_time=_INCIDENT_TIME + timedelta(hours=3),
-        token_symbol="USDC",
-        decimals=6,
-        amount_decimal=Decimal("99800"),
+        token_symbol="CBBTC",
+        decimals=8,
+        amount_decimal=Decimal("4.97"),  # 0.6% lower, inside 1.0% BTC tol
         chain=Chain.polygon,
     )
     adapter = MagicMock()
@@ -617,18 +619,18 @@ def test_brief_section_includes_parity_match_fields() -> None:
     entry = section[0]
     # Parity-match metadata must be surfaced verbatim.
     assert entry["lead_only"] is True
-    assert entry["confidence"] == "low"  # Tier 3
+    assert entry["confidence"] == "low"
     assert entry["parity_match"] == {
-        "deposit_asset": "USDT",
-        "withdrawal_asset": "USDC",
-        "parity_group": "stable",
+        "deposit_asset": "WBTC",
+        "withdrawal_asset": "CBBTC",
+        "parity_group": "btc",
     }
     assert entry["cross_chain_parity"] is True
     assert entry["candidate_chain"] == "polygon"
     # Investigator note must mention the cross-token + cross-chain
     # reasoning so an analyst reading the brief can act on it.
-    assert "USDT" in entry["investigator_note"]
-    assert "USDC" in entry["investigator_note"]
+    assert "WBTC" in entry["investigator_note"]
+    assert "CBBTC" in entry["investigator_note"]
     assert "polygon" in entry["investigator_note"]
 
 

@@ -121,8 +121,10 @@ tracking.
 2. **Worker trace.** `recupero-worker` claims the case, runs the BFS
    trace, the cross-chain bridge continuations, the DEX-swap
    continuations, the perpetrator-trace, the CEX-continuity pass, and
-   the indirect-exposure pass. Per-case API budget is capped by
-   `RECUPERO_API_BUDGET_USD_PER_CASE`.
+   the indirect-exposure pass. In v0.32.1+ industry-best mode the
+   per-case API budget cap is DISABLED by default (set
+   `RECUPERO_API_BUDGET_USD_PER_CASE` to a positive value to opt in).
+   See `docs/INDUSTRY_BEST_MODE.md` for the trade-offs.
 3. **Build deliverables.** The worker emits the forensic brief,
    per-exchange freeze letters, the LE handoff package, and the
    executive summary. Each artifact passes through `validators/`

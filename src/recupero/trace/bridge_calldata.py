@@ -588,6 +588,41 @@ def decode_bridge_calldata(
         or "l2standardbridge" in proto_compact
     ):
         return _decode_base_l1(method_id, args_blob, data)
+    # v0.32.1 W5 (round-2 adversary Route 1' close-out): 7 additional
+    # rollup-canonical L2 bridges. Polygon zkEVM reuses the Polygon-PoS
+    # depositFor / depositEtherFor calldata shape. The remaining six
+    # (Linea, Scroll, Blast, opBNB, Mantle, Manta Pacific) all reuse
+    # the OP-Stack L1StandardBridge ABI (Linea + Scroll expose a
+    # depositERC20-shaped surface that is calldata-compatible; Blast,
+    # opBNB, Mantle, Manta are direct OP-Stack derivatives). The chain
+    # override is applied here so the BridgeDecodeResult carries the
+    # correct destination_chain regardless of which OP-Stack decoder
+    # produces it.
+    if "polygon" in proto_compact and (
+        "zkevm" in proto_compact or "polygonzkevm" in proto_compact
+    ):
+        result = _decode_polygon_pos(method_id, args_blob, data)
+        if result is not None:
+            return BridgeDecodeResult(
+                destination_chain="polygon_zkevm",
+                destination_address=result.destination_address,
+                bridge_method=result.bridge_method,
+                confidence=result.confidence,
+                raw_calldata_excerpt=result.raw_calldata_excerpt,
+            )
+        return None
+    if "linea" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "linea")
+    if "scroll" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "scroll")
+    if "blast" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "blast")
+    if "opbnb" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "opbnb")
+    if "mantle" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "mantle")
+    if "manta" in proto_compact and "pacific" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "manta")
     return None
 
 

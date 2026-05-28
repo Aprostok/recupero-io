@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -158,9 +158,127 @@ class DrainerFindings:
     classification_confidence: str = "low"
 
 
+@dataclass(frozen=True)
+class _MinimalToken:
+    """Subset of TokenRef shape needed by signal-2 matching."""
+    contract: str | None
+    symbol: str
+    decimals: int
+
+
+@dataclass(frozen=True)
+class _SyntheticTransfer:
+    """Lightweight stand-in for ``recupero.models.Transfer`` used by the
+    W7 contract-outflow prefetch path.
+
+    The fetched outflow dicts from ``adapter.fetch_*_outflows`` carry
+    the same field set as Transfer but as plain dict keys. Rather than
+    instantiate a real Transfer (which would invoke Pydantic validation
+    + the trace's price-enrichment side effects), we wrap each fetched
+    dict in this minimal shape that exposes JUST the attributes signal-2
+    reads: ``from_address``, ``to_address``, ``block_number``,
+    ``amount_raw``, ``amount_decimal``, ``token``.
+    """
+    from_address: str
+    to_address: str
+    block_number: int
+    amount_raw: str
+    amount_decimal: Any
+    token: _MinimalToken
+    tx_hash: str = ""
+
+
+def _prefetch_contract_outflows(
+    *,
+    adapter: Any,
+    contract_addr: str,
+    anchor_block: int,
+    window_blocks: int,
+    max_outflows: int,
+) -> list[Any]:
+    """Best-effort fetch of contract's outbound transfers around the
+    anchor block. Returns a list of ``_SyntheticTransfer`` rows that
+    quack like ``recupero.models.Transfer`` for signal-2 matching.
+
+    Bounded by ``max_outflows`` to keep the budget impact predictable.
+    Never raises — adapter failures degrade to "no extra signal".
+    """
+    if adapter is None or not isinstance(contract_addr, str) or not contract_addr:
+        return []
+    start_block = max(0, int(anchor_block) - int(window_blocks))
+    fetched: list[dict[str, Any]] = []
+    for method_name in ("fetch_erc20_outflows", "fetch_native_outflows"):
+        method = getattr(adapter, method_name, None)
+        if not callable(method):
+            continue
+        try:
+            rows = method(contract_addr, start_block)
+        except Exception as exc:  # noqa: BLE001 — never break drainer detection
+            log.debug(
+                "W7 prefetch: %s(%s, %s) failed: %s",
+                method_name, contract_addr, start_block, exc,
+            )
+            continue
+        if not rows:
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            blk = row.get("block_number")
+            if isinstance(blk, int) and abs(blk - anchor_block) > window_blocks:
+                continue
+            fetched.append(row)
+            if len(fetched) >= max_outflows:
+                break
+        if len(fetched) >= max_outflows:
+            break
+
+    out: list[Any] = []
+    for row in fetched:
+        try:
+            tok = row.get("token") or {}
+            # Accept both pydantic TokenRef + plain dict shapes.
+            tok_contract = (
+                getattr(tok, "contract", None)
+                if not isinstance(tok, dict)
+                else tok.get("contract")
+            )
+            tok_symbol = (
+                getattr(tok, "symbol", "")
+                if not isinstance(tok, dict)
+                else tok.get("symbol", "")
+            )
+            tok_decimals = (
+                getattr(tok, "decimals", 0)
+                if not isinstance(tok, dict)
+                else tok.get("decimals", 0)
+            )
+            out.append(_SyntheticTransfer(
+                from_address=str(row.get("from", "") or ""),
+                to_address=str(row.get("to", "") or ""),
+                block_number=int(row.get("block_number") or 0),
+                amount_raw=str(row.get("amount_raw") or "0"),
+                amount_decimal=row.get("amount_decimal"),
+                token=_MinimalToken(
+                    contract=tok_contract,
+                    symbol=tok_symbol or "",
+                    decimals=int(tok_decimals or 0),
+                ),
+                tx_hash=str(row.get("tx_hash") or ""),
+            ))
+        except (TypeError, ValueError, AttributeError) as exc:
+            log.debug("W7 prefetch: row coerce failed: %s", exc)
+            continue
+    return out
+
+
 def detect_drainer_pattern(
     case: Case,
     high_risk_db: dict[str, HighRiskEntry] | None = None,
+    *,
+    adapter: Any = None,
+    max_contract_outflows: int = 100,
+    max_contracts_to_probe: int = 16,
 ) -> DrainerFindings:
     """Top-level entry point. Combines all detection heuristics
     and returns a structured DrainerFindings.
@@ -177,6 +295,29 @@ def detect_drainer_pattern(
         unnamed.
       * Else → not classified as drainer (could be address typo,
         social engineering, exchange withdrawal mistake).
+
+    v0.32.1 W7 (round-2 CRIT-NEW-1 close-out): the original signal-2
+    algorithm read ``transfers_from.get(contract_addr, [])`` to find
+    the drainer's outflow — but BFS has ``policy.stop_at_contract=True``
+    so those outflows are never enumerated. Result: the signal silently
+    produced zero events on every single-seed drainer case. With an
+    ``adapter`` provided, signal-2 now PRE-FETCHES contract outflows
+    for any victim→unknown-contract destination not already in
+    ``transfers_from``. The fetch is bounded:
+
+      * ``max_contracts_to_probe`` distinct contract addresses (default
+        16) — most drainer kits route through 1-3 contracts; this is
+        well above the realistic ceiling.
+      * ``max_contract_outflows`` outflows per contract (default 100)
+        — drainers immediately forward within a few txs of the
+        approval-pull.
+
+    The fetch uses ``adapter.fetch_erc20_outflows`` /
+    ``adapter.fetch_native_outflows`` if available on the adapter
+    instance. Adapters that don't expose those methods (or are absent
+    entirely) preserve v0.32.0 behavior (no extra fetch, signal-2
+    fires only on multi-seed cases that incidentally visit the
+    contract).
     """
     findings = DrainerFindings()
     if not case.transfers:
@@ -283,6 +424,7 @@ def detect_drainer_pattern(
             transfers_to.setdefault(dst_key, []).append(t)
 
     seen_drainer_contracts: set[str] = set()
+    contracts_probed: set[str] = set()  # for W7 fetch-budget tracking
     for t in case.transfers:
         if _ck(t.from_address) != seed:
             continue
@@ -306,6 +448,41 @@ def detect_drainer_pattern(
         forwarded_token_symbol: str | None = None
         forwarded_amount: Any = None
         contract_outflows = transfers_from.get(contract_addr, [])
+
+        # v0.32.1 W7 (round-2 CRIT-NEW-1 close-out): if the BFS never
+        # enumerated this contract's outflows (because
+        # ``policy.stop_at_contract=True`` is the default), the
+        # ``contract_outflows`` list is empty and signal-2 silently
+        # produces nothing — the round-2 audit's primary trace finding.
+        # Pre-fetch the first ``max_contract_outflows`` outbound
+        # transfers within ±``same_block_window_blocks`` of the victim
+        # tx so the forwarding match below has something to work with.
+        # Bounded by ``max_contracts_to_probe`` so a 1000-counterparty
+        # case doesn't fan out RPC calls.
+        if (
+            not contract_outflows
+            and adapter is not None
+            and contract_addr not in contracts_probed
+            and len(contracts_probed) < max_contracts_to_probe
+        ):
+            contracts_probed.add(contract_addr)
+            fetched = _prefetch_contract_outflows(
+                adapter=adapter,
+                contract_addr=t.to_address,  # use original case
+                anchor_block=t.block_number,
+                window_blocks=same_block_window_blocks,
+                max_outflows=max_contract_outflows,
+            )
+            if fetched:
+                contract_outflows = fetched
+                # Cache for any subsequent iterations referencing the
+                # same contract (multi-token drains).
+                transfers_from[contract_addr] = fetched
+                log.info(
+                    "drainer signal-2 W7 prefetch: contract=%s "
+                    "fetched %d outflows around block %s",
+                    contract_addr, len(fetched), t.block_number,
+                )
         for f in contract_outflows:
             dst_eoa = _ck(f.to_address)
             if not dst_eoa or dst_eoa == seed:

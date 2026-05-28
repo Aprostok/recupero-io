@@ -114,7 +114,12 @@ def identify_dust_attack_destinations(
             a single source for the pattern to fire. Default 10 — well
             above any legitimate change-back behavior (which fans out
             to at most 2-3 addresses per swap) and below the smallest
-            published dust-shower attacks (50-200 destinations).
+            published dust-shower attacks (50-200 destinations). This
+            is a heuristic CUTOFF, NOT a depth limit — v0.32.1+
+            industry-best mode keeps it bounded at 10 (rather than
+            relaxing it) and instead defeats the "set fanout-1" adversary
+            via per-case HMAC randomization (see case_id param + the
+            ``recupero.security.per_case_randomization`` module).
         case_id: Optional case identifier. When provided, the
             ``min_fanout`` is per-case randomized via HMAC under a
             server-held secret (``RECUPERO_RANDOMIZATION_SECRET``).

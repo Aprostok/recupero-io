@@ -37,7 +37,7 @@ from recupero.models import Chain
 
 
 VICTIM = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
-ADDR_B = "1HysioKHnUMzVNquWUL3yiKpcW1pPLnMSp"
+ADDR_B = "12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX"
 ADDR_C = "1BoatSLRHtKNngkdXEeobR76b53LETtpyT"
 ADDR_D = "1LoveRPzn7VLDpFY4VKqcDPHmHv9rUKuvi"
 ADDR_E = "1FfmbHfnpaZjKFvyi1okTjJJusN455paPH"

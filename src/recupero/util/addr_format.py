@@ -32,7 +32,7 @@ Examples
 '0xabc'
 
 >>> short_address("0xABCDEF1234567890ABCDEF1234567890ABCDEF12", prefix=8, suffix=6)
-'0xABCDEF…DEF12'
+'0xABCDEF…CDEF12'
 """
 
 from __future__ import annotations

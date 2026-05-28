@@ -192,7 +192,10 @@ MIDAS_ISSUER = IssuerInfo(
     secondary_role="underlying yield strategy manager",
     asset_description="Midas-issued ERC-20 wrapper token representing a pre-deposit position in Maple Finance's syrupUSDT institutional credit strategy on the Plasma blockchain",
     kyc_required=True,
-    kyc_minimum="USD 125,000",
+    # v0.32.1 (LE-HIGH-1): render USD via the canonical `$X,YYY` prefix,
+    # never the bank-statement "USD 125,000" form (which collides with
+    # the $-prefixed amounts elsewhere on the same page).
+    kyc_minimum="$125,000",
     # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-4): freeze posture note,
     # consistent with the issuers.json seed for the msyrupUSDp contract.
     freeze_notes=(
@@ -351,6 +354,43 @@ def _make_brief_id(case_id: str, theft_tx_hash: str) -> str:
     seed = f"{case_id}|{theft_tx_hash}"
     suffix = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:6]
     return f"BRIEF-{case_id[:8]}-{suffix}"
+
+
+def _register_filters(env: Environment) -> None:
+    """Register every Jinja filter the brief templates depend on.
+
+    v0.32.1 (LE-HIGH-1, XSS test parity): single source of truth for the
+    filter set so any Jinja ``Environment`` rendering one of our brief
+    templates (le.html.j2, issuer_freeze_request.html.j2, …) registers
+    the SAME filters. ``generate_briefs`` calls it on the production
+    environment; the adversarial XSS suite — which constructs its own
+    isolated ``Environment`` to render ``le.html.j2`` with attacker
+    payloads — calls the identical helper, so the test env can never
+    drift out of sync and raise ``No filter named 'usd_prefix'`` on a
+    template that production renders fine.
+
+    Registers:
+      * ``pluralize`` — v0.17.2 (POLISH-4): ``{{ n | pluralize("hop") }}``
+        → "1 hop" / "2 hops"; 2-arg form overrides the plural ending
+        for irregular nouns (``pluralize("hop", "hops")``).
+      * ``usd_prefix`` — v0.32.1 (LE-HIGH-1): the LE template drops its
+        literal "USD " prose prefix and pipes bare numerics through this
+        filter, yielding "$X,YYY.ZZ" everywhere so the cover never mixes
+        "USD 21,317.94" next to "$29,273.63" on the same page. The
+        shared ctx keeps the raw values bare because the issuer-letter
+        template still prepends its own "USD " literal.
+      * ``safe_url`` / ``safe_text`` / ``short_address`` — XSS-audit
+        defense-in-depth (via ``register_safe_filters``): href / src
+        attributes neuter any ``javascript:`` / ``data:`` / ``vbscript:``
+        URL that slips through an upstream bug. Autoescape alone does
+        NOT block these — it only escapes the quote character.
+
+    Idempotent — re-registering on the same env is a harmless overwrite.
+    """
+    env.filters["pluralize"] = _pluralize_filter
+    env.filters["usd_prefix"] = _ensure_usd_prefix
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
 
 
 def generate_briefs(
@@ -946,30 +986,13 @@ def generate_briefs(
         # rendering as empty strings that look like missing data.
         undefined=StrictUndefined,
     )
-    # v0.17.2 (output polish POLISH-4): pluralization filter so
-    # templates can write `{{ n }} {{ n | pluralize("transfer") }}`
-    # and get "1 transfer" / "2 transfers" without manual ternaries.
-    # The 2-arg form lets callers override the plural ending for
-    # irregular nouns: `{{ n | pluralize("hop", "hops") }}`.
-    env.filters["pluralize"] = _pluralize_filter
-    # v0.32.1 (LE-HIGH-1): single-prefix USD filter for the LE
-    # template. The shared ctx (consumed by both the issuer freeze
-    # letter AND the LE handoff) keeps `usd_value_at_theft` etc. as
-    # bare numerics ("21,317.94") because the issuer-letter template
-    # already prepends a literal "USD " — touching that here would
-    # double-stamp. The LE template instead drops its literal "USD "
-    # prefix and pipes the bare value through this filter, yielding
-    # the standard "$X,YYY.ZZ" rendering everywhere on the LE handoff
-    # so the cover never mixes `USD 21,317.94` next to `$29,273.63`
-    # on the same page.
-    env.filters["usd_prefix"] = _ensure_usd_prefix
-    # XSS-audit defense-in-depth: register safe_url / safe_text
-    # filters so href / src attributes in templates can neuter any
-    # `javascript:` / `data:` / `vbscript:` URLs that slip through
-    # an upstream bug. Autoescape alone does NOT block these — it
-    # only escapes the quote character.
-    from recupero.reports._jinja_filters import register_safe_filters
-    register_safe_filters(env)
+    # v0.32.1 (LE-HIGH-1, XSS test parity): all filters the brief
+    # templates need are registered through a single reusable helper so
+    # an out-of-process Jinja Environment (e.g. the adversarial XSS
+    # suite, which builds its own env to render le.html.j2 in isolation)
+    # can register the EXACT same filter set with one call instead of
+    # drifting out of sync. See `_register_filters` below.
+    _register_filters(env)
 
     issuer_template = "issuer_freeze_request.html.j2"
     # The legacy maple.html.j2 hardcodes "is currently held in"

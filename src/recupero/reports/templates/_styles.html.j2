@@ -153,23 +153,21 @@
     font-family: var(--font-serif);
     font-size: 100pt;
     font-weight: bold;
-    /* v0.32.1 (LE-CRIT-3): 10% opacity allowed the underlying text
-     * ("(operator name not configured)") to read through clearly on
-     * the cover + signature block. Raise to 22% so a skim cannot
-     * miss the UNSIGNED marker even when the cover text is heavy
-     * serif. Still light enough that the document reads on
-     * black-and-white print. */
+    /* v0.32.1 (LE-CRIT-3): 10% opacity let the underlying unconfigured-
+     * operator placeholder text read through clearly on the cover +
+     * signature block. Raise to 22% so a skim cannot miss the UNSIGNED
+     * marker even when the cover text is heavy serif. Still light enough
+     * that the document reads on black-and-white print. */
     color: rgba(140, 16, 16, 0.22);
     z-index: 1000;
     pointer-events: none;
     letter-spacing: 0.15em;
   }
   /* v0.32.1 (LE-CRIT-3): explicit placeholder-line styling so the
-   * cover meta + signature block render "______________________" /
-   * "[Operator pending assignment]" rather than the literal
-   * "(operator name not configured)" debug placeholder. Heavier
-   * weight + slightly faded color signals "this needs a signature"
-   * not "this is missing data". */
+   * cover meta + signature block render a ruled signature line / a
+   * pending-assignment marker rather than the raw unconfigured-operator
+   * debug placeholder. Heavier weight + slightly faded color signals
+   * "this needs a signature" not "this is missing data". */
   .placeholder-line {
     display: inline-block;
     min-width: 22ch;

@@ -23,10 +23,12 @@ Retry policy: one immediate retry on `Exception` (transient
 network errors); if still failing, return None and leave cache
 untouched.
 
-# TODO(wave-4-integration): wire `is_contract` into trace.tracer
-# replacing the inline `try: get_code... except: assume contract`
-# block. Add a "uncertain-hop" annotation on the brief when None
-# returns propagate.
+Wired into ``trace.tracer`` (v0.32.1 W8): the BFS frontier expander
+calls this instead of the inline ``try: adapter.is_contract ... except:
+assume contract`` block, so a transient probe failure no longer
+poisons the cache for the worker's lifetime. On a twice-failed probe
+the tracer expands the hop once (conservative-but-not-permanent) and
+leaves the cache untouched for a later pass to re-resolve.
 """
 
 from __future__ import annotations
@@ -63,12 +65,31 @@ def _is_eoa_code(code: Any) -> bool:
     return False
 
 
-def _call_get_code(evm_adapter: Any, address: str) -> Any:
-    """Invoke adapter.get_code(address). Raises whatever the adapter raises."""
+def _probe_is_contract(evm_adapter: Any, address: str) -> bool:
+    """Best-effort single probe: is ``address`` a contract?
+
+    Resolution order, matching the adapter interface actually in use:
+
+      1. ``adapter.get_code(address)`` if exposed — byte-code based EOA
+         check (most precise; resistant to label-DB staleness). No
+         current adapter implements this, but the path is kept so a
+         future raw-RPC adapter gets the better signal for free.
+      2. ``adapter.is_contract(address)`` — the canonical
+         ``ChainAdapter`` interface (base.py:83). Every shipped adapter
+         (evm/bitcoin/solana/tron/cosmos) implements this; it returns a
+         bool directly.
+
+    Raises whatever the adapter raises (so the caller's retry +
+    don't-cache-on-failure policy can fire), or ``AttributeError`` if
+    the adapter exposes neither method.
+    """
     get_code = getattr(evm_adapter, "get_code", None)
-    if not callable(get_code):
-        raise AttributeError("evm_adapter has no get_code()")
-    return get_code(address)
+    if callable(get_code):
+        return not _is_eoa_code(get_code(address))
+    is_contract_fn = getattr(evm_adapter, "is_contract", None)
+    if callable(is_contract_fn):
+        return bool(is_contract_fn(address))
+    raise AttributeError("adapter exposes neither get_code() nor is_contract()")
 
 
 def is_contract(
@@ -116,15 +137,15 @@ def is_contract(
 
     # First attempt
     try:
-        code = _call_get_code(evm_adapter, addr)
+        result = _probe_is_contract(evm_adapter, addr)
     except Exception as exc:
         log.debug("is_contract: first attempt failed for %s: %s", addr, exc)
         # Retry once
         try:
-            code = _call_get_code(evm_adapter, addr)
+            result = _probe_is_contract(evm_adapter, addr)
         except Exception as exc2:
             log.info(
-                "is_contract: %s on %s — RPC failed twice (%s, %s). "
+                "is_contract: %s on %s — probe failed twice (%s, %s). "
                 "NOT caching; caller should treat as uncertain.",
                 addr,
                 chain,
@@ -134,8 +155,6 @@ def is_contract(
             return (None, "rpc-failure-do-not-cache")
 
     # Success: cache and return.
-    is_eoa = _is_eoa_code(code)
-    result = not is_eoa
     if isinstance(cache, dict):
         cache[key] = result
     return (result, "verified-contract" if result else "verified-eoa")

@@ -223,8 +223,12 @@ def test_crit3_real_investigator_renders_named_block(tmp_path: Path) -> None:
         ),
     )
     assert "Jane Investigator" in html
-    # Banner must NOT be present in this case.
-    assert "unsigned-banner" not in html
+    # Banner must NOT be present in this case. Check the banner ELEMENT +
+    # text — not the bare "unsigned-banner" token, since the
+    # `.unsigned-banner` CSS rule is always in the inlined stylesheet
+    # whether or not the banner div actually renders.
+    assert '<div class="unsigned-banner">' not in html
+    assert "UNSIGNED — Operator identity not configured" not in html
     # Placeholder-line must NOT be present.
     assert "[Operator pending assignment]" not in html
 

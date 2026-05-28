@@ -365,7 +365,17 @@ def recommend_le_routes(
         # other unparsed shapes. Use the parsed country with a graceful
         # "(unspecified)" fallback so the rendered note never says
         # "outside the US (None)" or doubles up the parens.
-        display_country = (parsed_country or country or "").strip() or "(unspecified)"
+        # v0.32.1 (LE-HIGH-5): drop TODO:/TBD/(unset)-style placeholder
+        # citizenship so a victim record with an unconfirmed location never
+        # typesets "Victim located outside the US (TODO: confirm ...)" into
+        # the law-enforcement handoff. An unresolved placeholder renders as
+        # "(unspecified)" exactly like a blank field.
+        _cand = (parsed_country or country or "").strip()
+        if _cand[:5].upper() == "TODO:" or _cand.upper() in (
+            "TBD", "(UNSET)", "(NOT ON RECORD)", "(NO VALUE)", "(OPERATOR NAME NOT CONFIGURED)",
+        ):
+            _cand = ""
+        display_country = _cand or "(unspecified)"
         plan.notes.append(
             f"Victim located outside the US ({display_country}). Filing "
             "channels are country-specific; this report's generic "

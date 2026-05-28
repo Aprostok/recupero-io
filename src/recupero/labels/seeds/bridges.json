@@ -4002,7 +4002,7 @@
     "_audit_status": "externally_verified_v031_2: WebSearch returned debridge-finance/debridge-solana-sdk and docs.debridge.com pages referencing DEbrdGj3HsRsAzx6uH4MKyREKxVAfBydijLUF3ygsFfh as the main Solana program ID"
   },
   {
-    "address": "0x40ec5b33f54e0e8a33a975908c5ba1c14e5bbbdf",
+    "address": "0x2a3DD3EB832aF982ec71669E178424b10Dca2EDe",
     "name": "Polygon zkEVM: L1 Bridge",
     "category": "bridge",
     "source": "manual_v0_32_1_round2_W5",
@@ -4010,13 +4010,13 @@
     "supports_to_chains": [
       "polygon_zkevm"
     ],
-    "follow_up_url": "https://etherscan.io/address/0x40ec5b33f54e0e8a33a975908c5ba1c14e5bbbdf",
-    "notes": "Polygon zkEVM PolygonZkEVMBridge — Ethereum-L1 entry point for the zkEVM rollup. Decodes via the polygon-pos ABI family (depositFor / depositEtherFor). Closes round-2 adversary audit Route 1' Hop-1 (Polygon zkEVM canonical bridge escape).",
+    "follow_up_url": "https://etherscan.io/address/0x2a3DD3EB832aF982ec71669E178424b10Dca2EDe",
+    "notes": "Polygon zkEVM PolygonZkEVMBridge — Ethereum-L1 entry point for the zkEVM rollup (bridgeAsset / bridgeMessage). Closes round-2 adversary audit Route 1' Hop-1 (Polygon zkEVM canonical bridge escape).",
     "added_at": "2026-05-28T00:00:00Z",
     "chain": "ethereum",
     "verified": false,
     "_v032_1_round2_W5_addition": true,
-    "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt. NB: the round-2 adversary audit also references 0x2a3DD3EB832aF982ec71669E178424b10Dca2EDe as the PolygonZkEVMBridge — operator should reconcile both addresses against polygonscan.com/Polygon zkEVM docs before relying for freeze decisions."
+    "_audit_status": "v0_32_1_corrected: the prior round-2 wire-up pasted the Polygon PoS ERC20Predicate address (0x40ec5b33…) by mistake, colliding with the existing 'Polygon: ERC20Predicate' entry. Replaced with the canonical PolygonZkEVMBridge L1 address. Operator should still confirm against polygonscan.com before freeze decisions (verified=false)."
   },
   {
     "address": "0xd19d4B5d358258f05D7B411E21A1460D11B0876F",

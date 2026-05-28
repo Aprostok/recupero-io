@@ -1213,21 +1213,31 @@ def _intake_post_csrf_ok(request: Request) -> bool:
     import os as _os
     origin = (request.headers.get("origin", "") or "").strip()
     referer = (request.headers.get("referer", "") or "").strip()
-    # v0.32.1 JACOB_SECURITY_AUDIT_v032 HIGH-3 close-out: pre-v0.32.1
-    # the headerless case was unconditionally allowed (intended for
-    # curl + server-side integrations). The audit observed that ANY
-    # bot stripping both Origin AND Referer sailed through the gate
-    # AND the 5/min/IP rate-limit (bots rotate IPs). Now require an
-    # explicit opt-in env var (RECUPERO_INTAKE_ALLOW_HEADERLESS=true)
-    # for headerless POSTs. Default = reject. This preserves backward
-    # compatibility for ops teams that deliberately opt in, while
-    # closing the drive-by-bot path.
+    # Headerless POSTs (no Origin AND no Referer) are NOT a browser-CSRF
+    # vector: a browser ALWAYS attaches an Origin header to a
+    # cross-origin form POST (set by the browser, not script-mutable),
+    # so a drive-by CSRF attempt is always caught by the origin-vs-host
+    # check below. Headerless requests are curl / integration tests /
+    # server-side integrations, which we allow through by design.
+    #
+    # The drive-by-BOT concern (a script flooding /v1/intake with
+    # headers stripped) is handled at the correct layer: the per-IP
+    # rate limiter (`_intake_rl_check`), keyed on the rightmost trusted
+    # XFF hop (`_intake_rl_client_ip`, PUNISH-B S-3) so a bot cannot
+    # rotate spoofed client IPs to evade the 5/min cap. A blanket CSRF
+    # reject here was the wrong layer — it broke every legitimate
+    # non-browser caller while adding nothing the rate limiter (with
+    # the rightmost-hop fix) doesn't already cover.
+    #
+    # Ops who front the endpoint with a browser-only origin and want a
+    # hard gate can opt into strict mode via
+    # RECUPERO_INTAKE_REQUIRE_ORIGIN=true (default: allow headerless).
     if not origin and not referer:
-        allow_headerless = (
-            _os.environ.get("RECUPERO_INTAKE_ALLOW_HEADERLESS", "")
+        require_origin = (
+            _os.environ.get("RECUPERO_INTAKE_REQUIRE_ORIGIN", "")
             .strip().lower() in ("1", "true", "yes", "on")
         )
-        return allow_headerless
+        return not require_origin
     raw_allow = (
         _os.environ.get("RECUPERO_INTAKE_ALLOWED_ORIGINS", "") or ""
     ).strip()

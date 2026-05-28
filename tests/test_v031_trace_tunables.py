@@ -27,14 +27,21 @@ import pytest
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _read_back_max_depth(monkeypatch: pytest.MonkeyPatch, env_value: str) -> int:
+def _read_back_max_depth(
+    monkeypatch: pytest.MonkeyPatch,
+    env_value: str,
+    hard_ceiling: int = 64,
+) -> int:
     """Smoke: parse env var the way tracer.py does and return the
     final clamped value (matches the tracer's own logic exactly).
-    Mirrors `cfg_max_depth = max(1, min(8, env_max_hops))`."""
+    Mirrors `cfg_max_depth = max(1, min(hard_ceiling, env_max_hops))`.
+
+    v0.32.1+ industry-best mode: hard_ceiling defaults to 64 (was 8).
+    Operators override via RECUPERO_TRACE_MAX_HOPS_HARD_CEILING."""
     monkeypatch.setenv("RECUPERO_TRACE_MAX_HOPS", env_value)
     try:
         env_max_hops = int(os.environ.get("RECUPERO_TRACE_MAX_HOPS", "2"))
-        return max(1, min(8, env_max_hops))
+        return max(1, min(hard_ceiling, env_max_hops))
     except (TypeError, ValueError):
         return 2
 
@@ -43,6 +50,9 @@ def test_max_hops_within_range(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _read_back_max_depth(monkeypatch, "4") == 4
     assert _read_back_max_depth(monkeypatch, "1") == 1
     assert _read_back_max_depth(monkeypatch, "8") == 8
+    # v0.32.1+ industry-best mode: values up to 64 are honored.
+    assert _read_back_max_depth(monkeypatch, "32") == 32
+    assert _read_back_max_depth(monkeypatch, "64") == 64
 
 
 def test_max_hops_clamps_below_one(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -53,12 +63,21 @@ def test_max_hops_clamps_below_one(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _read_back_max_depth(monkeypatch, "-5") == 1
 
 
-def test_max_hops_clamps_above_eight(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A trace deeper than 8 hops can blow past the API budget by
-    orders of magnitude (1.25M+ transfers in pathological fan-out)
-    and is never useful in practice — clamp DOWN to 8."""
-    assert _read_back_max_depth(monkeypatch, "99") == 8
-    assert _read_back_max_depth(monkeypatch, "2147483647") == 8
+def test_max_hops_clamps_above_hard_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v0.32.1+ industry-best mode: the hard ceiling is 64 by default
+    (was 8). Operators chasing a 30-50 hop APT laundering chain bump
+    RECUPERO_TRACE_MAX_HOPS to whatever they can fund — only typos
+    in the hundreds clamp down."""
+    assert _read_back_max_depth(monkeypatch, "99") == 64
+    assert _read_back_max_depth(monkeypatch, "2147483647") == 64
+
+
+def test_max_hops_honors_lowered_hard_ceiling(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Operators on quota-constrained API plans can lower the ceiling
+    by setting RECUPERO_TRACE_MAX_HOPS_HARD_CEILING."""
+    # Simulate operator lowering the ceiling to 8 (legacy).
+    assert _read_back_max_depth(monkeypatch, "99", hard_ceiling=8) == 8
+    assert _read_back_max_depth(monkeypatch, "10", hard_ceiling=8) == 8
 
 
 def test_max_hops_garbage_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:

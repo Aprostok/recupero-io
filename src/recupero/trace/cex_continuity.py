@@ -167,16 +167,16 @@ def _are_at_parity(token_a: str, token_b: str) -> bool:
 class CexContinuityLead:
     """One investigative lead.
 
-    The brief section that consumes these is framed as 'LEAD ONLY —
-    same-hot-wallet correlation, not proven re-emergence.' Operators
-    decide whether to follow up.
+    DELIBERATELY confidence='low'. The brief section that consumes
+    these is framed as 'LEAD ONLY — same-hot-wallet correlation, not
+    proven re-emergence.' Operators decide whether to follow up.
 
-    v0.32.1 HIGH-10 close-out adds tiered confidence:
-
-      * 'high'   — Tier 1: same symbol, same chain.
-      * 'medium' — Tier 2: same parity group, same chain.
-      * 'low'    — Tier 3: same parity group, DIFFERENT chain (4h
-                   window). Also covers the legacy single-tier path.
+    The v0.32.1 HIGH-10 cross-token / cross-chain matcher still runs
+    (it widens WHICH outflows count as a candidate via parity groups
+    and per-tier windows/tolerances), but the confidence label is
+    ALWAYS 'low' — a forensic-integrity invariant. This is a
+    CORRELATION across a tight time window, never a causation, so it
+    can never carry 'high'/'medium' confidence regardless of tier.
     """
     deposit_tx_hash: str
     deposit_address: str          # CEX hot wallet (the to_address of the deposit)
@@ -190,7 +190,7 @@ class CexContinuityLead:
     candidate_block_time: datetime
     delta_hours: float
     amount_match_pct: float        # |dep - wth| / dep, expressed as a fraction
-    confidence: str                # "high" | "medium" | "low"
+    confidence: str                # always "low" — by design (invariant)
     # v0.32.1 HIGH-10: cross-token + cross-chain parity metadata.
     candidate_token_symbol: str = ""
     candidate_chain: "Chain | None" = None
@@ -358,15 +358,20 @@ def identify_cex_continuity_leads(
         if usd_val < min_usd_d:
             continue
         token_sym = (t.token.symbol or "").upper() if t.token else ""
-        # v0.32.1 HIGH-10: noisy-token gate now applies ONLY when the
-        # token is not part of a parity group. Noisy stables (USDT,
-        # USDC, DAI) and noisy ETH still produce Tier-2/3 leads via
-        # the cross-token parity matcher; the noise problem was the
-        # SAME-symbol coincidence (millions of $250K USDT moves per
-        # hour), and the parity gate already disqualifies those by
-        # requiring a different symbol. Tier 1 same-symbol on USDT
-        # remains gated.
-        if token_sym in noisy_tokens and _parity_group(token_sym) is None:
+        # Forensic-integrity invariant: noisy tokens (USDT/USDC/DAI/
+        # ETH/WETH) are filtered out at the deposit gate. CEX hot
+        # wallets process millions of dollars of these per minute, so
+        # a $250K amount-match in a short window is statistical noise,
+        # not a re-emergence signal. A correlation on a noisy token is
+        # never strong enough to surface as a lead — so we drop the
+        # deposit before any (cost-incurring) adapter call.
+        #
+        # NOTE: an earlier v0.32.1 change tried to let noisy-symbol
+        # deposits through when they belonged to a parity group (to
+        # catch cross-token routes). That re-introduced exactly the
+        # coincidental-match noise this gate exists to suppress, so the
+        # strict gate is restored.
+        if token_sym in noisy_tokens:
             continue
         # v0.31.4 (Gap 1a): use case.incident_time so the CEX label at
         # the time of theft is applied, not today's.
@@ -520,7 +525,11 @@ def identify_cex_continuity_leads(
                     # Tier 1
                     tier_window_h = window_h
                     tier_tol_pct = tol_pct
-                    tier_confidence = "high"
+                    # Forensic-integrity invariant: this is a CORRELATION,
+                    # never a causation. CEX hot wallets commingle funds,
+                    # so even a same-symbol same-chain amount-match is only
+                    # a LEAD — confidence is ALWAYS "low" by design.
+                    tier_confidence = "low"
                 elif parity and same_chain:
                     # Tier 2
                     pg = _parity_group(deposit_token)
@@ -532,7 +541,8 @@ def identify_cex_continuity_leads(
                         "eth": _ETH_PARITY_TOLERANCE_PCT,
                         "btc": _BTC_PARITY_TOLERANCE_PCT,
                     }[pg]
-                    tier_confidence = "medium"
+                    # Invariant: correlation, not causation → always "low".
+                    tier_confidence = "low"
                     tier_parity_group = pg
                     tier_parity_match = {
                         "deposit_asset": deposit_token,

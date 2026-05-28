@@ -59,7 +59,13 @@ class TraceParams(BaseModel):
     stop_at_contract: bool = True  # stop traversal at contract destinations (DeFi pools/routers)
     stop_at_bridge: bool = True    # stop traversal at labeled bridges (can't follow cross-chain)
     incident_buffer_minutes: int = 60
-    max_transfers_per_address: int = 500
+    # v0.32.1+ industry-best mode: bumped 500 → 50000 so whale-wallet
+    # traces follow the full activity history (Reactor caps around
+    # 5,000). Override per-case via the env var
+    # RECUPERO_MAX_TRANSFERS_PER_ADDRESS or set to 0 to disable the
+    # cap entirely (the BFS still terminates on max_depth, deadline,
+    # and per-case transfer-cap gates).
+    max_transfers_per_address: int = 50000
     # If a wallet has more raw outflows than this, treat it as service-like
     # (OTC desk, unlabeled exchange, mixer-adjacent, etc.) and don't traverse
     # its children. We still keep the transfers we observed in the case

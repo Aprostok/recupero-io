@@ -303,9 +303,14 @@ def test_promote_confirm_hash_match_allows_write(
     expected = hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
     # No raise → success.
+    # v0.32.1+ wave-6: this test pins the confirm_sha256 happy-path; the
+    # multi-source-confirm gate (W2 wire-up) would otherwise reject the
+    # single-source promote. The bypass_multi_source kwarg is provided
+    # for exactly this scenario — testing the hash flow in isolation.
     result = auto_ingest.promote_candidate(
         candidate_id=42, reviewer="ops@recupero.io",
         seeds_dir=seeds_dir, confirm_sha256=expected,
+        bypass_multi_source=True,
     )
     assert result["promoted_to"] == str(seeds_dir / "bridges.json")
     after = json.loads((seeds_dir / "bridges.json").read_text(encoding="utf-8"))

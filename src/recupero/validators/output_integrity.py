@@ -161,6 +161,23 @@ def check_invariant_g(
         except (OSError, json.JSONDecodeError, ValueError):
             transactions = []
 
+    # v0.32.1: absence of transaction evidence is NOT evidence of
+    # fabrication. When no trace-graph is available (no embedded
+    # trace_evidence AND no trace_evidence.json on disk), reachability
+    # cannot be checked — emit a single WARNING rather than flagging
+    # every destination as a CRITICAL "unsupported" claim. When the
+    # transaction graph IS present, an unreachable destination remains a
+    # CRITICAL below (a real fabricated-destination signal).
+    if not transactions:
+        return [Violation(
+            check="invariant_g_chain_of_custody", severity="warning",
+            detail=(
+                "No trace transaction evidence available (no embedded "
+                "trace_evidence and no trace_evidence.json on disk); "
+                "chain-of-custody reachability could not be verified."
+            ),
+        )]
+
     seed_raw = brief.get("VICTIM_WALLET_FULL") or brief.get("seed_address")
     if not seed_raw:
         # No seed → every destination is unsupported by construction.
@@ -814,11 +831,79 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
         # Best-effort load of the case-level artifacts the semantic
         # checks consume. Missing inputs degrade individual checks to
         # no-ops rather than crashing the validator.
-        manifest = _safe_load_json(case_dir / "manifest.json") or freeze_brief
+        #
+        # CC3 fix: production manifests live under
+        # ``briefs/manifest_BRIEF-<case>-<hash>.json`` (per-issuer
+        # brief manifests) and/or ``briefs/manifest_case_<case>.json``
+        # (case-level rollup). Try those first; fall back to the
+        # legacy ``case_dir/manifest.json`` for older callers.
+        manifest: dict[str, Any] | None = None
+        if briefs_dir.is_dir():
+            for pattern in ("manifest_case_*.json", "manifest_BRIEF-*.json",
+                            "manifest_*.json"):
+                for p in sorted(briefs_dir.glob(pattern)):
+                    candidate = _safe_load_json(p)
+                    if candidate:
+                        manifest = candidate
+                        break
+                if manifest:
+                    break
+        if manifest is None:
+            manifest = _safe_load_json(case_dir / "manifest.json")
+        # Fall back to the brief itself so M/N can still pull incident
+        # time from INCIDENT_TIMESTAMP_UTC.
+        if manifest is None:
+            manifest = freeze_brief
+
         trace_evidence = _safe_load_json(case_dir / "trace_evidence.json")
         recovery_disclosure = _safe_load_json(case_dir / "recovery_disclosure.json")
         brief = freeze_brief
-        freeze_letters = freeze_asks if isinstance(freeze_asks, list) else None
+
+        # CC2 fix part 1: freeze_letters. ``freeze_asks.json`` is a
+        # dict (``{"by_issuer": {...}}``) in production, not a list.
+        # Normalize into a list of freeze-letter-shaped dicts so the
+        # invariants can iterate. Each issuer becomes one synthetic
+        # freeze-letter entry whose ``freeze_asks`` is the issuer's
+        # list of holdings.
+        freeze_letters: list[dict] | None = None
+        if isinstance(freeze_asks, list):
+            freeze_letters = [fl for fl in freeze_asks if isinstance(fl, dict)]
+        elif isinstance(freeze_asks, dict):
+            normalized: list[dict] = []
+            by_issuer = freeze_asks.get("by_issuer") or freeze_asks.get("freeze_asks")
+            if isinstance(by_issuer, dict):
+                for issuer, asks in by_issuer.items():
+                    if isinstance(asks, list):
+                        normalized.append({
+                            "issuer": issuer,
+                            "freeze_asks": asks,
+                        })
+            else:
+                # Top-level keys may be the issuer names directly.
+                for k, v in freeze_asks.items():
+                    if isinstance(v, list):
+                        normalized.append({"issuer": k, "freeze_asks": v})
+            # An optional explicit list under "letters" wins.
+            letters = freeze_asks.get("letters")
+            if isinstance(letters, list):
+                normalized = [fl for fl in letters if isinstance(fl, dict)]
+            if normalized:
+                freeze_letters = normalized
+
+        # CC2 fix part 2: le_handoff. Look for a sidecar JSON or, when
+        # only the rendered HTML exists, surface an empty dict so the
+        # cross-doc check still picks up case_id / victim_name keys
+        # from the HTML-stripped prose downstream. Multiple LE handoffs
+        # ship per case (one per issuer); we pass the first dict-shaped
+        # sidecar that exists.
+        le_handoff: dict | None = None
+        if briefs_dir.is_dir():
+            for p in sorted(briefs_dir.glob("le_handoff_*.json")):
+                candidate = _safe_load_json(p)
+                if candidate:
+                    le_handoff = candidate
+                    break
+
         # Gather rendered HTML files for the explorer-link check.
         artifact_html_files: dict[str, str] = {}
         if briefs_dir.is_dir():
@@ -827,15 +912,57 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
                     artifact_html_files[p.name] = _safe_read(p)
                 except Exception:  # noqa: BLE001
                     continue
+
+        # CC2 fix part 3: prose_text. Concatenate every AI-editorial
+        # field surfaced in the brief, plus any paragraph text we can
+        # cheaply extract from the rendered HTML files. Used by
+        # INVARIANT O to detect hallucinated addresses / USD figures
+        # / chain names in narrative copy.
+        prose_parts: list[str] = []
+        if isinstance(brief, dict):
+            for k in (
+                "INCIDENT_NARRATIVE_RECUPERO",
+                "INCIDENT_NARRATIVE_FIRST_PERSON",
+                "VICTIM_SUMMARY",
+                "incident_narrative",
+                "incident_narrative_first_person",
+                "victim_summary",
+                "narrative",
+                "summary",
+                "AI_EDITORIAL",
+            ):
+                v = brief.get(k)
+                if isinstance(v, str) and v.strip():
+                    prose_parts.append(v)
+                elif isinstance(v, list):
+                    prose_parts.extend(x for x in v if isinstance(x, str))
+        # HTML <p> bodies — best-effort tag strip.
+        _p_re = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+        _tag_re = re.compile(r"<[^>]+>")
+        for fname, html in artifact_html_files.items():
+            # Limit to narrative-bearing artifacts to avoid scraping
+            # boilerplate from every rendered file.
+            if not (fname.startswith("le_handoff_")
+                    or fname.startswith("trace_report_")
+                    or fname.startswith("victim_summary_")
+                    or fname.startswith("engagement_letter_")
+                    or fname.startswith("freeze_request_")):
+                continue
+            for pm in _p_re.finditer(html):
+                txt = _tag_re.sub("", pm.group(1)).strip()
+                if txt:
+                    prose_parts.append(txt)
+        prose_text: str | None = "\n\n".join(prose_parts) if prose_parts else None
+
         semantic_violations = run_semantic_invariants(
             brief=brief,
             freeze_letters=freeze_letters,
-            le_handoff=None,
+            le_handoff=le_handoff,
             trace_evidence=trace_evidence,
             manifest=manifest,
             recovery_disclosure=recovery_disclosure,
             artifact_html_files=artifact_html_files,
-            prose_text=None,
+            prose_text=prose_text,
         )
         result.checks_run.append("semantic_invariants_g_through_p")
         result.violations.extend(semantic_violations)
@@ -4470,19 +4597,21 @@ def _check_cex_continuity_leads_framed(
                 ),
             ))
 
-        # v0.32.1 HIGH-10 close-out: leads now carry tiered confidence
-        # (high/medium/low) per audit. Tier 2/3 cross-token / cross-chain
-        # leads are explicitly framed as LEADS (lead_only=True, the
-        # framing prose, no destination_* keys) but the confidence label
-        # mirrors the tier. Accept the full set instead of pinning to
-        # "low" — the lead_only + framing fields carry the "never publish
-        # as confirmed destination" contract.
-        if lead.get("confidence") not in ("high", "medium", "low"):
+        # Forensic-integrity invariant: CEX-continuity leads are
+        # CORRELATIONS, not causations, so confidence MUST be "low" —
+        # ALWAYS. The cross-token / cross-chain (HIGH-10) matcher widens
+        # which outflows qualify as candidates, but the confidence label
+        # never escalates above "low" (the lead_only + framing fields
+        # carry the "never publish as confirmed destination" contract,
+        # and the confidence label must not contradict them). Anything
+        # other than "low" (including high/medium/empty/missing) is a
+        # violation.
+        if lead.get("confidence") != "low":
             violations.append(Violation(
                 check="cex_continuity_leads_framed", severity="high",
                 detail=(
-                    f"CEX_CONTINUITY_LEADS[{idx}].confidence must be one of "
-                    f"high/medium/low (got {lead.get('confidence')!r})"
+                    f"CEX_CONTINUITY_LEADS[{idx}].confidence must be "
+                    f"\"low\" (got {lead.get('confidence')!r})"
                 ),
             ))
 

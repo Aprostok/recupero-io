@@ -92,9 +92,12 @@ def test_async_surface_is_minimal_and_locked(parsed):
 def test_async_count_matches_baseline(parsed):
     """Lock the count so silent additions to api/* also get a code-review nudge."""
     total = sum(len(_async_funcs(t)) for _, t in parsed)
-    # As of this audit: 12 in api/app.py + 1 in api/auth.py = 13.
-    assert total == 13, (
-        f"async def count drifted to {total} (was 13). Update baseline and "
+    # As of this audit: 13 in api/app.py + 1 in api/auth.py = 14.
+    # (v0.32.1: +review_gate_ui — a static-template HTMLResponse, same
+    # non-blocking shape as intake_form_get; verified against the
+    # blocking-IO rule in test_no_blocking_io_inside_async_def.)
+    assert total == 14, (
+        f"async def count drifted to {total} (was 14). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

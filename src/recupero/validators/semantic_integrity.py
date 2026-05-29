@@ -139,7 +139,18 @@ _ADDR_EXPLORER_HOSTS: dict[str, tuple[str, ...]] = {
     "bsc": ("bscscan.com",),
     "avalanche": ("snowtrace.io", "subnets.avax.network"),
     "fantom": ("ftmscan.com",),
+    # v0.32.1 (output-audit HIGH): INVARIANT L silently SKIPPED its
+    # cross-chain mis-attribution check for any chain absent from this
+    # map (`if not allowed: continue`). Production
+    # _common.ADDRESS_EXPLORER_BY_CHAIN keys zkSync as "zksync" and ships
+    # linea/blast/scroll, but this registry keyed it "zksync_era" and
+    # omitted the others — so an EVM 0x… Linea/Blast/Scroll/zkSync holding
+    # rendered with an etherscan.io link was NOT flagged. Aligned here.
+    "zksync": ("explorer.zksync.io", "era.zksync.network"),
     "zksync_era": ("explorer.zksync.io", "era.zksync.network"),
+    "linea": ("lineascan.build",),
+    "blast": ("blastscan.io",),
+    "scroll": ("scrollscan.com",),
     "tron": ("tronscan.org", "tronscan.io"),
     "solana": ("solscan.io", "solana.fm", "explorer.solana.com"),
     "bitcoin": ("blockstream.info", "mempool.space", "btcscan.org"),

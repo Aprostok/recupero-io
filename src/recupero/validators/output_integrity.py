@@ -529,7 +529,15 @@ def check_invariant_i(
     return violations
 
 
-_DOLLAR_RE = re.compile(r"\$\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
+# v0.32.1 (output-audit HIGH, false-negative): also match the bank-
+# statement "USD 3,600,000.00" form, not just "$3,600,000.00". The
+# issuer_freeze_request template renders the theft headline as
+# `USD {{ ... }}`; with a $-only regex the cross-document USD reconciler
+# (invariant_i) never parsed that figure, so a freeze-request total could
+# silently diverge from the brief total and NO invariant fired. The
+# `\bUSD\s+` branch requires a word boundary + whitespace so it does not
+# false-match the USDC / USDT token symbols (e.g. "USDC 1,000").
+_DOLLAR_RE = re.compile(r"(?:\$\s*|\bUSD\s+)([0-9][0-9,]*(?:\.[0-9]+)?)")
 
 
 def _extract_dollar_amounts(text: str) -> list[Decimal]:

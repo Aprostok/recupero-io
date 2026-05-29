@@ -1310,12 +1310,34 @@ def _intake_rl_client_ip(request: Request) -> str:
             if candidate:
                 return candidate
 
-    # x-real-ip is set by some edge proxies after XFF normalization.
-    # Still client-influenceable through misconfiguration, but a
-    # better default than leftmost-XFF.
+    # x-real-ip is set by some edge proxies after XFF normalization, but
+    # it is ALSO a client-settable header. Without a declared trusted
+    # proxy (RECUPERO_TRUSTED_PROXY_HOPS) we cannot distinguish an
+    # edge-set value from a spoofed one.
+    #
+    # v0.32.1 (security-audit HIGH): in a detected PRODUCTION environment
+    # with no trusted-hop declaration, REFUSE to bucket on the spoofable
+    # x-real-ip — otherwise a bot rotating `X-Real-IP:` per request evades
+    # the per-IP intake rate limit, which (now that header-less POSTs are
+    # allowed) is the SOLE bot defense for the unauthenticated
+    # POST /v1/intake. Fall through to the socket peer (the real TCP peer,
+    # not client-controllable). Operators behind a trusted edge proxy
+    # should set RECUPERO_TRUSTED_PROXY_HOPS to restore per-client
+    # bucketing via the rightmost-hop path above. In non-prod we keep
+    # x-real-ip for local-dev convenience.
     real_ip = (request.headers.get("x-real-ip", "") or "").strip()
     if real_ip:
-        return real_ip
+        spoofable = trusted_hops == 0
+        if not spoofable:
+            return real_ip
+        try:
+            from recupero.api.auth import _is_production_environment
+            in_prod = _is_production_environment()
+        except Exception:  # noqa: BLE001 — never break the hot path on detection
+            in_prod = False
+        if not in_prod:
+            return real_ip
+        # prod + no trusted hops → x-real-ip is untrusted; fall through.
 
     if request.client and request.client.host:
         return request.client.host

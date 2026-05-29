@@ -236,6 +236,13 @@ def _build_base_context(brief: dict[str, Any]) -> dict[str, Any]:
     brief. Used as the base for each template render."""
     now_iso = resolve_render_time().isoformat(timespec="seconds")
     incident_date = brief.get("INCIDENT_DATE") or ""
+    # v0.32.1 (output-audit MEDIUM): sanitize free-text victim fields so a
+    # work-marker placeholder sentinel (the unconfirmed-state kind, or
+    # "(unset)", …) cannot typeset verbatim into an MLAT / 18 USC §3512 /
+    # 314(b) / subpoena draft. The LE-handoff path already runs this; the
+    # legal-request path did not. Reuse the canonical brief sanitizer
+    # (lazy import — brief imports legal_requests lazily, so no cycle).
+    from recupero.reports.brief import _sanitize_placeholder
     return {
         "case_id": brief.get("CASE_ID") or "(case-id missing)",
         "generated_at": now_iso.replace("+00:00", "Z"),
@@ -243,8 +250,8 @@ def _build_base_context(brief: dict[str, Any]) -> dict[str, Any]:
         "incident_type": brief.get("INCIDENT_TYPE") or "the underlying incident",
         "total_loss_usd": brief.get("TOTAL_LOSS_USD") or "$0.00",
         "victim": {
-            "name": brief.get("VICTIM_NAME") or "[victim name]",
-            "jurisdiction": brief.get("VICTIM_JURISDICTION") or "[jurisdiction]",
+            "name": _sanitize_placeholder(brief.get("VICTIM_NAME")) or "[victim name]",
+            "jurisdiction": _sanitize_placeholder(brief.get("VICTIM_JURISDICTION")) or "[jurisdiction]",
         },
         "investigator": {
             "name": brief.get("INVESTIGATOR_NAME") or "[investigator name]",

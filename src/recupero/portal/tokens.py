@@ -33,7 +33,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, NamedTuple
 from uuid import UUID
 
-import psycopg
+import psycopg  # noqa: F401 — re-exported for the test-mock seam: the
+# token-verification tests patch ``recupero.portal.tokens.psycopg.connect``
+# to exercise the DB path without a live Postgres. verify_token() reaches
+# the DB via ``recupero._common.db_connect`` (which calls psycopg.connect),
+# so this module-level name must remain importable for that patch target.
 from psycopg.rows import dict_row
 
 from recupero._common import db_connect

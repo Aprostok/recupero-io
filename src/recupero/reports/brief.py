@@ -20,10 +20,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re as _re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -108,6 +107,7 @@ from recupero._common import (
 from recupero._common import (
     explorer_name_for_chain as _common_explorer_name_for_chain,
 )
+
 # v0.30.0 (F7): operator-identity predicate. Wrapped in a safe-import
 # helper so a brief render never crashes because of an unexpected
 # import-time error in _common.py — the worst case becomes "DRAFT

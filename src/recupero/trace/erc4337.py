@@ -27,8 +27,7 @@ The BFS/brief layer consumes the structured output.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from decimal import Decimal
+from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger(__name__)

@@ -69,21 +69,18 @@ The full audit is in ``docs/JACOB_VALIDATOR_AUDIT_v032.md``.
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections import defaultdict, deque
-from datetime import datetime, timedelta, timezone
+from collections.abc import Iterable
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 # Re-use the Violation contract from the structural module so the
 # dispatcher can fold semantic results into the same ValidationResult.
 from recupero.validators.output_integrity import (
     Violation,
-    _safe_load_json,  # type: ignore[attr-defined]
-    _safe_read,       # type: ignore[attr-defined]
     _parse_usd_string,  # type: ignore[attr-defined]
 )
 
@@ -1099,11 +1096,11 @@ def check_invariant_m_time_window_coherence(
         return []
     incident_time = _parse_iso(_get_field(manifest, *_KEYS_INCIDENT_TIME))
     generated_at = (_parse_iso(_get_field(manifest, *_KEYS_GENERATED_AT))
-                    or datetime.now(timezone.utc))
+                    or datetime.now(UTC))
     if incident_time and incident_time.tzinfo is None:
-        incident_time = incident_time.replace(tzinfo=timezone.utc)
+        incident_time = incident_time.replace(tzinfo=UTC)
     if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=timezone.utc)
+        generated_at = generated_at.replace(tzinfo=UTC)
     if not incident_time:
         return []
     pre_window = incident_time - timedelta(minutes=pre_incident_window_minutes)
@@ -1118,7 +1115,7 @@ def check_invariant_m_time_window_coherence(
         if bt is None:
             continue
         if bt.tzinfo is None:
-            bt = bt.replace(tzinfo=timezone.utc)
+            bt = bt.replace(tzinfo=UTC)
         if bt < pre_window:
             violations.append(Violation(
                 check="invariant_m_time_window_coherence",
@@ -1176,7 +1173,7 @@ def check_invariant_n_stale_label_pit(
     if not incident_time:
         return []
     if incident_time.tzinfo is None:
-        incident_time = incident_time.replace(tzinfo=timezone.utc)
+        incident_time = incident_time.replace(tzinfo=UTC)
     violations: list[Violation] = []
     for key in ("labels", "label_citations", "cited_labels",
                 "LABELS", "LABEL_CITATIONS", "CITED_LABELS"):
@@ -1191,7 +1188,7 @@ def check_invariant_n_stale_label_pit(
             label_name = label.get("name") or label.get("category") or "?"
             if valid_from:
                 if valid_from.tzinfo is None:
-                    valid_from = valid_from.replace(tzinfo=timezone.utc)
+                    valid_from = valid_from.replace(tzinfo=UTC)
                 if valid_from > incident_time:
                     violations.append(Violation(
                         check="invariant_n_stale_label_pit",
@@ -1205,7 +1202,7 @@ def check_invariant_n_stale_label_pit(
                     ))
             if valid_to:
                 if valid_to.tzinfo is None:
-                    valid_to = valid_to.replace(tzinfo=timezone.utc)
+                    valid_to = valid_to.replace(tzinfo=UTC)
                 if valid_to < incident_time:
                     violations.append(Violation(
                         check="invariant_n_stale_label_pit",

@@ -808,8 +808,9 @@ def _job_label_auto_ingest() -> None:
 def _job_stale_label_alert() -> None:
     """Flag labels whose added_at is > 90 days old."""
     log.info("cron: running stale-label alert")
-    from pathlib import Path
     import json
+    from pathlib import Path
+
     from recupero._common import atomic_write_text
 
     seeds_dir = (

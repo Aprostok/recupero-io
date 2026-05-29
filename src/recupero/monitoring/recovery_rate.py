@@ -51,7 +51,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -88,7 +87,7 @@ _CACHE_TTL_SECONDS: float = 60.0
 
 # Process-wide cache. Keyed by DSN so a test harness using a separate
 # DB doesn't accidentally inherit prod numbers.
-_CACHE: dict[str, tuple[float, "RecoveryStats"]] = {}
+_CACHE: dict[str, tuple[float, RecoveryStats]] = {}
 
 
 @dataclass(frozen=True)
@@ -337,7 +336,6 @@ def _query_recovery_stats(dsn: str) -> RecoveryStats:
     avoids 30+ separate queries when generating the intake portal
     disclosure on every request.
     """
-    import psycopg
     from psycopg.rows import dict_row
 
     from recupero._common import db_connect

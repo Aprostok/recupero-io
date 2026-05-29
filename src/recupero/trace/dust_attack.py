@@ -63,7 +63,6 @@ from __future__ import annotations
 import logging
 import math
 from decimal import Decimal
-from typing import Iterable
 
 from recupero.models import Transfer
 

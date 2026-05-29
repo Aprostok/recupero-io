@@ -46,7 +46,7 @@ hash can only contribute one set, and a typical case sees ≤ 10k txs.
 from __future__ import annotations
 
 import threading
-from typing import Iterable
+from collections.abc import Iterable
 
 # Map of tx_hash → frozenset of canonical-form input addresses.
 _BTC_INPUTS_BY_TX: dict[str, frozenset[str]] = {}

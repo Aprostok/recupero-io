@@ -18,7 +18,6 @@ dashboard surfaces every issuer with letter history.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 

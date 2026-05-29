@@ -1289,10 +1289,7 @@ def _decode_axelar(
         if isinstance(addr_str, str):
             s = addr_str.strip()
             # EVM 0x-hex address
-            if s.startswith("0x") and len(s) == 42:
-                dest_address = s
-            # Cosmos bech32 — accept verbatim (operator follow-up)
-            elif len(s) > 10 and len(s) < 100:
+            if s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100:
                 dest_address = s
 
         confidence = (
@@ -1539,9 +1536,7 @@ def _decode_squid(
         dest_address: str | None = None
         if isinstance(addr_str, str):
             s = addr_str.strip()
-            if s.startswith("0x") and len(s) == 42:
-                dest_address = s
-            elif len(s) > 10 and len(s) < 100:
+            if s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100:
                 dest_address = s
 
         confidence = (

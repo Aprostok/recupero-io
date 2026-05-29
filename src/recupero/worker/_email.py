@@ -231,6 +231,7 @@ _RESEND_RETRY_WAITS_SEC = (5, 15, 30)
 # Ruff F401 wants to remove it (no in-file reference); that breaks
 # every DB-mock test in the suite.
 import psycopg  # noqa: F401, E402
+
 from recupero._common import db_connect  # noqa: E402
 from recupero._common import env_truthy as _is_truthy_env
 

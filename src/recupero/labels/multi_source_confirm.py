@@ -35,7 +35,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 #: Categories whose mislabeling causes operationally-catastrophic
 #: outcomes (wrong-entity freeze letter, swallowed trace). All other
 #: categories (dex_pool, lp_token, defi_protocol, etc.) can be

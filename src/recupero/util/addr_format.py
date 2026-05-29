@@ -37,8 +37,6 @@ Examples
 
 from __future__ import annotations
 
-from typing import Optional
-
 __all__ = ["short_address"]
 
 
@@ -51,7 +49,7 @@ _ELLIPSIS = "…"
 
 
 def short_address(
-    addr: Optional[str],
+    addr: str | None,
     prefix: int = 6,
     suffix: int = 4,
     *,

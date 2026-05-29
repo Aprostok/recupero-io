@@ -113,22 +113,22 @@ _BTC_PARITY = frozenset({
 # match enforce that the candidate token actually exists on the
 # candidate chain. Until per-chain divergence ships, every chain has
 # the same parity set.
-def _per_chain_table(symbols: frozenset[str]) -> "dict[Chain, frozenset[str]]":
+def _per_chain_table(symbols: frozenset[str]) -> dict[Chain, frozenset[str]]:
     chains = (
         Chain.ethereum, Chain.tron, Chain.bsc, Chain.polygon,
         Chain.arbitrum, Chain.optimism, Chain.base, Chain.avalanche,
         Chain.solana,
     )
-    return {c: symbols for c in chains}
+    return dict.fromkeys(chains, symbols)
 
 
-STABLECOIN_PARITY_GROUPS: "dict[Chain, frozenset[str]]" = (
+STABLECOIN_PARITY_GROUPS: dict[Chain, frozenset[str]] = (
     _per_chain_table(_STABLE_PARITY)
 )
-ETH_PARITY_GROUPS: "dict[Chain, frozenset[str]]" = (
+ETH_PARITY_GROUPS: dict[Chain, frozenset[str]] = (
     _per_chain_table(_ETH_PARITY)
 )
-BTC_PARITY_GROUPS: "dict[Chain, frozenset[str]]" = {
+BTC_PARITY_GROUPS: dict[Chain, frozenset[str]] = {
     # WBTC-family lives mostly on EVM mainnets.
     Chain.ethereum: _BTC_PARITY,
     Chain.bsc: _BTC_PARITY,
@@ -193,7 +193,7 @@ class CexContinuityLead:
     confidence: str                # always "low" — by design (invariant)
     # v0.32.1 HIGH-10: cross-token + cross-chain parity metadata.
     candidate_token_symbol: str = ""
-    candidate_chain: "Chain | None" = None
+    candidate_chain: Chain | None = None
     parity_group: str | None = None        # "stable" | "eth" | "btc" | None
     parity_match: dict[str, str] | None = None  # {"deposit_asset","withdrawal_asset","parity_group"}
     cross_chain_parity: bool = False
@@ -222,7 +222,7 @@ def _resolve_cex_label(
     chain: Chain,
     label_store: LabelStore | None,
     *,
-    point_in_time: "datetime | None" = None,
+    point_in_time: datetime | None = None,
 ) -> tuple[str, str] | None:
     """Return ``(cex_name, category)`` if ``address`` is a labeled CEX
     hot wallet / deposit address; ``None`` otherwise.

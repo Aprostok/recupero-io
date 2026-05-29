@@ -121,7 +121,7 @@ def _hmac_unit_interval(case_id: str, threshold_name: str, secret: bytes) -> flo
         raise ValueError("case_id must be a non-empty string")
     if not isinstance(threshold_name, str) or not threshold_name:
         raise ValueError("threshold_name must be a non-empty string")
-    msg = f"{case_id}:{threshold_name}".encode("utf-8")
+    msg = f"{case_id}:{threshold_name}".encode()
     digest = hmac.new(secret, msg, hashlib.sha256).digest()
     (n,) = struct.unpack(">Q", digest[:8])
     return n / float(1 << 64)

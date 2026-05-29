@@ -21,8 +21,10 @@ from eth_utils import to_checksum_address
 from recupero import __version__
 from recupero.chains.base import ChainAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
-from recupero.labels.store import LabelStore
-from recupero.labels.store import lookup_pit_safe  # v0.31.4
+from recupero.labels.store import (
+    LabelStore,
+    lookup_pit_safe,  # v0.31.4
+)
 from recupero.models import (
     Address,
     Case,

@@ -39,11 +39,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
 import os
 import re
 import unicodedata
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -901,8 +900,8 @@ def promote_candidate(
     else:
         try:
             from recupero.labels.multi_source_confirm import (
-                requires_multi_source_confirm,
                 confirm_via_secondary_sources,
+                requires_multi_source_confirm,
             )
         except Exception as exc:  # noqa: BLE001 — never break promote on import
             log.warning(

@@ -86,6 +86,7 @@ from pathlib import Path
 # logs. Now we fail-closed at import — if defusedxml is missing, the
 # sync simply cannot run.
 from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
+
 # Compatibility alias retained for any downstream code reading the
 # old flag (always True now). Will be removed in a future cleanup.
 _XML_PARSER_HARDENED = True
@@ -137,7 +138,7 @@ _FORBIDDEN_NAME_CHARS = (
     "‪‫‬‭‮"
     "⁦⁧⁨⁩"
 )
-_NAME_SANITIZE_TABLE = str.maketrans({c: None for c in _FORBIDDEN_NAME_CHARS})
+_NAME_SANITIZE_TABLE = str.maketrans(dict.fromkeys(_FORBIDDEN_NAME_CHARS))
 
 
 def _sanitize_sdn_name(name: str) -> str:

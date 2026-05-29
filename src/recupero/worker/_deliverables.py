@@ -212,7 +212,7 @@ def build_all_deliverables(
         flow_hash_seed = (
             f"{case_id_for_hash}|{case.seed_address or ''}|"
             f"{len(case.transfers or [])}"
-        ).encode("utf-8")
+        ).encode()
         flow_hex = hashlib.sha256(flow_hash_seed).hexdigest()[:8]
         candidate_path = briefs_dir / f"flow_{flow_hex}.svg"
         # Pass freeze_brief so wallets in the FREEZABLE list get
@@ -702,6 +702,7 @@ def _write_case_manifest(
     import json
 
     from recupero._common import atomic_write_text
+
     # Honor SOURCE_DATE_EPOCH for reproducible-builds workflows so the
     # case manifest's `generated_at` field doesn't break byte-identical
     # idempotency checks (RIGOR-7 E2E). Falls back to wall-clock when

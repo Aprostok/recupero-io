@@ -86,7 +86,7 @@ import hashlib
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -588,7 +588,7 @@ def _is_skip_labeled(
     label_store: LabelStore | None,
     chain: Chain,
     *,
-    point_in_time: "datetime | None" = None,
+    point_in_time: datetime | None = None,
 ) -> bool:
     """True if the address has an explicit label that excludes it
     from clustering (exchange / bridge / mixer / DeFi / staking).

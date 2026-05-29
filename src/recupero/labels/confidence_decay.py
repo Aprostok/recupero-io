@@ -26,7 +26,6 @@ load time; bad values fall back to default with a WARN.
 from __future__ import annotations
 
 import logging
-import math
 import os
 from datetime import UTC, datetime, timedelta
 

@@ -127,7 +127,7 @@ class _Counter:
             ):
                 # Cardinality cap hit: fold into a single overflow series
                 # so we still record the event without unbounded growth.
-                key = tuple(sorted({k: _OVERFLOW_SENTINEL for k in clean}.items()))
+                key = tuple(sorted(dict.fromkeys(clean, _OVERFLOW_SENTINEL).items()))
             self._values[key] += amt
 
     def snapshot(self) -> dict[tuple[tuple[str, str], ...], float]:
@@ -173,7 +173,7 @@ class _Histogram:
                 key not in self._data
                 and len(self._data) >= _MAX_LABEL_CARDINALITY
             ):
-                key = tuple(sorted({k: _OVERFLOW_SENTINEL for k in clean}.items()))
+                key = tuple(sorted(dict.fromkeys(clean, _OVERFLOW_SENTINEL).items()))
             if key not in self._data:
                 self._data[key] = ([0] * len(self.buckets), 0.0, 0)
             counts, total, count = self._data[key]

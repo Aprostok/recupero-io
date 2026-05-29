@@ -40,7 +40,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 #: 4-byte selectors for Safe ownership-management functions.
 #: Constant lookup; key is the 10-char "0x" + 8 hex chars selector,
 #: value is the canonical method name we surface in the trace report.

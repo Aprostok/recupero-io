@@ -121,9 +121,9 @@ class Violation:
 
 
 def check_invariant_g(
-    case_dir: "Path | str | None",
+    case_dir: Path | str | None,
     brief: dict | None,
-) -> list["Violation"]:
+) -> list[Violation]:
     """INVARIANT G — Chain-of-custody completeness.
 
     Every brief-cited DESTINATIONS[].address must be reachable from
@@ -242,7 +242,7 @@ def check_invariant_g(
     return violations
 
 
-def check_invariant_h(brief: dict | None) -> list["Violation"]:
+def check_invariant_h(brief: dict | None) -> list[Violation]:
     """INVARIANT H — Confidence calibration.
 
     Two rules:
@@ -307,9 +307,9 @@ def check_invariant_h(brief: dict | None) -> list["Violation"]:
 
 
 def check_invariant_i(
-    case_dir: "Path | str | None",
+    case_dir: Path | str | None,
     brief: dict | None,
-) -> list["Violation"]:
+) -> list[Violation]:
     """INVARIANT I — Cross-document consistency.
 
     Compare the brief against the freeze_request_*.html and
@@ -3797,7 +3797,7 @@ def _check_subpoena_targets_depends_on_resolves(
     # (target-1 → target-1 ancestor includes target-1). Multi-node
     # cycles caught on the back-edge.
     WHITE, GRAY, BLACK = 0, 1, 2
-    color: dict[str, int] = {tid: WHITE for tid in known_ids}
+    color: dict[str, int] = dict.fromkeys(known_ids, WHITE)
     cycles_reported: set[tuple[str, ...]] = set()
 
     def _dfs_cycle(start: str, path: list[str]) -> None:

@@ -26,7 +26,6 @@ victim's side of the conversation.
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 

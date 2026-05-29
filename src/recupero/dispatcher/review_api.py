@@ -22,7 +22,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, status
@@ -79,7 +79,7 @@ def _dsn() -> str:
 
 
 def _now_utc_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

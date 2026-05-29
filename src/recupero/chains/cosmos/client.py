@@ -311,4 +311,4 @@ class CosmosLCDClient:
 
     def close(self) -> None:
         """No-op for the urllib fallback. Real http_get owners close their own."""
-        return None
+        return

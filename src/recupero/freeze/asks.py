@@ -35,8 +35,10 @@ from pathlib import Path
 from typing import Any
 
 from recupero.dormant.finder import DormantCandidate, TokenHolding
-from recupero.labels.store import LabelStore
-from recupero.labels.store import lookup_pit_safe  # v0.31.4
+from recupero.labels.store import (
+    LabelStore,
+    lookup_pit_safe,  # v0.31.4
+)
 from recupero.models import Case, Chain, Label, LabelCategory
 
 log = logging.getLogger(__name__)

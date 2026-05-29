@@ -485,15 +485,17 @@ def score_recovery(
     # Combined = MIN of contributors. Worst-case venue wins.
     role, who, jur_mult = min(multipliers, key=lambda t: t[2])
 
-    # Sanctions overlay. The brief is expected to surface this via
-    # `RISK_ASSESSMENT.ofac_exposure` (bool/str truthy). Conservative
-    # default: no overlay when the field is absent.
-    risk = brief.get("RISK_ASSESSMENT") or {}
-    ofac_exposed = bool(
-        risk.get("ofac_exposure")
-        or risk.get("sanctions_exposure")
-        or risk.get("touched_sanctioned_entity")
-    )
+    # Sanctions overlay. v0.32.1 (financial-audit CRITICAL): the auto-
+    # generated brief surfaces OFAC exposure as
+    # RISK_ASSESSMENT.summary.ofac_exposed_count (see
+    # risk_scoring.risk_scores_to_brief_section), NOT the top-level
+    # ofac_exposure/sanctions_exposure/touched_sanctioned_entity keys this
+    # code originally read — so the 0.30x multiplier NEVER fired on a real
+    # brief and EVERY sanctioned case was scored at full recoverability.
+    # Read the canonical shape via the shared helper (which also honors the
+    # legacy top-level keys for hand-authored / test briefs).
+    from recupero.trace.risk_scoring import brief_has_ofac_exposure
+    ofac_exposed = brief_has_ofac_exposure(brief)
     sanctions_mult = 0.30 if ofac_exposed else 1.00
     combined_mult = jur_mult * sanctions_mult
 

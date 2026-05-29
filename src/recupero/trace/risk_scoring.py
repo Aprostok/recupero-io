@@ -474,6 +474,45 @@ def risk_scores_to_brief_section(
     }
 
 
+def brief_has_ofac_exposure(brief: dict[str, Any] | None) -> bool:
+    """True when a brief's ``RISK_ASSESSMENT`` shows DIRECT OFAC exposure.
+
+    Single source of truth for the brief-shape contract. The canonical
+    producer (:func:`risk_scores_to_brief_section`) records OFAC exposure as
+    ``RISK_ASSESSMENT.summary.ofac_exposed_count`` (an int count of
+    directly-exposed addresses).
+
+    v0.32.1 (financial-audit CRITICAL): the recovery scorer + the
+    cooperation-instrument recommender originally read NON-EXISTENT
+    top-level keys (``ofac_exposure`` / ``sanctions_exposure`` /
+    ``touched_sanctioned_entity``), so the 0.30x sanctions recovery
+    multiplier NEVER fired on an auto-generated brief and every sanctioned
+    case was scored at FULL recoverability (and routed without
+    OFAC-license-bearing counsel). This helper reads the ACTUAL produced
+    shape; the legacy top-level keys remain honored as a fallback for
+    hand-authored / test briefs.
+    """
+    if not isinstance(brief, dict):
+        return False
+    risk = brief.get("RISK_ASSESSMENT")
+    if not isinstance(risk, dict):
+        return False
+    if (
+        risk.get("ofac_exposure")
+        or risk.get("sanctions_exposure")
+        or risk.get("touched_sanctioned_entity")
+    ):
+        return True
+    summary = risk.get("summary")
+    if isinstance(summary, dict):
+        try:
+            if int(summary.get("ofac_exposed_count") or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
 # ----- helpers ----- #
 
 

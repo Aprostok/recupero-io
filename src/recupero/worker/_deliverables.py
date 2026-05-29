@@ -454,9 +454,13 @@ def build_all_deliverables(
                     recommend_legal_instrument,
                 )
                 # Pull OFAC + IC3 signals for the instrument recommender.
-                _ofac_exposed = bool(
-                    (freeze_brief.get("RISK_ASSESSMENT") or {}).get("ofac_exposure")
-                )
+                # v0.32.1 (financial-audit CRITICAL): read the canonical
+                # RISK_ASSESSMENT.summary.ofac_exposed_count shape via the
+                # shared helper — the old top-level "ofac_exposure" key never
+                # existed on a real brief, so the recommender never saw OFAC
+                # exposure and never routed to OFAC-license-bearing counsel.
+                from recupero.trace.risk_scoring import brief_has_ofac_exposure
+                _ofac_exposed = brief_has_ofac_exposure(freeze_brief)
                 _ic3_case_id_for_rec = (
                     (freeze_brief.get("IC3_CASE_ID") or "").strip() or None
                 )

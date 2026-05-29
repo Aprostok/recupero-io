@@ -460,3 +460,56 @@ def test_expected_recovery_never_exceeds_total_loss() -> None:
         f"clamped per-issuer rows (${_sum_rows(est)}) must still sum to the "
         f"clamped headline (${est.expected_recovered_usd}); drift ${drift}"
     )
+
+
+# ---- v0.32.1 audit (untouched-surfaces): OFAC sanctions overlay fires ---- #
+#
+# CRITICAL regression: the recovery scorer's 0.30x sanctions multiplier
+# read brief keys (ofac_exposure / sanctions_exposure /
+# touched_sanctioned_entity) that the producer NEVER emits — it emits
+# RISK_ASSESSMENT.summary.ofac_exposed_count. So the overlay never fired
+# and every sanctioned case was scored at FULL recoverability.
+
+
+def test_brief_has_ofac_exposure_reads_canonical_summary_shape() -> None:
+    from recupero.trace.risk_scoring import brief_has_ofac_exposure
+    # Canonical produced shape.
+    assert brief_has_ofac_exposure(
+        {"RISK_ASSESSMENT": {"summary": {"ofac_exposed_count": 2}}}
+    ) is True
+    assert brief_has_ofac_exposure(
+        {"RISK_ASSESSMENT": {"summary": {"ofac_exposed_count": 0}}}
+    ) is False
+    # Legacy top-level keys still honored (hand-authored / test briefs).
+    assert brief_has_ofac_exposure({"RISK_ASSESSMENT": {"ofac_exposure": True}}) is True
+    # Absent / malformed → False (no spurious overlay).
+    assert brief_has_ofac_exposure({}) is False
+    assert brief_has_ofac_exposure({"RISK_ASSESSMENT": None}) is False
+    assert brief_has_ofac_exposure(None) is False
+
+
+def test_sanctions_overlay_applies_030x_on_ofac_exposed_brief() -> None:
+    """A sanctioned case (RISK_ASSESSMENT.summary.ofac_exposed_count > 0)
+    gets the 0.30x recovery multiplier + an ofac_sanctions driver. Pre-fix
+    the overlay read a dead key → full recoverability on sanctioned cases."""
+    freezable = [{"issuer": "Tether", "total_usd": "$1,000,000",
+                  "freeze_capability": "HIGH"}]
+    clean = score_recovery(
+        _brief(total_loss="$3,000,000", freezable=freezable),
+        auto_load_priors=False,
+    )
+    sanctioned_brief = _brief(total_loss="$3,000,000", freezable=freezable)
+    sanctioned_brief["RISK_ASSESSMENT"] = {"summary": {"ofac_exposed_count": 1}}
+    sanctioned = score_recovery(sanctioned_brief, auto_load_priors=False)
+
+    assert sanctioned.expected_recovered_usd < clean.expected_recovered_usd
+    ratio = float(sanctioned.expected_recovered_usd / clean.expected_recovered_usd)
+    assert 0.25 <= ratio <= 0.35, (
+        f"expected ~0.30x sanctions overlay; got ratio {ratio:.3f} "
+        f"(clean=${clean.expected_recovered_usd}, "
+        f"sanctioned=${sanctioned.expected_recovered_usd})"
+    )
+    assert any(d.factor == "ofac_sanctions" for d in sanctioned.drivers), (
+        f"expected an ofac_sanctions driver; got "
+        f"{[d.factor for d in sanctioned.drivers]}"
+    )

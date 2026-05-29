@@ -466,16 +466,26 @@ def csrf_client(monkeypatch):
     return TestClient(app)
 
 
-def test_intake_post_rejects_when_origin_and_referer_both_absent(csrf_client):
-    """v0.32.1 HIGH-3 — the canonical fix. curl/requests default to no
-    Origin AND no Referer; pre-fix this walked past the CSRF gate."""
+def test_intake_post_headerless_rejected_in_strict_mode(csrf_client, monkeypatch):
+    """v0.32.1 strict-CSRF opt-in. By DEFAULT header-less POSTs (no
+    Origin AND no Referer — curl, server-side integrations, tests) are
+    ALLOWED: a header-less request is not a browser-CSRF vector (a
+    browser always attaches Origin to a cross-origin form POST), and bot
+    abuse is handled by the per-IP rate limiter keyed on the rightmost
+    trusted XFF hop. Operators fronting the endpoint with a browser-only
+    origin opt into a hard gate via RECUPERO_INTAKE_REQUIRE_ORIGIN=true —
+    this pins that strict mode still 403s a header-less POST.
+
+    (The default-allow path is covered by test_api_route_authz and
+    tests/test_v0_25_intake*.)"""
+    monkeypatch.setenv("RECUPERO_INTAKE_REQUIRE_ORIGIN", "true")
     resp = csrf_client.post(
         "/v1/intake", data=_VALID_INTAKE_FORM,
         follow_redirects=False,
     )
     assert resp.status_code == 403, (
-        f"intake POST without Origin AND without Referer must now 403; "
-        f"got {resp.status_code}"
+        f"strict mode (RECUPERO_INTAKE_REQUIRE_ORIGIN=true) must 403 a "
+        f"header-less intake POST; got {resp.status_code}"
     )
 
 

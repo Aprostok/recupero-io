@@ -143,10 +143,14 @@ def check_invariant_g(
     if not destinations:
         return []
 
-    # Pull transactions from embedded trace_evidence OR from disk.
+    # Pull transactions from embedded trace_evidence OR from disk. Track
+    # whether a trace-evidence SOURCE was provided at all — that
+    # distinction drives the empty-evidence severity below.
     transactions: list[dict] = []
+    evidence_source_present = False
     embedded = brief.get("trace_evidence")
     if isinstance(embedded, dict):
+        evidence_source_present = True
         txs = embedded.get("transactions")
         if isinstance(txs, list):
             transactions = [t for t in txs if isinstance(t, dict)]
@@ -154,6 +158,7 @@ def check_invariant_g(
         try:
             p = Path(case_dir) / "trace_evidence.json"
             if p.is_file():
+                evidence_source_present = True
                 data = json.loads(p.read_text(encoding="utf-8"))
                 txs = data.get("transactions") if isinstance(data, dict) else None
                 if isinstance(txs, list):
@@ -161,14 +166,26 @@ def check_invariant_g(
         except (OSError, json.JSONDecodeError, ValueError):
             transactions = []
 
-    # v0.32.1: absence of transaction evidence is NOT evidence of
-    # fabrication. When no trace-graph is available (no embedded
-    # trace_evidence AND no trace_evidence.json on disk), reachability
-    # cannot be checked — emit a single WARNING rather than flagging
-    # every destination as a CRITICAL "unsupported" claim. When the
-    # transaction graph IS present, an unreachable destination remains a
-    # CRITICAL below (a real fabricated-destination signal).
+    # v0.32.1: empty transaction set — two very different cases:
+    #   * A trace_evidence SOURCE was provided but carries ZERO
+    #     transactions while the brief still claims destinations. That is
+    #     a fabrication signal (the brief ships "evidence" supporting
+    #     nothing) → CRITICAL.
+    #   * No trace-evidence source at all (no embedded block AND no
+    #     trace_evidence.json on disk). Reachability simply cannot be
+    #     verified — absence of evidence is not evidence of fabrication →
+    #     WARNING. (Production deliverables don't yet persist a separate
+    #     trace_evidence.json; see Phase-5 "ship the transaction graph".)
     if not transactions:
+        if evidence_source_present:
+            return [Violation(
+                check="invariant_g_chain_of_custody", severity="critical",
+                detail=(
+                    "Brief claims destinations but the trace_evidence it "
+                    "provides contains zero transactions — the chain of "
+                    "custody is unsupported by any underlying transfer."
+                ),
+            )]
         return [Violation(
             check="invariant_g_chain_of_custody", severity="warning",
             detail=(

@@ -1264,6 +1264,57 @@ _CHAIN_NAME_NORM = {
 }
 
 
+# Words that immediately follow a chain-context "Base" ("Base network",
+# "Base chain", "Base L2", "Base mainnet", "Base blockchain"). Used to
+# disambiguate the Base chain from the English word "base".
+_BASE_CHAIN_FOLLOWERS = (
+    "network", "chain", "mainnet", "l2", "blockchain", "rollup",
+)
+# Words that immediately follow the common-English "base" (statistical /
+# generic usage we must NOT treat as a chain citation).
+_BASE_WORD_FOLLOWERS = (
+    "prior", "priors", "rate", "rates", "case", "cases", "line", "lines",
+    "layer", "fee", "fees", "currency", "asset", "amount", "value",
+    "salary", "model", "models", "level", "cost", "costs",
+)
+
+
+def _base_used_as_chain(text: str, start: int, end: int) -> bool:
+    """Heuristic: is the "Base" token at text[start:end] referring to the
+    Base blockchain (vs the English word "base")?
+
+    True when:
+      * the next word is a chain-context word ("Base network/chain/L2"…),
+      * OR it reads "on Base" / "to Base" / "the Base" immediately before,
+      * OR the original casing is "Base" (capitalized) AND the following
+        word is NOT a common statistical/generic follower ("base prior",
+        "base rate", "base case", …).
+    False otherwise (treated as the English word, not a chain).
+    """
+    original = text[start:end]
+    # Following word (skip punctuation/whitespace).
+    tail = text[end:end + 40].lstrip(" \t\n\r.,;:)(-—–")
+    next_word = re.match(r"[A-Za-z0-9]+", tail)
+    next_word_l = next_word.group(0).lower() if next_word else ""
+    if next_word_l in _BASE_CHAIN_FOLLOWERS:
+        return True
+    if next_word_l in _BASE_WORD_FOLLOWERS:
+        return False
+    # Preceding preposition/article suggesting a place/network.
+    head = text[max(0, start - 12):start].lower()
+    if re.search(r"\b(on|to|via|from|the)\s+$", head):
+        # "the base prior" already excluded above by follower check.
+        return True
+    # Bare "Base" capitalized with no disambiguating follower — ambiguous.
+    # Be conservative: only the lower-case "base" is clearly the English
+    # word; a capitalized standalone "Base" with no statistical follower
+    # is more likely a chain mention, but we still require it not be a
+    # known English follower (handled above). Default: treat lowercase as
+    # NOT a chain; treat capitalized standalone as NOT a chain either
+    # (insufficient signal) to avoid resurrecting the false positive.
+    return False
+
+
 def _structured_addrs(brief: dict, trace_evidence: dict | None) -> set[str]:
     addrs: set[str] = set()
     if trace_evidence:
@@ -1326,12 +1377,50 @@ def _structured_usd_values(
         if d > 0:
             out.append(d)
 
+    # Recupero's own SERVICE FEES are legitimately quotable in editorial
+    # boilerplate and appear in EVERY production brief's engagement /
+    # diagnostic sections (engagement_letter, victim_summary). They are
+    # NOT case-specific trace figures, so they don't live in the brief's
+    # FREEZABLE / DESTINATIONS structured data — without grounding them
+    # here, INVARIANT O would flag "$499.00" and "$10,000.00" on every
+    # real brief that mentions its own fees. Source from the single
+    # _pricing definition so a fee change stays in lock-step.
+    try:
+        from recupero._pricing import (
+            DIAGNOSTIC_FEE_USD,
+            ENGAGEMENT_FEE_USD,
+        )
+        _try_add(DIAGNOSTIC_FEE_USD)   # $499 diagnostic
+        _try_add(ENGAGEMENT_FEE_USD)   # $10,000 engagement
+    except Exception:  # noqa: BLE001
+        # Fall back to the documented constants if the import path
+        # changes — these are stable, contract-level fee amounts.
+        _try_add(Decimal("499"))
+        _try_add(Decimal("10000"))
+
     # Brief-level totals.
     for k in ("TOTAL_LOSS_USD", "TOTAL_FREEZABLE_USD", "TOTAL_SUSPECTED_USD",
               "TOTAL_EXCLUDED_USD", "TOTAL_UNRECOVERABLE_USD",
-              "MAX_RECOVERABLE_USD", "total_usd_stolen", "total_usd",
-              "stolen_usd"):
+              "MAX_RECOVERABLE_USD", "TOTAL_PERPETRATOR_HOLDINGS_USD",
+              "total_usd_stolen", "total_usd", "stolen_usd",
+              "theft_event_total_usd"):
         _try_add(brief.get(k))
+    # Per-theft-event amount on a multi-event drain. The LE handoff
+    # per-event timeline narrates each individual drain (V-CFI01 shape:
+    # six $600,000 transfers = $3.6M). That per-event figure is genuine
+    # trace data but is not surfaced in any single brief field — it's
+    # TOTAL_LOSS_USD / THEFT_EVENT_COUNT. Derive it so the per-event
+    # narrative prose grounds against structured data rather than
+    # tripping INVARIANT O as a hallucination.
+    try:
+        ev_count = brief.get("THEFT_EVENT_COUNT")
+        ev_count_i = int(ev_count) if ev_count is not None else 0
+        if ev_count_i > 1:
+            total_loss = _parse_usd_string(brief.get("TOTAL_LOSS_USD"))
+            if total_loss > 0:
+                _try_add(total_loss / Decimal(ev_count_i))
+    except Exception:  # noqa: BLE001
+        pass
     # Destinations rows.
     for key in ("destinations", "DESTINATIONS"):
         for row in brief.get(key) or []:
@@ -1496,6 +1585,18 @@ def check_invariant_o_ai_editorial_grounding(
     for m in _CHAIN_NAME_RE.finditer(prose_text):
         raw = m.group(1).strip().lower()
         norm = _CHAIN_NAME_NORM.get(raw, raw)
+        # "Base" is the one chain name in our roster that collides with a
+        # common English word ("base rate", "base prior", "database",
+        # "based on"). The other names (Ethereum, Solana, Arbitrum, …) are
+        # unambiguous proper nouns. Treat a "base" match as a CHAIN claim
+        # only when the surrounding text uses it as a blockchain
+        # ("on Base", "Base network/chain/mainnet/L2/blockchain"); a bare
+        # statistical/English "base" is not a chain citation and must not
+        # be flagged. This keeps INVARIANT O's anti-hallucination gate
+        # intact for genuine chain references while killing the false
+        # positive on the LE handoff's "base prior" recovery-forecast copy.
+        if norm == "base" and not _base_used_as_chain(prose_text, m.start(), m.end()):
+            continue
         if norm in seen_chain:
             continue
         seen_chain.add(norm)

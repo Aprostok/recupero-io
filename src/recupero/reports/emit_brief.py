@@ -378,6 +378,14 @@ def _extract_destinations(
     per_addr_category: dict[str, str | None] = {}
     per_addr_is_mixer: dict[str, bool] = defaultdict(bool)
     per_addr_tokens: dict[str, set[str]] = defaultdict(set)
+    # RC-8: per-destination chain. Genuine multi-chain cases (e.g. an
+    # Ethereum theft bridged to an Arbitrum consolidation hub) carry the
+    # destination chain only on the post-bridge transfer's ``chain`` field.
+    # Surfacing it onto the DESTINATIONS row keeps the brief's structured
+    # data agreeing with editorial prose that names the consolidation chain
+    # (INVARIANT O grounds chains from DESTINATIONS rows). First-seen wins
+    # so the row reflects the chain the funds actually landed on.
+    per_addr_chain: dict[str, str] = {}
     # Display-case map: canonical → first-seen original case. Used so
     # the brief renders the EIP-55-style mixed-case form rather than
     # the lowercase canonical-key form (which is harder to spot-check
@@ -391,6 +399,13 @@ def _extract_destinations(
         if not to or to == seed_canon:
             continue
         per_addr_display.setdefault(to, to_raw)
+        # RC-8: record the chain the funds landed on for this address.
+        # ``t.chain`` is a Chain enum; persist its string value. First
+        # observation wins (deterministic given the ordered transfer list).
+        if to not in per_addr_chain and getattr(t, "chain", None) is not None:
+            chain_val = getattr(t.chain, "value", None) or str(t.chain)
+            if chain_val:
+                per_addr_chain[to] = str(chain_val)
         # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum so
         # a single NaN doesn't poison the destination's received-USD
         # bucket. Without this, the `received >= dust_threshold` filter
@@ -502,6 +517,10 @@ def _extract_destinations(
             "address": addr_display,
             "short": short_addr(addr_display),
             "role": role,
+            # RC-8: chain the funds landed on for this destination (may differ
+            # from PRIMARY_CHAIN for cross-chain consolidation hops). Omitted
+            # (None) when no transfer recorded a chain for the address.
+            "chain": per_addr_chain.get(addr_canon),
             "usd_holding_now": holding_now,
             "usd_received_in_trace": usd(per_addr_received.get(addr_canon, Decimal("0"))),
             "status": status,

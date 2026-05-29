@@ -115,26 +115,41 @@ class TracePolicy:
           * pass through to brief destinations sorted at $0
           * confuse the operator ("why is this $0 transfer in the brief?")
         Now: when USD is unavailable AND token amount is below a tiny
-        absolute floor (10 units of any token regardless of decimals),
-        treat as dust. Real theft transfers have non-trivial amounts;
-        unpriced dust transfers (spam, airdrops, sentinel) get the same
-        treatment as priced dust.
+        absolute floor, treat as dust. Real theft transfers have
+        non-trivial amounts; unpriced dust transfers (spam, airdrops,
+        sentinel) get the same treatment as priced dust.
+
+        v0.32.1 (trace-depth #2): the unpriced floor was lowered from 10
+        units to 1e-3. The old "< 10 units" floor was VALUE-BLIND and could
+        drop a genuinely high-value hop: a transfer of, say, 5 units of a
+        token CoinGecko couldn't price (new listing, low-liquidity, or a
+        pricing outage) is dropped as "dust" even if those 5 units are 5
+        WBTC (~$300K). Because this same filter gates FRONTIER expansion
+        (tracer drops the transfer before queueing its destination), that
+        also silently lost the onward trail — a launderer could route
+        through a low-liquidity / self-issued unpriced token in small unit
+        counts to evade the trace. We don't get to ASSUME an unknown-value
+        transfer is worthless: only literal micro-dust (≈0, e.g. a 1-wei
+        sentinel) is dropped now; anything with a non-trivial on-chain
+        amount is traced AND recorded (the brief skips None-USD from
+        totals, so it can't inflate the headline, and the audit trail
+        stays complete). Bounded by the existing service-wallet, depth, and
+        per-case transfer caps so this can't explode the BFS.
         """
         if (
             transfer.usd_value_at_tx is not None
             and transfer.usd_value_at_tx < self.dust_threshold_usd
         ):
             return False
-        # Unpriced transfers: defensive amount-only dust check.
-        # `amount_decimal` is the human-units amount (1.0 ETH not 10^18).
-        # A transfer of < 10 token-units of ANY token without a USD price
-        # is overwhelmingly dust/spam. Real theft amounts always exceed
-        # this regardless of token decimals — even a 6-decimal stablecoin
-        # at 10 units = $10 of value if real.
+        # Unpriced transfers: drop ONLY literal micro-dust (≈0). A value-
+        # blind unit threshold cannot tell 5 WBTC ($300K) from 5 SCAM
+        # ($0), so we refuse to assume an unknown-value transfer is dust
+        # unless its on-chain amount is negligible. `amount_decimal` is the
+        # human-units amount (1.0 ETH not 10^18).
         if (
             transfer.usd_value_at_tx is None
             and transfer.amount_decimal is not None
-            and transfer.amount_decimal < Decimal("10")
+            and transfer.amount_decimal < Decimal("0.001")
         ):
             return False
         return True

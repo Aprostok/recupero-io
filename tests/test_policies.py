@@ -80,8 +80,26 @@ class TestTracePolicy:
         is now filtered.
         """
         p = TracePolicy(dust_threshold_usd=Decimal("50"))
-        # Default fixture has amount_decimal = 1 wei (< 10).
+        # Default fixture has amount_decimal = 1 wei (< 0.001 micro-dust floor).
         assert p.should_include(_transfer(None)) is False
+
+    def test_unknown_usd_high_value_low_unit_token_now_traced(self) -> None:
+        """v0.32.1 (trace-depth #2): the unpriced floor was lowered from
+        10 units to 1e-3 because the old floor was VALUE-BLIND — it dropped
+        a transfer of 5 units of an unpriced token even though 5 units could
+        be 5 WBTC (~$300K). Since this filter also gates frontier expansion,
+        the old floor silently lost the onward trail through a low-liquidity
+        / unpriced token. A 5-unit unpriced transfer must now be KEPT (and
+        thus traced + recorded)."""
+        p = TracePolicy(dust_threshold_usd=Decimal("50"))
+        t = _transfer(None).model_copy(update={"amount_decimal": Decimal("5")})
+        assert p.should_include(t) is True
+        # And a 0.5-unit unpriced transfer (e.g. 0.5 WBTC ~$30K) is kept too.
+        t2 = _transfer(None).model_copy(update={"amount_decimal": Decimal("0.5")})
+        assert p.should_include(t2) is True
+        # But literal micro-dust (below 1e-3 units) is still dropped.
+        t3 = _transfer(None).model_copy(update={"amount_decimal": Decimal("0.0000001")})
+        assert p.should_include(t3) is False
 
     def test_max_depth_blocks_traversal(self) -> None:
         p = TracePolicy(max_depth=1)

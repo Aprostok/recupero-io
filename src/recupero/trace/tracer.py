@@ -1492,11 +1492,23 @@ def _compute_exchange_endpoints(transfers: list[Transfer]) -> list[ExchangeEndpo
 
 
 def _collect_unlabeled(transfers: list[Transfer]) -> list[Address]:
+    # v0.32.1 (forensic-audit LOW): dedup on the CANONICAL address key,
+    # not the raw string. EIP-55 checksum case is a UI convention — the
+    # same EVM address can arrive both checksummed and lower-cased across
+    # transfers, and a raw-string set would then list it TWICE in the
+    # brief's unlabeled-counterparty list. canonical_address_key lower-
+    # cases EVM and preserves case-sensitive base58 (Solana/Tron/BTC), so
+    # this collapses casing variants without corrupting non-EVM addresses.
+    # The first-seen RAW address is preserved in the output for display.
+    from recupero._common import canonical_address_key as _ck
     seen: set[str] = set()
     out: list[Address] = []
     for t in transfers:
-        if t.counterparty.label is None and t.to_address not in seen:
-            seen.add(t.to_address)
+        if t.counterparty.label is not None:
+            continue
+        key = _ck(t.to_address) or t.to_address
+        if key not in seen:
+            seen.add(key)
             out.append(t.to_address)
     return out
 

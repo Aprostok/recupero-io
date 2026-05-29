@@ -497,9 +497,17 @@ def identify_cex_continuity_leads(
                     row_chain = None
                 same_chain = (row_chain is not None and row_chain == deposit_chain)
 
-                # v0.32.1 HIGH-10 close-out: tiered matching.
-                #   Tier 1 — same symbol, same chain → 'high' / 5% tol.
-                #   Tier 2 — same parity group, same chain → 'medium' /
+                # v0.32.1 HIGH-10 close-out: tiered matching. The tiers
+                # differ ONLY in matching window + amount tolerance — NOT
+                # in confidence. Every tier emits confidence="low" because
+                # a CEX hot-wallet amount-match is a CORRELATION, never a
+                # causation (commingled funds); the cardinal forensic
+                # invariant forbids "high"/"medium" here. (An earlier draft
+                # of this comment said Tier 1→'high' / Tier 2→'medium'; the
+                # CODE always pinned 'low' — corrected so nobody "fixes" the
+                # code to match a wrong comment and breaks the invariant.)
+                #   Tier 1 — same symbol, same chain → 'low' / 5% tol.
+                #   Tier 2 — same parity group, same chain → 'low' /
                 #            per-parity tol (1.5% stable, 1.0% ETH/BTC).
                 #   Tier 3 — same parity group, DIFFERENT chain → 'low' /
                 #            per-parity tol, 4h window only.

@@ -109,6 +109,40 @@ ZONE_ENDPOINTS: dict[str, tuple[str, str, str]] = {
 }
 
 
+# Per-zone base (staking / fee) denom. Used to decide whether a transfer's
+# denom is the chain's NATIVE asset. Keyed by bech32 prefix so it resolves
+# off the same address-prefix lookup as ZONE_ENDPOINTS.
+#
+# This is the *only* reliable native-denom signal — length/prefix heuristics
+# misclassify legit short micro-denoms (uusdc) and TokenFactory denoms. A
+# denom is native iff it EXACTLY equals the zone's base denom here.
+ZONE_BASE_DENOM: dict[str, str] = {
+    "cosmos": "uatom",
+    "osmo": "uosmo",
+    "inj": "inj",
+    "juno": "ujuno",
+    "stars": "ustars",
+    "axelar": "uaxl",
+    "secret": "uscrt",
+    "kava": "ukava",
+    "celestia": "utia",
+}
+
+
+def base_denom_for(address: str) -> str | None:
+    """Return the native base denom for ``address``'s zone, or None.
+
+    Resolves via the bech32 prefix; returns None for unknown zones so
+    the caller can degrade (treat native-detection as best-effort).
+    """
+    if not isinstance(address, str) or "1" not in address:
+        return None
+    idx = address.find("1")
+    if idx <= 0:
+        return None
+    return ZONE_BASE_DENOM.get(address[:idx])
+
+
 @dataclass(frozen=True)
 class ZoneInfo:
     """Resolution result for a bech32-prefixed address."""
@@ -236,6 +270,10 @@ class CosmosLCDClient:
 
         Returns the raw LCD response — caller is responsible for
         decoding ``tx_responses`` (a list of TxResponse objects).
+
+        NOTE: this fetches a SINGLE page only. For full-history
+        ingestion use :meth:`fetch_all_txs_by_sender`, which paginates
+        on ``pagination.next_key`` until exhausted.
         """
         base = lcd_base_url or self._resolve_lcd_for(sender_address)
         url = f"{base.rstrip('/')}/cosmos/tx/v1beta1/txs"
@@ -255,7 +293,11 @@ class CosmosLCDClient:
         offset: int = 0,
         lcd_base_url: str | None = None,
     ) -> dict[str, Any]:
-        """List txs where ``recipient_address`` is a transfer.recipient."""
+        """List txs where ``recipient_address`` is a transfer.recipient.
+
+        Single page only. See :meth:`fetch_all_txs_by_recipient` for the
+        paginating variant.
+        """
         base = lcd_base_url or self._resolve_lcd_for(recipient_address)
         url = f"{base.rstrip('/')}/cosmos/tx/v1beta1/txs"
         params = {
@@ -265,6 +307,147 @@ class CosmosLCDClient:
             "order_by": "ORDER_BY_DESC",
         }
         return self.get_json(url, params=params)
+
+    # ----- paginating variants -----
+
+    def fetch_all_txs_by_sender(
+        self,
+        sender_address: str,
+        *,
+        limit: int = 100,
+        max_pages: int = 50,
+        lcd_base_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Paginate ``fetch_txs_by_sender`` across all LCD pages.
+
+        Loops on ``pagination.next_key`` until exhausted or until a
+        safety cap (``max_pages``). Mirrors the Tron/Helius cursor
+        paginators' stuck-cursor guard so a buggy or adversarial mirror
+        that returns the same ``next_key`` forever cannot burn every
+        page slot on duplicate work.
+
+        Returns a synthetic LCD response dict with a merged
+        ``tx_responses`` list (and ``txs`` if present), so existing
+        callers that read ``tx_responses`` work unchanged.
+        """
+        return self._fetch_all_txs(
+            address=sender_address,
+            events=f"message.sender='{sender_address}'",
+            limit=limit,
+            max_pages=max_pages,
+            lcd_base_url=lcd_base_url,
+        )
+
+    def fetch_all_txs_by_recipient(
+        self,
+        recipient_address: str,
+        *,
+        limit: int = 100,
+        max_pages: int = 50,
+        lcd_base_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Paginate ``fetch_txs_by_recipient`` across all LCD pages."""
+        return self._fetch_all_txs(
+            address=recipient_address,
+            events=f"transfer.recipient='{recipient_address}'",
+            limit=limit,
+            max_pages=max_pages,
+            lcd_base_url=lcd_base_url,
+        )
+
+    def _fetch_all_txs(
+        self,
+        *,
+        address: str,
+        events: str,
+        limit: int,
+        max_pages: int,
+        lcd_base_url: str | None,
+    ) -> dict[str, Any]:
+        """Shared cursor-paginator for the ``/cosmos/tx/v1beta1/txs`` query.
+
+        Cosmos LCD pagination is key-based: each response carries a
+        ``pagination.next_key`` (base64 string) which, when non-null, is
+        echoed back as ``pagination.key`` to fetch the next page. We
+        thread that through up to ``max_pages`` with a stuck-cursor
+        guard. On a mid-pagination error we keep whatever we accumulated
+        rather than discarding it (unless page 0 fails, where we surface
+        the error so the caller can degrade).
+        """
+        base = lcd_base_url or self._resolve_lcd_for(address)
+        url = f"{base.rstrip('/')}/cosmos/tx/v1beta1/txs"
+
+        merged_tx_responses: list[Any] = []
+        merged_txs: list[Any] = []
+        next_key: str | None = None
+        last_pagination: Any = None
+        stuck_count = 0
+
+        for page in range(max_pages):
+            params: dict[str, Any] = {
+                "events": events,
+                "pagination.limit": str(limit),
+                "order_by": "ORDER_BY_DESC",
+            }
+            if next_key:
+                # Key-based paging: don't send offset alongside key.
+                params["pagination.key"] = next_key
+            else:
+                params["pagination.offset"] = "0"
+
+            body = self.get_json(url, params=params)
+            if not isinstance(body, dict):
+                break
+            if body.get("_error"):
+                # Page 0 failure → surface the error so the caller
+                # degrades gracefully. Later pages → keep partial.
+                if page == 0:
+                    return body
+                log.warning(
+                    "cosmos_lcd_pagination_stop page=%s error=%s",
+                    page, body.get("_error"),
+                )
+                break
+
+            tx_responses = body.get("tx_responses")
+            if isinstance(tx_responses, list):
+                merged_tx_responses.extend(tx_responses)
+            txs = body.get("txs")
+            if isinstance(txs, list):
+                merged_txs.extend(txs)
+
+            pagination = body.get("pagination")
+            last_pagination = pagination if isinstance(pagination, dict) else None
+            new_key = (
+                last_pagination.get("next_key") if last_pagination else None
+            )
+            # next_key is null/empty when there are no more pages.
+            if not new_key or not isinstance(new_key, str):
+                break
+            # Stuck-cursor guard: same key echoed back → not advancing.
+            if new_key == next_key:
+                stuck_count += 1
+                if stuck_count >= 1:
+                    log.warning(
+                        "cosmos_lcd_pagination_stuck page=%s key=%r; breaking",
+                        page, new_key,
+                    )
+                    break
+            else:
+                stuck_count = 0
+            next_key = new_key
+        else:
+            log.warning(
+                "cosmos_lcd_pagination_max_pages hit max_pages=%s for %s; "
+                "results may be truncated",
+                max_pages, address,
+            )
+
+        return {
+            "tx_responses": merged_tx_responses,
+            "txs": merged_txs,
+            "pagination": last_pagination or {},
+        }
 
     def fetch_balance(
         self,

@@ -280,6 +280,90 @@ def test_detect_swap_with_paired_output_high_confidence() -> None:
     assert s.output_recipient == perp_wallet
 
 
+def test_detect_swap_unpriced_single_output_still_followed() -> None:
+    """v0.32.1 (trace-depth #3): a swap whose OUTPUT token CoinGecko can't
+    price (usd=None) must still identify the output recipient. Pre-fix the
+    best-output selection was USD-only — an unpriced output defaulted to $0,
+    never won, best_output stayed None, and the tracer dead-ended at the
+    router (a launderer swapping into a low-liquidity / self-issued token
+    broke the trail). The router→address transfer is an on-chain fact, so a
+    SOLE output is unambiguous → high confidence, recipient identified."""
+    swapper = "0x" + "1" * 40
+    oneinch = "0x1111111254eeb25477b68fb85ed929f73a960582"
+    perp_wallet = "0x" + "9" * 40
+    tx = "0x" + "e" * 64
+    case = _mk_case([
+        _mk_transfer(
+            from_addr=swapper, to_addr=oneinch,
+            usd=Decimal("48200"), tx_hash=tx, token_symbol="USDC",
+        ),
+        # Output: router → perp, but the output token is UNPRICED.
+        _mk_transfer(
+            from_addr=oneinch, to_addr=perp_wallet,
+            usd=None, tx_hash=tx, token_symbol="NEWCOIN",
+            amount=Decimal("12345"),
+        ),
+    ])
+    swaps = detect_dex_swaps(case)
+    assert len(swaps) == 1
+    s = swaps[0]
+    assert s.confidence == "high"
+    assert s.output_recipient == perp_wallet, (
+        "unpriced sole swap output must still be followed"
+    )
+    assert s.output_token_symbol == "NEWCOIN"
+
+
+def test_detect_swap_unpriced_multi_same_token_picks_largest() -> None:
+    """Multiple unpriced outputs of the SAME token: the largest amount is
+    the main swap output (smaller ones are fee/dust). Pick it."""
+    swapper = "0x" + "2" * 40
+    oneinch = "0x1111111254eeb25477b68fb85ed929f73a960582"
+    perp_wallet = "0x" + "8" * 40
+    fee_wallet = "0x" + "7" * 40
+    tx = "0x" + "d" * 64
+    case = _mk_case([
+        _mk_transfer(from_addr=swapper, to_addr=oneinch,
+                     usd=Decimal("90000"), tx_hash=tx, token_symbol="USDC"),
+        # Main output (large, unpriced).
+        _mk_transfer(from_addr=oneinch, to_addr=perp_wallet,
+                     usd=None, tx_hash=tx, token_symbol="NEWCOIN",
+                     amount=Decimal("100000")),
+        # Fee output (small, unpriced, same token).
+        _mk_transfer(from_addr=oneinch, to_addr=fee_wallet,
+                     usd=None, tx_hash=tx, token_symbol="NEWCOIN",
+                     amount=Decimal("250")),
+    ])
+    swaps = detect_dex_swaps(case)
+    assert len(swaps) == 1
+    assert swaps[0].confidence == "high"
+    assert swaps[0].output_recipient == perp_wallet
+
+
+def test_detect_swap_unpriced_mixed_tokens_stays_medium() -> None:
+    """Multiple unpriced outputs of DIFFERENT tokens: amounts aren't
+    comparable across tokens, so we can't tell the main output from a fee.
+    Leave the recipient unidentified (medium) — the brief still surfaces
+    the swap for manual follow-up rather than guessing a wrong recipient."""
+    swapper = "0x" + "3" * 40
+    oneinch = "0x1111111254eeb25477b68fb85ed929f73a960582"
+    a = "0x" + "6" * 40
+    b = "0x" + "5" * 40
+    tx = "0x" + "c" * 64
+    case = _mk_case([
+        _mk_transfer(from_addr=swapper, to_addr=oneinch,
+                     usd=Decimal("90000"), tx_hash=tx, token_symbol="USDC"),
+        _mk_transfer(from_addr=oneinch, to_addr=a, usd=None, tx_hash=tx,
+                     token_symbol="TOKENA", amount=Decimal("100")),
+        _mk_transfer(from_addr=oneinch, to_addr=b, usd=None, tx_hash=tx,
+                     token_symbol="TOKENB", amount=Decimal("9999")),
+    ])
+    swaps = detect_dex_swaps(case)
+    assert len(swaps) == 1
+    assert swaps[0].confidence == "medium"
+    assert swaps[0].output_recipient is None
+
+
 def test_detect_swaps_sorted_by_amount_desc() -> None:
     """Multiple swaps → largest first, investigator workflow
     priority."""

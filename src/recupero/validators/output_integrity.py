@@ -666,7 +666,9 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
              briefs_dir, freeze_brief,
          )),
         ("no_unrendered_jinja_placeholders",
-         lambda: _check_no_unrendered_jinja_placeholders(briefs_dir)),
+         lambda: _check_no_unrendered_jinja_placeholders(
+             briefs_dir, case_dir / "legal_requests",
+         )),
         ("unrecoverable_addresses_not_in_freezable",
          lambda: _check_unrecoverable_not_in_freezable(
              briefs_dir, freeze_brief,
@@ -1859,34 +1861,54 @@ _JINJA_BLOCK_RE = re.compile(r"\{%[^%]+%\}")
 
 
 def _check_no_unrendered_jinja_placeholders(
-    briefs_dir: Path,
+    *dirs: Path,
 ) -> list[Violation]:
-    if not briefs_dir.is_dir():
-        return []
+    """Scan every ``*.html`` under each given dir for Jinja markup that
+    survived rendering — ``{{ ... }}`` vars or ``{% ... %}`` blocks. Their
+    presence means a template failed to render (a leaked variable name in
+    an LE-facing document) and is a high-severity output-integrity defect.
+
+    v0.32.1 (forensic-audit, output-MED): also scans the ``legal_requests/``
+    subdir, not just ``briefs/``. Subpoena / 314(b) / MLAT drafts land in
+    ``cases/<id>/legal_requests/`` and were previously unscanned, so a
+    template bug there could ship an unrendered ``{{ courthouse }}`` to an
+    attorney. NOTE: this check is deliberately for *Jinja* markup only — it
+    does NOT flag the intentional ``[TODO: ...]`` attorney fill-ins those
+    drafts carry (judicial district, courthouse address, return date, etc.),
+    which are by-design blanks recupero cannot populate and which render via
+    ``|default("[TODO: ...]")`` (i.e. they are NOT unrendered ``{{ }}``)."""
     violations: list[Violation] = []
-    for path in sorted(briefs_dir.glob("*.html")):
-        text = _safe_read(path)
-        var_matches = _JINJA_VAR_RE.findall(text)
-        block_matches = _JINJA_BLOCK_RE.findall(text)
-        if var_matches:
-            violations.append(Violation(
-                check="no_unrendered_jinja_placeholders",
-                severity="high", file=path.name,
-                detail=(
-                    f"{len(var_matches)} unrendered Jinja "
-                    f"{{ {{ ... }} }} placeholders. First: "
-                    f"{var_matches[0][:120]!r}"
-                ),
-            ))
-        if block_matches:
-            violations.append(Violation(
-                check="no_unrendered_jinja_placeholders",
-                severity="high", file=path.name,
-                detail=(
-                    f"{len(block_matches)} unrendered Jinja "
-                    "{% ... %} blocks (template didn't render)."
-                ),
-            ))
+    seen: set[Path] = set()
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for path in sorted(d.glob("*.html")):
+            rp = path.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            text = _safe_read(path)
+            var_matches = _JINJA_VAR_RE.findall(text)
+            block_matches = _JINJA_BLOCK_RE.findall(text)
+            if var_matches:
+                violations.append(Violation(
+                    check="no_unrendered_jinja_placeholders",
+                    severity="high", file=path.name,
+                    detail=(
+                        f"{len(var_matches)} unrendered Jinja "
+                        f"{{ {{ ... }} }} placeholders. First: "
+                        f"{var_matches[0][:120]!r}"
+                    ),
+                ))
+            if block_matches:
+                violations.append(Violation(
+                    check="no_unrendered_jinja_placeholders",
+                    severity="high", file=path.name,
+                    detail=(
+                        f"{len(block_matches)} unrendered Jinja "
+                        "{% ... %} blocks (template didn't render)."
+                    ),
+                ))
     return violations
 
 

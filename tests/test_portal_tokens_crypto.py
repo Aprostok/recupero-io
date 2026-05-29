@@ -30,7 +30,6 @@ from recupero.portal.tokens import (
     verify_token,
 )
 
-
 # ---- entropy source ---- #
 
 

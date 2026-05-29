@@ -109,7 +109,7 @@ def test_claim_update_sql_requires_previous_stage():
 
     def _capture_exec(sql, params=None):
         captured_sql.append(sql)
-        return None
+        return
 
     fake_cur.execute.side_effect = _capture_exec
 
@@ -156,7 +156,7 @@ def test_claim_update_sql_rechecks_freeze_outcomes_atomically():
 
     def _capture_exec(sql, params=None):
         captured_sql.append(sql)
-        return None
+        return
 
     fake_cur.execute.side_effect = _capture_exec
 
@@ -199,7 +199,7 @@ def test_find_due_sql_excludes_letters_with_outcome_recorded():
 
     def _capture_exec(sql, params=None):
         captured_sql.append(sql)
-        return None
+        return
 
     fake_cur.execute.side_effect = _capture_exec
 

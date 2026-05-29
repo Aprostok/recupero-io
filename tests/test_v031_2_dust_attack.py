@@ -29,7 +29,6 @@ from recupero.models import (
 )
 from recupero.trace.dust_attack import identify_dust_attack_destinations
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Test helpers
 # ─────────────────────────────────────────────────────────────────────────────

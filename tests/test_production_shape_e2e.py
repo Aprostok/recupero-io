@@ -51,7 +51,6 @@ from tests.test_v_cfi01_full_render import (
     _build_v_cfi01_case,
 )
 
-
 pytestmark = pytest.mark.slow
 
 

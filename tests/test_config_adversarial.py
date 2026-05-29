@@ -17,7 +17,6 @@ from typing import Any
 import pytest
 import yaml
 
-
 # ---- config: YAML override hardening ---- #
 
 

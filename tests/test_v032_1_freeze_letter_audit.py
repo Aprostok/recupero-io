@@ -29,7 +29,7 @@ from decimal import Decimal
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from recupero.freeze.asks import IssuerEntry, load_issuer_db
+from recupero.freeze.asks import load_issuer_db
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.reports.brief import (
     InvestigatorInfo,
@@ -39,7 +39,6 @@ from recupero.reports.brief import (
 from recupero.reports.victim import VictimInfo
 from recupero.worker._deliverables import _issuer_info_for
 from recupero.worker._engagement_letter import render_engagement_letter
-
 
 # ---------- CRIT-FR-2 + HIGH-FR-1: issuers.json carries legal entity ---------- #
 
@@ -354,6 +353,7 @@ def test_subpoena_target_has_ausa_gate() -> None:
         FileSystemLoader,
         select_autoescape,
     )
+
     from recupero.reports._jinja_filters import register_safe_filters
 
     env = Environment(

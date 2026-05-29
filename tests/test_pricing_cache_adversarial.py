@@ -12,12 +12,10 @@ import math
 import os
 import pathlib
 from pathlib import Path
-from unittest import mock
 
 import pytest
 
 from recupero.pricing.cache import PriceCache
-
 
 # ----------------------------------------------------------------------
 # 1. Cache poisoning — NaN/Infinity surviving re-read

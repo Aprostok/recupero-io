@@ -30,8 +30,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from recupero.chains.tron.adapter import (
     TRX_COINGECKO_ID,
     TRX_DECIMALS,
@@ -41,7 +39,6 @@ from recupero.chains.tron.adapter import (
 from recupero.chains.tron.address import base58_to_hex
 from recupero.chains.tron.client import TronGridError
 from recupero.models import Chain
-
 
 # Real Tron mainnet addresses (base58check + their hex form).
 PERP = "TMuA6YqfCeX8EhbfYEg5y7S4DqzSJireY9"

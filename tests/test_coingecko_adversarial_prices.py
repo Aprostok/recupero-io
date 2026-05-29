@@ -143,7 +143,6 @@ def test_price_at_rejects_cached_nan() -> None:
     fetch failure → a future tampered cache could write
     {'usd': 'NaN'} to bypass the fetch path entirely)."""
     from recupero.models import Chain, TokenRef
-    from recupero.pricing.coingecko import CoinGeckoClient
 
     client = _build_client()
     # Mock the cache to return a corrupted "NaN" entry.

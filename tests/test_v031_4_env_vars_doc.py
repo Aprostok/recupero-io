@@ -223,8 +223,7 @@ def inventory_doc_env_vars() -> tuple[set[str], set[str]]:
         # Drop tokens that are obviously not env vars (the doc
         # mentions e.g. RFC, JSON, OOM, USD, NaN, BFS, CEX, KYC, etc.)
         _NON_ENV_TOKENS = {
-            "RFC", "JSON", "OOM", "USD", "USDC", "USDC0", "USD",
-            "NaN", "BFS", "CEX", "KYC", "PDF", "HTML", "SVG", "API",
+            "RFC", "JSON", "OOM", "USD", "USDC", "USDC0", "NaN", "BFS", "CEX", "KYC", "PDF", "HTML", "SVG", "API",
             "CSV", "URL", "URI", "TTL", "TCP", "IP", "DSN", "WARN",
             "INFO", "DEBUG", "EVM", "MEV", "OFAC", "SDN",
         }

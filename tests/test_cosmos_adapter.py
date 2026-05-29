@@ -11,9 +11,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
-import pytest
+from datetime import UTC
 
 from recupero.chains.cosmos.adapter import (
     CosmosAdapter,
@@ -22,12 +20,11 @@ from recupero.chains.cosmos.adapter import (
     _parse_lcd_timestamp,
 )
 from recupero.chains.cosmos.client import (
-    CosmosLCDClient,
     ZONE_ENDPOINTS,
+    CosmosLCDClient,
     resolve_zone,
 )
 from recupero.models import Chain
-
 
 # -----------------------------------------------------------------------------
 # Chain enum registration
@@ -108,7 +105,7 @@ def test_parse_lcd_timestamp_with_fraction():
     dt = _parse_lcd_timestamp("2024-04-12T07:23:11.456Z")
     assert dt is not None
     assert dt.year == 2024
-    assert dt.tzinfo == timezone.utc
+    assert dt.tzinfo == UTC
 
 
 def test_parse_lcd_timestamp_no_fraction():

@@ -32,13 +32,11 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from recupero.models import Chain
 from recupero.trace.bridge_calldata import (
     BridgeDecodeResult,
     decode_bridge_calldata,
 )
 from recupero.trace.cross_chain import ingest_bridge_seeds
-
 
 # ─────────────────────────────────────────────────────────────────────
 # Step 2.1: bridges.json seed expansion
@@ -332,7 +330,7 @@ def test_trace_coverage_diagnosis_doc_still_referenced() -> None:
         / "docs" / "TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md"
     )
     assert diagnosis_path.is_file(), (
-        f"docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md missing — the v0.28 "
+        "docs/TRACE_COVERAGE_DIAGNOSIS_ZIGHA.md missing — the v0.28 "
         "seed/decoder/env additions cite this doc as canonical "
         "reference."
     )

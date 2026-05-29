@@ -9,7 +9,6 @@ from recupero.trace.mev_builders import (
     is_verified_builder,
 )
 
-
 # ---- Positive cases (12+) ---- #
 
 

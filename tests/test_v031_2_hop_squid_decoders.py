@@ -23,7 +23,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — copied verbatim from tests/test_v031_decoders.py so this file
 # stays standalone (no cross-test import coupling).

@@ -17,7 +17,6 @@ from recupero.trace.erc4337 import (
     is_aa_wallet,
 )
 
-
 # ---- ABI-encoding helpers (test-only, mirror decoder layout) ---- #
 
 

@@ -37,7 +37,6 @@ from recupero.reports.investigator_export import (
     write_json,
 )
 
-
 # ---- Bug 1: CSV formula injection in operator-controlled cells ----
 
 

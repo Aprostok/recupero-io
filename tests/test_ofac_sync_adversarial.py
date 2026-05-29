@@ -22,12 +22,10 @@ from unittest.mock import patch
 
 import pytest
 
-from recupero.trace import ofac_sync as ofac
 from recupero.trace.ofac_sync import (
     _extract_crypto_entries,
     sync_ofac_sdn,
 )
-
 
 # ----- 1. XXE injection ----- #
 

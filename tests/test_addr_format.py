@@ -12,7 +12,6 @@ import pytest
 
 from recupero.util.addr_format import short_address
 
-
 # ----- Canonical EVM (0x + 40 hex) ----- #
 
 
@@ -190,6 +189,7 @@ def test_cross_artifact_consistency():
 def test_jinja_filter_registration():
     """The Jinja filter wrapper renders identically to the function."""
     from jinja2 import Environment
+
     from recupero.reports._jinja_filters import register_safe_filters
 
     env = Environment(autoescape=True)
@@ -203,6 +203,7 @@ def test_jinja_filter_registration():
 def test_jinja_filter_none_renders_empty():
     """Filter must not crash on None (template-safe)."""
     from jinja2 import Environment
+
     from recupero.reports._jinja_filters import register_safe_filters
 
     env = Environment(autoescape=True)

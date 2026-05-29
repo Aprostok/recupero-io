@@ -269,9 +269,9 @@ def test_interactive_graph_user_label_cannot_break_out_of_json_script_tag():
     browser."""
     # Use the actual renderer so we exercise the </script> escaping
     # that lives in graph_ui.py, not just the template.
-    from recupero.reports.graph_ui import render_graph_html
     import tempfile
-    import json as _json
+
+    from recupero.reports.graph_ui import render_graph_html
 
     graph_data = {
         "nodes": [
@@ -309,8 +309,9 @@ def test_interactive_graph_rejects_infinity_in_json():
     """A node carrying ``Infinity`` as a USD value must NOT render as
     the bare JS literal ``Infinity`` (which would break JSON.parse on
     load AND betray data corruption in the deliverable)."""
-    from recupero.reports.graph_ui import render_graph_html
     import tempfile
+
+    from recupero.reports.graph_ui import render_graph_html
 
     graph_data = {
         "nodes": [],
@@ -372,7 +373,7 @@ def test_portal_status_attacker_client_name_does_not_inject_html():
             "closed_at": None,
         },
         artifacts=[],
-        token="tok-{}".format(BIDI),
+        token=f"tok-{BIDI}",
         expires_at=None,
     )
     assert XSS_SCRIPT not in html

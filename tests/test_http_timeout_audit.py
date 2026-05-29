@@ -21,7 +21,6 @@ from unittest import mock
 
 import httpx
 
-
 # --- Fixtures / helpers ---------------------------------------------------
 
 

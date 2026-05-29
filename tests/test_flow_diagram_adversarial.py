@@ -52,18 +52,13 @@ normalizers, e.g., the bridge-calldata virtual-transfer builder).
 
 from __future__ import annotations
 
-import math
-import sys
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 
-import pytest
-
 # Module under test.
 from recupero.worker import _flow_diagram as fd
-
 
 # ---------- Stub Transfer / Case shapes ---------- #
 
@@ -103,7 +98,7 @@ class _StubTransfer:
     counterparty: _StubCounterparty = field(default_factory=_StubCounterparty)
     usd_value_at_tx: Decimal | None = Decimal("100")
     block_time: datetime | None = field(
-        default_factory=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc)
+        default_factory=lambda: datetime(2026, 1, 1, tzinfo=UTC)
     )
 
 
@@ -317,7 +312,7 @@ def test_aggregate_handles_missing_block_time_without_crash() -> None:
     """
     t_with_time = _StubTransfer(
         usd_value_at_tx=Decimal("50"),
-        block_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        block_time=datetime(2026, 1, 1, tzinfo=UTC),
     )
     t_no_time = _StubTransfer(
         usd_value_at_tx=Decimal("30"),

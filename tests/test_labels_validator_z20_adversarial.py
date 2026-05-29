@@ -31,7 +31,7 @@ def test_addresses_value_null_does_not_crash() -> None:
         assert not report.ok
         assert any(
             i.severity == "error"
-            and "high_risk.json" == i.file
+            and i.file == "high_risk.json"
             and ("'addresses'" in i.message or "addresses" in (i.field or ""))
             for i in report.issues
         ), [i.message for i in report.issues]

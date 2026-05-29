@@ -20,17 +20,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
-
 from recupero.validators.output_integrity import (
     ValidationResult,
-    Violation,
     check_invariant_g,
     check_invariant_h,
     check_invariant_i,
     validate_case_output,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────
 # Helpers

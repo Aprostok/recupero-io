@@ -52,13 +52,11 @@ from uuid import uuid4
 
 import pytest
 
-from recupero.monitoring.poller import ObservedActivity
 from recupero.worker.monitor_tick import (
     _fetch_evm_activities,
     _row_to_subscription,
     run_monitor_tick,
 )
-
 
 # ----------------------- helpers ----------------------- #
 

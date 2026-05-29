@@ -39,7 +39,6 @@ Three bugs locked by this file:
 
 from __future__ import annotations
 
-from unittest.mock import patch
 from uuid import UUID
 
 import pytest

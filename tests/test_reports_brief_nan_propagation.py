@@ -46,14 +46,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
-from pathlib import Path
 from typing import Any
-from unittest.mock import patch
 
 import pytest
-
 
 # ---------- 1. graph_ui NaN propagation ----------
 
@@ -291,8 +288,8 @@ def test_emit_brief_cluster_total_loss_usd_human_rejects_nan(tmp_path, monkeypat
     nan_out = usd(Decimal("NaN"))
     inf_out = usd(Decimal("Infinity"))
     for out in (nan_out, inf_out):
-        assert "$NaN" != out
-        assert "$Infinity" != out
+        assert out != "$NaN"
+        assert out != "$Infinity"
         # The safe fallback is "$0" (matches the None-path).
         assert "NaN" not in out
         assert "Infinity" not in out

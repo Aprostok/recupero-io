@@ -46,7 +46,6 @@ Bugs covered:
 
 from __future__ import annotations
 
-from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -59,7 +58,6 @@ from recupero.screen.screener import (
     screen_address,
 )
 from recupero.trace.risk_scoring import HighRiskEntry
-
 
 # ---- Z1-1: correlation lookup tolerates non-numeric DB rows ---- #
 
@@ -74,7 +72,7 @@ class _FakeCursor:
     def fetchone(self) -> dict[str, Any] | None:
         return self._row
 
-    def __enter__(self) -> "_FakeCursor":
+    def __enter__(self) -> _FakeCursor:
         return self
 
     def __exit__(self, *exc: Any) -> None:
@@ -88,7 +86,7 @@ class _FakeConn:
     def cursor(self) -> _FakeCursor:
         return _FakeCursor(self._row)
 
-    def __enter__(self) -> "_FakeConn":
+    def __enter__(self) -> _FakeConn:
         return self
 
     def __exit__(self, *exc: Any) -> None:

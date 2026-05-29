@@ -27,7 +27,6 @@ the production guard would catch. Caller decides whether to skip.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path

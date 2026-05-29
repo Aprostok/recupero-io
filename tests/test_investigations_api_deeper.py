@@ -16,7 +16,6 @@ import pytest
 
 from recupero.worker import investigations_api as mod
 
-
 # ---- helpers ---- #
 
 
@@ -28,7 +27,7 @@ class _FakeResp:
     def read(self) -> bytes:
         return self._body
 
-    def __enter__(self) -> "_FakeResp":
+    def __enter__(self) -> _FakeResp:
         return self
 
     def __exit__(self, *a: object) -> None:

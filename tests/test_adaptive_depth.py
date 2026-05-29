@@ -20,7 +20,6 @@ from recupero.trace.adaptive_depth import (
     should_descend_further,
 )
 
-
 # ---- compute_max_depth ---- #
 
 

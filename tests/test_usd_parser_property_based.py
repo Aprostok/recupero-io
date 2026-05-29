@@ -23,11 +23,10 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from hypothesis import HealthCheck, assume, given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from recupero.validators.output_integrity import _parse_usd_string
-
 
 _SETTINGS = settings(
     max_examples=300,

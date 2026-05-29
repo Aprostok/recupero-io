@@ -8,7 +8,6 @@ from recupero.trace.burn_sinks import (
     is_burn_sink,
 )
 
-
 # ---- EVM zero / dead addresses ---- #
 
 

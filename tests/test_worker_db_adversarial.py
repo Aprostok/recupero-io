@@ -27,7 +27,6 @@ import pytest
 
 from recupero.worker.db import WorkerDB
 
-
 # ----- helpers ----- #
 
 

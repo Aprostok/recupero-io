@@ -6,7 +6,6 @@ from decimal import Decimal
 from typing import Any
 
 from recupero.trace.nft_transfers import (
-    NFTTransfer,
     fetch_nft_transfers,
 )
 

@@ -35,10 +35,7 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from recupero.reports import ai_editorial
-
 
 # ---------- duck-typed case / victim / transfer mocks ---------- #
 

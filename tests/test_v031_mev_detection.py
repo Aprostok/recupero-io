@@ -35,7 +35,6 @@ from recupero.trace.mev_detection import (
     mev_signals_to_brief_section,
 )
 
-
 # Verified addresses (lowercased canonical form matches the module).
 _SEED = "0x000000000000000000000000000000000000beef"
 _ATTACKER = "0x00000000000000000000000000000000000a77ac"

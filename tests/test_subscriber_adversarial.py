@@ -17,7 +17,6 @@ from uuid import UUID
 
 from recupero.monitoring.subscriber import (
     SubscriptionSeed,
-    auto_subscribe_from_brief,
     derive_subscriptions_from_brief,
     persist_subscriptions,
 )

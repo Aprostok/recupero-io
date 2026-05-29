@@ -17,7 +17,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -27,14 +26,11 @@ from recupero.labels import auto_ingest
 from recupero.labels.auto_ingest import (
     CandidateLabel,
     fetch_candidate_bridges,
-    fetch_candidate_cex_deposits,
     persist_candidates,
 )
 from recupero.labels.confidence_decay import (
-    EFFECTIVE_DECAY_DAYS,
     apply_decay,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DB stub — a single MagicMock connection that records SQL + returns
@@ -69,7 +65,7 @@ class _FakeCursor:
             return self.rows_for_fetchall.pop(0)
         return []
 
-    def __enter__(self) -> "_FakeCursor":
+    def __enter__(self) -> _FakeCursor:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -83,7 +79,7 @@ class _FakeConn:
     def cursor(self) -> _FakeCursor:
         return self._cursor
 
-    def __enter__(self) -> "_FakeConn":
+    def __enter__(self) -> _FakeConn:
         return self
 
     def __exit__(self, *args: Any) -> None:

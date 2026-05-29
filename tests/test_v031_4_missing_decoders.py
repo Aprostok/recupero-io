@@ -34,7 +34,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared helpers — copied verbatim from the v0.31.x test files so this file
 # stays self-contained (no cross-test imports).

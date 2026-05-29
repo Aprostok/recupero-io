@@ -318,7 +318,6 @@ def test_monitor_get_returns_404_for_foreign_subscription(two_key_client):
     """If key B asks for a subscription owned by key A, the response
     must be 404 (not 403 — 403 would leak existence). The underlying
     DB call must be scoped by api_key_name."""
-    from recupero.api.monitoring_api import get_subscription
     foreign_sub = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
     with patch(
         "recupero.api.monitoring_api.get_subscription",

@@ -51,7 +51,6 @@ from recupero.trace.cross_chain import (
     identify_cross_chain_handoffs,
 )
 
-
 # ---- Real Tron mainnet shapes used across the assertions ---- #
 
 USDT_TRC20 = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"

@@ -29,8 +29,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 
 def test_z9_parse_usd_string_rejects_nan() -> None:
     """Z9-1 RED → GREEN: ``_parse_usd_string("$NaN")`` must NOT return a

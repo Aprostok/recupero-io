@@ -35,7 +35,6 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Shared fake-DB infrastructure (matches the shape in test_v032_auto_ingest.py)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -60,7 +59,7 @@ class _FakeCursor:
             return self.rows_for_fetchall.pop(0)
         return []
 
-    def __enter__(self) -> "_FakeCursor":
+    def __enter__(self) -> _FakeCursor:
         return self
 
     def __exit__(self, *args: Any) -> None:
@@ -74,7 +73,7 @@ class _FakeConn:
     def cursor(self) -> _FakeCursor:
         return self._cursor
 
-    def __enter__(self) -> "_FakeConn":
+    def __enter__(self) -> _FakeConn:
         return self
 
     def __exit__(self, *args: Any) -> None:

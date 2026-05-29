@@ -20,7 +20,6 @@ from recupero.labels.multi_source_confirm import (
     requires_multi_source_confirm,
 )
 
-
 # ---------------------------------------------------------------------
 # requires_multi_source_confirm gate
 # ---------------------------------------------------------------------

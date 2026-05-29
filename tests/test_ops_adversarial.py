@@ -20,7 +20,6 @@ from uuid import uuid4
 
 import pytest
 
-
 # ---- Z13-1: mark_engaged with --fee NaN raises uncaught InvalidOperation ---- #
 
 
@@ -198,6 +197,7 @@ def test_cli_record_outcome_positional_catches_value_error() -> None:
     we confirm the source contains the catch — minimal but durable.
     """
     from pathlib import Path
+
     import recupero.ops.cli as cli_mod
     src = Path(cli_mod.__file__).read_text(encoding="utf-8")
     # The positional record_outcome call has to live inside a try/except

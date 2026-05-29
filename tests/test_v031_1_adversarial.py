@@ -26,7 +26,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Decoder adversarial inputs
 # ─────────────────────────────────────────────────────────────────────────────

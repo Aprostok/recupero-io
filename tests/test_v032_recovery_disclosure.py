@@ -37,7 +37,6 @@ from recupero.monitoring.recovery_rate import (
     wilson_score_interval,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Wilson score interval
 # ─────────────────────────────────────────────────────────────────────────────
@@ -428,9 +427,9 @@ def test_close_case_validation_layer_outcome_set_is_locked():
     """The CLI surface MUST be exactly these four outcomes; changing
     the set is a customer-facing contract change."""
     from recupero.ops.commands.close_case import VALID_CLI_OUTCOMES
-    assert VALID_CLI_OUTCOMES == frozenset({
+    assert frozenset({
         "full_recovery", "partial_recovery", "no_recovery", "dropped",
-    })
+    }) == VALID_CLI_OUTCOMES
 
 
 def test_close_case_full_recovery_requires_positive_usd():

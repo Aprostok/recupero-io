@@ -27,8 +27,6 @@ import sys
 import tomllib
 from pathlib import Path
 
-import pytest
-
 PYPROJECT = Path(__file__).resolve().parent.parent / "pyproject.toml"
 
 

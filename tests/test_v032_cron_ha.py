@@ -26,14 +26,11 @@ required) to keep CI green on machines without a Postgres.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import UTC, datetime, timedelta
-from unittest import mock
 
 import pytest
 
 from recupero.worker import cron_scheduler
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Fake in-memory cron_jobs_lock store
@@ -700,7 +697,6 @@ def test_healthz_endpoint_returns_503_on_down(monkeypatch):
     """Test 19: /cron/healthz HTTP route returns 503 when payload
     .status == 'down'. Pin so uptime monitors get a non-2xx response
     to alarm on."""
-    import socket
     import urllib.request
 
     from recupero.worker import _health_server

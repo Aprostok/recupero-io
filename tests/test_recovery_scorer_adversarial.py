@@ -15,7 +15,6 @@ import os
 from decimal import Decimal
 from unittest.mock import patch
 
-
 # ---- _parse_usd ---- #
 
 

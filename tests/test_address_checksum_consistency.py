@@ -30,8 +30,8 @@ exactly the bug ``canonical_address_key`` exists to prevent.
 
 from __future__ import annotations
 
-from recupero._common import canonical_address_key as _ck, short_addr
-
+from recupero._common import canonical_address_key as _ck
+from recupero._common import short_addr
 
 # ---- Boundary 1: canonical_address_key contract (cross-chain) ---- #
 

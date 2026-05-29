@@ -20,10 +20,8 @@ refactor that breaks the diff format trips a test.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-
-import pytest
 
 from recupero.ops.commands import bridge_sync_cmd as bs
 
@@ -33,7 +31,7 @@ def _run_offline(tmp_path: Path) -> tuple[int, dict]:
     exit_code = bs.run(
         output_path=diff_path,
         offline=True,
-        today=datetime(2026, 5, 26, tzinfo=timezone.utc),
+        today=datetime(2026, 5, 26, tzinfo=UTC),
     )
     payload = json.loads(diff_path.read_text(encoding="utf-8"))
     return exit_code, payload
@@ -131,7 +129,7 @@ def test_bridge_sync_handles_malformed_bridges_json(tmp_path: Path) -> None:
 def test_bridge_sync_decay_helper_treats_missing_field_as_stale() -> None:
     """The _is_stale helper directly — missing/empty `last_verified_at`
     counts as stale (forces operator to fill it in)."""
-    today = datetime(2026, 5, 26, tzinfo=timezone.utc)
+    today = datetime(2026, 5, 26, tzinfo=UTC)
     assert bs._is_stale(None, today)
     assert bs._is_stale("", today)
     assert bs._is_stale("   ", today)

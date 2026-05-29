@@ -33,8 +33,6 @@ from recupero.chains.bitcoin.inputs_registry import (
     lookup,
     size,
 )
-from recupero.models import Chain
-
 
 VICTIM = "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
 ADDR_B = "12c6DSiU4Rq3P4ZxziKxzrL5LmMBrzjrJX"

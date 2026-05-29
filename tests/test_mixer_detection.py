@@ -10,15 +10,12 @@ Coverage matrix:
 
 from __future__ import annotations
 
-import pytest
-
 from recupero.trace.mixer_detection import (
     KNOWN_MIXERS,
     count_by_type,
     is_mixer,
     list_known_mixers,
 )
-
 
 # -----------------------------------------------------------------------------
 # Positive — zk_mixer (Tornado Cash, sanctioned)

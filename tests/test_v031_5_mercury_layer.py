@@ -41,7 +41,6 @@ from recupero.trace.coinjoin_unwrap import (
     detect_coinjoin,
 )
 
-
 # A valid-looking P2TR script: "5120" (OP_1 + push 32) + 64 hex chars
 # = 32-byte x-only pubkey. The exact pubkey doesn't matter for shape
 # detection; we just need the right length and prefix.

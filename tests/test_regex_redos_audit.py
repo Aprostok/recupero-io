@@ -67,7 +67,6 @@ import time
 
 import pytest
 
-
 # ----------------------------------------------------------------------
 # Budget helper. We use wall-clock rather than ``signal.alarm`` because
 # the worker also runs on Windows in dev environments and POSIX-only
@@ -248,7 +247,9 @@ def test_html_tag_regex_linear_on_pathological_input():
     field validator (`_scrub_text`), so the regex never sees the
     pathological input. Test the production path, not the bare regex."""
     import time as _t
+
     from pydantic import ValidationError
+
     from recupero.hack_tracker.models import HackEvent
 
     hostile = "<" + ("a" * 5_000_000)  # 5MB, never-closing tag

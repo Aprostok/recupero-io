@@ -59,7 +59,6 @@ from recupero.worker.retrace_backfill import (
     write_retrace_report,
 )
 
-
 # Reference "now" — pinned so all relative-time math is deterministic
 # regardless of when the test suite runs.
 _NOW = datetime(2026, 5, 26, 12, 0, 0, tzinfo=UTC)
@@ -567,13 +566,13 @@ class TestModuleSurface:
         that quietly adds (e.g.) defi_protocol would inflate every
         cron run's candidate count and surprise operators — force
         the change to update this assertion deliberately."""
-        assert RETRACE_TRIGGER_CATEGORIES == frozenset({
+        assert frozenset({
             LabelCategory.bridge,
             LabelCategory.mixer,
             LabelCategory.exchange_deposit,
             LabelCategory.exchange_hot_wallet,
             LabelCategory.perpetrator,
-        })
+        }) == RETRACE_TRIGGER_CATEGORIES
 
     def test_default_out_path_is_under_data_dir(self) -> None:
         assert DEFAULT_OUT_RELATIVE == "data/retrace_candidates.json"

@@ -38,7 +38,6 @@ from recupero.payments.payment_links import (
 )
 from recupero.worker._engagement_letter import _fmt_usd
 
-
 # ---- Z15-1: ':' embedding in build_diagnostic_link ---- #
 
 

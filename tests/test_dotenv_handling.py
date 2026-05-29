@@ -27,12 +27,10 @@ from __future__ import annotations
 
 import importlib.util
 import os
-import sys
 import textwrap
 from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ROOT_CONFTEST = REPO_ROOT / "conftest.py"

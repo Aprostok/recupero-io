@@ -10,13 +10,17 @@ from decimal import Decimal
 from pathlib import Path
 
 from recupero.models import (
-    Case, Chain, Counterparty, TokenRef, Transfer,
+    Case,
+    Chain,
+    Counterparty,
+    TokenRef,
+    Transfer,
 )
 from recupero.reports.brief import (
-    InvestigatorInfo, generate_briefs,
+    InvestigatorInfo,
+    generate_briefs,
 )
 from recupero.reports.victim import VictimInfo
-
 
 VICTIM_ADDR = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
 PERP_ADDR = "0xF4bE227b268e191b79097Daad0AcCcD9a7A7FAD2"

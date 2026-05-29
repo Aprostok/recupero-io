@@ -38,7 +38,6 @@ from recupero.trace.drainer_detection import (
     drainer_findings_to_brief_section,
 )
 
-
 VICTIM = "0x" + "a" * 40
 DRAINER_CONTRACT = "0x" + "d" * 40
 ATTACKER_EOA = "0x" + "9" * 40

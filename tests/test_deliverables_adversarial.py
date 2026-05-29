@@ -24,9 +24,9 @@ import pytest
 from recupero.models import Case, Chain
 from recupero.reports.victim import VictimInfo
 from recupero.worker._deliverables import (
+    _emit_pdfs,
     _has_actionable_holding,
     _issuer_info_for,
-    _emit_pdfs,
     build_all_deliverables,
 )
 
@@ -192,6 +192,7 @@ def test_html_to_pdf_tmp_path_is_per_process_unique() -> None:
     by a randomized name.
     """
     import inspect
+
     from recupero.worker import _deliverables
 
     src = inspect.getsource(_deliverables._html_to_pdf)

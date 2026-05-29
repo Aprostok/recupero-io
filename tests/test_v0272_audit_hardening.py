@@ -63,7 +63,6 @@ Run synthetic — no DB, no network, fast.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 from decimal import Decimal
@@ -71,13 +70,12 @@ from pathlib import Path
 
 from recupero.reports.emit_brief import _compute_perpetrator_holdings
 from recupero.validators.output_integrity import (
+    _FREEZABLE_ROW_RE,
     _canonicalize_for_compare,
     _check_destinations_superset_of_ground_truth,
     _check_freeze_ask_targets_not_investigate_tagged,
     _check_issuer_letter_backed_by_freezable_row,
     _check_perpetrator_holdings_reconcile,
-    _FREEZABLE_ROW_RE,
-    validate_case_output,
 )
 
 # Real Zigha addresses (canonical lower-case).

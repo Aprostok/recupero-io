@@ -26,7 +26,6 @@ import io
 import sys
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 import pytest

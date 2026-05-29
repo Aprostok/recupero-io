@@ -30,7 +30,6 @@ from recupero.trace.clustering import (
     compute_clusters_with_metadata,
 )
 
-
 # ----- test helpers ----- #
 
 

@@ -34,8 +34,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from recupero.reports.subpoena_targets import (
-    SUBPOENA_USD_THRESHOLD,
     _KNOWN_CEX_COMPLIANCE,
+    SUBPOENA_USD_THRESHOLD,
     _resolve_cex_recipient,
     extract_subpoena_targets,
 )
@@ -652,4 +652,4 @@ def test_invariants_wired_into_validator(tmp_path: Path) -> None:
 def test_subpoena_usd_threshold_constant() -> None:
     """The threshold is documented as $1,000 USD in the design doc.
     Locking the constant value as a regression guard."""
-    assert SUBPOENA_USD_THRESHOLD == Decimal("1000")
+    assert Decimal("1000") == SUBPOENA_USD_THRESHOLD

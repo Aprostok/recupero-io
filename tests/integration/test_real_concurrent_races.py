@@ -44,17 +44,14 @@ connection (no pool sharing) to mirror cron-instance isolation.
 
 from __future__ import annotations
 
-import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from psycopg.rows import dict_row
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Connection + setup helpers
@@ -615,11 +612,12 @@ def test_w3_status_filter_blocks_resurrection_when_deleted_mid_tick(
     # Now reach into the production update_sql and execute it.
     # If the mutation removed the status='active' filter, this UPDATE
     # would match the deleted row and rewrite last_polled_at.
-    from recupero.worker.monitor_tick import _MAX_SUBSCRIPTIONS_PER_TICK  # noqa: F401
-    import recupero.worker.monitor_tick as mt
     # Read the run_monitor_tick source and grep the update_sql to
     # ensure it carries the status='active' filter.
     import inspect
+
+    import recupero.worker.monitor_tick as mt
+    from recupero.worker.monitor_tick import _MAX_SUBSCRIPTIONS_PER_TICK  # noqa: F401
     src = inspect.getsource(mt)
     assert "AND status = 'active'" in src, (
         "monitor_tick.py's update_sql does NOT carry the AND status='active'"

@@ -48,15 +48,12 @@ from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
-import pytest
-
 from recupero.worker.mini_freeze import (
     _change_to_ctx,
     _fmt_signed_usd,
     generate_daily_digest,
 )
 from recupero.worker.watch_tick import MaterialChange, WatchTickReport
-
 
 # ---------- helpers ---------- #
 

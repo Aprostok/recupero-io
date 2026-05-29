@@ -43,7 +43,6 @@ from uuid import UUID
 import httpx
 import pytest
 
-
 # =====================================================================
 # Helpers
 # =====================================================================
@@ -153,8 +152,8 @@ def test_z19_1_dispatcher_rejects_huge_content_length() -> None:
     # And the result must record the security rejection, not a fake
     # success.
     assert result.succeeded is False, (
-        f"dispatcher reported succeeded=True on a 5 GB-CL response — "
-        f"audit row will look like a legitimate delivery."
+        "dispatcher reported succeeded=True on a 5 GB-CL response — "
+        "audit row will look like a legitimate delivery."
     )
     err = (result.error_message or "").lower()
     assert any(k in err for k in ("size", "too large", "content-length", "cap", "exceed")), (

@@ -132,7 +132,7 @@ def test_no_blocking_io_inside_async_def(parsed):
     assert not violations, (
         "Blocking sync I/O inside async def. Use httpx.AsyncClient / "
         "asyncio.sleep, or run via fastapi.concurrency.run_in_threadpool. "
-        f"Violations:\n  " + "\n  ".join(violations)
+        "Violations:\n  " + "\n  ".join(violations)
     )
 
 

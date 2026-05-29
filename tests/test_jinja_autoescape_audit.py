@@ -23,8 +23,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SRC_ROOT = _REPO_ROOT / "src" / "recupero"
 
@@ -46,9 +44,7 @@ def _find_environment_calls(tree: ast.AST) -> list[ast.Call]:
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        if isinstance(func, ast.Name) and func.id == "Environment":
-            calls.append(node)
-        elif (
+        if isinstance(func, ast.Name) and func.id == "Environment" or (
             isinstance(func, ast.Attribute)
             and func.attr == "Environment"
             and isinstance(func.value, ast.Name)

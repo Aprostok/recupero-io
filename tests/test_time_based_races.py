@@ -14,24 +14,22 @@ W9-03 race tests.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import patch
 
 import pytest
 
 from recupero.payments.webhook import (
-    WebhookVerifyError,
     _REPLAY_TOLERANCE_SEC,
+    WebhookVerifyError,
     verify_and_parse,
 )
 from recupero.worker._freeze_followup import (
-    _STAGE_ESCALATION_7D,
     _STAGE_INITIAL,
     _STAGE_NUDGE_72H,
     _STAGE_SILENCE_14D,
     _compute_next_transition,
 )
-
 
 # ---------------------------------------------------------------------------
 # 1. Stripe webhook replay-window — BOTH upper AND lower bounds enforced
@@ -231,10 +229,9 @@ def test_portal_token_clock_uses_utc_not_local() -> None:
     with patch("recupero.portal.tokens.datetime", _SpyDT):
         # Call a path that hits the now-clock without needing the DB:
         # generate_token's expires-at compute does the same UTC call.
-        from recupero.portal.tokens import _DEFAULT_TTL_DAYS  # noqa: F401
-
         # Directly invoke the same expression that verify_token uses.
         from recupero.portal import tokens as _tokens_mod
+        from recupero.portal.tokens import _DEFAULT_TTL_DAYS  # noqa: F401
 
         v = _tokens_mod.datetime.now(UTC)
         assert v.tzinfo is not None, (

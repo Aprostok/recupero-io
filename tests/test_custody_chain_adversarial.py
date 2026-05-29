@@ -21,11 +21,7 @@ import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import pytest
-
 from recupero.custody.chain import (
-    AttestationEntry,
-    AttestedArtifact,
     GENESIS_PREV_HASH,
     append_to_chain,
     chain_file_path,

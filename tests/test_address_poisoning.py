@@ -15,8 +15,6 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-import pytest
-
 from recupero.trace.address_poisoning import (
     detect_poisoning_attempts,
     visual_similarity,

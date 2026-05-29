@@ -70,7 +70,6 @@ def test_read_case_traversal_actually_blocked(tmp_path: Path) -> None:
         opens_seen.append(str(self))
         return orig_open(self, *args, **kwargs)
 
-    import recupero.storage.case_store as cs_mod
     # Patch only on the path objects the store would touch.
     try:
         type(target).open = watched_open  # type: ignore[method-assign]

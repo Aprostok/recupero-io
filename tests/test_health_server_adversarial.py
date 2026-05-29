@@ -10,7 +10,6 @@ Covers:
 from __future__ import annotations
 
 import socket
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -152,7 +151,7 @@ def test_socket_has_recv_timeout_slowloris(monkeypatch):
                         "server did not close slow connection within 18s "
                         "— vulnerable to slowloris"
                     )
-        except socket.timeout:
+        except TimeoutError:
             pytest.fail(
                 "client recv timed out — server never closed slow "
                 "connection (slowloris risk)"

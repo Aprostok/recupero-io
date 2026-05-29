@@ -16,9 +16,6 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
-import pytest
-
-
 # ---- send_le_handoff: regex-bypass adversarial inputs in --to ---- #
 
 

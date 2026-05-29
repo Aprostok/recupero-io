@@ -31,8 +31,8 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from recupero.models import Chain
 from recupero.trace.bridge_calldata import (
@@ -41,11 +41,9 @@ from recupero.trace.bridge_calldata import (
 )
 from recupero.trace.cross_chain import (
     BridgeInfo,
-    CrossChainHandoff,
     identify_cross_chain_handoffs,
     ingest_bridge_seeds,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────
 # Property tests: identify_cross_chain_handoffs adversarial inputs.
@@ -75,7 +73,7 @@ def _make_transfer(
     t.usd_value_at_tx = amount_usd
     t.amount_decimal = Decimal("1.0")
     t.token = MagicMock(); t.token.symbol = "ETH"
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime
     t.block_time = datetime(2026, 1, 1, tzinfo=UTC)
     t.explorer_url = "https://etherscan.io/tx/" + tx_hash
     return t

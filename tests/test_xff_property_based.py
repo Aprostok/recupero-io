@@ -30,7 +30,6 @@ from hypothesis import strategies as st
 
 from recupero.api.app import _intake_rl_client_ip
 
-
 _SETTINGS = settings(
     max_examples=200,
     deadline=1000,

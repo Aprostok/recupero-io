@@ -70,18 +70,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from recupero.models import Case, Chain, Counterparty, Label, LabelCategory, TokenRef, Transfer
 from recupero.worker._trace_report import (
     _build_destinations_table,
-    _compute_stats,
     _build_freezable_table,
+    _compute_stats,
     render_trace_report,
 )
-
 
 # --------------------------------------------------------------- #
 # fixtures
@@ -302,7 +298,6 @@ def test_freezable_table_sort_is_deterministic_with_nan_string() -> None:
     non-deterministic output. The trace report's golden-diff /
     3x-determinism contract is broken silently. Treat unparseable
     or non-finite USD strings as 0.0 so sort is stable."""
-    import math
     freeze_brief = {
         "FREEZABLE": [
             {

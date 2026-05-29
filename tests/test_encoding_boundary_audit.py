@@ -31,7 +31,6 @@ import pathlib
 
 import pytest
 
-
 SRC_ROOT = pathlib.Path(__file__).resolve().parent.parent / "src" / "recupero"
 
 
@@ -196,7 +195,7 @@ def test_no_implicit_subprocess_text():
     [
         # cluster_builder hashes a lowercased ASCII chain|address
         # composite; .encode() default is UTF-8 on every CPython 3.x.
-        "abc|sol".encode(),
+        b"abc|sol",
         # webhook signed-payload prefix — ASCII timestamp + dot.
         f"{1700000000}.".encode(),
     ],

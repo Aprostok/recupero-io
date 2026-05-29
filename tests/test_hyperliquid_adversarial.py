@@ -19,17 +19,14 @@ The class of bug this covers:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from decimal import Decimal
-
-import pytest
 
 from recupero.chains.hyperliquid.client import (
     HyperliquidLedgerEvent,
     _parse_ledger_event,
 )
 from recupero.chains.hyperliquid.scraper import _events_to_transfers
-
 
 # ---- _parse_ledger_event: external-input hardening ---- #
 

@@ -41,7 +41,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 # --- Marker definition ----------------------------------------------------
 
 _MARKER_RE = re.compile(r"\b(TODO|FIXME|XXX|HACK|KLUDGE|DEPRECATED)\b")

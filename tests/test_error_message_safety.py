@@ -25,7 +25,6 @@ import json
 from typing import Any
 from unittest.mock import MagicMock, patch
 
-
 # -------- Alchemy: api_key is in URL path segment -------- #
 
 
@@ -33,6 +32,7 @@ def test_alchemy_transport_error_does_not_leak_api_key_in_url() -> None:
     """RED: A network error inside ``_rpc`` must not include the raw
     api_key (which lives in ``self.api_url``)."""
     import httpx
+
     from recupero.chains.evm.alchemy_client import (
         AlchemyClient,
         AlchemyError,
@@ -200,7 +200,7 @@ def test_sign_storage_url_error_does_not_echo_full_payload() -> None:
         def read(self) -> bytes:
             return self._data
 
-        def __enter__(self) -> "_FakeResp":
+        def __enter__(self) -> _FakeResp:
             return self
 
         def __exit__(self, *args: Any) -> None:

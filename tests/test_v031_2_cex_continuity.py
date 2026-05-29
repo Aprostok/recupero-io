@@ -11,7 +11,6 @@ operators decide whether to follow up.
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -37,7 +36,6 @@ from recupero.trace.cex_continuity import (
     identify_cex_continuity_leads,
     leads_to_brief_section,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test fixtures

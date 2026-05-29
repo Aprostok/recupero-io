@@ -252,6 +252,7 @@ def _run_fake_init(env_vars: dict[str, str]) -> dict:
     polluted by this one."""
     import sys
     import types
+
     from recupero.observability import sentry as s
 
     captured: dict = {}

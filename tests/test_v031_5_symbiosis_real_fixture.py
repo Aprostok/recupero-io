@@ -35,7 +35,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # ABI helpers (same shape as tests/test_v031_2_symbiosis_decoder.py — we
 # duplicate rather than cross-import so the test file is self-contained).

@@ -39,11 +39,9 @@ from recupero.models import (
     Case,
     Chain,
     Counterparty,
-    LabelCategory,
     TokenRef,
     Transfer,
 )
-
 
 # ──────────────────────────────────────────────────────────────────────
 # Fixtures
@@ -157,8 +155,8 @@ def test_extract_perp_hub_filters_nan_usd() -> None:
     if perp_hub is not None:
         addr = perp_hub.get("address") if isinstance(perp_hub, dict) else perp_hub
         assert addr != _DEST_NAN, (
-            f"_extract_perp_hub returned the NaN-poisoned address as "
-            f"the perp-hub. NaN should be filtered before the max() call."
+            "_extract_perp_hub returned the NaN-poisoned address as "
+            "the perp-hub. NaN should be filtered before the max() call."
         )
 
 
@@ -310,6 +308,7 @@ def test_aggregate_theft_amount_handles_none_amount_decimal() -> None:
     pricing-error transfer slipped through)? The helper must not
     crash and must not include None in the sum."""
     from dataclasses import dataclass
+
     from recupero.reports.brief import _aggregate_theft_amount_human
 
     @dataclass
@@ -332,6 +331,7 @@ def test_aggregate_theft_amount_handles_missing_token() -> None:
     """Defensive: a transfer with token=None or token.symbol=None
     shouldn't crash the mixed-asset detector."""
     from dataclasses import dataclass
+
     from recupero.reports.brief import _theft_events_mixed_assets
 
     @dataclass
@@ -351,6 +351,7 @@ def test_aggregate_theft_amount_handles_nan_decimal() -> None:
     helper should refuse to add it into a same-symbol sum (else the
     sum becomes NaN)."""
     from dataclasses import dataclass
+
     from recupero.reports.brief import _aggregate_theft_amount_human
 
     @dataclass

@@ -18,8 +18,7 @@ import logging
 
 import pytest
 
-from recupero.logging_setup import _SecretRedactingFilter, _redact
-
+from recupero.logging_setup import _redact, _SecretRedactingFilter
 
 # ---------------------------------------------------------------- #
 # Helpers

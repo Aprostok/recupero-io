@@ -30,7 +30,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-
 # ---------- Bug 1: malformed JSON bubbles unwrapped ----------
 
 

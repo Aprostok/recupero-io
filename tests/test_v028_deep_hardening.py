@@ -30,13 +30,13 @@ Three categories of tests in this file:
 from __future__ import annotations
 
 import json
-import re
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-from hypothesis import HealthCheck, assume, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from recupero.reports.subpoena_renderer import (
     _FILENAME_COMPONENT_MAX,
@@ -45,7 +45,6 @@ from recupero.reports.subpoena_renderer import (
     render_subpoena_artifacts,
 )
 from recupero.reports.subpoena_targets import (
-    SUBPOENA_USD_THRESHOLD,
     _parse_usd_from_asset_string,
     _parse_usd_from_str,
     _sanitize_usd,
@@ -53,7 +52,6 @@ from recupero.reports.subpoena_targets import (
     extract_subpoena_targets,
 )
 from recupero.validators.output_integrity import (
-    _check_subpoena_files_match_targets,
     _check_subpoena_targets_cover_non_freezable,
     _check_subpoena_targets_depends_on_resolves,
     validate_case_output,
@@ -510,6 +508,7 @@ def test_cex_compliance_override_unset_does_not_attempt_file_read(
     Pin the contract: with the env var unset, no WARNING is
     emitted from the override loader."""
     import logging
+
     from recupero.reports.subpoena_targets import _load_operator_overrides
 
     monkeypatch.delenv("RECUPERO_SUBPOENA_RECIPIENTS_OVERRIDE", raising=False)

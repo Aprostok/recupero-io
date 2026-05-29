@@ -29,7 +29,6 @@ from pathlib import Path
 
 import pytest
 
-
 # ----- Allowlists -----------------------------------------------------------
 
 # Names whose VALUES are guaranteed identifier-shaped operator constants —

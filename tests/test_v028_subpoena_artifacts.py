@@ -653,3 +653,78 @@ def test_subpoena_usd_threshold_constant() -> None:
     """The threshold is documented as $1,000 USD in the design doc.
     Locking the constant value as a regression guard."""
     assert Decimal("1000") == SUBPOENA_USD_THRESHOLD
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.32.1 (#209 step 1): emit_brief resolves endpoint transfer_ids into
+# subpoena tx-level evidence. Pre-fix the exchange dicts dropped
+# transfer_ids, so every off-ramp subpoena target shipped with NO tx_hash
+# for the exchange compliance team to grep against.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_subpoena_exchange_dicts_resolves_tx_evidence() -> None:
+    """Each ExchangeEndpoint's transfer_ids resolve to deduped tx_hashes
+    (+ chain + deposit window + count) via case.transfers."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from recupero.reports.emit_brief import _subpoena_exchange_dicts
+
+    eth = SimpleNamespace(value="ethereum")
+    transfers = [
+        SimpleNamespace(transfer_id="ethereum:0xaaa:0", tx_hash="0xaaa", chain=eth),
+        SimpleNamespace(transfer_id="ethereum:0xbbb:1", tx_hash="0xbbb", chain=eth),
+        # Same tx, different log index → must dedupe to one hash.
+        SimpleNamespace(transfer_id="ethereum:0xaaa:2", tx_hash="0xaaa", chain=eth),
+    ]
+    ep = SimpleNamespace(
+        address="0xDEPOSIT",
+        exchange="MEXC",
+        transfer_ids=["ethereum:0xaaa:0", "ethereum:0xbbb:1", "ethereum:0xaaa:2"],
+        total_received_usd=Decimal("1234567"),
+        first_deposit_at=datetime(2026, 1, 1, tzinfo=UTC),
+        last_deposit_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    case = SimpleNamespace(transfers=transfers, exchange_endpoints=[ep])
+
+    out = _subpoena_exchange_dicts(case)
+    assert len(out) == 1
+    d = out[0]
+    assert d["address"] == "0xDEPOSIT"
+    assert d["exchange"] == "MEXC"
+    assert d["tx_hashes"] == ["0xaaa", "0xbbb"], "deduped, order-preserved"
+    assert d["chain"] == "ethereum"
+    assert d["transfer_count"] == 3
+    assert d["first_deposit_at"] == "2026-01-01T00:00:00+00:00"
+    assert d["last_deposit_at"] == "2026-01-02T00:00:00+00:00"
+    assert d["source"] == "label_db"
+
+
+def test_subpoena_exchange_dicts_falls_back_to_parsing_transfer_id() -> None:
+    """When a transfer is absent from case.transfers, parse the canonical
+    'chain:tx_hash:logidx' id form so evidence is still emitted."""
+    from types import SimpleNamespace
+
+    from recupero.reports.emit_brief import _subpoena_exchange_dicts
+
+    ep = SimpleNamespace(
+        address="TDeposit", exchange="Binance",
+        transfer_ids=["tron:abc123:0"],
+        total_received_usd=Decimal("5000"),
+        first_deposit_at=None, last_deposit_at=None,
+    )
+    case = SimpleNamespace(transfers=[], exchange_endpoints=[ep])
+    out = _subpoena_exchange_dicts(case)
+    assert out[0]["tx_hashes"] == ["abc123"]
+    assert out[0]["chain"] == "tron"
+    assert out[0]["first_deposit_at"] is None
+
+
+def test_subpoena_exchange_dicts_empty_case_is_empty_list() -> None:
+    from types import SimpleNamespace
+
+    from recupero.reports.emit_brief import _subpoena_exchange_dicts
+
+    case = SimpleNamespace(transfers=[], exchange_endpoints=[])
+    assert _subpoena_exchange_dicts(case) == []

@@ -1811,6 +1811,79 @@ def _build_cex_continuity_section(
         return []
 
 
+def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
+    """Resolve ``case.exchange_endpoints`` into the dict shape
+    ``subpoena_targets.extract_subpoena_targets`` expects, INCLUDING
+    transaction-level evidence (tx_hashes + chain + deposit-window
+    timestamps + count) resolved from each endpoint's ``transfer_ids``
+    via ``case.transfers``.
+
+    v0.32.1 (#209 step 1): pre-fix the exchange dicts dropped
+    ``transfer_ids`` entirely, so every off-ramp subpoena target shipped
+    with NO tx_hash for the exchange's compliance team to grep against — a
+    subpoena that says "this address received $X" with no on-chain tx
+    reference is rejected on compliance review. The endpoint already
+    carries the deposit window (first/last_deposit_at); we resolve the
+    hashes (falling back to parsing the canonical "chain:tx_hash:logidx"
+    transfer-id form when a transfer is absent from ``case.transfers``).
+    """
+    tinfo_by_id: dict[str, tuple[str, str | None]] = {}
+    for t in (getattr(case, "transfers", None) or []):
+        tid = getattr(t, "transfer_id", None)
+        txh = getattr(t, "tx_hash", None)
+        tch = getattr(t, "chain", None)
+        cval = tch.value if hasattr(tch, "value") else (
+            tch if isinstance(tch, str) else None
+        )
+        if isinstance(tid, str) and isinstance(txh, str) and txh:
+            tinfo_by_id[tid] = (txh, cval)
+
+    def _iso(dt: object) -> str | None:
+        try:
+            return dt.isoformat() if dt is not None else None  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return None
+
+    out: list[dict[str, Any]] = []
+    for e in (getattr(case, "exchange_endpoints", None) or []):
+        is_d = isinstance(e, dict)
+        tids = (e.get("transfer_ids") if is_d
+                else getattr(e, "transfer_ids", None)) or []
+        hashes: list[str] = []
+        seen: set[str] = set()
+        chain_from_tx: str | None = None
+        for tid in tids:
+            info = tinfo_by_id.get(tid)
+            if info is None and isinstance(tid, str) and tid.count(":") >= 2:
+                # Defensive fallback: id form is "chain:tx_hash:logidx".
+                parts = tid.split(":")
+                info = (parts[1], parts[0]) if parts[1] else None
+            if info is None:
+                continue
+            txh, cval = info
+            if chain_from_tx is None:
+                chain_from_tx = cval
+            if txh and txh not in seen:
+                seen.add(txh)
+                hashes.append(txh)
+        first = e.get("first_deposit_at") if is_d else getattr(e, "first_deposit_at", None)
+        last = e.get("last_deposit_at") if is_d else getattr(e, "last_deposit_at", None)
+        chain = (e.get("chain") if is_d else getattr(e, "chain", None)) or chain_from_tx
+        out.append({
+            "address": e.get("address") if is_d else getattr(e, "address", None),
+            "exchange": e.get("exchange") if is_d else getattr(e, "exchange", None),
+            "total_received_usd": (e.get("total_received_usd") if is_d
+                else str(getattr(e, "total_received_usd", "") or "")),
+            "chain": chain,
+            "source": "label_db",
+            "tx_hashes": hashes,
+            "first_deposit_at": first if is_d else _iso(first),
+            "last_deposit_at": last if is_d else _iso(last),
+            "transfer_count": len(tids),
+        })
+    return out
+
+
 def emit_brief(
     case: Case,
     victim: VictimInfo,
@@ -2175,20 +2248,10 @@ def emit_brief(
     # docs/v0.28_subpoena_targets_design.md and INVARIANTS C/D/E.
     try:
         from recupero.reports.subpoena_targets import extract_subpoena_targets
-        # exchanges list: each entry already carries address +
-        # exchange + total_received_usd. Build the dict shape the
-        # extractor expects from the brief's already-built list.
-        exchange_dicts = [
-            {
-                "address": getattr(e, "address", None) if not isinstance(e, dict) else e.get("address"),
-                "exchange": getattr(e, "exchange", None) if not isinstance(e, dict) else e.get("exchange"),
-                "total_received_usd": str(getattr(e, "total_received_usd", "") or "")
-                    if not isinstance(e, dict) else e.get("total_received_usd"),
-                "chain": getattr(e, "chain", None) if not isinstance(e, dict) else e.get("chain"),
-                "source": "label_db",
-            }
-            for e in (case.exchange_endpoints or [])
-        ]
+        # Build the dict shape the extractor expects, resolving each
+        # endpoint's transfer_ids → tx-level evidence (#209 step 1; see
+        # _subpoena_exchange_dicts).
+        exchange_dicts = _subpoena_exchange_dicts(case)
         brief["SUBPOENA_TARGETS"] = extract_subpoena_targets(
             case=case,
             freeze_asks=freeze_asks,

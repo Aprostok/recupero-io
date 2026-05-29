@@ -247,16 +247,26 @@ def _build_base_context(brief: dict[str, Any]) -> dict[str, Any]:
         "case_id": brief.get("CASE_ID") or "(case-id missing)",
         "generated_at": now_iso.replace("+00:00", "Z"),
         "incident_date": incident_date,
-        "incident_type": brief.get("INCIDENT_TYPE") or "the underlying incident",
+        # v0.32.1 (output-audit LOW, sibling of the victim-field fix above):
+        # incident_type + the investigator name/organization are free-text
+        # intake fields that also typeset verbatim into the MLAT / §3512 /
+        # 314(b) / subpoena drafts — run them through the SAME placeholder
+        # sanitizer so an unconfirmed-state sentinel can't leak into a
+        # signed legal request.
+        "incident_type": _sanitize_placeholder(brief.get("INCIDENT_TYPE"))
+            or "the underlying incident",
         "total_loss_usd": brief.get("TOTAL_LOSS_USD") or "$0.00",
         "victim": {
             "name": _sanitize_placeholder(brief.get("VICTIM_NAME")) or "[victim name]",
             "jurisdiction": _sanitize_placeholder(brief.get("VICTIM_JURISDICTION")) or "[jurisdiction]",
         },
         "investigator": {
-            "name": brief.get("INVESTIGATOR_NAME") or "[investigator name]",
-            "organization": brief.get("INVESTIGATOR_ENTITY_FULL")
-                or brief.get("INVESTIGATOR_ENTITY") or "Recupero",
+            "name": _sanitize_placeholder(brief.get("INVESTIGATOR_NAME"))
+                or "[investigator name]",
+            "organization": _sanitize_placeholder(
+                brief.get("INVESTIGATOR_ENTITY_FULL")
+                or brief.get("INVESTIGATOR_ENTITY")
+            ) or "Recupero",
             "email": brief.get("INVESTIGATOR_EMAIL") or "[investigator email]",
             "fincen_314b_id": brief.get("FINCEN_314B_ID") or None,
         },

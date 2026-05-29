@@ -497,22 +497,39 @@ def score_recovery(
     sanctions_mult = 0.30 if ofac_exposed else 1.00
     combined_mult = jur_mult * sanctions_mult
 
-    expected_recovered = expected_freezable * Decimal(str(combined_mult))
+    # --- Bridge / DEX friction (computed UP-FRONT) ---
+    #
+    # v0.32.1 (financial-audit CRITICAL): friction must fold into the
+    # SINGLE reconciling multiplier applied uniformly to the headline,
+    # the per-issuer rows, AND the CI bounds. Pre-fix, friction was
+    # applied ONLY to the scalar headline while the per-issuer rows + CI
+    # carried combined_mult alone — so on ANY case with a bridge/DEX hop
+    # the per-issuer table over-summed the headline by up to
+    # 1/(1-0.30) ≈ 43%, re-opening the v0.22.1-C1 "table doesn't sum to
+    # headline" defect. (5% per hop, capped at 30%; no threshold gate —
+    # any complexity reduces expected recovery proportionally. The
+    # explanatory driver is appended further below.)
+    cross_chain_count = len(brief.get("CROSS_CHAIN_HANDOFFS") or [])
+    dex_count = len(brief.get("DEX_SWAPS") or [])
+    total_hops = cross_chain_count + dex_count
+    friction = min(0.30, 0.05 * total_hops) if total_hops > 0 else 0.0
 
-    # v0.22.1 (audit-fix C1 CRITICAL): apply the same jurisdiction +
-    # sanctions multipliers to each per-issuer row's
-    # `expected_recovered_usd`. Pre-v0.22.1 the per-issuer rows carried
-    # the pre-multiplier contribution, so the LE Section 5.4 table
-    # could show "Tether expected $850K" while the headline read
-    # "$38K" (Russia jurisdiction + OFAC overlay = 0.045x). The LE
-    # explanatory prose claimed "both are jurisdiction-adjusted" —
-    # was false. Now: rescale each row's expected_recovered_usd by
-    # combined_mult so the per-issuer table sums to the headline.
+    # The ONE multiplier: jurisdiction × sanctions × (1 - trace friction).
+    final_mult = Decimal(str(combined_mult)) * Decimal(str(1.0 - friction))
+
+    expected_recovered = expected_freezable * final_mult
+
+    # v0.22.1 (audit-fix C1) + v0.32.1: rescale each per-issuer row's
+    # `expected_recovered_usd` by the SAME final multiplier so the
+    # per-issuer LE Section 5.4 table sums to the headline. Pre-v0.22.1
+    # the rows carried the pre-multiplier contribution (table showed
+    # "Tether $850K" while headline read "$38K"); pre-v0.32.1 they
+    # carried combined_mult but not friction (table over-summed the
+    # friction-discounted headline).
     if per_issuer_rows:
-        _combined_mult_decimal = Decimal(str(combined_mult))
         for _row in per_issuer_rows:
             _row.expected_recovered_usd = _round_money(
-                _row.expected_recovered_usd * _combined_mult_decimal
+                _row.expected_recovered_usd * final_mult
             )
 
     if jur_mult < 0.9:
@@ -578,37 +595,23 @@ def score_recovery(
                 ),
             ))
 
-    # --- Bridge / DEX friction ---
+    # --- Bridge / DEX friction driver ---
     #
-    # v0.16.10 (round-9 scoring MEDIUM): smooth threshold. Pre-v0.16.10
-    # the friction multiplier only fired at `cross_chain >= 2 OR dex >= 3`,
-    # producing a step discontinuity — a case with 1 bridge + 2 swaps
-    # scored IDENTICALLY to a clean case, then 1 bridge + 3 swaps
-    # jumped to 20% friction. Engagement decisions on boundary cases
-    # flipped on a single hop. Now: per-hop linear contribution,
-    # capped at 30%, with NO threshold gate (any complexity reduces
-    # expected recovery proportionally).
-    cross_chain_count = len(brief.get("CROSS_CHAIN_HANDOFFS") or [])
-    dex_count = len(brief.get("DEX_SWAPS") or [])
-    total_hops = cross_chain_count + dex_count
-    if total_hops > 0:
-        # 5% per hop, cap at 30% total. A single hop = 5%, two = 10%,
-        # six+ = 30% (saturation). Matches the prior 0.05 * count math
-        # but starts firing at hop 1 instead of at the old thresholds.
-        friction = min(0.30, 0.05 * total_hops)
-        expected_recovered *= Decimal(str(1.0 - friction))
-        # Only surface a driver narrative when friction is meaningful
-        # (~10%+). Below that it's signal noise on the brief.
-        if friction >= 0.10:
-            drivers.append(RecoveryDriver(
-                factor="trace_complexity",
-                direction="negative",
-                weight=friction,
-                description=(
-                    f"{cross_chain_count} bridge hop(s) + {dex_count} DEX swap(s) "
-                    f"add trace complexity (~{friction*100:.0f}% recovery friction)."
-                ),
-            ))
+    # The friction multiplier itself was computed up-front and folded
+    # into `final_mult` (applied uniformly to headline + per-issuer rows
+    # + CI). Here we only surface the explanatory driver when friction is
+    # meaningful (~10%+); below that it's signal noise on the brief.
+    # (v0.16.10: smooth per-hop linear contribution, no threshold gate.)
+    if friction >= 0.10:
+        drivers.append(RecoveryDriver(
+            factor="trace_complexity",
+            direction="negative",
+            weight=friction,
+            description=(
+                f"{cross_chain_count} bridge hop(s) + {dex_count} DEX swap(s) "
+                f"add trace complexity (~{friction*100:.0f}% recovery friction)."
+            ),
+        ))
 
     # --- Confidence interval ---
     #
@@ -636,11 +639,35 @@ def score_recovery(
     if expected_recovered > 0:
         low, high = _compute_recovery_ci(
             issuer_breakdown=issuer_breakdown,
-            jur_mult=jur_mult * sanctions_mult,
+            # v0.32.1 (financial-audit CRITICAL): pass the SAME
+            # friction-inclusive multiplier used for the headline + rows
+            # so the CI band reconciles too (was jur_mult*sanctions_mult,
+            # i.e. friction-free → band over-stated on bridged cases).
+            jur_mult=combined_mult * (1.0 - friction),
             learned_priors=learned_priors,
         )
     else:
         low = high = Decimal("0")
+
+    # v0.32.1 (financial-audit HIGH): a victim can never be promised more
+    # than they lost. `expected_freezable` sums per-issuer REQUESTED USD,
+    # which on pooled-victim cases legitimately exceeds THIS victim's loss
+    # (the brief documents MAX_RECOVERABLE_USD = min(freezable, loss) and
+    # clamps there). The scorer must apply the same cap so the headline,
+    # the CI band, and the per-issuer rows never exceed total_loss — and
+    # so the net/recommendation below can't flip "recommend" on an
+    # inflated expected recovery. Rows are rescaled by the same factor to
+    # preserve the table↔headline reconciliation.
+    if total_loss > 0 and expected_recovered > total_loss:
+        _clamp = total_loss / expected_recovered
+        expected_recovered = total_loss
+        for _row in per_issuer_rows:
+            _row.expected_recovered_usd = _round_money(
+                _row.expected_recovered_usd * _clamp
+            )
+    if total_loss > 0:
+        high = min(high, total_loss)
+        low = min(low, total_loss)
 
     # --- Probabilities ---
     #
@@ -671,8 +698,21 @@ def score_recovery(
         )
     else:
         p_any = 0.10
+    # v0.32.1 (financial-audit MED): the breakeven recovery for "pays back
+    # the engagement" must derive from the pricing constants, not a magic
+    # number. A victim only nets >= 0 once recovery R clears ALL
+    # out-of-pocket cost — the fixed fees PLUS the contingency skimmed off
+    # the recovery itself: R - fixed_fees - contingency*R >= 0  →
+    # R >= fixed_fees / (1 - contingency). Pre-fix this used a hardcoded
+    # $12,000 (≈ the right value for the legacy $10,499 fees + 15%
+    # contingency) that silently drifted out of lockstep whenever pricing
+    # changed. Computed here (and reused below) so scoring + legal docs
+    # stay locked to recupero._pricing.
+    contingency_factor = _CONTINGENCY_PCT / Decimal("100")
+    fixed_fees = _DIAGNOSTIC_FEE_USD + _ENGAGEMENT_FEE_USD
+    _payback_breakeven = fixed_fees / (Decimal("1") - contingency_factor)
     p_payback = min(0.95, p_any * float(
-        min(Decimal("1"), expected_recovered / Decimal("12000"))
+        min(Decimal("1"), expected_recovered / _payback_breakeven)
     ))
 
     # --- Our revenue + victim net ---
@@ -691,8 +731,8 @@ def score_recovery(
     # be recomputed PER CI BAND POINT. Holding `expected_revenue`
     # constant across the band overstated `expected_net_high_usd` by
     # 15% * (high - expected_recovered) — wrong number in legal docs.
-    contingency_factor = _CONTINGENCY_PCT / Decimal("100")
-    fixed_fees = _DIAGNOSTIC_FEE_USD + _ENGAGEMENT_FEE_USD
+    # (`contingency_factor` + `fixed_fees` are defined above, at the
+    # p_payback breakeven, so the two stay in lockstep.)
     expected_revenue = fixed_fees + expected_recovered * contingency_factor
     expected_net = expected_recovered - expected_revenue
     # Recompute contingency for the CI bounds so the band reflects the

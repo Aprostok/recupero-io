@@ -851,9 +851,17 @@ def compute_clusters_with_metadata(
     for src, members in funding_groups.items():
         if len(members) < 2:
             continue
-        for i, (a, ts_a, _) in enumerate(members):
-            for b, ts_b, _ in members[i + 1:]:
+        for i, (a, ts_a, chain_a) in enumerate(members):
+            for b, ts_b, chain_b in members[i + 1:]:
                 if a == b:
+                    continue
+                # v0.32.1 (forensic-audit HIGH, H3 sibling of the H2 fix):
+                # the same funding-source address string can exist on
+                # multiple chains. Two addresses "funded by src" on
+                # DIFFERENT chains are not evidence of one controlling
+                # entity — only same-chain pairs may cluster (mirrors the
+                # H2/H4 chain guards).
+                if chain_a != chain_b:
                     continue
                 delta = abs((ts_a - ts_b).total_seconds())
                 if delta > _FUNDING_WINDOW.total_seconds():

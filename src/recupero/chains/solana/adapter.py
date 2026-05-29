@@ -195,22 +195,50 @@ class SolanaAdapter(ChainAdapter):
                 if (tt.get("fromUserAccount") or "") != from_address:
                     continue
                 raw_amount = tt.get("rawTokenAmount") or {}
-                amount_raw_str = str(raw_amount.get("tokenAmount") or tt.get("tokenAmount") or "0")
-                # rawTokenAmount.tokenAmount is a raw integer string; tokenAmount
-                # is a decimal float — prefer raw where available.
+                # Helius exposes the SPL amount two ways with DIFFERENT units:
+                #   * rawTokenAmount.tokenAmount — the BASE-UNIT integer
+                #     string (already scaled by 10**decimals). Use as-is.
+                #   * tt.tokenAmount — a HUMAN decimal string (e.g. "1.5").
+                #     This one must be multiplied by 10**decimals.
+                # v0.32.1 (chain-audit): the prior code merged both fields
+                # into one string and, on the int() fallback, ALWAYS scaled
+                # by 10**decimals. When the base-unit field was present but
+                # not int-parseable (scientific notation / stray decimal),
+                # that DOUBLE-scaled an already-scaled amount — inflating the
+                # transfer by 10**decimals and corrupting the BFS USD math.
+                # Each field now carries its own contract.
+                raw_int_str = raw_amount.get("tokenAmount")
+                human_str = tt.get("tokenAmount")
+                # Clamp the scaling exponent: the SPL mint `decimals` field is
+                # a u8 (on-chain max 255). Bounding it also blocks a DoS where
+                # an attacker-supplied huge `decimals` makes `10 ** decimals`
+                # build a multi-gigabyte integer before any OverflowError.
                 try:
-                    amount_raw = int(amount_raw_str)
+                    decimals = int(raw_amount.get("decimals", 0) or 0)
                 except (ValueError, TypeError):
-                    # Fall back to float conversion if necessary. This
-                    # path is hardened against attacker-supplied
-                    # ``Infinity`` / extreme ``decimals`` values that
-                    # would otherwise raise OverflowError uncaught and
-                    # kill the BFS hop.
+                    decimals = 0
+                decimals = max(0, min(decimals, 255))
+                amount_raw: int | None = None
+                # 1) Prefer the base-unit field — already scaled, NEVER scale.
+                if raw_int_str is not None:
                     try:
-                        amount_raw = int(float(amount_raw_str) * (10 ** int(raw_amount.get("decimals", 0) or 0)))
+                        amount_raw = int(str(raw_int_str))
+                    except (ValueError, TypeError):
+                        amount_raw = None  # malformed → try the human field
+                # 2) Only when the base-unit field is absent/unparseable,
+                #    derive from the HUMAN decimal field WITH scaling. This
+                #    path is hardened against attacker-supplied ``Infinity`` /
+                #    extreme values that would otherwise raise OverflowError
+                #    uncaught and kill the BFS hop.
+                if amount_raw is None and human_str is not None:
+                    try:
+                        amount_raw = int(float(str(human_str)) * (10 ** decimals))
                     except (ValueError, TypeError, OverflowError):
-                        amount_raw = 0
-                if amount_raw == 0:
+                        amount_raw = None
+                # Drop zero / malformed / negative magnitudes (outflow amounts
+                # are positive base units). `not amount_raw` short-circuits the
+                # None/0 case before the `<= 0` comparison touches None.
+                if not amount_raw or amount_raw <= 0:
                     continue
                 try:
                     out.append(self._normalize_spl(tx, tt, amount_raw))

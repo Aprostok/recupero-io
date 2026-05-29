@@ -90,9 +90,11 @@ def lookup(tx_hash: str) -> frozenset[str]:
 def clear_for_case() -> None:
     """Reset the registry. Safe to call between cases.
 
-    Currently called only by tests; the production tracer is owned
-    by another agent for v0.32.1 and the registry's bounded growth
-    (one entry per BTC tx in a case) is acceptable for the ship.
+    Called by the production tracer at the start of each run
+    (``trace.tracer`` invokes this before BFS so co-spend inputs never
+    bleed across unrelated victims, and so two sequential in-process
+    runs match a clean-process run) as well as by tests. Growth is
+    bounded — one entry per BTC tx visited in a case.
     """
     with _LOCK:
         _BTC_INPUTS_BY_TX.clear()

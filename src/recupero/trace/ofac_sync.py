@@ -169,8 +169,36 @@ def _validate_url(url: str) -> str | None:
     host = (parsed.hostname or "").lower()
     if not host:
         return "url has no host"
+    # Literal deny-list — always enforced, even if the shared SSRF helper
+    # below is unavailable (graceful degradation: never weaker than before).
     if host in _DENY_HOSTS:
         return f"refused host {host!r}: cloud-metadata exfil defense"
+    # v0.32.1 (security-audit): reuse the hardened SSRF host check from the
+    # monitoring API so the OFAC fetch gets the SAME full defense as webhook
+    # dispatch — RFC1918 / loopback / link-local / IPv6 ranges + internal
+    # hostname suffixes (.internal/.local) + DNS-rebinding resolution —
+    # rather than only the 3-entry literal metadata deny-list above. The
+    # threat is an operator typo / env-var override of OFAC_SDN_XML_URL
+    # pointing at internal infra; a public host (treasury.gov) passes.
+    # Lazy + best-effort: if the API module can't be imported (e.g. a
+    # trace-only deployment), we fall back to the literal deny-list.
+    try:
+        from recupero.api.monitoring_api import (
+            _is_blocked_host,
+            _resolves_to_blocked_ip,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        if _is_blocked_host(host) or _resolves_to_blocked_ip(host):
+            return (
+                f"refused host {host!r}: resolves to a private / loopback / "
+                "link-local / metadata target (SSRF defense)"
+            )
+    except Exception:  # noqa: BLE001
+        # Never let the shared SSRF helper crash the sync — the literal
+        # deny-list above already covers the obvious exfil vectors.
+        return None
     return None
 
 # RIGOR-2a: removed _PARSER_HARDENING_WARNED state. defusedxml is

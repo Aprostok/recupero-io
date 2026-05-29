@@ -466,6 +466,15 @@ def _write_silence_outcome(*, letter_id: UUID, dsn: str) -> None:
     state in the LE handoff's Live Filing Status section.
     """
     with db_connect(dsn) as conn, conn.cursor() as cur:
+        # v0.32.1 (worker-audit HIGH): idempotent insert. A retried tick
+        # (stage advance committed, this post-step re-run), a manual cron
+        # invocation, or two overlapping ticks racing the same letter must
+        # NOT append a second silence_14d row — duplicates double-count the
+        # non-response in the per-issuer priors pipeline. The partial unique
+        # index `freeze_outcomes_one_silence_14d_per_letter` (migration 031)
+        # is the hard guarantee; ON CONFLICT ... DO NOTHING makes the race a
+        # safe no-op instead of a crash. The conflict target carries the
+        # same WHERE predicate as the partial index so Postgres can infer it.
         cur.execute(
             """
             INSERT INTO public.freeze_outcomes
@@ -473,6 +482,8 @@ def _write_silence_outcome(*, letter_id: UUID, dsn: str) -> None:
             VALUES (%s, 'silence_14d', NOW(),
                     'Auto-recorded by freeze_followup cron after 14 days '
                     'of issuer silence following nudge_72h + escalation_7d.')
+            ON CONFLICT (letter_id) WHERE outcome_type = 'silence_14d'
+            DO NOTHING
             """,
             (letter_id,),
         )

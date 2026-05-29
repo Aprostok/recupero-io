@@ -151,6 +151,19 @@ _ADDR_EXPLORER_HOSTS: dict[str, tuple[str, ...]] = {
     "linea": ("lineascan.build",),
     "blast": ("blastscan.io",),
     "scroll": ("scrollscan.com",),
+    # v0.32.1 (output-audit HIGH, A.4 sibling): the prior pass added
+    # zksync/linea/blast/scroll but stopped short of full parity with
+    # _common.ADDRESS_EXPLORER_BY_CHAIN, which also ships these six
+    # EVM chains. Without them INVARIANT L still silently SKIPPED its
+    # cross-chain mis-attribution check for a Mantle/Celo/Gnosis/
+    # Moonbeam/Metis/Kava 0x… holding rendered with an etherscan.io
+    # link. Hosts mirror the canonical explorers in _common.
+    "mantle": ("mantlescan.xyz",),
+    "celo": ("celoscan.io",),
+    "gnosis": ("gnosisscan.io",),
+    "moonbeam": ("moonscan.io",),
+    "metis": ("andromeda-explorer.metis.io",),
+    "kava": ("kavascan.com",),
     "tron": ("tronscan.org", "tronscan.io"),
     "solana": ("solscan.io", "solana.fm", "explorer.solana.com"),
     "bitcoin": ("blockstream.info", "mempool.space", "btcscan.org"),
@@ -336,17 +349,49 @@ def check_invariant_g_chain_of_custody(
     graph from each seed and confirm reachability. Any destination
     unreachable from any seed is a CRITICAL — the brief is claiming a
     destination it cannot demonstrate."""
-    if not brief or not trace_evidence:
+    if not brief:
         return []
-    transactions = trace_evidence.get("transactions") or trace_evidence.get("transfers") or []
-    if not isinstance(transactions, list):
+    # v0.32.1 (output-audit A.3): mirror output_integrity.check_invariant_g's
+    # structure + severity split. Check the CLAIMS first — if the brief
+    # cites no destinations there is nothing whose custody to demonstrate,
+    # so stay silent regardless of evidence shape (avoids false-positives
+    # AND avoids duplicating the structural validator's advisory WARNING).
+    destinations = _extract_destination_addresses(brief)
+    if not destinations:
         return []
+
+    # Normalize the evidence source. `evidence_source_present` distinguishes
+    # "a trace_evidence block was supplied" (a dict, even if its transaction
+    # list is empty) from "no source at all" (None). That distinction drives
+    # the empty-evidence severity below.
+    evidence_source_present = isinstance(trace_evidence, dict)
+    transactions: list = []
+    if evidence_source_present:
+        raw = trace_evidence.get("transactions")
+        if not isinstance(raw, list):
+            raw = trace_evidence.get("transfers")
+        if isinstance(raw, list):
+            transactions = [t for t in raw if isinstance(t, dict)]
+
     if not transactions:
-        # v0.32.1: absence of transaction evidence is NOT evidence of
-        # fabrication — without a trace graph we cannot verify
-        # reachability, so emit a single WARNING rather than flagging
-        # every destination as a CRITICAL. When transactions ARE present
-        # an unreachable destination is still CRITICAL below.
+        # Two very different cases, matching output_integrity:
+        #   * A trace_evidence SOURCE was supplied but ships ZERO
+        #     transactions while the brief still claims destinations — the
+        #     brief presents "evidence" supporting nothing → CRITICAL.
+        #     Pre-v0.32.1 this was a WARNING (a fabrication-signal
+        #     false-negative).
+        #   * No source at all → reachability simply cannot be verified;
+        #     absence of evidence is not evidence of fabrication → WARNING.
+        if evidence_source_present:
+            return [Violation(
+                check="invariant_g_chain_of_custody",
+                severity="critical",
+                detail=(
+                    "Brief claims destinations but the trace_evidence "
+                    "provided contains zero transactions — the chain of "
+                    "custody is unsupported by any underlying transfer."
+                ),
+            )]
         return [Violation(
             check="invariant_g_chain_of_custody",
             severity="warning",
@@ -358,14 +403,20 @@ def check_invariant_g_chain_of_custody(
     graph = _walk_transactions(transactions)
     seeds = _extract_seed_addresses(brief, manifest)
     if not seeds:
+        # Destinations claimed + a trace graph present, but no identifiable
+        # seed → unverifiable by construction. output_integrity treats this
+        # as CRITICAL; aligned here (was WARNING).
         return [Violation(
             check="invariant_g_chain_of_custody",
-            severity="warning",
-            detail="No seed addresses found in brief; chain-of-custody check skipped.",
+            severity="critical",
+            detail=(
+                "Brief claims destinations but provides no seed address "
+                "(VICTIM_WALLET_FULL); chain-of-custody is unverifiable."
+            ),
         )]
     reachable = _bfs_reachable(graph, seeds)
     violations: list[Violation] = []
-    for (addr, chain) in _extract_destination_addresses(brief):
+    for (addr, chain) in destinations:
         if addr not in reachable:
             violations.append(Violation(
                 check="invariant_g_chain_of_custody",

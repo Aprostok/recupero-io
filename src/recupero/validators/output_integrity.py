@@ -1873,10 +1873,11 @@ def _check_no_unrendered_jinja_placeholders(
     ``cases/<id>/legal_requests/`` and were previously unscanned, so a
     template bug there could ship an unrendered ``{{ courthouse }}`` to an
     attorney. NOTE: this check is deliberately for *Jinja* markup only — it
-    does NOT flag the intentional ``[TODO: ...]`` attorney fill-ins those
-    drafts carry (judicial district, courthouse address, return date, etc.),
-    which are by-design blanks recupero cannot populate and which render via
-    ``|default("[TODO: ...]")`` (i.e. they are NOT unrendered ``{{ }}``)."""
+    does NOT flag the intentional bracketed attorney fill-in placeholders
+    those drafts carry (judicial district, courthouse address, return date,
+    etc.), which are by-design blanks recupero cannot populate and which
+    render via a Jinja ``|default(...)`` fallback string (i.e. they are
+    plain rendered text, NOT unrendered ``{{ }}``)."""
     violations: list[Violation] = []
     seen: set[Path] = set()
     for d in dirs:

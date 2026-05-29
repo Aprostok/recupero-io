@@ -154,3 +154,40 @@ def test_negative_inputs() -> None:
     assert should_descend_further(-1, 100, 8) is False
     assert should_descend_further(3, -1, 8) is False
     assert should_descend_further(3, 100, 0) is False
+
+
+# ---- v0.32.1 Phase-2: unbounded budget = deepest ("go deeper") ---- #
+
+
+def test_unbounded_budget_none_is_deepest() -> None:
+    """None budget = UNBOUNDED (the default disabled-budget deployment).
+    Takes the DEEPEST path: the industry-best floor (16) with severity
+    bumps stacked on top, so a high-value case is chased deeper than a
+    small one. 'Budget doesn't matter, go deeper.'"""
+    assert compute_max_depth(None, None) == BUDGET_STARVATION_FLOOR_DEPTH  # 16
+    assert compute_max_depth({"theft_amount_usd": 500_000}, None) == 16  # < $1M
+    assert compute_max_depth({"theft_amount_usd": 5_000_000}, None) == 18  # > $1M
+    assert compute_max_depth({"theft_amount_usd": 50_000_000}, None) == 20  # > $10M
+
+
+def test_unbounded_budget_inf_matches_none() -> None:
+    """+inf is the same UNBOUNDED signal as None."""
+    assert compute_max_depth({"theft_amount_usd": 50_000_000}, float("inf")) == 20
+    assert compute_max_depth(None, float("inf")) == 16
+
+
+def test_unbounded_high_value_deeper_than_enabled_budget() -> None:
+    """An uncapped deployment chases a $50M case DEEPER (20) than the same
+    case under an enabled, healthy budget (12) — enabling a budget is an
+    opt-in to economization, by design. Pre-Phase-2 the adaptive wiring
+    read the wrong snapshot key and flattened every case to the floor."""
+    uncapped = compute_max_depth({"theft_amount_usd": 50_000_000}, None)
+    enabled = compute_max_depth({"theft_amount_usd": 50_000_000}, 500.0)
+    assert uncapped == 20
+    assert enabled == 12
+    assert uncapped > enabled
+
+
+def test_unbounded_never_exceeds_hard_ceiling() -> None:
+    """Even unbounded + astronomical theft stays clipped to HARD_CEILING."""
+    assert compute_max_depth({"theft_amount_usd": 1e18}, None) <= HARD_CEILING

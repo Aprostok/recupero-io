@@ -91,32 +91,53 @@ def compute_max_depth(
 ) -> int:
     """Decide the BFS max_depth for this trace.
 
-    Logic (each rule applies independently; final depth is clipped to
-    the hard ceiling):
-      - Base = 6.
-      - +2 if theft > $1M.
-      - +2 more if theft > $10M (so $10M+ caps at 10 from severity).
-      - +2 if budget > $100 (so $10M+ with healthy budget can hit 12).
-      - If budget < $5, floor at BUDGET_STARVATION_FLOOR_DEPTH (16 in
-        industry-best mode — the budget no longer gates depth).
+    Logic (final depth is clipped to the hard ceiling):
+      - UNBOUNDED budget (None / +inf — the default deployment ships
+        budget tracking DISABLED, i.e. "budget doesn't matter, go
+        deeper"): start from the industry-best floor (16) and stack the
+        severity bumps ON TOP, so a $50M case is chased deeper (20) than
+        a $50k one (16). This is the DEEPEST path — an uncapped
+        deployment never loses hops.
+      - Enabled budget < $5 (starved): floor at BUDGET_STARVATION_FLOOR_DEPTH
+        (16) — even a tiny operator-set budget keeps the floor.
+      - Enabled budget >= $5: base 6, +2 if theft > $1M, +2 more if
+        theft > $10M, +2 if budget > $100 (operator opted into
+        economization → shallower than the uncapped default, by design).
       - Never exceed HARD_CEILING (64 in industry-best mode).
     """
     theft = _theft_amount(case_metadata)
 
-    # Coerce budget input.
-    try:
-        budget = float(api_budget_remaining_usd) if api_budget_remaining_usd is not None else 0.0
-        if budget != budget:  # NaN
+    # Coerce budget. None => UNBOUNDED (default disabled-budget deployment).
+    # +inf is also unbounded. Garbage / NaN => 0.0 (treated as starved →
+    # floor) so a poisoned value can never SHRINK the trace below the floor.
+    if api_budget_remaining_usd is None:
+        budget = float("inf")
+    else:
+        try:
+            budget = float(api_budget_remaining_usd)
+            if budget != budget:  # NaN
+                budget = 0.0
+        except (ValueError, TypeError):
             budget = 0.0
-    except (ValueError, TypeError):
-        budget = 0.0
 
-    # v0.32.1+ industry-best mode: budget starvation no longer collapses
-    # the trace. The default ships with budget tracking DISABLED so
-    # ``budget < BUDGET_STARVATION_CAP`` is the normal case. Return the
-    # starvation floor (16 hops, up from 4) which is still deeper than
-    # the default base — that's intentional: a budget-disabled industry-
-    # best deployment should NEVER lose hops to budget pressure.
+    # UNBOUNDED budget: the DEEPEST path. The budget never gates depth;
+    # severity bumps stack on the industry-best floor (16 → 18 → 20).
+    if budget == float("inf"):
+        depth = BUDGET_STARVATION_FLOOR_DEPTH
+        if theft > SEVERITY_BUMP_TIER_1:
+            depth += 2
+        if theft > SEVERITY_BUMP_TIER_2:
+            depth += 2
+        depth = min(HARD_CEILING, depth)
+        log.debug(
+            "compute_max_depth: UNBOUNDED budget, theft=$%s → depth=%d",
+            theft, depth,
+        )
+        return depth
+
+    # v0.32.1+ industry-best mode: a STARVED enabled budget no longer
+    # collapses the trace to 4 — it floors at 16. An operator who set a
+    # tiny per-case budget still shouldn't lose hops below the floor.
     if budget < BUDGET_STARVATION_CAP:
         log.debug(
             "compute_max_depth: budget %s < %s, flooring at %d",

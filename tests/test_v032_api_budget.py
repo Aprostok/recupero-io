@@ -316,6 +316,36 @@ def test_snapshot_marks_disabled_budget() -> None:
     assert snap["remaining_usd"] == "unbounded"
 
 
+def test_snapshot_key_is_remaining_usd_for_adaptive_depth_wiring() -> None:
+    """Regression lock (v0.32.1 Phase-2): the tracer's adaptive-depth pass
+    reads snapshot()['remaining_usd']. A pre-Phase-2 bug read a
+    non-existent 'budget_remaining_usd' key, so it ALWAYS got 0.0 → every
+    case looked budget-starved and the severity-based depth bumps never
+    applied. Lock the producer key name so the two can't drift again."""
+    b = CaseBudget(case_id="case-1", budget_usd=Decimal("100"))
+    snap = b.snapshot()
+    assert "remaining_usd" in snap, (
+        "tracer adaptive-depth reads snapshot()['remaining_usd']"
+    )
+    assert "budget_remaining_usd" not in snap, (
+        "the buggy key must never exist — it silently read 0.0"
+    )
+
+
+def test_disabled_budget_record_is_noop_never_raises() -> None:
+    """The default deployment ships budget tracking DISABLED ('budget
+    doesn't matter, go deeper'). record() must be a no-op that NEVER
+    raises BudgetExceededError, so the API budget can never truncate a
+    deep trace by default."""
+    b = CaseBudget(case_id="case-1", budget_usd=Decimal("0"))
+    assert not b.enabled
+    # Hammer it far past any conceivable real spend — must never trip.
+    for _ in range(10_000):
+        b.record("etherscan", calls=1000)
+    assert b.snapshot()["exceeded"] is False
+    assert b.snapshot()["remaining_usd"] == "unbounded"
+
+
 def test_snapshot_marks_exceeded_after_trip() -> None:
     b = CaseBudget(case_id="case-1", budget_usd=Decimal("0.0001"))
     with pytest.raises(BudgetExceededError):

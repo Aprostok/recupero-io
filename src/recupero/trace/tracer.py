@@ -224,9 +224,28 @@ def run_trace(
         try:
             from recupero.trace.adaptive_depth import compute_max_depth
             budget_snap = case_budget.snapshot() if case_budget else {}
-            budget_remaining = float(
-                budget_snap.get("budget_remaining_usd", 0.0) or 0.0
-            )
+            # v0.32.1 (Phase-2 fix): read the CORRECT snapshot key. The
+            # snapshot exposes ``remaining_usd`` (a stringified Decimal, or
+            # the literal "unbounded" when budget tracking is DISABLED — the
+            # industry-best default). The pre-fix code read a non-existent
+            # ``budget_remaining_usd`` key, so it ALWAYS got 0.0 → the
+            # adaptive pass treated every case as budget-starved and the
+            # severity bumps never applied. Map unbounded / missing /
+            # tracking-disabled → None so compute_max_depth takes its
+            # DEEPEST (unbounded) path; a real enabled remaining is parsed.
+            _rem_raw = budget_snap.get("remaining_usd")
+            budget_remaining: float | None
+            if (
+                _rem_raw is None
+                or _rem_raw == "unbounded"
+                or not budget_snap.get("enabled", False)
+            ):
+                budget_remaining = None  # unbounded → deepest
+            else:
+                try:
+                    budget_remaining = float(_rem_raw)
+                except (TypeError, ValueError):
+                    budget_remaining = None
             case_meta: dict[str, Any] = {}
             # The Case model doesn't carry theft_amount_usd until after
             # trace completes (operator inputs it on intake, scrapers

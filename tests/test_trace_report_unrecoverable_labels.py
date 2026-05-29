@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import json
 import tempfile
-from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -81,8 +80,11 @@ def test_rendered_trace_report_carries_unrecoverable_badge():
     from recupero.reports.victim import VictimInfo
     from recupero.worker._deliverables import build_all_deliverables
     from tests.test_v_cfi01_production_path import (
-        VICTIM, _build_editorial, _build_freeze_asks_dict,
-        _build_issuer_metadata, _build_v_cfi01_case,
+        VICTIM,
+        _build_editorial,
+        _build_freeze_asks_dict,
+        _build_issuer_metadata,
+        _build_v_cfi01_case,
     )
 
     case = _build_v_cfi01_case()
@@ -155,8 +157,11 @@ def test_validator_dai_sky_check_accepts_labeled_trace_report():
     from recupero.validators.output_integrity import validate_case_output
     from recupero.worker._deliverables import build_all_deliverables
     from tests.test_v_cfi01_production_path import (
-        VICTIM, _build_editorial, _build_freeze_asks_dict,
-        _build_issuer_metadata, _build_v_cfi01_case,
+        VICTIM,
+        _build_editorial,
+        _build_freeze_asks_dict,
+        _build_issuer_metadata,
+        _build_v_cfi01_case,
     )
 
     case = _build_v_cfi01_case()

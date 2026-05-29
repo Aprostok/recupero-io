@@ -42,7 +42,6 @@ from recupero.api.monitoring_api import (
     assert_webhook_url_safe,
 )
 
-
 # Suppress the function-scoped-fixture health check — these tests
 # don't use fixtures, but pytest's strict markers still hit it.
 _SETTINGS = settings(

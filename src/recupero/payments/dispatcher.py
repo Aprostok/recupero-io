@@ -497,6 +497,7 @@ _EVM_DISPATCH_CHAINS = frozenset({
 })
 
 import re as _re_dispatch
+
 _EVM_ADDR_DISPATCH_RE = _re_dispatch.compile(r"^0x[0-9a-fA-F]{40}$")
 _SOL_ADDR_DISPATCH_RE = _re_dispatch.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 _TRON_ADDR_DISPATCH_RE = _re_dispatch.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")

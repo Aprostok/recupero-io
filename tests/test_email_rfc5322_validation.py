@@ -27,7 +27,6 @@ import pytest
 
 from recupero.worker._email import _validate_email_address
 
-
 # ---- Accept: the boring legitimate shapes ---- #
 
 

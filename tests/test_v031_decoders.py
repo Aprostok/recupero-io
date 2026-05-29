@@ -27,7 +27,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — construct realistic ABI-encoded calldata blobs.
 # Each 32-byte slot is 64 hex chars.

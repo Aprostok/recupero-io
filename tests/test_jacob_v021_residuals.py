@@ -26,6 +26,8 @@ from decimal import Decimal
 
 def _v_cfi01_brief():
     """Build the V-CFI01 brief via the same fixture path Jacob uses."""
+    from recupero.reports.emit_brief import emit_brief
+    from recupero.reports.victim import VictimInfo
     from tests.test_v_cfi01_production_path import (  # type: ignore
         VICTIM,
         _build_editorial,
@@ -33,8 +35,6 @@ def _v_cfi01_brief():
         _build_issuer_metadata,
         _build_v_cfi01_case,
     )
-    from recupero.reports.emit_brief import emit_brief
-    from recupero.reports.victim import VictimInfo
 
     return emit_brief(
         case=_build_v_cfi01_case(),
@@ -149,6 +149,11 @@ def test_v_cfi01_full_validator_passes_with_new_invariant():
     import tempfile
     from pathlib import Path
 
+    from recupero.reports.brief import InvestigatorInfo
+    from recupero.reports.emit_brief import emit_brief
+    from recupero.reports.victim import VictimInfo
+    from recupero.validators.output_integrity import validate_case_output
+    from recupero.worker._deliverables import build_all_deliverables
     from tests.test_v_cfi01_production_path import (  # type: ignore
         VICTIM,
         _build_editorial,
@@ -156,11 +161,6 @@ def test_v_cfi01_full_validator_passes_with_new_invariant():
         _build_issuer_metadata,
         _build_v_cfi01_case,
     )
-    from recupero.reports.brief import InvestigatorInfo
-    from recupero.reports.emit_brief import emit_brief
-    from recupero.reports.victim import VictimInfo
-    from recupero.validators.output_integrity import validate_case_output
-    from recupero.worker._deliverables import build_all_deliverables
 
     case = _build_v_cfi01_case()
     victim = VictimInfo(

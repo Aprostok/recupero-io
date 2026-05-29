@@ -60,9 +60,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
-import pytest
-
-
 # ----------------------------------------------------------------------
 # Shared DB stub — mirrors test_monitoring_nan_aggregation.py shape.
 # ----------------------------------------------------------------------

@@ -22,11 +22,10 @@ Two contracts pinned by this file:
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-
 
 _SEEDS = Path(__file__).parent.parent / "src" / "recupero" / "labels" / "seeds"
 
@@ -111,7 +110,7 @@ def _is_stale(verified_at: str | None, today: datetime) -> bool:
             cleaned = cleaned + "+00:00"
         dt = datetime.fromisoformat(cleaned)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
     except (ValueError, TypeError):
         return True
     age_days = (today - dt).total_seconds() / 86_400
@@ -134,7 +133,7 @@ def test_high_confidence_stale_entry_budget() -> None:
     proof-of-life from the v0.28.4 / v0.29.0 audit cycles and
     counting them as stale would falsely inflate the budget.
     """
-    today = datetime(2026, 5, 26, tzinfo=timezone.utc)
+    today = datetime(2026, 5, 26, tzinfo=UTC)
     files = ["bridges.json"] + LIST_FILES
     stale_high: list[str] = []
     for fname in files:

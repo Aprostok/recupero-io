@@ -28,7 +28,6 @@ from decimal import Decimal
 from recupero._pricing import fmt_usd, fmt_usd_bare_or
 from recupero.recovery.scorer import _parse_usd, score_recovery
 
-
 # ---- 1. Extreme magnitudes ---- #
 
 

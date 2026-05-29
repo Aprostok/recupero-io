@@ -24,7 +24,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — same ABI-encoding shape as test_v031_decoders.py. Copied
 # locally so this test file is self-contained (no cross-test imports).

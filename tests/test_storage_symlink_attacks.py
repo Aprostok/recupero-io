@@ -104,8 +104,8 @@ def test_atomic_write_bytes_real_symlink_refused(tmp_path: Path) -> None:
     junction-aware path with a sibling junction-based test that
     catches the same code via NTFS junctions (no privilege needed).
     """
-    from tests._link_helper import LinkUnsupported, make_file_link
     from recupero.storage.case_store import _atomic_write_bytes
+    from tests._link_helper import LinkUnsupported, make_file_link
 
     sensitive = tmp_path / "sensitive.txt"
     sensitive.write_text("secret data")
@@ -136,8 +136,8 @@ def test_atomic_write_bytes_real_junction_refused(tmp_path: Path) -> None:
     if sys.platform != "win32":
         pytest.skip("junctions are a Windows NTFS concept")
 
-    from tests._link_helper import LinkUnsupported, make_dir_link
     from recupero.storage.case_store import _atomic_write_bytes
+    from tests._link_helper import LinkUnsupported, make_dir_link
 
     # The junction points the SUBJECT directory at a sensitive
     # location. We then try to atomic-write a FILE inside the
@@ -291,9 +291,8 @@ def test_atomic_write_symlink_check_is_early(tmp_path: Path) -> None:
 
     target = tmp_path / "case.json"
 
-    with patch.object(Path, "is_symlink", return_value=True):
-        with pytest.raises(ValueError):
-            _atomic_write_bytes(target, b"payload")
+    with patch.object(Path, "is_symlink", return_value=True), pytest.raises(ValueError):
+        _atomic_write_bytes(target, b"payload")
 
     # No tempfile should have been created.
     leftovers = list(tmp_path.glob("case.json.*"))

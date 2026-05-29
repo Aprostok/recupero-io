@@ -31,7 +31,6 @@ from unittest.mock import patch
 
 import pytest
 
-
 # ---- atomic_write helpers: unique tempfile name ---- #
 
 
@@ -163,9 +162,8 @@ def test_atomic_write_bytes_cleans_up_tmp_on_rename_failure(
 
     target = tmp_path / "case.json"
 
-    with patch("os.replace", side_effect=OSError("cross-device link")):
-        with pytest.raises(OSError):
-            _atomic_write_bytes(target, b"payload")
+    with patch("os.replace", side_effect=OSError("cross-device link")), pytest.raises(OSError):
+        _atomic_write_bytes(target, b"payload")
 
     # Tempfile glob: name is randomized, but the prefix is `case.json.`
     # and the suffix is `.tmp`. None must linger.
@@ -184,9 +182,8 @@ def test_atomic_write_text_cleans_up_tmp_on_rename_failure_wave3(
 
     target = tmp_path / "out.json"
 
-    with patch("os.replace", side_effect=OSError("rename failed")):
-        with pytest.raises(OSError):
-            atomic_write_text(target, "payload")
+    with patch("os.replace", side_effect=OSError("rename failed")), pytest.raises(OSError):
+        atomic_write_text(target, "payload")
 
     leftovers = list(tmp_path.glob("out.json.*.tmp"))
     assert not leftovers, f"tempfile leaked: {leftovers}"
@@ -229,7 +226,7 @@ def test_case_id_at_cap_accepted(tmp_path: Path) -> None:
     tmp prefix leaves while still proving the validator accepts it.
     """
     from recupero.config import RecuperoConfig
-    from recupero.storage.case_store import CaseStore, _MAX_CASE_ID_LEN
+    from recupero.storage.case_store import _MAX_CASE_ID_LEN, CaseStore
 
     # Layer 1: policy cap value lock — fails fast on regression.
     assert _MAX_CASE_ID_LEN == 200, (

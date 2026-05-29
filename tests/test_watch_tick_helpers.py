@@ -204,3 +204,40 @@ def test_watch_tick_report_default_lists_independent() -> None:
         "WatchTickReport.errors leaked across instances — switch to "
         "field(default_factory=list)"
     )
+
+
+# ---- _fetch_eligible atomic-claim contract (race fix) ---- #
+
+
+def test_fetch_eligible_uses_atomic_claim_not_bare_select() -> None:
+    """v0.32.1 worker-resilience contract lock. watch-tick runs as an
+    UNLEASED cron; pre-fix ``_fetch_eligible`` ran a bare SELECT and
+    advanced ``last_snapshot_at`` only at the END (after the chain API
+    call), so two overlapping ticks both claimed the same rows and both
+    burned an RPC call + wrote a duplicate snapshot. The fix mirrors
+    monitor_tick: an atomic ``UPDATE ... FROM (SELECT ... FOR UPDATE SKIP
+    LOCKED) ... RETURNING`` that advances the claim mark as it selects.
+
+    This is a source-level contract assertion (same shape as
+    test_w2_w3_update_sql_carries_status_active_filter for monitor_tick)
+    — it does not need a DB and guards against a regression that silently
+    reverts to the racy bare SELECT.
+    """
+    import inspect
+
+    from recupero.worker import watch_tick
+
+    src = inspect.getsource(watch_tick._fetch_eligible)
+    assert "FOR UPDATE SKIP LOCKED" in src, (
+        "_fetch_eligible no longer carries FOR UPDATE SKIP LOCKED — the "
+        "double-snapshot race has regressed to a bare SELECT"
+    )
+    # The claim must advance last_snapshot_at (the cooldown column doubles
+    # as the claim mark) and RETURN the claimed rows.
+    assert "SET last_snapshot_at = NOW()" in src
+    assert "RETURNING" in src
+    # Both the priority-aware and legacy-fallback paths must be claims.
+    assert src.count("FOR UPDATE SKIP LOCKED") >= 2, (
+        "both the priority and legacy-fallback queries must use the "
+        "atomic claim, not just one"
+    )

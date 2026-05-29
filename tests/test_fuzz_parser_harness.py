@@ -37,11 +37,10 @@ from pydantic import ValidationError
 from recupero._common import canonical_address_key
 from recupero._pricing import fmt_usd
 from recupero.hack_tracker.models import HackEvent, HackEventSeverity, HackEventSource
-from recupero.pricing.coingecko import _safe_finite_nonneg_decimal
 from recupero.portal.intake import IntakeValidationError, _reject_unicode_trojans
+from recupero.pricing.coingecko import _safe_finite_nonneg_decimal
 from recupero.screen.screener import _safe_decimal, _safe_int
 from recupero.trace.ofac_sync import _sanitize_sdn_name
-
 
 _FUZZ = settings(
     max_examples=200,

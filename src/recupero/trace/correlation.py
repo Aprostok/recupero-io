@@ -302,8 +302,10 @@ def build_observations(
         _emit(addr, role, label_cat=label_cat, label_name=label_name)
 
     # 3. Anything in freeze_targets_by_addr that isn't already
-    # bucketed gets 'high_risk_destination' (we know it's freezable
-    # → exchange/issuer deposit).
+    # bucketed is a freezable exchange/issuer deposit → 'exchange_deposit'.
+    # (Historic comment said 'high_risk_destination'; the code has always
+    # emitted 'exchange_deposit' — a freezable destination is NOT
+    # perpetrator-controlled, so it must never bind a cross-case cluster.)
     for addr in freeze_targets_by_addr.keys():
         _emit(_ck(addr), "exchange_deposit")
 

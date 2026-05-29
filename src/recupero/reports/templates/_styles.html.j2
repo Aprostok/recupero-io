@@ -153,10 +153,47 @@
     font-family: var(--font-serif);
     font-size: 100pt;
     font-weight: bold;
-    color: rgba(140, 16, 16, 0.10);
+    /* v0.32.1 (LE-CRIT-3): 10% opacity let the underlying unconfigured-
+     * operator placeholder text read through clearly on the cover +
+     * signature block. Raise to 22% so a skim cannot miss the UNSIGNED
+     * marker even when the cover text is heavy serif. Still light enough
+     * that the document reads on black-and-white print. */
+    color: rgba(140, 16, 16, 0.22);
     z-index: 1000;
     pointer-events: none;
     letter-spacing: 0.15em;
+  }
+  /* v0.32.1 (LE-CRIT-3): explicit placeholder-line styling so the
+   * cover meta + signature block render a ruled signature line / a
+   * pending-assignment marker rather than the raw unconfigured-operator
+   * debug placeholder. Heavier weight + slightly faded color signals
+   * "this needs a signature" not "this is missing data". */
+  .placeholder-line {
+    display: inline-block;
+    min-width: 22ch;
+    border-bottom: 1px solid #6B7280;
+    color: #6B7280;
+    font-style: italic;
+    letter-spacing: 0.04em;
+  }
+  /* v0.32.1 (LE-CRIT-3): top-of-document banner shown when the
+   * operator identity isn't configured. Pairs with the diagonal
+   * UNSIGNED watermark — together they make it impossible to skim
+   * the document without noticing the brief is not ready to ship. */
+  .unsigned-banner {
+    background: #FEF2F2;
+    border: 1.5px solid #991B1B;
+    color: #7F1D1D;
+    padding: 0.8em 1.1em;
+    margin: 0 0 1.5em 0;
+    font-weight: 600;
+    font-size: 11pt;
+    letter-spacing: 0.04em;
+    border-radius: 3px;
+  }
+  .unsigned-banner::before {
+    content: "⚠  ";
+    font-weight: 700;
   }
 
   /* ===================================================================

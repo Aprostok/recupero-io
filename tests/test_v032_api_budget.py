@@ -13,17 +13,24 @@ These tests lock in:
     ``spend_by_provider`` by the per-provider weight.
   * Cap enforcement: ``assert_within_budget()`` raises at the exact
     threshold, not strictly past it. 5000 Etherscan calls @
-    $0.0001 each = $0.50 = the cap exactly → must raise.
+    $0.0001 each = $0.50 = an opted-in cap of $0.50 exactly → raise.
   * Env-var resolution: bad inputs (NaN, Inf, negative, garbage)
-    fall back to default $0.50 with a WARN. Empty / unset uses
-    default. Literal 0 disables.
+    fall back to default (DISABLED — $0) with a WARN. Empty / unset
+    uses default. Literal 0 disables (matches default).
   * Tracer integration: when the budget trips during BFS, the
     case is marked ``partial_budget_hit`` and the per-provider
     breakdown lands in ``case.config_used["api_budget"]``.
   * Budget=0 disables tracking entirely — ``record()`` is a
-    no-op and never raises.
+    no-op and never raises. This is the v0.32.1+ industry-best
+    default.
   * Per-provider breakdown surfaces in the snapshot dict for the
     brief renderer.
+
+v0.32.1+ "industry-best mode": the default budget is $0 (DISABLED).
+Operators opt in by setting RECUPERO_API_BUDGET_USD_PER_CASE to a
+positive value. Tests that exercise cap enforcement construct a
+CaseBudget with an explicit positive value rather than relying on
+the env-var default.
 
 The pattern mirrors the v0.31.x adversarial-input tests: bad inputs
 get a loud WARN, never a silently-poisoned trace.
@@ -41,7 +48,6 @@ from recupero.observability.api_budget import (
     cost_per_call,
     resolve_budget_from_env,
 )
-
 
 # ---------------------------------------------------------------------------
 # Cost model
@@ -194,8 +200,9 @@ def test_budget_zero_remaining_is_unbounded_sentinel() -> None:
 
 
 def test_resolve_budget_default_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v0.32.1+ industry-best mode: default is DISABLED ($0)."""
     monkeypatch.delenv("RECUPERO_API_BUDGET_USD_PER_CASE", raising=False)
-    assert resolve_budget_from_env() == Decimal("0.50")
+    assert resolve_budget_from_env() == Decimal("0")
 
 
 def test_resolve_budget_honors_valid_value(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -203,8 +210,16 @@ def test_resolve_budget_honors_valid_value(monkeypatch: pytest.MonkeyPatch) -> N
     assert resolve_budget_from_env() == Decimal("2.50")
 
 
+def test_resolve_budget_honors_large_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v0.32.1+ ceiling raised to $1M so whale-case overrides are accepted."""
+    monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "10000.0")
+    assert resolve_budget_from_env() == Decimal("10000.0")
+    monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "500000.0")
+    assert resolve_budget_from_env() == Decimal("500000.0")
+
+
 def test_resolve_budget_rejects_nan(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """NaN is non-finite → fall back to default $0.50 with a WARN.
+    """NaN is non-finite → fall back to default ($0 disabled) with a WARN.
 
     Critical guard: Decimal("NaN") comparisons return False for both
     < and >, so without this check a NaN would slip through and never
@@ -213,7 +228,7 @@ def test_resolve_budget_rejects_nan(monkeypatch: pytest.MonkeyPatch, caplog: pyt
     monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "NaN")
     with caplog.at_level("WARNING"):
         result = resolve_budget_from_env()
-    assert result == Decimal("0.50")
+    assert result == Decimal("0")
     assert any("non-finite" in r.message.lower() or "nan" in r.message.lower()
                for r in caplog.records)
 
@@ -222,29 +237,33 @@ def test_resolve_budget_rejects_infinity(monkeypatch: pytest.MonkeyPatch, caplog
     monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "Infinity")
     with caplog.at_level("WARNING"):
         result = resolve_budget_from_env()
-    assert result == Decimal("0.50")
+    assert result == Decimal("0")
 
 
 def test_resolve_budget_rejects_garbage(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "not-a-number")
     with caplog.at_level("WARNING"):
         result = resolve_budget_from_env()
-    assert result == Decimal("0.50")
+    assert result == Decimal("0")
 
 
 def test_resolve_budget_rejects_negative(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "-1.0")
     with caplog.at_level("WARNING"):
         result = resolve_budget_from_env()
-    assert result == Decimal("0.50")
+    assert result == Decimal("0")
 
 
 def test_resolve_budget_clamps_above_max(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    """Above $100 falls back to default — operator confusion ceiling."""
-    monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "1000.0")
+    """Above $1M falls back to default — operator confusion ceiling.
+
+    v0.32.1+ industry-best mode raised the ceiling from $50K to $1M
+    so the cap accepts any reasonable operator override; only typos
+    in the millions reject."""
+    monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "10000000.0")
     with caplog.at_level("WARNING"):
         result = resolve_budget_from_env()
-    assert result == Decimal("0.50")
+    assert result == Decimal("0")
 
 
 def test_resolve_budget_clamps_below_min(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
@@ -252,18 +271,18 @@ def test_resolve_budget_clamps_below_min(monkeypatch: pytest.MonkeyPatch, caplog
     monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "0.001")
     with caplog.at_level("WARNING"):
         result = resolve_budget_from_env()
-    assert result == Decimal("0.50")
+    assert result == Decimal("0")
 
 
 def test_resolve_budget_honors_explicit_zero(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Literal `0` is the documented "disable tracking" escape hatch
-    and does NOT emit a WARN — it's deliberate."""
+    and does NOT emit a WARN — it matches the default."""
     monkeypatch.setenv("RECUPERO_API_BUDGET_USD_PER_CASE", "0")
     caplog.clear()
     with caplog.at_level("WARNING"):
         result = resolve_budget_from_env()
     assert result == Decimal("0")
-    # No warning when 0 — operator's deliberate choice.
+    # No warning when 0 — operator's deliberate choice (matches default).
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert warnings == []
 
@@ -295,6 +314,36 @@ def test_snapshot_marks_disabled_budget() -> None:
     snap = b.snapshot()
     assert snap["enabled"] is False
     assert snap["remaining_usd"] == "unbounded"
+
+
+def test_snapshot_key_is_remaining_usd_for_adaptive_depth_wiring() -> None:
+    """Regression lock (v0.32.1 Phase-2): the tracer's adaptive-depth pass
+    reads snapshot()['remaining_usd']. A pre-Phase-2 bug read a
+    non-existent 'budget_remaining_usd' key, so it ALWAYS got 0.0 → every
+    case looked budget-starved and the severity-based depth bumps never
+    applied. Lock the producer key name so the two can't drift again."""
+    b = CaseBudget(case_id="case-1", budget_usd=Decimal("100"))
+    snap = b.snapshot()
+    assert "remaining_usd" in snap, (
+        "tracer adaptive-depth reads snapshot()['remaining_usd']"
+    )
+    assert "budget_remaining_usd" not in snap, (
+        "the buggy key must never exist — it silently read 0.0"
+    )
+
+
+def test_disabled_budget_record_is_noop_never_raises() -> None:
+    """The default deployment ships budget tracking DISABLED ('budget
+    doesn't matter, go deeper'). record() must be a no-op that NEVER
+    raises BudgetExceededError, so the API budget can never truncate a
+    deep trace by default."""
+    b = CaseBudget(case_id="case-1", budget_usd=Decimal("0"))
+    assert not b.enabled
+    # Hammer it far past any conceivable real spend — must never trip.
+    for _ in range(10_000):
+        b.record("etherscan", calls=1000)
+    assert b.snapshot()["exceeded"] is False
+    assert b.snapshot()["remaining_usd"] == "unbounded"
 
 
 def test_snapshot_marks_exceeded_after_trip() -> None:

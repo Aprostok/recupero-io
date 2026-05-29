@@ -21,6 +21,7 @@ from recupero.worker._freeze_followup import (
     FreezeFollowupCandidate,
     _compute_next_transition,
     _render_followup_html,
+    _write_silence_outcome,
     run_freeze_followup_cron,
 )
 
@@ -398,4 +399,45 @@ def test_cron_send_failure_rolls_back_claim():
     assert rollback_called == [(LETTER_ID, "initial")], (
         "Stage advance must be ROLLED BACK on send failure so next "
         "tick retries the same letter rather than silently dropping it"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.32.1 (worker-audit HIGH) — silence_14d outcome write is idempotent
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_write_silence_outcome_uses_idempotent_insert() -> None:
+    """The silence_14d outcome write must be idempotent: a retried tick,
+    a manual cron run, or two overlapping ticks racing the same letter
+    must NOT append a second silence_14d row (duplicates double-count the
+    non-response in the per-issuer priors pipeline). The hard guarantee is
+    migration 031's partial unique index; the INSERT pairs it with
+    `ON CONFLICT (letter_id) WHERE outcome_type = 'silence_14d' DO NOTHING`
+    so the race is a safe no-op. Lock the clause is present + the conflict
+    target carries the partial-index predicate so Postgres can infer it."""
+    cur = MagicMock()
+    cursor_cm = MagicMock()
+    cursor_cm.__enter__.return_value = cur
+    cursor_cm.__exit__.return_value = False
+    conn = MagicMock()
+    conn.cursor.return_value = cursor_cm
+    conn_cm = MagicMock()
+    conn_cm.__enter__.return_value = conn
+    conn_cm.__exit__.return_value = False
+
+    with patch(
+        "recupero.worker._freeze_followup.db_connect",
+        return_value=conn_cm,
+    ):
+        _write_silence_outcome(letter_id=LETTER_ID, dsn="postgres://fake")
+
+    assert cur.execute.call_count == 1, "expected exactly one INSERT"
+    sql = " ".join(cur.execute.call_args[0][0].upper().split())
+    assert "ON CONFLICT" in sql, "INSERT must guard against duplicate writes"
+    assert "DO NOTHING" in sql, "conflict must be a no-op, not an error"
+    # The conflict target must match the partial unique index predicate so
+    # Postgres can infer the arbiter index (migration 031).
+    assert "(LETTER_ID) WHERE OUTCOME_TYPE = 'SILENCE_14D'" in sql, (
+        "ON CONFLICT target must carry the partial-index WHERE predicate"
     )

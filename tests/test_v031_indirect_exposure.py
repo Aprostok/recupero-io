@@ -28,7 +28,6 @@ from recupero.trace.indirect_exposure import (
     label_exposure_scores_to_brief_section,
 )
 
-
 # ---------- helpers ---------- #
 
 

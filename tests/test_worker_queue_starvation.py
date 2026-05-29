@@ -108,7 +108,7 @@ def test_claimable_statuses_excludes_failed_no_in_worker_retry() -> None:
     )
     assert S.COMPLETED not in S.CLAIMABLE_STATUSES
     # Only pending and review_approved are claimable.
-    assert S.CLAIMABLE_STATUSES == frozenset({S.QUEUED, S.REVIEW_APPROVED}), (
+    assert frozenset({S.QUEUED, S.REVIEW_APPROVED}) == S.CLAIMABLE_STATUSES, (
         f"CLAIMABLE_STATUSES drifted: {S.CLAIMABLE_STATUSES!r}. "
         "Any addition risks reopening starvation/retry semantics."
     )

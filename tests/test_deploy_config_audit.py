@@ -14,9 +14,6 @@ import json
 import re
 from pathlib import Path
 
-import pytest
-
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 RAILWAY_JSON = REPO_ROOT / "railway.json"

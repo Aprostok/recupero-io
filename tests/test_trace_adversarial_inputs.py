@@ -45,8 +45,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 
-import pytest
-
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.trace.clustering import cluster_addresses
 from recupero.trace.cross_chain import ingest_bridge_seeds

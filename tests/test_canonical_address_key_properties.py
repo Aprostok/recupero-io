@@ -23,14 +23,11 @@ These tests probe ALGEBRAIC properties:
 
 from __future__ import annotations
 
-import string
-
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from recupero._common import canonical_address_key
-
 
 _SETTINGS = settings(
     max_examples=300,

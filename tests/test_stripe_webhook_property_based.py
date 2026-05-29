@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import hashlib
 import hmac as _hmac
-import json
 import time
 
 import pytest
@@ -30,12 +29,11 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from recupero.payments.webhook import (
-    WebhookVerifyError,
     _MAX_V1_SIGNATURES,
+    WebhookVerifyError,
     _parse_signature_header,
     verify_and_parse,
 )
-
 
 _SETTINGS = settings(
     max_examples=200,

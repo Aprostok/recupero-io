@@ -86,6 +86,7 @@ from pathlib import Path
 # logs. Now we fail-closed at import — if defusedxml is missing, the
 # sync simply cannot run.
 from defusedxml import ElementTree as ET  # type: ignore[import-untyped]
+
 # Compatibility alias retained for any downstream code reading the
 # old flag (always True now). Will be removed in a future cleanup.
 _XML_PARSER_HARDENED = True
@@ -137,7 +138,7 @@ _FORBIDDEN_NAME_CHARS = (
     "‪‫‬‭‮"
     "⁦⁧⁨⁩"
 )
-_NAME_SANITIZE_TABLE = str.maketrans({c: None for c in _FORBIDDEN_NAME_CHARS})
+_NAME_SANITIZE_TABLE = str.maketrans(dict.fromkeys(_FORBIDDEN_NAME_CHARS))
 
 
 def _sanitize_sdn_name(name: str) -> str:
@@ -168,8 +169,47 @@ def _validate_url(url: str) -> str | None:
     host = (parsed.hostname or "").lower()
     if not host:
         return "url has no host"
+    # Literal deny-list — always enforced, even if the shared SSRF helper
+    # below is unavailable (graceful degradation: never weaker than before).
     if host in _DENY_HOSTS:
         return f"refused host {host!r}: cloud-metadata exfil defense"
+    # v0.32.1 (security-audit): reuse the hardened SSRF host check from the
+    # monitoring API so the OFAC fetch gets the SAME full defense as webhook
+    # dispatch — RFC1918 / loopback / link-local / IPv6 ranges + internal
+    # hostname suffixes (.internal/.local) + DNS-rebinding resolution —
+    # rather than only the 3-entry literal metadata deny-list above. The
+    # threat is an operator typo / env-var override of OFAC_SDN_XML_URL
+    # pointing at internal infra; a public host (treasury.gov) passes.
+    # Lazy + best-effort: if the API module can't be imported (e.g. a
+    # trace-only deployment), we fall back to the literal deny-list.
+    try:
+        from recupero.api.monitoring_api import (
+            _is_blocked_host,
+            _is_blocked_ip,
+            _resolves_to_blocked_ip,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        if _is_blocked_host(host) or _resolves_to_blocked_ip(host):
+            return (
+                f"refused host {host!r}: resolves to a private / loopback / "
+                "link-local / metadata target (SSRF defense)"
+            )
+    except Exception:  # noqa: BLE001
+        # The shared helper crashed — do NOT fail fully open. Re-apply the
+        # network-free IP-literal RFC1918/loopback/link-local check as a
+        # last resort so an IP-literal target the small `_DENY_HOSTS` list
+        # doesn't cover (e.g. http://10.0.0.1/) is still refused.
+        try:
+            if _is_blocked_ip(host):
+                return (
+                    f"refused host {host!r}: private / loopback / link-local "
+                    "IP literal (SSRF defense)"
+                )
+        except Exception:  # noqa: BLE001
+            pass
+        return None
     return None
 
 # RIGOR-2a: removed _PARSER_HARDENING_WARNED state. defusedxml is
@@ -540,7 +580,12 @@ def _extract_crypto_entries(xml_bytes: bytes) -> list[OFACCryptoEntry]:
                     id_type = (id_child.text or "").strip()
                 elif tag == "idNumber":
                     id_number = (id_child.text or "").strip()
-            if not id_type.startswith("Digital Currency Address"):
+            # v0.32.1 (sanctions-audit): match case-INSENSITIVELY. The
+            # prior exact-prefix check would SILENTLY DROP a real sanctioned
+            # address if Treasury ever shifted the label casing (e.g.
+            # "Digital currency address - ETH") — a missed OFAC hit is the
+            # worst outcome here, so be tolerant of upstream format drift.
+            if not id_type.lower().startswith("digital currency address"):
                 continue
             # Extract chain code from the id_type string
             # e.g., "Digital Currency Address - ETH" → "ETH"

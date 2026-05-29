@@ -13,7 +13,7 @@ The pre-fix bug shape: TronGrid returns
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import MagicMock
 
 

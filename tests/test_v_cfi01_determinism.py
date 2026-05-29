@@ -37,7 +37,6 @@ from pathlib import Path
 
 import pytest
 
-
 # Regexes that match LEGITIMATELY-variable fields. Two runs MAY differ
 # on these. Everything else MUST be identical.
 _LEGITIMATE_VARIATION_PATTERNS = [
@@ -306,6 +305,6 @@ def test_v_cfi01_freeze_brief_json_normalizes_identically(
                     f"A={_normalize(va)[:100]}, B={_normalize(vb)[:100]}"
                 )
         pytest.fail(
-            f"freeze_brief.json normalized contents differ:\n"
+            "freeze_brief.json normalized contents differ:\n"
             + "\n".join(diffs[:5])
         )

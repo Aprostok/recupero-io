@@ -23,7 +23,6 @@ from pathlib import Path
 
 import pytest
 
-
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS_DIR = _REPO_ROOT / "scripts"
 _PY_FILES = sorted(p for p in _SCRIPTS_DIR.glob("*.py") if p.is_file())

@@ -3,14 +3,8 @@ coverage, cross-chain $NaN, aggregate atomic write, dotted-I flake fix.
 """
 from __future__ import annotations
 
-import os
-from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
-
 
 # ──────────────────────────────────────────────────────────────────────
 # T2-A: SOURCE_DATE_EPOCH honored by the new shared helper
@@ -71,8 +65,8 @@ def test_all_seven_renderers_route_through_shared_helper() -> None:
 def test_cross_chain_brief_section_skips_nan_amount_usd() -> None:
     """`handoffs_to_brief_section` must NOT render $NaN into the
     LE handoff cross-chain table."""
-    from recupero.trace.cross_chain import handoffs_to_brief_section, CrossChainHandoff
     from recupero.models import Chain
+    from recupero.trace.cross_chain import CrossChainHandoff, handoffs_to_brief_section
     h = CrossChainHandoff(
         source_chain=Chain.ethereum,
         source_address="0xVictim",
@@ -98,8 +92,8 @@ def test_cross_chain_brief_section_skips_nan_amount_usd() -> None:
 
 def test_cross_chain_investigator_note_skips_inf_usd() -> None:
     """The investigator-note prose must not render 'Bridged $Infinity'."""
-    from recupero.trace.cross_chain import _build_investigator_note, CrossChainHandoff
     from recupero.models import Chain
+    from recupero.trace.cross_chain import CrossChainHandoff, _build_investigator_note
     h = CrossChainHandoff(
         source_chain=Chain.ethereum,
         source_address="0xV",

@@ -1178,6 +1178,73 @@ def _strip_json_fences(text: str) -> str:
     return text.strip()
 
 
+# v0.32.1 round-2 LE handoff HIGH-8: sentinel marker that the brief /
+# LE renderer can scan for so a truncated editorial is flagged with a
+# banner instead of shipping a silently-incomplete narrative.
+EDITORIAL_TRUNCATION_SENTINEL = (
+    " [...EDITORIAL_TRUNCATED_AT_BUDGET — see validator INVARIANT-O...]"
+)
+
+
+def _annotate_truncated_editorial(
+    ai_obj: dict[str, Any],
+    *,
+    truncated_at_chars: int,
+) -> None:
+    """Mutate the parsed AI editorial dict in place to record that the
+    response was truncated at the Anthropic ``max_tokens`` boundary.
+
+    Effects:
+      * Sets ``_EDITORIAL_TRUNCATED_AT_BUDGET`` to True (the renderer
+        can banner the brief on this flag).
+      * Sets ``_EDITORIAL_TRUNCATED_AT_CHARS`` to ``truncated_at_chars``
+        for observability.
+      * Appends ``EDITORIAL_TRUNCATION_SENTINEL`` to the longest
+        AI-drafted string narrative — whichever one is most likely to
+        have been the one running into the cap when the response
+        terminated. The brief reader sees the sentinel inline.
+
+    The sentinel is the contract validator INVARIANT-O is expected to
+    scan for. Per the audit (HIGH-8) the brief still ships when this
+    fires — it is a WARN, not a CRIT — but the reader is told
+    explicitly that some narrative content may be incomplete.
+    """
+    if not isinstance(ai_obj, dict):
+        return
+    ai_obj["_EDITORIAL_TRUNCATED_AT_BUDGET"] = True
+    ai_obj["_EDITORIAL_TRUNCATED_AT_CHARS"] = int(truncated_at_chars)
+    # Find the longest AI-drafted string narrative and append the
+    # sentinel there. We restrict to the narrative fields the AI is
+    # tasked with drafting; tagging the sentinel onto a structured
+    # field (DESTINATION_NOTES dict, UNRECOVERABLE_ITEMS list) would
+    # not render naturally and could break downstream schema-checks.
+    #
+    # INCIDENT_TYPE is deliberately excluded — its per-field length
+    # cap in ``_AI_FIELD_MAX_LENGTHS`` is only 200 chars, so appending
+    # an ~80-char sentinel to a near-cap value could push the field
+    # over the validator's max-length gate.
+    _narrative_keys = (
+        "INCIDENT_NARRATIVE_RECUPERO",
+        "INCIDENT_NARRATIVE_FIRST_PERSON",
+        "VICTIM_SUMMARY",
+    )
+    longest_key: str | None = None
+    longest_len = -1
+    for k in _narrative_keys:
+        v = ai_obj.get(k)
+        if isinstance(v, str) and len(v) > longest_len:
+            # Guard: refuse to push the field over its declared cap.
+            cap = _AI_FIELD_MAX_LENGTHS.get(k)
+            if cap is not None and len(v) + len(EDITORIAL_TRUNCATION_SENTINEL) > cap:
+                continue
+            longest_key = k
+            longest_len = len(v)
+    if longest_key is not None and longest_len >= 0:
+        existing = ai_obj.get(longest_key, "")
+        if isinstance(existing, str) and EDITORIAL_TRUNCATION_SENTINEL.strip() not in existing:
+            ai_obj[longest_key] = existing.rstrip() + EDITORIAL_TRUNCATION_SENTINEL
+
+
 def _call_messages_with_retry(
     *,
     client: Any,
@@ -1397,7 +1464,44 @@ def call_anthropic_for_editorial(
             raw = "".join(text_parts)
             cleaned = _strip_json_fences(raw)
 
+            # v0.32.1 round-2 LE handoff HIGH-8: detect when the
+            # Anthropic API truncated the response at the MAX_TOKENS
+            # output cap. The SDK exposes ``stop_reason`` on the
+            # response — "max_tokens" means the model was cut off
+            # mid-stream and the JSON / narrative is incomplete.
+            #
+            # Pre-fix: a 50-destination case could exhaust the 4096-
+            # token output cap mid-DESTINATION_NOTES dict; the model
+            # returned half a dict, ``json.loads`` failed, the retry
+            # used MORE tokens and failed the same way, and the
+            # operator saw a bare RuntimeError. Worse: when the JSON
+            # *did* parse (model padded the closing brace), the LE
+            # reader saw a brief whose narrative stopped mid-sentence
+            # with no warning.
+            #
+            # Now: log WARN with the truncation-at-chars boundary, set
+            # an editorial-level flag (``_EDITORIAL_TRUNCATED_AT_BUDGET``)
+            # so the renderer can banner the brief, and append a
+            # sentinel marker to the longest narrative field so the
+            # brief reader sees the truncation explicitly in-line.
+            stop_reason = getattr(resp, "stop_reason", None)
+            was_truncated = stop_reason == "max_tokens"
+            if was_truncated:
+                log.warning(
+                    "ai_editorial: response truncated at MAX_TOKENS=%d "
+                    "(stop_reason=%r, truncated_at_chars=%d, "
+                    "output_tokens=%d). Brief will carry the "
+                    "EDITORIAL_TRUNCATED_AT_BUDGET sentinel.",
+                    MAX_TOKENS,
+                    stop_reason,
+                    len(raw),
+                    int(getattr(usage, "output_tokens", 0) or 0)
+                        if usage is not None else 0,
+                )
+
             ai_obj = json.loads(cleaned)
+            if was_truncated:
+                _annotate_truncated_editorial(ai_obj, truncated_at_chars=len(raw))
             problems = _validate_ai_output(ai_obj)
             if problems:
                 last_error = f"AI output failed validation: {problems[:3]}"

@@ -28,10 +28,10 @@ from typing import Any
 
 from recupero.chains.ethereum.etherscan import EtherscanClient
 from recupero.chains.evm.alchemy_client import (
+    _CHAIN_ID_TO_ALCHEMY_PREFIX,
     AlchemyClient,
     AlchemyError,
     AlchemyRateLimitError,
-    _CHAIN_ID_TO_ALCHEMY_PREFIX,
 )
 
 log = logging.getLogger(__name__)

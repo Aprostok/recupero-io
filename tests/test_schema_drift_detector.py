@@ -177,7 +177,7 @@ _SQL_KEYWORDS = frozenset(
         "rank", "dense_rank", "lag", "lead", "first_value", "last_value",
         "for", "update", "share", "skip", "locked", "of", "into",
         "insert", "delete", "truncate", "create", "alter", "drop",
-        "table", "index", "view", "if", "exists",
+        "table", "index", "view", "if",
     }
 )
 

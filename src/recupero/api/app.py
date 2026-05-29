@@ -106,6 +106,111 @@ except Exception as _exc:  # noqa: BLE001
         "label-candidates API not registered (import failed): %s", _exc,
     )
 
+# v0.32.1 HIGH-5 — admin-gated /v1/cron/jobs endpoint. Public
+# /cron/healthz strips last_error_message; admins use this endpoint
+# to retrieve the full payload including the redacted error text.
+try:
+    from recupero.api.cron_admin_api import router as _cron_admin_router
+    app.include_router(_cron_admin_router)
+except Exception as _exc:  # noqa: BLE001
+    log.warning(
+        "cron admin API not registered (import failed): %s", _exc,
+    )
+
+
+# ---- Request body-size cap (intake DoS guard) ---- #
+
+# v0.32.1 (forensic-audit, api-MED): cap inbound request bodies. Pre-fix
+# the FastAPI app had NO body-size limit — every POST handler reaches
+# ``await request.json()`` / pydantic parsing, which buffers the WHOLE
+# body into memory first. A single client advertising (or streaming) a
+# multi-hundred-MB body could OOM the API process before any per-field
+# validator ran. None of the endpoints need a large body: the biggest is
+# /v1/screen/bulk at 100 × 128-char addresses (~13 KB with JSON
+# overhead). 256 KiB is generous headroom while slamming the door on
+# abuse bodies. (The worker intake portal uses a tighter 64 KB cap in
+# _health_server.py; the API surface is broader, hence the larger value.)
+_MAX_REQUEST_BODY_BYTES = 256 * 1024
+
+
+class _BodySizeLimitMiddleware:
+    """Pure-ASGI middleware rejecting oversized request bodies.
+
+    Two layers, because a Content-Length header alone is not trustworthy:
+
+      1. Fast path — an honest ``Content-Length`` above the cap is
+         rejected with 413 before a single body byte is read.
+      2. Streaming guard — the ``receive`` callable is wrapped to count
+         actual bytes, so a client that LIES about Content-Length or uses
+         chunked transfer-encoding (no Content-Length at all) is still cut
+         off at the cap. On overflow we hand the app an ``http.disconnect``
+         so its body parser raises ClientDisconnect and never produces an
+         oversized parse — no unbounded read, no response-already-started
+         race.
+
+    Implemented as raw ASGI (not BaseHTTPMiddleware) precisely so it never
+    consumes/buffers the body itself — it only inspects sizes and forwards.
+    """
+
+    def __init__(self, app: Any, *, max_bytes: int = _MAX_REQUEST_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Layer 1: honest Content-Length → reject before reading anything.
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    await self._send_413(send)
+                    return
+                if declared > self.max_bytes:
+                    await self._send_413(send)
+                    return
+                break
+
+        # Layer 2: enforce on actual bytes (lying CL / chunked encoding).
+        total = 0
+        limit = self.max_bytes
+
+        async def limited_receive() -> Any:
+            nonlocal total
+            message = await receive()
+            if message.get("type") == "http.request":
+                total += len(message.get("body", b""))
+                if total > limit:
+                    # Tell the app the client went away; its body reader
+                    # raises ClientDisconnect rather than parsing a
+                    # half-read oversized body. Stops the DoS cold.
+                    return {"type": "http.disconnect"}
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+    @staticmethod
+    async def _send_413(send: Any) -> None:
+        await send({
+            # 413 Payload/Content Too Large. Literal rather than the
+            # starlette constant, whose name churns across versions
+            # (REQUEST_ENTITY_TOO_LARGE → CONTENT_TOO_LARGE) and emits a
+            # DeprecationWarning the test suite treats as an error.
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b'{"detail":"request body too large"}',
+        })
+
+
+app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
+
 
 # ---- Request / response models ---- #
 
@@ -1202,10 +1307,31 @@ def _intake_post_csrf_ok(request: Request) -> bool:
     import os as _os
     origin = (request.headers.get("origin", "") or "").strip()
     referer = (request.headers.get("referer", "") or "").strip()
-    # Non-browser caller — no Origin, no Referer. Treated as safe;
-    # curl/postman/server-side integrations.
+    # Headerless POSTs (no Origin AND no Referer) are NOT a browser-CSRF
+    # vector: a browser ALWAYS attaches an Origin header to a
+    # cross-origin form POST (set by the browser, not script-mutable),
+    # so a drive-by CSRF attempt is always caught by the origin-vs-host
+    # check below. Headerless requests are curl / integration tests /
+    # server-side integrations, which we allow through by design.
+    #
+    # The drive-by-BOT concern (a script flooding /v1/intake with
+    # headers stripped) is handled at the correct layer: the per-IP
+    # rate limiter (`_intake_rl_check`), keyed on the rightmost trusted
+    # XFF hop (`_intake_rl_client_ip`, PUNISH-B S-3) so a bot cannot
+    # rotate spoofed client IPs to evade the 5/min cap. A blanket CSRF
+    # reject here was the wrong layer — it broke every legitimate
+    # non-browser caller while adding nothing the rate limiter (with
+    # the rightmost-hop fix) doesn't already cover.
+    #
+    # Ops who front the endpoint with a browser-only origin and want a
+    # hard gate can opt into strict mode via
+    # RECUPERO_INTAKE_REQUIRE_ORIGIN=true (default: allow headerless).
     if not origin and not referer:
-        return True
+        require_origin = (
+            _os.environ.get("RECUPERO_INTAKE_REQUIRE_ORIGIN", "")
+            .strip().lower() in ("1", "true", "yes", "on")
+        )
+        return not require_origin
     raw_allow = (
         _os.environ.get("RECUPERO_INTAKE_ALLOWED_ORIGINS", "") or ""
     ).strip()
@@ -1278,12 +1404,41 @@ def _intake_rl_client_ip(request: Request) -> str:
             if candidate:
                 return candidate
 
-    # x-real-ip is set by some edge proxies after XFF normalization.
-    # Still client-influenceable through misconfiguration, but a
-    # better default than leftmost-XFF.
+    # x-real-ip is set by some edge proxies after XFF normalization, but
+    # it is ALSO a client-settable header. Without a declared trusted
+    # proxy (RECUPERO_TRUSTED_PROXY_HOPS) we cannot distinguish an
+    # edge-set value from a spoofed one.
+    #
+    # Without a declared trusted proxy (RECUPERO_TRUSTED_PROXY_HOPS),
+    # x-real-ip is a client-settable header — a bot rotating `X-Real-IP:`
+    # per request would evade the per-IP intake rate limit, which (now that
+    # header-less POSTs are allowed) is the SOLE bot defense for the
+    # unauthenticated POST /v1/intake.
+    #
+    # v0.32.1 (security-audit cycle-2): FAIL CLOSED. The prior gate trusted
+    # x-real-ip UNLESS _is_production_environment() positively detected prod
+    # — but that keys off explicit markers, so a production deploy that
+    # forgot to set one (no RAILWAY_ENVIRONMENT/ENVIRONMENT/…=production)
+    # fell through to trusting the spoofable header. Now we trust x-real-ip
+    # in the no-trusted-hop case ONLY when the environment POSITIVELY
+    # declares dev/test/local; any unmarked / ambiguous / production env
+    # refuses it and buckets on the socket peer (the real TCP peer, not
+    # client-controllable). Operators behind a trusted edge proxy should
+    # set RECUPERO_TRUSTED_PROXY_HOPS to restore precise per-client
+    # bucketing via the rightmost-hop path above.
     real_ip = (request.headers.get("x-real-ip", "") or "").strip()
     if real_ip:
-        return real_ip
+        spoofable = trusted_hops == 0
+        if not spoofable:
+            return real_ip
+        try:
+            from recupero.api.auth import _is_local_dev_environment
+            trust_real_ip = _is_local_dev_environment()
+        except Exception:  # noqa: BLE001 — never break the hot path on detection
+            trust_real_ip = False  # detection failed → fail closed (assume prod)
+        if trust_real_ip:
+            return real_ip
+        # ambiguous / prod + no trusted hops → x-real-ip untrusted; fall through.
 
     if request.client and request.client.host:
         return request.client.host
@@ -1610,6 +1765,77 @@ async def intake_form_post(  # noqa: PLR0913 — form fields are deliberately ex
         url=checkout_url,
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+
+# ---- Operator UI for the brief-review queue (v0.32.1) ---- #
+#
+# Pre-v0.32.1 the dispatcher review gate (recupero.dispatcher.review_api)
+# was API-only. The Jacob cross-cutting audit (§4) flagged this as a
+# deploy-blocker: every approve/reject required an on-call operator to
+# hand-craft a curl invocation with the admin-key header, at 2 AM,
+# inside a constrained ops window. ``/review-gate`` is the minimum-
+# viable operator console: list pending rows, click-through to the
+# artifact, approve / reject, surface the reviewer + completion
+# timestamp once a row is decided.
+#
+# The page is intentionally not gated by FastAPI middleware — the
+# state-changing calls under the hood (POST /v1/reviews/{id}/...)
+# all enforce the X-Recupero-Admin-Key check inside ``review_api``.
+# Serving the static HTML to anyone is a deliberate choice: it tells
+# an unauthenticated visitor "this is the gate" without leaking any
+# data (the queue load fetches from /v1/reviews/queue which DOES
+# require the header).
+
+
+@app.get(
+    "/review-gate",
+    response_class=HTMLResponse,
+    tags=["ops"],
+    summary=(
+        "Operator UI for the brief-review queue (v0.32.1). "
+        "State-changing actions remain gated by X-Recupero-Admin-Key "
+        "at the /v1/reviews/* API layer."
+    ),
+)
+async def review_gate_ui() -> HTMLResponse:
+    """Render the operator console for the dispatcher review gate.
+
+    The HTML is a static asset (``recupero.web.templates.review_gate.html``)
+    — no per-request templating context is needed because every dynamic
+    bit is fetched client-side from ``/v1/reviews/queue`` and posted
+    back to ``/v1/reviews/{id}/(approve|reject)`` with the admin key.
+
+    On any I/O error reading the template, returns a 503 with a short
+    message so the operator knows to fall back to curl.
+
+    TODO (Wave-4): wire a server-side render that proxies the queue
+    fetch through the same FastAPI process so an operator pasting an
+    admin key into the page form doesn't need to re-authenticate
+    when navigating to /review-gate. Signature:
+        ``async def review_gate_ui(x_recupero_admin_key: str | None = Header(None))``
+    """
+    from pathlib import Path
+
+    template_path = (
+        Path(__file__).resolve().parent.parent
+        / "web" / "templates" / "review_gate.html"
+    )
+    try:
+        html = template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning(
+            "review_gate_ui: template read failed (%s): %s",
+            template_path, exc,
+        )
+        return HTMLResponse(
+            content=(
+                "<h1>Review gate UI unavailable</h1>"
+                "<p>Template file could not be read; fall back to "
+                "<code>curl /v1/reviews/queue</code>.</p>"
+            ),
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return HTMLResponse(content=html)
 
 
 # ---- Uvicorn entry point ---- #

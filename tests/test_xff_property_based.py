@@ -30,7 +30,6 @@ from hypothesis import strategies as st
 
 from recupero.api.app import _intake_rl_client_ip
 
-
 _SETTINGS = settings(
     max_examples=200,
     deadline=1000,
@@ -123,7 +122,14 @@ def test_property_trusted_hops_zero_ignores_xff_completely(
 ) -> None:
     """With RECUPERO_TRUSTED_PROXY_HOPS=0 (the default), the function
     must NOT use XFF at all. An attacker who controls XFF cannot
-    influence the bucket. Fallback is x-real-ip, then socket peer."""
+    influence the bucket. Fallback is x-real-ip, then socket peer.
+
+    v0.32.1 (security-audit cycle-2): the x-real-ip fallback is now
+    gated on an EXPLICIT dev/test marker (fail-closed by default), so
+    ENVIRONMENT=development is set to exercise the x-real-ip preference.
+    The invariant under test — XFF is never used when trusted_hops=0 —
+    is unchanged; the prod fail-closed-to-socket-peer path is locked in
+    test_v0_25_1_audit_fixes.test_d1b/test_d1c."""
     raw_xff = ", ".join(chain)
     req = _FakeRequest(
         headers={
@@ -134,7 +140,8 @@ def test_property_trusted_hops_zero_ignores_xff_completely(
     )
 
     with patch.dict("os.environ",
-                    {"RECUPERO_TRUSTED_PROXY_HOPS": "0"}):
+                    {"RECUPERO_TRUSTED_PROXY_HOPS": "0",
+                     "ENVIRONMENT": "development"}):
         result = _intake_rl_client_ip(req)
 
     # With trusted_hops=0, x-real-ip is the next preference.

@@ -154,7 +154,14 @@ def test_attacker_cannot_bypass_via_padding_xff() -> None:
 
 def test_zero_trusted_hops_still_ignores_xff_completely() -> None:
     """Regression check: the existing trusted_hops=0 contract is
-    unchanged by the misconfig hardening."""
+    unchanged by the misconfig hardening — XFF is ignored and x-real-ip
+    is the fallback.
+
+    v0.32.1 (security-audit cycle-2): the x-real-ip fallback is now
+    gated on an EXPLICIT dev/test marker (fail-closed by default), so
+    set ENVIRONMENT=development to exercise the resolution path. The
+    fail-closed prod behavior is locked separately in
+    test_v0_25_1_audit_fixes.test_d1b/test_d1c."""
     from recupero.api.app import _intake_rl_client_ip
 
     req = _FakeRequest(
@@ -163,6 +170,7 @@ def test_zero_trusted_hops_still_ignores_xff_completely() -> None:
             "x-real-ip": "203.0.113.99",
         },
     )
-    with patch.dict("os.environ", {"RECUPERO_TRUSTED_PROXY_HOPS": "0"}):
+    with patch.dict("os.environ", {"RECUPERO_TRUSTED_PROXY_HOPS": "0",
+                                   "ENVIRONMENT": "development"}):
         result = _intake_rl_client_ip(req)
     assert result == "203.0.113.99"

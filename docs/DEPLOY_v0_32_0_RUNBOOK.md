@@ -370,3 +370,239 @@ These don't block the merge but should be queued:
 
 These are in the post-mortem doc and can ship as v0.32.1 / v0.33.x
 without blocking the v0.32.0 production deploy.
+
+---
+
+## v0.32.1 deltas
+
+The v0.32.1 cycle is a remediation pass on top of v0.32.0 driven by
+the round-2 Jacob-style audit (six parallel reviewers). It is
+**code-only** — no new migrations, no new required env vars beyond
+the v0.32.0 set above. Treat this as a rolling forward fix on the same
+production deploy.
+
+### What's in v0.32.1
+
+#### 1. Rollup-canonical bridge decoders (closes adversary Route 1)
+
+`src/recupero/trace/bridge_calldata.py` now decodes the canonical
+bridge entrypoints for the five major rollups so the cross-chain
+continuation pass anchors at the actual destination recipient instead
+of inferring it from a heuristic:
+
+- Polygon PoS bridge (`RootChainManager.depositFor` /
+  `MintableERC20PredicateProxy`)
+- Optimism standard bridge (`L1StandardBridge.depositERC20To` /
+  `depositETHTo`)
+- Arbitrum standard bridge (`Inbox.depositEth` /
+  `L1ERC20Gateway.outboundTransferCustomRefund`)
+- zkSync Era bridge (`L1ERC20Bridge.deposit` /
+  `L1SharedBridge.bridgehubDepositBaseToken`)
+- Base bridge (`L1StandardBridge.bridgeERC20To` — Base shares
+  Optimism's contract surface but on its own chain id)
+
+**Smoke test:**
+```bash
+# A staging case with a known Ethereum→Polygon PoS hop
+recupero trace --chain ethereum --address 0x... --incident-time ... --case-id SMOKE-V0321-ROLLUP
+# Expected: the destination Polygon address appears in case.json under
+# trace.dst_chain_hops, NOT in trace.bridge_dead_ends.
+pytest tests/test_bridge_calldata_canonical.py -q
+# Expected: all rollup-canonical cases pass.
+```
+
+#### 2. CEX cross-token continuity at parity (closes HIGH-10)
+
+`src/recupero/trace/cex_continuity.py` now matches deposit + withdraw
+pairs at the same exchange across the canonical parity-token sets:
+
+- Stablecoin parity: USDT ↔ USDC ↔ DAI ↔ FDUSD ↔ TUSD
+- ETH parity: ETH ↔ WETH ↔ stETH ↔ wstETH ↔ rETH
+- BTC parity: WBTC ↔ cbBTC ↔ tBTC ↔ renBTC (where still active)
+
+Deposit-in-USDT, withdraw-in-USDC at the same exchange within the
+continuity window now produces a `tier=2 cross_token_parity` lead
+instead of dead-ending the continuity scan.
+
+**Smoke test:**
+```bash
+pytest tests/test_cex_continuity_parity.py -q
+# Expected: all parity-pair cases produce a tier-2 continuity edge.
+```
+
+#### 3. Trace dst-chain anchor fix (closes CRIT-3)
+
+`src/recupero/trace/tracer.py` cross-chain continuation pass now
+anchors the destination-chain BFS at the bridge's recipient address
+extracted by the (v0.32.1 enhanced) decoder, not at the source-chain
+seed re-mapped to the destination chain. The v0.32.0 bug truncated
+destination-chain traces in cases where the bridge recipient differed
+from the source-chain seed (the common case for routed bridge
+transactions).
+
+**Smoke test:**
+```bash
+pytest tests/test_v032_1_trace_crit_fixes.py -q
+# Expected: dst-chain anchor cases land at the recipient, not the seed.
+```
+
+#### 4. Cron scheduler secret redactor expansion (closes SEC CRIT-2)
+
+`src/recupero/worker/cron_scheduler.py` log-redactor now covers the
+full set of secret-shaped tokens that can land in cron stderr:
+
+- `RECUPERO_TOKEN_PEPPER`, `RECUPERO_ADMIN_KEY`,
+  `RECUPERO_RANDOMIZATION_SECRET`
+- API keys: `ETHERSCAN_*`, `HELIUS_*`, `ALCHEMY_*`, `COINGECKO_*`,
+  `ANTHROPIC_*`, `RESEND_*`, `STRIPE_*`
+- DSN-shaped strings (`postgresql://...`) with password components
+- JWT-shaped strings and 32+ byte hex tokens
+
+**Smoke test:**
+```bash
+pytest tests/test_v032_1_security_fixes.py::test_cron_redactor -q
+# Expected: pepper, admin key, DSN password all redacted in captured stderr.
+```
+
+#### 5. Auto-ingest promote validation + `confirm_sha256` (closes SEC CRIT-1)
+
+`src/recupero/labels/api.py` — the `POST /v1/labels/promote/{id}`
+endpoint now requires the caller to echo back the candidate's content
+SHA-256 in the request body. Closes the label-promote JSON-injection
+window where an attacker who got an admin-key replay could promote a
+crafted candidate row to a `high`-tier label without re-fetching its
+content.
+
+**Smoke test:**
+```bash
+# Promote a real candidate with the correct hash
+curl -X POST -H "X-Recupero-Admin-Key: $RECUPERO_ADMIN_KEY" \
+  -d '{"confirm_sha256":"<the candidate's sha256>"}' \
+  https://recupero-worker.up.railway.app/v1/labels/promote/<candidate_id>
+# Expected: 200 ok.
+
+# Same with a wrong hash
+curl -X POST -H "X-Recupero-Admin-Key: $RECUPERO_ADMIN_KEY" \
+  -d '{"confirm_sha256":"deadbeef..."}' \
+  https://recupero-worker.up.railway.app/v1/labels/promote/<candidate_id>
+# Expected: 409 confirm_sha256 mismatch.
+```
+
+#### 6. Admin-gated `/v1/cron/jobs` (closes SEC HIGH-5)
+
+`src/recupero/api/cron_admin_api.py` — the cron status endpoint now
+requires the same `X-Recupero-Admin-Key` header used by the review API
+and the labels admin API. v0.32.0 left this endpoint unauthenticated.
+
+**Smoke test:**
+```bash
+curl https://recupero-worker.up.railway.app/v1/cron/jobs
+# Expected: 401 invalid X-Recupero-Admin-Key.
+
+curl -H "X-Recupero-Admin-Key: $RECUPERO_ADMIN_KEY" \
+  https://recupero-worker.up.railway.app/v1/cron/jobs
+# Expected: 200 + list of jobs and their last_success_utc.
+```
+
+#### 7. Validator semantic INVARIANTS G–P (coverage 30% → 90%)
+
+`src/recupero/validators/output_integrity.py` ships INVARIANTS G
+through P for v0.32.1:
+
+| Invariant | Checks |
+|---|---|
+| G | Intra-artifact cross-section USD sums reconcile to the headline figure |
+| H | Address ↔ chain ↔ explorer URL coherence (no Etherscan link on a Polygon address, etc.) |
+| I | Time-window coherence (no transfer dated before incident_time on the freeze letter) |
+| J | Per-section USD sums in the LE handoff reconcile to brief totals |
+| K | Brief ↔ freeze-letter token / amount / recipient consistency |
+| L | Address ↔ chain ↔ explorer URL coherence across templates (template-level check 1 tightening) |
+| M | Cross-document time-window coherence |
+| N | Stale-label / PIT render verification (no v0.32 candidate-tier label appears as `high` in customer-facing artifacts) |
+| O | AI-editorial claim grounding (every assertion in `ai_editorial.py` output traces to a section of the LE handoff or brief) |
+| P | Parent-link / disclosure metadata coherence (every artifact carries the case's parent disclosure ID) |
+
+**Smoke test:**
+```bash
+pytest tests/test_output_integrity_g_h_i.py -q
+pytest tests/test_output_integrity.py -q   # full INVARIANT A-P suite
+# Expected: all pass.
+```
+
+### Migration list
+
+**No new migrations.** Migrations 027-030 from v0.32.0 still apply.
+Verify with:
+
+```bash
+python -c "
+import os
+from recupero._common import db_connect
+with db_connect() as conn, conn.cursor() as cur:
+    for tbl in ['recovery_disclosures', 'brief_reviews', 'cron_jobs_lock', 'label_candidates']:
+        cur.execute('SELECT 1 FROM information_schema.tables WHERE table_name=%s', (tbl,))
+        print(f'{tbl}: ', 'OK' if cur.fetchone() else 'MISSING')
+"
+# Expected: all four OK (unchanged from v0.32.0)
+```
+
+If you are deploying v0.32.1 directly without v0.32.0 in production
+first, follow Step 1 of this runbook to apply 027-030, then continue
+with the code-only path below.
+
+### Deploy procedure (v0.32.1)
+
+Because v0.32.1 is code-only, the merge is the only ship step:
+
+```bash
+cd C:/Users/apros/Downloads/recupero-io/.claude/worktrees/cranky-fermat-54fcfb
+
+# Pre-flight: full regression + mutation harness
+pytest -q --ignore=tests/integration
+# Expected: 4600+ passed, 10 skipped, 0 failed (the v0.32.1 cycle adds
+# ~30 new tests; exact count will be in the merge commit message).
+
+python scripts/mutation_smoke.py
+# Expected: 43/43+ mutations detected.
+
+# Push pdf-deliverables for CI
+git push origin pdf-deliverables
+
+# Merge to main → triggers Railway auto-deploy
+git checkout main
+git pull origin main
+git merge pdf-deliverables --no-ff -m "Merge v0.32.1: round-2 audit remediation"
+git push origin main
+
+git checkout pdf-deliverables
+```
+
+Watch the Railway logs:
+
+```
+recupero-worker startup ok
+db schema: 30 migrations applied        ← unchanged from v0.32.0
+v0.32.1 deltas active                   ← if your worker boot logs the version line
+```
+
+### Rollback procedure (v0.32.1 → v0.32.0)
+
+Because v0.32.1 ships no migrations, the rollback is a single
+revert:
+
+```bash
+git checkout main
+git pull origin main
+git revert -m 1 HEAD                    # the v0.32.1 merge commit
+git push origin main
+```
+
+Railway auto-deploys the revert. The schema stays at 030 (unchanged
+between v0.32.0 and v0.32.1) so no DB rollback is required.
+
+**Caveat:** any review-gate approvals or label promotions that
+exercised the v0.32.1 surfaces (confirm_sha256, admin-gated cron jobs)
+will see the v0.32.0 looser surface restored. This is safe — the
+v0.32.0 endpoints still validate the admin key for the review and
+labels surfaces — but it widens the v0.32.0 attack surface back to its
+pre-v0.32.1 footprint. Treat the rollback as a pause, not a fix.

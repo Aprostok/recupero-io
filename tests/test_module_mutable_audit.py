@@ -97,6 +97,25 @@ ALLOWED: dict[tuple[str, str], str] = {
     # tick is awaited sequentially by the worker loop.
     ("worker/monitor_tick.py", "_ADAPTER_CACHE"):
         "single-threaded; cleared per tick by _reset_adapter_cache()",
+
+    # v0.32.1 (CRIT-1) chains/bitcoin/inputs_registry.py: tx_hash ->
+    # frozenset of input addresses for the Bitcoin co-spending (H1)
+    # heuristic. Every read-modify-write (register/lookup/clear/size)
+    # takes `_LOCK`; cleared per case by clear_for_case().
+    ("chains/bitcoin/inputs_registry.py", "_BTC_INPUTS_BY_TX"):
+        "lock-guarded by _LOCK",
+
+    # v0.32.1 chains/bitcoin/adapter.py: registry of synthetic CoinJoin-
+    # unwrap (tx_hash, to_address) rows so the brief/LE renderer can
+    # badge probabilistic rows. Every mutation (mark_synthetic_coinjoin
+    # / clear_synthetic_coinjoin_registry) takes `_SYNTHETIC_LOCK`.
+    ("chains/bitcoin/adapter.py", "_SYNTHETIC_COINJOIN_KEYS"):
+        "lock-guarded by _SYNTHETIC_LOCK",
+
+    # v0.32.1 chains/bitcoin/adapter.py: confidence/rationale metadata
+    # paired with _SYNTHETIC_COINJOIN_KEYS. Same lock discipline.
+    ("chains/bitcoin/adapter.py", "_SYNTHETIC_COINJOIN_META"):
+        "lock-guarded by _SYNTHETIC_LOCK",
 }
 
 

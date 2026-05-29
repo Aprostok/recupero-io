@@ -25,10 +25,6 @@ well-formed passes ALL invariants together.
 
 from __future__ import annotations
 
-import math
-
-import pytest
-
 from recupero.validators.output_integrity import (
     _check_cex_continuity_leads_framed,
     _check_decoded_handoffs_consistent,
@@ -36,7 +32,6 @@ from recupero.validators.output_integrity import (
     _check_mev_signals_well_formed,
     _check_wallet_clusters_contract,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers

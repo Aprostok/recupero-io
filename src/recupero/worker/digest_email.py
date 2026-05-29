@@ -107,7 +107,9 @@ def maybe_send_digest_email(
     # str). Validate each recipient via the same regex the Resend
     # path uses — drop anything that fails. If nothing is left,
     # bail out before opening an SMTP connection.
-    from recupero.worker._email import _validate_email_address  # local import: avoids cycle on cold import
+    from recupero.worker._email import (
+        _validate_email_address,  # local import: avoids cycle on cold import
+    )
     valid_recipients = [r for r in recipients if _validate_email_address(r)]
     if not valid_recipients:
         log.warning(

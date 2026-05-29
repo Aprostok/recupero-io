@@ -46,7 +46,6 @@ from uuid import uuid4
 
 import pytest
 
-
 # ---------- Bug 1: record_outcome free-text trojan validation ---------- #
 
 
@@ -254,8 +253,6 @@ def test_check_one_address_drops_holdings_with_nan_usd() -> None:
     only the finite holdings counted.
     """
     from recupero.dormant.finder import (
-        DormantCandidate,
-        TokenHolding,
         _check_one_address,
     )
     from recupero.models import Chain, TokenRef

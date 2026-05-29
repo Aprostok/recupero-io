@@ -47,7 +47,6 @@ from uuid import UUID
 # auto-fix did) breaks every test that mocks DB connections via this
 # patch point. The pattern is intentional; not a real unused-import.
 import psycopg  # noqa: F401
-
 from psycopg.rows import dict_row
 
 from recupero._common import db_connect

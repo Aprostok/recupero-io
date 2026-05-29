@@ -29,7 +29,6 @@ import pytest
 from recupero.worker import _deliverables
 from recupero.worker._deliverables import validate_url_for_weasyprint
 
-
 # ---------------------------------------------------------------------------
 # 1. Remote schemes — every network-capable scheme must raise
 # ---------------------------------------------------------------------------

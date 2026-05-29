@@ -320,10 +320,16 @@ def test_d1_client_ip_uses_trusted_hop_not_leftmost(monkeypatch):
 
 def test_d1_client_ip_falls_back_to_x_real_ip_when_no_hops_configured(monkeypatch):
     """With RECUPERO_TRUSTED_PROXY_HOPS unset, XFF is not trusted.
-    Fall back to x-real-ip (set by edge proxies after stripping XFF)."""
+    Fall back to x-real-ip (set by edge proxies after stripping XFF).
+
+    v0.32.1 (security-audit cycle-2): the x-real-ip fallback for the
+    no-trusted-hop case is now gated on an EXPLICIT dev/test marker
+    (fail-closed by default — see test_d1b below). This test sets one to
+    exercise the dev-convenience resolution path."""
     from recupero.api.app import _intake_rl_client_ip
 
     monkeypatch.delenv("RECUPERO_TRUSTED_PROXY_HOPS", raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "development")
     request = MagicMock()
     request.headers = {
         "x-forwarded-for": "10.0.0.1, 192.168.1.1",  # Distrusted.
@@ -333,6 +339,46 @@ def test_d1_client_ip_falls_back_to_x_real_ip_when_no_hops_configured(monkeypatc
     request.client.host = "127.0.0.1"
     ip = _intake_rl_client_ip(request)
     assert ip == "203.0.113.99"
+
+
+def test_d1b_client_ip_refuses_x_real_ip_in_prod_when_no_hops(monkeypatch):
+    """v0.32.1 fail-closed: with trusted_hops=0 and NO dev marker (an
+    unmarked / production deploy), the spoofable x-real-ip is REFUSED so a
+    bot rotating X-Real-IP can't evade the intake rate limit. Bucket on the
+    socket peer instead."""
+    from recupero.api.app import _intake_rl_client_ip
+
+    monkeypatch.delenv("RECUPERO_TRUSTED_PROXY_HOPS", raising=False)
+    for _m in ("RAILWAY_ENVIRONMENT", "ENVIRONMENT", "ENV",
+               "NODE_ENV", "RECUPERO_ENV", "SENTRY_ENVIRONMENT"):
+        monkeypatch.delenv(_m, raising=False)
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    request = MagicMock()
+    request.headers = {"x-real-ip": "203.0.113.99"}  # client-settable, untrusted
+    request.client = MagicMock()
+    request.client.host = "172.16.0.10"
+    ip = _intake_rl_client_ip(request)
+    assert ip == "172.16.0.10", (
+        f"prod + trusted_hops=0 must refuse the spoofable x-real-ip and "
+        f"bucket on the socket peer; got {ip!r}"
+    )
+
+
+def test_d1c_client_ip_refuses_x_real_ip_when_env_unmarked(monkeypatch):
+    """Fail-closed also applies to an AMBIGUOUS (entirely unmarked) env —
+    absence of a dev marker is treated as production, not dev."""
+    from recupero.api.app import _intake_rl_client_ip
+
+    monkeypatch.delenv("RECUPERO_TRUSTED_PROXY_HOPS", raising=False)
+    for _m in ("RAILWAY_ENVIRONMENT", "ENVIRONMENT", "ENV",
+               "NODE_ENV", "RECUPERO_ENV", "SENTRY_ENVIRONMENT"):
+        monkeypatch.delenv(_m, raising=False)
+    request = MagicMock()
+    request.headers = {"x-real-ip": "203.0.113.99"}
+    request.client = MagicMock()
+    request.client.host = "172.16.0.10"
+    ip = _intake_rl_client_ip(request)
+    assert ip == "172.16.0.10"
 
 
 def test_d1_client_ip_falls_back_to_socket_peer_when_no_headers(monkeypatch):

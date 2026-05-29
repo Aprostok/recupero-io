@@ -853,6 +853,7 @@ def cli() -> None:
 
     if args.command == "bridge-sync":
         from pathlib import Path as _Path
+
         from recupero.ops.commands import bridge_sync_cmd as bs
         sys.exit(bs.run(
             bridges_path=_Path(args.bridges) if args.bridges else None,

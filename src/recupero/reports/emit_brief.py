@@ -378,6 +378,14 @@ def _extract_destinations(
     per_addr_category: dict[str, str | None] = {}
     per_addr_is_mixer: dict[str, bool] = defaultdict(bool)
     per_addr_tokens: dict[str, set[str]] = defaultdict(set)
+    # RC-8: per-destination chain. Genuine multi-chain cases (e.g. an
+    # Ethereum theft bridged to an Arbitrum consolidation hub) carry the
+    # destination chain only on the post-bridge transfer's ``chain`` field.
+    # Surfacing it onto the DESTINATIONS row keeps the brief's structured
+    # data agreeing with editorial prose that names the consolidation chain
+    # (INVARIANT O grounds chains from DESTINATIONS rows). First-seen wins
+    # so the row reflects the chain the funds actually landed on.
+    per_addr_chain: dict[str, str] = {}
     # Display-case map: canonical → first-seen original case. Used so
     # the brief renders the EIP-55-style mixed-case form rather than
     # the lowercase canonical-key form (which is harder to spot-check
@@ -391,6 +399,13 @@ def _extract_destinations(
         if not to or to == seed_canon:
             continue
         per_addr_display.setdefault(to, to_raw)
+        # RC-8: record the chain the funds landed on for this address.
+        # ``t.chain`` is a Chain enum; persist its string value. First
+        # observation wins (deterministic given the ordered transfer list).
+        if to not in per_addr_chain and getattr(t, "chain", None) is not None:
+            chain_val = getattr(t.chain, "value", None) or str(t.chain)
+            if chain_val:
+                per_addr_chain[to] = str(chain_val)
         # v0.30.3 (V030_2_CORRECTNESS_AUDIT T1-B): finite-only sum so
         # a single NaN doesn't poison the destination's received-USD
         # bucket. Without this, the `received >= dust_threshold` filter
@@ -502,6 +517,10 @@ def _extract_destinations(
             "address": addr_display,
             "short": short_addr(addr_display),
             "role": role,
+            # RC-8: chain the funds landed on for this destination (may differ
+            # from PRIMARY_CHAIN for cross-chain consolidation hops). Omitted
+            # (None) when no transfer recorded a chain for the address.
+            "chain": per_addr_chain.get(addr_canon),
             "usd_holding_now": holding_now,
             "usd_received_in_trace": usd(per_addr_received.get(addr_canon, Decimal("0"))),
             "status": status,
@@ -731,6 +750,17 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
         symbol = None
         capability = None
         primary_contact = None
+        # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2 / CRIT-FR-4): pull
+        # corporate legal-entity name + posture notes from the first ask
+        # that carries them. Issuer entries in freeze_asks.json now carry
+        # these fields end-to-end from issuers.json seed → IssuerEntry →
+        # serialized ask → here → the FREEZABLE issuer dict → IssuerInfo →
+        # the template. None means an issuer DB entry didn't supply them
+        # (or an old freeze_asks.json from before v0.32.1).
+        legal_name: str | None = None
+        corporate_jurisdiction: str | None = None
+        issuer_freeze_notes: str | None = None
+        issuer_seed_jurisdiction: str | None = None
         holdings = []
 
         for a in asks:
@@ -769,6 +799,25 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
                 capability = a.get("freeze_capability")
             if primary_contact is None:
                 primary_contact = a.get("primary_contact")
+            # v0.32.1 (CRIT-FR-2 / CRIT-FR-4): pull-through from the
+            # first ask carrying these fields. They live on the issuer,
+            # not the holding, so any ask is representative.
+            if legal_name is None:
+                ln = a.get("legal_name")
+                if isinstance(ln, str) and ln.strip():
+                    legal_name = ln
+            if corporate_jurisdiction is None:
+                cj = a.get("corporate_jurisdiction")
+                if isinstance(cj, str) and cj.strip():
+                    corporate_jurisdiction = cj
+            if issuer_freeze_notes is None:
+                fn = a.get("freeze_notes")
+                if isinstance(fn, str) and fn.strip():
+                    issuer_freeze_notes = fn
+            if issuer_seed_jurisdiction is None:
+                sj = a.get("jurisdiction")
+                if isinstance(sj, str) and sj.strip():
+                    issuer_seed_jurisdiction = sj
             holdings.append({
                 "address": addr,
                 # v0.17.4 (round-10 audit HIGH): per-holding chain.
@@ -832,6 +881,16 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             "portal_url": meta.get("portal_url", ""),
             "typical_response_time": meta.get("typical_response_time", "Variable"),
             "freeze_note": meta.get("freeze_note", ""),
+            # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2 / CRIT-FR-4):
+            # corporate legal name + freeze-posture notes from issuers.json,
+            # threaded through freeze_asks.json. Downstream consumers
+            # (`_issuer_info_for` in worker/_deliverables.py) read these
+            # to populate `IssuerInfo.name` (legal entity), `.jurisdiction`,
+            # and the new `freeze_notes` field rendered in Section 6.
+            "legal_name": legal_name,
+            "corporate_jurisdiction": corporate_jurisdiction,
+            "freeze_notes": issuer_freeze_notes,
+            "issuer_jurisdiction": issuer_seed_jurisdiction,
             # Aggregate evidence_mode for the letter template.
             "evidence_mode": evidence_mode,
             "historical_count": n_historical,
@@ -1519,6 +1578,10 @@ def _build_incident_classification_section(
                 "drainer_attribution": None,
                 "classification_confidence": "low",
                 "signals": [],
+                # v0.32.1 (CRIT-4): keep the events key in the
+                # fallback so downstream consumers can assume the
+                # shape regardless of whether detection succeeded.
+                "events": [],
             },
             None,
         )
@@ -1746,6 +1809,105 @@ def _build_cex_continuity_section(
             "section omitted", exc,
         )
         return []
+
+
+def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
+    """Resolve ``case.exchange_endpoints`` into the dict shape
+    ``subpoena_targets.extract_subpoena_targets`` expects, INCLUDING
+    transaction-level evidence (tx_hashes + chain + deposit-window
+    timestamps + count) resolved from each endpoint's ``transfer_ids``
+    via ``case.transfers``.
+
+    v0.32.1 (#209 step 1): pre-fix the exchange dicts dropped
+    ``transfer_ids`` entirely, so every off-ramp subpoena target shipped
+    with NO tx_hash for the exchange's compliance team to grep against — a
+    subpoena that says "this address received $X" with no on-chain tx
+    reference is rejected on compliance review. The endpoint already
+    carries the deposit window (first/last_deposit_at); we resolve the
+    hashes (falling back to parsing the canonical "chain:tx_hash:logidx"
+    transfer-id form when a transfer is absent from ``case.transfers``).
+    """
+    tinfo_by_id: dict[str, tuple[str, str | None]] = {}
+    for t in (getattr(case, "transfers", None) or []):
+        tid = getattr(t, "transfer_id", None)
+        txh = getattr(t, "tx_hash", None)
+        tch = getattr(t, "chain", None)
+        cval = tch.value if hasattr(tch, "value") else (
+            tch if isinstance(tch, str) else None
+        )
+        if isinstance(tid, str) and isinstance(txh, str) and txh:
+            tinfo_by_id[tid] = (txh, cval)
+
+    def _iso(dt: object) -> str | None:
+        try:
+            return dt.isoformat() if dt is not None else None  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return None
+
+    out: list[dict[str, Any]] = []
+    for e in (getattr(case, "exchange_endpoints", None) or []):
+        is_d = isinstance(e, dict)
+        tids = (e.get("transfer_ids") if is_d
+                else getattr(e, "transfer_ids", None)) or []
+        hashes: list[str] = []
+        seen: set[str] = set()
+        chain_from_tx: str | None = None
+        for tid in tids:
+            info = tinfo_by_id.get(tid)
+            if info is None and isinstance(tid, str) and tid.count(":") >= 2:
+                # Defensive fallback: id form is "chain:tx_hash:logidx".
+                parts = tid.split(":")
+                info = (parts[1], parts[0]) if parts[1] else None
+            if info is None:
+                continue
+            txh, cval = info
+            if chain_from_tx is None:
+                chain_from_tx = cval
+            if txh and txh not in seen:
+                seen.add(txh)
+                hashes.append(txh)
+        first = e.get("first_deposit_at") if is_d else getattr(e, "first_deposit_at", None)
+        last = e.get("last_deposit_at") if is_d else getattr(e, "last_deposit_at", None)
+        chain = (e.get("chain") if is_d else getattr(e, "chain", None)) or chain_from_tx
+        out.append({
+            "address": e.get("address") if is_d else getattr(e, "address", None),
+            "exchange": e.get("exchange") if is_d else getattr(e, "exchange", None),
+            "total_received_usd": (e.get("total_received_usd") if is_d
+                else str(getattr(e, "total_received_usd", "") or "")),
+            "chain": chain,
+            "source": "label_db",
+            "tx_hashes": hashes,
+            "first_deposit_at": first if is_d else _iso(first),
+            "last_deposit_at": last if is_d else _iso(last),
+            "transfer_count": len(tids),
+        })
+
+    # v0.32.1 (#209 step 2): augment the label-DB endpoints (the shared CEX
+    # HOT WALLETS funds reached) with INFERRED per-user deposit addresses —
+    # unlabeled addresses that swept funds into one of those hot wallets.
+    # The hot wallet is a weak subpoena target (millions of deposits hit it);
+    # the inferred deposit address is the precise one tied to a single KYC'd
+    # account. Confidence is pinned low/medium (a lead, never proof) by the
+    # attribution pass. Existing label-DB addresses win on dedup so we never
+    # downgrade a confirmed endpoint to an inferred lead.
+    try:
+        from recupero.trace.cex_attribution import infer_cex_deposits_from_case
+        _existing = {
+            (d.get("address") or "").lower()
+            for d in out if d.get("address")
+        }
+        for dep in infer_cex_deposits_from_case(case):
+            d = dep.to_dict()
+            addr_l = (d.get("address") or "").lower()
+            if addr_l and addr_l not in _existing:
+                out.append(d)
+                _existing.add(addr_l)
+    except Exception as _exc:  # noqa: BLE001 — attribution is best-effort
+        log.warning(
+            "emit_brief: CEX deposit-address attribution failed (%s) — "
+            "subpoena targets fall back to label-DB endpoints only", _exc,
+        )
+    return out
 
 
 def emit_brief(
@@ -2112,20 +2274,10 @@ def emit_brief(
     # docs/v0.28_subpoena_targets_design.md and INVARIANTS C/D/E.
     try:
         from recupero.reports.subpoena_targets import extract_subpoena_targets
-        # exchanges list: each entry already carries address +
-        # exchange + total_received_usd. Build the dict shape the
-        # extractor expects from the brief's already-built list.
-        exchange_dicts = [
-            {
-                "address": getattr(e, "address", None) if not isinstance(e, dict) else e.get("address"),
-                "exchange": getattr(e, "exchange", None) if not isinstance(e, dict) else e.get("exchange"),
-                "total_received_usd": str(getattr(e, "total_received_usd", "") or "")
-                    if not isinstance(e, dict) else e.get("total_received_usd"),
-                "chain": getattr(e, "chain", None) if not isinstance(e, dict) else e.get("chain"),
-                "source": "label_db",
-            }
-            for e in (case.exchange_endpoints or [])
-        ]
+        # Build the dict shape the extractor expects, resolving each
+        # endpoint's transfer_ids → tx-level evidence (#209 step 1; see
+        # _subpoena_exchange_dicts).
+        exchange_dicts = _subpoena_exchange_dicts(case)
         brief["SUBPOENA_TARGETS"] = extract_subpoena_targets(
             case=case,
             freeze_asks=freeze_asks,

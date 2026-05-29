@@ -71,21 +71,49 @@ SUBPOENA_USD_THRESHOLD = Decimal("1000")
 # subpoena_recipient_overrides.json at case dir. Curated minimally
 # for the v0.28.0 ship; expand from Chainalysis / TRM directories in
 # a v0.28.x label DB expansion.
+# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-ST-2): Coinbase / Binance
+# entity-name correctness notes.
+#
+# COINBASE: there are FOUR distinct legal entities under the Coinbase
+# umbrella that an investigator might reasonably address:
+#   1. Coinbase Global, Inc. — publicly-traded holding co (NASDAQ: COIN)
+#   2. Coinbase, Inc. — the US exchange operating subsidiary (the
+#      customer-facing US exchange; holder of state MTLs)
+#   3. Coinbase Custody Trust Company, LLC — NYDFS-chartered limited-
+#      purpose trust company; institutional custody + the cbBTC issuer
+#   4. Coinbase Europe Limited / Coinbase Ireland Limited — EU operations
+#
+# For a US grand-jury subpoena targeting US-customer account records,
+# "Coinbase, Inc." (the operating subsidiary) is the correct entity.
+# For a cbBTC token blacklist or institutional-custody freeze, the
+# correct entity is "Coinbase Custody Trust Company, LLC" — see the
+# cbBTC entry in issuers.json. For an EU customer the right entity is
+# Coinbase Europe Limited. The hardcoded entry below is the US-customer
+# default; operators MUST verify the right entity per case via the
+# `subpoena_recipient_overrides.json` mechanism if the customer is EU /
+# the records target is cbBTC / institutional-custody.
+#
+# BINANCE: "Binance Holdings" is the umbrella holding co cited on the
+# 2023 DOJ resolution. For US-customer records the relevant entity may
+# instead be Binance.US (BAM Trading Services Inc.); for international
+# customer records, Binance Capital Management Co., Ltd. (the Cayman
+# entity) is the practical issuing target. The hardcoded entry below is
+# the international / general-records default.
 _KNOWN_CEX_COMPLIANCE = {
-    "mexc":      ("MEXC Global",       "compliance@mexc.com",     "Seychelles", 30, "medium"),
-    "binance":   ("Binance Holdings",  "leinquiries@binance.com", "Cayman Islands", 21, "high"),
-    "coinbase":  ("Coinbase, Inc.",    "subpoenas@coinbase.com",  "USA",        14, "high"),
-    "kraken":    ("Kraken",            "complianceeu@kraken.com", "USA",        21, "high"),
-    "bybit":     ("Bybit",             "compliance@bybit.com",    "Dubai",      30, "medium"),
-    "kucoin":    ("KuCoin",            "compliance@kucoin.com",   "Seychelles", 30, "medium"),
-    "okx":       ("OKX",               "compliance@okx.com",      "Seychelles", 30, "medium"),
-    "gate.io":   ("Gate.io",           "compliance@gate.io",      "Cayman",     30, "medium"),
-    "bitget":    ("Bitget",            "compliance@bitget.com",   "Seychelles", 30, "medium"),
-    "huobi":     ("Huobi / HTX",       "compliance@htx.com",      "Seychelles", 30, "low"),
-    "htx":       ("Huobi / HTX",       "compliance@htx.com",      "Seychelles", 30, "low"),
-    "crypto.com": ("Crypto.com",       "compliance@crypto.com",   "Singapore",  21, "high"),
-    "gemini":    ("Gemini",            "compliance@gemini.com",   "USA",        14, "high"),
-    "bitstamp":  ("Bitstamp",          "compliance@bitstamp.net", "Luxembourg", 21, "high"),
+    "mexc":      ("MEXC Global Limited",                       "compliance@mexc.com",     "Seychelles", 30, "medium"),
+    "binance":   ("Binance Holdings Limited",                  "leinquiries@binance.com", "Cayman Islands", 21, "high"),
+    "coinbase":  ("Coinbase, Inc.",                            "subpoenas@coinbase.com",  "United States (Delaware; operating subsidiary of Coinbase Global, Inc., NASDAQ: COIN)", 14, "high"),
+    "kraken":    ("Payward, Inc. (d/b/a Kraken)",              "complianceeu@kraken.com", "United States (California)", 21, "high"),
+    "bybit":     ("Bybit Fintech Limited",                     "compliance@bybit.com",    "British Virgin Islands (operational HQ Dubai)",      30, "medium"),
+    "kucoin":    ("Mek Global Limited (d/b/a KuCoin)",         "compliance@kucoin.com",   "Seychelles", 30, "medium"),
+    "okx":       ("OKX (Aux Cayes FinTech Co. Ltd.)",          "compliance@okx.com",      "Seychelles / Cayman Islands", 30, "medium"),
+    "gate.io":   ("Gate Technology Inc. (d/b/a Gate.io)",      "compliance@gate.io",      "Cayman Islands",     30, "medium"),
+    "bitget":    ("Bitget Limited",                            "compliance@bitget.com",   "Seychelles", 30, "medium"),
+    "huobi":     ("HBT International Limited (d/b/a HTX)",     "compliance@htx.com",      "Seychelles", 30, "low"),
+    "htx":       ("HBT International Limited (d/b/a HTX)",     "compliance@htx.com",      "Seychelles", 30, "low"),
+    "crypto.com": ("Foris DAX MT Limited (d/b/a Crypto.com)",  "compliance@crypto.com",   "Malta / Singapore",  21, "high"),
+    "gemini":    ("Gemini Trust Company, LLC",                 "compliance@gemini.com",   "United States (New York; NYDFS-chartered trust)",        14, "high"),
+    "bitstamp":  ("Bitstamp Limited",                          "compliance@bitstamp.net", "Luxembourg", 21, "high"),
 }
 
 
@@ -340,20 +368,77 @@ def extract_subpoena_targets(
                 "priority": "low",
             }
 
+        # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-ST-2): per-address
+        # evidence now includes tx_hashes + first/last block_time when
+        # the input carries them (OnwardCEXFlow surfaces these; raw
+        # `exchange_deposits` from emit_brief does not). A subpoena to
+        # Binance saying "this address received $X" with NO
+        # transaction-level evidence is rejected on compliance review
+        # — the compliance team needs the tx_hash to tie the on-chain
+        # deposit to an internal customer account. Pre-v0.32.1 the
+        # linked_address evidence only carried `amount_usd` +
+        # `label_source` so the rendered subpoena had nothing for the
+        # compliance team to grep against.
+        def _ev_from(ex_dict):  # noqa: ANN001 (closure-local; loose typing)
+            ev = {
+                "amount_usd": str(amt),
+                "label_source": ex_dict.get("source") or "label_db",
+            }
+            tx_hashes_raw = ex_dict.get("tx_hashes")
+            if isinstance(tx_hashes_raw, list):
+                ev["tx_hashes"] = [
+                    str(h) for h in tx_hashes_raw if isinstance(h, str)
+                ]
+            first_at = ex_dict.get("first_deposit_at") or ex_dict.get("first_flow_at")
+            last_at = ex_dict.get("last_deposit_at") or ex_dict.get("last_flow_at")
+            if isinstance(first_at, str) and first_at:
+                ev["first_observed_at"] = first_at
+            if isinstance(last_at, str) and last_at:
+                ev["last_observed_at"] = last_at
+            transfer_count = ex_dict.get("deposit_count") or ex_dict.get("transfer_count")
+            if isinstance(transfer_count, int) and transfer_count > 0:
+                ev["transfer_count"] = transfer_count
+            return ev
+
+        def _linked_addr(ex_dict, addr):  # noqa: ANN001 (closure-local; loose typing)
+            # v0.32.1 (#209 step 2): an INFERRED CEX deposit address (source
+            # prefixed "inferred:", produced by the sweep-pattern attribution
+            # pass) carries its heuristic + confidence so the subpoena renderer
+            # can frame it as a LEAD, not a confirmed off-ramp. Forensic
+            # invariant: inferred attribution is never proof — pin the surfaced
+            # confidence to low/medium even if an upstream bug set otherwise.
+            # (``addr`` is passed explicitly rather than captured so this
+            # closure doesn't bind the enclosing loop variable.)
+            src = ex_dict.get("source") or "label_db"
+            inferred = isinstance(src, str) and src.startswith("inferred")
+            la = {
+                "address": addr,
+                "chain": ex_dict.get("chain") or (
+                    getattr(case, "chain", None) and case.chain.value
+                ),
+                "role": (
+                    "inferred CEX deposit address (sweep to hot wallet)"
+                    if inferred else "off-ramp deposit (perpetrator-owned)"
+                ),
+                "evidence": [_ev_from(ex_dict)],
+            }
+            if inferred:
+                ac = ex_dict.get("attribution_confidence")
+                la["attribution_confidence"] = ac if ac in ("low", "medium") else "low"
+                ah = ex_dict.get("attribution_heuristic")
+                if ah:
+                    la["attribution_heuristic"] = str(ah)
+                hw = ex_dict.get("hot_wallet_address")
+                if hw:
+                    la["hot_wallet_address"] = str(hw)
+            return la
+
         recipient_key = recipient_info["recipient_name"]
         existing = cex_targets_by_recipient.get(recipient_key)
         if existing is not None:
             # Multiple deposits at the same exchange → one
             # consolidated subpoena listing every address.
-            existing["linked_addresses"].append({
-                "address": addr,
-                "chain": ex.get("chain") or getattr(case, "chain", None) and case.chain.value,
-                "role": "off-ramp deposit (perpetrator-owned)",
-                "evidence": [{
-                    "amount_usd": str(amt),
-                    "label_source": ex.get("source") or "label_db",
-                }],
-            })
+            existing["linked_addresses"].append(_linked_addr(ex, addr))
             # Aggregate total USD for sort ordering.
             existing["_total_usd"] += amt
             continue
@@ -364,17 +449,7 @@ def extract_subpoena_targets(
             "recipient_type": "cex",
             **recipient_info,
             "evidentiary_basis": "off_ramp_deposit",
-            "linked_addresses": [{
-                "address": addr,
-                "chain": ex.get("chain") or (
-                    getattr(case, "chain", None) and case.chain.value
-                ),
-                "role": "off-ramp deposit (perpetrator-owned)",
-                "evidence": [{
-                    "amount_usd": str(amt),
-                    "label_source": ex.get("source") or "label_db",
-                }],
-            }],
+            "linked_addresses": [_linked_addr(ex, addr)],
             "expected_records": [
                 "subscriber identity (name, email, phone, country)",
                 "KYC documents on file (govt ID, proof of address)",

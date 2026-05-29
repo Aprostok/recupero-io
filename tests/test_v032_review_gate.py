@@ -18,14 +18,11 @@ the gate + the API endpoints.
 
 from __future__ import annotations
 
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Lightweight in-memory store + connect-mock
@@ -58,7 +55,7 @@ class _Store:
             "review_notes": None,
             "override_reason": None,
             "override_acknowledged_legal_risk": False,
-            "created_at_utc": created_at or datetime.now(timezone.utc),
+            "created_at_utc": created_at or datetime.now(UTC),
         }
         self.rows[key] = row
         return row["id"]
@@ -93,7 +90,7 @@ class _Store:
             row["override_acknowledged_legal_risk"] = (
                 override_acknowledged_legal_risk
             )
-        row["review_completed_at_utc"] = datetime.now(timezone.utc)
+        row["review_completed_at_utc"] = datetime.now(UTC)
         return row
 
 
@@ -246,7 +243,8 @@ def artifact_path(tmp_path: Path) -> Path:
 def test_dispatch_raises_when_no_review_row(store, case_id, artifact_path):
     """No row → raises."""
     from recupero.dispatcher import (
-        BriefNotReviewedError, require_review_approved,
+        BriefNotReviewedError,
+        require_review_approved,
     )
     with pytest.raises(BriefNotReviewedError):
         require_review_approved(
@@ -260,8 +258,10 @@ def test_dispatch_raises_while_awaiting_review(
 ):
     """awaiting_review → raises."""
     from recupero.dispatcher import (
-        BriefNotReviewedError, compute_sha256,
-        create_review_row, require_review_approved,
+        BriefNotReviewedError,
+        compute_sha256,
+        create_review_row,
+        require_review_approved,
     )
     assert create_review_row(
         case_id=case_id, artifact_kind="brief",
@@ -281,8 +281,10 @@ def test_dispatch_succeeds_after_approval(
 ):
     """approved → returns without raising."""
     from recupero.dispatcher import (
-        REVIEW_STATUS_APPROVED, compute_sha256,
-        create_review_row, require_review_approved,
+        REVIEW_STATUS_APPROVED,
+        compute_sha256,
+        create_review_row,
+        require_review_approved,
     )
     create_review_row(
         case_id=case_id, artifact_kind="brief",
@@ -306,8 +308,10 @@ def test_dispatch_raises_after_rejection(
 ):
     """rejected → raises."""
     from recupero.dispatcher import (
-        BriefNotReviewedError, REVIEW_STATUS_REJECTED,
-        compute_sha256, create_review_row,
+        REVIEW_STATUS_REJECTED,
+        BriefNotReviewedError,
+        compute_sha256,
+        create_review_row,
         require_review_approved,
     )
     create_review_row(
@@ -333,8 +337,10 @@ def test_override_without_reason_raises(
 ):
     """override with no documented reason → raises."""
     from recupero.dispatcher import (
-        BriefNotReviewedError, REVIEW_STATUS_OVERRIDDEN,
-        compute_sha256, create_review_row,
+        REVIEW_STATUS_OVERRIDDEN,
+        BriefNotReviewedError,
+        compute_sha256,
+        create_review_row,
         require_review_approved,
     )
     create_review_row(
@@ -358,9 +364,12 @@ def test_override_with_documented_reason_succeeds(
 ):
     """override + documented reason → succeeds + WARN log."""
     import logging
+
     from recupero.dispatcher import (
-        REVIEW_STATUS_OVERRIDDEN, compute_sha256,
-        create_review_row, require_review_approved,
+        REVIEW_STATUS_OVERRIDDEN,
+        compute_sha256,
+        create_review_row,
+        require_review_approved,
     )
     create_review_row(
         case_id=case_id, artifact_kind="brief",
@@ -387,8 +396,10 @@ def test_resave_changes_sha_requires_new_row(
 ):
     """Re-rendering → new SHA → no matching row → raises."""
     from recupero.dispatcher import (
-        BriefNotReviewedError, REVIEW_STATUS_APPROVED,
-        compute_sha256, create_review_row,
+        REVIEW_STATUS_APPROVED,
+        BriefNotReviewedError,
+        compute_sha256,
+        create_review_row,
         require_review_approved,
     )
     create_review_row(
@@ -477,6 +488,7 @@ def api_client(store, monkeypatch):
     """Build a FastAPI TestClient with the review router mounted."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
+
     from recupero.dispatcher.review_api import router
 
     monkeypatch.setenv("RECUPERO_ADMIN_KEY", "test-admin-secret")
@@ -592,7 +604,7 @@ def test_override_endpoint_requires_ack(api_client, store, case_id):
 def test_sla_scan_flags_overdue_rows(store, case_id, caplog):
     """Rows older than 24h in awaiting_review are surfaced."""
     import logging
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     old = now - timedelta(hours=30)
     fresh = now - timedelta(hours=1)
     store.insert_awaiting(
@@ -616,7 +628,7 @@ def test_sla_scan_no_overdue(store, case_id):
     """Recent rows do not trip the SLA."""
     store.insert_awaiting(
         case_id=case_id, kind="brief", sha="a" * 64,
-        created_at=datetime.now(timezone.utc) - timedelta(hours=2),
+        created_at=datetime.now(UTC) - timedelta(hours=2),
     )
     from recupero.dispatcher.sla import run_review_sla_job
     assert run_review_sla_job() == 0

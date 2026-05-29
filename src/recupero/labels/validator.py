@@ -141,6 +141,11 @@ _LABEL_FILES: dict[str, dict[str, Any]] = {
             "_v030_1_contact_note",
             # v0.31.2 (Gap #5 — point-in-time labels).
             "valid_from", "valid_until",
+            # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2): corporate
+            # legal-entity name + incorporation jurisdiction for the
+            # freeze letter's "Addressed To" field. See issuers.json v3
+            # schema_changes notes.
+            "legal_name", "corporate_jurisdiction",
         ],
     },
 }

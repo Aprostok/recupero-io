@@ -41,7 +41,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 # --- Marker definition ----------------------------------------------------
 
 _MARKER_RE = re.compile(r"\b(TODO|FIXME|XXX|HACK|KLUDGE|DEPRECATED)\b")
@@ -62,21 +61,33 @@ _SRC_ROOT = _REPO_ROOT / "src" / "recupero"
 # the change.
 
 _KNOWN_MARKER_COUNTS: dict[tuple[str, str], int] = {
-    ("src/recupero/chains/tron/adapter.py",          "TODO"): 2,
+    ("src/recupero/api/app.py",                      "TODO"): 1,
+    ("src/recupero/chains/cosmos/__init__.py",       "TODO"): 1,
+    ("src/recupero/chains/cosmos/adapter.py",        "TODO"): 1,
+    ("src/recupero/chains/tron/adapter.py",          "TODO"): 1,
     ("src/recupero/cli.py",                          "TODO"): 4,
     ("src/recupero/freeze_learning/status.py",       "XXX"):  1,
     ("src/recupero/hack_tracker/digest_cli.py",      "HACK"): 1,
     ("src/recupero/ops/cli.py",                      "TODO"): 1,
     ("src/recupero/reports/ai_editorial.py",         "TODO"): 21,
+    ("src/recupero/reports/brief.py",                "TODO"): 6,
     ("src/recupero/reports/emit_brief.py",           "TODO"): 27,
     ("src/recupero/reports/legal_requests.py",       "TODO"): 1,
-    ("src/recupero/trace/drainer_detection.py",      "TODO"): 1,
+    ("src/recupero/trace/adaptive_depth.py",         "TODO"): 1,
+    ("src/recupero/trace/address_poisoning.py",      "TODO"): 1,
+    ("src/recupero/trace/burn_sinks.py",             "TODO"): 1,
+    ("src/recupero/trace/erc4337.py",                "TODO"): 1,
     # v0.31.0: indirect_exposure.py MVP scorer has one TODO note
     # flagging the cycle-detection / per-category severity / inflow-
     # aware traversal as post-MVP follow-ups. Documented in the
     # commit message; deferred.
     ("src/recupero/trace/indirect_exposure.py",      "TODO"): 1,
+    ("src/recupero/trace/lightning_detection.py",    "TODO"): 1,
+    ("src/recupero/trace/mev_builders.py",           "TODO"): 2,
+    ("src/recupero/trace/mixer_detection.py",        "TODO"): 1,
+    ("src/recupero/trace/nft_transfers.py",          "TODO"): 1,
     ("src/recupero/trace/perpetrator_trace.py",      "XXX"):  1,
+    ("src/recupero/trace/wrap_unwrap.py",            "TODO"): 1,
     ("src/recupero/validators/output_integrity.py",  "XXX"):  2,
     ("src/recupero/worker/_engagement_letter.py",    "XXX"):  1,
     ("src/recupero/worker/_victim_summary.py",       "XXX"):  2,
@@ -95,14 +106,62 @@ _TODO_NOTES: dict[tuple[str, str], str] = {
         "convention"
     ),
     ("src/recupero/chains/tron/adapter.py", "TODO"): (
-        "deferred: 2× TRX native outflow ingestion (line 20 docstring + "
-        "line 175 implementation), scheduled v0.12.x"
+        "deferred: 1× TRX native outflow ingestion (line 20 docstring "
+        "reference to the in-body follow-on), scheduled v0.12.x"
     ),
     ("src/recupero/worker/watch_tick.py", "TODO"): (
         "deferred: hyperliquid wallet-balance snapshot needs a new endpoint"
     ),
-    ("src/recupero/trace/drainer_detection.py", "TODO"): (
-        "deferred: detect_approval_signatures needs Approval-event ingestion"
+    ("src/recupero/api/app.py", "TODO"): (
+        "deferred: Wave-4 server-side render proxy for the review_gate queue UI"
+    ),
+    ("src/recupero/trace/adaptive_depth.py", "TODO"): (
+        "deferred: wave-4-integration — wire compute_max_depth into the "
+        "tracer entry point (documented integration plan in the docstring)"
+    ),
+    ("src/recupero/trace/burn_sinks.py", "TODO"): (
+        "deferred: wave-4-integration — wire classify_outflow into the "
+        "tracer BFS short-circuit + brief burn panel"
+    ),
+    ("src/recupero/trace/erc4337.py", "TODO"): (
+        "deferred: wave-4-integration — wire decompose_user_ops into the "
+        "tracer for EntryPoint inner-transfer virtual hops"
+    ),
+    ("src/recupero/trace/nft_transfers.py", "TODO"): (
+        "deferred: wave-4-integration — merge fetch_nft_transfers into the "
+        "tracer BFS frontier"
+    ),
+    ("src/recupero/trace/wrap_unwrap.py", "TODO"): (
+        "deferred: wave-4-integration — wire is_wrap_unwrap into the tracer "
+        "to collapse ETH→WETH→DEX hops"
+    ),
+    ("src/recupero/trace/mev_builders.py", "TODO"): (
+        "deferred: wave-4-integration — 1× prose note + 1× integration note "
+        "to replace mev_detection._MEV_BUILDERS with this canonical registry"
+    ),
+    ("src/recupero/trace/address_poisoning.py", "TODO"): (
+        "deferred: wave-7-integration — wire detect_poisoning_attempts into "
+        "the tracer + brief Section 7 (documented integration plan)"
+    ),
+    ("src/recupero/trace/lightning_detection.py", "TODO"): (
+        "deferred: wave-7-integration — surface Lightning exits as a "
+        "trace-dead-end lead in brief Section 4"
+    ),
+    ("src/recupero/trace/mixer_detection.py", "TODO"): (
+        "deferred: wave-7-integration — wire is_mixer into the tracer BFS "
+        "frontier + brief Section 4 dead-end reasons"
+    ),
+    ("src/recupero/chains/cosmos/__init__.py", "TODO"): (
+        "deferred: wave-7-integration — register CosmosAdapter + cosmos BFS "
+        "frontier detection (documented integration plan)"
+    ),
+    ("src/recupero/chains/cosmos/adapter.py", "TODO"): (
+        "deferred: wave-7-integration — register CosmosAdapter, bech32 "
+        "Address validation, IBC packet decode"
+    ),
+    ("src/recupero/reports/brief.py", "TODO"): (
+        "domain: 6× references to the 'TODO:' placeholder/sentinel "
+        "convention used by the LE-handoff placeholder sanitizer"
     ),
     ("src/recupero/trace/indirect_exposure.py", "TODO"): (
         "deferred: v0.31.0 MVP scorer flags cycle-detection, per-category "

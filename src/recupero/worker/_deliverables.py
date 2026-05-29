@@ -212,7 +212,7 @@ def build_all_deliverables(
         flow_hash_seed = (
             f"{case_id_for_hash}|{case.seed_address or ''}|"
             f"{len(case.transfers or [])}"
-        ).encode("utf-8")
+        ).encode()
         flow_hex = hashlib.sha256(flow_hash_seed).hexdigest()[:8]
         candidate_path = briefs_dir / f"flow_{flow_hex}.svg"
         # Pass freeze_brief so wallets in the FREEZABLE list get
@@ -454,9 +454,13 @@ def build_all_deliverables(
                     recommend_legal_instrument,
                 )
                 # Pull OFAC + IC3 signals for the instrument recommender.
-                _ofac_exposed = bool(
-                    (freeze_brief.get("RISK_ASSESSMENT") or {}).get("ofac_exposure")
-                )
+                # v0.32.1 (financial-audit CRITICAL): read the canonical
+                # RISK_ASSESSMENT.summary.ofac_exposed_count shape via the
+                # shared helper — the old top-level "ofac_exposure" key never
+                # existed on a real brief, so the recommender never saw OFAC
+                # exposure and never routed to OFAC-license-bearing counsel.
+                from recupero.trace.risk_scoring import brief_has_ofac_exposure
+                _ofac_exposed = brief_has_ofac_exposure(freeze_brief)
                 _ic3_case_id_for_rec = (
                     (freeze_brief.get("IC3_CASE_ID") or "").strip() or None
                 )
@@ -702,6 +706,7 @@ def _write_case_manifest(
     import json
 
     from recupero._common import atomic_write_text
+
     # Honor SOURCE_DATE_EPOCH for reproducible-builds workflows so the
     # case manifest's `generated_at` field doesn't break byte-identical
     # idempotency checks (RIGOR-7 E2E). Falls back to wall-clock when
@@ -1688,6 +1693,25 @@ def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:
     freeze_brief data + sensible defaults — the resulting brief renders
     cleanly because the j2 templates are defensively wrapped in
     ``{% if issuer.X %}`` blocks for the optional fields.
+
+    v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2 / CRIT-FR-4 / HIGH-FR-1 /
+    HIGH-FR-6): pull the corporate legal name + freeze posture +
+    incorporation jurisdiction out of the freezable_entry (threaded
+    end-to-end from issuers.json seed). Pre-v0.32.1 every non-Midas
+    issuer ended up with `name='Tether'` / `'Circle'` / `'Coinbase'` —
+    bare freeze-brief short tags addressed to "Tether — Compliance &
+    Security" rather than "Tether Operations Limited — Compliance &
+    Security." A compliance team triaging the letter flags it as
+    hobbyist-grade on the first read. The audit findings:
+      * CRIT-FR-2 — `.name` is now the corporate legal entity when
+        the seed knows it.
+      * HIGH-FR-1 — `.jurisdiction` populated for every seeded issuer
+        so the Section 6 regulatory-context block renders for the
+        non-Midas letters.
+      * HIGH-FR-6 — defensive `or ""` on contact_email retained but
+        the cover-meta now also surfaces the legal entity name so a
+        missing contact email no longer renders an isolated
+        "Compliance & Security" line under a bare short name.
     """
     if name == MIDAS_ISSUER.name:
         return MIDAS_ISSUER
@@ -1703,24 +1727,94 @@ def _issuer_info_for(name: str, freezable_entry: dict[str, Any]) -> IssuerInfo:
     if not short_name:
         short_name = "issuer"
 
+    # v0.32.1 (CRIT-FR-2): pull the corporate legal name from the
+    # freezable entry (threaded from issuers.json via freeze_asks.json
+    # and emit_brief._extract_freezable). Falls back to the bare short
+    # tag when the seed didn't carry a `legal_name` — preserving
+    # backward-compatible behavior for issuers without seed data.
+    legal_name_raw = freezable_entry.get("legal_name")
+    legal_name = (
+        legal_name_raw
+        if isinstance(legal_name_raw, str) and legal_name_raw.strip()
+        else None
+    )
+    # v0.32.1 (HIGH-FR-1): expose `jurisdiction` so the Section 6
+    # regulatory-context branch renders for Tether/Circle/Coinbase/Paxos
+    # (previously only Midas got this block).
+    corp_juris_raw = freezable_entry.get("corporate_jurisdiction")
+    seed_juris_raw = freezable_entry.get("issuer_jurisdiction")
+    jurisdiction = next(
+        (
+            v for v in (corp_juris_raw, seed_juris_raw)
+            if isinstance(v, str) and v.strip()
+        ),
+        None,
+    )
+    # v0.32.1 (CRIT-FR-4): the issuer-specific freeze-posture note from
+    # issuers.json — surfaced in the new Section 6 of the freeze letter
+    # so a compliance reviewer reads the same posture cue the operator
+    # sees (e.g., "Tether has frozen billions in USDT and is generally
+    # responsive…"). Hand-curated; never auto-generated. Pre-v0.32.1
+    # this lived in the seed DB but never reached the rendered letter.
+    freeze_notes_raw = freezable_entry.get("freeze_notes")
+    freeze_notes = (
+        freeze_notes_raw
+        if isinstance(freeze_notes_raw, str) and freeze_notes_raw.strip()
+        else None
+    )
+
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-FR-2): per-issuer KYC-
+    # asymmetry framing. Pre-v0.32.1 the KYC asymmetry block (Section
+    # KYC asymmetry in issuer_freeze_request.html.j2 line 238) only
+    # rendered for Midas. For Coinbase cbBTC, the mint/issuance path
+    # goes through Coinbase Custody KYC (institutional customers KYC at
+    # mint) — a perpetrator wallet receiving cbBTC via on-chain
+    # transfer never went through Coinbase KYC at issuance. That is a
+    # genuine KYC asymmetry argument and supports the freeze ask.
+    # Other freezable stablecoins (Tether USDT, Circle USDC) issue
+    # via fiat-on-ramp KYC at the originating account but don't have a
+    # KYC-tied mint per-address, so the asymmetry argument is weaker —
+    # keep them at kyc_required=False for now.
+    name_lower = name.lower()
+    kyc_required = False
+    kyc_minimum: str | None = None
+    if "coinbase" in name_lower:
+        kyc_required = True
+        kyc_minimum = (
+            "Coinbase Custody institutional KYC at cbBTC mint"
+        )
+
     # freeze_brief.json's contact key is literally "contact_email" (see
     # the v0.2.0 schema in freeze_brief.json — earlier code looked up
     # "primary_contact" and always got the empty fallback, which is why
     # rendered LE handoffs read "Issue a preservation request to Circle ()"
     # with empty parens. Fix: use the right key.
     return IssuerInfo(
-        name=name,
+        # v0.32.1 (CRIT-FR-2): corporate legal name when known, bare
+        # short tag otherwise. `short_name` stays the bare tag for
+        # prose flow ("…we ask that Tether place a hold…") — only the
+        # "Addressed To" / legal-attribution surfaces switch to the
+        # corporate entity. This keeps the letter readable without
+        # repeated "Tether Operations Limited" mouthfuls in body prose.
+        name=legal_name or name,
         short_name=short_name.title(),
         contact_email=(
             freezable_entry.get("contact_email")
             or freezable_entry.get("primary_contact")
             or ""
         ),
-        jurisdiction=None,  # not in freeze_brief; template handles None
-        regulatory_framework=None,
+        jurisdiction=jurisdiction,
+        # v0.32.1 (HIGH-FR-1): if the seed carries an incorporation /
+        # regulatory framing, surface it as the regulatory_framework so
+        # Section 6 renders. The seed's `jurisdiction` is a short
+        # incorporation tag (e.g., "British Virgin Islands"); the
+        # template's Section 6 prose adds the legal verbiage around it.
+        regulatory_framework=jurisdiction,
         secondary_party=None,
         secondary_role=None,
         asset_description=None,
-        kyc_required=False,
-        kyc_minimum=None,
+        # v0.32.1 (HIGH-FR-2): per-issuer KYC asymmetry framing.
+        kyc_required=kyc_required,
+        kyc_minimum=kyc_minimum,
+        freeze_notes=freeze_notes,
     )

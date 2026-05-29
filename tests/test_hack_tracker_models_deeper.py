@@ -30,7 +30,6 @@ from decimal import Decimal
 import pytest
 from pydantic import ValidationError
 
-
 # ---- 1. severity enum gate ---- #
 
 

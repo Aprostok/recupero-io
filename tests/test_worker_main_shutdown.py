@@ -28,14 +28,10 @@ process.
 
 from __future__ import annotations
 
-import os
 import signal
-import sys
 import threading
 import time
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from recupero.worker import main as worker_main
 
@@ -93,7 +89,7 @@ def test_crash_loop_protection_minimum_uptime_guard_exists():
         "on Railway. Add _MIN_UPTIME_SEC (e.g., 30s) and gate the "
         "non-zero exit on it."
     )
-    val = getattr(worker_main, "_MIN_UPTIME_SEC")
+    val = worker_main._MIN_UPTIME_SEC
     assert isinstance(val, (int, float)) and val > 0
     assert hasattr(worker_main, "_enforce_min_uptime"), (
         "No _enforce_min_uptime helper — the constant alone isn't "
@@ -193,7 +189,7 @@ def test_heartbeat_thread_is_daemon_and_join_bounded():
     assert isinstance(
         worker_main._Heartbeat._STOP_JOIN_TIMEOUT_SEC, (int, float)
     )
-    assert worker_main._Heartbeat._STOP_JOIN_TIMEOUT_SEC < float("inf"), (
+    assert float("inf") > worker_main._Heartbeat._STOP_JOIN_TIMEOUT_SEC, (
         "stop() join timeout must be finite, else a hung DB blocks "
         "worker exit forever"
     )

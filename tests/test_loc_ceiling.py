@@ -52,8 +52,17 @@ the allowlist on every commit, while still flagging runaway growth.
 # comment captures why the file is large so a future refactor has
 # direction.
 ALLOWLIST: dict[str, int] = {
-    # No files currently exceed LOC_CAP. Largest file in tree is
-    # ``src/recupero/validators/output_integrity.py`` at ~1870 lines.
+    # v0.32.1: the output-integrity validator accreted past the 5000-line
+    # cap when invariants F–P (chain-of-custody, cross-document
+    # consistency, AI-editorial grounding, parent-link disclosure, …)
+    # were added. It is the single safety-critical gate that runs every
+    # structural invariant over the rendered artifact set, so the checks
+    # are cohesive — but the file is a refactor candidate. REFACTOR
+    # QUEUED (Phase-3 dead-code/flatten task): split into
+    # validators/output_integrity/<invariant-group>.py modules behind the
+    # existing validate_case_output() facade. Pinned at the current size;
+    # the BUFFER lets small edits land, and any real growth re-trips this.
+    "src/recupero/validators/output_integrity.py": 5145,
     # Add entries here only when a file legitimately must exceed the
     # cap AND a refactor is queued.
 }

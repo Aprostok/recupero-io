@@ -53,11 +53,24 @@ log = logging.getLogger(__name__)
 # Roles in address_observations that indicate the address is a
 # PERP-controlled wallet — these are the bridges between cases.
 # Excludes victim / unlabeled / exchange_deposit etc.
+#
+# v0.32.1 (forensic-audit): only roles that genuinely denote
+# PERPETRATOR CONTROL may bind a cross-case cluster, because the cluster
+# LE-handoff asserts the binding address is "perpetrator-controlled
+# infrastructure" to an AUSA. The two roles below are exactly those:
+#   * perpetrator_hub — emitted ONLY from a confident `perpetrator` label
+#     (correlation._role_from_label_category).
+#   * drainer_contract — the malicious approval-drainer contract itself.
+# Pruned here: `perpetrator_hop` and `high_risk_destination` — NEITHER is
+# ever emitted by correlation._emit (the former is dead; step-3 emits
+# `exchange_deposit`, not `high_risk_destination`). `high_risk_destination`
+# in particular is a HEURISTIC risk-score role; binding a cluster on it
+# would turn a correlation into a falsely-asserted "common perpetrator
+# control" claim. Removing them is behavior-preserving today (they're
+# never produced) and closes the latent over-claim foot-gun.
 _PERP_ROLES_FOR_CLUSTERING = frozenset({
     "perpetrator_hub",
-    "perpetrator_hop",
     "drainer_contract",
-    "high_risk_destination",
 })
 
 

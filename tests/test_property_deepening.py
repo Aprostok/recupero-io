@@ -23,7 +23,7 @@ import functools
 import hmac
 import json
 import math
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -97,7 +97,7 @@ _json_scalar = st.one_of(
     st.datetimes(
         min_value=datetime(2000, 1, 1),
         max_value=datetime(2100, 1, 1),
-    ).map(lambda d: d.replace(tzinfo=timezone.utc)),
+    ).map(lambda d: d.replace(tzinfo=UTC)),
 )
 
 

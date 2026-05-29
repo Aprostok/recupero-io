@@ -34,7 +34,6 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
-from unittest.mock import MagicMock
 
 
 def _build_transfer_with_symbol(symbol: str):

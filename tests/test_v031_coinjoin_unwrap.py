@@ -39,7 +39,6 @@ from recupero.trace.coinjoin_unwrap import (
     detection_to_brief_section,
 )
 
-
 # ---- Wasabi 1.0 (regression — must still be recognized) ---- #
 
 

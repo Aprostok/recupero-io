@@ -29,7 +29,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from hypothesis import HealthCheck, given, settings, strategies as st
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from recupero.labels.store import LabelStore
 from recupero.models import (
@@ -47,7 +48,6 @@ from recupero.trace.bridge_calldata import (
 )
 from recupero.trace.cex_continuity import identify_cex_continuity_leads
 from recupero.trace.dust_attack import identify_dust_attack_destinations
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Hypothesis settings — bound the runtime per test.

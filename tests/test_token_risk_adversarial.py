@@ -9,10 +9,7 @@ These tests pin behaviour for malformed / hostile inputs.
 
 from __future__ import annotations
 
-import math
-
 from recupero.token_risk.scorer import score_token
-
 
 # ---- Bug Z8-A: non-dict tx_history_stats crashes with AttributeError ---- #
 

@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import pytest
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # SQL injection payloads
 # ─────────────────────────────────────────────────────────────────────────────
@@ -76,7 +75,6 @@ def test_intake_sql_injection_in_description_does_not_execute(
     bypassed at the form layer.
     """
     from recupero.portal.intake import (
-        IntakePayload,
         IntakeValidationError,
         validate_intake_payload,
     )

@@ -22,7 +22,6 @@ network call ever leaves this process.
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -39,7 +38,6 @@ from recupero.trace.ofac_sync import (
     read_ofac_meta,
     sync_ofac_sdn,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Test fixtures
@@ -255,9 +253,8 @@ def test_network_failure_raises_in_strict_mode() -> None:
         with patch(
             "recupero.trace.ofac_sync.urllib.request.urlopen",
             side_effect=URLError("simulated outage"),
-        ):
-            with pytest.raises(OFACSyncError) as exc_info:
-                sync_ofac_sdn(output_path=out_path, strict=True)
+        ), pytest.raises(OFACSyncError) as exc_info:
+            sync_ofac_sdn(output_path=out_path, strict=True)
         assert "simulated outage" in str(exc_info.value)
         # The wrapped SyncResult is available for inspection.
         assert exc_info.value.result is not None
@@ -323,9 +320,8 @@ def test_malformed_xml_raises_in_strict_mode() -> None:
         with patch(
             "recupero.trace.ofac_sync.urllib.request.urlopen",
             return_value=_FakeResponse(b"<not><valid>"),
-        ):
-            with pytest.raises(OFACSyncError):
-                sync_ofac_sdn(output_path=out_path, strict=True)
+        ), pytest.raises(OFACSyncError):
+            sync_ofac_sdn(output_path=out_path, strict=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -550,9 +546,8 @@ def test_cron_job_uses_strict_mode_so_failures_raise() -> None:
     with patch(
         "recupero.trace.ofac_sync.urllib.request.urlopen",
         side_effect=URLError("simulated cron-time outage"),
-    ):
-        with pytest.raises(OFACSyncError):
-            _job_ofac_sync()
+    ), pytest.raises(OFACSyncError):
+        _job_ofac_sync()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

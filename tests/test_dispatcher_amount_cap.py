@@ -18,8 +18,6 @@ payment is implausible.
 
 from __future__ import annotations
 
-import pytest
-
 
 def test_resolve_amount_cents_caps_extreme_values() -> None:
     """A Stripe object with amount_total = 10**18 (10 quintillion
@@ -35,9 +33,9 @@ def test_resolve_amount_cents_caps_extreme_values() -> None:
     # The cap value depends on the implementation; just ensure
     # we don't return the raw 10**18.
     assert result != 10**18, (
-        f"_resolve_amount_cents returned 10**18 directly — extreme "
-        f"values pass through to payments.amount_cents. Cap or "
-        f"fallback to default."
+        "_resolve_amount_cents returned 10**18 directly — extreme "
+        "values pass through to payments.amount_cents. Cap or "
+        "fallback to default."
     )
     # Sanity: result should be a reasonable cents value.
     assert 0 <= result <= 10**11, (

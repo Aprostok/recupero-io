@@ -42,7 +42,6 @@ def _build_adapter():
 def test_fetch_native_outflows_skips_malformed_to_address() -> None:
     """A malformed `to` address from Alchemy / Etherscan must NOT
     crash the whole fetch loop. The row is dropped + logged."""
-    from recupero.chains.evm.adapter import EvmAdapter
 
     adapter = _build_adapter()
     addr = "0x" + "a" * 40
@@ -99,7 +98,6 @@ def test_fetch_native_outflows_skips_malformed_to_address() -> None:
 def test_fetch_native_outflows_skips_truncated_to_address() -> None:
     """A truncated EVM address (39 chars instead of 42) must drop
     cleanly."""
-    from recupero.chains.evm.adapter import EvmAdapter
 
     adapter = _build_adapter()
     addr = "0x" + "a" * 40
@@ -133,7 +131,6 @@ def test_fetch_erc20_outflows_skips_malformed_contract_address() -> None:
     """ERC-20 path: malformed `contractAddress` field crashes
     `to_checksum_address` inside `_normalize_erc20`. Pre-fix this
     propagates uncaught."""
-    from recupero.chains.evm.adapter import EvmAdapter
 
     adapter = _build_adapter()
     addr = "0x" + "a" * 40
@@ -167,7 +164,6 @@ def test_fetch_erc20_outflows_skips_malformed_contract_address() -> None:
 def test_good_row_still_works_alongside_malformed() -> None:
     """Sanity: a good row in the same batch as a malformed one still
     produces a valid Transfer output."""
-    from recupero.chains.evm.adapter import EvmAdapter
 
     adapter = _build_adapter()
     addr = "0x" + "a" * 40

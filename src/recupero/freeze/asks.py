@@ -35,8 +35,10 @@ from pathlib import Path
 from typing import Any
 
 from recupero.dormant.finder import DormantCandidate, TokenHolding
-from recupero.labels.store import LabelStore
-from recupero.labels.store import lookup_pit_safe  # v0.31.4
+from recupero.labels.store import (
+    LabelStore,
+    lookup_pit_safe,  # v0.31.4
+)
 from recupero.models import Case, Chain, Label, LabelCategory
 
 log = logging.getLogger(__name__)
@@ -86,6 +88,15 @@ class IssuerEntry:
     # v0.7.5 — see class docstring.
     delegates_to: str | None = None              # underlying contract
     delegates_to_entry: IssuerEntry | None = None  # resolved at load
+    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2): full corporate
+    # legal-entity name to address the freeze letter to (e.g. "Tether
+    # Operations Limited"). Falls back to the bare `issuer` name when
+    # absent. `corporate_jurisdiction` is a one-line incorporation
+    # framing (e.g. "British Virgin Islands"); used as the issuer's
+    # `jurisdiction` field on the rendered letter when the seed entry
+    # didn't otherwise populate it.
+    legal_name: str | None = None
+    corporate_jurisdiction: str | None = None
 
 
 @dataclass
@@ -236,11 +247,16 @@ class OnwardCEXFlow:
     tx_hashes: list[str]             # per-transfer evidence
 
     def short_summary(self) -> str:
+        # v0.32.1 (Jacob cross-cutting audit §3.1): canonical truncation
+        # via recupero.util.addr_format.short_address — same rendering
+        # across briefs, LE handoff, freeze letters, log lines.
+        from recupero.util.addr_format import short_address
         usd = f"${self.flow_usd_value:,.2f}"
         return (
             f"{usd} {self.token_symbol} flowed "
-            f"{self.upstream_address[:10]}…{self.upstream_address[-6:]} "
-            f"→ {self.exchange} ({self.cex_address[:10]}…{self.cex_address[-6:]}) "
+            f"{short_address(self.upstream_address, prefix=10, suffix=6)} "
+            f"→ {self.exchange} "
+            f"({short_address(self.cex_address, prefix=10, suffix=6)}) "
             f"in {self.transfer_count} transfer(s)"
         )
 
@@ -465,6 +481,18 @@ def load_issuer_db(path: Path | None = None) -> dict[tuple[Chain, str], IssuerEn
             secondary_contact=tok.get("secondary_contact"),
             jurisdiction=tok.get("jurisdiction", "unknown"),
             delegates_to=delegates_to,
+            # v0.32.1 (CRIT-FR-2): corporate legal name + incorporation
+            # jurisdiction. Empty / missing → None so downstream callers
+            # fall back to the bare `issuer` name.
+            legal_name=(
+                tok.get("legal_name") if isinstance(tok.get("legal_name"), str)
+                and tok.get("legal_name").strip() else None
+            ),
+            corporate_jurisdiction=(
+                tok.get("corporate_jurisdiction")
+                if isinstance(tok.get("corporate_jurisdiction"), str)
+                and tok.get("corporate_jurisdiction").strip() else None
+            ),
         )
     # Pass 2: resolve cross-references.
     for entry in out.values():

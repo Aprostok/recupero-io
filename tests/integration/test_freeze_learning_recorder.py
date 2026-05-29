@@ -23,7 +23,6 @@ from uuid import UUID, uuid4
 import psycopg
 import pytest
 
-
 pytestmark = pytest.mark.usefixtures("integration_enabled")
 
 

@@ -170,6 +170,40 @@
   </li>
 </ul>
 
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-EL-1): the recovery-rate
+   disclosure that the customer ack'd at intake must appear on the
+   LEGAL CONTRACT they sign. Pre-v0.32.1 the disclosure rendered only
+   on the intake form (intake.html.j2) — the customer ticked the box,
+   paid the diagnostic fee, then received an engagement letter that
+   never named the rate. A customer's lawyer reading this contract
+   reasonably asks "where is the recovery-rate disclosure?" — the
+   pre-v0.32.1 answer was "they ticked a box on the website." Now the
+   contract carries the same rate the customer saw at intake. #}
+{% if recovery_disclosure and recovery_disclosure.available %}
+<div class="summary-box" style="background:#FFFBEB; border-left:4px solid #B45309; padding:0.75em 1em; margin:1em 0;">
+  <p style="margin:0 0 0.5em 0;"><strong>3.1. Recovery-rate disclosure (acknowledged at intake).</strong></p>
+  <p style="margin:0;">{{ recovery_disclosure.summary_html|safe }}</p>
+  <p class="small" style="margin:0.5em 0 0 0; color:#374151;">
+    This rate is the same disclosure you acknowledged on the intake
+    form before paying the {{ initial_fee_text }} diagnostic fee. It
+    is reproduced here on the binding engagement contract so the
+    rate you reviewed at checkout is part of the agreement you
+    sign — not an out-of-contract website disclosure.
+  </p>
+</div>
+{% else %}
+<p class="small" style="margin-top:0.5em; color:#374151;">
+  <strong>Recovery-rate disclosure (acknowledged at intake).</strong>
+  At intake you acknowledged that Recupero's published recovery rate
+  may be as low as the published industry baseline of ~3% full
+  recovery for crypto theft cases involving centralized exchanges
+  (Chainalysis 2024 Crypto Crime Report). That acknowledgement is
+  re-confirmed here as part of this engagement. The case-of-record
+  Wilson 95% CI was unavailable at the moment this contract was
+  generated; please refer to the intake-form ack on file.
+</p>
+{% endif %}
+
 <h2>4. Fees</h2>
 
 <h3>Engagement fee</h3>
@@ -224,6 +258,25 @@
   <strong>If Recupero terminates</strong> before the compliance
   letters are sent: a full refund of the engagement fee is issued.
 </p>
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-EL-2): contract-document-
+   level record of the freeze-letter-send event. Pre-v0.32.1 the
+   refund-eligibility gate ("letters sent yet?") relied solely on
+   Recupero's internal records; a customer disputing "letters were
+   sent before my termination email" had no contract-document
+   anchor either way. Recupero now commits, by signing this
+   contract, to record the freeze-letter-send timestamp in writing to
+   the customer (the very same act that triggers the
+   non-refundability) — establishing a clear two-sided paper trail. #}
+<p class="small" style="margin-top:0.5em; color:#374151;">
+  <strong>Letter-send notification (refund-eligibility tracking).</strong>
+  Recupero will notify you in writing (email is sufficient) within
+  one business day of sending each compliance freeze letter, naming
+  the issuer and the local timestamp of dispatch. The cumulative
+  letter-send log is the controlling record for the 75% / 0% refund
+  gate above. Disputes about the send timing must be raised within
+  10 business days of the send-notification email; absent timely
+  dispute, the send-notification record is binding.
+</p>
 
 <h2>6. Authority &amp; consent</h2>
 <p>
@@ -261,17 +314,89 @@
 </p>
 
 <h2>8. Governing law &amp; dispute resolution</h2>
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT HIGH-EL-3): the Delaware default
+   is operator-of-record-friendly but may be unenforceable against
+   consumers in some states with mandatory-arbitration jurisprudence
+   (notably California — Iskanian/Viking River). Operators serving
+   California consumers should override `investigator_jurisdiction` to
+   "California" or omit the JAMS clause entirely. The default below
+   remains Delaware (where most operator-of-record entities are
+   incorporated) but with explicit consumer-fairness language so the
+   clause survives scrutiny on the more common multi-state cases. #}
 <p>
   This engagement is governed by the laws of
-  {% if investigator_jurisdiction %}{{ investigator_jurisdiction }}{% else %}the State of Delaware{% endif %}.
+  {% if investigator_jurisdiction %}{{ investigator_jurisdiction }}{% else %}the State of Delaware{% endif %},
+  without regard to conflict-of-laws principles, except that this
+  choice-of-law clause does not deprive you of any consumer-protection
+  rights you would otherwise be entitled to under the mandatory laws
+  of your state of residence.
   Any dispute arising under this engagement that cannot be
   resolved by good-faith discussion will be submitted to
   binding arbitration administered by JAMS in
   {% if investigator_jurisdiction %}{{ investigator_jurisdiction }}{% else %}Delaware{% endif %},
-  under JAMS' Streamlined Arbitration Rules.
+  under JAMS' Streamlined Arbitration Rules — except that small-claims
+  matters within the jurisdictional limit of your local small-claims
+  court may be brought there at your option, and you may opt out of
+  this arbitration provision by mailing a signed opt-out notice to
+  Recupero at the address on file within 30 days of signing this
+  engagement.
 </p>
 
 <h2>9. Signature</h2>
+
+{# v0.32.1 (JACOB_FREEZE_LETTER_AUDIT MED-EL-1): investigator
+   attestation block — rendered as 9.1 (sub-section) so the existing
+   "9. Signature" anchor preserved by the test contract continues to
+   work. Pre-v0.32.1 Section 9 was just the signature table; there
+   was no paragraph where the investigator certified, under penalty
+   of perjury, that the diagnostic findings supporting this engagement
+   are accurate to the best of their knowledge. For an engagement
+   letter that triggers a non-refundable fee, the attestation is the
+   legal hook for the customer's reliance interest. #}
+<h3>9.1. Investigator Attestation</h3>
+<p>
+  <strong>{{ investigator.name }}</strong>, in the capacity of
+  Investigator of record for {{ investigator.organization }}, hereby
+  attests that:
+</p>
+<ol>
+  <li>
+    The on-chain trace, freeze brief, and identified recoverable
+    holdings referenced in Section 1 of this engagement letter were
+    prepared by or under the direct supervision of the undersigned
+    investigator using the methodology documented in Recupero's
+    case file for case <code>{{ case_id }}</code>.
+  </li>
+  <li>
+    To the best of the investigator's knowledge and belief, formed
+    after the trace and dormant-detection passes completed on or
+    before {{ diagnostic_completed_at }}, the diagnostic findings
+    reflecting the funds traced from the victim's wallet are
+    accurate as of the trace-completion timestamp recorded in the
+    case file.
+  </li>
+  <li>
+    The investigator has no undisclosed financial interest in the
+    recovery of these specific funds beyond the contingency fee
+    stated in Section 4 of this engagement and the standard
+    operator compensation of {{ investigator.organization }}.
+  </li>
+  <li>
+    The investigator understands and acknowledges Recupero's
+    no-legal-advice posture: nothing in the diagnostic findings or
+    this engagement constitutes legal advice, and the engagement
+    is supported by — but does not include — coordination with
+    counsel or law enforcement of the victim's choosing.
+  </li>
+</ol>
+<p class="small" style="color:#374151;">
+  This attestation is made in support of the victim's reasonable
+  reliance on the diagnostic findings when paying the engagement
+  fee and authorizing the work described in Section 2. The
+  investigator's signature below confirms this attestation.
+</p>
+
+<h3>9.2. Signature blocks</h3>
 
 <div class="summary-box action">
   <p style="margin:0 0 0.7em 0;">

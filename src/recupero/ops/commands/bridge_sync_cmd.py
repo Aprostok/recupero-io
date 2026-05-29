@@ -49,7 +49,7 @@ import json
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -179,7 +179,7 @@ def _is_stale(verified_at: str | None, today: datetime) -> bool:
             cleaned = cleaned + "+00:00"
         dt = datetime.fromisoformat(cleaned)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
+            dt = dt.replace(tzinfo=UTC)
     except (ValueError, TypeError):
         return True
     age_days = (today - dt).total_seconds() / 86_400
@@ -225,7 +225,7 @@ def run(*, bridges_path: Path | None = None, output_path: Path | None = None,
     """
     bridges = bridges_path or DEFAULT_BRIDGES_PATH
     diff_out = output_path or DEFAULT_DIFF_PATH
-    today = today or datetime.now(timezone.utc)
+    today = today or datetime.now(UTC)
 
     entries = _load_bridges_json(bridges)
     if entries is None:

@@ -23,7 +23,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — copied verbatim from tests/test_v031_decoders.py so this file
 # stays standalone (no cross-test import coupling).
@@ -406,3 +405,24 @@ def test_both_new_protocols_never_swallow_valid_selectors_on_truncation() -> Non
         assert r.confidence == "low"
         assert r.destination_chain is None
         assert r.destination_address is None
+
+
+def test_squid_free_text_destination_not_accepted_as_high() -> None:
+    """v0.32.1 (forensic-audit): a free-text / garbage destinationAddress
+    string (11-99 chars, contains spaces) must NOT be accepted as a
+    destination — pre-fix an operator-precedence bug accepted ANY such
+    string at confidence='high', fabricating a destination the BFS would
+    pursue. Now: chain known but no valid address → 'medium', no address."""
+    calldata = _build_squid_bridge_call_calldata(
+        destination_chain="Polygon",
+        destination_address="the quick brown fox jumped over",  # prose, has spaces
+    )
+    out = decode_bridge_calldata(bridge_protocol="Squid", input_data=calldata)
+    assert isinstance(out, BridgeDecodeResult)
+    assert out.destination_chain == "polygon"
+    assert out.destination_address is None, (
+        "free-text string must not be accepted as a destination address"
+    )
+    assert out.confidence == "medium", (
+        "chain known + no valid address → medium, never high"
+    )

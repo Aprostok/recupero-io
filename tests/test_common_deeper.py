@@ -13,7 +13,6 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-
 # ---- pooled_dsn URL-encoding ---- #
 
 
@@ -124,8 +123,9 @@ def test_atomic_write_text_refuses_symlink_target(tmp_path: Path) -> None:
     junction test below (which only requires `mklink /J`) catches
     the same is_link_like guard."""
     import pytest
-    from tests._link_helper import LinkUnsupported, make_file_link
+
     from recupero._common import atomic_write_text
+    from tests._link_helper import LinkUnsupported, make_file_link
     real = tmp_path / "real.json"
     real.write_text("orig", encoding="utf-8")
     link = tmp_path / "link.json"
@@ -145,12 +145,13 @@ def test_atomic_write_text_refuses_junction_target(tmp_path: Path) -> None:
     returned False for junctions, leaving a Windows-only bypass.
     """
     import sys
+
     import pytest
     if sys.platform != "win32":
         pytest.skip("junctions are a Windows NTFS concept")
 
-    from tests._link_helper import LinkUnsupported, make_dir_link
     from recupero._common import atomic_write_text
+    from tests._link_helper import LinkUnsupported, make_dir_link
 
     real_dir = tmp_path / "real_dir"
     real_dir.mkdir()

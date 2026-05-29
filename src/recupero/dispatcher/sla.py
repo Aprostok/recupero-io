@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from recupero.dispatcher.review_gate import REVIEW_STATUS_AWAITING
@@ -65,7 +65,7 @@ def scan_overdue_reviews(
 
     sla_hours = sla_hours or _resolve_sla_hours()
     if now is None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
     cutoff = now - timedelta(hours=sla_hours)
 
     overdue: list[dict[str, Any]] = []

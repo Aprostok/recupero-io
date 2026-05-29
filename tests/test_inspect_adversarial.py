@@ -19,16 +19,13 @@ Both can carry adversarial payloads:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from decimal import Decimal
 
 import pytest
 
 from recupero.chains.base import ChainAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv, StorageParams
 from recupero.inspect.inspector import inspect_address
-from recupero.labels.store import LabelStore
 from recupero.models import Chain, EvidenceReceipt
-
 
 SEED = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
 PERP = "0xF4bE227b268e191b79097Daad0AcCcD9a7A7FAD2"

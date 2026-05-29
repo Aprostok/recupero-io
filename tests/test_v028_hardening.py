@@ -66,8 +66,6 @@ from decimal import Decimal
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from recupero.reports.subpoena_renderer import (
     _FILENAME_COMPONENT_MAX,
     _safe_filename_component,
@@ -266,7 +264,6 @@ def test_emit_brief_writes_sentinel_on_extraction_exception(
     extract_subpoena_targets to raise, then inspect the brief dict
     for the sentinel field. This is the contract the surviving
     mutant exposed."""
-    from recupero.reports import emit_brief as eb_mod
 
     def boom(*args, **kwargs):
         raise RuntimeError("simulated extraction crash for test")
@@ -307,6 +304,7 @@ def test_emit_brief_source_contains_sentinel_write() -> None:
     'simplify error handling' refactor that drops the sentinel
     write trips this test immediately."""
     import inspect
+
     from recupero.reports import emit_brief as eb_mod
     src = inspect.getsource(eb_mod)
     assert 'SUBPOENA_TARGETS_EXTRACTION_ERROR' in src, (
@@ -840,7 +838,7 @@ def test_subpoena_usd_threshold_is_one_thousand_usd() -> None:
     """The v0.28 design doc pins the threshold at $1,000 USD.
     A silent edit to bypass small-amount cases (or to gate more
     aggressively) is caught here."""
-    assert SUBPOENA_USD_THRESHOLD == Decimal("1000")
+    assert Decimal("1000") == SUBPOENA_USD_THRESHOLD
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -992,6 +990,7 @@ def test_tracer_source_contains_confidence_gate() -> None:
     continuation) is caught by this structural check.
     """
     import inspect
+
     from recupero.trace import tracer as tracer_mod
     src = inspect.getsource(tracer_mod)
     assert (

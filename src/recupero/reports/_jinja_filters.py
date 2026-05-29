@@ -139,10 +139,18 @@ def register_safe_filters(env) -> None:
     Call this immediately after constructing every ``Environment``
     that renders templates containing `href`/`src` attributes.
 
+    Also registers ``short_address`` — v0.32.1 cross-cutting polish
+    (Jacob audit §3.1): templates can now use ``{{ addr | short_address }}``
+    instead of the ad-hoc ``{{ addr[:10] }}…{{ addr[-6:] }}`` slicing,
+    so the same address renders identically across every artifact.
+
     Idempotent — re-registration is a no-op.
     """
+    from recupero.util.addr_format import short_address
+
     env.filters.setdefault("safe_url", safe_url)
     env.filters.setdefault("safe_text", safe_text)
+    env.filters.setdefault("short_address", short_address)
 
 
 __all__ = ["safe_url", "safe_text", "register_safe_filters"]

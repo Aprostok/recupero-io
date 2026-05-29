@@ -152,3 +152,54 @@ def test_dispatcher_rejects_unparseable_url():
         )
         assert not mock_client.post.called
     assert result.succeeded is False
+
+
+def test_dispatch_owned_client_pins_tls_verify_and_no_redirects():
+    """v0.32.1 (security-audit cycle-2): the owned httpx client must be
+    constructed with verify=True (TLS cert verification — the PRIMARY
+    DNS-rebind defense: a rebound internal IP cannot present a cert valid
+    for the attacker's webhook hostname) and follow_redirects=False (a 3xx
+    to an internal URL would bypass the up-front SSRF check). Pinned
+    explicitly so an httpx default change / refactor can't silently weaken
+    the SSRF posture."""
+    from unittest.mock import patch
+
+    from recupero.monitoring.dispatcher import dispatch_alert
+    payload = _make_payload()
+    with patch("httpx.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.post.return_value = type(
+            "R", (), {"status_code": 200, "text": "ok"},
+        )()
+        dispatch_alert(
+            payload, webhook_url="https://hooks.example.com/recupero",
+            webhook_secret=None, attempt_number=1,
+        )
+        assert mock_client_cls.called
+        kwargs = mock_client_cls.call_args.kwargs
+        assert kwargs.get("verify") is True, (
+            "owned webhook client must verify TLS certs (DNS-rebind defense)"
+        )
+        assert kwargs.get("follow_redirects") is False, (
+            "owned webhook client must NOT follow redirects (redirect SSRF)"
+        )
+
+
+def test_dispatch_treats_3xx_as_failure_not_success():
+    """A 3xx (e.g. a redirect to an internal URL) must be recorded as a
+    non-2xx FAILURE — never followed, never treated as a delivered alert."""
+    from unittest.mock import patch
+
+    from recupero.monitoring.dispatcher import dispatch_alert
+    payload = _make_payload()
+    with patch("httpx.Client") as mock_client_cls:
+        mock_client = mock_client_cls.return_value
+        mock_client.post.return_value = type(
+            "R", (), {"status_code": 302, "text": ""},
+        )()
+        result = dispatch_alert(
+            payload, webhook_url="https://hooks.example.com/recupero",
+            webhook_secret=None, attempt_number=1,
+        )
+    assert result.succeeded is False
+    assert result.status_code == 302

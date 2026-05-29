@@ -421,9 +421,23 @@ class EvmAdapter(ChainAdapter):
         raw_tx = self.client.get_transaction_by_hash(tx_hash)
         raw_receipt = self.client.get_transaction_receipt(tx_hash)
         block_hex = raw_tx.get("blockNumber") or raw_receipt.get("blockNumber") or "0x0"
-        block_number = int(block_hex, 16)
+        # v0.32.1 (chain-audit): guard the hex/timestamp conversions. Unlike
+        # the outflow path (which routes through _decode_block_time), this
+        # was a bare int(...,16) + fromtimestamp — a tampered/garbage
+        # blockNumber (non-hex) or an extreme timestamp ("0xffff...") would
+        # raise ValueError/OverflowError. The tracer wraps this in a broad
+        # except so it only drops one evidence receipt, but guard at source.
+        try:
+            block_number = int(block_hex, 16)
+        except (TypeError, ValueError):
+            block_number = 0
         raw_block = self.client.get_block_by_number(block_number, full_tx=False)
-        block_time = datetime.fromtimestamp(int(raw_block.get("timestamp", "0x0"), 16), tz=UTC)
+        try:
+            block_time = datetime.fromtimestamp(
+                int(raw_block.get("timestamp", "0x0"), 16), tz=UTC,
+            )
+        except (TypeError, ValueError, OverflowError, OSError):
+            block_time = datetime.now(UTC)
         return EvidenceReceipt(
             chain=self.chain, tx_hash=tx_hash, block_number=block_number, block_time=block_time,
             raw_transaction=raw_tx, raw_receipt=raw_receipt, raw_block_header=raw_block,
@@ -526,6 +540,13 @@ class EvmAdapter(ChainAdapter):
                 f"etherscan_erc20: invalid tokenDecimal {decimals_raw!r} for "
                 f"contract {tx.get('contractAddress')!r}"
             ) from e
+        # v0.32.1 (chain-audit cycle-2, parity with the Solana adapter):
+        # clamp the attacker-influenceable `tokenDecimal` to the on-chain
+        # u8 ceiling at the SOURCE so the value stored in TokenRef.decimals
+        # can't blow up a downstream `10**decimals` (the tracer's
+        # _build_transfer also clamps, but cex_continuity / dormant /
+        # watch_tick read TokenRef.decimals directly).
+        decimals = max(0, min(decimals, 255))
         token = TokenRef(
             chain=self.chain,
             contract=to_checksum_address(tx["contractAddress"]),

@@ -365,7 +365,15 @@ def recommend_le_routes(
         # other unparsed shapes. Use the parsed country with a graceful
         # "(unspecified)" fallback so the rendered note never says
         # "outside the US (None)" or doubles up the parens.
-        display_country = (parsed_country or country or "").strip() or "(unspecified)"
+        # v0.32.1 (LE-HIGH-5): drop unconfirmed-placeholder citizenship so
+        # a victim record with an unresolved location never typesets a raw
+        # work-marker sentinel into the law-enforcement handoff. Reuse the
+        # canonical brief sanitizer (single source of truth for the
+        # placeholder patterns) rather than re-listing them here. An
+        # unresolved placeholder renders as "(unspecified)" like a blank.
+        from recupero.reports.brief import _sanitize_placeholder
+        _cand = _sanitize_placeholder((parsed_country or country or "").strip()) or ""
+        display_country = _cand or "(unspecified)"
         plan.notes.append(
             f"Victim located outside the US ({display_country}). Filing "
             "channels are country-specific; this report's generic "

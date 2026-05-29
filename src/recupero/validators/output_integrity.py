@@ -110,6 +110,447 @@ class Violation:
     file: str | None = None  # Relative path within case_dir, when applicable.
 
 
+# v0.32.1 test-public semantic invariants G/H/I. Signatures:
+#   check_invariant_g(case_dir, brief)
+#   check_invariant_h(brief)
+#   check_invariant_i(case_dir, brief)
+#
+# Each returns a list[Violation]. These are wired into
+# validate_case_output's checks_run list under their canonical
+# identifiers (``invariant_g_chain_of_custody`` etc).
+
+
+def check_invariant_g(
+    case_dir: Path | str | None,
+    brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT G — Chain-of-custody completeness.
+
+    Every brief-cited DESTINATIONS[].address must be reachable from
+    the seed (VICTIM_WALLET_FULL) via the brief's
+    ``trace_evidence.transactions`` list (or the
+    ``trace_evidence.json`` file on disk under ``case_dir``).
+    """
+    if brief is None:
+        return []
+    destinations: list[dict] = []
+    raw_dests = brief.get("DESTINATIONS")
+    if isinstance(raw_dests, list):
+        for d in raw_dests:
+            if isinstance(d, dict) and d.get("address"):
+                destinations.append(d)
+
+    if not destinations:
+        return []
+
+    # Pull transactions from embedded trace_evidence OR from disk. Track
+    # whether a trace-evidence SOURCE was provided at all — that
+    # distinction drives the empty-evidence severity below.
+    transactions: list[dict] = []
+    evidence_source_present = False
+    embedded = brief.get("trace_evidence")
+    if isinstance(embedded, dict):
+        evidence_source_present = True
+        txs = embedded.get("transactions")
+        if isinstance(txs, list):
+            transactions = [t for t in txs if isinstance(t, dict)]
+    if not transactions and case_dir is not None:
+        try:
+            p = Path(case_dir) / "trace_evidence.json"
+            if p.is_file():
+                evidence_source_present = True
+                data = json.loads(p.read_text(encoding="utf-8"))
+                txs = data.get("transactions") if isinstance(data, dict) else None
+                if isinstance(txs, list):
+                    transactions = [t for t in txs if isinstance(t, dict)]
+        except (OSError, json.JSONDecodeError, ValueError):
+            transactions = []
+
+    # v0.32.1: empty transaction set — two very different cases:
+    #   * A trace_evidence SOURCE was provided but carries ZERO
+    #     transactions while the brief still claims destinations. That is
+    #     a fabrication signal (the brief ships "evidence" supporting
+    #     nothing) → CRITICAL.
+    #   * No trace-evidence source at all (no embedded block AND no
+    #     trace_evidence.json on disk). Reachability simply cannot be
+    #     verified — absence of evidence is not evidence of fabrication →
+    #     WARNING. (Production deliverables don't yet persist a separate
+    #     trace_evidence.json; see Phase-5 "ship the transaction graph".)
+    if not transactions:
+        if evidence_source_present:
+            return [Violation(
+                check="invariant_g_chain_of_custody", severity="critical",
+                detail=(
+                    "Brief claims destinations but the trace_evidence it "
+                    "provides contains zero transactions — the chain of "
+                    "custody is unsupported by any underlying transfer."
+                ),
+            )]
+        return [Violation(
+            check="invariant_g_chain_of_custody", severity="warning",
+            detail=(
+                "No trace transaction evidence available (no embedded "
+                "trace_evidence and no trace_evidence.json on disk); "
+                "chain-of-custody reachability could not be verified."
+            ),
+        )]
+
+    seed_raw = brief.get("VICTIM_WALLET_FULL") or brief.get("seed_address")
+    if not seed_raw:
+        # No seed → every destination is unsupported by construction.
+        return [Violation(
+            check="invariant_g_chain_of_custody", severity="critical",
+            detail=(
+                "Brief claims destinations but provides no seed address "
+                "(VICTIM_WALLET_FULL). Chain-of-custody is unverifiable."
+            ),
+        )]
+    seed = str(seed_raw).lower()
+
+    # Build adjacency map. Each tx: from_address → to_address.
+    graph: dict[str, set[str]] = {}
+    for tx in transactions:
+        f = (tx.get("from_address") or "").lower()
+        t = (tx.get("to_address") or "").lower()
+        if not f or not t:
+            continue
+        graph.setdefault(f, set()).add(t)
+
+    # BFS from seed.
+    reachable: set[str] = {seed}
+    frontier: list[str] = [seed]
+    while frontier:
+        cur = frontier.pop(0)
+        for nxt in graph.get(cur, ()):
+            if nxt not in reachable:
+                reachable.add(nxt)
+                frontier.append(nxt)
+
+    violations: list[Violation] = []
+    for d in destinations:
+        addr = str(d.get("address") or "").lower()
+        if not addr:
+            continue
+        if addr not in reachable:
+            violations.append(Violation(
+                check="invariant_g_chain_of_custody", severity="critical",
+                detail=(
+                    f"Brief claims destination {addr} but it is not "
+                    f"reachable from the seed via the trace transactions."
+                ),
+            ))
+    return violations
+
+
+def check_invariant_h(brief: dict | None) -> list[Violation]:
+    """INVARIANT H — Confidence calibration.
+
+    Two rules:
+      * If RECOVERY_RATE.wilson_lower < 0.05 AND there is at least one
+        DESTINATIONS entry with confidence=='high', emit a WARNING
+        (per-lead high-conf claim disagrees with aggregate base rate).
+      * Every high-confidence destination MUST cite ≥ 2 distinct
+        independent evidence sources. Evidence_sources can be a list
+        of strings (treated as raw types) or list of {"type": ...}
+        dicts; duplicates by type count as ONE.
+    """
+    if brief is None:
+        return []
+    violations: list[Violation] = []
+    rec_rate = brief.get("RECOVERY_RATE") or {}
+    wilson_lower = None
+    if isinstance(rec_rate, dict):
+        try:
+            wilson_lower = float(rec_rate.get("wilson_lower"))
+        except (TypeError, ValueError):
+            wilson_lower = None
+
+    destinations = brief.get("DESTINATIONS") or []
+    high_conf: list[dict] = [
+        d for d in destinations
+        if isinstance(d, dict)
+        and str(d.get("confidence", "")).lower() == "high"
+    ]
+
+    if wilson_lower is not None and wilson_lower < 0.05 and high_conf:
+        violations.append(Violation(
+            check="invariant_h_confidence_calibration", severity="warning",
+            detail=(
+                f"Aggregate Wilson lower bound is {wilson_lower:.1%} (<5%) but "
+                f"{len(high_conf)} high-confidence destination(s) cited. "
+                "Per-lead claims may overstate aggregate base rate."
+            ),
+        ))
+
+    for d in high_conf:
+        sources = d.get("evidence_sources")
+        unique_types: set[str] = set()
+        if isinstance(sources, list):
+            for s in sources:
+                if isinstance(s, str) and s.strip():
+                    unique_types.add(s.strip())
+                elif isinstance(s, dict):
+                    t = s.get("type")
+                    if isinstance(t, str) and t.strip():
+                        unique_types.add(t.strip())
+        n = len(unique_types)
+        if n < 2:
+            addr = d.get("address") or "?"
+            violations.append(Violation(
+                check="invariant_h_confidence_calibration", severity="critical",
+                detail=(
+                    f"High-confidence destination {addr} cites only {n} "
+                    f"independent evidence source(s); requires >= 2."
+                ),
+            ))
+    return violations
+
+
+def check_invariant_i(
+    case_dir: Path | str | None,
+    brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT I — Cross-document consistency.
+
+    Compare the brief against the freeze_request_*.html and
+    le_handoff_*.html files in ``case_dir/briefs/``. Mismatches in
+    CASE_ID, victim name, total USD ($100 tol), addresses, incident
+    date, or exchange name fire a critical.
+    """
+    if brief is None or case_dir is None:
+        return []
+    case_path = Path(case_dir)
+    briefs_dir = case_path / "briefs"
+    if not briefs_dir.is_dir():
+        return []
+
+    htmls: list[tuple[str, str]] = []  # (filename, content)
+    for p in sorted(briefs_dir.glob("freeze_request_*.html")):
+        try:
+            htmls.append((p.name, p.read_text(encoding="utf-8")))
+        except OSError:
+            pass
+    for p in sorted(briefs_dir.glob("le_handoff_*.html")):
+        try:
+            htmls.append((p.name, p.read_text(encoding="utf-8")))
+        except OSError:
+            pass
+    if not htmls:
+        return []
+
+    violations: list[Violation] = []
+    case_id = str(brief.get("CASE_ID") or "").strip()
+    victim_name = (
+        str(brief.get("VICTIM_NAME")
+            or (brief.get("victim") or {}).get("name") or "")
+        .strip()
+    )
+    incident_date = str(brief.get("INCIDENT_DATE") or "").strip()
+    incident_ts = str(brief.get("INCIDENT_TIMESTAMP_UTC") or "").strip()
+    total_usd_raw = brief.get("TOTAL_LOSS_USD") or brief.get("TOTAL_FREEZABLE_USD")
+    total_usd = _parse_usd_string(total_usd_raw)
+    # Collect every address the brief references.
+    brief_addrs: set[str] = set()
+    for d in brief.get("DESTINATIONS", []) or []:
+        if isinstance(d, dict):
+            a = d.get("address")
+            if isinstance(a, str):
+                brief_addrs.add(a.lower())
+    for f in brief.get("FREEZABLE", []) or []:
+        if isinstance(f, dict):
+            for h in f.get("holdings", []) or []:
+                if isinstance(h, dict):
+                    a = h.get("address")
+                    if isinstance(a, str):
+                        brief_addrs.add(a.lower())
+    seed = str(brief.get("VICTIM_WALLET_FULL") or "").lower()
+    if seed:
+        brief_addrs.add(seed)
+    # Exchanges claimed in the brief.
+    brief_exchanges: set[str] = set()
+    for e in brief.get("EXCHANGES", []) or []:
+        if isinstance(e, dict):
+            n = e.get("name")
+            if isinstance(n, str) and n.strip():
+                brief_exchanges.add(n.strip().lower())
+    for f in brief.get("FREEZABLE", []) or []:
+        if isinstance(f, dict):
+            iss = f.get("issuer")
+            if isinstance(iss, str) and iss.strip():
+                brief_exchanges.add(iss.strip().lower())
+
+    # Per-issuer FREEZABLE subtotal, keyed by the normalized issuer slug
+    # used in the freeze_request_<slug>_*.html filenames. A per-issuer
+    # freeze REQUEST totals only that issuer's freezable holdings — NOT
+    # the case grand total — so its dollar figure must reconcile against
+    # this subtotal, not against brief.TOTAL_LOSS_USD. (Comparing every
+    # per-issuer letter to the $3.6M grand total produced 4 false-positive
+    # CRITICALs on the V-CFI01 fixture.)
+    per_issuer_total_by_slug: dict[str, Decimal] = {}
+    for f in brief.get("FREEZABLE", []) or []:
+        if not isinstance(f, dict):
+            continue
+        iss = f.get("issuer")
+        if not (isinstance(iss, str) and iss.strip()):
+            continue
+        sub = _parse_usd_string(f.get("total_usd"))
+        if sub <= 0:
+            # Fall back to summing the issuer's FREEZABLE holdings.
+            sub = Decimal(0)
+            for h in f.get("holdings", []) or []:
+                if isinstance(h, dict):
+                    sub += _parse_usd_string(
+                        h.get("usd_value") or h.get("usd")
+                        or h.get("amount_usd") or h.get("total_usd")
+                    )
+        if sub > 0:
+            per_issuer_total_by_slug[_normalize_issuer_key(iss)] = sub
+
+    for fname, content in htmls:
+        lower = content.lower()
+        # CASE_ID
+        if case_id and case_id not in content:
+            violations.append(Violation(
+                check="invariant_i_cross_document_consistency",
+                severity="critical", file=fname,
+                detail=(
+                    f"document does not cite brief case_id {case_id!r}"
+                ),
+            ))
+        is_freeze_request = fname.startswith("freeze_request_")
+        # Victim name — required only on LE-handoff documents. A freeze
+        # REQUEST is addressed to the token issuer ABOUT the perpetrator;
+        # it deliberately minimizes victim PII (the victim's name is not
+        # operationally needed by the issuer's compliance team and is a
+        # privacy liability if it leaks). Requiring victim-name citation
+        # on issuer freeze requests is therefore wrong — scope it to the
+        # LE handoff, which IS the victim-attributed evidentiary package.
+        if victim_name and not is_freeze_request and victim_name.lower() not in lower:
+            violations.append(Violation(
+                check="invariant_i_cross_document_consistency",
+                severity="critical", file=fname,
+                detail=f"document does not cite victim name {victim_name!r}",
+            ))
+        # Total USD ($100 tolerance). A per-issuer freeze REQUEST totals
+        # only that issuer's FREEZABLE holdings, so reconcile it against
+        # the per-issuer subtotal (resolved by filename slug) rather than
+        # the case grand total. LE handoffs carry the grand total and are
+        # checked against brief.TOTAL_LOSS_USD.
+        expected_total = total_usd
+        if is_freeze_request:
+            slug = _extract_issuer_slug(fname, prefix="freeze_request")
+            per_issuer = (
+                per_issuer_total_by_slug.get(slug or "")
+                if slug else None
+            )
+            # Prefer the per-issuer freezable subtotal; only when the
+            # brief carries no resolvable per-issuer total do we fall
+            # back to the case grand total (legacy behavior).
+            expected_total = per_issuer if per_issuer else total_usd
+        if expected_total > 0:
+            doc_totals = _extract_dollar_amounts(content)
+            ok = any(
+                abs(amount - expected_total) <= Decimal("100")
+                for amount in doc_totals
+            )
+            if not ok:
+                formatted = f"${expected_total:,.2f}"
+                # If the freeze request carries no machine-readable total
+                # we can compare, that's a WARNING (missing data), not a
+                # CRITICAL contradiction.
+                severity = (
+                    "warning"
+                    if (is_freeze_request and not doc_totals)
+                    else "critical"
+                )
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity=severity, file=fname,
+                    detail=(
+                        f"document total usd does not match expected "
+                        f"{formatted} within $100 tolerance"
+                    ),
+                ))
+        # Addresses — at least one brief address must appear.
+        if brief_addrs:
+            found_any = any(a in lower for a in brief_addrs)
+            if not found_any:
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity="critical", file=fname,
+                    detail=(
+                        "document does not cite any subject address from "
+                        "the brief"
+                    ),
+                ))
+        # Incident date — either the long-form or ISO date string.
+        if incident_date or incident_ts:
+            d_long = incident_date.lower() if incident_date else None
+            d_iso10 = incident_ts[:10] if incident_ts else None
+            ok = (
+                (d_long is not None and d_long in lower)
+                or (d_iso10 is not None and d_iso10 in content)
+            )
+            if not ok:
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity="critical", file=fname,
+                    detail=(
+                        f"document does not cite the brief incident date "
+                        f"{incident_date or incident_ts!r}"
+                    ),
+                ))
+        # Exchange / issuer slug taken from the filename must match a brief
+        # exchange/issuer.
+        slug = ""
+        if fname.startswith("freeze_request_"):
+            rest = fname[len("freeze_request_"):]
+            slug = rest.split("_", 1)[0]
+        elif fname.startswith("le_handoff_"):
+            rest = fname[len("le_handoff_"):]
+            slug = rest.split("_", 1)[0]
+        slug = slug.lower()
+        if slug and brief_exchanges:
+            slug_compact = slug.replace("_", "")
+            matched = any(
+                slug_compact in e.replace(" ", "").replace("-", "").lower()
+                or e.replace(" ", "").replace("-", "").lower() in slug_compact
+                for e in brief_exchanges
+            )
+            if not matched:
+                violations.append(Violation(
+                    check="invariant_i_cross_document_consistency",
+                    severity="critical", file=fname,
+                    detail=(
+                        f"document exchange/issuer slug {slug!r} does not "
+                        f"match any brief exchange: {sorted(brief_exchanges)}"
+                    ),
+                ))
+    return violations
+
+
+# v0.32.1 (output-audit HIGH, false-negative): also match the bank-
+# statement "USD 3,600,000.00" form, not just "$3,600,000.00". The
+# issuer_freeze_request template renders the theft headline as
+# `USD {{ ... }}`; with a $-only regex the cross-document USD reconciler
+# (invariant_i) never parsed that figure, so a freeze-request total could
+# silently diverge from the brief total and NO invariant fired. The
+# `\bUSD\s+` branch requires a word boundary + whitespace so it does not
+# false-match the USDC / USDT token symbols (e.g. "USDC 1,000").
+_DOLLAR_RE = re.compile(r"(?:\$\s*|\bUSD\s+)([0-9][0-9,]*(?:\.[0-9]+)?)")
+
+
+def _extract_dollar_amounts(text: str) -> list[Decimal]:
+    out: list[Decimal] = []
+    for m in _DOLLAR_RE.finditer(text):
+        try:
+            v = Decimal(m.group(1).replace(",", ""))
+            out.append(v)
+        except (InvalidOperation, ValueError):
+            continue
+    return out
+
+
 @dataclass
 class ValidationResult:
     """Aggregate result. ``ok`` is True iff there are zero
@@ -225,7 +666,9 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
              briefs_dir, freeze_brief,
          )),
         ("no_unrendered_jinja_placeholders",
-         lambda: _check_no_unrendered_jinja_placeholders(briefs_dir)),
+         lambda: _check_no_unrendered_jinja_placeholders(
+             briefs_dir, case_dir / "legal_requests",
+         )),
         ("unrecoverable_addresses_not_in_freezable",
          lambda: _check_unrecoverable_not_in_freezable(
              briefs_dir, freeze_brief,
@@ -383,6 +826,14 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_subpoena_targets_extraction_succeeded(
              freeze_brief,
          )),
+        # v0.32.1 (#209): an INFERRED CEX deposit-address attribution
+        # (sweep-pattern, source "inferred:…") is a subpoena LEAD, never
+        # proof — its confidence MUST be low/medium, never high. Mirrors
+        # the cex_continuity confidence guardrail.
+        ("subpoena_inferred_attribution_confidence",
+         lambda: _check_inferred_attribution_confidence(
+             freeze_brief,
+         )),
         # v0.31.4 (Gap-audit): output-integrity invariants for the
         # v0.31.x brief sections (MEV_SIGNALS, INDIRECT_EXPOSURE_V031,
         # WALLET_CLUSTERS, CEX_CONTINUITY_LEADS, decoded cross-chain
@@ -429,6 +880,16 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_review_gate_approvals_present(
              briefs_dir, freeze_brief,
          )),
+        # v0.32.1 — three semantic invariants the audit referenced by
+        # letter (G / H / I). Each is a self-contained check; wired into
+        # checks_run so callers can confirm the new validations executed
+        # (test_dispatcher_runs_all_invariants_including_g_h_i).
+        ("invariant_g_chain_of_custody",
+         lambda: check_invariant_g(case_dir, freeze_brief)),
+        ("invariant_h_confidence_calibration",
+         lambda: check_invariant_h(freeze_brief)),
+        ("invariant_i_cross_document_consistency",
+         lambda: check_invariant_i(case_dir, freeze_brief)),
     ]
     for name, fn in checks:
         result.checks_run.append(name)
@@ -441,6 +902,263 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
                 detail=f"check itself crashed: {type(exc).__name__}: {exc}",
             )]
         result.violations.extend(violations)
+
+    # v0.32.1 test-public re-exports — the test scaffolding imports the
+    # semantic invariants directly from output_integrity for symmetry
+    # with the existing A-F checks. Keep these in sync with the
+    # dispatcher block immediately below.
+    # NB: the import target is the public semantic module; failures to
+    # import here are swallowed because the runtime path below does the
+    # actual wiring inside a try-block.
+
+    # v0.32.1 JACOB_VALIDATOR_AUDIT_v032 — run semantic invariants G–P
+    # AFTER the structural checks. The structural module catches "wrong
+    # bytes written" at ~90%; the semantic module catches "bytes that
+    # look fine but disagree with each other or with the trace data".
+    # Failures here are isolated (one crash does not break the rest).
+    try:
+        from recupero.validators.semantic_integrity import (
+            run_semantic_invariants,
+        )
+        # Best-effort load of the case-level artifacts the semantic
+        # checks consume. Missing inputs degrade individual checks to
+        # no-ops rather than crashing the validator.
+        #
+        # CC3 fix: production manifests live under
+        # ``briefs/manifest_BRIEF-<case>-<hash>.json`` (per-issuer
+        # brief manifests) and/or ``briefs/manifest_case_<case>.json``
+        # (case-level rollup). Try those first; fall back to the
+        # legacy ``case_dir/manifest.json`` for older callers.
+        manifest: dict[str, Any] | None = None
+        if briefs_dir.is_dir():
+            for pattern in ("manifest_case_*.json", "manifest_BRIEF-*.json",
+                            "manifest_*.json"):
+                for p in sorted(briefs_dir.glob(pattern)):
+                    candidate = _safe_load_json(p)
+                    if candidate:
+                        manifest = candidate
+                        break
+                if manifest:
+                    break
+        if manifest is None:
+            manifest = _safe_load_json(case_dir / "manifest.json")
+        # Fall back to the brief itself so M/N can still pull incident
+        # time from INCIDENT_TIMESTAMP_UTC.
+        if manifest is None:
+            manifest = freeze_brief
+
+        trace_evidence = _safe_load_json(case_dir / "trace_evidence.json")
+        recovery_disclosure = _safe_load_json(case_dir / "recovery_disclosure.json")
+        brief = freeze_brief
+
+        # CC2 fix part 1: freeze_letters. ``freeze_asks.json`` is a
+        # dict (``{"by_issuer": {...}}``) in production, not a list.
+        # Normalize into a list of freeze-letter-shaped dicts so the
+        # invariants can iterate. Each issuer becomes one synthetic
+        # freeze-letter entry whose ``freeze_asks`` is the issuer's
+        # list of holdings.
+        freeze_letters: list[dict] | None = None
+        if isinstance(freeze_asks, list):
+            freeze_letters = [fl for fl in freeze_asks if isinstance(fl, dict)]
+        elif isinstance(freeze_asks, dict):
+            # A freeze LETTER is only shipped for an issuer that actually
+            # has freeze authority. freeze_asks.json carries EVERY issuer
+            # (including freeze_capability='no' issuers like Sky Protocol /
+            # DAI, which are routed to UNRECOVERABLE and never receive a
+            # letter). Synthesizing a "Sky Protocol freeze letter" from
+            # those rows made INVARIANT K flag a (DAI, perp-hub) tuple the
+            # brief correctly omits from FREEZABLE. Filter non-freezable
+            # asks out so the synthetic letter set matches what production
+            # actually ships.
+            from recupero._common import capability_blocks_freeze
+
+            def _freezable_asks(asks: list) -> list[dict]:
+                out: list[dict] = []
+                for a in asks:
+                    if not isinstance(a, dict):
+                        continue
+                    if capability_blocks_freeze(a.get("freeze_capability")):
+                        continue
+                    out.append(a)
+                return out
+
+            normalized: list[dict] = []
+            by_issuer = freeze_asks.get("by_issuer") or freeze_asks.get("freeze_asks")
+            if isinstance(by_issuer, dict):
+                for issuer, asks in by_issuer.items():
+                    if isinstance(asks, list):
+                        freezable_asks = _freezable_asks(asks)
+                        if freezable_asks:
+                            normalized.append({
+                                "issuer": issuer,
+                                "freeze_asks": freezable_asks,
+                            })
+            else:
+                # Top-level keys may be the issuer names directly.
+                for k, v in freeze_asks.items():
+                    if isinstance(v, list):
+                        freezable_asks = _freezable_asks(v)
+                        if freezable_asks:
+                            normalized.append({
+                                "issuer": k, "freeze_asks": freezable_asks,
+                            })
+            # An optional explicit list under "letters" wins.
+            letters = freeze_asks.get("letters")
+            if isinstance(letters, list):
+                normalized = [fl for fl in letters if isinstance(fl, dict)]
+            if normalized:
+                freeze_letters = normalized
+
+        # CC2 fix part 2: le_handoff. Look for a sidecar JSON or, when
+        # only the rendered HTML exists, surface an empty dict so the
+        # cross-doc check still picks up case_id / victim_name keys
+        # from the HTML-stripped prose downstream. Multiple LE handoffs
+        # ship per case (one per issuer); we pass the first dict-shaped
+        # sidecar that exists.
+        le_handoff: dict | None = None
+        if briefs_dir.is_dir():
+            for p in sorted(briefs_dir.glob("le_handoff_*.json")):
+                candidate = _safe_load_json(p)
+                if candidate:
+                    le_handoff = candidate
+                    break
+
+        # Gather rendered HTML files for the explorer-link check.
+        artifact_html_files: dict[str, str] = {}
+        if briefs_dir.is_dir():
+            for p in briefs_dir.glob("*.html"):
+                try:
+                    artifact_html_files[p.name] = _safe_read(p)
+                except Exception:  # noqa: BLE001
+                    continue
+
+        # CC2 fix part 3: prose_text. Concatenate every AI-editorial
+        # field surfaced in the brief, plus any paragraph text we can
+        # cheaply extract from the rendered HTML files. Used by
+        # INVARIANT O to detect hallucinated addresses / USD figures
+        # / chain names in narrative copy.
+        prose_parts: list[str] = []
+        if isinstance(brief, dict):
+            for k in (
+                "INCIDENT_NARRATIVE_RECUPERO",
+                "INCIDENT_NARRATIVE_FIRST_PERSON",
+                "VICTIM_SUMMARY",
+                "incident_narrative",
+                "incident_narrative_first_person",
+                "victim_summary",
+                "narrative",
+                "summary",
+                "AI_EDITORIAL",
+            ):
+                v = brief.get(k)
+                if isinstance(v, str) and v.strip():
+                    prose_parts.append(v)
+                elif isinstance(v, list):
+                    prose_parts.extend(x for x in v if isinstance(x, str))
+        # HTML <p> bodies — best-effort tag strip.
+        _p_re = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+        _tag_re = re.compile(r"<[^>]+>")
+        for fname, html in artifact_html_files.items():
+            # Limit to narrative-bearing artifacts to avoid scraping
+            # boilerplate from every rendered file.
+            if not (fname.startswith("le_handoff_")
+                    or fname.startswith("trace_report_")
+                    or fname.startswith("victim_summary_")
+                    or fname.startswith("engagement_letter_")
+                    or fname.startswith("freeze_request_")):
+                continue
+            for pm in _p_re.finditer(html):
+                txt = _tag_re.sub("", pm.group(1)).strip()
+                if txt:
+                    prose_parts.append(txt)
+        prose_text: str | None = "\n\n".join(prose_parts) if prose_parts else None
+
+        # v0.32.1 RC-8: ground multi-chain consolidation hops from
+        # ``briefs/investigator_findings.json``. Genuine multi-chain cases
+        # (e.g. Ethereum theft → DeBridge DLN → Arbitrum consolidation) carry
+        # the destination chain only in the per-row ``chain`` field of the
+        # persisted findings, NOT in PRIMARY_CHAIN or (when trace_evidence.json
+        # is absent) any structured brief row. INVARIANT O then false-positives
+        # on correct editorial prose that names the consolidation chain.
+        #
+        # Inject the findings' distinct chains into ``brief["chains"]`` — the
+        # only key ``_structured_chains`` reads as a free list and (verified)
+        # the only consumer of that key across all invariants, so the merge is
+        # scoped purely to chain grounding. We deliberately do NOT feed findings
+        # rows into trace_evidence transactions: they are address/counterparty
+        # rows, not verified from→to edges, so using them for reachability
+        # (INVARIANT G) would be unsound — G stays a warning absent a real
+        # trace_evidence.json. We also leave the address-grounding set alone:
+        # the only brief keys ``_structured_addrs`` reads (IDENTIFIED_WALLETS et
+        # al.) are shared by ~6 other invariants, so injecting synthetic rows
+        # there could perturb checks the audit did not ask us to touch.
+        if isinstance(brief, dict):
+            try:
+                f_chains: set[str] = set()
+                # Source 1: persisted investigator_findings.json. Each
+                # actionable finding row carries a ``chain`` field.
+                findings_doc = _safe_load_json(
+                    briefs_dir / "investigator_findings.json"
+                )
+                findings = (findings_doc or {}).get("findings")
+                if isinstance(findings, list):
+                    for row in findings:
+                        if isinstance(row, dict):
+                            c = row.get("chain")
+                            if isinstance(c, str) and c.strip():
+                                f_chains.add(c.strip())
+                # Source 2: the brief's own CROSS_CHAIN_HANDOFFS. Each entry
+                # is a VERIFIED bridge transfer the tracer recorded; its
+                # source_chain and any resolved destination chain(s) are
+                # legitimately grounded data the editorial may cite. (For
+                # handoffs whose destination chain was decoded from bridge
+                # calldata, that lands in decoded_destination_chain /
+                # destination_chain_candidates.)
+                for h in brief.get("CROSS_CHAIN_HANDOFFS") or []:
+                    if not isinstance(h, dict):
+                        continue
+                    for key in ("source_chain", "decoded_destination_chain",
+                                "destination_chain"):
+                        c = h.get(key)
+                        if isinstance(c, str) and c.strip():
+                            f_chains.add(c.strip())
+                    cands = h.get("destination_chain_candidates")
+                    if isinstance(cands, list):
+                        for c in cands:
+                            if isinstance(c, str) and c.strip():
+                                f_chains.add(c.strip())
+                if f_chains:
+                    existing = brief.get("chains")
+                    existing_set = (
+                        {str(x) for x in existing}
+                        if isinstance(existing, list) else set()
+                    )
+                    brief["chains"] = sorted(existing_set | f_chains)
+            except Exception:  # noqa: BLE001
+                # Artifacts absent/malformed for this case — grounding from
+                # findings / handoffs is best-effort; skip silently.
+                pass
+
+        semantic_violations = run_semantic_invariants(
+            brief=brief,
+            freeze_letters=freeze_letters,
+            le_handoff=le_handoff,
+            trace_evidence=trace_evidence,
+            manifest=manifest,
+            recovery_disclosure=recovery_disclosure,
+            artifact_html_files=artifact_html_files,
+            prose_text=prose_text,
+        )
+        result.checks_run.append("semantic_invariants_g_through_p")
+        result.violations.extend(semantic_violations)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("semantic_invariants dispatch crashed: %s", exc)
+        result.violations.append(Violation(
+            check="semantic_invariants_g_through_p",
+            severity="warning",
+            detail=f"dispatch crashed: {type(exc).__name__}: {exc}",
+        ))
+
     return result
 
 
@@ -1143,34 +1861,55 @@ _JINJA_BLOCK_RE = re.compile(r"\{%[^%]+%\}")
 
 
 def _check_no_unrendered_jinja_placeholders(
-    briefs_dir: Path,
+    *dirs: Path,
 ) -> list[Violation]:
-    if not briefs_dir.is_dir():
-        return []
+    """Scan every ``*.html`` under each given dir for Jinja markup that
+    survived rendering — ``{{ ... }}`` vars or ``{% ... %}`` blocks. Their
+    presence means a template failed to render (a leaked variable name in
+    an LE-facing document) and is a high-severity output-integrity defect.
+
+    v0.32.1 (forensic-audit, output-MED): also scans the ``legal_requests/``
+    subdir, not just ``briefs/``. Subpoena / 314(b) / MLAT drafts land in
+    ``cases/<id>/legal_requests/`` and were previously unscanned, so a
+    template bug there could ship an unrendered ``{{ courthouse }}`` to an
+    attorney. NOTE: this check is deliberately for *Jinja* markup only — it
+    does NOT flag the intentional bracketed attorney fill-in placeholders
+    those drafts carry (judicial district, courthouse address, return date,
+    etc.), which are by-design blanks recupero cannot populate and which
+    render via a Jinja ``|default(...)`` fallback string (i.e. they are
+    plain rendered text, NOT unrendered ``{{ }}``)."""
     violations: list[Violation] = []
-    for path in sorted(briefs_dir.glob("*.html")):
-        text = _safe_read(path)
-        var_matches = _JINJA_VAR_RE.findall(text)
-        block_matches = _JINJA_BLOCK_RE.findall(text)
-        if var_matches:
-            violations.append(Violation(
-                check="no_unrendered_jinja_placeholders",
-                severity="high", file=path.name,
-                detail=(
-                    f"{len(var_matches)} unrendered Jinja "
-                    f"{{ {{ ... }} }} placeholders. First: "
-                    f"{var_matches[0][:120]!r}"
-                ),
-            ))
-        if block_matches:
-            violations.append(Violation(
-                check="no_unrendered_jinja_placeholders",
-                severity="high", file=path.name,
-                detail=(
-                    f"{len(block_matches)} unrendered Jinja "
-                    "{% ... %} blocks (template didn't render)."
-                ),
-            ))
+    seen: set[Path] = set()
+    for d in dirs:
+        if not d.is_dir():
+            continue
+        for path in sorted(d.glob("*.html")):
+            rp = path.resolve()
+            if rp in seen:
+                continue
+            seen.add(rp)
+            text = _safe_read(path)
+            var_matches = _JINJA_VAR_RE.findall(text)
+            block_matches = _JINJA_BLOCK_RE.findall(text)
+            if var_matches:
+                violations.append(Violation(
+                    check="no_unrendered_jinja_placeholders",
+                    severity="high", file=path.name,
+                    detail=(
+                        f"{len(var_matches)} unrendered Jinja "
+                        f"{{ {{ ... }} }} placeholders. First: "
+                        f"{var_matches[0][:120]!r}"
+                    ),
+                ))
+            if block_matches:
+                violations.append(Violation(
+                    check="no_unrendered_jinja_placeholders",
+                    severity="high", file=path.name,
+                    detail=(
+                        f"{len(block_matches)} unrendered Jinja "
+                        "{% ... %} blocks (template didn't render)."
+                    ),
+                ))
     return violations
 
 
@@ -2880,6 +3619,60 @@ def _check_perpetrator_holdings_reconcile(
 _SUBPOENA_USD_THRESHOLD = Decimal("1000")
 
 
+def _check_inferred_attribution_confidence(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """v0.32.1 (#209): an INFERRED CEX deposit-address attribution is a
+    LEAD for the subpoena, never proof of ownership.
+
+    Any SUBPOENA_TARGETS linked_address produced by the sweep-pattern
+    attribution pass (role "inferred CEX deposit address ...", or carrying
+    an ``attribution_confidence`` key) MUST be ``"low"`` or ``"medium"`` —
+    never ``"high"``. Only a label-DB hit is ``"high"``, and those
+    addresses don't carry an ``attribution_confidence``. Mirrors the
+    cex_continuity confidence guardrail.
+
+    Severity: HIGH — a "high"-confidence inferred attribution would
+    misrepresent a behavioral correlation as a confirmed identity in a
+    legal subpoena, the cardinal forensic error this codebase forbids.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    targets = freeze_brief.get("SUBPOENA_TARGETS") or []
+    if not isinstance(targets, list):
+        return []
+    violations: list[Violation] = []
+    for t in targets:
+        if not isinstance(t, dict):
+            continue
+        for la in t.get("linked_addresses") or []:
+            if not isinstance(la, dict):
+                continue
+            role = la.get("role") or ""
+            ac = la.get("attribution_confidence")
+            is_inferred = (
+                ac is not None
+                or (isinstance(role, str) and "inferred" in role.lower())
+            )
+            if not is_inferred:
+                continue
+            if ac not in ("low", "medium"):
+                violations.append(Violation(
+                    check="subpoena_inferred_attribution_confidence",
+                    severity="high",
+                    detail=(
+                        f"SUBPOENA_TARGETS entry {t.get('target_id')!r} linked "
+                        f"address {la.get('address')!r} is an INFERRED CEX "
+                        f"deposit attribution with confidence {ac!r} — inferred "
+                        f"attributions are leads, not proof, and must be "
+                        f"'low'/'medium' (only label-DB hits are 'high'). A "
+                        f"'high' here would misrepresent a correlation as a "
+                        f"confirmed identity in a legal subpoena."
+                    ),
+                ))
+    return violations
+
+
 def _check_subpoena_targets_cover_non_freezable(
     freeze_brief: dict | None,
 ) -> list[Violation]:
@@ -3097,7 +3890,7 @@ def _check_subpoena_targets_depends_on_resolves(
     # (target-1 → target-1 ancestor includes target-1). Multi-node
     # cycles caught on the back-edge.
     WHITE, GRAY, BLACK = 0, 1, 2
-    color: dict[str, int] = {tid: WHITE for tid in known_ids}
+    color: dict[str, int] = dict.fromkeys(known_ids, WHITE)
     cycles_reported: set[tuple[str, ...]] = set()
 
     def _dfs_cycle(start: str, path: list[str]) -> None:
@@ -4064,12 +4857,21 @@ def _check_cex_continuity_leads_framed(
                 ),
             ))
 
+        # Forensic-integrity invariant: CEX-continuity leads are
+        # CORRELATIONS, not causations, so confidence MUST be "low" —
+        # ALWAYS. The cross-token / cross-chain (HIGH-10) matcher widens
+        # which outflows qualify as candidates, but the confidence label
+        # never escalates above "low" (the lead_only + framing fields
+        # carry the "never publish as confirmed destination" contract,
+        # and the confidence label must not contradict them). Anything
+        # other than "low" (including high/medium/empty/missing) is a
+        # violation.
         if lead.get("confidence") != "low":
             violations.append(Violation(
                 check="cex_continuity_leads_framed", severity="high",
                 detail=(
                     f"CEX_CONTINUITY_LEADS[{idx}].confidence must be "
-                    f"'low' (got {lead.get('confidence')!r})"
+                    f"\"low\" (got {lead.get('confidence')!r})"
                 ),
             ))
 

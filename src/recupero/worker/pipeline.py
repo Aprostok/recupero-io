@@ -803,6 +803,19 @@ def _stage_list_freeze_targets(
                     "primary_contact": a.issuer.primary_contact,
                     "freeze_capability": a.issuer.freeze_capability,
                     "explorer_url": a.explorer_url,
+                    # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2 / CRIT-FR-4):
+                    # surface the corporate legal name + freeze posture notes
+                    # all the way from the seed DB through freeze_asks.json
+                    # into the per-issuer freeze letter context. These end up
+                    # in the FREEZABLE issuer dict (see _extract_freezable)
+                    # and then in IssuerInfo, where the template can render
+                    # the corporate legal-entity name in the "Addressed To"
+                    # cover-meta row and quote the issuer-specific posture
+                    # note in the new Section 6 (Freeze Posture).
+                    "legal_name": a.issuer.legal_name,
+                    "corporate_jurisdiction": a.issuer.corporate_jurisdiction,
+                    "freeze_notes": a.issuer.freeze_notes,
+                    "jurisdiction": a.issuer.jurisdiction,
                     # AI editorial + freeze-letter templates branch on
                     # evidence_type to choose between "freeze NOW" and
                     # "investigate" framing per-row.
@@ -1043,6 +1056,33 @@ def _synthesize_freeze_brief_from_asks(
                 "portal_url": "",
                 "typical_response_time": "Variable",
                 "freeze_note": "",
+                # v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2 / CRIT-FR-4):
+                # mirror the main emit_brief path so the synthesizer path
+                # also carries legal-entity name + posture notes through
+                # to the FREEZABLE list. Pull-through from the first entry
+                # carrying the field. Pre-v0.32.1 a skip_editorial run
+                # silently dropped these and the freeze letter rendered
+                # bare "Tether" / "Circle" again.
+                "legal_name": (
+                    e.get("legal_name")
+                    if isinstance(e.get("legal_name"), str)
+                    and e.get("legal_name").strip() else None
+                ),
+                "corporate_jurisdiction": (
+                    e.get("corporate_jurisdiction")
+                    if isinstance(e.get("corporate_jurisdiction"), str)
+                    and e.get("corporate_jurisdiction").strip() else None
+                ),
+                "freeze_notes": (
+                    e.get("freeze_notes")
+                    if isinstance(e.get("freeze_notes"), str)
+                    and e.get("freeze_notes").strip() else None
+                ),
+                "issuer_jurisdiction": (
+                    e.get("jurisdiction")
+                    if isinstance(e.get("jurisdiction"), str)
+                    and e.get("jurisdiction").strip() else None
+                ),
             })
             # Status policy (mirrors emit_brief._extract_freezable):
             #   * capability=no/low                 → UNRECOVERABLE

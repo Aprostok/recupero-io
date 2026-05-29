@@ -90,6 +90,68 @@ class TestModels:
                 explorer_url="https://etherscan.io/tx/0xabc",
             )
 
+    def test_amount_decimal_rejects_negative_and_nonfinite(self) -> None:
+        """`amount_decimal` is what the pipeline does arithmetic on; a
+        negative or NaN/Inf value would silently corrupt loss totals.
+        The model must reject both at construction."""
+        for bad in (Decimal("-1"), Decimal("NaN"), Decimal("Infinity"),
+                    Decimal("-Infinity")):
+            with pytest.raises(ValueError):
+                Transfer(
+                    transfer_id="ethereum:0xabc:0",
+                    chain=Chain.ethereum,
+                    tx_hash="0xabc",
+                    block_number=1,
+                    block_time=_now(),
+                    log_index=None,
+                    from_address="0xa",
+                    to_address="0xb",
+                    counterparty=Counterparty(address="0xb"),
+                    token=_eth_token(),
+                    amount_raw="1000000",
+                    amount_decimal=bad,
+                    fetched_at=_now(),
+                    explorer_url="https://etherscan.io/tx/0xabc",
+                )
+
+    def test_usd_value_rejects_negative_and_nonfinite_but_allows_none(self) -> None:
+        """`usd_value_at_tx` is optional (None passes), but a present value
+        must be finite and non-negative — a poisoned price feed must not
+        enter the Decimal column the recovery math sums over."""
+        # None is allowed.
+        t = _transfer()
+        assert t.usd_value_at_tx == Decimal("3000.00")
+        for bad in (Decimal("-0.01"), Decimal("NaN"), Decimal("Infinity")):
+            with pytest.raises(ValueError):
+                Transfer(
+                    transfer_id="ethereum:0xabc:0",
+                    chain=Chain.ethereum,
+                    tx_hash="0xabc",
+                    block_number=1,
+                    block_time=_now(),
+                    log_index=None,
+                    from_address="0xa",
+                    to_address="0xb",
+                    counterparty=Counterparty(address="0xb"),
+                    token=_eth_token(),
+                    amount_raw="1000000",
+                    amount_decimal=Decimal("1.0"),
+                    usd_value_at_tx=bad,
+                    fetched_at=_now(),
+                    explorer_url="https://etherscan.io/tx/0xabc",
+                )
+
+    def test_token_decimals_rejects_negative(self) -> None:
+        """`TokenRef.decimals` is the exponent in amount = raw/10**decimals;
+        a negative value (malformed RPC/label response) would inflate every
+        derived USD figure. The model must reject it at the boundary."""
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            TokenRef(chain=Chain.ethereum, symbol="EVIL", decimals=-1)
+        # Sanity: a normal value still constructs.
+        ok = TokenRef(chain=Chain.ethereum, symbol="USDC", decimals=6)
+        assert ok.decimals == 6
+
     def test_extra_fields_forbidden(self) -> None:
         from pydantic import ValidationError
         with pytest.raises(ValidationError):

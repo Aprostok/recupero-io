@@ -21,8 +21,10 @@ from eth_utils import to_checksum_address
 from recupero import __version__
 from recupero.chains.base import ChainAdapter
 from recupero.config import RecuperoConfig, RecuperoEnv
-from recupero.labels.store import LabelStore
-from recupero.labels.store import lookup_pit_safe  # v0.31.4
+from recupero.labels.store import (
+    LabelStore,
+    lookup_pit_safe,  # v0.31.4
+)
 from recupero.models import (
     Address,
     Case,
@@ -134,6 +136,24 @@ def run_trace(
         incident_time = incident_time.replace(tzinfo=UTC)
     seed_address = _normalize_address(chain, seed_address)
 
+    # v0.32.1 (forensic-audit CRIT): reset the process-lifetime Bitcoin
+    # co-spend input registry + synthetic-CoinJoin registry at the START
+    # of every case. These are module-level globals populated during a
+    # trace; a worker that processes case B after case A in the SAME
+    # process would otherwise inherit case A's BTC input sets, causing
+    # the H1 common-input clustering heuristic to FALSE-MERGE addresses
+    # across unrelated victims — and making two sequential in-process
+    # runs differ from a clean-process run (nondeterminism). The clears
+    # are cheap no-ops for non-Bitcoin cases.
+    from recupero.chains.bitcoin.adapter import (
+        clear_synthetic_coinjoin_registry as _clear_btc_coinjoin,
+    )
+    from recupero.chains.bitcoin.inputs_registry import (
+        clear_for_case as _clear_btc_inputs,
+    )
+    _clear_btc_inputs()
+    _clear_btc_coinjoin()
+
     # v0.32 — per-case API budget. One CaseBudget per case, propagated
     # to every chain + pricing client. When the cap trips, BFS catches
     # the BudgetExceededError, marks the case partial_budget_hit, and
@@ -152,23 +172,113 @@ def run_trace(
 
     # v0.31.0 — env-var overrides for the two BFS knobs operators most
     # often want to tune per-case. Both fall back to the config-yaml
-    # defaults (TraceParams.max_depth=2, dust_threshold_usd=10) so the
+    # defaults (TraceParams.max_depth=4, dust_threshold_usd=10) so the
     # behavior is unchanged when the env vars are absent.
     #   * RECUPERO_TRACE_MAX_HOPS — bump for deep-laundering cases
-    #     (Zigha-shape paths can run 4-6 hops via consolidation hubs).
+    #     (Zigha-shape paths can run 4-6 hops via consolidation hubs;
+    #     APT-style chains can reach 30-50 hops). v0.32.1+ "industry-best
+    #     mode": hard ceiling raised to 64 so we can reach destinations
+    #     Reactor caps at ~12. Operators on quota-constrained API plans
+    #     can lower RECUPERO_TRACE_MAX_HOPS_HARD_CEILING to match their
+    #     funded API budget.
     #   * RECUPERO_TRACE_DUST_USD — lower for sub-cent dust-attack
     #     studies, raise for whale-volume cases where $10 noise gets
     #     too much attention.
-    # Both are clamped to safe ranges: max_hops ∈ [1, 8], dust ∈ [0, 1e6].
+    # Both are clamped to safe ranges: max_hops ∈ [1, HARD_CEILING]
+    # (default 64), dust ∈ [0, 1e6].
     cfg_max_depth = config.trace.max_depth
+    # v0.32.1+ "industry-best mode": the hard ceiling was 8 hops, which
+    # is below what real laundering operators use (Lazarus / DPRK routes
+    # typically span 10-20 hops; complex APT routes can hit 50+). The
+    # ceiling is now operator-controllable via
+    # ``RECUPERO_TRACE_MAX_HOPS_HARD_CEILING`` (default 64) so a $50M
+    # case can drive a deep trace without artificial truncation. The
+    # config default still pins the BFS to a sensible 6-hop start; ops
+    # bump RECUPERO_TRACE_MAX_HOPS per case.
+    try:
+        hard_ceiling = int(
+            os.environ.get("RECUPERO_TRACE_MAX_HOPS_HARD_CEILING", "64")
+        )
+    except (TypeError, ValueError):
+        hard_ceiling = 64
+    hard_ceiling = max(1, hard_ceiling)
     try:
         env_max_hops = int(os.environ.get("RECUPERO_TRACE_MAX_HOPS", str(cfg_max_depth)))
-        cfg_max_depth = max(1, min(8, env_max_hops))
+        cfg_max_depth = max(1, min(hard_ceiling, env_max_hops))
     except (TypeError, ValueError):
         log.warning(
             "RECUPERO_TRACE_MAX_HOPS=%r is not an int; falling back to config (%d)",
             os.environ.get("RECUPERO_TRACE_MAX_HOPS"), config.trace.max_depth,
         )
+
+    # v0.32.1 W4 (round-2 CRIT-NEW-2 wire-up): adaptive depth. Pre-W4
+    # this was dead-code; tracer.py clamped to ``min(8, env_max_hops)``
+    # regardless of case severity. With adaptive_depth wired, a $50M
+    # theft case is allowed to descend to depth 12 (severity bump +
+    # budget headroom), while a $50K case stays shallow. Falls back to
+    # the env+config-driven ceiling on any error — never break the
+    # trace over a depth-policy module.
+    if os.environ.get("RECUPERO_ADAPTIVE_DEPTH", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    ):
+        try:
+            from recupero.trace.adaptive_depth import compute_max_depth
+            budget_snap = case_budget.snapshot() if case_budget else {}
+            # v0.32.1 (Phase-2 fix): read the CORRECT snapshot key. The
+            # snapshot exposes ``remaining_usd`` (a stringified Decimal, or
+            # the literal "unbounded" when budget tracking is DISABLED — the
+            # industry-best default). The pre-fix code read a non-existent
+            # ``budget_remaining_usd`` key, so it ALWAYS got 0.0 → the
+            # adaptive pass treated every case as budget-starved and the
+            # severity bumps never applied. Map unbounded / missing /
+            # tracking-disabled → None so compute_max_depth takes its
+            # DEEPEST (unbounded) path; a real enabled remaining is parsed.
+            _rem_raw = budget_snap.get("remaining_usd")
+            budget_remaining: float | None
+            if (
+                _rem_raw is None
+                or _rem_raw == "unbounded"
+                or not budget_snap.get("enabled", False)
+            ):
+                budget_remaining = None  # unbounded → deepest
+            else:
+                try:
+                    budget_remaining = float(_rem_raw)
+                except (TypeError, ValueError):
+                    budget_remaining = None
+            case_meta: dict[str, Any] = {}
+            # The Case model doesn't carry theft_amount_usd until after
+            # trace completes (operator inputs it on intake, scrapers
+            # surface it). Best-effort: read from config_used if the
+            # caller populated it, or from env override.
+            theft_env = os.environ.get("RECUPERO_CASE_THEFT_USD")
+            if theft_env is not None:
+                try:
+                    case_meta["theft_amount_usd"] = float(theft_env)
+                except (TypeError, ValueError):
+                    pass
+            adaptive = compute_max_depth(
+                case_metadata=case_meta or None,
+                api_budget_remaining_usd=budget_remaining,
+            )
+            # Use the adaptive value as the ceiling unless the operator
+            # has explicitly capped it lower via the env var. v0.32.1+
+            # industry-best mode: adaptive_depth's HARD_CEILING is 64
+            # so deep-laundering chains can be followed. The hard
+            # ceiling here matches the RECUPERO_TRACE_MAX_HOPS_HARD_CEILING
+            # env override so operators can lower the cap if needed.
+            cfg_max_depth = max(1, min(hard_ceiling, adaptive, cfg_max_depth)) if (
+                "RECUPERO_TRACE_MAX_HOPS" in os.environ
+            ) else max(1, min(hard_ceiling, adaptive))
+            log.info(
+                "adaptive depth: case_meta=%s budget=$%s → max_depth=%d",
+                case_meta, budget_remaining, cfg_max_depth,
+            )
+        except Exception as exc:  # noqa: BLE001 — never break trace
+            log.debug(
+                "adaptive_depth compute failed (%s); falling back to %d",
+                exc, cfg_max_depth,
+            )
 
     cfg_dust = config.trace.dust_threshold_usd
     try:
@@ -272,6 +382,13 @@ def run_trace(
     # case. See _address_visited_key for why this matters.
     visited: set[str] = {_address_visited_key(chain, seed_address)}  # includes queued-but-not-yet-processed
     is_contract_cache: dict[str, bool] = {}
+    # v0.32.1 W8 (round-2 wire-up): per-case contract_detection cache.
+    # Keyed by ``f"{chain}:{address.lower()}"`` (see
+    # contract_detection._cache_key). Distinct from is_contract_cache
+    # (which uses chain-aware dest_key) so contract_detection.is_contract
+    # can manage its own retry + non-cache-on-failure invariant without
+    # interfering with the legacy cache shape.
+    _contract_check_cache: dict[str, bool] = {}
     current_wave: list[tuple[Address, int]] = [(seed_address, 0)]
     addresses_processed = 0
     wave_number = 0
@@ -376,10 +493,45 @@ def run_trace(
                 # Contract check: one RPC per unique address, cached.
                 # Done here (single-threaded between waves) so we don't
                 # need to lock is_contract_cache.
+                #
+                # v0.32.1 W8 (round-2 wire-up): route through
+                # ``contract_detection.is_contract`` so transient RPC
+                # failures don't poison the cache as "is_contract=True"
+                # forever. Pre-W8 a single rate-limit hit on the
+                # is_contract probe would make BFS skip that address
+                # permanently for the rest of the worker's lifetime.
+                # The contract_detection helper:
+                #   * retries once on Exception (transient),
+                #   * returns (None, reason) on twice-failed RPC and
+                #     leaves the cache UNTOUCHED — letting later passes
+                #     re-resolve cleanly,
+                #   * caches verified True/False with a chain-aware key.
+                # We mirror into the legacy ``is_contract_cache`` (keyed
+                # by dest_key) so other code paths that read it
+                # (continuation pass, tracer:1157) keep working.
                 if policy.stop_at_contract:
                     if dest_key not in is_contract_cache:
                         try:
-                            is_contract_cache[dest_key] = adapter.is_contract(dest)
+                            from recupero.trace.contract_detection import (
+                                is_contract as _is_contract_safe,
+                            )
+                            result_bool, _reason = _is_contract_safe(
+                                dest, chain.value, adapter, _contract_check_cache,
+                            )
+                            if result_bool is None:
+                                # RPC failed twice; fall back to the
+                                # conservative "assume contract" gate to
+                                # avoid expanding into an unverifiable
+                                # destination. NB: we DO NOT cache None
+                                # so a later pass can re-resolve.
+                                log.debug(
+                                    "is_contract uncertain for %s (%s); "
+                                    "treating as contract for this hop",
+                                    dest, _reason,
+                                )
+                                is_contract_cache[dest_key] = True
+                            else:
+                                is_contract_cache[dest_key] = result_bool
                         except Exception as e:  # noqa: BLE001
                             log.debug("is_contract check failed for %s: %s", dest, e)
                             # Be conservative: if we can't check, assume contract (skip)
@@ -506,6 +658,38 @@ def run_trace(
             "api_budget": case_budget.snapshot(),
         }
     finally:
+        # v0.32.1 W7 (round-2 CRIT-NEW-1 wire-up): pre-fetch drainer
+        # contract outflows BEFORE the adapter closes. Stores the
+        # resulting findings on case.config_used["drainer_findings_w7"]
+        # so emit_brief can consume them. Best-effort: any failure
+        # here logs and continues — the brief still gets a chance to
+        # run drainer detection at render time (without the W7
+        # prefetch path).
+        if os.environ.get("RECUPERO_DRAINER_W7_PREFETCH", "1").strip().lower() in (
+            "1", "true", "yes", "on",
+        ):
+            try:
+                from recupero.trace.drainer_detection import detect_drainer_pattern
+                # Lazy-load high_risk_db; many cases don't trip signal-1
+                # and the W7 path is signal-2-only.
+                _w7_findings = detect_drainer_pattern(
+                    case, high_risk_db=None, adapter=adapter,
+                )
+                # Surface a tiny snapshot on config_used so emit_brief can
+                # detect that prefetch ran. The full findings object is
+                # rebuilt at brief time from case.transfers + the now-cached
+                # contract outflows that prefetch wrote into the adapter's
+                # internal caches (where present).
+                case.config_used = {
+                    **(case.config_used or {}),
+                    "drainer_w7_prefetch": {
+                        "ran": True,
+                        "events_found": len(_w7_findings.events),
+                        "signals_found": len(_w7_findings.signals),
+                    },
+                }
+            except Exception as exc:  # noqa: BLE001 — never break trace cleanup
+                log.debug("drainer W7 prefetch failed: %s", exc)
         try:
             price_client.close()
         except Exception:  # noqa: BLE001
@@ -844,6 +1028,20 @@ def _continue_past_dex_and_bridges(
             # continuation leaked one or more httpx clients per
             # investigation — FD exhaustion over hours of operation.
             try:
+                # v0.32.1 JACOB_TRACE_AUDIT_v032 CRIT-3 close-out: use the
+                # earliest bridge-handoff time INTO this destination chain
+                # as the per-dst-chain incident anchor. Previously we
+                # passed the source-chain incident_time which caused
+                # _process_wave to apply incident_buffer_minutes WINDOW
+                # before the SRC theft (a window that excludes legitimate
+                # post-bridge outflows once the bridge takes more than a
+                # few hours to settle). Falling back to source incident
+                # time only if the dst_chain has no entry (defensive —
+                # shouldn't happen because by_chain population is from
+                # the same loop).
+                dst_anchor_time = earliest_src_time_by_chain.get(
+                    dst_chain, incident_time,
+                )
                 try:
                     xchain_results = _process_wave(
                         dst_seeds,
@@ -851,7 +1049,7 @@ def _continue_past_dex_and_bridges(
                         label_store=label_store,
                         price_client=price_client,
                         policy=policy,
-                        incident_time=incident_time,
+                        incident_time=dst_anchor_time,
                         config=config,
                         evidence_dir=evidence_dir,
                         concurrency=trace_concurrency,
@@ -1012,7 +1210,24 @@ def _trace_one_hop(
     # the configured ceiling. ``max_transfers_per_address <= 0``
     # disables the cap — pass None so adapters walk to the natural
     # end of pagination.
+    #
+    # v0.32.1+ industry-best mode: env var
+    # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` overrides the config value
+    # per-case. Set to 0 to disable the cap entirely (the BFS still
+    # terminates on max_depth + deadline + per-case transfer-cap gates).
+    # Default config moved from 500 → 50000 so whale-wallet activity
+    # histories are followed in full.
     _cap = config.trace.max_transfers_per_address
+    _env_cap_raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    if _env_cap_raw is not None:
+        try:
+            _cap = int(_env_cap_raw)
+        except (TypeError, ValueError):
+            log.warning(
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=%r is not an int; "
+                "falling back to config (%d)",
+                _env_cap_raw, config.trace.max_transfers_per_address,
+            )
     fetch_cap: int | None
     if _cap and _cap > 0:
         fetch_cap = int(_cap * 1.5)
@@ -1060,13 +1275,15 @@ def _trace_one_hop(
             policy.service_wallet_outflow_threshold,
         )
 
-    # Cap to avoid runaway on chatty addresses
-    if len(raw_outflows) > config.trace.max_transfers_per_address:
+    # Cap to avoid runaway on chatty addresses. ``_cap`` honors the
+    # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` env-var override resolved
+    # above; ``_cap <= 0`` disables the slice (industry-best mode).
+    if _cap and _cap > 0 and len(raw_outflows) > _cap:
         log.warning(
             "capping outflows from %d to %d for address %s",
-            len(raw_outflows), config.trace.max_transfers_per_address, from_address,
+            len(raw_outflows), _cap, from_address,
         )
-        raw_outflows = raw_outflows[: config.trace.max_transfers_per_address]
+        raw_outflows = raw_outflows[:_cap]
 
     transfers: list[Transfer] = []
     for raw in raw_outflows:
@@ -1177,7 +1394,18 @@ def _build_transfer(raw: dict, *, hop_depth: int, parent_transfer_id: str | None
     log_idx = raw.get("log_index")
     transfer_id = f"{raw['chain'].value}:{raw['tx_hash']}:{log_idx if log_idx is not None else 0}"
     amount_raw_int = raw["amount_raw"]
-    decimals = raw["token"].decimals
+    # v0.32.1 (chain-audit cycle-2): clamp the decimals exponent at this
+    # COMMON sink for every chain adapter. token.decimals is sourced from
+    # attacker-influenceable RPC / explorer responses; an unclamped huge
+    # value makes 10**decimals build a multi-gigabyte integer before this
+    # divide, DoS-ing the BFS hop (OverflowError / unbounded memory). Real
+    # tokens never exceed ~24 decimals; u8 (255) is the on-chain ceiling.
+    # Adapters also clamp at their own boundary — this is the backstop so
+    # no single adapter (or a future one) can blow up the tracer.
+    try:
+        decimals = max(0, min(int(raw["token"].decimals), 255))
+    except (TypeError, ValueError):
+        decimals = 0
     amount_decimal = Decimal(amount_raw_int) / Decimal(10**decimals)
 
     # Placeholder counterparty — replaced after labeling
@@ -1264,11 +1492,23 @@ def _compute_exchange_endpoints(transfers: list[Transfer]) -> list[ExchangeEndpo
 
 
 def _collect_unlabeled(transfers: list[Transfer]) -> list[Address]:
+    # v0.32.1 (forensic-audit LOW): dedup on the CANONICAL address key,
+    # not the raw string. EIP-55 checksum case is a UI convention — the
+    # same EVM address can arrive both checksummed and lower-cased across
+    # transfers, and a raw-string set would then list it TWICE in the
+    # brief's unlabeled-counterparty list. canonical_address_key lower-
+    # cases EVM and preserves case-sensitive base58 (Solana/Tron/BTC), so
+    # this collapses casing variants without corrupting non-EVM addresses.
+    # The first-seen RAW address is preserved in the output for display.
+    from recupero._common import canonical_address_key as _ck
     seen: set[str] = set()
     out: list[Address] = []
     for t in transfers:
-        if t.counterparty.label is None and t.to_address not in seen:
-            seen.add(t.to_address)
+        if t.counterparty.label is not None:
+            continue
+        key = _ck(t.to_address) or t.to_address
+        if key not in seen:
+            seen.add(key)
             out.append(t.to_address)
     return out
 
@@ -1342,10 +1582,15 @@ def _apply_dust_attack_filter(case: Case) -> None:
     # when the filter is off (which is the default).
     from recupero.trace.dust_attack import identify_dust_attack_destinations
 
+    # v0.32.1 W1 (round-2 adversary M-5 wire-up): pass case_id so the
+    # min_fanout threshold is per-case randomized under HMAC. Without
+    # the case_id the function falls back to the fixed default (BC for
+    # tests + ad-hoc analysis scripts).
     flagged = identify_dust_attack_destinations(
         case.transfers,
         dust_threshold_usd=threshold_usd,
         min_fanout=min_fanout,
+        case_id=case.case_id,
     )
     if not flagged:
         return

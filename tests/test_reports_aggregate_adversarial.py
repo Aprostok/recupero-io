@@ -33,14 +33,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from decimal import Decimal
 
-import pytest
-
 from recupero.models import Case, Chain, Counterparty, TokenRef, Transfer
 from recupero.reports.aggregate import (
     aggregate_stolen,
     format_aggregate_markdown,
 )
-
 
 # ---- fixtures ----
 

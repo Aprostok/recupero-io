@@ -372,65 +372,111 @@ def _fetch_eligible(
     Backward-compat: if the ``priority`` column doesn't exist yet
     (migration not applied), the query falls back to the legacy
     single-tier behavior — every active row uses ``min_interval_sec``.
+
+    Concurrency (v0.32.1 forensic-audit, worker-resilience): this is an
+    ATOMIC CLAIM, not a plain SELECT. Pre-fix the function ran a bare
+    SELECT and ``last_snapshot_at`` was only advanced at the very end
+    (in ``_persist_and_diff``, after the chain API call). watch-tick runs
+    as an UNLEASED Railway cron — exactly like monitor_tick — so when one
+    tick runs long (a big watchlist) and the cron fires again, OR two
+    worker instances overlap, BOTH ticks selected the same eligible rows
+    and BOTH burned an Etherscan/Helius call + wrote a duplicate snapshot
+    row (and a spurious ~0 "material change" diff against the sibling's
+    fresh row). Same race monitor_tick closed in PUNISH-B / RIGOR-1.
+
+    The fix mirrors monitor_tick's claim: a single ``UPDATE ... FROM
+    (SELECT ... FOR UPDATE SKIP LOCKED LIMIT) ... RETURNING`` advances
+    ``last_snapshot_at = NOW()`` (the claim mark) atomically as it selects.
+    Under ``autocommit=True`` the UPDATE commits immediately, so a second
+    concurrent tick's cooldown filter (``last_snapshot_at < NOW() -
+    interval``) now excludes the just-claimed rows — no double work.
+
+    Trade-off (accepted, documented): the cooldown interval IS the claim
+    TTL. If a tick crashes between claim and snapshot, that row waits one
+    cooldown cycle (1h hot / 12h standard) before re-attempt rather than
+    being retried on the very next tick. For periodic balance snapshots
+    (not one-shot critical actions) a one-cycle freshness delay on the
+    rare mid-tick crash is acceptable — and strictly better than the
+    guaranteed double-work the bare SELECT caused on every cron overlap.
     """
     if hot_interval_sec is None:
         hot_interval_sec = _env_int(
             _ENV_HOT_INTERVAL_SEC, _DEFAULT_HOT_INTERVAL_SEC,
         )
 
-    sql_with_priority = """
-        SELECT id, address, chain, role, label_category, label_name,
-               is_freezeable, issuer, asset_symbol, asset_contract,
-               last_snapshot_at, priority
-          FROM public.watchlist
-         WHERE status = 'active'
-           AND priority IN ('standard', 'hot')
-           AND (last_snapshot_at IS NULL
-                OR last_snapshot_at < NOW() - (
-                    CASE priority
-                      WHEN 'hot' THEN make_interval(secs => %s)
-                      ELSE             make_interval(secs => %s)
-                    END
-                ))
-         ORDER BY
-           CASE priority WHEN 'hot' THEN 0 ELSE 1 END,
-           last_balance_usd DESC NULLS LAST, flagged_at ASC
+    # Treat None and 0 as "no limit" so the CLI flag can default
+    # safely to 0 without silently capping everything. The LIMIT lives
+    # INSIDE the FOR-UPDATE-SKIP-LOCKED subquery (so we lock+claim at
+    # most ``use_limit`` rows) and is ALWAYS present as a literal
+    # ``LIMIT %s`` — Postgres treats ``LIMIT NULL`` as "no limit", so
+    # binding ``use_limit=None`` is the unbounded case. Keeping it a
+    # literal (not an f-string interpolation) keeps the statement a pure
+    # string constant for the inline-SQL audit; only the bound %s
+    # parameter ever carries the value.
+    use_limit = limit if (limit is not None and limit > 0) else None
+
+    claim_sql_with_priority = """
+        UPDATE public.watchlist w
+           SET last_snapshot_at = NOW()
+          FROM (
+            SELECT id
+              FROM public.watchlist
+             WHERE status = 'active'
+               AND priority IN ('standard', 'hot')
+               AND (last_snapshot_at IS NULL
+                    OR last_snapshot_at < NOW() - (
+                        CASE priority
+                          WHEN 'hot' THEN make_interval(secs => %s)
+                          ELSE             make_interval(secs => %s)
+                        END
+                    ))
+             ORDER BY
+               CASE priority WHEN 'hot' THEN 0 ELSE 1 END,
+               last_balance_usd DESC NULLS LAST, flagged_at ASC
+             LIMIT %s
+             FOR UPDATE SKIP LOCKED
+          ) c
+         WHERE w.id = c.id
+        RETURNING w.id, w.address, w.chain, w.role, w.label_category,
+                  w.label_name, w.is_freezeable, w.issuer, w.asset_symbol,
+                  w.asset_contract, w.last_snapshot_at, w.priority
     """
-    sql_legacy = """
-        SELECT id, address, chain, role, label_category, label_name,
-               is_freezeable, issuer, asset_symbol, asset_contract,
-               last_snapshot_at
-          FROM public.watchlist
-         WHERE status = 'active'
-           AND (last_snapshot_at IS NULL
-                OR last_snapshot_at < NOW() - make_interval(secs => %s))
-         ORDER BY last_balance_usd DESC NULLS LAST, flagged_at ASC
+    claim_sql_legacy = """
+        UPDATE public.watchlist w
+           SET last_snapshot_at = NOW()
+          FROM (
+            SELECT id
+              FROM public.watchlist
+             WHERE status = 'active'
+               AND (last_snapshot_at IS NULL
+                    OR last_snapshot_at < NOW() - make_interval(secs => %s))
+             ORDER BY last_balance_usd DESC NULLS LAST, flagged_at ASC
+             LIMIT %s
+             FOR UPDATE SKIP LOCKED
+          ) c
+         WHERE w.id = c.id
+        RETURNING w.id, w.address, w.chain, w.role, w.label_category,
+                  w.label_name, w.is_freezeable, w.issuer, w.asset_symbol,
+                  w.asset_contract, w.last_snapshot_at
     """
 
-    # Treat None and 0 as "no limit" so the CLI flag can default
-    # safely to 0 without silently capping everything.
-    use_limit = limit if (limit is not None and limit > 0) else None
+    pri_params: tuple[Any, ...] = (hot_interval_sec, min_interval_sec, use_limit)
+    legacy_params: tuple[Any, ...] = (min_interval_sec, use_limit)
+
     pooled_dsn = _pooled_dsn(dsn)
     with db_connect(pooled_dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
-        sql, params = sql_with_priority, (hot_interval_sec, min_interval_sec)
         try:
-            if use_limit is not None:
-                cur.execute(sql + " LIMIT %s", (*params, use_limit))
-            else:
-                cur.execute(sql, params)
+            cur.execute(claim_sql_with_priority, pri_params)
         except psycopg.errors.UndefinedColumn:
             # Migration 004 not applied — fall back to single-tier.
+            # db_connect runs autocommit=True, so the failed UPDATE did
+            # not open a poisoned transaction; a fresh cursor is clean.
             log.warning(
                 "watchlist.priority column missing — fallback to "
                 "single-tier cooldown (apply migration 004 to enable hot tier)"
             )
-            # Need a fresh transaction since the prior errored.
             with conn.cursor() as cur2:
-                if use_limit is not None:
-                    cur2.execute(sql_legacy + " LIMIT %s",
-                                 (min_interval_sec, use_limit))
-                else:
-                    cur2.execute(sql_legacy, (min_interval_sec,))
+                cur2.execute(claim_sql_legacy, legacy_params)
                 return list(cur2.fetchall())
         return list(cur.fetchall())
 

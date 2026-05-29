@@ -33,7 +33,6 @@ from recupero.worker._email import (
     send_email,
 )
 
-
 # ---- _sanitize_email_header: pure-function attack matrix ---- #
 
 

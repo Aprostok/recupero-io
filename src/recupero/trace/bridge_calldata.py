@@ -547,6 +547,82 @@ def decode_bridge_calldata(
         return _decode_ccip(method_id, args_blob, data)
     if "multichain" in proto_lc or "anyswap" in proto_lc:
         return _decode_multichain(method_id, args_blob, data)
+    # v0.32.1 JACOB_ADVERSARY_AUDIT_v032 M-6 close-out: rollup-canonical
+    # bridges. Pre-v0.32.1 these were labeled in bridges.json (so the BFS
+    # halted at the bridge) but no destination was extracted, leaving
+    # the operator with "destination candidates: polygon" and no
+    # actionable address. The adversary audit's Route 1 ($5M Polygon
+    # PoS escape) succeeded entirely through this gap. New decoders for:
+    #   * Polygon PoS RootChainManager (depositFor / depositEtherFor)
+    #   * Optimism L1StandardBridge (depositERC20{To}, depositETH{To})
+    #   * Arbitrum Inbox / L1ERC20Gateway (outboundTransfer{,CustomRefund},
+    #     depositEth)
+    #   * zkSync Era L1ERC20Bridge (deposit)
+    #   * Base L1StandardBridge (OP-Stack ABI; same selectors as Optimism)
+    # Use a space-normalized variant for the rollup-canonical matches —
+    # bridges.json names use spaces ("L1 Standard Bridge"); our internal
+    # convention is lowercased-no-spaces. Match against both.
+    proto_compact = proto_lc.replace(" ", "").replace("-", "").replace(":", "")
+    if "polygon" in proto_compact and (
+        "pos" in proto_compact
+        or "rootchainmanager" in proto_compact
+        or "erc20predicate" in proto_compact
+    ):
+        return _decode_polygon_pos(method_id, args_blob, data)
+    if "optimism" in proto_compact and (
+        "l1standardbridge" in proto_compact
+        or "l2standardbridge" in proto_compact
+    ):
+        return _decode_optimism_l1(method_id, args_blob, data)
+    if "arbitrum" in proto_compact and (
+        "inbox" in proto_compact
+        or "gateway" in proto_compact
+    ):
+        return _decode_arbitrum_l1(method_id, args_blob, data)
+    if "zksync" in proto_compact and (
+        "bridge" in proto_compact or "era" in proto_compact
+    ):
+        return _decode_zksync_l1(method_id, args_blob, data)
+    if "base" in proto_compact and (
+        "l1standardbridge" in proto_compact
+        or "l2standardbridge" in proto_compact
+    ):
+        return _decode_base_l1(method_id, args_blob, data)
+    # v0.32.1 W5 (round-2 adversary Route 1' close-out): 7 additional
+    # rollup-canonical L2 bridges. Polygon zkEVM reuses the Polygon-PoS
+    # depositFor / depositEtherFor calldata shape. The remaining six
+    # (Linea, Scroll, Blast, opBNB, Mantle, Manta Pacific) all reuse
+    # the OP-Stack L1StandardBridge ABI (Linea + Scroll expose a
+    # depositERC20-shaped surface that is calldata-compatible; Blast,
+    # opBNB, Mantle, Manta are direct OP-Stack derivatives). The chain
+    # override is applied here so the BridgeDecodeResult carries the
+    # correct destination_chain regardless of which OP-Stack decoder
+    # produces it.
+    if "polygon" in proto_compact and (
+        "zkevm" in proto_compact or "polygonzkevm" in proto_compact
+    ):
+        result = _decode_polygon_pos(method_id, args_blob, data)
+        if result is not None:
+            return BridgeDecodeResult(
+                destination_chain="polygon_zkevm",
+                destination_address=result.destination_address,
+                bridge_method=result.bridge_method,
+                confidence=result.confidence,
+                raw_calldata_excerpt=result.raw_calldata_excerpt,
+            )
+        return None
+    if "linea" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "linea")
+    if "scroll" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "scroll")
+    if "blast" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "blast")
+    if "opbnb" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "opbnb")
+    if "mantle" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "mantle")
+    if "manta" in proto_compact and "pacific" in proto_compact:
+        return _decode_op_stack_l1(method_id, args_blob, data, "manta")
     return None
 
 
@@ -599,40 +675,73 @@ def _decode_wormhole(
         # For EVM destinations: right-padded address (last 40 hex)
         # For Solana: full 32-byte pubkey → base58
         # For Tron: 21-byte payload (prefix 0x41 + 20 address bytes) → base58check
+        # Decode the recipient by the destination chain's address shape.
+        # Each branch sets dest_address ONLY when the blob validates for
+        # that chain; an ill-fitting blob leaves it None so the result
+        # drops to "medium" (chain known, address untrusted) rather than
+        # fabricating a confident-but-wrong destination.
+        dest_address: str | None = None
         if dest_chain == "solana":
-            # v0.17.5 (round-10 forensic CRIT): pre-v0.17.5 we surfaced
-            # the raw "0x" + 64-hex form of the 32-byte pubkey, but
-            # Solana's RPC and the Helius client both require base58
-            # — so any cross-chain BFS continuation against the decoded
-            # destination silently failed at the adapter boundary
-            # (returned []). Encode here so the downstream Solana
-            # adapter receives the canonical form.
+            # v0.17.5 (round-10 forensic CRIT): Solana RPC + the Helius
+            # client require base58, so encode the 32-byte pubkey here for
+            # the downstream adapter (pre-v0.17.5 the 0x-hex form silently
+            # dropped every Wormhole→Solana continuation at the adapter).
+            # v0.32.1 (forensic-audit cycle-2): reject blobs that are NOT a
+            # real pubkey before emitting at high confidence. An all-zero
+            # slot is a null recipient; a slot whose leading 12 bytes are
+            # zero is a left-padded 20-byte EVM address mis-routed here, not
+            # a 32-byte Solana pubkey (a uniform-random pubkey has 12 leading
+            # zero bytes with prob ~2^-96). Either would seed a fabricated
+            # Solana destination in the continuation pass.
             try:
                 pubkey_bytes = bytes.fromhex(recipient_hex)
-                dest_address = _b58encode_no_checksum(pubkey_bytes)
             except ValueError:
-                dest_address = None
+                pubkey_bytes = b""
+            if (len(pubkey_bytes) == 32
+                    and pubkey_bytes != bytes(32)
+                    and pubkey_bytes[:12] != bytes(12)):
+                dest_address = _b58encode_no_checksum(pubkey_bytes)
         elif dest_chain == "tron":
-            # v0.17.5 (round-10 forensic CRIT): Wormhole-to-Tron is
-            # rare but legitimate. The bytes32 recipient encodes the
-            # full 21-byte payload (0x41 prefix + 20 address bytes)
-            # right-padded into 32 bytes — last 21 are the payload.
+            # v0.17.5 (round-10 forensic CRIT): Wormhole→Tron encodes the
+            # 21-byte payload (0x41 prefix + 20 addr bytes) right-padded into
+            # the bytes32 — the last 21 bytes are the payload. v0.32.1
+            # (forensic-audit cycle-2): a valid Tron MAINNET payload MUST
+            # start with the 0x41 version byte. A garbage / EVM-shaped
+            # bytes32 still base58check-encodes to a syntactically valid but
+            # WRONG T-address; require 0x41 so we never emit a fabricated
+            # destination at high confidence.
             try:
                 payload = bytes.fromhex(recipient_hex[-42:])
-                # Append checksum and encode.
+            except ValueError:
+                payload = b""
+            if len(payload) == 21 and payload[0] == 0x41:
                 import hashlib as _hl
                 checksum = _hl.sha256(_hl.sha256(payload).digest()).digest()[:4]
                 dest_address = _b58encode_no_checksum(payload + checksum)
-            except ValueError:
-                dest_address = None
+        elif dest_chain is not None:
+            # Known EVM destination: the address is right-aligned in the
+            # bytes32 (last 20 bytes / 40 hex).
+            evm_tail = recipient_hex[24:]
+            if len(evm_tail) == 40:
+                dest_address = "0x" + evm_tail
+
+        # Confidence mirrors the Stargate decoder's calibrated rule:
+        #   high   = chain known AND a trusted address parsed
+        #   medium = chain known XOR raw recipient bytes present (an unknown
+        #            chain still carries the raw recipient bytes32, so it
+        #            stays medium rather than low for manual follow-up)
+        if dest_chain is not None and dest_address is not None:
+            confidence = "high"
+        elif dest_chain is not None or recipient_hex:
+            confidence = "medium"
         else:
-            dest_address = "0x" + recipient_hex[24:]  # last 20 bytes
+            confidence = "low"
 
         return BridgeDecodeResult(
             destination_chain=dest_chain,
-            destination_address=dest_address if dest_chain else None,
+            destination_address=dest_address,
             bridge_method=method_name,
-            confidence="high" if dest_chain else "medium",
+            confidence=confidence,
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:
@@ -806,10 +915,19 @@ def _decode_stargate(
                         if to_data_end <= len(args_blob):
                             to_bytes_hex = args_blob[to_data_start:to_data_end]
                             if to_len == 20:
-                                # EVM address
+                                # 20-byte payload → canonical EVM address.
                                 dest_address = "0x" + to_bytes_hex
                             else:
-                                dest_address = "0x" + to_bytes_hex
+                                # v0.32.1 (forensic-audit MEDIUM): a non-20-byte
+                                # `to` blob is a NON-EVM destination (e.g. a
+                                # 32-byte Solana pubkey or a Tron/other-chain
+                                # address). Rendering it as "0x"+hex fabricated
+                                # a bogus EVM-looking address at high confidence
+                                # that the continuation pass could then seed on
+                                # the wrong chain. Leave dest_address unset so
+                                # the lead drops to lower confidence and surfaces
+                                # for manual follow-up rather than mis-tracing.
+                                dest_address = None
             except (ValueError, IndexError):
                 dest_address = None
 
@@ -1212,11 +1330,20 @@ def _decode_axelar(
         dest_address: str | None = None
         if isinstance(addr_str, str):
             s = addr_str.strip()
-            # EVM 0x-hex address
-            if s.startswith("0x") and len(s) == 42:
-                dest_address = s
-            # Cosmos bech32 — accept verbatim (operator follow-up)
-            elif len(s) > 10 and len(s) < 100:
+            # v0.32.1 (forensic-audit MEDIUM): the original condition
+            #   s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100
+            # parsed as (0x & ==42) OR (10<len<100) — so ANY 11-99-char string
+            # (incl. free text) was accepted as a destination address.
+            # Parenthesize and require the non-EVM branch to be address-shaped
+            # (alphanumeric, allowing bech32/base58 plus '-'/'_'), rejecting
+            # arbitrary prose. Axelar legitimately targets non-EVM chains, so
+            # we keep the second branch — just bounded.
+            is_evm = s.startswith("0x") and len(s) == 42
+            is_nonevm_addr = (
+                10 < len(s) < 100
+                and s.replace("-", "").replace("_", "").replace(":", "").isalnum()
+            )
+            if is_evm or is_nonevm_addr:
                 dest_address = s
 
         confidence = (
@@ -1463,9 +1590,20 @@ def _decode_squid(
         dest_address: str | None = None
         if isinstance(addr_str, str):
             s = addr_str.strip()
-            if s.startswith("0x") and len(s) == 42:
-                dest_address = s
-            elif len(s) > 10 and len(s) < 100:
+            # v0.32.1 (forensic-audit cycle full): same operator-precedence
+            # bug as the Axelar twin (now fixed above) — the original
+            #   s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100
+            # parsed as (0x & ==42) OR (10<len<100), so ANY 11-99-char string
+            # (free text, a memo, a garbage decoded tail) was accepted as a
+            # destination address and surfaced at confidence="high" — a
+            # FABRICATED destination the continuation BFS would then pursue.
+            # Parenthesize + require the non-EVM branch to be address-shaped.
+            is_evm = s.startswith("0x") and len(s) == 42
+            is_nonevm_addr = (
+                10 < len(s) < 100
+                and s.replace("-", "").replace("_", "").replace(":", "").isalnum()
+            )
+            if is_evm or is_nonevm_addr:
                 dest_address = s
 
         confidence = (
@@ -2297,7 +2435,263 @@ def _decode_stargate_v2(
         )
 
 
+# ──────────────────────────────────────────────────────────────────────
+# v0.32.1 — Rollup-canonical bridge decoders
+# Closes Adversary M-6 (the single highest-leverage CRIT in v0.32.0).
+# Pre-v0.32.1 these bridges were labeled but undecoded, so the BFS
+# halted at the bridge address with no actionable destination.
+# ──────────────────────────────────────────────────────────────────────
+
+
+def _extract_addr_slot(args_blob: str, slot_idx: int) -> str | None:
+    """Read a 32-byte slot (slot_idx 0-based) and treat its last 20
+    bytes as an EVM address. Return ``0x…`` lowercase, or ``None`` if
+    out of range or zero address."""
+    start = slot_idx * 64
+    end = start + 64
+    if end > len(args_blob):
+        return None
+    hex_addr = args_blob[start + 24:end]  # last 20 bytes = 40 hex chars
+    if len(hex_addr) != 40 or hex_addr == "0" * 40:
+        return None
+    return "0x" + hex_addr
+
+
+# Polygon PoS RootChainManager — Ethereum L1 side.
+_POLYGON_POS_METHODS = {
+    # depositFor(address user, address rootToken, bytes depositData)
+    "0xe3dec8fb": "depositFor",
+    # depositEtherFor(address user)
+    "0x4faa8a26": "depositEtherFor",
+}
+
+
+def _decode_polygon_pos(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Polygon PoS RootChainManager calldata.
+
+    Destination chain is always 'polygon' for both selectors. The
+    destination address is slot 0 (`user` parameter) in both methods.
+    """
+    method_name = _POLYGON_POS_METHODS.get(method_id)
+    if method_name is None:
+        # Unknown selector under a recognised protocol → dispatcher
+        # contract returns None (caller falls back to the
+        # bridges.json candidate list).
+        return None
+    try:
+        dest_addr = _extract_addr_slot(args_blob, 0)
+        return BridgeDecodeResult(
+            destination_chain="polygon",
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("polygon-pos decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain="polygon", destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+# Optimism L1StandardBridge — Ethereum L1 side. Same ABI as Base.
+_OP_STACK_METHODS = {
+    # depositERC20To(address _l1Token, address _l2Token, address _to,
+    #                uint256 _amount, uint32 _l2Gas, bytes _data)
+    "0x838b2520": ("depositERC20To", 2),    # _to is slot 2
+    # depositETHTo(address _to, uint32 _l2Gas, bytes _data)
+    "0x9a2ac6d5": ("depositETHTo", 0),       # _to is slot 0
+    # depositERC20(address _l1Token, address _l2Token, uint256 _amount,
+    #              uint32 _l2Gas, bytes _data) — recipient = msg.sender,
+    # not in calldata. Return medium confidence with no dest_address.
+    "0x58a997f6": ("depositERC20", None),
+    # depositETH(uint32 _l2Gas, bytes _data) — recipient = msg.sender.
+    "0xb1a1a882": ("depositETH", None),
+    # withdrawTo(address _l2Token, address _to, uint256 _amount,
+    #            uint32 _l1Gas, bytes _data) — L2-side: recipient is on
+    # ethereum (the L1 side). Slot 1 = _to.
+    "0xa3a79548": ("withdrawTo", 1),
+}
+
+
+def _decode_op_stack_l1(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+    dest_chain: str,
+) -> BridgeDecodeResult | None:
+    """Shared OP-Stack L1StandardBridge decoder. Optimism + Base share
+    this ABI (Base is OP Stack). ``dest_chain`` is either 'optimism'
+    or 'base'.
+
+    Special case: ``withdrawTo`` runs on the L2 side; the destination
+    of the funds is the L1 side (ethereum), so the chain is overridden
+    regardless of which OP-Stack the L2 belongs to.
+    """
+    entry = _OP_STACK_METHODS.get(method_id)
+    if entry is None:
+        return BridgeDecodeResult(
+            destination_chain=dest_chain, destination_address=None,
+            bridge_method="unknown", confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    method_name, dest_slot = entry
+    # withdrawTo is an L2-side method — destination is L1 (ethereum).
+    effective_chain = "ethereum" if method_name == "withdrawTo" else dest_chain
+    try:
+        if dest_slot is None:
+            # msg.sender path — we don't have it here. The trace's
+            # transaction-from address will be used by the BFS
+            # continuation logic when destination_address is None.
+            return BridgeDecodeResult(
+                destination_chain=effective_chain, destination_address=None,
+                bridge_method=method_name, confidence="medium",
+                raw_calldata_excerpt=full_data[:400],
+            )
+        dest_addr = _extract_addr_slot(args_blob, dest_slot)
+        return BridgeDecodeResult(
+            destination_chain=effective_chain,
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("%s decode failed: %s", effective_chain, exc)
+        return BridgeDecodeResult(
+            destination_chain=effective_chain, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+def _decode_optimism_l1(
+    method_id: str, args_blob: str, full_data: str,
+) -> BridgeDecodeResult | None:
+    return _decode_op_stack_l1(method_id, args_blob, full_data, "optimism")
+
+
+def _decode_base_l1(
+    method_id: str, args_blob: str, full_data: str,
+) -> BridgeDecodeResult | None:
+    return _decode_op_stack_l1(method_id, args_blob, full_data, "base")
+
+
+# Arbitrum L1ERC20Gateway + Inbox.
+_ARBITRUM_L1_METHODS = {
+    # outboundTransfer(address _l1Token, address _to, uint256 _amount,
+    #                  uint256 _maxGas, uint256 _gasPriceBid, bytes _data)
+    "0xd2ce7d65": ("outboundTransfer", 1),
+    # outboundTransferCustomRefund(address _l1Token, address _refundTo,
+    #                              address _to, uint256 _amount, ...)
+    "0x4fb1a07b": ("outboundTransferCustomRefund", 2),
+    # depositEth() on Inbox — recipient = msg.sender.
+    "0x439370b1": ("depositEth", None),
+}
+
+
+def _decode_arbitrum_l1(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Arbitrum L1 gateway / Inbox calldata. Destination chain
+    is always 'arbitrum'."""
+    entry = _ARBITRUM_L1_METHODS.get(method_id)
+    if entry is None:
+        return BridgeDecodeResult(
+            destination_chain="arbitrum", destination_address=None,
+            bridge_method="unknown", confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    method_name, dest_slot = entry
+    try:
+        if dest_slot is None:
+            return BridgeDecodeResult(
+                destination_chain="arbitrum", destination_address=None,
+                bridge_method=method_name, confidence="medium",
+                raw_calldata_excerpt=full_data[:400],
+            )
+        dest_addr = _extract_addr_slot(args_blob, dest_slot)
+        return BridgeDecodeResult(
+            destination_chain="arbitrum",
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("arbitrum-l1 decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain="arbitrum", destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+# zkSync Era L1ERC20Bridge.
+_ZKSYNC_L1_METHODS = {
+    # deposit(address _l2Receiver, address _l1Token, uint256 _amount,
+    #         uint256 _l2TxGasLimit, uint256 _l2TxGasPerPubdataByte,
+    #         address _refundRecipient)
+    "0xe8b99b1b": ("deposit", 0),
+}
+
+
+def _decode_zksync_l1(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode zkSync Era L1ERC20Bridge calldata. Destination chain
+    is always 'zksync_era'."""
+    entry = _ZKSYNC_L1_METHODS.get(method_id)
+    if entry is None:
+        return BridgeDecodeResult(
+            destination_chain="zksync", destination_address=None,
+            bridge_method="unknown", confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    method_name, dest_slot = entry
+    try:
+        dest_addr = _extract_addr_slot(args_blob, dest_slot)
+        return BridgeDecodeResult(
+            destination_chain="zksync",
+            destination_address=dest_addr,
+            bridge_method=method_name,
+            confidence="high" if dest_addr else "medium",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("zksync-l1 decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain="zksync", destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
+# v0.32.1 test-public aliases. The tests in
+# ``tests/test_bridge_calldata_canonical.py`` import the per-bridge
+# selector tables directly; the OP-Stack-shared table is exposed under
+# both _OPTIMISM_L1_METHODS and _BASE_L1_METHODS for symmetry.
+_OPTIMISM_L1_METHODS = _OP_STACK_METHODS
+_BASE_L1_METHODS = _OP_STACK_METHODS
+
+
 __all__ = (
     "BridgeDecodeResult",
     "decode_bridge_calldata",
+    "_POLYGON_POS_METHODS",
+    "_OPTIMISM_L1_METHODS",
+    "_BASE_L1_METHODS",
+    "_OP_STACK_METHODS",
+    "_ARBITRUM_L1_METHODS",
+    "_ZKSYNC_L1_METHODS",
 )

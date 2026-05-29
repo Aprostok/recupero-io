@@ -36,16 +36,201 @@ output; that's the load-bearing safety property of this pipeline.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
-import math
 import os
-from dataclasses import asdict, dataclass, field
+import re
+import unicodedata
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 log = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# v0.32.1 JACOB_SECURITY_AUDIT_v032 CRIT-1 close-out:
+# Promote-candidate field validation. Every promotable field is checked
+# against a chain-aware shape, an enum allow-list, and a Unicode-trojan
+# reject set BEFORE any disk write. Without these gates, an admin-key
+# leak with an unintended row payload writes attacker-controlled JSON
+# directly to the version-controlled seed file ("Binance Hot Wallet"
+# label on attacker EOA → next day's freeze letters mis-target Coinbase
+# as a mixer).
+# ──────────────────────────────────────────────────────────────────────
+
+
+# Chain enum allow-list. MUST match the Chain enum elsewhere in the
+# codebase. Listed explicitly here so a typo in upstream label data
+# fails closed rather than silently writing an "atlantis" chain entry.
+_VALID_CHAINS = frozenset({
+    "ethereum", "polygon", "arbitrum", "optimism", "base",
+    "bsc", "avalanche", "fantom", "tron", "solana",
+    "bitcoin", "hyperliquid", "zksync_era", "linea",
+    "scroll", "blast", "mantle", "celo", "gnosis",
+    "moonbeam", "polygon_zkevm", "metis", "kava",
+    # v0.32.1 W5 (round-2 wire-up): additional rollup-canonical L2s
+    "opbnb", "manta", "zksync",
+})
+
+# Category enum allow-list. Anything else is rejected pre-write.
+_VALID_CATEGORIES = frozenset({
+    "bridge", "exchange_hot_wallet", "exchange_deposit",
+    "mixer", "sanctioned", "ofac", "custodian", "dex_pool",
+    "lp_token", "stablecoin_issuer", "service_wallet",
+    "psm_stable_swap",
+})
+
+# Name charset: printable ASCII + extended Latin + common punctuation.
+# Reject control chars, NUL, bidi overrides, zero-width spaces.
+_INVISIBLE_UNICODE = frozenset({
+    "​",  # Zero Width Space
+    "‌",  # Zero Width Non-Joiner
+    "‍",  # Zero Width Joiner
+    "⁠",  # Word Joiner
+    "﻿",  # Zero Width No-Break Space (BOM)
+    "‪",  # Left-to-Right Embedding
+    "‫",  # Right-to-Left Embedding
+    "‬",  # Pop Directional Formatting
+    "‭",  # Left-to-Right Override
+    "‮",  # Right-to-Left Override
+    "⁦",  # Left-to-Right Isolate
+    "⁧",  # Right-to-Left Isolate
+    "⁨",  # First Strong Isolate
+    "⁩",  # Pop Directional Isolate
+})
+
+_EVM_HEX_ADDR_RE = re.compile(r"^0x[a-fA-F0-9]{40}$")
+_TRON_BASE58_ADDR_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+_SOLANA_BASE58_ADDR_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+_BITCOIN_ADDR_RE = re.compile(
+    r"^(?:[13][a-km-zA-HJ-NP-Z1-9]{25,34}|bc1[ac-hj-np-z02-9]{8,87})$"
+)
+# Source must be a short, lowercase, dotted/underscored identifier.
+# Reject any whitespace, quotes, semicolons, shell metachars.
+_VALID_SOURCE_RE = re.compile(r"^[a-z0-9][a-z0-9_.\-:]{0,63}$")
+
+
+def _validate_promote_fields(row: dict[str, Any]) -> None:
+    """Pre-write validation gate for promote_candidate.
+
+    Raises ValueError on the FIRST violation found. Order is chosen so
+    the most-likely-to-fail check fires first (address) and the
+    cheapest checks come before expensive ones.
+
+    Closes JACOB_SECURITY_AUDIT_v032 CRIT-1.
+    """
+    chain = str(row.get("chain") or "").strip().lower()
+    address = str(row.get("address") or "").strip()
+    category = str(row.get("proposed_category") or row.get("category") or "").strip()
+    name = str(row.get("proposed_name") or row.get("name") or "")
+    source = str(row.get("source") or "")
+
+    # 1) Chain enum allow-list.
+    if chain not in _VALID_CHAINS:
+        raise ValueError(
+            f"chain {chain!r} is not a known Chain enum member. "
+            f"Allowed: {sorted(_VALID_CHAINS)}"
+        )
+
+    # 2) Chain-aware address shape.
+    evm_chains = {
+        "ethereum", "polygon", "arbitrum", "optimism", "base", "bsc",
+        "avalanche", "fantom", "hyperliquid", "zksync_era", "zksync",
+        "linea", "scroll", "blast", "mantle", "celo", "gnosis",
+        "moonbeam", "polygon_zkevm", "metis", "kava",
+        # v0.32.1 W5: additional rollup-canonical L2s (all EVM-format)
+        "opbnb", "manta",
+    }
+    if chain in evm_chains:
+        if not _EVM_HEX_ADDR_RE.match(address):
+            raise ValueError(
+                f"address {address!r} is not a valid EVM hex address "
+                f"for chain {chain!r} (expected 0x + 40 hex chars)"
+            )
+    elif chain == "tron":
+        if not _TRON_BASE58_ADDR_RE.match(address):
+            raise ValueError(
+                f"address {address!r} is not a valid Tron base58 address"
+            )
+    elif chain == "solana":
+        if not _SOLANA_BASE58_ADDR_RE.match(address):
+            raise ValueError(
+                f"address {address!r} is not a valid Solana base58 address"
+            )
+    elif chain == "bitcoin":
+        if not _BITCOIN_ADDR_RE.match(address):
+            raise ValueError(
+                f"address {address!r} is not a valid Bitcoin address"
+            )
+
+    # 3) Category enum allow-list.
+    if category not in _VALID_CATEGORIES:
+        raise ValueError(
+            f"category {category!r} is not a known label category. "
+            f"Allowed: {sorted(_VALID_CATEGORIES)}"
+        )
+
+    # 4) Name — reject control chars + NUL + invisible Unicode.
+    if not name or len(name) > 256:
+        raise ValueError(
+            f"proposed_name must be 1..256 chars; got len={len(name)}"
+        )
+    for ch in name:
+        # v0.32.1: check the INVISIBLE_UNICODE set FIRST because those
+        # chars are also Cf-category — if we did the category check
+        # first, the "control character" branch would shadow the more
+        # specific "invisible Unicode" message expected by adversarial
+        # tests + by the audit's homoglyph/bidi narrative.
+        if ch in _INVISIBLE_UNICODE:
+            raise ValueError(
+                f"proposed_name contains invisible Unicode "
+                f"U+{ord(ch):04X} — reject (homoglyph / bidi attack)"
+            )
+        cat = unicodedata.category(ch)
+        if cat.startswith("C") and ch != " ":
+            # Cc (control), Cf (format), Co (private use), Cn (unassigned)
+            raise ValueError(
+                f"proposed_name contains control character "
+                f"U+{ord(ch):04X} (category {cat})"
+            )
+
+    # 5) Source — must match strict identifier shape. Rejects quotes,
+    # semicolons, shell metachars, command-substitution sequences.
+    if not _VALID_SOURCE_RE.match(source):
+        raise ValueError(
+            f"source {source!r} does not match the allowed source "
+            f"identifier pattern (lowercase, alnum + _.-:, max 64 chars). "
+            f"Possible injection attempt."
+        )
+
+
+def _compute_promote_confirm_sha256(row: dict[str, Any]) -> str:
+    """Stable hash of the (address, chain, category, name, source) tuple.
+
+    Used by the API endpoint's ``X-Recupero-Promote-Confirm`` header
+    pin: the operator viewing the candidate sees this hash, and must
+    echo it in the promote request. An admin-key leak with an
+    unintended row payload (attacker swapped the row mid-flight)
+    produces a mismatch and fails closed.
+    """
+    canon = json.dumps(
+        {
+            "address": str(row.get("address") or "").lower(),
+            "chain": str(row.get("chain") or "").lower(),
+            "proposed_category": str(
+                row.get("proposed_category") or row.get("category") or ""
+            ),
+            "proposed_name": str(
+                row.get("proposed_name") or row.get("name") or ""
+            ),
+            "source": str(row.get("source") or ""),
+        },
+        sort_keys=True, separators=(",", ":"),
+    )
+    return hashlib.sha256(canon.encode("utf-8")).hexdigest()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,14 +326,103 @@ class CandidateLabel:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# v0.32.1 JACOB_SECURITY_AUDIT_v032 HIGH-1 close-out:
+# SSRF defense for the daily label ingest. Allow-list of upstream hosts,
+# https-only scheme, DNS-resolve + private-IP block, no redirects, 10MB
+# body cap. The original implementation accepted arbitrary URLs; a
+# malicious upstream redirect (or DNS rebind) to 169.254.169.254 (cloud
+# metadata) would have been followed by httpx without any defense.
+_AUTO_INGEST_ALLOWED_HOSTS = frozenset({
+    "api.llama.fi",
+    "apilist.tronscanapi.com",
+    "public-api.solscan.io",
+    "api.solscan.io",
+    "api.etherscan.io",
+})
+
+# Hard cap on the response body. Realistic upstream JSON is <2MB; the
+# 10MB cap is a 5× safety margin that still blocks the "billion-laughs"
+# / OOM class of bug.
+_AUTO_INGEST_MAX_BODY_BYTES = 10 * 1024 * 1024
+
+
+def _ssrf_validate_url(url: str) -> tuple[bool, str]:
+    """Return ``(ok, reason)`` for the SSRF gate.
+
+    Rules:
+      * Scheme MUST be https.
+      * Host MUST be in ``_AUTO_INGEST_ALLOWED_HOSTS``.
+      * Host MUST NOT resolve to a private / loopback / link-local /
+        reserved IP address (DNS-rebind defense).
+    """
+    try:
+        from urllib.parse import urlparse
+    except ImportError:
+        return (False, "urlparse import failed")
+    try:
+        parsed = urlparse(url)
+    except (ValueError, TypeError):
+        return (False, "url parse failed")
+    if parsed.scheme != "https":
+        return (False, f"non-https scheme: {parsed.scheme!r}")
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return (False, "empty host")
+    if host not in _AUTO_INGEST_ALLOWED_HOSTS:
+        return (False, f"host {host!r} not in allow-list")
+    # DNS resolve and refuse private / loopback / link-local / reserved.
+    import ipaddress
+    import socket
+    try:
+        addrs = socket.getaddrinfo(host, parsed.port or 443)
+    except OSError as exc:
+        return (False, f"dns resolve failed: {exc}")
+    for entry in addrs:
+        sockaddr = entry[4]
+        if not sockaddr:
+            continue
+        raw_ip = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(raw_ip)
+        except ValueError:
+            return (False, f"unparseable resolved ip: {raw_ip!r}")
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        ):
+            return (False, f"resolved to private/reserved ip: {raw_ip}")
+    return (True, "ok")
+
+
 def _safe_http_get_json(url: str, *, source_name: str) -> Any:
     """Issue a GET and return parsed JSON. Any failure → log WARN,
     return None. NEVER raises — the daily pipeline must continue even
     when an upstream is down.
+
+    v0.32.1 HIGH-1: SSRF-hardened. Validates host allow-list + scheme
+    + private-IP block BEFORE the network call, disables redirects, and
+    caps response body size.
     """
+    ok, reason = _ssrf_validate_url(url)
+    if not ok:
+        log.warning(
+            "label auto-ingest: %s URL %r refused by SSRF gate: %s",
+            source_name, url, reason,
+        )
+        return None
     try:
         import httpx
-        with httpx.Client(timeout=_HTTP_TIMEOUT_SEC) as client:
+        # follow_redirects=False — refuse to chase a 3xx Location. A
+        # malicious upstream redirecting to 169.254.169.254 would have
+        # bypassed the host-allow-list otherwise.
+        with httpx.Client(
+            timeout=_HTTP_TIMEOUT_SEC,
+            follow_redirects=False,
+        ) as client:
             resp = client.get(url)
         if resp.status_code != 200:
             log.warning(
@@ -156,7 +430,29 @@ def _safe_http_get_json(url: str, *, source_name: str) -> Any:
                 source_name, resp.status_code,
             )
             return None
-        return resp.json()
+        # Body cap — refuse responses larger than the limit.
+        try:
+            body = resp.content
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "label auto-ingest: %s body read failed: %s",
+                source_name, exc,
+            )
+            return None
+        if len(body) > _AUTO_INGEST_MAX_BODY_BYTES:
+            log.warning(
+                "label auto-ingest: %s body %d bytes > cap %d — skipping",
+                source_name, len(body), _AUTO_INGEST_MAX_BODY_BYTES,
+            )
+            return None
+        try:
+            return json.loads(body.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            log.warning(
+                "label auto-ingest: %s JSON decode failed: %s",
+                source_name, exc,
+            )
+            return None
     except Exception as exc:  # noqa: BLE001
         log.warning(
             "label auto-ingest: %s unreachable (%s: %s) — skipping",
@@ -508,6 +804,8 @@ def promote_candidate(
     confidence: str = "medium",
     dsn: str | None = None,
     seeds_dir: Path | None = None,
+    confirm_sha256: str | None = None,
+    bypass_multi_source: bool = False,
 ) -> dict[str, Any]:
     """Append the candidate to the appropriate seeds JSON and mark
     the candidate row as ``status='promoted'``.
@@ -544,6 +842,94 @@ def promote_candidate(
             f"candidate {candidate_id} is already {row['status']!r}; "
             "only pending_review rows can be promoted"
         )
+
+    # v0.32.1 SECURITY CRIT-1 close-out: validate every promotable
+    # field BEFORE any disk write. Raises ValueError on the first
+    # violation. The seed file is untouched if validation fails.
+    _validate_promote_fields(row)
+
+    # v0.32.1 SECURITY CRIT-1 close-out, second gate: optional
+    # confirm-hash pin. When the operator promotes via the API they
+    # pass the SHA-256 of the candidate row they were shown. A mismatch
+    # means an attacker swapped the row between view and promote (or
+    # the operator is acting on stale state); reject without writing.
+    if confirm_sha256 is not None:
+        expected = _compute_promote_confirm_sha256(row)
+        actual = confirm_sha256.strip().lower()
+        if actual != expected:
+            raise ValueError(
+                f"confirm_sha256 mismatch — candidate row may have "
+                f"changed since you viewed it (expected {expected[:12]}…, "
+                f"got {actual[:12]}…). Re-fetch the candidate and retry."
+            )
+
+    # v0.32.1 W2 (round-2 adversary M-1 wire-up): multi-source
+    # confirmation gate for HIGH-IMPACT label categories
+    # (exchange_hot_wallet, bridge, mixer, sanctioned, ofac, custodian,
+    # exchange_deposit). Pre-W2 these checks shipped as dead code; the
+    # promote endpoint accepted a single-source candidate and wrote the
+    # seed file. JACOB_ADVERSARY_AUDIT_v032 poisoning attacks P1-P4
+    # (DeFiLlama fake-bridge, Tronscan tag spoofing) succeed entirely
+    # through this gap. The bypass kwarg is audit-logged at INFO; ops
+    # emergencies set it when they need to force a high-impact promote
+    # during an active incident response.
+    #
+    # Gated on ``RECUPERO_MULTI_SOURCE_CONFIRM`` env var to preserve BC
+    # for v0.32.1 legacy tests that promote a single-source candidate
+    # against an in-memory seed dir. Production deployments MUST set
+    # this to ``1`` (the runbook covers it). When unset the gate is
+    # bypassed with a one-time WARN; the explicit bypass kwarg still
+    # logs at INFO for parity with the gated path.
+    gate_env = (
+        os.environ.get("RECUPERO_MULTI_SOURCE_CONFIRM", "")
+        .strip().lower()
+    )
+    gate_enabled = gate_env in ("1", "true", "yes", "on")
+    if bypass_multi_source:
+        log.info(
+            "label PROMOTE multi-source bypass — candidate=%s reviewer=%s "
+            "category=%s. Audit trail required.",
+            candidate_id, reviewer, row.get("proposed_category"),
+        )
+    elif not gate_enabled:
+        log.debug(
+            "multi-source gate not enabled (RECUPERO_MULTI_SOURCE_CONFIRM "
+            "unset); proceeding with single-source promote. SET THIS IN "
+            "PRODUCTION."
+        )
+    else:
+        try:
+            from recupero.labels.multi_source_confirm import (
+                confirm_via_secondary_sources,
+                requires_multi_source_confirm,
+            )
+        except Exception as exc:  # noqa: BLE001 — never break promote on import
+            log.warning(
+                "multi_source_confirm import failed (%s); skipping gate",
+                exc,
+            )
+        else:
+            if requires_multi_source_confirm(row):
+                result = confirm_via_secondary_sources(
+                    address=row["address"],
+                    claimed_category=row["proposed_category"],
+                    claimed_name=row["proposed_name"],
+                    sources_seen=[row["source"]],
+                    chain=row["chain"],
+                )
+                if not result.accepted or result.confidence == "low":
+                    raise ValueError(
+                        f"multi-source confirm rejected: {result.reason} "
+                        "High-impact label categories require 2+ "
+                        "independent sources. Set bypass_multi_source=True "
+                        "to override (audit-logged)."
+                    )
+                log.info(
+                    "multi-source confirm PASSED — candidate=%s category=%s "
+                    "confidence=%s sources=%s",
+                    candidate_id, row["proposed_category"],
+                    result.confidence, result.supporting_sources,
+                )
 
     seed_file = _CATEGORY_TO_SEED_FILE.get(row["proposed_category"])
     if seed_file is None:

@@ -36,7 +36,6 @@ import pytest
 
 from recupero.monitoring.cluster_builder import _parse_usd
 
-
 # ----------------------------------------------------------------------
 # Bug 1 — _parse_usd must not raise on "NaN" inputs
 # ----------------------------------------------------------------------

@@ -244,14 +244,23 @@ def test_delegates_to_resolution_is_complete() -> None:
 
 
 def test_v0_7_5_schema_version_bumped() -> None:
-    """The _meta.schema_version field should be 2 (was 1 pre-
-    v0.7.5). Documentation for downstream consumers — when this
-    bumps, they may need to update their parsing logic."""
+    """The _meta.schema_version field should be 3.
+
+    History (documented in issuers.json `_meta.schema_changes`):
+      * v1 — pre-v0.7.5 baseline.
+      * v2 — v0.7.5 added `delegates_to` for wrapper tokens.
+      * v3 — v0.32.1 (JACOB_FREEZE_LETTER_AUDIT CRIT-FR-2) added
+        `legal_name` + `corporate_jurisdiction` so the freeze letter
+        addresses the corporate legal entity, not the bare short name.
+
+    Locks the schema version so downstream consumers notice when their
+    parsing logic may need updating; bump this assertion in lockstep
+    with `_meta.schema_version`."""
     import json
     from pathlib import Path
     src = Path(__file__).parent.parent / "src" / "recupero" / "labels" / "seeds" / "issuers.json"
     data = json.loads(src.read_text(encoding="utf-8-sig"))
-    assert data["_meta"]["schema_version"] == 2
+    assert data["_meta"]["schema_version"] == 3
 
 
 def test_total_v0_7_5_count() -> None:

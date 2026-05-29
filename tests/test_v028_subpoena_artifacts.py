@@ -34,8 +34,8 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from recupero.reports.subpoena_targets import (
-    SUBPOENA_USD_THRESHOLD,
     _KNOWN_CEX_COMPLIANCE,
+    SUBPOENA_USD_THRESHOLD,
     _resolve_cex_recipient,
     extract_subpoena_targets,
 )
@@ -652,4 +652,188 @@ def test_invariants_wired_into_validator(tmp_path: Path) -> None:
 def test_subpoena_usd_threshold_constant() -> None:
     """The threshold is documented as $1,000 USD in the design doc.
     Locking the constant value as a regression guard."""
-    assert SUBPOENA_USD_THRESHOLD == Decimal("1000")
+    assert Decimal("1000") == SUBPOENA_USD_THRESHOLD
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.32.1 (#209 step 1): emit_brief resolves endpoint transfer_ids into
+# subpoena tx-level evidence. Pre-fix the exchange dicts dropped
+# transfer_ids, so every off-ramp subpoena target shipped with NO tx_hash
+# for the exchange compliance team to grep against.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def test_subpoena_exchange_dicts_resolves_tx_evidence() -> None:
+    """Each ExchangeEndpoint's transfer_ids resolve to deduped tx_hashes
+    (+ chain + deposit window + count) via case.transfers."""
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from recupero.reports.emit_brief import _subpoena_exchange_dicts
+
+    eth = SimpleNamespace(value="ethereum")
+    transfers = [
+        SimpleNamespace(transfer_id="ethereum:0xaaa:0", tx_hash="0xaaa", chain=eth),
+        SimpleNamespace(transfer_id="ethereum:0xbbb:1", tx_hash="0xbbb", chain=eth),
+        # Same tx, different log index → must dedupe to one hash.
+        SimpleNamespace(transfer_id="ethereum:0xaaa:2", tx_hash="0xaaa", chain=eth),
+    ]
+    ep = SimpleNamespace(
+        address="0xDEPOSIT",
+        exchange="MEXC",
+        transfer_ids=["ethereum:0xaaa:0", "ethereum:0xbbb:1", "ethereum:0xaaa:2"],
+        total_received_usd=Decimal("1234567"),
+        first_deposit_at=datetime(2026, 1, 1, tzinfo=UTC),
+        last_deposit_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    case = SimpleNamespace(transfers=transfers, exchange_endpoints=[ep])
+
+    out = _subpoena_exchange_dicts(case)
+    assert len(out) == 1
+    d = out[0]
+    assert d["address"] == "0xDEPOSIT"
+    assert d["exchange"] == "MEXC"
+    assert d["tx_hashes"] == ["0xaaa", "0xbbb"], "deduped, order-preserved"
+    assert d["chain"] == "ethereum"
+    assert d["transfer_count"] == 3
+    assert d["first_deposit_at"] == "2026-01-01T00:00:00+00:00"
+    assert d["last_deposit_at"] == "2026-01-02T00:00:00+00:00"
+    assert d["source"] == "label_db"
+
+
+def test_subpoena_exchange_dicts_falls_back_to_parsing_transfer_id() -> None:
+    """When a transfer is absent from case.transfers, parse the canonical
+    'chain:tx_hash:logidx' id form so evidence is still emitted."""
+    from types import SimpleNamespace
+
+    from recupero.reports.emit_brief import _subpoena_exchange_dicts
+
+    ep = SimpleNamespace(
+        address="TDeposit", exchange="Binance",
+        transfer_ids=["tron:abc123:0"],
+        total_received_usd=Decimal("5000"),
+        first_deposit_at=None, last_deposit_at=None,
+    )
+    case = SimpleNamespace(transfers=[], exchange_endpoints=[ep])
+    out = _subpoena_exchange_dicts(case)
+    assert out[0]["tx_hashes"] == ["abc123"]
+    assert out[0]["chain"] == "tron"
+    assert out[0]["first_deposit_at"] is None
+
+
+def test_subpoena_exchange_dicts_empty_case_is_empty_list() -> None:
+    from types import SimpleNamespace
+
+    from recupero.reports.emit_brief import _subpoena_exchange_dicts
+
+    case = SimpleNamespace(transfers=[], exchange_endpoints=[])
+    assert _subpoena_exchange_dicts(case) == []
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v0.32.1 (#209 step 2): inferred CEX deposit-address attribution flows
+# through extract_subpoena_targets into linked_addresses, and the
+# forensic invariant pins inferred confidence to low/medium.
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _inferred_ex(confidence: str = "medium") -> dict:
+    return {
+        "address": "0x" + "d" * 40,
+        "exchange": "MEXC",
+        "total_received_usd": "250000",
+        "chain": "ethereum",
+        "source": "inferred:sweep_to_hot_wallet",
+        "attribution_heuristic": "sweep_to_hot_wallet",
+        "attribution_confidence": confidence,
+        "hot_wallet_address": "0x" + "c" * 40,
+        "tx_hashes": ["0x" + "2" * 64],
+    }
+
+
+def test_extract_surfaces_inferred_attribution_fields() -> None:
+    """An inferred deposit dict flows into the linked_address with its
+    heuristic + confidence + hot-wallet, framed as a LEAD (not a
+    confirmed off-ramp)."""
+    out = extract_subpoena_targets(
+        case=_stub_case(), freeze_asks={}, editorial=None,
+        exchanges=[_inferred_ex("medium")], unrecoverable=[],
+    )
+    assert len(out) == 1
+    la = out[0]["linked_addresses"][0]
+    assert "inferred" in la["role"].lower()
+    assert la["attribution_confidence"] == "medium"
+    assert la["attribution_heuristic"] == "sweep_to_hot_wallet"
+    assert la["hot_wallet_address"] == "0x" + "c" * 40
+    # Tx evidence still flows.
+    assert la["evidence"][0]["tx_hashes"] == ["0x" + "2" * 64]
+
+
+def test_extract_pins_inferred_high_confidence_down_to_low() -> None:
+    """FORENSIC INVARIANT (defense in depth): even if an upstream bug
+    sets an inferred attribution to 'high', the extractor pins the
+    surfaced confidence to 'low' — never proof in a legal subpoena."""
+    out = extract_subpoena_targets(
+        case=_stub_case(), freeze_asks={}, editorial=None,
+        exchanges=[_inferred_ex("high")], unrecoverable=[],
+    )
+    la = out[0]["linked_addresses"][0]
+    assert la["attribution_confidence"] == "low"
+
+
+def test_label_db_endpoint_has_no_attribution_fields() -> None:
+    """A confirmed label-DB off-ramp must NOT carry inferred-attribution
+    fields (it's not an inference)."""
+    out = extract_subpoena_targets(
+        case=_stub_case(), freeze_asks={}, editorial=None,
+        exchanges=[{"address": "0x" + "e" * 40, "exchange": "MEXC",
+                    "total_received_usd": "250000", "chain": "ethereum",
+                    "source": "label_db"}],
+        unrecoverable=[],
+    )
+    la = out[0]["linked_addresses"][0]
+    assert "attribution_confidence" not in la
+    assert "inferred" not in la["role"].lower()
+
+
+def test_invariant_inferred_attribution_high_confidence_fires() -> None:
+    """The output-integrity invariant flags a 'high'-confidence inferred
+    attribution (a correlation masquerading as proof) as a HIGH
+    violation."""
+    from recupero.validators.output_integrity import (
+        _check_inferred_attribution_confidence,
+    )
+    brief = {"SUBPOENA_TARGETS": [{
+        "target_id": "subpoena-1",
+        "linked_addresses": [{
+            "address": "0x" + "d" * 40,
+            "role": "inferred CEX deposit address (sweep to hot wallet)",
+            "attribution_confidence": "high",
+        }],
+    }]}
+    out = _check_inferred_attribution_confidence(brief)
+    assert len(out) == 1
+    assert out[0].severity == "high"
+    assert out[0].check == "subpoena_inferred_attribution_confidence"
+
+
+def test_invariant_inferred_attribution_low_medium_passes() -> None:
+    """low/medium inferred attributions are valid leads → no violation;
+    label-DB linked addresses (no attribution_confidence) are ignored."""
+    from recupero.validators.output_integrity import (
+        _check_inferred_attribution_confidence,
+    )
+    brief = {"SUBPOENA_TARGETS": [{
+        "target_id": "subpoena-1",
+        "linked_addresses": [
+            {"address": "0x" + "d" * 40,
+             "role": "inferred CEX deposit address (sweep to hot wallet)",
+             "attribution_confidence": "medium"},
+            {"address": "0x" + "a" * 40,
+             "role": "inferred CEX deposit address (sweep to hot wallet)",
+             "attribution_confidence": "low"},
+            {"address": "0x" + "e" * 40,
+             "role": "off-ramp deposit (perpetrator-owned)"},  # label-db
+        ],
+    }]}
+    assert _check_inferred_attribution_confidence(brief) == []

@@ -253,6 +253,34 @@
     "chain": "ethereum"
   },
   {
+    "address": "0x4dbd4fc535ac27206064b6804e1fbcc1c5b8ee18",
+    "name": "Arbitrum: DelayedInbox",
+    "category": "bridge",
+    "source": "arbitrum_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum"
+    ],
+    "follow_up_url": "https://arbiscan.io",
+    "notes": "Arbitrum One DelayedInbox — canonical L1 entry point for forced inclusion txs (v0.32.1 audit).",
+    "added_at": "2026-05-25T00:00:00Z",
+    "chain": "ethereum"
+  },
+  {
+    "address": "0x57891966931eb4bb6fb81430e6ce0a03aabde063",
+    "name": "zkSync Era: L1ERC20Bridge",
+    "category": "bridge",
+    "source": "zksync_docs",
+    "confidence": "high",
+    "supports_to_chains": [
+      "zksync"
+    ],
+    "follow_up_url": "https://explorer.zksync.io",
+    "notes": "zkSync Era L1ERC20Bridge — canonical L1 entry point for ERC-20 deposits to zkSync Era (v0.32.1 audit).",
+    "added_at": "2026-05-25T00:00:00Z",
+    "chain": "ethereum"
+  },
+  {
     "address": "0xa3a7b6f88361f48403514059f1f16c8e78d60eec",
     "name": "Arbitrum: L1ERC20Gateway",
     "category": "bridge",
@@ -3972,5 +4000,124 @@
     "added_at": "2026-05-26T00:00:00Z",
     "_v031_addition": true,
     "_audit_status": "externally_verified_v031_2: WebSearch returned debridge-finance/debridge-solana-sdk and docs.debridge.com pages referencing DEbrdGj3HsRsAzx6uH4MKyREKxVAfBydijLUF3ygsFfh as the main Solana program ID"
+  },
+  {
+    "address": "0x2a3DD3EB832aF982ec71669E178424b10Dca2EDe",
+    "name": "Polygon zkEVM: L1 Bridge",
+    "category": "bridge",
+    "source": "manual_v0_32_1_round2_W5",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "polygon_zkevm"
+    ],
+    "follow_up_url": "https://etherscan.io/address/0x2a3DD3EB832aF982ec71669E178424b10Dca2EDe",
+    "notes": "Polygon zkEVM PolygonZkEVMBridge — Ethereum-L1 entry point for the zkEVM rollup (bridgeAsset / bridgeMessage). Closes round-2 adversary audit Route 1' Hop-1 (Polygon zkEVM canonical bridge escape).",
+    "added_at": "2026-05-28T00:00:00Z",
+    "chain": "ethereum",
+    "verified": false,
+    "_v032_1_round2_W5_addition": true,
+    "_audit_status": "v0_32_1_corrected: the prior round-2 wire-up pasted the Polygon PoS ERC20Predicate address (0x40ec5b33…) by mistake, colliding with the existing 'Polygon: ERC20Predicate' entry. Replaced with the canonical PolygonZkEVMBridge L1 address. Operator should still confirm against polygonscan.com before freeze decisions (verified=false)."
+  },
+  {
+    "address": "0xd19d4B5d358258f05D7B411E21A1460D11B0876F",
+    "name": "Linea: L1 Bridge",
+    "category": "bridge",
+    "source": "manual_v0_32_1_round2_W5",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "linea"
+    ],
+    "follow_up_url": "https://etherscan.io/address/0xd19d4B5d358258f05D7B411E21A1460D11B0876F",
+    "notes": "Linea Consensys L1 message service / token bridge entry point on Ethereum. Decodes via the OP-Stack ABI family (depositERC20{To}, depositETH{To}) as Linea reuses the standard-bridge calldata shape. Closes round-2 adversary audit Route 1' (Linea variant).",
+    "added_at": "2026-05-28T00:00:00Z",
+    "chain": "ethereum",
+    "verified": false,
+    "_v032_1_round2_W5_addition": true,
+    "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt; operator should re-confirm against Consensys / linea.build docs."
+  },
+  {
+    "address": "0xF8B1378579659D8F7EE5f3C929c2f3E332E41Fd6",
+    "name": "Scroll: L1 Gateway Router",
+    "category": "bridge",
+    "source": "manual_v0_32_1_round2_W5",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "scroll"
+    ],
+    "follow_up_url": "https://etherscan.io/address/0xF8B1378579659D8F7EE5f3C929c2f3E332E41Fd6",
+    "notes": "Scroll L1 Gateway Router — Ethereum-side entry point for the Scroll zkEVM rollup. Decodes via the OP-Stack ABI family (Scroll exposes a depositERC20-shaped calldata). Closes round-2 adversary audit Route 1' (Scroll variant).",
+    "added_at": "2026-05-28T00:00:00Z",
+    "chain": "ethereum",
+    "verified": false,
+    "_v032_1_round2_W5_addition": true,
+    "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt; operator should re-confirm against scroll.io docs."
+  },
+  {
+    "address": "0x0Ec68c5B10F21EFFb74f2A5C61DFe6b08C0Db6Cb",
+    "name": "Blast: L1 Bridge",
+    "category": "bridge",
+    "source": "manual_v0_32_1_round2_W5",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "blast"
+    ],
+    "follow_up_url": "https://etherscan.io/address/0x0Ec68c5B10F21EFFb74f2A5C61DFe6b08C0Db6Cb",
+    "notes": "Blast L1 Bridge — Ethereum-side entry point. Decodes via the OP-Stack ABI family (Blast is OP-Stack derivative). Closes round-2 adversary audit Route 1' (Blast variant).",
+    "added_at": "2026-05-28T00:00:00Z",
+    "chain": "ethereum",
+    "verified": false,
+    "_v032_1_round2_W5_addition": true,
+    "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt; operator should re-confirm against blast.io docs."
+  },
+  {
+    "address": "0x1876EA7702C0ad0C6A2ae6036DE7733edfBcA519",
+    "name": "opBNB: L1 Bridge",
+    "category": "bridge",
+    "source": "manual_v0_32_1_round2_W5",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "opbnb"
+    ],
+    "follow_up_url": "https://bscscan.com/address/0x1876EA7702C0ad0C6A2ae6036DE7733edfBcA519",
+    "notes": "opBNB L1 Bridge — BSC-side entry point for the opBNB OP-Stack L2. Decodes via OP-Stack ABI family. NB: chain is bsc, not ethereum — opBNB anchors to BSC rather than Ethereum. Closes round-2 adversary audit Route 1' (opBNB variant).",
+    "added_at": "2026-05-28T00:00:00Z",
+    "chain": "bsc",
+    "verified": false,
+    "_v032_1_round2_W5_addition": true,
+    "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt; operator should re-confirm against opbnb.bnbchain.org docs."
+  },
+  {
+    "address": "0x676A795fe6E43C17c668de16730c3F690FEB7120",
+    "name": "Mantle: L1 Bridge",
+    "category": "bridge",
+    "source": "manual_v0_32_1_round2_W5",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "mantle"
+    ],
+    "follow_up_url": "https://etherscan.io/address/0x676A795fe6E43C17c668de16730c3F690FEB7120",
+    "notes": "Mantle L1 Bridge — Ethereum-side native bridge for the Mantle Network L2. Decodes via the OP-Stack ABI family (Mantle is BitDAO/Mantle OP-Stack derivative). Closes round-2 adversary audit Route 1' (Mantle variant).",
+    "added_at": "2026-05-28T00:00:00Z",
+    "chain": "ethereum",
+    "verified": false,
+    "_v032_1_round2_W5_addition": true,
+    "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt; operator should re-confirm against mantle.xyz docs."
+  },
+  {
+    "address": "0x9168765EE952de7C6f8fC6FaD5Ec209B960b7622",
+    "name": "Manta Pacific: L1 Bridge",
+    "category": "bridge",
+    "source": "manual_v0_32_1_round2_W5",
+    "confidence": "medium",
+    "supports_to_chains": [
+      "manta"
+    ],
+    "follow_up_url": "https://etherscan.io/address/0x9168765EE952de7C6f8fC6FaD5Ec209B960b7622",
+    "notes": "Manta Pacific L1 Bridge — Ethereum-side native bridge for the Manta Pacific OP-Stack L2. Decodes via the OP-Stack ABI family. Closes round-2 adversary audit Route 1' (Manta variant).",
+    "added_at": "2026-05-28T00:00:00Z",
+    "chain": "ethereum",
+    "verified": false,
+    "_v032_1_round2_W5_addition": true,
+    "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt; operator should re-confirm against pacific.manta.network docs."
   }
 ]

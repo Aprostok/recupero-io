@@ -55,7 +55,6 @@ from recupero.trace.cross_chain import (
     ingest_bridge_seeds,
 )
 
-
 # Real Solana mainnet shapes — none tied to a specific entity.
 VICTIM_SOL = "5Q544fKrFoe6tsEbD7S8EmxGTJYAKtTVhAW5Q5pge4j1"  # synthetic 32-byte
 PERP_SOL = "9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM"

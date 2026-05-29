@@ -22,7 +22,7 @@ drops the kwarg or stops honoring it will fail here immediately.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def test_etherscan_paginate_breaks_on_max_results() -> None:

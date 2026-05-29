@@ -182,9 +182,14 @@ def _build_address_to_url_map(html_path: Path) -> dict[str, str]:
         if m:
             full_addr = m.group(0)
             out.setdefault(full_addr, href)
-            short_uni = f"{full_addr[:6]}…{full_addr[-4:]}"
+            # v0.32.1 (Jacob cross-cutting audit §3.1): both unicode-
+            # ellipsis and ASCII-dot variants come from the canonical
+            # short_address helper so the PDF-link matcher stays in
+            # lockstep with whatever the templates rendered.
+            from recupero.util.addr_format import short_address
+            short_uni = short_address(full_addr)
             out.setdefault(short_uni, href)
-            short_ascii = f"{full_addr[:6]}...{full_addr[-4:]}"
+            short_ascii = short_address(full_addr, ascii_safe=True)
             out.setdefault(short_ascii, href)
     return out
 

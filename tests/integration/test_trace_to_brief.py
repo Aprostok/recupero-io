@@ -38,6 +38,7 @@ from __future__ import annotations
 # integration suite at import time. The fixture honors a pre-set env
 # var (line 57 of conftest) and short-circuits the DB probe path.
 import os as _os_for_optin
+
 _os_for_optin.environ.setdefault("RECUPERO_RUN_INTEGRATION", "1")
 
 import hashlib

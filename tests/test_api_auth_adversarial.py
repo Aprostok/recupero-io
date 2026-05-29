@@ -29,7 +29,7 @@ import os
 from collections.abc import Iterator
 
 import pytest
-from fastapi import FastAPI, Depends
+from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from recupero.api.auth import (
@@ -39,7 +39,6 @@ from recupero.api.auth import (
     require_api_key,
     reset_buckets_for_tests,
 )
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers

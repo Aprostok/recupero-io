@@ -39,7 +39,9 @@ their own section.
 | Name | Default | Type | Range / Format | Introduced | Purpose |
 | ---- | ------- | ---- | -------------- | ---------- | ------- |
 | **Trace tuning** | | | | | |
-| `RECUPERO_TRACE_MAX_HOPS` | `config.trace.max_depth` (2) | int | `[1, 8]` | v0.16.x | BFS depth cap; raise for deep-laundering paths. |
+| `RECUPERO_TRACE_MAX_HOPS` | `config.trace.max_depth` (4) | int | `[1, RECUPERO_TRACE_MAX_HOPS_HARD_CEILING]` | v0.16.x | BFS depth cap; raise for deep-laundering paths. Industry-best ceiling 64 in v0.32.1+. |
+| `RECUPERO_TRACE_MAX_HOPS_HARD_CEILING` | `64` | int | `[1, 1024]` | v0.32.1 | Upper bound on `RECUPERO_TRACE_MAX_HOPS`. v0.32.1+ industry-best raised from 8 → 64 so the tracer can chase 30-50 hop APT laundering chains. Operators on quota-constrained API plans set this lower. |
+| `RECUPERO_MAX_TRANSFERS_PER_ADDRESS` | `config.trace.max_transfers_per_address` (50000) | int | `>= 0`; 0 disables | v0.32.1 | Per-address fetch cap. Industry-best default bumped from 500 → 50000 so whale-wallet activity histories are followed in full. Set 0 to disable. |
 | `RECUPERO_TRACE_DUST_USD` | `config.trace.dust_threshold_usd` (10) | float | `[0, 1_000_000]`, finite | v0.16.x | Per-transfer USD floor; below this is dropped as noise. |
 | `RECUPERO_TRACE_TIMEOUT_SEC` | `540` | int | `>= 0` | v0.16.11 | Wall-clock deadline before BFS exits with `trace_status=partial_deadline_hit`. |
 | `RECUPERO_MAX_TRANSFERS_PER_CASE` | `50000` | int | `>= 0` | v0.16.11 | OOM defense — trace stops once this many transfers accumulate. |
@@ -52,6 +54,9 @@ their own section.
 | `RECUPERO_PASS2_MAX_TRACES` | `3` | int | `>= 0` | v0.20.x | Max pass-2 traces per investigation. |
 | `RECUPERO_INDIRECT_DECAY` | `0.5` | float | `(0, 1]` | v0.31.0 | Per-hop decay factor for indirect-exposure scoring (MVP). |
 | `RECUPERO_INDIRECT_MAX_HOPS` | `3` | int | `>= 1` | v0.31.0 | Max BFS depth for MVP indirect-exposure scorer. |
+| `RECUPERO_ADAPTIVE_DEPTH` | unset (off) | bool | `1/true/yes/on` to enable | v0.32.1 | Opt-in adaptive BFS depth: severity (theft USD) + API-budget headroom raise the depth ceiling for big cases. When off, depth is the static `RECUPERO_TRACE_MAX_HOPS`/config value. |
+| `RECUPERO_CASE_THEFT_USD` | unset | float | `>= 0`, finite | v0.32.1 | Theft-amount override (USD) fed to the adaptive-depth severity bump when `RECUPERO_ADAPTIVE_DEPTH=1`. Best-effort; ignored if unparseable. |
+| `RECUPERO_DRAINER_W7_PREFETCH` | `1` (on) | bool | opt-out via `0/false/no/off` | v0.32.1 | Prefetch drainer-contract outflows in the trace `finally` block (before the adapter closes) so `emit_brief` can consume cached drainer findings. Best-effort — failure logs and continues. |
 | **Cross-chain** | | | | | |
 | `RECUPERO_CROSS_CHAIN_CONTINUATION` | `1` (on) | bool | opt-out via `0/false/no/off` | v0.28.0 | Master switch for cross-chain BFS continuation. |
 | `RECUPERO_CROSSCHAIN_WINDOW_HOURS` | `24` | float | `[0, 720]`, finite | v0.31.0 | Time window past source-bridge tx to accept dst transfers; 0 disables filter. |
@@ -75,7 +80,7 @@ their own section.
 | `RECUPERO_INVESTIGATOR_PHONE` | unset | str | phone | v0.20.0 | Optional operator phone number. |
 | `RECUPERO_DESTINATION_DUST_USD` | `1000.00` | Decimal | `>= 0`, finite | v0.20.x | See "dust / CEX-continuity". |
 | `RECUPERO_AI_MAX_USD_PER_CALL` | `2.00` | Decimal | `> 0` | v0.17.8 | Per-call USD ceiling on AI editorial calls; `0` disables (logged WARN). |
-| `RECUPERO_API_BUDGET_USD_PER_CASE` | `0.50` | Decimal | `[0.01, 100.0]`, finite | v0.32 | Per-case API spend cap across all providers. Setting to `0` disables tracking. Tier-1 gap #4 — closes the "one whale case burns the day's free tier" failure mode. |
+| `RECUPERO_API_BUDGET_USD_PER_CASE` | `0` (disabled) | Decimal | `[0.01, 1_000_000.0]`, finite | v0.32 | Per-case API spend cap across all providers. v0.32.1+ industry-best mode: default DISABLED so the tracker can reach deep destinations without an artificial dollar gate. Operators on shared free-tier API keys opt in with a positive USD value. |
 | `RECUPERO_P_ANY_CALIBRATION_JSON` | unset | JSON | object | v0.21.x | Override default p_any calibration constants (recovery scorer). |
 | `RECUPERO_PRICING_FALLBACK` | `defillama` | str | `defillama` / `none` | v0.31.5 | Secondary historical-price provider. `none` disables the fallback chain (CoinGecko only). |
 | **Worker / scheduler** | | | | | |
@@ -95,6 +100,7 @@ their own section.
 | `RECUPERO_CRON_LEASE_SECONDS` | `300` | int | `> 0` | v0.32 | Postgres lock lease duration for cron leader election. Way longer than any expected job runtime; raising past 600 risks a dead replica hogging a job after SIGKILL until the lease expires. |
 | `RECUPERO_CRON_HEALTHZ_STALE_HOURS` | `25` | float | `> 0`, finite | v0.32 | Hours since `last_success_utc` before /cron/healthz marks a job "stale" (degraded). Default 25 gives the 24h jobs a 1h grace window. >168h is hard-down regardless. |
 | `RECUPERO_LABEL_AUTO_INGEST_DAILY_CAP` | `100` | int | `[1, 10000]` | v0.32 | Max number of candidate labels the daily auto-ingest cron will persist per run. Hard cap protects the operator review queue from upstream tag-API flushes. |
+| `RECUPERO_MULTI_SOURCE_CONFIRM` | unset (off) | bool | `1/true/yes/on` to enable | v0.32 | Gate label auto-ingest on multi-source confirmation: when on, a candidate label is only promoted if ≥2 independent sources agree. Default off preserves single-source backward-compatible ingest. |
 | `RECUPERO_LABEL_DECAY_DAYS` | `180` | int | `[1, 3650]` | v0.32 | Confidence-decay window (days). A `high` label un-refreshed for this many days is effectively `medium` at lookup time; one tier per window, floored at `low`. Stored value never mutates. |
 | **Watch / monitor / digest cron** | | | | | |
 | `RECUPERO_WATCH_DELTA_USD_THRESHOLD` | `100` | Decimal | `>= 0` | v0.16.x | Min USD delta between snapshots to record as a material change. |
@@ -137,6 +143,7 @@ their own section.
 | `RECUPERO_API_PORT` | (uvicorn default) | int | TCP port | v0.18.x | API uvicorn bind port. |
 | `RECUPERO_API_DOCS_PUBLIC` | unset | bool | `=1` | v0.18.9 | Expose `/docs`, `/openapi.json`, `/redoc` in prod (default locked). |
 | `RECUPERO_INTAKE_ALLOWED_ORIGINS` | unset | str | comma-sep origins | v0.25.x | CSRF allow-list for the unauthenticated POST `/v1/intake`. |
+| `RECUPERO_INTAKE_REQUIRE_ORIGIN` | unset (off) | bool | `1/true/yes/on` to enable | v0.32.1 | Strict-CSRF mode for POST `/v1/intake`: when on, reject header-less requests (no Origin AND no Referer). Default OFF — header-less callers (curl, server-side integrations, tests) are allowed and bot abuse is handled by the per-IP rate limiter keyed on the rightmost trusted XFF hop. |
 | `RECUPERO_TRUSTED_PROXY_HOPS` | `0` | int | `>= 0` | v0.18.2 / S-3b | Number of trusted reverse proxies in front of the worker / API (XFF parsing). |
 | `RECUPERO_ADMIN_KEY` | unset | str | secret | v0.16.6 | Shared secret for the admin UI `X-Recupero-Admin-Key` header. Endpoint denies all when unset. |
 | `RECUPERO_PORTAL_BASE_URL` | unset | str | URL prefix | v0.18.x | Portal base URL used when generating customer links. |
@@ -145,6 +152,7 @@ their own section.
 | `RECUPERO_WEBHOOK_ALLOWLIST_HOSTS` | unset | str | comma-sep hosts | v0.27.x | SSRF allow-list for outbound monitoring webhooks (empty = no host bypasses deny list). |
 | **Custody / chain-of-custody** | | | | | |
 | `RECUPERO_CUSTODY_KEY_PATH` | `~/.recupero/custody_key` | str | file path | v0.17.x | Override path to the Ed25519 private key used for custody attestation. |
+| `RECUPERO_RANDOMIZATION_SECRET` | unset | str (secret) | high-entropy | v0.31.2 | Server-held secret keying the per-case HMAC randomization (e.g. dust-attack salt in `security/per_case_randomization.py`). Unset → deterministic local-dev/CI fallback (NOT for prod — set a real secret so per-case salts are unguessable). |
 | **Metrics / health** | | | | | |
 | `RECUPERO_METRICS_BIND_HOST` | `127.0.0.1` | str | bind host | v0.27.x | Prometheus exporter bind host. |
 | **Hack tracker** | | | | | |
@@ -164,17 +172,43 @@ their own section.
 #### `RECUPERO_TRACE_MAX_HOPS`
 
 BFS depth cap for the primary trace walk. Read at trace start
-(`src/recupero/trace/tracer.py:125`), clamped to `[1, 8]`, and falls
-back to `config.trace.max_depth` on parse failure with a
-`log.warning`.
+(`src/recupero/trace/tracer.py:125`), clamped to
+`[1, RECUPERO_TRACE_MAX_HOPS_HARD_CEILING]` (default 64 in v0.32.1+
+industry-best mode), and falls back to `config.trace.max_depth` on
+parse failure with a `log.warning`.
 
 * **Failure modes:** a non-int value triggers a WARN and the trace
-  uses the YAML default (2). Setting it to 0 or negative clamps to 1.
-  Above 8 is rejected — 8 hops already explores tens of thousands of
-  counterparties and risks API quota exhaustion.
-* **When to override:** raise to 4-6 for deep-laundering cases that
-  hop through consolidation hubs (Zigha-shape). Leave at default for
+  uses the YAML default (4). Setting it to 0 or negative clamps to 1.
+  Above the hard ceiling clamps DOWN to the ceiling.
+* **When to override:** raise to 8-16 for deep-laundering cases that
+  hop through consolidation hubs (Zigha-shape). For APT-style cases
+  with 30-50 hop chains, raise to 32 or 64. Leave at default for
   routine diagnostics.
+
+#### `RECUPERO_TRACE_MAX_HOPS_HARD_CEILING`
+
+Upper bound on `RECUPERO_TRACE_MAX_HOPS`. v0.32.1+ industry-best
+mode raised from 8 → 64 so Recupero can reach destinations Reactor
+caps around 12. Operators on quota-constrained API plans lower this
+to whatever they can fund.
+
+* **Failure modes:** non-int falls back to 64 with a WARN. Clamped
+  to `[1, 1024]` (above 1024 is almost certainly a typo).
+* **When to override:** lower to 8 to restore legacy v0.31.x
+  behavior on shared free-tier API keys.
+
+#### `RECUPERO_MAX_TRANSFERS_PER_ADDRESS`
+
+Per-address transfer fetch cap (raw + sliced). Read at
+`src/recupero/trace/tracer.py` `_trace_one_hop`. Overrides
+`config.trace.max_transfers_per_address` per-case. Set to 0 to
+disable the cap entirely.
+
+* **Failure modes:** non-int falls back to config with a WARN.
+* **When to override:** set 0 on a whale-wallet trace where the
+  full activity history matters (still bounded by `max_depth`,
+  the trace deadline, and the per-case transfer cap). Set lower
+  (e.g. 500) to restore legacy v0.31.x behavior.
 
 #### `RECUPERO_TRACE_DUST_USD`
 
@@ -367,12 +401,18 @@ to disable (logged as WARN — runaway retries will burn real budget).
 
 #### `RECUPERO_API_BUDGET_USD_PER_CASE`
 
-v0.32 (Tier-1 gap #4 from `docs/WHY_RECUPERO_WOULD_FAIL.md` §1.4).
-Per-case API spend cap across all upstream providers (Etherscan,
-Helius, TronGrid, Alchemy, CoinGecko, DeFiLlama). Read at the top of
-the tracer (`src/recupero/observability/api_budget.py`,
-`src/recupero/trace/tracer.py`). Default $0.50, clamped to
-`[$0.01, $100.0]`.
+v0.32 (Tier-1 gap #4 from `docs/WHY_RECUPERO_WOULD_FAIL.md` §1.4),
+relaxed to "industry-best mode" in v0.32.1+. Per-case API spend cap
+across all upstream providers (Etherscan, Helius, TronGrid, Alchemy,
+CoinGecko, DeFiLlama). Read at the top of the tracer
+(`src/recupero/observability/api_budget.py`,
+`src/recupero/trace/tracer.py`).
+
+**Default: `0` (DISABLED).** v0.32.1+ ships in industry-best mode
+where the tracker burns whatever API quota the case needs to reach
+destinations Reactor would. Operators opt in to per-case spend
+tracking by setting a positive USD value. When set, the cap is
+clamped to `[$0.01, $1,000,000.0]`.
 
 The cost model is pessimistic by design — each provider's per-call
 cost is rounded UP to the nearest order of magnitude so we cap
@@ -388,14 +428,12 @@ deadline-hit path).
 
 * **Failure modes:** non-finite (NaN / Inf), non-numeric, or
   out-of-range values reject with a WARN and fall back to default
-  $0.50. Negative values are rejected loud. Zero is honored as
-  "disable tracking" without a warning — it's the documented
-  test / CLI escape hatch.
-* **When to override:** raise to $2.00-$5.00 for whale-case
-  diagnostic runs where deep BFS is worth the spend; lower to
-  $0.10 for quick exploratory runs that shouldn't ever hit the
-  paid tier. Set to `0` in test scaffolding and one-off CLI runs
-  where the cap would just add noise.
+  (disabled). Negative values are rejected loud. Zero matches the
+  default and is honored without a warning.
+* **When to override:** set $5.00-$50.00 for cost-controlled
+  deployments on shared free-tier API keys; set $1000+ on
+  whale-case diagnostic runs where deep BFS is worth the spend.
+  Leave unset for the industry-best default (no cap).
 
 #### `RECUPERO_P_ANY_CALIBRATION_JSON`
 

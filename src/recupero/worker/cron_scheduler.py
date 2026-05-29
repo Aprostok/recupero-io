@@ -331,36 +331,124 @@ def _record_job_failure(
         return 1
 
 
+def _looks_like_uuid(s: str) -> bool:
+    """Return True for 8-4-4-4-12 UUID-shaped strings (don't redact these)."""
+    import re as _re
+    return bool(_re.fullmatch(
+        r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}",
+        s,
+    ))
+
+
+def _looks_like_address(s: str) -> bool:
+    """Return True for 0x-prefixed EVM-style addresses (don't redact)."""
+    return s.startswith("0x") and len(s) in (42, 66) and all(
+        c in "0123456789abcdefABCDEFx" for c in s
+    )
+
+
 def _safe_error_text(error: Exception) -> str:
     """Scrub + truncate an exception message for storage / webhook.
 
-    The webhook payload MUST NOT contain DSN credentials, API keys,
-    or other secrets. ``str(error)`` for a psycopg OperationalError
-    typically includes the full DSN. ``_common.db_connect`` already
-    redacts DSNs on the way up, but we belt-and-suspender here so a
-    direct exception bypassing that path still gets scrubbed.
+    v0.32.1 JACOB_SECURITY_AUDIT_v032 CRIT-2 close-out: the prior version
+    only redacted ``api_key|token|secret|password|bearer`` labels and DSN
+    URI credentials. Any cron exception that surfaced a bare vendor-key
+    (``sk_live_xxx``, ``re_xxx``, ``whsec_xxx``, ``AKIA…``, JWT, Slack
+    webhook URL, etc.) was shipped to Slack/Discord. This expansion also
+    redacts:
+
+    * Credentialed URI schemes beyond postgres: redis, mongodb, amqp,
+      sftp, ftp, mysql, smtp, https-with-basic-auth.
+    * Labeled secrets (existing).
+    * Vendor key prefixes (Stripe ``sk_live`` / ``sk_test`` / ``rk_live``
+      / ``pk_live``, Resend ``re_``, Anthropic ``sk-ant-``,
+      ``sk-proj-``, GitHub ``ghp_``/``ghs_``/``gho_``, AWS ``AKIA``/
+      ``ASIA``, Vercel ``vc_``, Slack ``xoxb-``, generic ``whsec_``).
+    * JWT pattern (three dot-separated base64url chunks starting ``eyJ``).
+    * Slack incoming-webhook URLs.
+    * Generic high-entropy 32+ char base64/hex chunks NOT matching the
+      UUID or 0x-address allow-lists.
+
+    The webhook payload MUST NOT contain DSN credentials, API keys, or
+    other secrets. ``_common.db_connect`` already redacts DSNs on the
+    way up, but we belt-and-suspender here so a direct exception
+    bypassing that path still gets scrubbed.
     """
     raw = f"{type(error).__name__}: {error}"
-    # Conservative redaction: anything that looks like a URI with
-    # credentials.
     import re
-    # postgresql://user:password@host:port/db → postgresql://***@host:port/db
+
+    # 1) Credentialed URI schemes — collapse user:pass@host to ***@host.
     raw = re.sub(
-        r"(postgres(?:ql)?://)[^@\s]+@",
+        r"((?:postgres(?:ql)?|redis|mongodb(?:\+srv)?|amqp(?:s)?|sftp|ftp|mysql|smtp|https?)://)"
+        r"[^@\s/]+@",
         r"\1***@",
         raw,
+        flags=re.IGNORECASE,
     )
-    # Common secret-shaped substrings: long base64-ish / hex chunks
-    # that don't look like UUIDs or addresses. Cheap heuristic — any
-    # token >= 32 alphanumeric chars without a vowel pattern gets
-    # masked. Avoid this being too aggressive: only redact tokens
-    # that have a key-like prefix.
+
+    # 2) Labeled secrets (existing behavior, plus authorization header).
     raw = re.sub(
-        r"(api[_-]?key|token|secret|password|bearer)[=:\s]+\S+",
+        r"(api[_-]?key|token|secret|password|passwd|bearer|authorization)"
+        r"[=:\s]+\S+",
         r"\1=***",
         raw,
         flags=re.IGNORECASE,
     )
+
+    # 3) JWT (three base64url segments separated by dots, starting eyJ).
+    raw = re.sub(
+        r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b",
+        "***JWT***",
+        raw,
+    )
+
+    # 4) Slack incoming-webhook URLs.
+    raw = re.sub(
+        r"https://hooks\.slack\.com/services/[A-Z0-9/]+",
+        "https://hooks.slack.com/services/***",
+        raw,
+    )
+
+    # 5) Vendor key prefixes. Match the prefix + a non-trivial suffix.
+    vendor_prefixes = [
+        r"sk_live_[A-Za-z0-9]{8,}",
+        r"sk_test_[A-Za-z0-9]{8,}",
+        r"rk_live_[A-Za-z0-9]{8,}",
+        r"pk_live_[A-Za-z0-9]{8,}",
+        r"whsec_[A-Za-z0-9]{8,}",
+        r"re_[A-Za-z0-9]{16,}",  # Resend
+        r"sk-ant-[A-Za-z0-9\-_]{16,}",
+        r"sk-proj-[A-Za-z0-9\-_]{16,}",
+        r"ghp_[A-Za-z0-9]{16,}",
+        r"ghs_[A-Za-z0-9]{16,}",
+        r"gho_[A-Za-z0-9]{16,}",
+        r"AKIA[0-9A-Z]{16}",
+        r"ASIA[0-9A-Z]{16}",
+        r"vc_[A-Za-z0-9]{16,}",
+        r"xoxb-[A-Za-z0-9\-]{16,}",
+        r"xoxp-[A-Za-z0-9\-]{16,}",
+        r"xapp-[A-Za-z0-9\-]{16,}",
+    ]
+    for pat in vendor_prefixes:
+        raw = re.sub(pat, "***VENDOR_KEY***", raw)
+
+    # 6) Generic high-entropy 32+ char base64/hex chunks. Skip UUIDs and
+    # 0x-prefixed addresses by pattern-matching them first and masking
+    # by token-by-token replacement.
+    def _maybe_redact_token(match: re.Match) -> str:
+        token = match.group(0)
+        if _looks_like_uuid(token):
+            return token
+        if _looks_like_address(token):
+            return token
+        return "***HIGH_ENTROPY***"
+
+    raw = re.sub(
+        r"\b[A-Za-z0-9_\-+/=]{32,}\b",
+        _maybe_redact_token,
+        raw,
+    )
+
     return raw[:1000]
 
 
@@ -399,6 +487,31 @@ def _post_error_webhook(
         # No webhook configured — silent. Operators see the failure
         # via the /cron/healthz endpoint + the WARN log line.
         return
+
+    # v0.32.1 (security-audit cycle-2): the alert URL is operator-set via
+    # env, but a typo / compromised env var pointing at internal infra
+    # (169.254.169.254, 10.x, *.internal) would exfil job-internal error
+    # text on every cron failure. Run the host through the SAME SSRF guard
+    # the webhook dispatch + OFAC sync use. Best-effort: a guard import
+    # failure falls through (the URL is operator-set, not attacker-set, so
+    # we don't hard-fail the alert path on an import error), but a host the
+    # guard rejects is skipped rather than POSTed.
+    try:
+        from urllib.parse import urlsplit
+
+        from recupero.api.monitoring_api import (
+            _is_blocked_host,
+            _resolves_to_blocked_ip,
+        )
+        _alert_host = urlsplit(url).hostname or ""
+        if _is_blocked_host(_alert_host) or _resolves_to_blocked_ip(_alert_host):
+            log.warning(
+                "cron: alert webhook host %r blocked by SSRF guard (job=%s); "
+                "skipping page", _alert_host, job_name,
+            )
+            return
+    except Exception:  # noqa: BLE001
+        pass
 
     payload = {
         "text": f"cron job {job_name} failed (#{consecutive_failures})",
@@ -451,7 +564,11 @@ def _post_error_webhook(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
+def build_cron_healthz_payload(
+    *,
+    dsn: str | None = None,
+    include_error_message: bool = False,
+) -> dict:
     """Return the JSON payload served at GET /cron/healthz.
 
     Shape::
@@ -526,6 +643,8 @@ def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
     for name in expected_jobs:
         row = rows_by_job.get(name)
         last_success = row["last_success_utc"] if row else None
+        last_error_utc_raw = row["last_error_utc"] if row else None
+        last_error_msg = row["last_error_message"] if row else None
         failures = row["consecutive_failures"] if row else 0
         if last_success is None:
             status = "down"
@@ -540,7 +659,7 @@ def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
                 status = "stale"
             else:
                 status = "ok"
-        job_states[name] = {
+        state: dict = {
             "last_success_utc": (
                 last_success.isoformat().replace("+00:00", "Z")
                 if last_success else None
@@ -551,6 +670,22 @@ def build_cron_healthz_payload(*, dsn: str | None = None) -> dict:
             "consecutive_failures": int(failures),
             "status": status,
         }
+        if include_error_message:
+            # Admin-only payload (v0.32.1 HIGH-5): surface the
+            # last_error_message + last_error_utc. The public
+            # /cron/healthz never includes these fields.
+            err_utc_iso: str | None = None
+            if last_error_utc_raw is not None:
+                _e = last_error_utc_raw
+                if hasattr(_e, "tzinfo") and _e.tzinfo is None:
+                    _e = _e.replace(tzinfo=UTC)
+                try:
+                    err_utc_iso = _e.isoformat().replace("+00:00", "Z")
+                except AttributeError:
+                    err_utc_iso = str(_e)
+            state["last_error_utc"] = err_utc_iso
+            state["last_error_message"] = last_error_msg
+        job_states[name] = state
         # Roll-up: down beats stale beats ok.
         if status == "down":
             worst_status = "down"
@@ -698,8 +833,9 @@ def _job_label_auto_ingest() -> None:
 def _job_stale_label_alert() -> None:
     """Flag labels whose added_at is > 90 days old."""
     log.info("cron: running stale-label alert")
-    from pathlib import Path
     import json
+    from pathlib import Path
+
     from recupero._common import atomic_write_text
 
     seeds_dir = (
@@ -826,21 +962,33 @@ def _install_signal_handlers() -> None:
         signal.signal(signal.SIGINT, _handler)
 
 
-def _fire_job(j: CronJob) -> None:
+def _fire_job(j: CronJob) -> bool:
     """Fire one job inside the HA wrapper.
 
     Order:
-      1. Try to acquire the lock. If another replica holds it → INFO + skip.
+      1. Try to acquire the lock. If another replica holds it (or the
+         lock-acquire fails closed on a DB error) → INFO/refuse + skip.
       2. Run the job.
       3. On success: record success.
       4. On failure: log exception, record failure, maybe fire webhook.
+
+    Returns True iff this replica acquired the lease and ATTEMPTED the run
+    (success OR job-internal failure). Returns False when the tick was
+    SKIPPED — another replica holds the lease, or `_try_acquire_lock`
+    failed closed on a DB blip. v0.32.1 (worker-audit HIGH): the caller
+    advances `last_fired` ONLY on a True return, so a skipped tick re-
+    evaluates the window on the next tick instead of silently swallowing
+    the run for a full schedule period (the old code set last_fired in a
+    `finally` regardless, so a transient lock-acquire failure on the sole
+    live replica missed the window — e.g. OFAC sync skipped for 24h).
     """
     if not _try_acquire_lock(j.name):
         log.info(
-            "cron: job %s held by another leader, skipping this tick",
+            "cron: job %s held by another leader / lock unavailable, "
+            "skipping this tick (will re-evaluate next tick)",
             j.name,
         )
-        return
+        return False
 
     try:
         j.run_fn()
@@ -850,6 +998,7 @@ def _fire_job(j: CronJob) -> None:
         _post_error_webhook(j.name, exc, failures)
     else:
         _record_job_success(j.name)
+    return True
 
 
 def run_scheduler(
@@ -883,10 +1032,17 @@ def run_scheduler(
             next_fire = j.schedule_fn(anchor)
             if now >= next_fire:
                 j.is_running = True
+                ran = False
                 try:
-                    _fire_job(j)
+                    ran = _fire_job(j)
                 finally:
-                    j.last_fired = now
+                    # v0.32.1 (worker-audit HIGH): only advance last_fired
+                    # when the job actually RAN this tick. A skip (not
+                    # leader, or lock-acquire DB error) must leave
+                    # last_fired so the window is retried next tick rather
+                    # than missed for a full schedule period.
+                    if ran:
+                        j.last_fired = now
                     j.is_running = False
 
         tick += 1

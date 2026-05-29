@@ -85,6 +85,31 @@ class Chain(str, Enum):
     moonbeam = "moonbeam"
     metis = "metis"
     kava = "kava"
+    # v0.32.1 W5 (round-2 adversary Route 1' close-out): additional
+    # rollup-canonical L2 destination chains. Each has a labeled
+    # canonical bridge in bridges.json + a decoder dispatch in
+    # bridge_calldata.py. Without these enum members the cross-chain
+    # BFS continuation in tracer.py would fail to instantiate the
+    # destination adapter and silently produce no continuation.
+    #
+    # NB: polygon_zkevm, opbnb, manta are LABEL-only destinations for
+    # now (no full adapter via watch_tick). The Chain enum entry is
+    # what bridges.json needs to be loaded WITHOUT being silently
+    # dropped by the validator.
+    polygon_zkevm = "polygon_zkevm"
+    opbnb = "opbnb"
+    manta = "manta"
+    # v0.32.1+ (Cap-C): Cosmos / IBC chains. Minimal read-only
+    # coverage via Mintscan / LCD endpoints. The enum entry is
+    # shared by Cosmos Hub, Osmosis, Injective, etc. — the
+    # CosmosAdapter dispatches per-zone via the address bech32
+    # prefix (``cosmos1...``, ``osmo1...``, ``inj1...``).
+    #
+    # NOT YET wired into ChainAdapter.for_chain — the BFS does not
+    # call into Cosmos until wave-7 integration. The enum entry
+    # exists so Case / Transfer records can carry the chain
+    # identifier without a Pydantic rejection.
+    cosmos = "cosmos"
 
 
 class LabelCategory(str, Enum):
@@ -118,7 +143,17 @@ class TokenRef(BaseModel):
     chain: Chain
     contract: Address | None = None  # None => native asset (ETH on mainnet)
     symbol: str
-    decimals: int
+    # v0.32.1 (forensic-audit): decimals must be in [0, 255]. A NEGATIVE
+    # value is a smoking-gun for a malformed RPC/label response, and it is
+    # the exponent that scales raw on-chain integers into human amounts
+    # (amount = raw / 10**decimals) — a negative would INFLATE the amount
+    # by orders of magnitude, corrupting every USD figure derived from it.
+    # The EVM/Tron adapters already clamp to [0, 255] at source; this is
+    # the model-boundary backstop so a value reaching TokenRef any other
+    # way (a hand-built seed, a future adapter) can't smuggle a negative
+    # exponent into the loss math. 255 mirrors the adapter clamp ceiling
+    # so it never rejects an adapter-produced value.
+    decimals: int = Field(ge=0, le=255)
     coingecko_id: str | None = None
 
 
@@ -232,6 +267,43 @@ class Transfer(BaseModel):
         if not v.isdigit():
             raise ValueError(
                 f"amount_raw must be a non-negative integer string, got {v!r}"
+            )
+        return v
+
+    @field_validator("amount_decimal", "usd_value_at_tx")
+    @classmethod
+    def _money_is_finite_nonnegative(cls, v: Decimal | None) -> Decimal | None:
+        """`amount_decimal` and `usd_value_at_tx` must be finite and >= 0.
+
+        Mirrors the `amount_raw` guard at the model boundary (the round-9
+        audit closed the raw-string path; this closes the Decimal path that
+        the rest of the pipeline actually does arithmetic on). Two failure
+        modes this stops:
+
+          * NEGATIVE — there is no on-chain negative transfer value; a
+            leading `-` is a smoking-gun for a parser bug (signed-int
+            overflow misread, off-by-one in raw-bytes decoding). Permitting
+            it meant downstream Decimal sums silently SUBTRACTED from the
+            loss total — a legally-consequential under-count.
+          * NON-FINITE (NaN/Inf) — a price-feed or RPC glitch that, once it
+            enters a Decimal column, poisons every aggregate it touches
+            (total drained, per-asset, per-issuer recovery math) and renders
+            "NaN"/"inf" into LE-facing deliverables. We have defense-in-depth
+            downstream, but rejecting at construction is the real fix and
+            makes the long-standing test-helper assumption (that the model
+            rejects non-finite Decimals) finally true.
+
+        `usd_value_at_tx` is optional, so `None` passes through untouched.
+        """
+        if v is None:
+            return v
+        if not v.is_finite():
+            raise ValueError(
+                f"monetary value must be a finite Decimal, got {v!r}"
+            )
+        if v < 0:
+            raise ValueError(
+                f"monetary value must be non-negative, got {v!r}"
             )
         return v
 

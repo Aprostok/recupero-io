@@ -351,3 +351,165 @@ def test_malformed_freezable_entry_skipped_not_crash() -> None:
     est = score_recovery(brief)
     # The valid Tether entry still contributes.
     assert est.expected_recovered_usd > Decimal("0")
+
+
+# ---- v0.32.1 financial-audit: table ↔ headline ↔ CI reconciliation ---- #
+#
+# These lock the CRITICAL + HIGH fixes from the v0.32.1 audit cycle:
+#   * friction (bridge/DEX hops) must fold into the SINGLE multiplier
+#     applied uniformly to the headline, the per-issuer rows, AND the CI
+#     band — pre-fix it hit only the scalar headline, so the LE Section
+#     5.4 table over-summed the headline by up to ~43% on any bridged case
+#     (re-opening the v0.22.1-C1 "table doesn't sum to headline" defect);
+#   * the headline / CI / rows can never promise more than total_loss.
+# Tolerance is $0.10 — the rows are cent-rounded (and re-rounded after the
+# friction + clamp rescales), so a few cents of drift is expected; a real
+# regression is thousands of dollars off, not pennies.
+
+_RECONCILE_TOL = Decimal("0.10")
+
+
+def _sum_rows(est) -> Decimal:
+    return sum((r.expected_recovered_usd for r in est.per_issuer), Decimal("0"))
+
+
+def test_per_issuer_rows_sum_to_headline_with_friction() -> None:
+    """CRITICAL: multi-issuer case WITH bridge + DEX hops — the
+    per-issuer table must still reconcile to the friction-discounted
+    headline (pre-fix the rows carried jur×sanctions but not friction)."""
+    brief = _brief(
+        total_loss="$5,000,000",
+        freezable=[
+            {"issuer": "Tether", "total_usd": "$2,000,000", "freeze_capability": "HIGH"},
+            {"issuer": "Circle", "total_usd": "$1,500,000", "freeze_capability": "HIGH"},
+            {"issuer": "Binance", "total_usd": "$1,000,000", "freeze_capability": "yes"},
+        ],
+        cross_chain_handoffs=[{}, {}, {}],  # 3 bridge hops
+        dex_swaps=[{}, {}],                  # 2 DEX swaps → friction = 0.25
+    )
+    est = score_recovery(brief, auto_load_priors=False)
+    assert est.per_issuer, "expected per-issuer rows"
+    drift = abs(_sum_rows(est) - est.expected_recovered_usd)
+    assert drift <= _RECONCILE_TOL, (
+        f"per-issuer table (${_sum_rows(est)}) must reconcile to headline "
+        f"(${est.expected_recovered_usd}); drift ${drift}"
+    )
+
+
+def test_friction_reduces_expected_recovery() -> None:
+    """The friction multiplier must actually bite: an identical case
+    WITH six bridge hops (30% friction, the cap) recovers strictly less
+    than one WITHOUT, and the rows still reconcile to the headline."""
+    base_freezable = [
+        {"issuer": "Tether", "total_usd": "$3,000,000", "freeze_capability": "HIGH"},
+    ]
+    clean = score_recovery(
+        _brief(total_loss="$10,000,000", freezable=base_freezable),
+        auto_load_priors=False,
+    )
+    bridged = score_recovery(
+        _brief(
+            total_loss="$10,000,000",
+            freezable=base_freezable,
+            cross_chain_handoffs=[{}, {}, {}, {}, {}, {}],  # 6 hops → 30% cap
+        ),
+        auto_load_priors=False,
+    )
+    assert bridged.expected_recovered_usd < clean.expected_recovered_usd
+    drift = abs(_sum_rows(bridged) - bridged.expected_recovered_usd)
+    assert drift <= _RECONCILE_TOL
+
+
+def test_ci_band_reconciles_with_friction() -> None:
+    """CRITICAL: the CI band is computed with the SAME friction-inclusive
+    multiplier as the headline (was friction-free → band over-stated on
+    bridged cases). Lock: low ≤ headline ≤ high."""
+    brief = _brief(
+        total_loss="$10,000,000",
+        freezable=[
+            {"issuer": "Tether", "total_usd": "$3,000,000", "freeze_capability": "HIGH"},
+        ],
+        cross_chain_handoffs=[{}, {}, {}, {}],  # 4 hops → 20% friction
+    )
+    est = score_recovery(brief, auto_load_priors=False)
+    assert est.expected_recovered_low_usd <= est.expected_recovered_usd
+    assert est.expected_recovered_usd <= est.expected_recovered_high_usd
+
+
+def test_expected_recovery_never_exceeds_total_loss() -> None:
+    """HIGH: on a pooled-victim case the summed FREEZABLE can exceed THIS
+    victim's loss; the headline, BOTH CI bounds, and the per-issuer rows
+    must all be clamped to total_loss — and the rows must still sum to the
+    clamped headline."""
+    loss = Decimal("1000000")
+    brief = _brief(
+        total_loss="$1,000,000",
+        freezable=[
+            {"issuer": "Tether", "total_usd": "$5,000,000", "freeze_capability": "HIGH"},
+            {"issuer": "Circle", "total_usd": "$3,000,000", "freeze_capability": "HIGH"},
+        ],
+    )
+    est = score_recovery(brief, auto_load_priors=False)
+    assert est.expected_recovered_usd <= loss, (
+        f"headline ${est.expected_recovered_usd} must not exceed loss ${loss}"
+    )
+    assert est.expected_recovered_high_usd <= loss
+    assert est.expected_recovered_low_usd <= loss
+    drift = abs(_sum_rows(est) - est.expected_recovered_usd)
+    assert drift <= _RECONCILE_TOL, (
+        f"clamped per-issuer rows (${_sum_rows(est)}) must still sum to the "
+        f"clamped headline (${est.expected_recovered_usd}); drift ${drift}"
+    )
+
+
+# ---- v0.32.1 audit (untouched-surfaces): OFAC sanctions overlay fires ---- #
+#
+# CRITICAL regression: the recovery scorer's 0.30x sanctions multiplier
+# read brief keys (ofac_exposure / sanctions_exposure /
+# touched_sanctioned_entity) that the producer NEVER emits — it emits
+# RISK_ASSESSMENT.summary.ofac_exposed_count. So the overlay never fired
+# and every sanctioned case was scored at FULL recoverability.
+
+
+def test_brief_has_ofac_exposure_reads_canonical_summary_shape() -> None:
+    from recupero.trace.risk_scoring import brief_has_ofac_exposure
+    # Canonical produced shape.
+    assert brief_has_ofac_exposure(
+        {"RISK_ASSESSMENT": {"summary": {"ofac_exposed_count": 2}}}
+    ) is True
+    assert brief_has_ofac_exposure(
+        {"RISK_ASSESSMENT": {"summary": {"ofac_exposed_count": 0}}}
+    ) is False
+    # Legacy top-level keys still honored (hand-authored / test briefs).
+    assert brief_has_ofac_exposure({"RISK_ASSESSMENT": {"ofac_exposure": True}}) is True
+    # Absent / malformed → False (no spurious overlay).
+    assert brief_has_ofac_exposure({}) is False
+    assert brief_has_ofac_exposure({"RISK_ASSESSMENT": None}) is False
+    assert brief_has_ofac_exposure(None) is False
+
+
+def test_sanctions_overlay_applies_030x_on_ofac_exposed_brief() -> None:
+    """A sanctioned case (RISK_ASSESSMENT.summary.ofac_exposed_count > 0)
+    gets the 0.30x recovery multiplier + an ofac_sanctions driver. Pre-fix
+    the overlay read a dead key → full recoverability on sanctioned cases."""
+    freezable = [{"issuer": "Tether", "total_usd": "$1,000,000",
+                  "freeze_capability": "HIGH"}]
+    clean = score_recovery(
+        _brief(total_loss="$3,000,000", freezable=freezable),
+        auto_load_priors=False,
+    )
+    sanctioned_brief = _brief(total_loss="$3,000,000", freezable=freezable)
+    sanctioned_brief["RISK_ASSESSMENT"] = {"summary": {"ofac_exposed_count": 1}}
+    sanctioned = score_recovery(sanctioned_brief, auto_load_priors=False)
+
+    assert sanctioned.expected_recovered_usd < clean.expected_recovered_usd
+    ratio = float(sanctioned.expected_recovered_usd / clean.expected_recovered_usd)
+    assert 0.25 <= ratio <= 0.35, (
+        f"expected ~0.30x sanctions overlay; got ratio {ratio:.3f} "
+        f"(clean=${clean.expected_recovered_usd}, "
+        f"sanctioned=${sanctioned.expected_recovered_usd})"
+    )
+    assert any(d.factor == "ofac_sanctions" for d in sanctioned.drivers), (
+        f"expected an ofac_sanctions driver; got "
+        f"{[d.factor for d in sanctioned.drivers]}"
+    )

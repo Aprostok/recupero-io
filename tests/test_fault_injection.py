@@ -70,7 +70,6 @@ from uuid import uuid4
 
 import pytest
 
-
 # ----------------------------------------------------------------------
 # Shared helpers
 # ----------------------------------------------------------------------
@@ -175,7 +174,7 @@ def test_fault2_persistent_5xx_marks_stage_failed_not_silent(monkeypatch) -> Non
     db.mark_failed with error_stage="tracing" — a TRANSIENT-style
     failure that the operator can re-queue, NOT a silent success.
     """
-    from recupero.worker.pipeline import _StageFailure, _run_stage
+    from recupero.worker.pipeline import _run_stage, _StageFailure
 
     db = MagicMock()
     inv_id = uuid4()
@@ -205,8 +204,8 @@ def test_fault2_5xx_classified_as_transient_by_storage_retry() -> None:
     import httpx
 
     from recupero.storage.supabase_case_store import (
-        _StorageTransient,
         _is_storage_transient,
+        _StorageTransient,
     )
 
     # 5xx → retry
@@ -311,7 +310,7 @@ def test_fault4_memoryerror_in_aggregate_routes_to_stage_failure(monkeypatch) ->
     operator sees ``MemoryError: ...`` in error_message rather than a
     generic "unknown" tag.
     """
-    from recupero.worker.pipeline import _StageFailure, _run_stage
+    from recupero.worker.pipeline import _run_stage, _StageFailure
 
     db = MagicMock()
     inv_id = uuid4()

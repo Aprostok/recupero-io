@@ -490,6 +490,51 @@ def test_unrendered_jinja_block_flagged(tmp_path):
     )
 
 
+def test_unrendered_jinja_in_legal_requests_flagged(tmp_path):
+    """v0.32.1 output-MED: subpoena / 314(b) / MLAT drafts land in
+    cases/<id>/legal_requests/, which the validator previously did NOT
+    scan. A template bug there could ship an unrendered {{ courthouse }}
+    to an attorney. The check now scans that subdir too."""
+    case_dir = _build_minimal_good_case(tmp_path)
+    legal_dir = case_dir / "legal_requests"
+    legal_dir.mkdir(parents=True, exist_ok=True)
+    _write_lf(legal_dir / "subpoena_Binance.html",
+        "<!DOCTYPE html><html><body>"
+        "<p>Produce records for {{ perpetrator.exchange_address }}</p>"
+        "</body></html>"
+    )
+    result = validate_case_output(case_dir)
+    assert any(
+        v.check == "no_unrendered_jinja_placeholders"
+        and v.severity == "high"
+        and v.file == "subpoena_Binance.html"
+        for v in result.violations
+    ), "unrendered Jinja in legal_requests/ must be flagged"
+
+
+def test_todo_attorney_fill_in_not_flagged_as_unrendered(tmp_path):
+    """The intentional [TODO: ...] attorney fill-ins a subpoena draft
+    carries (judicial district, courthouse, return date — blanks recupero
+    genuinely cannot populate) render via |default("[TODO: ...]") and are
+    NOT unrendered Jinja. The check must NOT flag them, or it would break
+    the legitimate subpoena-draft workflow with a false positive."""
+    case_dir = _build_minimal_good_case(tmp_path)
+    legal_dir = case_dir / "legal_requests"
+    legal_dir.mkdir(parents=True, exist_ok=True)
+    _write_lf(legal_dir / "subpoena_Kraken.html",
+        "<!DOCTYPE html><html><body>"
+        "<p>Sitting at [TODO: courthouse address] on or before "
+        "[TODO: 30-day return date].</p>"
+        "</body></html>"
+    )
+    result = validate_case_output(case_dir)
+    assert not any(
+        v.check == "no_unrendered_jinja_placeholders"
+        and v.file == "subpoena_Kraken.html"
+        for v in result.violations
+    ), "intentional [TODO:] attorney fill-ins must not be flagged"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # End-to-end: run V-CFI01 production path through the validator
 # ─────────────────────────────────────────────────────────────────────────────

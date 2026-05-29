@@ -277,6 +277,99 @@ class TronGridClient:
             )
         return out
 
+    def get_native_transactions(
+        self,
+        address: str,
+        *,
+        limit: int = 200,
+        min_timestamp: int | None = None,
+        max_timestamp: int | None = None,
+        max_pages: int = 50,
+        only_to: bool | None = None,
+        only_from: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        """Paginated NATIVE-TRX transaction history (v0.32.1, CRIT-2).
+
+        Returns the flat list of full Tron transactions for the
+        account. Each entry exposes the ``raw_data.contract[0]``
+        envelope; native TRX transfers carry ``type ==
+        "TransferContract"`` with
+        ``raw_data.contract[0].parameter.value.{owner_address,
+        to_address, amount}`` (amount in SUN; 1 TRX = 1,000,000 SUN).
+
+        Other contract types (TriggerSmartContract for TRC-20 calls,
+        TransferAssetContract for TRC-10 tokens, FreezeBalanceContract
+        for staking, etc.) appear here too — the adapter is
+        responsible for filtering to ``TransferContract`` only.
+
+        Pagination mirrors the TRC-20 path: cursor-based via
+        ``meta.fingerprint``, stuck-fingerprint guard, max_pages cap.
+        """
+        out: list[dict[str, Any]] = []
+        params: dict[str, Any] = {"limit": str(min(limit, 200))}
+        if min_timestamp is not None:
+            params["min_timestamp"] = str(min_timestamp)
+        if max_timestamp is not None:
+            params["max_timestamp"] = str(max_timestamp)
+        if only_to:
+            params["only_to"] = "true"
+        if only_from:
+            params["only_from"] = "true"
+
+        url = f"/v1/accounts/{address}/transactions"
+        stuck_count = 0
+        for page in range(max_pages):
+            try:
+                body = self._get(url, params=params)
+            except TronGridError as e:
+                # Surface the first-page error; partial pages stop
+                # with whatever we collected so far (mirrors
+                # RIGOR-Jacob I hardening — don't lose accumulated
+                # data on a mid-pagination 5xx).
+                if page == 0:
+                    raise
+                log.warning(
+                    "trongrid native txns: stopping pagination at page "
+                    "%d after error: %s", page, e,
+                )
+                break
+            if not isinstance(body, dict):
+                raise TronGridError(
+                    f"TronGrid native-txn response not a dict "
+                    f"(got {type(body).__name__})"
+                )
+            data = body.get("data") or []
+            if not isinstance(data, list):
+                log.warning(
+                    "trongrid native txns: unexpected non-list 'data' "
+                    "field (got %r); stopping pagination",
+                    type(data).__name__,
+                )
+                break
+            out.extend(data)
+            meta = body.get("meta") or {}
+            fingerprint = meta.get("fingerprint") if isinstance(meta, dict) else None
+            if not fingerprint or not data:
+                break
+            if fingerprint == params.get("fingerprint"):
+                stuck_count += 1
+                if stuck_count >= 3:
+                    log.warning(
+                        "trongrid native txns: stuck fingerprint at "
+                        "page %d (fp=%r); breaking after %d repeats",
+                        page, fingerprint, stuck_count,
+                    )
+                    break
+            else:
+                stuck_count = 0
+            params["fingerprint"] = fingerprint
+        else:
+            log.warning(
+                "trongrid native txns: hit max_pages=%d for %s; "
+                "results may be truncated", max_pages, address,
+            )
+        return out
+
     def get_latest_block(self) -> dict[str, Any]:
         """Latest block header. Used by adapters to anchor an
         "up through now" timestamp window."""

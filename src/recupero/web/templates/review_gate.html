@@ -1,0 +1,311 @@
+<!--
+  review_gate.html — operator UI for the v0.32 brief-review queue.
+
+  Backed by recupero.dispatcher.review_api (router prefix /v1/reviews):
+    GET  /v1/reviews/queue              → list awaiting rows
+    POST /v1/reviews/{id}/approve       → mark approved
+    POST /v1/reviews/{id}/reject        → mark rejected
+    POST /v1/reviews/{id}/override      → mark overridden (audited)
+
+  Auth: every state-changing call demands the X-Recupero-Admin-Key
+  header. We surface a single text field at the top of the page; the
+  operator pastes their admin key once and we attach it to every
+  fetch() invocation in the click handler below. The key is held
+  ONLY in memory — never localStorage, never a cookie.
+
+  Vanilla HTML + a tiny inline <script>: no framework, no build step,
+  no external CDN. Renders on any modern browser including the
+  Firefox ESR / Chromium versions our compliance team's corporate
+  images ship. Pre-v0.32.1 the gate was API-only (Jacob audit §4);
+  this is the minimum viable operator console to action the queue
+  without curl.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Recupero — Review Gate (awaiting briefs)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    /* Minimal CSS — match the rest of the operator surfaces (sans-serif,
+       neutral palette). Pre-v0.32.1 we shipped no operator console at
+       all; this is intentionally not pixel-perfect, just legible. */
+    :root {
+      --bg: #fbfbfb;
+      --fg: #1c1c1c;
+      --muted: #6b6b6b;
+      --border: #d4d4d4;
+      --accent: #1d4ed8;
+      --approve: #15803d;
+      --reject: #b91c1c;
+      --pending: #b45309;
+      --done: #047857;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      margin: 0;
+      padding: 1.5rem 2rem;
+      max-width: 1100px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    h1 { font-size: 1.4rem; margin: 0 0 0.25rem 0; }
+    .subtitle { color: var(--muted); margin: 0 0 1.5rem 0; font-size: 0.9rem; }
+    .auth-row {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 1.25rem;
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+    }
+    .auth-row label { font-size: 0.85rem; color: var(--muted); }
+    .auth-row input {
+      flex: 1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.85rem;
+      padding: 0.4rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+    }
+    button {
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 0.4rem 0.8rem;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: #fff;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    button.approve { background: var(--approve); color: #fff; border-color: var(--approve); }
+    button.reject  { background: var(--reject);  color: #fff; border-color: var(--reject);  }
+    button.reload  { background: var(--accent);  color: #fff; border-color: var(--accent);  }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    th, td {
+      text-align: left;
+      padding: 0.6rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    th { background: #f3f3f3; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+    tr:last-child td { border-bottom: none; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+    .status-awaiting { color: var(--pending); font-weight: 600; }
+    .status-approved { color: var(--done); font-weight: 600; }
+    .status-rejected { color: var(--reject); font-weight: 600; }
+    .actions { display: flex; gap: 0.4rem; }
+    .empty {
+      padding: 2rem;
+      text-align: center;
+      color: var(--muted);
+      background: #fff;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 1.25rem;
+      right: 1.25rem;
+      background: #1c1c1c;
+      color: #fff;
+      padding: 0.6rem 1rem;
+      border-radius: 4px;
+      font-size: 0.85rem;
+      max-width: 22rem;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+    .toast.visible { opacity: 0.95; }
+    details { background: #fafafa; padding: 0.4rem 0.6rem; border-radius: 4px; }
+    summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); }
+    .resolved-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
+  </style>
+</head>
+<body>
+
+<h1>Recupero — Brief Review Gate</h1>
+<p class="subtitle">
+  Pending deliverables awaiting human sign-off before the dispatcher
+  releases them downstream. v0.32 Tier-0 gap #1 (see
+  <code>recupero.dispatcher.review_gate</code>).
+</p>
+
+<div class="auth-row">
+  <label for="admin-key">X-Recupero-Admin-Key:</label>
+  <input
+    type="password"
+    id="admin-key"
+    autocomplete="off"
+    spellcheck="false"
+    placeholder="paste admin key (held in memory only — not stored)">
+  <button type="button" class="reload" id="reload-btn">Reload queue</button>
+</div>
+
+<div id="queue-container">
+  <p class="empty">Paste your admin key and click <strong>Reload queue</strong>.</p>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  // Vanilla JS, no framework. Holds the admin key in memory only and
+  // attaches it as X-Recupero-Admin-Key to every fetch() invocation.
+  // No localStorage / sessionStorage — closing the tab discards the key.
+  (function () {
+    const container = document.getElementById("queue-container");
+    const keyInput  = document.getElementById("admin-key");
+    const reloadBtn = document.getElementById("reload-btn");
+    const toastEl   = document.getElementById("toast");
+
+    function toast(msg) {
+      toastEl.textContent = msg;
+      toastEl.classList.add("visible");
+      setTimeout(() => toastEl.classList.remove("visible"), 3000);
+    }
+
+    function adminHeaders() {
+      const key = (keyInput.value || "").trim();
+      const h = { "Content-Type": "application/json" };
+      if (key) h["X-Recupero-Admin-Key"] = key;
+      return h;
+    }
+
+    function shortSha(s) { return s ? s.slice(0, 12) + "…" : "—"; }
+
+    async function loadQueue() {
+      container.innerHTML = '<p class="empty">Loading…</p>';
+      let resp;
+      try {
+        resp = await fetch("/v1/reviews/queue", { headers: adminHeaders() });
+      } catch (e) {
+        container.innerHTML = '<p class="empty">Network error — is the API reachable?</p>';
+        return;
+      }
+      if (resp.status === 401) {
+        container.innerHTML = '<p class="empty">401 — invalid or missing admin key.</p>';
+        return;
+      }
+      if (resp.status === 503) {
+        container.innerHTML = '<p class="empty">503 — review API disabled (RECUPERO_ADMIN_KEY unset on the server).</p>';
+        return;
+      }
+      if (!resp.ok) {
+        container.innerHTML = '<p class="empty">Unexpected status ' + resp.status + '.</p>';
+        return;
+      }
+      const data = await resp.json();
+      const rows = data.reviews || [];
+      if (rows.length === 0) {
+        container.innerHTML = '<p class="empty">Queue is empty — no briefs awaiting review.</p>';
+        return;
+      }
+      renderTable(rows);
+    }
+
+    function renderTable(rows) {
+      const headers = "<tr>"
+        + "<th>Brief SHA</th><th>Case</th><th>Kind</th>"
+        + "<th>Generated (UTC)</th><th>Artifact</th>"
+        + "<th>Status</th><th>Actions</th></tr>";
+      const body = rows.map(r => {
+        const sha = r.artifact_sha256 || "";
+        const inlineUrl = r.artifact_path
+          ? '<a href="/v1/reviews/' + r.id + '/artifact" target="_blank" rel="noopener">view inline</a>'
+          : "—";
+        return "<tr data-id=\"" + r.id + "\">"
+          + '<td class="mono" title="' + sha + '">' + shortSha(sha) + '</td>'
+          + "<td class=\"mono\">" + (r.case_id || "—") + "</td>"
+          + "<td>" + (r.artifact_kind || "—") + "</td>"
+          + "<td class=\"mono\">" + (r.created_at_utc || "—") + "</td>"
+          + "<td>" + inlineUrl + "</td>"
+          + '<td><span class="status-awaiting">awaiting_review</span></td>'
+          + '<td class="actions">'
+          + '  <button class="approve" data-action="approve">Approve</button>'
+          + '  <button class="reject"  data-action="reject">Reject</button>'
+          + "</td>"
+          + "</tr>";
+      }).join("");
+      container.innerHTML = "<table>" + headers + body + "</table>";
+
+      container.querySelectorAll("button[data-action]").forEach(btn => {
+        btn.addEventListener("click", onActionClick);
+      });
+    }
+
+    async function onActionClick(ev) {
+      const btn = ev.currentTarget;
+      const tr = btn.closest("tr");
+      const id = tr.getAttribute("data-id");
+      const action = btn.getAttribute("data-action");
+      const reviewer = prompt("Reviewer email (recorded on the audit row):");
+      if (!reviewer) return;
+      const notes = action === "reject"
+        ? prompt("Rejection notes (required):")
+        : prompt("Review notes (optional):") || null;
+      if (action === "reject" && !notes) {
+        toast("Rejection notes are required.");
+        return;
+      }
+
+      btn.disabled = true;
+      tr.querySelectorAll("button").forEach(b => b.disabled = true);
+      let resp;
+      try {
+        resp = await fetch("/v1/reviews/" + id + "/" + action, {
+          method: "POST",
+          headers: adminHeaders(),
+          body: JSON.stringify({
+            reviewer_email: reviewer,
+            review_notes: notes
+          })
+        });
+      } catch (e) {
+        toast("Network error.");
+        tr.querySelectorAll("button").forEach(b => b.disabled = false);
+        return;
+      }
+      if (!resp.ok) {
+        toast(action + " failed: HTTP " + resp.status);
+        tr.querySelectorAll("button").forEach(b => b.disabled = false);
+        return;
+      }
+      const data = await resp.json();
+      // Replace the row with the "decided" state — operators get
+      // immediate visual confirmation without re-fetching the whole queue.
+      const statusCell = tr.querySelector("td:nth-child(6)");
+      const actionsCell = tr.querySelector("td.actions");
+      const cls = data.status === "approved" ? "status-approved" : "status-rejected";
+      statusCell.innerHTML = '<span class="' + cls + '">' + data.status + '</span>';
+      actionsCell.innerHTML = '<div class="resolved-meta">'
+        + (data.status === "approved" ? "approved" : "rejected")
+        + " by " + (data.reviewer_email || "?")
+        + " at " + (data.review_completed_at_utc || "?")
+        + "</div>";
+      toast("Review " + data.status + ".");
+    }
+
+    reloadBtn.addEventListener("click", loadQueue);
+
+    // Enter inside the key field triggers reload — small ergonomics
+    // win for the 2-AM-on-call workflow this exists to serve.
+    keyInput.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter") loadQueue();
+    });
+  })();
+</script>
+
+</body>
+</html>

@@ -92,9 +92,17 @@ def test_async_surface_is_minimal_and_locked(parsed):
 def test_async_count_matches_baseline(parsed):
     """Lock the count so silent additions to api/* also get a code-review nudge."""
     total = sum(len(_async_funcs(t)) for _, t in parsed)
-    # As of this audit: 12 in api/app.py + 1 in api/auth.py = 13.
-    assert total == 13, (
-        f"async def count drifted to {total} (was 13). Update baseline and "
+    # As of this audit: 16 in api/app.py + 1 in api/auth.py = 17.
+    # (v0.32.1: +review_gate_ui — a static-template HTMLResponse, same
+    # non-blocking shape as intake_form_get; verified against the
+    # blocking-IO rule in test_no_blocking_io_inside_async_def.)
+    # (v0.32.1 body-size cap: +3 in _BodySizeLimitMiddleware —
+    # __call__ / limited_receive / _send_413. All pure ASGI plumbing
+    # (await receive/send, byte counting); zero blocking I/O. Covered by
+    # test_no_blocking_io_inside_async_def, which scans every async def
+    # in api/app.py for sync-I/O calls and passed on these three.)
+    assert total == 17, (
+        f"async def count drifted to {total} (was 17). Update baseline and "
         "verify each new async def is non-blocking."
     )
 
@@ -129,7 +137,7 @@ def test_no_blocking_io_inside_async_def(parsed):
     assert not violations, (
         "Blocking sync I/O inside async def. Use httpx.AsyncClient / "
         "asyncio.sleep, or run via fastapi.concurrency.run_in_threadpool. "
-        f"Violations:\n  " + "\n  ".join(violations)
+        "Violations:\n  " + "\n  ".join(violations)
     )
 
 

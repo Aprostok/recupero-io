@@ -16,13 +16,10 @@ Pins the F1–F7 fixes from `docs/BRIEF_READTHROUGH_FINDINGS_v030.md`:
 """
 from __future__ import annotations
 
-import os
 from decimal import Decimal
 from pathlib import Path
-from unittest import mock
 
 import pytest
-
 
 # ──────────────────────────────────────────────────────────────────────
 # F3/F4 — jurisdiction parser + US-victim routing
@@ -200,7 +197,7 @@ def test_section_5_inclusion_floor_is_configurable_constant() -> None:
         _SECTION_5_USD_INCLUSION_FLOOR_DEFAULT,
     )
     assert isinstance(_SECTION_5_USD_INCLUSION_FLOOR_DEFAULT, Decimal)
-    assert _SECTION_5_USD_INCLUSION_FLOOR_DEFAULT > Decimal("0")
+    assert Decimal("0") < _SECTION_5_USD_INCLUSION_FLOOR_DEFAULT
     assert isinstance(_SECTION_5_HOP_DEPTH_FLOOR, int)
     assert isinstance(_SECTION_5_UNLABELED_HARD_CAP, int)
     assert _SECTION_5_UNLABELED_HARD_CAP >= 10

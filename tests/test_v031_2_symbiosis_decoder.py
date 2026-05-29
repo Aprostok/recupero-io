@@ -25,7 +25,6 @@ from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers — same shape as tests/test_v031_2_hop_squid_decoders.py
 # ─────────────────────────────────────────────────────────────────────────────

@@ -47,7 +47,7 @@ from pathlib import Path
 import httpx
 
 from recupero.config import RecuperoConfig, RecuperoEnv
-from recupero.models import Chain, TokenRef
+from recupero.models import Chain
 
 log = logging.getLogger(__name__)
 

@@ -33,7 +33,13 @@ trace:
   incident_buffer_minutes: 60
 
   # Maximum number of transfers to follow per address (sanity cap).
-  max_transfers_per_address: 500
+  # v0.32.1+ industry-best mode: bumped 500 → 50000 so whale-wallet
+  # traces follow the full activity history. Reactor caps around
+  # 5,000; the higher ceiling lets us reach destinations that sit
+  # behind a hub with thousands of outflows. Set 0 to disable the
+  # cap entirely (the BFS still terminates on max_depth, deadline,
+  # and per-case transfer-cap gates).
+  max_transfers_per_address: 50000
 
   # Service-wallet detection: if a wallet emits more than this many
   # outflows in the trace window, treat it as service-like (unlabeled

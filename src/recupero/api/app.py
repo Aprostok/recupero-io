@@ -1315,29 +1315,36 @@ def _intake_rl_client_ip(request: Request) -> str:
     # proxy (RECUPERO_TRUSTED_PROXY_HOPS) we cannot distinguish an
     # edge-set value from a spoofed one.
     #
-    # v0.32.1 (security-audit HIGH): in a detected PRODUCTION environment
-    # with no trusted-hop declaration, REFUSE to bucket on the spoofable
-    # x-real-ip — otherwise a bot rotating `X-Real-IP:` per request evades
-    # the per-IP intake rate limit, which (now that header-less POSTs are
-    # allowed) is the SOLE bot defense for the unauthenticated
-    # POST /v1/intake. Fall through to the socket peer (the real TCP peer,
-    # not client-controllable). Operators behind a trusted edge proxy
-    # should set RECUPERO_TRUSTED_PROXY_HOPS to restore per-client
-    # bucketing via the rightmost-hop path above. In non-prod we keep
-    # x-real-ip for local-dev convenience.
+    # Without a declared trusted proxy (RECUPERO_TRUSTED_PROXY_HOPS),
+    # x-real-ip is a client-settable header — a bot rotating `X-Real-IP:`
+    # per request would evade the per-IP intake rate limit, which (now that
+    # header-less POSTs are allowed) is the SOLE bot defense for the
+    # unauthenticated POST /v1/intake.
+    #
+    # v0.32.1 (security-audit cycle-2): FAIL CLOSED. The prior gate trusted
+    # x-real-ip UNLESS _is_production_environment() positively detected prod
+    # — but that keys off explicit markers, so a production deploy that
+    # forgot to set one (no RAILWAY_ENVIRONMENT/ENVIRONMENT/…=production)
+    # fell through to trusting the spoofable header. Now we trust x-real-ip
+    # in the no-trusted-hop case ONLY when the environment POSITIVELY
+    # declares dev/test/local; any unmarked / ambiguous / production env
+    # refuses it and buckets on the socket peer (the real TCP peer, not
+    # client-controllable). Operators behind a trusted edge proxy should
+    # set RECUPERO_TRUSTED_PROXY_HOPS to restore precise per-client
+    # bucketing via the rightmost-hop path above.
     real_ip = (request.headers.get("x-real-ip", "") or "").strip()
     if real_ip:
         spoofable = trusted_hops == 0
         if not spoofable:
             return real_ip
         try:
-            from recupero.api.auth import _is_production_environment
-            in_prod = _is_production_environment()
+            from recupero.api.auth import _is_local_dev_environment
+            trust_real_ip = _is_local_dev_environment()
         except Exception:  # noqa: BLE001 — never break the hot path on detection
-            in_prod = False
-        if not in_prod:
+            trust_real_ip = False  # detection failed → fail closed (assume prod)
+        if trust_real_ip:
             return real_ip
-        # prod + no trusted hops → x-real-ip is untrusted; fall through.
+        # ambiguous / prod + no trusted hops → x-real-ip untrusted; fall through.
 
     if request.client and request.client.host:
         return request.client.host

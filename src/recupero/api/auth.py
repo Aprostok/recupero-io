@@ -261,6 +261,42 @@ def _is_production_environment() -> bool:
     return False
 
 
+#: Environment-marker values that POSITIVELY declare a local / dev / test
+#: deploy. "staging" is deliberately EXCLUDED — staging is a real-ish
+#: environment and must get the safe (production-like) behavior.
+_DEV_ENV_VALUES = frozenset({"development", "dev", "local", "test", "testing"})
+
+
+def _is_local_dev_environment() -> bool:
+    """True only when an env marker POSITIVELY declares a local/dev/test
+    deploy.
+
+    Used for FAIL-CLOSED security defaults: a feature that relaxes a
+    control "in dev" (e.g. trusting a client-settable header for rate-limit
+    bucketing) must gate on THIS returning True, so an unmarked / ambiguous
+    / production deploy gets the SAFE behavior by default.
+
+    This is intentionally STRICTER than ``not _is_production_environment()``
+    — the latter is True for an UNMARKED environment, which is exactly the
+    ambiguous case we must NOT treat as dev (an operator who forgot to set
+    a production marker must still get production-safe behavior). Same
+    marker set as the prod detector, matched against dev values.
+    """
+    markers = (
+        "RAILWAY_ENVIRONMENT",
+        "ENVIRONMENT",
+        "ENV",
+        "NODE_ENV",
+        "RECUPERO_ENV",
+        "SENTRY_ENVIRONMENT",
+    )
+    for var in markers:
+        val = (os.environ.get(var) or "").strip().lower()
+        if val in _DEV_ENV_VALUES:
+            return True
+    return False
+
+
 def _is_optional_auth() -> bool:
     """Local-dev bypass. Production-environment markers REFUSE the
     bypass and log a loud WARNING so accidental setting in prod

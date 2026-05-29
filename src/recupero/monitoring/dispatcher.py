@@ -225,13 +225,25 @@ def dispatch_alert(
     # infra, exfiltrating cloud-provider IAM credentials or scanning
     # the local network.
     #
-    # assert_webhook_url_safe runs the same validator chain used at
-    # create time: scheme==https, hostname not in deny-list (loopback,
-    # *.internal, *.local, metadata domains), and (defense in depth)
-    # the hostname's DNS resolution does not point at a blocked IP
-    # range. If any check fails we record a failed dispatch with a
-    # security-specific error_message + skip the HTTP request
-    # entirely.
+    # SSRF defense is LAYERED — no single check is load-bearing:
+    #   1. assert_webhook_url_safe (here + at create time): scheme==https,
+    #      hostname not in deny-list (loopback, *.internal, *.local,
+    #      metadata domains), and the hostname's CURRENT DNS resolution
+    #      does not point at a blocked IP range.
+    #   2. TLS certificate verification (verify=True on the client below).
+    #      This is the PRIMARY defense against DNS REBINDING: the (2) DNS
+    #      check in (1) is inherently TOCTOU — an attacker controlling the
+    #      authoritative DNS could rebind the hostname from a public IP to
+    #      an internal one (169.254.169.254, 10.x) in the window between
+    #      the check and httpx's own resolution. But webhooks are https-
+    #      only, and an internal target cannot present a TLS cert valid for
+    #      the attacker's webhook hostname, so the handshake fails and NO
+    #      request body is ever transmitted to the rebound internal IP.
+    #   3. follow_redirects=False: a 3xx to an internal URL would bypass
+    #      check (1) entirely; we never follow (a 3xx is recorded as a
+    #      non-2xx failure).
+    # If check (1) fails we record a failed dispatch with a security-
+    # specific error_message + skip the HTTP request entirely.
     fired_at = datetime.now(UTC)
     try:
         from recupero.api.monitoring_api import (
@@ -273,7 +285,17 @@ def dispatch_alert(
     }
     if webhook_secret:
         headers["X-Recupero-Signature"] = compute_signature(body, webhook_secret)
-    client = http_client or httpx.Client(timeout=timeout_seconds)
+    # v0.32.1 (security-audit cycle-2): pin the two settings that actually
+    # defeat a DNS-rebind / redirect SSRF EXPLICITLY rather than relying on
+    # httpx defaults (a future httpx default change or a refactor must not
+    # silently weaken this). See the layered-defense note above:
+    #   * verify=True — TLS cert verification; the primary rebind defense.
+    #   * follow_redirects=False — never chase a 3xx to an internal URL.
+    client = http_client or httpx.Client(
+        timeout=timeout_seconds,
+        verify=True,
+        follow_redirects=False,
+    )
     owns_client = http_client is None
     try:
         try:

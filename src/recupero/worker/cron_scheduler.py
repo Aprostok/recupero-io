@@ -962,21 +962,33 @@ def _install_signal_handlers() -> None:
         signal.signal(signal.SIGINT, _handler)
 
 
-def _fire_job(j: CronJob) -> None:
+def _fire_job(j: CronJob) -> bool:
     """Fire one job inside the HA wrapper.
 
     Order:
-      1. Try to acquire the lock. If another replica holds it → INFO + skip.
+      1. Try to acquire the lock. If another replica holds it (or the
+         lock-acquire fails closed on a DB error) → INFO/refuse + skip.
       2. Run the job.
       3. On success: record success.
       4. On failure: log exception, record failure, maybe fire webhook.
+
+    Returns True iff this replica acquired the lease and ATTEMPTED the run
+    (success OR job-internal failure). Returns False when the tick was
+    SKIPPED — another replica holds the lease, or `_try_acquire_lock`
+    failed closed on a DB blip. v0.32.1 (worker-audit HIGH): the caller
+    advances `last_fired` ONLY on a True return, so a skipped tick re-
+    evaluates the window on the next tick instead of silently swallowing
+    the run for a full schedule period (the old code set last_fired in a
+    `finally` regardless, so a transient lock-acquire failure on the sole
+    live replica missed the window — e.g. OFAC sync skipped for 24h).
     """
     if not _try_acquire_lock(j.name):
         log.info(
-            "cron: job %s held by another leader, skipping this tick",
+            "cron: job %s held by another leader / lock unavailable, "
+            "skipping this tick (will re-evaluate next tick)",
             j.name,
         )
-        return
+        return False
 
     try:
         j.run_fn()
@@ -986,6 +998,7 @@ def _fire_job(j: CronJob) -> None:
         _post_error_webhook(j.name, exc, failures)
     else:
         _record_job_success(j.name)
+    return True
 
 
 def run_scheduler(
@@ -1019,10 +1032,17 @@ def run_scheduler(
             next_fire = j.schedule_fn(anchor)
             if now >= next_fire:
                 j.is_running = True
+                ran = False
                 try:
-                    _fire_job(j)
+                    ran = _fire_job(j)
                 finally:
-                    j.last_fired = now
+                    # v0.32.1 (worker-audit HIGH): only advance last_fired
+                    # when the job actually RAN this tick. A skip (not
+                    # leader, or lock-acquire DB error) must leave
+                    # last_fired so the window is retried next tick rather
+                    # than missed for a full schedule period.
+                    if ran:
+                        j.last_fired = now
                     j.is_running = False
 
         tick += 1

@@ -771,3 +771,43 @@ def test_healthz_endpoint_returns_200_on_ok(monkeypatch):
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+def test_fire_job_returns_false_on_skip_true_on_run(monkeypatch):
+    """v0.32.1 (worker-audit HIGH): _fire_job signals whether it actually
+    ran, so the scheduler can decide whether to advance last_fired."""
+    monkeypatch.setenv("HOSTNAME", "replica-A")
+    cron_scheduler._try_acquire_lock("ofac_sync")  # A holds the lease
+    monkeypatch.setenv("HOSTNAME", "replica-B")
+    j_skip = cron_scheduler.CronJob(
+        name="ofac_sync", schedule_fn=lambda now: now, run_fn=lambda: None,
+    )
+    assert cron_scheduler._fire_job(j_skip) is False  # B can't acquire → skip
+
+    monkeypatch.setenv("HOSTNAME", "replica-A")  # A re-acquires its own lease
+    ran = []
+    j_run = cron_scheduler.CronJob(
+        name="ofac_sync", schedule_fn=lambda now: now,
+        run_fn=lambda: ran.append(1),
+    )
+    assert cron_scheduler._fire_job(j_run) is True
+    assert ran == [1]
+
+
+def test_scheduler_does_not_advance_last_fired_on_skip(monkeypatch):
+    """The missed-window fix: a SKIPPED tick (not-leader / lock-acquire DB
+    error) must NOT advance last_fired — otherwise a transient skip on the
+    sole live replica swallows the run for a full schedule period."""
+    monkeypatch.setattr(cron_scheduler, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(cron_scheduler, "_SHUTDOWN", False)
+    j = cron_scheduler.CronJob(
+        name="ofac_sync", schedule_fn=lambda now: now, run_fn=lambda: None,
+    )
+    # Force a skip → last_fired must stay None (window retried next tick).
+    monkeypatch.setattr(cron_scheduler, "_fire_job", lambda job: False)
+    cron_scheduler.run_scheduler(jobs=[j], tick_seconds=0, max_ticks=1)
+    assert j.last_fired is None, "a skipped tick must NOT advance last_fired"
+    # Force a real run → last_fired advances.
+    monkeypatch.setattr(cron_scheduler, "_fire_job", lambda job: True)
+    cron_scheduler.run_scheduler(jobs=[j], tick_seconds=0, max_ticks=1)
+    assert j.last_fired is not None, "a real run MUST advance last_fired"

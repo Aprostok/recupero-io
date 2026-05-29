@@ -454,3 +454,22 @@ def test_render_cluster_handoff_sanitizes_unsafe_public_id_in_filename():
     assert path is not None
     assert ".." not in path.name
     assert "/" not in path.name
+
+
+def test_cluster_binding_roles_are_only_perpetrator_controlled() -> None:
+    """v0.32.1 (forensic-audit): a cross-case cluster may bind ONLY on
+    roles that genuinely denote perpetrator control, because the cluster
+    LE handoff asserts the binding address is "perpetrator-controlled
+    infrastructure" to an AUSA. Lock the set to exactly the two roles
+    correlation._emit actually produces for perp control — so a future
+    change can't silently re-introduce a HEURISTIC binder (e.g.
+    high_risk_destination) and turn a correlation into a falsely-asserted
+    common-control claim."""
+    from recupero.monitoring.cluster_builder import _PERP_ROLES_FOR_CLUSTERING
+    assert _PERP_ROLES_FOR_CLUSTERING == frozenset(
+        {"perpetrator_hub", "drainer_contract"}
+    ), (
+        "binding-role set drifted — only confidently perpetrator-controlled "
+        "roles may bind a cluster (see the cluster_handoff 'perpetrator-"
+        "controlled' assertion)"
+    )

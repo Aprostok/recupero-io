@@ -526,6 +526,13 @@ class EvmAdapter(ChainAdapter):
                 f"etherscan_erc20: invalid tokenDecimal {decimals_raw!r} for "
                 f"contract {tx.get('contractAddress')!r}"
             ) from e
+        # v0.32.1 (chain-audit cycle-2, parity with the Solana adapter):
+        # clamp the attacker-influenceable `tokenDecimal` to the on-chain
+        # u8 ceiling at the SOURCE so the value stored in TokenRef.decimals
+        # can't blow up a downstream `10**decimals` (the tracer's
+        # _build_transfer also clamps, but cex_continuity / dormant /
+        # watch_tick read TokenRef.decimals directly).
+        decimals = max(0, min(decimals, 255))
         token = TokenRef(
             chain=self.chain,
             contract=to_checksum_address(tx["contractAddress"]),

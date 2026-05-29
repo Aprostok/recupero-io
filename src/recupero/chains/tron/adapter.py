@@ -408,6 +408,11 @@ class TronAdapter(ChainAdapter):
             decimals = int(token_info.get("decimals", 6) or 6)
         except (TypeError, ValueError):
             decimals = 6
+        # v0.32.1 (chain-audit cycle-2, parity with the Solana adapter):
+        # clamp the attacker-influenceable TronGrid `decimals` to the
+        # on-chain u8 ceiling at the SOURCE so the value stored in
+        # TokenRef.decimals can't blow up a downstream `10**decimals`.
+        decimals = max(0, min(decimals, 255))
 
         # Tron's value field is a string of the raw integer (smallest
         # unit). We keep it as int for the tracer; downstream pricing

@@ -580,7 +580,12 @@ def _extract_crypto_entries(xml_bytes: bytes) -> list[OFACCryptoEntry]:
                     id_type = (id_child.text or "").strip()
                 elif tag == "idNumber":
                     id_number = (id_child.text or "").strip()
-            if not id_type.startswith("Digital Currency Address"):
+            # v0.32.1 (sanctions-audit): match case-INSENSITIVELY. The
+            # prior exact-prefix check would SILENTLY DROP a real sanctioned
+            # address if Treasury ever shifted the label casing (e.g.
+            # "Digital currency address - ETH") — a missed OFAC hit is the
+            # worst outcome here, so be tolerant of upstream format drift.
+            if not id_type.lower().startswith("digital currency address"):
                 continue
             # Extract chain code from the id_type string
             # e.g., "Digital Currency Address - ETH" → "ETH"

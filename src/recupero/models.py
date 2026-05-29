@@ -260,6 +260,43 @@ class Transfer(BaseModel):
             )
         return v
 
+    @field_validator("amount_decimal", "usd_value_at_tx")
+    @classmethod
+    def _money_is_finite_nonnegative(cls, v: Decimal | None) -> Decimal | None:
+        """`amount_decimal` and `usd_value_at_tx` must be finite and >= 0.
+
+        Mirrors the `amount_raw` guard at the model boundary (the round-9
+        audit closed the raw-string path; this closes the Decimal path that
+        the rest of the pipeline actually does arithmetic on). Two failure
+        modes this stops:
+
+          * NEGATIVE — there is no on-chain negative transfer value; a
+            leading `-` is a smoking-gun for a parser bug (signed-int
+            overflow misread, off-by-one in raw-bytes decoding). Permitting
+            it meant downstream Decimal sums silently SUBTRACTED from the
+            loss total — a legally-consequential under-count.
+          * NON-FINITE (NaN/Inf) — a price-feed or RPC glitch that, once it
+            enters a Decimal column, poisons every aggregate it touches
+            (total drained, per-asset, per-issuer recovery math) and renders
+            "NaN"/"inf" into LE-facing deliverables. We have defense-in-depth
+            downstream, but rejecting at construction is the real fix and
+            makes the long-standing test-helper assumption (that the model
+            rejects non-finite Decimals) finally true.
+
+        `usd_value_at_tx` is optional, so `None` passes through untouched.
+        """
+        if v is None:
+            return v
+        if not v.is_finite():
+            raise ValueError(
+                f"monetary value must be a finite Decimal, got {v!r}"
+            )
+        if v < 0:
+            raise ValueError(
+                f"monetary value must be non-negative, got {v!r}"
+            )
+        return v
+
 
 # ----- Aggregations ----- #
 

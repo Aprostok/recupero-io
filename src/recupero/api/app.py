@@ -118,6 +118,100 @@ except Exception as _exc:  # noqa: BLE001
     )
 
 
+# ---- Request body-size cap (intake DoS guard) ---- #
+
+# v0.32.1 (forensic-audit, api-MED): cap inbound request bodies. Pre-fix
+# the FastAPI app had NO body-size limit — every POST handler reaches
+# ``await request.json()`` / pydantic parsing, which buffers the WHOLE
+# body into memory first. A single client advertising (or streaming) a
+# multi-hundred-MB body could OOM the API process before any per-field
+# validator ran. None of the endpoints need a large body: the biggest is
+# /v1/screen/bulk at 100 × 128-char addresses (~13 KB with JSON
+# overhead). 256 KiB is generous headroom while slamming the door on
+# abuse bodies. (The worker intake portal uses a tighter 64 KB cap in
+# _health_server.py; the API surface is broader, hence the larger value.)
+_MAX_REQUEST_BODY_BYTES = 256 * 1024
+
+
+class _BodySizeLimitMiddleware:
+    """Pure-ASGI middleware rejecting oversized request bodies.
+
+    Two layers, because a Content-Length header alone is not trustworthy:
+
+      1. Fast path — an honest ``Content-Length`` above the cap is
+         rejected with 413 before a single body byte is read.
+      2. Streaming guard — the ``receive`` callable is wrapped to count
+         actual bytes, so a client that LIES about Content-Length or uses
+         chunked transfer-encoding (no Content-Length at all) is still cut
+         off at the cap. On overflow we hand the app an ``http.disconnect``
+         so its body parser raises ClientDisconnect and never produces an
+         oversized parse — no unbounded read, no response-already-started
+         race.
+
+    Implemented as raw ASGI (not BaseHTTPMiddleware) precisely so it never
+    consumes/buffers the body itself — it only inspects sizes and forwards.
+    """
+
+    def __init__(self, app: Any, *, max_bytes: int = _MAX_REQUEST_BODY_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        # Layer 1: honest Content-Length → reject before reading anything.
+        for name, value in scope.get("headers", []):
+            if name == b"content-length":
+                try:
+                    declared = int(value)
+                except ValueError:
+                    await self._send_413(send)
+                    return
+                if declared > self.max_bytes:
+                    await self._send_413(send)
+                    return
+                break
+
+        # Layer 2: enforce on actual bytes (lying CL / chunked encoding).
+        total = 0
+        limit = self.max_bytes
+
+        async def limited_receive() -> Any:
+            nonlocal total
+            message = await receive()
+            if message.get("type") == "http.request":
+                total += len(message.get("body", b""))
+                if total > limit:
+                    # Tell the app the client went away; its body reader
+                    # raises ClientDisconnect rather than parsing a
+                    # half-read oversized body. Stops the DoS cold.
+                    return {"type": "http.disconnect"}
+            return message
+
+        await self.app(scope, limited_receive, send)
+
+    @staticmethod
+    async def _send_413(send: Any) -> None:
+        await send({
+            # 413 Payload/Content Too Large. Literal rather than the
+            # starlette constant, whose name churns across versions
+            # (REQUEST_ENTITY_TOO_LARGE → CONTENT_TOO_LARGE) and emits a
+            # DeprecationWarning the test suite treats as an error.
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [(b"content-type", b"application/json")],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b'{"detail":"request body too large"}',
+        })
+
+
+app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
+
+
 # ---- Request / response models ---- #
 
 # v0.19.2 (round-13 type-HIGH-3): supported-chain enum for API request

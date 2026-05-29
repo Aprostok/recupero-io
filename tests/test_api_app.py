@@ -87,6 +87,34 @@ def test_health_reports_git_sha_when_set(client: TestClient) -> None:
             os.environ["RECUPERO_GIT_SHA"] = prev
 
 
+# ---- Request body-size cap (intake DoS guard) ---- #
+
+
+def test_oversized_body_rejected_with_413(client: TestClient) -> None:
+    """v0.32.1 api-MED: a POST body over the 256 KiB cap must be rejected
+    with 413 BEFORE it is parsed (or even fully read) — the guard exists
+    so a multi-MB body can't OOM the process at json()/pydantic time.
+
+    The cap fires ahead of auth (it's the outermost middleware), so no
+    API key is needed to observe the rejection — that's the point: the
+    DoS door is shut before any per-request work happens."""
+    from recupero.api.app import _MAX_REQUEST_BODY_BYTES
+
+    oversized = "x" * (_MAX_REQUEST_BODY_BYTES + 1024)
+    r = client.post("/v1/screen", json={"address": oversized, "chain": "ethereum"})
+    assert r.status_code == 413, (
+        f"oversized body should be 413, got {r.status_code}"
+    )
+
+
+def test_normal_sized_body_passes_the_cap(client: TestClient, auth_env: None) -> None:
+    """A normal small body must sail through the size guard — it should
+    reach auth (401 without a key), NOT be rejected as too large."""
+    r = client.post("/v1/screen", json={"address": "0xabc", "chain": "ethereum"})
+    assert r.status_code != 413, "a tiny body must not trip the size cap"
+    assert r.status_code == 401  # missing API key — i.e. we got past the cap
+
+
 # ---- Auth on /v1/screen ---- #
 
 

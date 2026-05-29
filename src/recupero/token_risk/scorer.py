@@ -264,6 +264,21 @@ def _score_tx_history(stats: dict[str, Any]) -> list[TokenRiskSignal]:
             ),
             evidence=f"buys={buy_count} sells_succeeded={sell_success}",
         ))
+    elif buy_count >= 1 and sell_success <= 0:
+        # v0.32.1 (token-risk audit): a freshly-deployed honeypot has a
+        # SMALL sample (1-4 buys, zero sells). Pre-fix it fell below the
+        # >=5 floor and emitted NO signal at all → a verdict of "clean" on
+        # an unrecoverable contract. Emit a low-severity lead so the
+        # verdict floors at low/medium-risk, not clean.
+        out.append(TokenRiskSignal(
+            kind="low_volume_no_sell",
+            severity=2,
+            description=(
+                f"{buy_count} buy(s), no successful sells — small sample. "
+                "Possible early-stage honeypot; verify before clearing."
+            ),
+            evidence=f"buys={buy_count} sells_succeeded={sell_success}",
+        ))
 
     # Rug-pull indicator: LP removed within 24h of launch.
     if stats.get("lp_removed_within_24h_of_launch"):

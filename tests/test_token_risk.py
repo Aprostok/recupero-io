@@ -203,3 +203,26 @@ def test_to_json_safe_is_serializable() -> None:
     })
     import json
     json.dumps(out.to_json_safe())  # should not raise
+
+
+def test_low_volume_honeypot_is_not_clean() -> None:
+    """v0.32.1 (token-risk audit): a small-sample honeypot (1-4 buys, zero
+    successful sells) must NOT score 'clean' — pre-fix it fell below the
+    >=5 floor and emitted no signal, clearing an unrecoverable contract.
+    Now it floors at low_risk via a severity-2 lead."""
+    out = score_token(
+        "0xtoken",
+        tx_history_stats={"buy_count": 3, "sell_success_count": 0},
+    )
+    assert out.verdict != "clean", (
+        f"a 3-buy / 0-sell token must not be 'clean'; got {out.verdict}"
+    )
+    assert any(s.kind == "low_volume_no_sell" for s in out.signals)
+
+
+def test_strong_honeypot_threshold_unchanged() -> None:
+    """The >=5 (medium) and >=20 (honeypot) floors still fire as before."""
+    mid = score_token("0xt", tx_history_stats={"buy_count": 6, "sell_success_count": 0})
+    assert any(s.kind == "high_buy_no_sell" and s.severity == 3 for s in mid.signals)
+    strong = score_token("0xt", tx_history_stats={"buy_count": 25, "sell_success_count": 0})
+    assert any(s.kind == "high_buy_no_sell" and s.severity == 4 for s in strong.signals)

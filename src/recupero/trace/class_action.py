@@ -321,9 +321,11 @@ def _build_class_action_note(
     base = (
         f"CLASS-ACTION OPPORTUNITY: this case shares "
         f"{qualifying_count} perpetrator-controlled address(es) "
-        f"with {prior_case_count} prior case(s) totaling "
-        f"${combined_loss:,.2f} in combined victim loss across prior "
-        "cases. "
+        f"with {prior_case_count} prior case(s); "
+        f"~${combined_loss:,.2f} in aggregate USD flowed through those "
+        "shared addresses across prior cases (exposure estimate — may "
+        "double-count where multiple shared addresses touch the same "
+        "prior case). "
     )
     if multi_share_prior_cases > 0:
         base += (

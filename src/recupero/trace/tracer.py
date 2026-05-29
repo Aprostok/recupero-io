@@ -933,6 +933,82 @@ def _continue_past_dex_and_bridges(
                 src_block_time = incident_time
             cross_chain_seeds.append((dest_chain, decoded_addr, 1, src_block_time))
 
+    # v0.32.1 (trace-depth #1 wiring): lock-and-mint cross-chain matching.
+    # OPT-IN via RECUPERO_LOCKMINT_MATCH because it is the more INFERENTIAL,
+    # more EXPENSIVE tier. For handoffs where calldata decode yielded NO
+    # destination (Celer pool / Orbiter / legacy Multichain — the recipient
+    # is not in the source calldata), fetch the perpetrator address's
+    # INBOUND transfers on each candidate destination chain and correlate by
+    # amount+time (same-address lock-and-mint heuristic). A confirmed match
+    # (confidence medium/low — a cross-chain correlation, NEVER proof) adds a
+    # continuation seed so the BFS follows the trail onto the destination
+    # chain. Default OFF so existing prod traces are byte-for-byte unchanged
+    # unless an operator opts into the deeper matching for a specific case.
+    _lockmint_on = os.environ.get(
+        "RECUPERO_LOCKMINT_MATCH", "",
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if _lockmint_on and cross_chain_continue and handoffs:
+        from recupero.trace.cross_chain import match_lockmint_destination
+        for handoff in handoffs:
+            if handoff.decoded_destination_address:
+                continue  # calldata already produced a destination
+            for cand_str in handoff.destination_chain_candidates:
+                try:
+                    cand_chain = Chain(cand_str)
+                except (ValueError, KeyError):
+                    continue  # chain not in our enum / no adapter
+                xkey = (
+                    cand_chain.value,
+                    _address_visited_key(cand_chain, handoff.source_address),
+                )
+                if xkey in cross_chain_visited:
+                    continue
+                try:
+                    lm_adapter = ChainAdapter.for_chain(cand_chain, (config, env))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "lock-mint: failed to instantiate %s adapter: %s",
+                        cand_chain.value, exc,
+                    )
+                    continue
+                try:
+                    match = match_lockmint_destination(
+                        handoff, dst_adapter=lm_adapter,
+                        window_hours=xchain_window_h or 24.0,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "lock-mint match failed on %s: %s", cand_chain.value, exc,
+                    )
+                    match = None
+                finally:
+                    try:  # noqa: SIM105
+                        lm_adapter.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+                if match is None:
+                    continue
+                cross_chain_visited.add(xkey)
+                try:
+                    src_bt = datetime.fromisoformat(
+                        handoff.block_time_iso.replace("Z", "+00:00")
+                    )
+                    if src_bt.tzinfo is None:
+                        src_bt = src_bt.replace(tzinfo=UTC)
+                except (TypeError, ValueError, AttributeError):
+                    src_bt = incident_time
+                cross_chain_seeds.append(
+                    (cand_chain, match.candidate.address, 1, src_bt)
+                )
+                log.info(
+                    "lock-mint match: handoff %s → %s on %s (confidence=%s, "
+                    "%.2f%% amount / %.1fh) — continuing BFS as a cross-chain "
+                    "CORRELATION lead, not proof",
+                    handoff.source_tx_hash[:14], match.candidate.address,
+                    cand_chain.value, match.confidence, match.amount_diff_pct,
+                    match.delay_seconds / 3600.0,
+                )
+
     if not continuation_seeds and not cross_chain_seeds:
         return
 

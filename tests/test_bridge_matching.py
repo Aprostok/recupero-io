@@ -271,3 +271,112 @@ def test_candidates_from_transfers_maps_domain_objects() -> None:
     )
     assert res is not None
     assert res.confidence == "medium"
+
+
+# ---- match_lockmint_destination (cross_chain integration, fake adapter) ---- #
+
+
+class _TokenRef:
+    def __init__(self, symbol: str, decimals: int) -> None:
+        self.symbol = symbol
+        self.decimals = decimals
+
+
+class _FakeChain:
+    value = "arbitrum"
+
+
+class _FakeDstAdapter:
+    """Minimal ChainAdapter stand-in: returns canned inbound rows in the
+    normalized dict shape the EVM adapter's fetch_*_inflows produce."""
+
+    chain = _FakeChain()
+
+    def __init__(self, native_rows=None, erc20_rows=None) -> None:
+        self._native = native_rows or []
+        self._erc20 = erc20_rows or []
+
+    def block_at_or_before(self, ts):  # noqa: ANN001
+        return 1
+
+    def fetch_native_inflows(self, to_address, start_block, *, max_results=None):  # noqa: ANN001
+        return self._native
+
+    def fetch_erc20_inflows(self, to_address, start_block, *, max_results=None):  # noqa: ANN001
+        return self._erc20
+
+
+def _handoff(amount: str = "100000", token: str = "USDC"):
+    from recupero.trace.cross_chain import CrossChainHandoff
+
+    from recupero.models import Chain
+
+    return CrossChainHandoff(
+        source_address="0x" + "f" * 40,
+        source_chain=Chain.ethereum,
+        source_tx_hash="0xsrc",
+        source_explorer_url="https://etherscan.io/tx/0xsrc",
+        bridge_name="Celer cBridge",
+        bridge_protocol="celer",
+        bridge_address="0x" + "c" * 40,
+        amount_decimal=Decimal(amount),
+        amount_usd=Decimal(amount),
+        token_symbol=token,
+        block_time_iso="2026-01-01T12:00:00Z",
+        destination_chain_candidates=("arbitrum",),
+        follow_up_url=None,
+    )
+
+
+def test_match_lockmint_destination_same_address_inbound_match() -> None:
+    """End-to-end: a lock-mint handoff (no decoded recipient) + the perp's
+    inbound USDC on the destination chain within the window → matched at
+    medium confidence (correlation, never high)."""
+    from recupero.trace.cross_chain import match_lockmint_destination
+
+    erc20_rows = [{
+        "chain": _FakeChain(),
+        "to": "0x" + "f" * 40,
+        "tx_hash": "0xmint",
+        "amount_raw": 99700000000,            # 99,700 USDC (6 decimals), 0.3% fee
+        "block_time": _T0 + timedelta(minutes=4),
+        "token": _TokenRef("USDC", 6),
+        "explorer_url": "https://arbiscan.io/tx/0xmint",
+    }]
+    res = match_lockmint_destination(
+        _handoff(amount="100000"),
+        dst_adapter=_FakeDstAdapter(erc20_rows=erc20_rows),
+    )
+    assert res is not None
+    assert res.confidence in ("medium", "low")
+    assert res.confidence != "high"
+    assert res.candidate.tx_hash == "0xmint"
+
+
+def test_match_lockmint_destination_no_inbound_returns_none() -> None:
+    """No inbound activity on the candidate chain → no match (trail simply
+    isn't on this chain)."""
+    from recupero.trace.cross_chain import match_lockmint_destination
+
+    res = match_lockmint_destination(
+        _handoff(), dst_adapter=_FakeDstAdapter(),
+    )
+    assert res is None
+
+
+def test_match_lockmint_destination_amount_mismatch_returns_none() -> None:
+    """Inbound exists but the amount is far off → not our funds, no match."""
+    from recupero.trace.cross_chain import match_lockmint_destination
+
+    erc20_rows = [{
+        "chain": _FakeChain(), "to": "0x" + "f" * 40, "tx_hash": "0xother",
+        "amount_raw": 5000000000,             # 5,000 USDC — unrelated
+        "block_time": _T0 + timedelta(minutes=4),
+        "token": _TokenRef("USDC", 6),
+        "explorer_url": "https://arbiscan.io/tx/0xother",
+    }]
+    res = match_lockmint_destination(
+        _handoff(amount="100000"),
+        dst_adapter=_FakeDstAdapter(erc20_rows=erc20_rows),
+    )
+    assert res is None

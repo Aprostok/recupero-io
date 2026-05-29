@@ -207,6 +207,72 @@ class TestEthereumAdapter:
         assert t["amount_raw"] == 1000000000
 
     @respx.mock
+    def test_native_inflows_keeps_inbound_drops_outbound(self, adapter: EthereumAdapter) -> None:
+        """v0.32.1 (trace-depth #1): fetch_native_inflows is the mirror of
+        fetch_native_outflows — it keeps rows where our address is the
+        RECIPIENT (to == addr) and drops outbound / zero / failed."""
+        me = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
+        other = "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d"
+        rows = [
+            # inbound (kept)
+            {"blockNumber": "19000001", "timeStamp": "1736942400",
+             "hash": "0xin1", "from": other, "to": me,
+             "value": "2000000000000000000", "isError": "0"},
+            # outbound (dropped — wrong direction for inflows)
+            {"blockNumber": "19000002", "timeStamp": "1736942500",
+             "hash": "0xout1", "from": me, "to": other,
+             "value": "1000000000000000000", "isError": "0"},
+            # inbound but zero-value (dropped)
+            {"blockNumber": "19000003", "timeStamp": "1736942600",
+             "hash": "0xz", "from": other, "to": me,
+             "value": "0", "isError": "0"},
+            # inbound but failed (dropped)
+            {"blockNumber": "19000004", "timeStamp": "1736942700",
+             "hash": "0xf", "from": other, "to": me,
+             "value": "5000000000000000000", "isError": "1"},
+        ]
+        respx.get("https://api.etherscan.io/v2/api").mock(
+            return_value=httpx.Response(200, json=_ok(rows))
+        )
+        out = adapter.fetch_native_inflows(me, start_block=19000000)
+        assert any(t["tx_hash"] == "0xin1" for t in out)
+        assert all(t["tx_hash"] != "0xout1" for t in out)
+        assert all(t["tx_hash"] != "0xz" for t in out)
+        assert all(t["tx_hash"] != "0xf" for t in out)
+        # The kept inbound row is normalized with us as the recipient.
+        kept = next(t for t in out if t["tx_hash"] == "0xin1")
+        assert kept["to"].lower() == me.lower()
+
+    @respx.mock
+    def test_erc20_inflows_keeps_inbound_token_receipt(self, adapter: EthereumAdapter) -> None:
+        """Token INBOUND fetch — keep a USDT transfer where we're the
+        recipient; this is what the lock-and-mint matcher correlates a
+        bridge deposit against."""
+        me = "0x0cdC902f4448b51289398261DB41E8ADC99bE955"
+        bridge_payout = "0xeEaDd1F663E5Cd8cdB2102d42756168762457b9d"
+        rows = [
+            {"blockNumber": "19000005", "timeStamp": "1736942800",
+             "hash": "0xtok_in", "from": bridge_payout, "to": me,
+             "contractAddress": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+             "tokenSymbol": "USDT", "tokenDecimal": "6",
+             "value": "99700000000", "logIndex": "0"},  # 99,700 USDT (post-fee)
+            # outbound token (dropped)
+            {"blockNumber": "19000006", "timeStamp": "1736942900",
+             "hash": "0xtok_out", "from": me, "to": bridge_payout,
+             "contractAddress": "0xdAC17F958D2ee523a2206206994597C13D831ec7",
+             "tokenSymbol": "USDT", "tokenDecimal": "6",
+             "value": "1000000", "logIndex": "1"},
+        ]
+        respx.get("https://api.etherscan.io/v2/api").mock(
+            return_value=httpx.Response(200, json=_ok(rows))
+        )
+        out = adapter.fetch_erc20_inflows(me, start_block=19000000)
+        assert len(out) == 1
+        assert out[0]["tx_hash"] == "0xtok_in"
+        assert out[0]["token"].symbol == "USDT"
+        assert out[0]["to"].lower() == me.lower()
+
+    @respx.mock
     def test_no_records_found_is_handled_as_empty(self, adapter: EthereumAdapter) -> None:
         respx.get("https://api.etherscan.io/v2/api").mock(
             return_value=httpx.Response(200, json={

@@ -390,10 +390,102 @@ def _build_investigator_note(h: CrossChainHandoff) -> str:
     return " ".join(parts)
 
 
+def match_lockmint_destination(
+    handoff: CrossChainHandoff,
+    *,
+    dst_adapter: Any,
+    window_hours: float = 24.0,
+    slippage_pct: Decimal = Decimal("2.0"),
+    max_candidates_per_leg: int = 500,
+) -> Any:
+    """Locate the destination of a LOCK-AND-MINT bridge handoff on one
+    candidate destination chain by correlating amount + time.
+
+    Used for bridges that don't carry the recipient in source-chain calldata
+    (Celer pool, Orbiter, legacy Multichain): ``handoff.decoded_destination_*``
+    is ``None`` and the calldata-driven continuation has nothing to follow.
+
+    Heuristic (same-address lock-and-mint — the common EVM↔EVM case): the
+    relayer mints to the SAME perpetrator-controlled address on the
+    destination chain. So we fetch that address's INBOUND transfers on
+    ``dst_adapter``'s chain within the settlement window and ask the pure
+    matcher (``bridge_matching.match_bridge_withdrawal``) which one matches
+    the source deposit on amount (± fee/slippage) and time.
+
+    Returns a ``BridgeMatchResult`` (confidence "medium"/"low" — a
+    cross-chain correlation, NEVER "high") or ``None`` if nothing matches.
+    Pure given the injected ``dst_adapter`` → unit-testable with a fake
+    adapter; the only I/O is the adapter's inbound fetch.
+    """
+    from datetime import datetime
+
+    from recupero.trace.bridge_matching import (
+        BridgeMatchCandidate,
+        match_bridge_withdrawal,
+    )
+
+    if handoff.amount_decimal is None or handoff.amount_decimal <= 0:
+        return None
+    try:
+        src_time = datetime.fromisoformat(
+            handoff.block_time_iso.replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+
+    try:
+        start_block = dst_adapter.block_at_or_before(src_time)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "lock-mint match: block_at_or_before failed on %s: %s",
+            getattr(dst_adapter, "chain", "?"), exc,
+        )
+        return None
+
+    legs: list[dict[str, Any]] = []
+    for fetch in (dst_adapter.fetch_native_inflows, dst_adapter.fetch_erc20_inflows):
+        try:
+            legs.extend(fetch(
+                handoff.source_address, start_block,
+                max_results=max_candidates_per_leg,
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("lock-mint match: inbound fetch failed: %s", exc)
+
+    candidates: list[BridgeMatchCandidate] = []
+    for row in legs:
+        token = row.get("token")
+        decimals = getattr(token, "decimals", 18) if token is not None else 18
+        try:
+            amt = Decimal(int(row["amount_raw"])) / (Decimal(10) ** int(decimals))
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            continue
+        row_chain = row.get("chain")
+        chain_str = getattr(row_chain, "value", None) or str(row_chain or "")
+        candidates.append(BridgeMatchCandidate(
+            chain=chain_str,
+            address=row.get("to", "") or "",
+            tx_hash=row.get("tx_hash", "") or "",
+            amount_decimal=amt,
+            block_time=row["block_time"],
+            token_symbol=getattr(token, "symbol", None) if token else None,
+            explorer_url=row.get("explorer_url"),
+        ))
+
+    return match_bridge_withdrawal(
+        source_amount=handoff.amount_decimal,
+        source_time=src_time,
+        candidates=candidates,
+        window_hours=window_hours,
+        slippage_pct=slippage_pct,
+    )
+
+
 __all__ = (
     "BridgeInfo",
     "CrossChainHandoff",
     "ingest_bridge_seeds",
     "identify_cross_chain_handoffs",
     "handoffs_to_brief_section",
+    "match_lockmint_destination",
 )

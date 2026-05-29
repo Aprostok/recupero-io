@@ -60,6 +60,7 @@ their own section.
 | **Cross-chain** | | | | | |
 | `RECUPERO_CROSS_CHAIN_CONTINUATION` | `1` (on) | bool | opt-out via `0/false/no/off` | v0.28.0 | Master switch for cross-chain BFS continuation. |
 | `RECUPERO_CROSSCHAIN_WINDOW_HOURS` | `24` | float | `[0, 720]`, finite | v0.31.0 | Time window past source-bridge tx to accept dst transfers; 0 disables filter. |
+| `RECUPERO_LOCKMINT_MATCH` | `0` (off) | bool | opt-in via `1/true/yes/on` | v0.32.1 | Opt-in lock-and-mint cross-chain matching: for bridge handoffs with no decoded destination (Celer/Orbiter/Multichain), correlate the perpetrator's inbound transfers on each candidate chain by amount+time and continue the trail. Inferential (correlation, never proof — medium/low confidence) and costs extra inbound fetches, hence default OFF. |
 | **Dust / CEX-continuity heuristics** | | | | | |
 | `RECUPERO_DUST_ATTACK_FILTER` | unset (off) | bool | `1/true/yes/on` to enable | v0.31.2 | Strip dust-shower fan-out destinations from the brief. |
 | `RECUPERO_DUST_ATTACK_THRESHOLD_USD` | `1.00` | Decimal | `[0, 100]`, finite | v0.31.2 | Per-destination USD ceiling for the dust-attack filter. |

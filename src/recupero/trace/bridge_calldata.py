@@ -1590,7 +1590,20 @@ def _decode_squid(
         dest_address: str | None = None
         if isinstance(addr_str, str):
             s = addr_str.strip()
-            if s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100:
+            # v0.32.1 (forensic-audit cycle full): same operator-precedence
+            # bug as the Axelar twin (now fixed above) — the original
+            #   s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100
+            # parsed as (0x & ==42) OR (10<len<100), so ANY 11-99-char string
+            # (free text, a memo, a garbage decoded tail) was accepted as a
+            # destination address and surfaced at confidence="high" — a
+            # FABRICATED destination the continuation BFS would then pursue.
+            # Parenthesize + require the non-EVM branch to be address-shaped.
+            is_evm = s.startswith("0x") and len(s) == 42
+            is_nonevm_addr = (
+                10 < len(s) < 100
+                and s.replace("-", "").replace("_", "").replace(":", "").isalnum()
+            )
+            if is_evm or is_nonevm_addr:
                 dest_address = s
 
         confidence = (

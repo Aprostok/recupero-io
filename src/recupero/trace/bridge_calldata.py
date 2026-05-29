@@ -882,10 +882,19 @@ def _decode_stargate(
                         if to_data_end <= len(args_blob):
                             to_bytes_hex = args_blob[to_data_start:to_data_end]
                             if to_len == 20:
-                                # EVM address
+                                # 20-byte payload → canonical EVM address.
                                 dest_address = "0x" + to_bytes_hex
                             else:
-                                dest_address = "0x" + to_bytes_hex
+                                # v0.32.1 (forensic-audit MEDIUM): a non-20-byte
+                                # `to` blob is a NON-EVM destination (e.g. a
+                                # 32-byte Solana pubkey or a Tron/other-chain
+                                # address). Rendering it as "0x"+hex fabricated
+                                # a bogus EVM-looking address at high confidence
+                                # that the continuation pass could then seed on
+                                # the wrong chain. Leave dest_address unset so
+                                # the lead drops to lower confidence and surfaces
+                                # for manual follow-up rather than mis-tracing.
+                                dest_address = None
             except (ValueError, IndexError):
                 dest_address = None
 
@@ -1288,8 +1297,20 @@ def _decode_axelar(
         dest_address: str | None = None
         if isinstance(addr_str, str):
             s = addr_str.strip()
-            # EVM 0x-hex address
-            if s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100:
+            # v0.32.1 (forensic-audit MEDIUM): the original condition
+            #   s.startswith("0x") and len(s) == 42 or len(s) > 10 and len(s) < 100
+            # parsed as (0x & ==42) OR (10<len<100) — so ANY 11-99-char string
+            # (incl. free text) was accepted as a destination address.
+            # Parenthesize and require the non-EVM branch to be address-shaped
+            # (alphanumeric, allowing bech32/base58 plus '-'/'_'), rejecting
+            # arbitrary prose. Axelar legitimately targets non-EVM chains, so
+            # we keep the second branch — just bounded.
+            is_evm = s.startswith("0x") and len(s) == 42
+            is_nonevm_addr = (
+                10 < len(s) < 100
+                and s.replace("-", "").replace("_", "").replace(":", "").isalnum()
+            )
+            if is_evm or is_nonevm_addr:
                 dest_address = s
 
         confidence = (

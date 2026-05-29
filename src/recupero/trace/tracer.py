@@ -136,6 +136,24 @@ def run_trace(
         incident_time = incident_time.replace(tzinfo=UTC)
     seed_address = _normalize_address(chain, seed_address)
 
+    # v0.32.1 (forensic-audit CRIT): reset the process-lifetime Bitcoin
+    # co-spend input registry + synthetic-CoinJoin registry at the START
+    # of every case. These are module-level globals populated during a
+    # trace; a worker that processes case B after case A in the SAME
+    # process would otherwise inherit case A's BTC input sets, causing
+    # the H1 common-input clustering heuristic to FALSE-MERGE addresses
+    # across unrelated victims — and making two sequential in-process
+    # runs differ from a clean-process run (nondeterminism). The clears
+    # are cheap no-ops for non-Bitcoin cases.
+    from recupero.chains.bitcoin.adapter import (
+        clear_synthetic_coinjoin_registry as _clear_btc_coinjoin,
+    )
+    from recupero.chains.bitcoin.inputs_registry import (
+        clear_for_case as _clear_btc_inputs,
+    )
+    _clear_btc_inputs()
+    _clear_btc_coinjoin()
+
     # v0.32 — per-case API budget. One CaseBudget per case, propagated
     # to every chain + pricing client. When the cap trips, BFS catches
     # the BudgetExceededError, marks the case partial_budget_hit, and

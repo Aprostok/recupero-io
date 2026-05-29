@@ -795,9 +795,16 @@ def compute_clusters_with_metadata(
                 "(treated as shared infra)", src, len(recipients),
             )
             continue
-        for i, (a, ts_a, _) in enumerate(recipients):
-            for b, ts_b, _ in recipients[i + 1:]:
+        for i, (a, ts_a, chain_a) in enumerate(recipients):
+            for b, ts_b, chain_b in recipients[i + 1:]:
                 if a == b:
+                    continue
+                # v0.32.1 (forensic-audit HIGH): the same-named CEX deposit
+                # address can be deployed on multiple chains. Two withdrawals
+                # of similar timing on DIFFERENT chains are not evidence of a
+                # single controlling entity — only same-chain pairs may
+                # cluster (mirrors the H4 chain guard).
+                if chain_a != chain_b:
                     continue
                 delta = abs((ts_a - ts_b).total_seconds())
                 if delta > _CEX_WITHDRAWAL_WINDOW.total_seconds():

@@ -141,6 +141,17 @@ class TestModels:
                     explorer_url="https://etherscan.io/tx/0xabc",
                 )
 
+    def test_token_decimals_rejects_negative(self) -> None:
+        """`TokenRef.decimals` is the exponent in amount = raw/10**decimals;
+        a negative value (malformed RPC/label response) would inflate every
+        derived USD figure. The model must reject it at the boundary."""
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError):
+            TokenRef(chain=Chain.ethereum, symbol="EVIL", decimals=-1)
+        # Sanity: a normal value still constructs.
+        ok = TokenRef(chain=Chain.ethereum, symbol="USDC", decimals=6)
+        assert ok.decimals == 6
+
     def test_extra_fields_forbidden(self) -> None:
         from pydantic import ValidationError
         with pytest.raises(ValidationError):

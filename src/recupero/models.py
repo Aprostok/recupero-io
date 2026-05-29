@@ -143,7 +143,17 @@ class TokenRef(BaseModel):
     chain: Chain
     contract: Address | None = None  # None => native asset (ETH on mainnet)
     symbol: str
-    decimals: int
+    # v0.32.1 (forensic-audit): decimals must be in [0, 255]. A NEGATIVE
+    # value is a smoking-gun for a malformed RPC/label response, and it is
+    # the exponent that scales raw on-chain integers into human amounts
+    # (amount = raw / 10**decimals) — a negative would INFLATE the amount
+    # by orders of magnitude, corrupting every USD figure derived from it.
+    # The EVM/Tron adapters already clamp to [0, 255] at source; this is
+    # the model-boundary backstop so a value reaching TokenRef any other
+    # way (a hand-built seed, a future adapter) can't smuggle a negative
+    # exponent into the loss math. 255 mirrors the adapter clamp ceiling
+    # so it never rejects an adapter-produced value.
+    decimals: int = Field(ge=0, le=255)
     coingecko_id: str | None = None
 
 

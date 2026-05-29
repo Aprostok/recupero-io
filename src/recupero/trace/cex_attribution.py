@@ -241,3 +241,38 @@ def infer_cex_deposit_addresses(
     # Deterministic order: descending USD, then address for tie-break.
     out.sort(key=lambda d: (-d.swept_usd, d.deposit_address))
     return out
+
+
+class _CaseLabelIndex:
+    """Lookup adapter backed by the labels already resolved onto the
+    case's transfer counterparties at TRACE time.
+
+    Lets :func:`infer_cex_deposits_from_case` run attribution at
+    brief-assembly time without re-loading a ``LabelStore`` — the
+    counterparty labels are the SAME authoritative labels the rest of
+    the brief (exchange-endpoint detection, freeze targeting) relies on.
+    In a theft trace any CEX hot wallet the funds reached necessarily
+    appears as a recipient (so its label is indexed), which is exactly
+    the set the sweep heuristic needs.
+    """
+
+    def __init__(self, case: Case) -> None:
+        self._by_addr: dict[str, object] = {}
+        for t in (getattr(case, "transfers", None) or []):
+            cp = getattr(t, "counterparty", None)
+            lbl = getattr(cp, "label", None) if cp is not None else None
+            if lbl is not None:
+                key = _ck(t.to_address)
+                if key:
+                    self._by_addr[key] = lbl
+
+    def lookup(self, address: str, chain: object = None) -> object | None:  # noqa: ARG002
+        return self._by_addr.get(_ck(address))
+
+
+def infer_cex_deposits_from_case(case: Case) -> list[InferredCexDeposit]:
+    """Brief-time convenience: attribute CEX deposit addresses using the
+    labels baked onto the case's transfer counterparties (no separate
+    ``LabelStore`` needed). Delegates to :func:`infer_cex_deposit_addresses`.
+    """
+    return infer_cex_deposit_addresses(case, label_store=_CaseLabelIndex(case))

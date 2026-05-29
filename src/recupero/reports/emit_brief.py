@@ -1881,6 +1881,32 @@ def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
             "last_deposit_at": last if is_d else _iso(last),
             "transfer_count": len(tids),
         })
+
+    # v0.32.1 (#209 step 2): augment the label-DB endpoints (the shared CEX
+    # HOT WALLETS funds reached) with INFERRED per-user deposit addresses —
+    # unlabeled addresses that swept funds into one of those hot wallets.
+    # The hot wallet is a weak subpoena target (millions of deposits hit it);
+    # the inferred deposit address is the precise one tied to a single KYC'd
+    # account. Confidence is pinned low/medium (a lead, never proof) by the
+    # attribution pass. Existing label-DB addresses win on dedup so we never
+    # downgrade a confirmed endpoint to an inferred lead.
+    try:
+        from recupero.trace.cex_attribution import infer_cex_deposits_from_case
+        _existing = {
+            (d.get("address") or "").lower()
+            for d in out if d.get("address")
+        }
+        for dep in infer_cex_deposits_from_case(case):
+            d = dep.to_dict()
+            addr_l = (d.get("address") or "").lower()
+            if addr_l and addr_l not in _existing:
+                out.append(d)
+                _existing.add(addr_l)
+    except Exception as _exc:  # noqa: BLE001 — attribution is best-effort
+        log.warning(
+            "emit_brief: CEX deposit-address attribution failed (%s) — "
+            "subpoena targets fall back to label-DB endpoints only", _exc,
+        )
     return out
 
 

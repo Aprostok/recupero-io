@@ -116,7 +116,17 @@
     <tr>
       <td class="mono">{{ la.address }}</td>
       <td>{{ la.chain or '—' }}</td>
-      <td>{{ la.role }}</td>
+      <td>{{ la.role }}
+        {%- if la.attribution_confidence %}
+        <br><span style="font-size:8pt; color:#92400e;">&#9888; Inferred attribution
+        ({{ la.attribution_confidence }} confidence{% if la.attribution_heuristic %},
+        {{ la.attribution_heuristic }}{% endif %}) &mdash; a LEAD for this subpoena,
+        not confirmed ownership.{% if la.hot_wallet_address %} Funds swept into the
+        exchange hot wallet <code style="font-size:7pt; word-break:break-all;">{{ la.hot_wallet_address }}</code>;
+        the exchange can confirm which customer account this deposit address belongs
+        to.{% endif %}</span>
+        {%- endif %}
+      </td>
       <td class="amount mono">
         {% if la.evidence and la.evidence|length > 0 %}
           {% for ev in la.evidence %}

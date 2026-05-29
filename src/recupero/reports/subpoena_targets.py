@@ -400,17 +400,45 @@ def extract_subpoena_targets(
                 ev["transfer_count"] = transfer_count
             return ev
 
+        def _linked_addr(ex_dict, addr):  # noqa: ANN001 (closure-local; loose typing)
+            # v0.32.1 (#209 step 2): an INFERRED CEX deposit address (source
+            # prefixed "inferred:", produced by the sweep-pattern attribution
+            # pass) carries its heuristic + confidence so the subpoena renderer
+            # can frame it as a LEAD, not a confirmed off-ramp. Forensic
+            # invariant: inferred attribution is never proof — pin the surfaced
+            # confidence to low/medium even if an upstream bug set otherwise.
+            # (``addr`` is passed explicitly rather than captured so this
+            # closure doesn't bind the enclosing loop variable.)
+            src = ex_dict.get("source") or "label_db"
+            inferred = isinstance(src, str) and src.startswith("inferred")
+            la = {
+                "address": addr,
+                "chain": ex_dict.get("chain") or (
+                    getattr(case, "chain", None) and case.chain.value
+                ),
+                "role": (
+                    "inferred CEX deposit address (sweep to hot wallet)"
+                    if inferred else "off-ramp deposit (perpetrator-owned)"
+                ),
+                "evidence": [_ev_from(ex_dict)],
+            }
+            if inferred:
+                ac = ex_dict.get("attribution_confidence")
+                la["attribution_confidence"] = ac if ac in ("low", "medium") else "low"
+                ah = ex_dict.get("attribution_heuristic")
+                if ah:
+                    la["attribution_heuristic"] = str(ah)
+                hw = ex_dict.get("hot_wallet_address")
+                if hw:
+                    la["hot_wallet_address"] = str(hw)
+            return la
+
         recipient_key = recipient_info["recipient_name"]
         existing = cex_targets_by_recipient.get(recipient_key)
         if existing is not None:
             # Multiple deposits at the same exchange → one
             # consolidated subpoena listing every address.
-            existing["linked_addresses"].append({
-                "address": addr,
-                "chain": ex.get("chain") or getattr(case, "chain", None) and case.chain.value,
-                "role": "off-ramp deposit (perpetrator-owned)",
-                "evidence": [_ev_from(ex)],
-            })
+            existing["linked_addresses"].append(_linked_addr(ex, addr))
             # Aggregate total USD for sort ordering.
             existing["_total_usd"] += amt
             continue
@@ -421,14 +449,7 @@ def extract_subpoena_targets(
             "recipient_type": "cex",
             **recipient_info,
             "evidentiary_basis": "off_ramp_deposit",
-            "linked_addresses": [{
-                "address": addr,
-                "chain": ex.get("chain") or (
-                    getattr(case, "chain", None) and case.chain.value
-                ),
-                "role": "off-ramp deposit (perpetrator-owned)",
-                "evidence": [_ev_from(ex)],
-            }],
+            "linked_addresses": [_linked_addr(ex, addr)],
             "expected_records": [
                 "subscriber identity (name, email, phone, country)",
                 "KYC documents on file (govt ID, proof of address)",

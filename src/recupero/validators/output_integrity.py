@@ -824,6 +824,14 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_subpoena_targets_extraction_succeeded(
              freeze_brief,
          )),
+        # v0.32.1 (#209): an INFERRED CEX deposit-address attribution
+        # (sweep-pattern, source "inferred:…") is a subpoena LEAD, never
+        # proof — its confidence MUST be low/medium, never high. Mirrors
+        # the cex_continuity confidence guardrail.
+        ("subpoena_inferred_attribution_confidence",
+         lambda: _check_inferred_attribution_confidence(
+             freeze_brief,
+         )),
         # v0.31.4 (Gap-audit): output-integrity invariants for the
         # v0.31.x brief sections (MEV_SIGNALS, INDIRECT_EXPOSURE_V031,
         # WALLET_CLUSTERS, CEX_CONTINUITY_LEADS, decoded cross-chain
@@ -3586,6 +3594,60 @@ def _check_perpetrator_holdings_reconcile(
 # a SUBPOENA_TARGETS entry. Matches SUBPOENA_USD_THRESHOLD in
 # subpoena_targets.py — $1K matches the design doc's INVARIANT C wording.
 _SUBPOENA_USD_THRESHOLD = Decimal("1000")
+
+
+def _check_inferred_attribution_confidence(
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """v0.32.1 (#209): an INFERRED CEX deposit-address attribution is a
+    LEAD for the subpoena, never proof of ownership.
+
+    Any SUBPOENA_TARGETS linked_address produced by the sweep-pattern
+    attribution pass (role "inferred CEX deposit address ...", or carrying
+    an ``attribution_confidence`` key) MUST be ``"low"`` or ``"medium"`` —
+    never ``"high"``. Only a label-DB hit is ``"high"``, and those
+    addresses don't carry an ``attribution_confidence``. Mirrors the
+    cex_continuity confidence guardrail.
+
+    Severity: HIGH — a "high"-confidence inferred attribution would
+    misrepresent a behavioral correlation as a confirmed identity in a
+    legal subpoena, the cardinal forensic error this codebase forbids.
+    """
+    if not isinstance(freeze_brief, dict):
+        return []
+    targets = freeze_brief.get("SUBPOENA_TARGETS") or []
+    if not isinstance(targets, list):
+        return []
+    violations: list[Violation] = []
+    for t in targets:
+        if not isinstance(t, dict):
+            continue
+        for la in t.get("linked_addresses") or []:
+            if not isinstance(la, dict):
+                continue
+            role = la.get("role") or ""
+            ac = la.get("attribution_confidence")
+            is_inferred = (
+                ac is not None
+                or (isinstance(role, str) and "inferred" in role.lower())
+            )
+            if not is_inferred:
+                continue
+            if ac not in ("low", "medium"):
+                violations.append(Violation(
+                    check="subpoena_inferred_attribution_confidence",
+                    severity="high",
+                    detail=(
+                        f"SUBPOENA_TARGETS entry {t.get('target_id')!r} linked "
+                        f"address {la.get('address')!r} is an INFERRED CEX "
+                        f"deposit attribution with confidence {ac!r} — inferred "
+                        f"attributions are leads, not proof, and must be "
+                        f"'low'/'medium' (only label-DB hits are 'high'). A "
+                        f"'high' here would misrepresent a correlation as a "
+                        f"confirmed identity in a legal subpoena."
+                    ),
+                ))
+    return violations
 
 
 def _check_subpoena_targets_cover_non_freezable(

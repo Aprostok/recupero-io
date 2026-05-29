@@ -292,3 +292,78 @@ def test_raw_calldata_excerpt_included() -> None:
     assert out is not None
     assert out.raw_calldata_excerpt.startswith("7b939232")  # method id (no 0x)
     assert len(out.raw_calldata_excerpt) <= 400
+
+
+# ---- v0.32.1 cycle-2: Wormhole non-EVM recipient over-claim guard ---- #
+#
+# A garbage / mis-routed bytes32 recipient must NOT be base58-encoded into
+# a confident-but-WRONG Tron / Solana destination. The continuation pass
+# seeds on destination_address, so a fabricated address at confidence
+# "high" would mis-trace onto an innocent wallet — the cardinal forensic
+# sin. These lock the per-chain validation + the Stargate-style confidence
+# rule (high only when chain known AND a trusted address parsed).
+
+
+def test_wormhole_tron_valid_0x41_payload_is_high_confidence() -> None:
+    """A well-formed Tron recipient (21-byte payload, 0x41 version byte,
+    left-padded in the bytes32) decodes to a base58check T-address at
+    high confidence."""
+    payload_hex = "41" + "aa" * 20           # 0x41 + 20 addr bytes = 21 bytes
+    recipient = "0" * 22 + payload_hex        # left-pad to 32 bytes (64 hex)
+    assert len(recipient) == 64
+    calldata = _build_wormhole_transfer_calldata(
+        recipient_chain=18, recipient_bytes32=recipient,
+    )
+    out = decode_bridge_calldata(bridge_protocol="Wormhole", input_data=calldata)
+    assert out is not None
+    assert out.destination_chain == "tron"
+    assert out.destination_address is not None
+    assert out.destination_address.startswith("T")  # base58check Tron form
+    assert out.confidence == "high"
+
+
+def test_wormhole_tron_without_0x41_prefix_is_not_fabricated() -> None:
+    """A bytes32 whose trailing 21 bytes do NOT start with the Tron 0x41
+    version byte (garbage / right-padded EVM blob) must NOT emit a
+    fabricated T-address — drop to no address + medium confidence."""
+    payload_hex = "ff" + "aa" * 20            # wrong version byte
+    recipient = "0" * 22 + payload_hex
+    calldata = _build_wormhole_transfer_calldata(
+        recipient_chain=18, recipient_bytes32=recipient,
+    )
+    out = decode_bridge_calldata(bridge_protocol="Wormhole", input_data=calldata)
+    assert out is not None
+    assert out.destination_chain == "tron"
+    assert out.destination_address is None, (
+        "must not base58check-encode a non-0x41 payload into a confident "
+        "but WRONG Tron address"
+    )
+    assert out.confidence == "medium"
+
+
+def test_wormhole_solana_evm_shaped_recipient_is_not_fabricated() -> None:
+    """A left-padded 20-byte EVM address mis-routed to the Solana branch
+    (leading 12 bytes zero) is NOT a real 32-byte pubkey — reject rather
+    than emit a confident-but-wrong base58 Solana destination."""
+    recipient = "0" * 24 + "aa" * 20          # 12 zero bytes + 20 addr bytes
+    calldata = _build_wormhole_transfer_calldata(
+        recipient_chain=1, recipient_bytes32=recipient,
+    )
+    out = decode_bridge_calldata(bridge_protocol="Wormhole", input_data=calldata)
+    assert out is not None
+    assert out.destination_chain == "solana"
+    assert out.destination_address is None
+    assert out.confidence == "medium"
+
+
+def test_wormhole_solana_all_zero_recipient_is_not_fabricated() -> None:
+    """An all-zero recipient slot is a null/uninitialized recipient, not a
+    real pubkey — must not surface a confident Solana destination."""
+    calldata = _build_wormhole_transfer_calldata(
+        recipient_chain=1, recipient_bytes32="0" * 64,
+    )
+    out = decode_bridge_calldata(bridge_protocol="Wormhole", input_data=calldata)
+    assert out is not None
+    assert out.destination_chain == "solana"
+    assert out.destination_address is None
+    assert out.confidence == "medium"

@@ -185,6 +185,7 @@ def _validate_url(url: str) -> str | None:
     try:
         from recupero.api.monitoring_api import (
             _is_blocked_host,
+            _is_blocked_ip,
             _resolves_to_blocked_ip,
         )
     except Exception:  # noqa: BLE001
@@ -196,8 +197,18 @@ def _validate_url(url: str) -> str | None:
                 "link-local / metadata target (SSRF defense)"
             )
     except Exception:  # noqa: BLE001
-        # Never let the shared SSRF helper crash the sync — the literal
-        # deny-list above already covers the obvious exfil vectors.
+        # The shared helper crashed — do NOT fail fully open. Re-apply the
+        # network-free IP-literal RFC1918/loopback/link-local check as a
+        # last resort so an IP-literal target the small `_DENY_HOSTS` list
+        # doesn't cover (e.g. http://10.0.0.1/) is still refused.
+        try:
+            if _is_blocked_ip(host):
+                return (
+                    f"refused host {host!r}: private / loopback / link-local "
+                    "IP literal (SSRF defense)"
+                )
+        except Exception:  # noqa: BLE001
+            pass
         return None
     return None
 

@@ -196,3 +196,50 @@ def test_native_negative_timestamp_does_not_crash() -> None:
             f"_normalize_native raised {type(e).__name__} on negative "
             f"timestamp: {e}"
         ) from e
+
+
+def test_spl_decimals_clamped_to_u8_ceiling() -> None:
+    """v0.32.1 cycle-2: an attacker-influenceable Helius ``decimals`` is
+    clamped to the u8 on-chain ceiling (255) at the SOURCE so the value
+    stored in TokenRef.decimals can't blow up a downstream ``10**decimals``
+    — the tracer divides amount_raw by 10**decimals on every BFS hop, and
+    an unclamped 1e9 would build a multi-gigabyte integer (OOM / hang)."""
+    from recupero.chains.solana.adapter import SolanaAdapter
+
+    adapter = _build_adapter()
+    raw_txs = [
+        {
+            "timestamp": 1700000000,
+            "signature": "sig1",
+            "slot": 1,
+            "tokenTransfers": [
+                {
+                    "fromUserAccount": "test-addr",
+                    "toUserAccount": "dest-addr",
+                    "mint": "FakeMint11111111111111111111111111111111111",
+                    "rawTokenAmount": {
+                        "tokenAmount": "1000000",   # valid base-unit integer
+                        "decimals": 10**9,          # absurd exponent
+                    },
+                },
+            ],
+        },
+    ]
+    adapter._fetch_all = lambda *a, **kw: raw_txs  # type: ignore
+
+    import recupero.chains.solana.adapter as solana_mod
+    original = solana_mod.normalize_solana_address
+    solana_mod.normalize_solana_address = lambda x: x
+    try:
+        out = SolanaAdapter.fetch_erc20_outflows(
+            adapter, "test-addr", 0, max_results=None,
+        )
+    finally:
+        solana_mod.normalize_solana_address = original
+
+    assert len(out) == 1
+    assert out[0]["token"].decimals <= 255, (
+        "TokenRef.decimals must be clamped so 10**decimals can't OOM the tracer"
+    )
+    # The base-unit field is used as-is (never re-scaled by 10**decimals).
+    assert out[0]["amount_raw"] == 1_000_000

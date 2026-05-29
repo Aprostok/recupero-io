@@ -675,40 +675,73 @@ def _decode_wormhole(
         # For EVM destinations: right-padded address (last 40 hex)
         # For Solana: full 32-byte pubkey → base58
         # For Tron: 21-byte payload (prefix 0x41 + 20 address bytes) → base58check
+        # Decode the recipient by the destination chain's address shape.
+        # Each branch sets dest_address ONLY when the blob validates for
+        # that chain; an ill-fitting blob leaves it None so the result
+        # drops to "medium" (chain known, address untrusted) rather than
+        # fabricating a confident-but-wrong destination.
+        dest_address: str | None = None
         if dest_chain == "solana":
-            # v0.17.5 (round-10 forensic CRIT): pre-v0.17.5 we surfaced
-            # the raw "0x" + 64-hex form of the 32-byte pubkey, but
-            # Solana's RPC and the Helius client both require base58
-            # — so any cross-chain BFS continuation against the decoded
-            # destination silently failed at the adapter boundary
-            # (returned []). Encode here so the downstream Solana
-            # adapter receives the canonical form.
+            # v0.17.5 (round-10 forensic CRIT): Solana RPC + the Helius
+            # client require base58, so encode the 32-byte pubkey here for
+            # the downstream adapter (pre-v0.17.5 the 0x-hex form silently
+            # dropped every Wormhole→Solana continuation at the adapter).
+            # v0.32.1 (forensic-audit cycle-2): reject blobs that are NOT a
+            # real pubkey before emitting at high confidence. An all-zero
+            # slot is a null recipient; a slot whose leading 12 bytes are
+            # zero is a left-padded 20-byte EVM address mis-routed here, not
+            # a 32-byte Solana pubkey (a uniform-random pubkey has 12 leading
+            # zero bytes with prob ~2^-96). Either would seed a fabricated
+            # Solana destination in the continuation pass.
             try:
                 pubkey_bytes = bytes.fromhex(recipient_hex)
-                dest_address = _b58encode_no_checksum(pubkey_bytes)
             except ValueError:
-                dest_address = None
+                pubkey_bytes = b""
+            if (len(pubkey_bytes) == 32
+                    and pubkey_bytes != bytes(32)
+                    and pubkey_bytes[:12] != bytes(12)):
+                dest_address = _b58encode_no_checksum(pubkey_bytes)
         elif dest_chain == "tron":
-            # v0.17.5 (round-10 forensic CRIT): Wormhole-to-Tron is
-            # rare but legitimate. The bytes32 recipient encodes the
-            # full 21-byte payload (0x41 prefix + 20 address bytes)
-            # right-padded into 32 bytes — last 21 are the payload.
+            # v0.17.5 (round-10 forensic CRIT): Wormhole→Tron encodes the
+            # 21-byte payload (0x41 prefix + 20 addr bytes) right-padded into
+            # the bytes32 — the last 21 bytes are the payload. v0.32.1
+            # (forensic-audit cycle-2): a valid Tron MAINNET payload MUST
+            # start with the 0x41 version byte. A garbage / EVM-shaped
+            # bytes32 still base58check-encodes to a syntactically valid but
+            # WRONG T-address; require 0x41 so we never emit a fabricated
+            # destination at high confidence.
             try:
                 payload = bytes.fromhex(recipient_hex[-42:])
-                # Append checksum and encode.
+            except ValueError:
+                payload = b""
+            if len(payload) == 21 and payload[0] == 0x41:
                 import hashlib as _hl
                 checksum = _hl.sha256(_hl.sha256(payload).digest()).digest()[:4]
                 dest_address = _b58encode_no_checksum(payload + checksum)
-            except ValueError:
-                dest_address = None
+        elif dest_chain is not None:
+            # Known EVM destination: the address is right-aligned in the
+            # bytes32 (last 20 bytes / 40 hex).
+            evm_tail = recipient_hex[24:]
+            if len(evm_tail) == 40:
+                dest_address = "0x" + evm_tail
+
+        # Confidence mirrors the Stargate decoder's calibrated rule:
+        #   high   = chain known AND a trusted address parsed
+        #   medium = chain known XOR raw recipient bytes present (an unknown
+        #            chain still carries the raw recipient bytes32, so it
+        #            stays medium rather than low for manual follow-up)
+        if dest_chain is not None and dest_address is not None:
+            confidence = "high"
+        elif dest_chain is not None or recipient_hex:
+            confidence = "medium"
         else:
-            dest_address = "0x" + recipient_hex[24:]  # last 20 bytes
+            confidence = "low"
 
         return BridgeDecodeResult(
             destination_chain=dest_chain,
-            destination_address=dest_address if dest_chain else None,
+            destination_address=dest_address,
             bridge_method=method_name,
-            confidence="high" if dest_chain else "medium",
+            confidence=confidence,
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:

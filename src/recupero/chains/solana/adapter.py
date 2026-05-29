@@ -342,6 +342,12 @@ class SolanaAdapter(ChainAdapter):
                 decimals = int(decimals_raw)
             except (TypeError, ValueError):
                 decimals = 6 if mint in (USDC_SOLANA_MINT, USDT_SOLANA_MINT) else 9
+        # v0.32.1 (chain-audit cycle-2): clamp the attacker-influenceable
+        # Helius `decimals` to the u8 on-chain ceiling at the SOURCE so the
+        # value stored in TokenRef.decimals can't blow up a downstream
+        # 10**decimals (the tracer's _build_transfer also clamps, but
+        # cex_continuity / dormant / watch_tick read this field too).
+        decimals = max(0, min(decimals, 255))
         # Symbol — we don't get it from Helius for SPL, so derive conservatively
         symbol = _symbol_from_mint(mint)
         token = TokenRef(

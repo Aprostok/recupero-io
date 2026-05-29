@@ -392,14 +392,14 @@ def check_invariant_g_chain_of_custody(
                     "custody is unsupported by any underlying transfer."
                 ),
             )]
-        return [Violation(
-            check="invariant_g_chain_of_custody",
-            severity="warning",
-            detail=(
-                "No trace transaction evidence available; chain-of-custody "
-                "reachability not verified."
-            ),
-        )]
+        # Absent source (trace_evidence is None / not a dict): reachability
+        # cannot be verified, but this is NOT fabrication. Stay SILENT here —
+        # the structural output_integrity.check_invariant_g, which runs in
+        # the SAME validate_case_output pass, already emits the advisory
+        # WARNING for the absent-source case. Emitting it here too would
+        # duplicate that WARNING on every production deliverable (which does
+        # not yet persist a separate trace_evidence.json).
+        return []
     graph = _walk_transactions(transactions)
     seeds = _extract_seed_addresses(brief, manifest)
     if not seeds:

@@ -1375,7 +1375,18 @@ def _build_transfer(raw: dict, *, hop_depth: int, parent_transfer_id: str | None
     log_idx = raw.get("log_index")
     transfer_id = f"{raw['chain'].value}:{raw['tx_hash']}:{log_idx if log_idx is not None else 0}"
     amount_raw_int = raw["amount_raw"]
-    decimals = raw["token"].decimals
+    # v0.32.1 (chain-audit cycle-2): clamp the decimals exponent at this
+    # COMMON sink for every chain adapter. token.decimals is sourced from
+    # attacker-influenceable RPC / explorer responses; an unclamped huge
+    # value makes 10**decimals build a multi-gigabyte integer before this
+    # divide, DoS-ing the BFS hop (OverflowError / unbounded memory). Real
+    # tokens never exceed ~24 decimals; u8 (255) is the on-chain ceiling.
+    # Adapters also clamp at their own boundary — this is the backstop so
+    # no single adapter (or a future one) can blow up the tracer.
+    try:
+        decimals = max(0, min(int(raw["token"].decimals), 255))
+    except (TypeError, ValueError):
+        decimals = 0
     amount_decimal = Decimal(amount_raw_int) / Decimal(10**decimals)
 
     # Placeholder counterparty — replaced after labeling

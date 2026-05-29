@@ -488,6 +488,31 @@ def _post_error_webhook(
         # via the /cron/healthz endpoint + the WARN log line.
         return
 
+    # v0.32.1 (security-audit cycle-2): the alert URL is operator-set via
+    # env, but a typo / compromised env var pointing at internal infra
+    # (169.254.169.254, 10.x, *.internal) would exfil job-internal error
+    # text on every cron failure. Run the host through the SAME SSRF guard
+    # the webhook dispatch + OFAC sync use. Best-effort: a guard import
+    # failure falls through (the URL is operator-set, not attacker-set, so
+    # we don't hard-fail the alert path on an import error), but a host the
+    # guard rejects is skipped rather than POSTed.
+    try:
+        from urllib.parse import urlsplit
+
+        from recupero.api.monitoring_api import (
+            _is_blocked_host,
+            _resolves_to_blocked_ip,
+        )
+        _alert_host = urlsplit(url).hostname or ""
+        if _is_blocked_host(_alert_host) or _resolves_to_blocked_ip(_alert_host):
+            log.warning(
+                "cron: alert webhook host %r blocked by SSRF guard (job=%s); "
+                "skipping page", _alert_host, job_name,
+            )
+            return
+    except Exception:  # noqa: BLE001
+        pass
+
     payload = {
         "text": f"cron job {job_name} failed (#{consecutive_failures})",
         "attachments": [{

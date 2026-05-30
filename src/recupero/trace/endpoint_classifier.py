@@ -271,6 +271,12 @@ def infer_infrastructure_endpoints(
             "distinct_inbound": result.distinct_inbound,
             "distinct_outbound": result.distinct_outbound,
             "inflow_usd": str(inflow.get(key, Decimal("0"))),
+            # v0.32.1 (audit M-1): surface whether the diversity probe hit
+            # its fetch cap. A truncated probe UNDER-counts distinct
+            # counterparties, so the diversity figures here are a floor — an
+            # operator must know they were measured on a capped sample
+            # before relying on (or dismissing) the classification.
+            "probe_truncated": div.probe_truncated,
             "note": result.reason,
         })
     return out

@@ -5258,5 +5258,27 @@
     "verified": true,
     "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xc145990e84155416144c532e31f89b840ca8c2ce",
+    "name": "THORChain Router",
+    "protocol": "THORChain",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "bitcoin",
+      "bsc",
+      "avalanche",
+      "base",
+      "cosmos"
+    ],
+    "follow_up_url": "https://thornode.thorchain.info/thorchain/inbound_addresses",
+    "source": "thornode_inbound_addresses",
+    "notes": "THORChain native cross-chain SWAP router (Ethereum). Funds sent here are swapped to a DIFFERENT asset on a DIFFERENT chain and delivered to a DIFFERENT recipient specified in the swap memo (calldata) — NOT a same-address lock-and-mint, so the destination asset/chain/recipient must be read from the deposit/transferOut memo. Address from the THORNode inbound_addresses endpoint (the router is stable; asgard vaults rotate and are intentionally NOT labeled). Confirmed on-chain as a deployed contract (8558 bytes). Routers on BSC/AVAX/Base require the inbound_addresses API to enumerate (not reachable from this build env).",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v034_thorchain_addition": true
   }
 ]

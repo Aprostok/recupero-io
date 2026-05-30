@@ -187,6 +187,85 @@ def test_connext_unknown_method_returns_none() -> None:
     assert out is None
 
 
+def test_v0_34_decoders_reject_nonaligned_recipient_slot() -> None:
+    """v0.34 (#229): Across (depositV3 + legacy), Connext, and the Wormhole
+    EVM path previously surfaced the low 20 bytes of a recipient slot as a
+    HIGH-confidence destination with no right-alignment check — so a uint256 /
+    misaligned read / non-EVM 32-byte value could FABRICATE a perpetrator
+    wallet in an LE deliverable. Each now requires the top 12 bytes to be zero
+    (a real ABI address is right-aligned). Feed each a non-right-aligned slot
+    and assert NO address is fabricated; feed a right-aligned one and assert it
+    is recovered (so the guard didn't over-reject)."""
+    from recupero.trace.bridge_calldata import (
+        _decode_across_deposit_legacy,
+        _decode_across_deposit_v3,
+        _decode_connext,
+        _decode_wormhole,
+    )
+
+    bad = "ff" * 12 + "a" * 40        # top 12 bytes NON-zero -> not an address
+    good = _pad_address("a" * 40)     # right-aligned 20-byte address
+
+    # Across depositV3: recipient = slot 1; destinationChainId = slot 6.
+    def _across_v3(recip: str) -> BridgeDecodeResult:
+        args = (
+            _pad_address("1" * 40) + recip + _pad_address("2" * 40)
+            + _pad_uint(0, 1) + _pad_uint(0, 1) + _pad_uint(0, 1)
+            + _pad_uint(42161, 1)  # arbitrum
+        )
+        return _decode_across_deposit_v3(args, "0x7b939232" + args, "depositV3")
+
+    v3_bad, v3_good = _across_v3(bad), _across_v3(good)
+    assert v3_bad.destination_chain == "arbitrum"        # chain still known
+    assert v3_bad.destination_address is None            # but no fabrication
+    assert v3_bad.confidence != "high"
+    assert v3_good.destination_address == "0x" + "a" * 40
+    assert v3_good.confidence == "high"
+
+    # Across legacy deposit: recipient = slot 0; destinationChainId = slot 3.
+    def _across_legacy(recip: str) -> BridgeDecodeResult:
+        args = recip + _pad_address("2" * 40) + _pad_uint(0, 1) + _pad_uint(42161, 1)
+        return _decode_across_deposit_legacy(args, "0xf0826b7d" + args, "deposit")
+
+    lg_bad, lg_good = _across_legacy(bad), _across_legacy(good)
+    assert lg_bad.destination_address is None
+    assert lg_bad.confidence != "high"
+    assert lg_good.destination_address == "0x" + "a" * 40
+
+    # Connext xcall: to = slot 1; destination domain = slot 0.
+    def _connext(to_slot: str) -> BridgeDecodeResult:
+        head = (
+            _pad_uint(1869640809, 1) + to_slot + _pad_address("c" * 40)
+            + _pad_address("d" * 40) + _pad_uint(0, 1) + _pad_uint(0, 1)
+            + _pad_uint(224, 1)
+        )
+        blob = head + _pad_uint(0, 1)
+        return _decode_connext("0x4ff746f6", blob, "0x4ff746f6" + blob)
+
+    cx_bad, cx_good = _connext(bad), _connext(good)
+    assert cx_bad.destination_chain == "optimism"
+    assert cx_bad.destination_address is None
+    assert cx_bad.confidence != "high"
+    assert cx_good.destination_address == "0x" + "a" * 40
+    assert cx_good.confidence == "high"
+
+    # Wormhole transferTokens: recipientChain = slot 2 (uint16), recipient
+    # bytes32 = slot 3. recipientChain 23 -> arbitrum (an EVM destination).
+    def _wormhole(recip: str) -> BridgeDecodeResult:
+        args = (
+            _pad_address("7" * 40) + _pad_uint(0, 1) + _pad_uint(23, 1)
+            + recip + _pad_uint(0, 1) + _pad_uint(0, 1)
+        )
+        return _decode_wormhole("0x0f5287b0", args, "0x0f5287b0" + args)
+
+    wh_bad, wh_good = _wormhole(bad), _wormhole(good)
+    assert wh_bad.destination_chain == "arbitrum"
+    assert wh_bad.destination_address is None
+    assert wh_bad.confidence != "high"
+    assert wh_good.destination_address == "0x" + "a" * 40
+    assert wh_good.confidence == "high"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Axelar callContractWithToken / sendToken decoder
 # ─────────────────────────────────────────────────────────────────────────────

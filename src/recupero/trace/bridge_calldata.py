@@ -725,10 +725,17 @@ def _decode_wormhole(
                 dest_address = _b58encode_no_checksum(payload + checksum)
         elif dest_chain is not None:
             # Known EVM destination: the address is right-aligned in the
-            # bytes32 (last 20 bytes / 40 hex).
-            evm_tail = recipient_hex[24:]
-            if len(evm_tail) == 40:
-                dest_address = "0x" + evm_tail
+            # bytes32 (top 12 bytes zero, last 20 bytes the address). v0.34
+            # (#229): require the top 12 bytes to be zero — mirror the
+            # Solana/Tron sibling guards above. A left-padded value or a
+            # misaligned read must NOT surface its low 20 bytes as a
+            # fabricated EVM wallet at high confidence.
+            if (
+                len(recipient_hex) == 64
+                and recipient_hex[:24] == "0" * 24
+                and recipient_hex[24:] != "0" * 40
+            ):
+                dest_address = "0x" + recipient_hex[24:]
 
         # Confidence mirrors the Stargate decoder's calibrated rule:
         #   high   = chain known AND a trusted address parsed
@@ -800,8 +807,10 @@ def _decode_across_deposit_v3(
             raw_calldata_excerpt=full_data[:400],
         )
     try:
-        # recipient — slot [32..64], address in last 20 bytes
-        recipient = "0x" + args_blob[32*2 + 24:64*2]
+        # recipient — slot 1. v0.34 (#229): extract via the shared guard,
+        # which requires a right-aligned ABI address (top 12 bytes zero), so
+        # a misaligned / uint256 slot can't fabricate a high-confidence wallet.
+        recipient = _extract_addr_slot(args_blob, 1)
         # destinationChainId — slot [192..224], uint256
         dest_chain_id_hex = args_blob[192*2:224*2]
         dest_chain_id = int(dest_chain_id_hex, 16)
@@ -810,7 +819,11 @@ def _decode_across_deposit_v3(
             destination_chain=dest_chain,
             destination_address=recipient,
             bridge_method=method_name,
-            confidence="high" if dest_chain else "medium",
+            confidence=(
+                "high" if (dest_chain and recipient)
+                else "medium" if (dest_chain or recipient)
+                else "low"
+            ),
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:
@@ -834,8 +847,9 @@ def _decode_across_deposit_legacy(
             raw_calldata_excerpt=full_data[:400],
         )
     try:
-        # recipient is the first arg
-        recipient = "0x" + args_blob[24:64]
+        # recipient is the first arg (slot 0). v0.34 (#229): guard top-12-zero
+        # via the shared helper so a misaligned slot can't fabricate a wallet.
+        recipient = _extract_addr_slot(args_blob, 0)
         # destinationChainId is the fourth arg
         dest_chain_id_hex = args_blob[96*2:128*2]
         dest_chain_id = int(dest_chain_id_hex, 16)
@@ -844,7 +858,11 @@ def _decode_across_deposit_legacy(
             destination_chain=dest_chain,
             destination_address=recipient,
             bridge_method=method_name,
-            confidence="high" if dest_chain else "medium",
+            confidence=(
+                "high" if (dest_chain and recipient)
+                else "medium" if (dest_chain or recipient)
+                else "low"
+            ),
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError):
@@ -1231,9 +1249,10 @@ def _decode_connext(
         domain_id = int(domain_hex, 16) if domain_hex else 0
         dest_chain = _CONNEXT_DOMAIN_IDS.get(domain_id)
 
-        # to address — slot [32..64], last 20 bytes
-        recipient_hex = args_blob[32*2 + 24:64*2]
-        dest_address = "0x" + recipient_hex if len(recipient_hex) == 40 else None
+        # to address — slot 1. v0.34 (#229): extract via the shared guard
+        # (requires a right-aligned ABI address, top 12 bytes zero) so a
+        # misaligned / uint256 slot can't fabricate a high-confidence wallet.
+        dest_address = _extract_addr_slot(args_blob, 1)
 
         confidence = (
             "high" if (dest_chain and dest_address)

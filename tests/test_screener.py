@@ -40,30 +40,57 @@ def test_ofac_address_is_sanctioned() -> None:
     assert "2022-04-14" in result.investigator_note
 
 
-def test_ransomware_address_is_sanctioned() -> None:
+def test_ransomware_address_is_high_not_sanctioned() -> None:
+    """Ransomware ATTRIBUTION (CISA/DOJ advisories) is high-risk but is NOT an
+    OFAC sanction — the screener must NOT mint a 'sanctioned' verdict for it
+    (that would assert a Treasury designation that does not exist). If a
+    ransomware address is ALSO separately OFAC-listed, its risk_category begins
+    'ofac' and the OFAC branch fires instead."""
     addr = "0x" + "2" * 40
     db = {addr: HighRiskEntry(
         address=addr, name="LockBit Operator",
         risk_category="ransomware", severity=4,
     )}
     result = screen_address(addr, use_correlation_db=False, high_risk_db=db)
-    assert result.risk_verdict == "sanctioned"
+    assert result.risk_verdict == "high"
     assert result.is_ransomware is True
     assert "ransomware" in result.investigator_note.lower()
+    assert "sanctioned" not in result.investigator_note.lower().split(".")[0]
 
 
 def test_mixer_sanctioned_is_sanctioned() -> None:
-    """mixer_sanctioned category → verdict SANCTIONED (not 'high'),
-    matching how Treasury's 50% Rule treats Tornado Cash et al."""
+    """mixer_sanctioned category (a CURRENTLY OFAC-sanctioned mixer, e.g.
+    Sinbad.io) → verdict SANCTIONED, matching Treasury's 50% Rule."""
     addr = "0x" + "3" * 40
     db = {addr: HighRiskEntry(
-        address=addr, name="Tornado Cash: 100 ETH",
+        address=addr, name="Sinbad.io (sanctioned mixer)",
         risk_category="mixer_sanctioned", severity=4,
     )}
     result = screen_address(addr, use_correlation_db=False, high_risk_db=db)
     assert result.risk_verdict == "sanctioned"
     assert result.is_mixer is True
     assert result.risk_score == 9
+
+
+def test_mixer_high_risk_is_high_not_sanctioned() -> None:
+    """REGRESSION (Tornado-class defect): a mixer_high_risk entry — an
+    OFAC-DELISTED or never-sanctioned mixer (delisted Tornado Cash, Railgun,
+    FixedFloat) — must screen as 'high', NOT 'sanctioned'. The screener
+    previously collapsed ANY category containing 'mixer' to 'sanctioned',
+    re-asserting the OFAC designation that the seed reclassification removed."""
+    addr = "0x" + "6" * 40
+    db = {addr: HighRiskEntry(
+        address=addr, name="Tornado Cash: 1 ETH (OFAC-delisted 2025-03-21)",
+        risk_category="mixer_high_risk", severity=3,
+    )}
+    result = screen_address(addr, use_correlation_db=False, high_risk_db=db)
+    assert result.risk_verdict == "high"
+    assert result.is_mixer is True
+    assert result.is_ofac_sanctioned is False
+    note = result.investigator_note.lower()
+    assert "high-risk" in note
+    # Must NOT assert a current OFAC sanction in the headline verdict.
+    assert not note.startswith("sanctioned")
 
 
 def test_drainer_is_high() -> None:

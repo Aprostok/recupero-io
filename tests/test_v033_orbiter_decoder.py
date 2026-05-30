@@ -96,9 +96,17 @@ def test_short_amount_returns_none() -> None:
     assert decode_orbiter_destination("9002") is not None            # exactly 4 digits, valid marker
 
 
-def test_limit_source_chains_degrade_to_none() -> None:
-    for src in ("zksync", "immutablex", "dydx", "ZKSYNC", "zksync_era"):
-        assert decode_orbiter_destination(_wei_with_code(21), source_chain=src) is None
+def test_normal_amount_decodes_regardless_of_source_chain() -> None:
+    # v0.34 #7: the Wave-B over-degradation is FIXED. A normal 9xxx amount (no
+    # trailing zeros) decodes via the byte-exact last-4 path on EVERY source
+    # chain — including our 'zksync' (which is zkSync ERA, full EVM) and the
+    # former 'limit' synonyms. The validDigit offset only diverges for specific
+    # trailing-zero amounts on the genuine packed-balance chains; that exact
+    # SDK behavior is verified in test_v034_orbiter_limit_port.py.
+    for src in ("zksync", "zksync_era", "immutablex", "dydx", "ZKSYNC", None):
+        d = decode_orbiter_destination(_wei_with_code(21), source_chain=src)
+        assert d is not None, src
+        assert d.our_chain == "base"
 
 
 def test_non_digit_and_negative_return_none() -> None:

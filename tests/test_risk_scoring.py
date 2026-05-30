@@ -94,24 +94,89 @@ def test_load_high_risk_includes_ofac_entries() -> None:
     assert db[lazarus].severity == 4
 
 
-def test_load_high_risk_promotes_mixers_to_sanctioned() -> None:
-    """The legacy mixers.json doesn't have severity/risk_category.
-    The loader promotes Tornado Cash entries (notes mention OFAC)
-    to severity=4 sanctioned."""
+def test_load_high_risk_tornado_is_high_risk_not_sanctioned() -> None:
+    """v0.34 #8: OFAC DELISTED the Tornado Cash protocol on 2025-03-21 (Fifth
+    Circuit). The mixers.json Tornado notes record the delisting, so the loader
+    must classify them as 'mixer_high_risk' (severity 3) — NOT 'mixer_sanctioned'
+    — so a hit does NOT route to an OFAC freeze letter. (A still-listed mixer
+    whose notes say OFAC with no delisting marker is still promoted; see
+    test_delisting_marker_demotes_sanctioned_promotion.)"""
     db = load_high_risk_db()
     # Tornado Cash 0.1 ETH from the seed file
     tornado = "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936"
     assert tornado in db
-    assert db[tornado].risk_category == "mixer_sanctioned"
-    assert db[tornado].severity == 4
+    assert db[tornado].risk_category == "mixer_high_risk"
+    assert db[tornado].severity == 3
+    assert "delisted" in (db[tornado].notes or "").lower()
+
+
+def test_delisting_marker_demotes_sanctioned_promotion() -> None:
+    """v0.34 #8 (seed-independent): the mixers.json loader promotes an
+    OFAC-noted entry to 'mixer_sanctioned' (sev 4) — UNLESS the notes record a
+    delisting/overturn, in which case it demotes to 'mixer_high_risk' (sev 3).
+    This pins the loader's discrimination directly (not via the shipped seeds),
+    so the Tornado-Cash-delisting behavior can't silently regress."""
+    delisted_addr = "0x" + "d" * 40   # OFAC mention + delisting marker
+    listed_addr = "0x" + "e" * 40     # OFAC mention, still listed
+    mixers_payload = [
+        {
+            "address": delisted_addr,
+            "name": "DelistedMixerShape",
+            "notes": "OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (5th Cir.)",
+        },
+        {
+            "address": listed_addr,
+            "name": "StillSanctionedMixerShape",
+            "notes": "OFAC-sanctioned — active SDN designation",
+        },
+    ]
+    with TemporaryDirectory() as td:
+        hr = Path(td) / "hr.json"
+        hr.write_text(json.dumps({"addresses": []}))
+        mx = Path(td) / "mx.json"
+        mx.write_text(json.dumps(mixers_payload))
+        rw = Path(td) / "rw.json"
+        rw.write_text(json.dumps({"addresses": []}))
+        db = load_high_risk_db(hr, mx, rw)
+
+    # Delisted entry: demoted to high-risk (no OFAC freeze-letter routing).
+    assert db[delisted_addr].risk_category == "mixer_high_risk"
+    assert db[delisted_addr].severity == 3
+    # Still-listed entry: promoted to sanctioned (the loader's default).
+    assert db[listed_addr].risk_category == "mixer_sanctioned"
+    assert db[listed_addr].severity == 4
+
+
+def test_ofac_feed_provides_authoritative_attribution() -> None:
+    """v0.34 — sanctioned coverage comes from the committed OFAC SDN feed
+    (ofac_crypto_live.csv) with OFAC's OWN attribution, not hand-maintained
+    hardcoded labels (which a cross-check proved were systematically wrong).
+    Locks in: the feed loads, and previously-mislabeled addresses now resolve
+    to their true OFAC entity (and the fabricated 'Sinbad' EVM entry is gone)."""
+    db = load_high_risk_db()
+    # The feed is substantial (Treasury lists hundreds of crypto addresses).
+    assert len(db) > 500
+    # Previously hardcoded as "Garantex" — OFAC actually lists it under SUEX.
+    suex = db.get("0x308ed4b7b49797e1a98d3818bff6fe5385410370")
+    assert suex is not None and "SUEX" in suex.name
+    assert suex.risk_category == "ofac_sanctioned"
+    # Previously hardcoded as "Sinbad.io" — OFAC lists it under Mingming Wang.
+    wang = db.get("0xfac583c0cf07ea434052c49115a4682172ab6b4f")
+    assert wang is not None and "WANG" in wang.name.upper()
+    # The fabricated "Sinbad.io" EVM entry (actually a Tornado pool, not in SDN)
+    # must be gone.
+    assert "0xb1c8094b234dce6e03f10a5b673c1d8c69739a00" not in db
 
 
 def test_load_high_risk_missing_file_returns_empty() -> None:
-    """All seed files missing → empty dict, never raises."""
+    """All seed files missing → empty dict, never raises. The always-on OFAC
+    live feed is isolated via a missing ofac_csv_path so this asserts the
+    seed-loading behavior, not the committed authoritative feed."""
     db = load_high_risk_db(
         high_risk_path=Path("/does/not/exist.json"),
         mixers_path=Path("/does/not/exist2.json"),
         ransomware_path=Path("/does/not/exist3.json"),
+        ofac_csv_path=Path("/does/not/exist_ofac.csv"),
     )
     assert db == {}
 
@@ -132,6 +197,7 @@ def test_load_high_risk_with_custom_paths(tmp_path) -> None:
         high_risk_path=custom,
         mixers_path=Path("/nope.json"),
         ransomware_path=Path("/nope2.json"),
+        ofac_csv_path=Path("/nope_ofac.csv"),
     )
     assert len(db) == 1
     entry = next(iter(db.values()))

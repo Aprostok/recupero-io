@@ -410,6 +410,26 @@ def test_lifi_start_bridge_tokens_via_across_arbitrum() -> None:
     assert out.destination_address == "0x" + "3" * 40
 
 
+def test_lifi_rejects_non_address_receiver_slot() -> None:
+    """v0.34 (no fake wallets): a 32-byte slot whose top 12 bytes are NON-zero
+    is a uint256 (amount/fee) or a misaligned read, NOT an ABI-encoded address.
+    The decoder must NOT surface its low 20 bytes as a high-confidence
+    destination — doing so would fabricate a bogus wallet in an LE deliverable.
+    """
+    valid = _build_lifi_bridgedata_calldata(
+        method_id="ed178619", receiver_address="9" * 40, destination_chain_id=137,
+    )
+    addr_slot = "0" * 24 + "9" * 40            # properly left-padded address
+    corrupt_slot = "ff" * 12 + "9" * 40         # uint256: nonzero high, addr-shaped low
+    assert addr_slot in valid
+    corrupted = valid.replace(addr_slot, corrupt_slot, 1)
+    out = decode_bridge_calldata(bridge_protocol="LiFi", input_data=corrupted)
+    assert isinstance(out, BridgeDecodeResult)
+    # The masquerading uint256's low-20-bytes must NOT be surfaced as a wallet.
+    assert out.destination_address != "0x" + "9" * 40
+    assert out.destination_address is None
+
+
 def test_lifi_li_fi_protocol_alias_routes_correctly() -> None:
     """Some seeds spell it 'li.fi' rather than 'lifi'."""
     calldata = _build_lifi_bridgedata_calldata(

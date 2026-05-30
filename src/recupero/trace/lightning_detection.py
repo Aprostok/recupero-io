@@ -22,18 +22,23 @@ correctly LABEL the dead-end.
 Known Lightning gateway addresses
 ---------------------------------
 
-Sources are public BLIP-31 directory listings, the Strike public
-treasury addresses, and CoinGate / OpenNode operator support pages.
-Addresses change over time — wave-7 should add a periodic refresh
-from a BLIP-31 mirror.
+v0.34 — the previously-hardcoded gateway table was REMOVED. 12 of its 16
+addresses were fabricated placeholders with invalid bech32/base58 checksums
+(proven by scripts/_verify_addr_checksums.py) — they could never match a real
+transaction — and the remaining 4 were unverified. Custodial-wallet sweep
+addresses also ROTATE, so a static hardcoded list is fundamentally unfit for
+forensic use: it asserts attributions that cannot be verified and silently
+goes stale. The registry is now EMPTY and ``detect_lightning_exit`` returns
+None for every address until wave-7 wires a maintained, verifiable source. For
+a forensic deliverable it is better to label nothing than to label wrongly.
 
 TODO(wave-7-integration):
-  * Surface as a "Lightning exit detected — automated trace cannot
-    continue" lead in `brief.py` Section 4.
-  * Add to `trace/policies.py:_SINKS` so the burn-list classifier
-    also treats Lightning gateways as terminal nodes.
-  * Periodic refresh of known gateway addresses from a maintained
-    public list (BLIP-31 or a community-curated GitHub).
+  * Populate ``KNOWN_LIGHTNING_GATEWAYS`` from a maintained, verifiable source
+    (BLIP-31 mirror / community-curated GitHub), with ONLY checksum-valid
+    literals, plus a periodic refresh.
+  * Then surface a "Lightning exit detected — automated trace cannot continue"
+    lead in `brief.py` Section 4 and add the gateways to
+    `trace/policies.py:_SINKS` as terminal nodes.
 """
 
 from __future__ import annotations
@@ -64,138 +69,10 @@ class LightningExit:
 # (legacy "1...") and P2SH (legacy "3...") are case-sensitive.
 
 KNOWN_LIGHTNING_GATEWAYS: dict[str, LightningExit] = {
-    # -----------------------------------------------------------------
-    # Wallet of Satoshi — custodial mobile wallet, very popular for
-    # small-value Lightning routing. Their hot-wallet sweep addresses
-    # rotate; these are the most-recently-observed (2024-2025).
-    # -----------------------------------------------------------------
-    "bc1q9d4ywgfnd8h43da5tpcxcn6ajv590cg6d3tg6axemvljvt2k76zs50tv4q": LightningExit(
-        address="bc1q9d4ywgfnd8h43da5tpcxcn6ajv590cg6d3tg6axemvljvt2k76zs50tv4q",
-        gateway_name="Wallet of Satoshi",
-        operator_type="custodial_wallet",
-        notes="Custodial Lightning wallet, popular in mobile retail. Hot-wallet sweep address.",
-    ),
-    "bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h": LightningExit(
-        address="bc1qm34lsc65zpw79lxes69zkqmk6ee3ewf0j77s3h",
-        gateway_name="Wallet of Satoshi",
-        operator_type="custodial_wallet",
-    ),
-    # -----------------------------------------------------------------
-    # Strike — US-based custodial Lightning provider (Jack Mallers).
-    # KYC-required in supported jurisdictions; cooperation rate
-    # on freeze requests is comparable to a US exchange (high).
-    # -----------------------------------------------------------------
-    "bc1qg9stkxrszkdqsuj92lm4c7akvk36zvhqw7p6ck": LightningExit(
-        address="bc1qg9stkxrszkdqsuj92lm4c7akvk36zvhqw7p6ck",
-        gateway_name="Strike",
-        operator_type="custodial_wallet",
-        notes="US-based; high cooperation rate on subpoenas — freeze letter recommended.",
-    ),
-    "3JjPf13Rd8g6WAyvg8yiPnrsdjJt1NP4FC": LightningExit(
-        address="3JjPf13Rd8g6WAyvg8yiPnrsdjJt1NP4FC",
-        gateway_name="Strike",
-        operator_type="custodial_wallet",
-    ),
-    # -----------------------------------------------------------------
-    # CoinGate — merchant-payment processor with Lightning support.
-    # -----------------------------------------------------------------
-    "bc1qa9k86qxr9k8whzx6mwfdg5xj82xkl5pcsmamke": LightningExit(
-        address="bc1qa9k86qxr9k8whzx6mwfdg5xj82xkl5pcsmamke",
-        gateway_name="CoinGate",
-        operator_type="merchant_processor",
-        notes="Estonian merchant processor; cooperates on subpoenas.",
-    ),
-    # -----------------------------------------------------------------
-    # OpenNode — merchant-Lightning gateway (now Voltage-affiliated).
-    # -----------------------------------------------------------------
-    "bc1qx3pz9rk6h69xq8gxq2u8m3p4y7t6z6f9j8n2hm": LightningExit(
-        address="bc1qx3pz9rk6h69xq8gxq2u8m3p4y7t6z6f9j8n2hm",
-        gateway_name="OpenNode",
-        operator_type="merchant_processor",
-    ),
-    "3PgHWGgvnv7Et66pAi7CoEYJrXACQXyhRz": LightningExit(
-        address="3PgHWGgvnv7Et66pAi7CoEYJrXACQXyhRz",
-        gateway_name="OpenNode",
-        operator_type="merchant_processor",
-    ),
-    # -----------------------------------------------------------------
-    # Sphinx Chat — non-custodial chat-and-payments app with Lightning.
-    # -----------------------------------------------------------------
-    "bc1qsphinx7n8m9k2v5xc6h8a3g4f3d2s1n0pqwert9": LightningExit(
-        address="bc1qsphinx7n8m9k2v5xc6h8a3g4f3d2s1n0pqwert9",
-        gateway_name="Sphinx Chat",
-        operator_type="non_custodial",
-        notes="Non-custodial — no central operator to subpoena.",
-    ),
-    # -----------------------------------------------------------------
-    # Lightning Pool / Loop (Lightning Labs) — channel marketplace.
-    # Routing-only; funds rarely terminate here, but are observed.
-    # -----------------------------------------------------------------
-    "bc1qloop8m7k9z2vc6h8a5g4f3d2s1n0pq3xc7l4kt": LightningExit(
-        address="bc1qloop8m7k9z2vc6h8a5g4f3d2s1n0pq3xc7l4kt",
-        gateway_name="Lightning Labs Loop",
-        operator_type="lsp",
-        notes="Submarine-swap LSP; funds in/out of channels via Loop server.",
-    ),
-    "bc1qpool5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0pq7": LightningExit(
-        address="bc1qpool5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0pq7",
-        gateway_name="Lightning Labs Pool",
-        operator_type="lsp",
-    ),
-    # -----------------------------------------------------------------
-    # Blink (formerly Galoy / Bitcoin Beach Wallet) — El Salvador
-    # custodial Lightning wallet.
-    # -----------------------------------------------------------------
-    "bc1qblink9d4ywgfnd8h43da5tpcxcn6ajv590cg6d": LightningExit(
-        address="bc1qblink9d4ywgfnd8h43da5tpcxcn6ajv590cg6d",
-        gateway_name="Blink (Galoy)",
-        operator_type="custodial_wallet",
-        notes="El Salvador-based; was Bitcoin Beach Wallet.",
-    ),
-    # -----------------------------------------------------------------
-    # Phoenix — non-custodial Lightning wallet by ACINQ.
-    # -----------------------------------------------------------------
-    "bc1qphoenix3pz9rk6h69xq8gxq2u8m3p4y7t6z6f9": LightningExit(
-        address="bc1qphoenix3pz9rk6h69xq8gxq2u8m3p4y7t6z6f9",
-        gateway_name="Phoenix (ACINQ)",
-        operator_type="non_custodial",
-        notes="ACINQ-operated LSP; user retains keys, but channel-opens visible.",
-    ),
-    # -----------------------------------------------------------------
-    # Voltage — managed Lightning node hosting.
-    # -----------------------------------------------------------------
-    "bc1qvoltage5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0": LightningExit(
-        address="bc1qvoltage5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0",
-        gateway_name="Voltage",
-        operator_type="lsp",
-        notes="Managed-node provider; subpoena Voltage Inc directly.",
-    ),
-    # -----------------------------------------------------------------
-    # Muun — non-custodial mobile wallet with on-chain + Lightning.
-    # -----------------------------------------------------------------
-    "bc1qmuun8m7k9z2vc6h8a5g4f3d2s1n0pq3xc7l4kt": LightningExit(
-        address="bc1qmuun8m7k9z2vc6h8a5g4f3d2s1n0pq3xc7l4kt",
-        gateway_name="Muun",
-        operator_type="non_custodial",
-    ),
-    # -----------------------------------------------------------------
-    # Bitnob — Africa-focused custodial Lightning provider.
-    # -----------------------------------------------------------------
-    "bc1qbitnob5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0p": LightningExit(
-        address="bc1qbitnob5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0p",
-        gateway_name="Bitnob",
-        operator_type="custodial_wallet",
-        notes="Africa-focused; KYC-required.",
-    ),
-    # -----------------------------------------------------------------
-    # Cash App — Block's Lightning entry point.
-    # -----------------------------------------------------------------
-    "bc1qcashapp5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0": LightningExit(
-        address="bc1qcashapp5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0",
-        gateway_name="Cash App",
-        operator_type="custodial_wallet",
-        notes="Block-operated; US-jurisdiction; high cooperation rate.",
-    ),
+    # Intentionally EMPTY (v0.34 fabricated-address removal — see module
+    # docstring). Re-populate ONLY from a maintained, verifiable source and
+    # ONLY with checksum-valid literals; scripts/_verify_addr_checksums.py
+    # and tests/test_lightning_detection_no_fabrication.py guard this.
 }
 
 

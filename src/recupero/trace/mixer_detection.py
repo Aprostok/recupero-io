@@ -13,22 +13,33 @@ The five mixer types
 * ``privacy_pool``   — Vitalik's Privacy Pools / RAILGUN.
 * ``swap_no_kyc``    — FixedFloat / ChangeNOW / SimpleSwap. Not strictly
                        mixers, but used as mixer-equivalent for hop-1 anonymization.
-* ``btc_mixer``      — Sinbad.io (sanctioned 2023), Blender.io (sanctioned 2022),
-                       Wasabi/Whirlpool coordinator addresses, ChipMixer (seized 2023).
-* ``sanctioned``     — Any of the above under active OFAC SDN designation. The
+* ``btc_mixer``      — BTC CoinJoin / mixer coordinator addresses (e.g. Wasabi
+                       zkSNACK). CURRENTLY OFAC-sanctioned BTC mixers (Sinbad,
+                       Blender) are sourced from the OFAC SDN sync, not hardcoded
+                       here — see the BTC section note below.
+* ``sanctioned``     — Any of the above under a CURRENT OFAC SDN designation. The
                        ``is_mixer`` return surfaces this as the highest-priority type.
+                       NOTE: the Tornado Cash protocol contracts were DELISTED by
+                       OFAC on 2025-03-21 (Van Loon v. Treasury, 5th Cir. — immutable
+                       smart contracts are not sanctionable property), so they now
+                       carry ``sanctioned=False`` (still ``zk_mixer``, still high-risk,
+                       DOJ prosecution of the founders ongoing). The BTC mixers
+                       (Sinbad, Blender, ChipMixer) remain sanctioned/seized.
 
 Sources for the constants table
 -------------------------------
 
 * Tornado pool addresses: the 12 canonical Ethereum pool contracts
-  documented in `OFAC SDN 2022-08-08` and Tornado's open-source repo.
+  documented in `OFAC SDN 2022-08-08` (DELISTED 2025-03-21) and Tornado's
+  open-source repo.
   The Polygon / BSC / Arbitrum / Optimism deployments use the same
   pool sizes; addresses are forked-deployed at different addresses
   (deterministic CREATE2 was not used for the mainnet originals).
-* Sinbad / Blender BTC addresses: published in
-  https://home.treasury.gov/news/press-releases/jy1768 (Sinbad 2023)
-  and https://home.treasury.gov/news/press-releases/jy0768 (Blender 2022).
+* BTC mixers: CURRENTLY OFAC-sanctioned BTC-mixer coverage (Sinbad 2023,
+  Blender 2022) is sourced from the OFAC SDN sync (trace/ofac_sync.py), the
+  authoritative feed — NOT hardcoded here. (Earlier hardcoded Sinbad/Blender
+  literals were FABRICATED — they failed their bech32 checksums and could
+  never match a real tx — and were removed in v0.34; see the BTC section.)
 * Railway (Privacy Pools) — Vitalik-co-authored 2023 paper
   ("Privacy Pools for Better"). Deployment addresses from privacypools.com.
 * FixedFloat / ChangeNOW non-KYC swap routers — exchange API docs.
@@ -78,93 +89,95 @@ class MixerEntry:
 
 KNOWN_MIXERS: dict[str, MixerEntry] = {
     # -----------------------------------------------------------------
-    # Tornado Cash — Ethereum mainnet (OFAC SDN 2022-08-08)
+    # Tornado Cash — Ethereum mainnet (OFAC SDN 2022-08-08; DELISTED
+    # 2025-03-21 per Van Loon v. Treasury — sanctioned=False, still zk_mixer)
     # -----------------------------------------------------------------
     # ETH denomination pools
     "0x12d66f87a04a9e220743712ce6d9bb1b5616b8fc": MixerEntry(
-        "Tornado Cash 0.1 ETH", "ethereum", "zk_mixer", sanctioned=True,
-        notes="SDN 2022-08-08 — 0.1 ETH denomination",
+        "Tornado Cash 0.1 ETH", "ethereum", "zk_mixer", sanctioned=False,
+        notes="SDN 2022-08-08, DELISTED 2025-03-21 — 0.1 ETH denomination",
     ),
     "0x47ce0c6ed5b0ce3d3a51fdb1c52dc66a7c3c2936": MixerEntry(
-        "Tornado Cash 1 ETH", "ethereum", "zk_mixer", sanctioned=True,
-        notes="SDN 2022-08-08 — 1 ETH denomination",
+        "Tornado Cash 1 ETH", "ethereum", "zk_mixer", sanctioned=False,
+        notes="SDN 2022-08-08, DELISTED 2025-03-21 — 1 ETH denomination",
     ),
     "0x910cbd523d972eb0a6f4cae4618ad62622b39dbf": MixerEntry(
-        "Tornado Cash 10 ETH", "ethereum", "zk_mixer", sanctioned=True,
-        notes="SDN 2022-08-08 — 10 ETH denomination",
+        "Tornado Cash 10 ETH", "ethereum", "zk_mixer", sanctioned=False,
+        notes="SDN 2022-08-08, DELISTED 2025-03-21 — 10 ETH denomination",
     ),
     "0xa160cdab225685da1d56aa342ad8841c3b53f291": MixerEntry(
-        "Tornado Cash 100 ETH", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100 ETH", "ethereum", "zk_mixer", sanctioned=False,
         notes="SDN 2022-08-08 — 100 ETH denomination",
     ),
     # DAI denomination pools
     "0xd4b88df4d29f5cedd6857912842cff3b20c8cfa3": MixerEntry(
-        "Tornado Cash 100 DAI", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100 DAI", "ethereum", "zk_mixer", sanctioned=False,
     ),
     "0xfd8610d20aa15b7b2e3be39b396a1bc3516c7144": MixerEntry(
-        "Tornado Cash 1000 DAI", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1000 DAI", "ethereum", "zk_mixer", sanctioned=False,
     ),
     "0x07687e702b410fa43f4cb4af7fa097918ffd2730": MixerEntry(
-        "Tornado Cash 10000 DAI", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 10000 DAI", "ethereum", "zk_mixer", sanctioned=False,
     ),
     "0x23773e65ed146a459791799d01336db287f25334": MixerEntry(
-        "Tornado Cash 100000 DAI", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100000 DAI", "ethereum", "zk_mixer", sanctioned=False,
     ),
     # USDC denomination pools
     "0xd96f2b1c14db8458374d9aca76e26c3d18364307": MixerEntry(
-        "Tornado Cash 100 USDC", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100 USDC", "ethereum", "zk_mixer", sanctioned=False,
     ),
     "0x4736dcf1b7a3d580672cce6e7c65cd5cc9cfba9d": MixerEntry(
-        "Tornado Cash 1000 USDC", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1000 USDC", "ethereum", "zk_mixer", sanctioned=False,
     ),
     # USDT denomination pools
     "0x169ad27a470d064dede56a2d3ff727986b15d52b": MixerEntry(
-        "Tornado Cash 100 USDT", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100 USDT", "ethereum", "zk_mixer", sanctioned=False,
     ),
     "0x0836222f2b2b24a3f36f98668ed8f0b38d1a872f": MixerEntry(
-        "Tornado Cash 1000 USDT", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1000 USDT", "ethereum", "zk_mixer", sanctioned=False,
     ),
     # WBTC denomination pools
     "0x178169b423a011fff22b9e3f3abea13414ddd0f1": MixerEntry(
-        "Tornado Cash 0.1 WBTC", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 0.1 WBTC", "ethereum", "zk_mixer", sanctioned=False,
     ),
     "0x610b717796ad172b316836ac95a2ffad065ceab4": MixerEntry(
-        "Tornado Cash 1 WBTC", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1 WBTC", "ethereum", "zk_mixer", sanctioned=False,
     ),
     "0xbb93e510bbcd0b7beb5a853875f9ec60275cf498": MixerEntry(
-        "Tornado Cash 10 WBTC", "ethereum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 10 WBTC", "ethereum", "zk_mixer", sanctioned=False,
     ),
     # Tornado router (proxy for any pool)
     "0xd90e2f925da726b50c4ed8d0fb90ad053324f31b": MixerEntry(
-        "Tornado Cash Router", "ethereum", "zk_mixer", sanctioned=True,
-        notes="Front-end router — proxies to all pool contracts",
+        "Tornado Cash Router", "ethereum", "zk_mixer", sanctioned=False,
+        notes="Front-end router — proxies to all pool contracts; "
+              "SDN 2022-08-08, DELISTED 2025-03-21",
     ),
     # -----------------------------------------------------------------
     # Tornado Cash — Polygon (Tornado deployed clones)
     # -----------------------------------------------------------------
     "0x1e34a77868e19a6647b1f2f47b51ed72dede95dd": MixerEntry(
-        "Tornado Cash 100 MATIC", "polygon", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100 MATIC", "polygon", "zk_mixer", sanctioned=False,
     ),
     "0xdf231d99ff8b6c6cbf4e9b9a945cbacef9339178": MixerEntry(
-        "Tornado Cash 1000 MATIC", "polygon", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1000 MATIC", "polygon", "zk_mixer", sanctioned=False,
     ),
     "0xaf4c0b70b2ea9fb7487c7cbb37ada259579fe040": MixerEntry(
-        "Tornado Cash 10000 MATIC", "polygon", "zk_mixer", sanctioned=True,
+        "Tornado Cash 10000 MATIC", "polygon", "zk_mixer", sanctioned=False,
     ),
     "0xa5c2254e4253490c54cef0a4347fddb8f75a4998": MixerEntry(
-        "Tornado Cash 100000 MATIC", "polygon", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100000 MATIC", "polygon", "zk_mixer", sanctioned=False,
     ),
     # -----------------------------------------------------------------
     # Tornado Cash — Arbitrum
     # -----------------------------------------------------------------
     "0x84443cfd09a48af6ef360c6976c5392ac5023a1f": MixerEntry(
-        "Tornado Cash 0.1 ETH", "arbitrum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 0.1 ETH", "arbitrum", "zk_mixer", sanctioned=False,
     ),
     "0xd47438c816c9e7f2e2888e060936a499af9582b3": MixerEntry(
-        "Tornado Cash 1 ETH", "arbitrum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1 ETH", "arbitrum", "zk_mixer", sanctioned=False,
     ),
     "0x330bdfade01ee9bf63c209ee33102dd334618e0a": MixerEntry(
-        "Tornado Cash 10 ETH", "arbitrum", "zk_mixer", sanctioned=True,
+        "Tornado Cash 10 ETH", "arbitrum", "zk_mixer", sanctioned=False,
     ),
     # v0.32.1 (trace cleanup): the Arbitrum "Tornado Cash 100 ETH" pool
     # was previously keyed with 0x1e34…95dd — the SAME literal as the
@@ -180,28 +193,28 @@ KNOWN_MIXERS: dict[str, MixerEntry] = {
     # Tornado Cash — Optimism
     # -----------------------------------------------------------------
     "0x84443cfd09a48af6ef360c6976c5392ac5023a1e": MixerEntry(
-        "Tornado Cash 0.1 ETH", "optimism", "zk_mixer", sanctioned=True,
+        "Tornado Cash 0.1 ETH", "optimism", "zk_mixer", sanctioned=False,
     ),
     "0xd47438c816c9e7f2e2888e060936a499af9582b2": MixerEntry(
-        "Tornado Cash 1 ETH", "optimism", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1 ETH", "optimism", "zk_mixer", sanctioned=False,
     ),
     "0x330bdfade01ee9bf63c209ee33102dd334618e09": MixerEntry(
-        "Tornado Cash 10 ETH", "optimism", "zk_mixer", sanctioned=True,
+        "Tornado Cash 10 ETH", "optimism", "zk_mixer", sanctioned=False,
     ),
     # -----------------------------------------------------------------
     # Tornado Cash — BSC
     # -----------------------------------------------------------------
     "0x1e34a77868e19a6647b1f2f47b51ed72dede95de": MixerEntry(
-        "Tornado Cash 0.1 BNB", "bsc", "zk_mixer", sanctioned=True,
+        "Tornado Cash 0.1 BNB", "bsc", "zk_mixer", sanctioned=False,
     ),
     "0xdf231d99ff8b6c6cbf4e9b9a945cbacef9339179": MixerEntry(
-        "Tornado Cash 1 BNB", "bsc", "zk_mixer", sanctioned=True,
+        "Tornado Cash 1 BNB", "bsc", "zk_mixer", sanctioned=False,
     ),
     "0xaf4c0b70b2ea9fb7487c7cbb37ada259579fe041": MixerEntry(
-        "Tornado Cash 10 BNB", "bsc", "zk_mixer", sanctioned=True,
+        "Tornado Cash 10 BNB", "bsc", "zk_mixer", sanctioned=False,
     ),
     "0xa5c2254e4253490c54cef0a4347fddb8f75a4999": MixerEntry(
-        "Tornado Cash 100 BNB", "bsc", "zk_mixer", sanctioned=True,
+        "Tornado Cash 100 BNB", "bsc", "zk_mixer", sanctioned=False,
     ),
     # -----------------------------------------------------------------
     # RAILGUN — privacy pool / private DeFi (NOT sanctioned, but mixer-shaped)
@@ -269,55 +282,26 @@ KNOWN_MIXERS: dict[str, MixerEntry] = {
         "SimpleSwap Hot Wallet", "ethereum", "swap_no_kyc",
     ),
     # -----------------------------------------------------------------
-    # Cyclone Protocol — Tornado-fork on multiple chains (defunct 2022)
+    # BTC mixers
     # -----------------------------------------------------------------
-    "0x06aa9f0e0b04dc1f4a4b8b8a8e1e1e1e1e1e1e1e": MixerEntry(
-        "Cyclone Protocol", "bsc", "zk_mixer",
-        notes="Tornado fork, defunct after team exit 2022",
-    ),
-    # -----------------------------------------------------------------
-    # BTC mixers — sanctioned / seized
-    # -----------------------------------------------------------------
-    # Sinbad.io (sanctioned OFAC 2023-11-29)
-    "bc1qy2cmgrcwucy26z6dat0qjehfh5fwnz5q4le930": MixerEntry(
-        "Sinbad.io Mixer", "bitcoin", "btc_mixer", sanctioned=True,
-        notes="OFAC SDN 2023-11-29 — Lazarus-affiliated BTC mixer",
-    ),
-    "bc1qsxehc4yj5fhz5pgqg3xkz4kgz8wvg66x4hh3yv": MixerEntry(
-        "Sinbad.io Mixer 2", "bitcoin", "btc_mixer", sanctioned=True,
-    ),
-    # Blender.io (sanctioned OFAC 2022-05-06, then rebranded as Sinbad)
-    "bc1qy4nq6r8c6q4xn80ndxgdt6hkft0qynxdgk6sjz": MixerEntry(
-        "Blender.io Mixer", "bitcoin", "btc_mixer", sanctioned=True,
-        notes="OFAC SDN 2022-05-06 — first BTC mixer ever sanctioned",
-    ),
-    # ChipMixer (seized DOJ + Europol 2023-03)
-    "bc1qm3jzpa6yejmd83axfa3ka7vqg9q0c4wflpqxn5": MixerEntry(
-        "ChipMixer", "bitcoin", "btc_mixer", sanctioned=True,
-        notes="DOJ + Europol seized 2023-03 — infrastructure dismantled",
-    ),
-    # Whirlpool (Samourai Wallet, seized 2024-04)
-    "bc1qwhirlpool0nq8j4hxs5d6yqj8h0xn5p5pq9xv8y": MixerEntry(
-        "Samourai Whirlpool", "bitcoin", "btc_mixer",
-        notes="Samourai Wallet team arrested 2024-04; service dismantled",
-    ),
-    # Wasabi 1.0 coordinator (zkSNACK)
+    # v0.34 FABRICATED-ADDRESS REMOVAL: the prior Sinbad.io (x2), Blender.io,
+    # ChipMixer, Samourai Whirlpool, Whir.to, CryptoMixer.io and FoxMixer BTC
+    # entries — plus a "Cyclone Protocol" EVM entry
+    # (0x06aa9f0e0b04dc1f4a4b8b8a8e1e1e1e1e1e1e1e, a hand-typed repeating-nibble
+    # placeholder) — were FABRICATED. Their bech32/base58 checksums are invalid
+    # (proven by scripts/_verify_addr_checksums.py), so they could NEVER have
+    # matched a real on-chain transaction, and the cited Treasury provenance
+    # (jy1768 / jy0768) was false. They were REMOVED rather than fabricate
+    # replacements (per the no-fabrication forensic rule). CURRENTLY OFAC-
+    # sanctioned BTC mixers (Sinbad, Blender) are covered by the authoritative
+    # OFAC SDN sync (trace/ofac_sync.py), not this unwired fast-path. Any
+    # address re-added here MUST be a verified, checksum-valid literal — the
+    # test_no_fabricated_btc_addresses regression guards this.
     "bc1qs604c7jv6amk4cxqlnvuxv26hv3e48cds4m0ew": MixerEntry(
         "Wasabi 1.0 Coordinator", "bitcoin", "btc_mixer",
-        notes="zkSNACK coordinator; Wasabi 2.0 uses WabiSabi (not yet decoded)",
-    ),
-    # Whir mixer (smaller player)
-    "bc1qwhir0xqp9z3jc5e3thfm2v9q3xc7l8nq7m4u5y": MixerEntry(
-        "Whir.to", "bitcoin", "btc_mixer",
-        notes="Smaller BTC mixer; popular 2022-2023",
-    ),
-    # CryptoMixer.io
-    "bc1qcryptomix0x4n5p3q8m7k9z2vc6h8a5g4f3d2s": MixerEntry(
-        "CryptoMixer.io", "bitcoin", "btc_mixer",
-    ),
-    # MixTum / FoxMixer
-    "bc1qfoxmix5q3wn7p8m9k2v5xc6h8a3g4f3d2s1n0p": MixerEntry(
-        "FoxMixer", "bitcoin", "btc_mixer",
+        notes="zkSNACK coordinator (checksum-valid; attribution from public "
+              "coordinator lists, not independently re-verified). Wasabi 2.0 "
+              "uses WabiSabi (not yet decoded).",
     ),
 }
 
@@ -354,11 +338,8 @@ def is_mixer(address: str, chain: str) -> tuple[bool, str | None, str]:
 
     chain_norm = chain.lower().strip()
 
-    # EVM and EVM-shape chains: lowercase normalize.
-    if chain_norm != "bitcoin":
-        addr_norm = address.lower().strip()
-    else:
-        addr_norm = address.strip()
+    # EVM and EVM-shape chains: lowercase normalize; BTC is case-sensitive.
+    addr_norm = address.lower().strip() if chain_norm != "bitcoin" else address.strip()
 
     entry = _BY_CHAIN_AND_ADDR.get((chain_norm, addr_norm))
     if entry is None:

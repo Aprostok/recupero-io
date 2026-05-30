@@ -270,6 +270,17 @@ def identify_cross_chain_handoffs(
                     decoded_chain = result.destination_chain
                     decoded_address = result.destination_address
                     decoded_confidence = result.confidence
+                    # v0.34 (trace beginning->end): OP-Stack depositETH/
+                    # depositERC20 mint to msg.sender on L2 — the recipient is
+                    # NOT in calldata, it IS the address that sent into the
+                    # bridge (this transfer's from_address). That makes the L2
+                    # destination DETERMINISTIC (same address), so recover it and
+                    # let the BFS continue at high confidence instead of dead-
+                    # ending at the bridge. No fabrication: from_address is the
+                    # real on-chain msg.sender.
+                    if result.recipient_is_msg_sender and decoded_address is None:
+                        decoded_address = t.from_address
+                        decoded_confidence = "high"
                     log.info(
                         "cross-chain handoff decoded: tx=%s bridge=%s "
                         "→ chain=%s addr=%s (confidence=%s)",

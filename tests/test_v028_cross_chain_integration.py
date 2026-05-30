@@ -179,6 +179,52 @@ def test_cross_chain_handoff_high_confidence_sets_all_decoded_fields(
     assert h.decoded_confidence == "high"
 
 
+def test_op_stack_msg_sender_handoff_resolves_to_depositor(monkeypatch) -> None:
+    """v0.34 (trace beginning->end): an OP-Stack depositETH/depositERC20 handoff
+    mints to msg.sender on L2 (recipient NOT in calldata). The cross_chain layer
+    must resolve the destination to the on-chain depositor — the source
+    transfer's from_address — at HIGH confidence so the BFS continues instead of
+    dead-ending at the bridge. No fabrication: from_address is the real
+    msg.sender that the OP-Stack contract mints to on L2."""
+    addr = "0x" + "b" * 40
+    bridge_db = {(Chain.ethereum, addr): BridgeInfo(
+        chain=Chain.ethereum, address=addr,
+        name="Optimism: L1 Standard Bridge", protocol="optimism",
+        confidence="high", follow_up_url=None,
+        supports_to_chains=("optimism",),
+    )}
+    case = _make_synthetic_case([
+        _make_transfer(to_address=addr, tx_hash="0x" + "2" * 64),
+    ])
+    receipt = MagicMock()
+    receipt.raw_transaction = {"input": "0xb1a1a882" + "0" * 128}
+    adapter = MagicMock()
+    adapter.fetch_evidence_receipt = MagicMock(return_value=receipt)
+    # Decoder flags msg.sender routing with no in-calldata recipient.
+    fake_result = BridgeDecodeResult(
+        destination_chain="optimism",
+        destination_address=None,
+        bridge_method="depositETH",
+        confidence="medium",
+        raw_calldata_excerpt="0xb1a1a882...",
+        recipient_is_msg_sender=True,
+    )
+    monkeypatch.setattr(
+        "recupero.trace.bridge_calldata.decode_bridge_calldata",
+        lambda **kwargs: fake_result,
+    )
+    out = identify_cross_chain_handoffs(
+        case, bridge_db=bridge_db, adapter=adapter,
+    )
+    assert len(out) == 1
+    h = out[0]
+    assert h.decoded_destination_chain == "optimism"
+    # Resolved to the depositor (== the source sender / on-chain msg.sender).
+    assert h.decoded_destination_address is not None
+    assert h.decoded_destination_address == h.source_address
+    assert h.decoded_confidence == "high"
+
+
 def test_cross_chain_handoff_low_confidence_decode_preserved(
     monkeypatch,
 ) -> None:

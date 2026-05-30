@@ -94,6 +94,11 @@ class BridgeDecodeResult:
     bridge_method: str               # 'transferTokens' | 'deposit' | 'swap' | ...
     confidence: str
     raw_calldata_excerpt: str        # first 200 chars for forensic record
+    # v0.34: True when the method routes to msg.sender (recipient NOT in
+    # calldata) — e.g. OP-Stack depositETH/depositERC20. The caller resolves the
+    # destination to the immediate on-chain sender (a DETERMINISTIC same-address
+    # continuation), so the trace doesn't dead-end at the bridge.
+    recipient_is_msg_sender: bool = False
 
 
 # Method-ID prefixes (first 4 bytes of keccak256(signature)) for
@@ -1427,7 +1432,6 @@ def _decode_lifi(
         (416 * 2, 480 * 2),   # BridgeData after a 4-slot prefix (swap-and-bridge)
     ]
     try:
-        best: tuple[str | None, str | None, str] = (None, None, "low")
         for recv_idx, chain_idx in candidates:
             if chain_idx + 64 > len(args_blob):
                 continue
@@ -1441,9 +1445,16 @@ def _decode_lifi(
                 continue  # Try next candidate
 
             recv_hex_full = args_blob[recv_idx:recv_idx + 64]
-            recv_hex = recv_hex_full[-40:]  # last 20 bytes
-            if len(recv_hex) != 40:
+            if len(recv_hex_full) != 64:
                 continue
+            # v0.34: a real ABI-encoded `address` is left-padded with 12 zero
+            # bytes. If the top 12 bytes are NOT zero, this 32-byte slot is a
+            # uint256 (amount/fee) or a misaligned read — NOT an address.
+            # Surfacing its low 20 bytes as a destination would FABRICATE a
+            # bogus wallet at high confidence. Reject and try the next candidate.
+            if recv_hex_full[:24] != "0" * 24:
+                continue
+            recv_hex = recv_hex_full[-40:]  # last 20 bytes
             # Reject obviously-zero recipient (sentinel for wrong offset)
             if recv_hex == "0" * 40:
                 continue
@@ -2546,13 +2557,16 @@ def _decode_op_stack_l1(
     effective_chain = "ethereum" if method_name == "withdrawTo" else dest_chain
     try:
         if dest_slot is None:
-            # msg.sender path — we don't have it here. The trace's
-            # transaction-from address will be used by the BFS
-            # continuation logic when destination_address is None.
+            # msg.sender path — recipient is NOT in calldata. OP-Stack
+            # depositETH/depositERC20 mint to msg.sender on L2, i.e. whoever
+            # sent into the bridge. We flag it so the caller (which HAS the
+            # source transfer) resolves the destination to that immediate
+            # sender — a deterministic same-address continuation.
             return BridgeDecodeResult(
                 destination_chain=effective_chain, destination_address=None,
                 bridge_method=method_name, confidence="medium",
                 raw_calldata_excerpt=full_data[:400],
+                recipient_is_msg_sender=True,
             )
         dest_addr = _extract_addr_slot(args_blob, dest_slot)
         return BridgeDecodeResult(

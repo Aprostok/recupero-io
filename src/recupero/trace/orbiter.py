@@ -51,6 +51,7 @@ running it on an arbitrary transfer would risk a coincidental ``9xxx`` match.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 __all__ = [
@@ -113,11 +114,59 @@ ORBITER_CODE_TO_CHAIN: dict[int, tuple[str, str | None]] = {
     98: ("Soneium", None),
 }
 
-# Orbiter "limit-number" source chains whose decode path differs (see
-# docstring) — decode degrades to None for these source chains.
-_LIMIT_SOURCE_CHAINS = frozenset({
-    "zksync", "zksync_era", "zksync_lite", "immutablex", "dydx",
-})
+# --- Faithful port of orbiter-sdk core.ts pText EXTRACTION (sha256
+# 0bbc410dcd48050b1709d35fcbc74a6fbc417e873b28c03663a2df6a2c2c0502), VERIFIED
+# byte-identical against the reference JS (run via node) on 136 vectors — see
+# tests/fixtures/orbiter_ptext_reference.json + test_v034_orbiter_limit_port.py.
+#
+# Most chains take the LAST 4 digits of the smallest-unit amount. The
+# "limit-number" chains (zkSync LITE, ImmutableX, dYdX — packed-balance /
+# StarkEx L2s that cap the encodable bits) instead take the 4 digits at a
+# ``validDigit`` offset derived from MAX_BITS. CRITICAL: our Chain enum
+# ``zksync`` is zkSync ERA (chainId 324, full EVM, the SDK's "zksync2") — NOT
+# zkSync Lite — so it is NON-limit and uses the last-4 path. (Wave B wrongly
+# degraded it to None; this restores correct decoding for zkSync-Era sources.)
+# The genuine limit chains are not in our Chain enum, so for real recupero
+# source chains the extraction is always last-4; the offset path is ported for
+# completeness + correctness should those chains ever be traced.
+_SDK_LIMIT_CHAINS: dict[str, int] = {
+    "zksync_lite": 35,   # zkSync Lite (StarkWare packed balance)
+    "immutablex": 28,
+    "dydx": 28,          # dYdX v3 (StarkEx)
+}
+
+
+def _sdk_remove_sides_zero(s: str) -> str:
+    """Port of core.ts ``removeSidesZero``: strip leading zeros (keep the first
+    significant digit) and trailing zeros (keep the last significant digit)."""
+    s = re.sub(r"^0+(\d)", r"\1", s)
+    return re.sub(r"(\d)0+$", r"\1", s)
+
+
+def _sdk_extract_trailing4(amount_str: str, *, limit_max_bits: int | None) -> str | None:
+    """Port of core.ts ``getPTextFromTAmount`` pText extraction. Returns the
+    4-digit identification string, or None when the amount is too short.
+
+    For a limit-number chain (``limit_max_bits`` set) whose amount is longer
+    than its ``validDigit`` count, the code sits at ``amount[:validDigit][-4:]``;
+    otherwise (and for every non-limit chain) it is the last 4 digits. The
+    ``validDigit`` derivation mirrors ``AmountValidDigits`` exactly: when the
+    de-zeroed amount exceeds the chain's max digit count, the JS returns an
+    error string and the ``amountLength > validDigit`` comparison is NaN-false,
+    so the code falls through to last-4 (replicated here by leaving the limit
+    branch un-taken).
+    """
+    if len(amount_str) < _P_NUMBER:
+        return None
+    if limit_max_bits is not None:
+        region_max = 2 ** limit_max_bits - 1
+        max_digits = len(str(region_max))
+        ramount = _sdk_remove_sides_zero(amount_str)
+        if len(ramount) <= max_digits:
+            valid_digit = max_digits - 1 if int(ramount) > region_max else max_digits
+            if len(amount_str) > valid_digit:
+                return amount_str[:valid_digit][-_P_NUMBER:]
+    return amount_str[-_P_NUMBER:]
 
 
 @dataclass(frozen=True)
@@ -136,10 +185,6 @@ class OrbiterDestination:
     confidence: str = "medium"   # NEVER "high"
 
 
-def _is_limit_source(source_chain: str | None) -> bool:
-    return source_chain is not None and source_chain.lower() in _LIMIT_SOURCE_CHAINS
-
-
 def decode_orbiter_destination(
     amount_raw: str | int,
     *,
@@ -149,21 +194,26 @@ def decode_orbiter_destination(
 
     ``amount_raw`` is the integer amount in the token's smallest unit (the
     ``Transfer.amount_raw`` string — exact, no rounding). Returns ``None`` when
-    the transfer is not a decodable Orbiter cross-chain deposit (no 9xxx
-    marker / too short / non-integer) or when the source chain uses the
-    un-ported limit-number path. Pure + side-effect free.
+    the transfer is not a decodable Orbiter cross-chain deposit (no 9xxx marker
+    / too short / non-integer). The trailing-code extraction is the byte-exact,
+    node-verified port of orbiter-sdk ``getPTextFromTAmount`` (last-4 for normal
+    chains; the ``validDigit`` offset for the genuine limit chains). Pure +
+    side-effect free.
 
     Callers MUST gate this on a recognized Orbiter Maker label (see module
     docstring) — an ungated call risks a coincidental marker match.
     """
-    if _is_limit_source(source_chain):
-        return None
-
     s = str(amount_raw).strip()
-    if not s.isdigit() or len(s) < _P_NUMBER:
+    if not s.isdigit():
         return None
 
-    trailing = int(s[-_P_NUMBER:])
+    limit_max_bits = (
+        _SDK_LIMIT_CHAINS.get(source_chain.lower()) if source_chain else None
+    )
+    ptext = _sdk_extract_trailing4(s, limit_max_bits=limit_max_bits)
+    if ptext is None:
+        return None
+    trailing = int(ptext)
     # Require the 9xxx identification marker (9000 + internalId). This both
     # decodes the chain AND gates out coincidental amounts.
     if not (_MARKER_OFFSET < trailing < _MARKER_OFFSET + 1000):

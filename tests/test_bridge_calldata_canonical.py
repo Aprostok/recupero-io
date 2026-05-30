@@ -267,6 +267,31 @@ def test_optimism_deposit_erc20_no_recipient_surfaces_chain_only() -> None:
     assert out.destination_chain == "optimism"
     assert out.destination_address is None
     assert out.confidence == "medium"
+    # v0.34: flagged as msg.sender-routing so the caller (cross_chain) can
+    # resolve the destination to the on-chain depositor (deterministic L2
+    # same-address continuation) instead of dead-ending.
+    assert out.recipient_is_msg_sender is True
+
+
+def test_op_stack_msg_sender_flag_only_on_non_to_variants() -> None:
+    """The msg.sender flag must be set for depositETH/depositERC20 (recipient
+    not in calldata) and NOT for the depositETHTo/depositERC20To variants
+    (recipient IS in calldata, so no inference needed)."""
+    # depositETH(uint32,bytes) — msg.sender.
+    eth = decode_bridge_calldata(
+        bridge_protocol="Base: L1 Standard Bridge",
+        input_data="0xb1a1a882" + _pad_uint(200_000) + _pad_uint(0x40) + _pad_uint(0),
+    )
+    assert eth is not None and eth.recipient_is_msg_sender is True
+    assert eth.destination_address is None
+    # depositETHTo(address,uint32,bytes) — recipient explicit, flag stays False.
+    eth_to = decode_bridge_calldata(
+        bridge_protocol="Base: L1 Standard Bridge",
+        input_data="0x9a2ac6d5" + _pad_address("a" * 40) + _pad_uint(200_000)
+        + _pad_uint(0x60) + _pad_uint(0),
+    )
+    assert eth_to is not None and eth_to.recipient_is_msg_sender is False
+    assert eth_to.destination_address is not None
 
 
 def test_optimism_withdraw_to_decodes_recipient_on_ethereum() -> None:

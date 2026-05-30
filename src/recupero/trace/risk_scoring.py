@@ -146,6 +146,7 @@ def load_high_risk_db(
     high_risk_path: Path | None = None,
     mixers_path: Path | None = None,
     ransomware_path: Path | None = None,
+    ofac_csv_path: Path | None = None,
 ) -> dict[str, HighRiskEntry]:
     """Load high-risk address labels from THREE seed files.
 
@@ -154,10 +155,13 @@ def load_high_risk_db(
         + ofac_listing_date.
       * ransomware.json — v0.9.3 format. Same shape as high_risk
         but operator-tagged.
-      * mixers.json — legacy flat array, no severity. We promote
-        each entry to severity=4 (mixer = sanctioned equivalent
-        for risk-scoring purposes) and category
-        "mixer_sanctioned".
+      * mixers.json — legacy flat array, no severity. An entry whose
+        notes assert a CURRENT OFAC/sanction designation is promoted
+        to severity=4 / "mixer_sanctioned" (→ OFAC freeze-letter
+        routing); an entry whose notes record a DELISTING/overturn
+        (e.g. Tornado Cash, delisted 2025-03-21) is severity=3 /
+        "mixer_high_risk" (flagged, but no OFAC letter); any other
+        mixer also defaults to severity=3 / "mixer_high_risk".
 
     Returns ``{canonical_address_key: HighRiskEntry}`` — EVM
     lowercased, base58 case-preserved (v0.17.5).
@@ -247,7 +251,10 @@ def load_high_risk_db(
     # land without a code deploy.
     try:
         from recupero.trace.ofac_sync import load_ofac_csv
-        for entry in load_ofac_csv():
+        # ofac_csv_path=None -> load_ofac_csv uses DEFAULT_OFAC_CSV_PATH (the
+        # committed authoritative feed). Tests pass an explicit missing path to
+        # isolate seed-loading behavior from the always-on OFAC feed.
+        for entry in load_ofac_csv(ofac_csv_path):
             # v0.31.5: an entry with `removed_at_utc` set was previously
             # OFAC-listed but has since been removed from the upstream
             # feed (e.g. Tornado Cash partial 2024 ruling). It stays
@@ -276,8 +283,9 @@ def load_high_risk_db(
     except Exception as exc:  # noqa: BLE001
         log.debug("ofac live-sync data unavailable: %s", exc)
 
-    # mixers.json — legacy schema (treat all entries as
-    # mixer_sanctioned severity=4)
+    # mixers.json — legacy schema. Promote to mixer_sanctioned (sev 4)
+    # only when notes assert a CURRENT OFAC designation; a delisted/
+    # overturned entry or a plain mixer is mixer_high_risk (sev 3).
     mx_path = mixers_path or _MIXERS_SEED_PATH
     try:
         raw = json.loads(mx_path.read_text(encoding="utf-8-sig"))
@@ -306,15 +314,23 @@ def load_high_risk_db(
                     if key in out:
                         continue
                     notes_raw = entry.get("notes")
-                    # Coerce non-string notes to None — keep the row
-                    # loadable, conservative classification.
-                    if isinstance(notes_raw, str):
-                        notes = notes_raw
-                    else:
-                        notes = ""
+                    # Coerce non-string notes to "" — keep the row loadable
+                    # (conservative classification).
+                    notes = notes_raw if isinstance(notes_raw, str) else ""
+                    notes_l = notes.lower()
+                    # OFAC/sanction in the notes promotes a mixer to
+                    # "sanctioned" (-> OFAC freeze-letter routing) — UNLESS the
+                    # notes record a DELISTING / overturn. A delisted protocol
+                    # (e.g. Tornado Cash, delisted 2025-03-21 after the Fifth
+                    # Circuit held immutable contracts aren't sanctionable
+                    # property) is still a high-risk mixer but is NOT currently
+                    # OFAC-sanctioned, so it must NOT generate an OFAC letter.
                     is_sanctioned = (
-                        "ofac" in notes.lower()
-                        or "sanction" in notes.lower()
+                        ("ofac" in notes_l or "sanction" in notes_l)
+                        and not any(m in notes_l for m in (
+                            "delisted", "overturned", "vacated",
+                            "no longer sanctioned", "removed from the sdn",
+                        ))
                     )
                     out[key] = HighRiskEntry(
                         address=key,

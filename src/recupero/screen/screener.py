@@ -187,6 +187,7 @@ def screen_address(
     labels: list[ScreeningLabel] = []
     is_ofac = False
     is_mixer = False
+    is_mixer_sanctioned = False
     is_ransomware = False
     is_drainer = False
 
@@ -197,6 +198,14 @@ def screen_address(
             is_ofac = True
         if "mixer" in cat:
             is_mixer = True
+        # Only a CURRENTLY OFAC-sanctioned mixer (mixer_sanctioned, e.g.
+        # Sinbad/Blender) yields a "sanctioned" verdict. A "mixer_high_risk"
+        # entry (e.g. OFAC-DELISTED Tornado Cash, Railgun, FixedFloat) is
+        # high-risk but NOT sanctioned — collapsing it to "sanctioned" would
+        # re-assert an OFAC designation that does not exist (the same defect
+        # the Tornado seed reclassification fixed).
+        if cat == "mixer_sanctioned":
+            is_mixer_sanctioned = True
         if "ransomware" in cat:
             is_ransomware = True
         if "drainer" in cat or "scam" in cat:
@@ -233,6 +242,7 @@ def screen_address(
     verdict = _verdict_for(
         is_ofac=is_ofac,
         is_mixer=is_mixer,
+        is_mixer_sanctioned=is_mixer_sanctioned,
         is_ransomware=is_ransomware,
         is_drainer=is_drainer,
         score=score,
@@ -242,6 +252,7 @@ def screen_address(
     note = _build_investigator_note(
         address=addr_norm, verdict=verdict, entry=entry,
         correlation=correlation, is_ofac=is_ofac, is_mixer=is_mixer,
+        is_mixer_sanctioned=is_mixer_sanctioned,
         is_ransomware=is_ransomware, is_drainer=is_drainer,
     )
 
@@ -345,7 +356,6 @@ def _lookup_correlation_for_address(
     per-case appearance detail — it needs aggregated counts).
     """
     try:
-        import psycopg
         from psycopg.rows import dict_row
     except ImportError:
         return ScreeningCorrelation()
@@ -447,19 +457,23 @@ def _verdict_for(
     is_drainer: bool,
     score: int,
     correlation: ScreeningCorrelation,
+    is_mixer_sanctioned: bool = False,
 ) -> str:
     """Map (flags + score) to a verdict string.
 
-    Matches the taxonomy used by RISK_ASSESSMENT in the brief so
-    downstream consumers can union the two outputs cleanly.
+    Matches the taxonomy used by RISK_ASSESSMENT in the brief
+    (risk_scoring._verdict_for_score) so downstream consumers can union the
+    two outputs cleanly. "sanctioned" is reserved for a CURRENT OFAC SDN hit:
+    a direct OFAC entry or a still-sanctioned mixer (mixer_sanctioned, e.g.
+    Sinbad/Blender). Ransomware attribution, OFAC-DELISTED / high-risk mixers
+    (mixer_high_risk, e.g. Tornado Cash post-2025-03-21, Railgun, FixedFloat),
+    and drainers are serious but are NOT OFAC sanctions — they map to "high",
+    never "sanctioned" (asserting a non-existent OFAC designation in a
+    compliance-facing verdict is a forensic/legal defect).
     """
-    if is_ofac:
+    if is_ofac or is_mixer_sanctioned:
         return "sanctioned"
-    if is_ransomware:
-        return "sanctioned"
-    if is_mixer:
-        return "sanctioned"
-    if is_drainer:
+    if is_ransomware or is_mixer or is_drainer:
         return "high"
     if score >= 6 or correlation.prior_ofac_exposed_count > 0:
         return "high"
@@ -480,6 +494,7 @@ def _build_investigator_note(
     is_mixer: bool,
     is_ransomware: bool,
     is_drainer: bool,
+    is_mixer_sanctioned: bool = False,
 ) -> str:
     """One-sentence human-readable verdict."""
     if is_ofac:
@@ -492,17 +507,29 @@ def _build_investigator_note(
             f"{entry.name if entry else 'OFAC entry'}. "
             "Do not transact with this address."
         )
+    if is_mixer_sanctioned:
+        listing = (
+            f" (listed {entry.ofac_listing_date})"
+            if entry and entry.ofac_listing_date else ""
+        )
+        return (
+            f"SANCTIONED — OFAC-sanctioned mixer{listing}: "
+            f"{entry.name if entry else 'unknown'}. "
+            "Funds passing through here lose recoverability."
+        )
     if is_ransomware:
         return (
-            f"SANCTIONED — ransomware attribution: "
+            f"HIGH-RISK — ransomware attribution: "
             f"{entry.name if entry else 'unknown operator'}. "
-            "Treat as ransomware payment endpoint."
+            "Treat as ransomware payment endpoint (CISA/DOJ attribution; "
+            "NOT an OFAC sanction)."
         )
     if is_mixer:
         return (
-            f"SANCTIONED — mixer/obfuscation contract: "
+            f"HIGH-RISK — high-risk mixer/obfuscation contract: "
             f"{entry.name if entry else 'unknown'}. "
-            "Funds passing through here lose recoverability."
+            "Funds passing through here lose recoverability "
+            "(high-risk, NOT OFAC-sanctioned)."
         )
     if is_drainer:
         return (

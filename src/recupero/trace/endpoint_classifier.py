@@ -27,7 +27,9 @@ that it is a CEX, precisely so the perp's hub is never mislabeled.
 
 from __future__ import annotations
 
+import contextlib
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Literal
 
 from recupero._common import canonical_address_key as _ck
@@ -37,6 +39,7 @@ __all__ = [
     "EndpointClassification",
     "classify_by_counterparty_diversity",
     "probe_endpoint_diversity",
+    "infer_infrastructure_endpoints",
 ]
 
 # Distinct-counterparty thresholds. Tuned conservatively: a perpetrator
@@ -181,3 +184,93 @@ def probe_endpoint_diversity(
         total_outbound_txs=len(outbound),
         probe_truncated=truncated,
     )
+
+
+def infer_infrastructure_endpoints(
+    case: Any,
+    *,
+    adapter: Any,
+    start_block: int,
+    max_probe: int = 10,
+    min_inflow_usd: Decimal = Decimal("1000"),
+) -> list[dict[str, Any]]:
+    """Probe the top unlabeled terminal endpoints in ``case`` and return the
+    ones that classify as likely exchange / service infrastructure.
+
+    Candidates are the case's UNLABELED counterparties that sit on the
+    ``adapter``'s chain, ranked by trace-visible USD inflow and capped to
+    ``max_probe`` (bounded I/O — this is the opt-in deep tier). Each is
+    diversity-probed and classified; only ``likely_exchange_infrastructure``
+    hits are returned, as plain dicts ready for the brief's subpoena-targets
+    section. Confidence stays "low"/"medium" — a behavioral inference.
+
+    Pure given the injected ``adapter`` (the only I/O is its fetches), so it
+    is unit-testable with a fake adapter + a duck-typed case.
+    """
+    transfers = getattr(case, "transfers", None) or []
+    if not transfers:
+        return []
+    adapter_chain = getattr(getattr(adapter, "chain", None), "value", None) or str(
+        getattr(adapter, "chain", "")
+    )
+
+    # Per-address trace-visible inflow + the chain it was seen on. Only
+    # consider addresses that appear as a RECIPIENT (a terminal/holding
+    # endpoint) and are unlabeled.
+    unlabeled = {
+        _ck(a) for a in (getattr(case, "unlabeled_counterparties", None) or []) if a
+    }
+    unlabeled.discard("")
+    inflow: dict[str, Decimal] = {}
+    raw_by_key: dict[str, str] = {}
+    chain_by_key: dict[str, str] = {}
+    for t in transfers:
+        dst_raw = getattr(t, "to_address", None)
+        key = _ck(dst_raw or "")
+        if not key or key not in unlabeled:
+            continue
+        usd = getattr(t, "usd_value_at_tx", None)
+        with contextlib.suppress(TypeError, ValueError, ArithmeticError):
+            inflow[key] = inflow.get(key, Decimal("0")) + (
+                Decimal(usd) if usd is not None else Decimal("0")
+            )
+        raw_by_key.setdefault(key, dst_raw or key)
+        tchain = getattr(getattr(t, "chain", None), "value", None) or str(
+            getattr(t, "chain", "")
+        )
+        chain_by_key.setdefault(key, tchain)
+
+    # Rank by inflow, keep those above the floor + on the adapter's chain.
+    ranked = sorted(
+        (k for k in inflow if inflow[k] >= min_inflow_usd
+         and chain_by_key.get(k) == adapter_chain),
+        key=lambda k: inflow[k],
+        reverse=True,
+    )[:max_probe]
+
+    out: list[dict[str, Any]] = []
+    for key in ranked:
+        raw = raw_by_key.get(key, key)
+        try:
+            div = probe_endpoint_diversity(raw, adapter=adapter, start_block=start_block)
+        except Exception:  # noqa: BLE001 — a probe failure must not abort the trace
+            continue
+        result = classify_by_counterparty_diversity(
+            address=raw,
+            distinct_inbound=div.distinct_inbound,
+            distinct_outbound=div.distinct_outbound,
+        )
+        if result.classification != "likely_exchange_infrastructure":
+            continue
+        out.append({
+            "address": raw,
+            "chain": chain_by_key.get(key, adapter_chain),
+            "heuristic": "counterparty_diversity",
+            "classification": result.classification,
+            "attribution_confidence": result.confidence,
+            "distinct_inbound": result.distinct_inbound,
+            "distinct_outbound": result.distinct_outbound,
+            "inflow_usd": str(inflow.get(key, Decimal("0"))),
+            "note": result.reason,
+        })
+    return out

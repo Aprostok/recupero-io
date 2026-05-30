@@ -1180,6 +1180,40 @@ def _continue_past_dex_and_bridges(
             len(new_transfers), len(continuation_seeds), len(cross_chain_seeds),
         )
 
+    # v0.32.1 (trace-depth #2 wiring): behavioral endpoint diversity probe.
+    # OPT-IN via RECUPERO_ENDPOINT_DIVERSITY_PROBE because it is the more
+    # inferential, more EXPENSIVE tier (it fetches the broader in/out activity
+    # of the top unlabeled terminal endpoints). Recognizes UNLABELED exchange
+    # / service infrastructure (a subpoena lead the label DB missed) from
+    # counterparty diversity — capped low/medium confidence, never proof, and
+    # NEVER flags a low/asymmetric-diversity address (so a perpetrator's own
+    # consolidation hub is not mislabeled as a CEX). Runs on the source-chain
+    # adapter only; recorded onto the case for the brief's subpoena section.
+    _div_probe_on = os.environ.get(
+        "RECUPERO_ENDPOINT_DIVERSITY_PROBE", "",
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if _div_probe_on:
+        try:
+            from recupero.trace.endpoint_classifier import (
+                infer_infrastructure_endpoints,
+            )
+            probe_start_block = adapter.block_at_or_before(incident_time)
+            infra = infer_infrastructure_endpoints(
+                case, adapter=adapter, start_block=probe_start_block,
+            )
+            if infra:
+                case.inferred_infrastructure_endpoints = (
+                    list(case.inferred_infrastructure_endpoints) + infra
+                )
+                log.info(
+                    "endpoint-diversity probe: %d unlabeled endpoint(s) "
+                    "classified as likely exchange/service infrastructure "
+                    "(behavioral correlation, not proof)",
+                    len(infra),
+                )
+        except Exception as exc:  # noqa: BLE001 — probe is best-effort
+            log.warning("endpoint-diversity probe failed (non-fatal): %s", exc)
+
 
 def _process_wave(
     wave: list[tuple[Address, int]],

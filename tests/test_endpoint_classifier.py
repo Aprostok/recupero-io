@@ -9,8 +9,11 @@ Locks the forensic invariant: behavioral classification NEVER returns
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 from recupero.trace.endpoint_classifier import (
     classify_by_counterparty_diversity,
+    infer_infrastructure_endpoints,
     probe_endpoint_diversity,
 )
 
@@ -144,3 +147,81 @@ def test_probe_end_to_end_classifies_high_diversity_as_infra() -> None:
         distinct_outbound=div.distinct_outbound,
     )
     assert c.classification == "likely_exchange_infrastructure"
+
+
+# ---- infer_infrastructure_endpoints orchestrator ---- #
+
+
+class _Chain:
+    def __init__(self, v: str) -> None:
+        self.value = v
+
+
+class _Tx:
+    def __init__(self, to_address, usd, chain="ethereum") -> None:  # noqa: ANN001
+        self.to_address = to_address
+        self.usd_value_at_tx = usd
+        self.chain = _Chain(chain)
+
+
+class _Case:
+    def __init__(self, transfers, unlabeled) -> None:  # noqa: ANN001
+        self.transfers = transfers
+        self.unlabeled_counterparties = unlabeled
+
+
+class _OrchAdapter(_FakeAdapter):
+    chain = _Chain("ethereum")
+
+    def block_at_or_before(self, ts):  # noqa: ANN001
+        return 1
+
+
+def test_infer_infrastructure_endpoints_flags_high_diversity_endpoint() -> None:
+    hot = "0x" + "9" * 40
+    case = _Case(
+        transfers=[_Tx(hot, Decimal("250000"))],
+        unlabeled=[hot],
+    )
+    adapter = _OrchAdapter(
+        native_in=_rows("from", [f"0x{i:040x}" for i in range(60)]),
+        erc20_in=[],
+        native_out=_rows("to", [f"0x{(i + 1000):040x}" for i in range(60)]),
+        erc20_out=[],
+    )
+    out = infer_infrastructure_endpoints(case, adapter=adapter, start_block=1)
+    assert len(out) == 1
+    assert out[0]["address"] == hot
+    assert out[0]["classification"] == "likely_exchange_infrastructure"
+    assert out[0]["attribution_confidence"] in ("medium", "low")
+
+
+def test_infer_infrastructure_endpoints_skips_perp_hub() -> None:
+    """A low-diversity unlabeled collector (perp consolidation hub) must NOT
+    be flagged — the orchestrator returns nothing for it."""
+    hub = "0x" + "7" * 40
+    case = _Case(transfers=[_Tx(hub, Decimal("250000"))], unlabeled=[hub])
+    adapter = _OrchAdapter(
+        native_in=_rows("from", ["0x" + "a" * 40, "0x" + "b" * 40]),
+        erc20_in=[], native_out=_rows("to", ["0x" + "c" * 40]), erc20_out=[],
+    )
+    out = infer_infrastructure_endpoints(case, adapter=adapter, start_block=1)
+    assert out == []
+
+
+def test_infer_infrastructure_endpoints_skips_low_inflow_and_other_chains() -> None:
+    """Below the inflow floor, or on a chain other than the adapter's, are
+    not probed."""
+    poor = "0x" + "1" * 40       # below floor
+    other = "0x" + "2" * 40      # on a different chain
+    case = _Case(
+        transfers=[_Tx(poor, Decimal("10")), _Tx(other, Decimal("999999"), chain="polygon")],
+        unlabeled=[poor, other],
+    )
+    adapter = _OrchAdapter(
+        native_in=_rows("from", [f"0x{i:040x}" for i in range(60)]),
+        erc20_in=[], native_out=_rows("to", [f"0x{(i+1000):040x}" for i in range(60)]),
+        erc20_out=[],
+    )
+    out = infer_infrastructure_endpoints(case, adapter=adapter, start_block=1)
+    assert out == []

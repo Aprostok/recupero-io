@@ -417,6 +417,124 @@ class EvmAdapter(ChainAdapter):
                 continue
         return out
 
+    # --- inbound transfer fetching (lock-and-mint cross-chain matching) ---
+    #
+    # v0.32.1 (trace-depth #1 wiring): the cross-chain lock-and-mint matcher
+    # needs an address's INBOUND transfers on a candidate destination chain
+    # (the mint/withdrawal side) to correlate against a source-chain bridge
+    # deposit. These mirror the outflow methods exactly — same Etherscan
+    # calls (which return txs in BOTH directions) — but keep rows where the
+    # address is the RECIPIENT (`to == addr`) instead of the sender. They
+    # reuse `_normalize_native` / `_normalize_erc20`, so the per-row
+    # malformed-input hardening (RIGOR-Jacob N/X) applies identically.
+
+    def fetch_native_inflows(
+        self, to_address: Address, start_block: int,
+        *, max_results: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Native-asset INBOUND transfers TO ``to_address`` since
+        ``start_block``. Same normalized dict shape as
+        ``fetch_native_outflows``."""
+        addr = to_checksum_address(to_address)
+        addr_l = addr.lower()
+        client_side_filter = self._needs_client_side_start_block_filter()
+        api_start = 0 if client_side_filter else start_block
+        normal = self.client.get_normal_transactions(
+            addr, start_block=api_start, max_results=max_results,
+        )
+        internal = self.client.get_internal_transactions(
+            addr, start_block=api_start, max_results=max_results,
+        )
+
+        def _keep(tx: dict[str, Any]) -> bool:
+            from_l = (tx.get("from", "") or "").lower()
+            to_l = (tx.get("to", "") or "").lower()
+            if to_l != addr_l:  # inbound: we must be the RECIPIENT
+                return False
+            if from_l and to_l and from_l == to_l:
+                return False  # self-transfer: no economic movement
+            try:
+                if int(tx.get("value", "0") or "0") == 0:
+                    return False
+            except (TypeError, ValueError):
+                return False
+            if self._is_failed_tx(tx):
+                return False
+            if client_side_filter:
+                try:
+                    if int(tx.get("blockNumber", "0") or "0") < start_block:
+                        return False
+                except (TypeError, ValueError):
+                    return False
+            return True
+
+        out: list[dict[str, Any]] = []
+        for source, rows in (("normal", normal), ("internal", internal)):
+            for tx in rows:
+                if not _keep(tx):
+                    continue
+                try:
+                    out.append(self._normalize_native(tx, source=source))
+                except Exception as e:  # noqa: BLE001
+                    log.warning(
+                        "evm: dropping malformed inbound native row tx=%s: %s",
+                        tx.get("hash", "?"), e,
+                    )
+                    continue
+        return out
+
+    def fetch_erc20_inflows(
+        self, to_address: Address, start_block: int,
+        *, max_results: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Token INBOUND transfers TO ``to_address``. Same shape as
+        ``fetch_erc20_outflows``."""
+        addr = to_checksum_address(to_address)
+        addr_l = addr.lower()
+        client_side_filter = self._needs_client_side_start_block_filter()
+        api_start = 0 if client_side_filter else start_block
+        rows = self.client.get_erc20_transfers(
+            addr, start_block=api_start, max_results=max_results,
+        )
+        out: list[dict[str, Any]] = []
+        for tx in rows:
+            from_l = (tx.get("from", "") or "").lower()
+            to_l = (tx.get("to", "") or "").lower()
+            if to_l != addr_l:  # inbound: we must be the RECIPIENT
+                continue
+            if from_l and to_l and from_l == to_l:
+                continue
+            if self._is_failed_tx(tx):
+                continue
+            if tx.get("tokenID") or tx.get("tokenId"):
+                continue  # NFT-shaped row on the fungible path
+            try:
+                if int(tx.get("value", "0") or "0") == 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if client_side_filter:
+                try:
+                    if int(tx.get("blockNumber", "0") or "0") < start_block:
+                        continue
+                except (TypeError, ValueError):
+                    continue
+            try:
+                out.append(self._normalize_erc20(tx))
+            except ValueError as e:
+                log.warning(
+                    "skipping inbound ERC-20 row to %s tx=%s: %s",
+                    to_l, tx.get("hash"), e,
+                )
+                continue
+            except Exception as e:  # noqa: BLE001
+                log.warning(
+                    "skipping malformed inbound ERC-20 row to %s tx=%s: %s",
+                    to_l, tx.get("hash"), e,
+                )
+                continue
+        return out
+
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
         raw_tx = self.client.get_transaction_by_hash(tx_hash)
         raw_receipt = self.client.get_transaction_receipt(tx_hash)

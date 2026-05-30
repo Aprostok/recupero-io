@@ -166,9 +166,16 @@ KNOWN_MIXERS: dict[str, MixerEntry] = {
     "0x330bdfade01ee9bf63c209ee33102dd334618e0a": MixerEntry(
         "Tornado Cash 10 ETH", "arbitrum", "zk_mixer", sanctioned=True,
     ),
-    "0x1e34a77868e19a6647b1f2f47b51ed72dede95dd": MixerEntry(  # collision with poly entry
-        "Tornado Cash 100 ETH", "arbitrum", "zk_mixer", sanctioned=True,
-    ),
+    # v0.32.1 (trace cleanup): the Arbitrum "Tornado Cash 100 ETH" pool
+    # was previously keyed with 0x1e34…95dd — the SAME literal as the
+    # Polygon "100 MATIC" entry above (line ~145). A dict literal keeps
+    # only the last occurrence, so the Polygon entry was silently shadowed
+    # (ruff F601) AND a Polygon-pool address was mislabeled as an Arbitrum
+    # ETH pool. Tornado's deterministic deploys give DISTINCT addresses per
+    # chain, so this was a copy-paste error, not a real cross-chain
+    # collision. Removed the wrong entry rather than invent an address;
+    # the genuine Arbitrum 100-ETH pool address is a known label-DB gap for
+    # the maintainer to backfill (do NOT guess it).
     # -----------------------------------------------------------------
     # Tornado Cash — Optimism
     # -----------------------------------------------------------------

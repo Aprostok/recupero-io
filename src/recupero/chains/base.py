@@ -102,6 +102,34 @@ class ChainAdapter(ABC):
     ) -> list[dict[str, Any]]:
         """Same as fetch_native_outflows but for token transfers (ERC-20 / SPL / etc.)."""
 
+    # --- inbound transfer fetching (optional capability) ---
+    #
+    # v0.32.1 (trace-depth #1 wiring): cross-chain lock-and-mint matching
+    # needs to query an address's INBOUND transfers on a candidate
+    # destination chain (the mint/withdrawal side) to correlate against a
+    # source-chain bridge deposit. These are CONCRETE defaults (not
+    # abstract) returning [] — an adapter that hasn't implemented inbound
+    # fetch degrades gracefully (the lock-mint matcher simply finds no
+    # candidates on that chain) rather than the interface forcing every
+    # adapter to implement it. The EVM adapter overrides both.
+    def fetch_native_inflows(
+        self, to_address: Address, start_block: int,
+        *, max_results: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Native-asset INBOUND transfers TO `to_address` since
+        `start_block`. Same normalized dict shape as
+        `fetch_native_outflows`. Default: [] (adapter has no inbound
+        support yet)."""
+        return []
+
+    def fetch_erc20_inflows(
+        self, to_address: Address, start_block: int,
+        *, max_results: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Token INBOUND transfers TO `to_address`. Default: [] (adapter
+        has no inbound support yet)."""
+        return []
+
     # --- evidence ---
 
     @abstractmethod

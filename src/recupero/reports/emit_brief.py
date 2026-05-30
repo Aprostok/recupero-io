@@ -1907,6 +1907,25 @@ def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
             "emit_brief: CEX deposit-address attribution failed (%s) — "
             "subpoena targets fall back to label-DB endpoints only", _exc,
         )
+
+    # v0.32.1 (trace-depth #2): surface UNLABELED endpoints a broader-activity
+    # diversity probe judged to be likely exchange/service infrastructure
+    # (populated during the trace only when RECUPERO_ENDPOINT_DIVERSITY_PROBE
+    # is enabled). These are behavioral leads (confidence low/medium, never
+    # proof) for venues the label DB doesn't cover. Label-DB + sweep-inferred
+    # endpoints win on dedup so an inferred lead never downgrades a confirmed
+    # one.
+    try:
+        for infra in (getattr(case, "inferred_infrastructure_endpoints", None) or []):
+            addr_l = (infra.get("address") or "").lower()
+            if addr_l and addr_l not in _existing:
+                out.append(infra)
+                _existing.add(addr_l)
+    except Exception as _exc:  # noqa: BLE001 — best-effort augmentation
+        log.warning(
+            "emit_brief: infrastructure-endpoint augmentation failed (%s)",
+            _exc,
+        )
     return out
 
 

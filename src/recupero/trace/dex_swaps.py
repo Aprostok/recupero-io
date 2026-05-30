@@ -210,6 +210,34 @@ def detect_dex_swaps(
                     best_usd = usd
                     best_output = out_t
 
+            # v0.32.1 (trace-depth #3): USD-only selection makes an UNPRICED
+            # swap output INVISIBLE — `usd_value_at_tx or 0` defaults an
+            # unpriced output to 0, which never beats best_usd=0, so
+            # best_output stays None and the tracer (which only follows
+            # confidence=='high' outputs with a recipient) DEAD-ENDS at the
+            # router. A launderer swapping stolen funds into a token
+            # CoinGecko can't price (new listing, low liquidity, self-issued)
+            # thereby breaks the trail. Fall back to the on-chain output
+            # transfer(s) when no priced winner exists — the router→address
+            # transfer is an on-chain FACT (not an inference), so the
+            # recipient is identified with structural certainty:
+            #   * exactly one output transfer  → unambiguous, use it.
+            #   * multiple, all same token     → largest amount is the main
+            #                                     output (others are fee/dust).
+            #   * multiple, mixed tokens, all  → cannot tell main from fee
+            #     unpriced                       across tokens; leave None
+            #                                     (confidence 'medium', the
+            #                                     brief still surfaces the
+            #                                     swap for manual follow-up).
+            if best_output is None and output_transfers:
+                if len(output_transfers) == 1:
+                    best_output = output_transfers[0]
+                elif len({ot.token.symbol for ot in output_transfers}) == 1:
+                    best_output = max(
+                        output_transfers,
+                        key=lambda ot: ot.amount_decimal or Decimal("0"),
+                    )
+
             confidence = "high" if best_output is not None else "medium"
             swaps.append(DEXSwap(
                 tx_hash=tx_hash,

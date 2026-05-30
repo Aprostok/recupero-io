@@ -347,6 +347,17 @@ class Case(BaseModel):
     exchange_endpoints: list[ExchangeEndpoint] = Field(default_factory=list)
     unlabeled_counterparties: list[Address] = Field(default_factory=list)
     total_usd_out: Decimal | None = None
+    # v0.32.1 (trace-depth #2): behavioral classifications of UNLABELED
+    # endpoints that a broader-activity diversity probe judged to be likely
+    # exchange/service infrastructure (a subpoena lead the label DB missed).
+    # Populated during the trace ONLY when RECUPERO_ENDPOINT_DIVERSITY_PROBE
+    # is enabled; each entry is the EndpointClassification.as_dict() shape and
+    # carries confidence "low"/"medium" (a behavioral inference, never proof).
+    # Kept separate from exchange_endpoints so an inferred lead is never
+    # conflated with a label-DB-confirmed endpoint.
+    inferred_infrastructure_endpoints: list[dict[str, Any]] = Field(
+        default_factory=list
+    )
 
     # Run metadata (mirrored to manifest.json for easy access)
     config_used: dict[str, Any] = Field(default_factory=dict)

@@ -94,6 +94,11 @@ class BridgeDecodeResult:
     bridge_method: str               # 'transferTokens' | 'deposit' | 'swap' | ...
     confidence: str
     raw_calldata_excerpt: str        # first 200 chars for forensic record
+    # v0.34: True when the method routes to msg.sender (recipient NOT in
+    # calldata) — e.g. OP-Stack depositETH/depositERC20. The caller resolves the
+    # destination to the immediate on-chain sender (a DETERMINISTIC same-address
+    # continuation), so the trace doesn't dead-end at the bridge.
+    recipient_is_msg_sender: bool = False
 
 
 # Method-ID prefixes (first 4 bytes of keccak256(signature)) for
@@ -2546,13 +2551,16 @@ def _decode_op_stack_l1(
     effective_chain = "ethereum" if method_name == "withdrawTo" else dest_chain
     try:
         if dest_slot is None:
-            # msg.sender path — we don't have it here. The trace's
-            # transaction-from address will be used by the BFS
-            # continuation logic when destination_address is None.
+            # msg.sender path — recipient is NOT in calldata. OP-Stack
+            # depositETH/depositERC20 mint to msg.sender on L2, i.e. whoever
+            # sent into the bridge. We flag it so the caller (which HAS the
+            # source transfer) resolves the destination to that immediate
+            # sender — a deterministic same-address continuation.
             return BridgeDecodeResult(
                 destination_chain=effective_chain, destination_address=None,
                 bridge_method=method_name, confidence="medium",
                 raw_calldata_excerpt=full_data[:400],
+                recipient_is_msg_sender=True,
             )
         dest_addr = _extract_addr_slot(args_blob, dest_slot)
         return BridgeDecodeResult(

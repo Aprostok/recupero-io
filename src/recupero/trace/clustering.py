@@ -756,6 +756,9 @@ def compute_clusters_with_metadata(
     # exchange. For each labeled source, find pairs of recipients
     # that received within the 1-hour window.
     cex_outflows: dict[str, list[tuple[str, Any, Chain]]] = defaultdict(list)
+    # v0.34 (#225): remember whether each source is a per-user deposit address
+    # or a shared hot wallet — it sets the pairing confidence below.
+    cex_src_category: dict[str, LabelCategory] = {}
     if label_store is not None:
         for t in case.transfers:
             if t.chain == Chain.bitcoin:
@@ -783,6 +786,7 @@ def compute_clusters_with_metadata(
             if _is_skip_labeled(dst, label_store, t.chain, point_in_time=case.incident_time):
                 continue
             cex_outflows[src].append((dst, t.block_time, t.chain))
+            cex_src_category[src] = lbl.category
 
     for src, recipients in cex_outflows.items():
         if len(recipients) < 2:
@@ -809,11 +813,22 @@ def compute_clusters_with_metadata(
                 delta = abs((ts_a - ts_b).total_seconds())
                 if delta > _CEX_WITHDRAWAL_WINDOW.total_seconds():
                     continue
+                # v0.34 (#225): confidence depends on the SOURCE type. A
+                # per-user exchange DEPOSIT address paying two recipients within
+                # an hour is a strong same-beneficiary signal (high). A shared
+                # exchange HOT WALLET serves thousands of unrelated users, so
+                # co-timed withdrawals are only weak circumstantial evidence
+                # (medium) — clustering two unrelated users at high confidence
+                # would be a forensic overclaim in an LE deliverable.
+                is_deposit = (
+                    cex_src_category.get(src) == LabelCategory.exchange_deposit
+                )
+                src_kind = "deposit" if is_deposit else "hot-wallet"
                 edges.append((a, b, _PairSignal(
                     heuristic="cex_withdrawal",
-                    confidence="high",
+                    confidence="high" if is_deposit else "medium",
                     details=(
-                        f"Both withdrew from exchange address "
+                        f"Both withdrew from exchange {src_kind} address "
                         f"{src[:10]}… within {delta / 60:.1f}min"
                     ),
                 )))

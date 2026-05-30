@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Literal
 
 __all__ = [
@@ -59,6 +59,11 @@ _TIGHT_WINDOW_HOURS = 2.0
 # this are treated as indistinguishable → ambiguous (refuse to single one
 # out). Expressed in percentage points of the source amount.
 _AMBIGUITY_MARGIN_PCT = Decimal("0.1")
+# In amount+time-ONLY mode (a DIFFERENT-address match — no same-address link
+# to corroborate), the source amount must carry at least this many significant
+# digits. A round amount (1, 100, 0.5) is too coincidence-prone to match across
+# chains on amount alone, so it is rejected outright in that mode.
+_DEFAULT_MIN_SIGNIFICANT_DIGITS = 5
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,15 @@ def _abs(d: Decimal) -> Decimal:
     return -d if d < 0 else d
 
 
+def _significant_digits(amount: Decimal) -> int:
+    """Count significant digits — a distinctiveness proxy. 100 → 1, 0.5 → 1,
+    1.2345 → 5, 13.37428 → 7. Round amounts score low (coincidence-prone)."""
+    try:
+        return len(amount.normalize().as_tuple().digits)
+    except (InvalidOperation, ValueError):
+        return 0
+
+
 def match_bridge_withdrawal(
     *,
     source_amount: Decimal,
@@ -100,6 +114,8 @@ def match_bridge_withdrawal(
     source_token_symbol: str | None = None,
     slippage_pct: Decimal = _DEFAULT_SLIPPAGE_PCT,
     window_hours: float = _DEFAULT_WINDOW_HOURS,
+    amount_time_only: bool = False,
+    min_significant_digits: int = _DEFAULT_MIN_SIGNIFICANT_DIGITS,
 ) -> BridgeMatchResult | None:
     """Find the destination withdrawal that best matches a bridge deposit.
 
@@ -126,6 +142,16 @@ def match_bridge_withdrawal(
     Never ``"high"``: a cross-chain amount/time correlation is
     circumstantial. On genuine ambiguity the result is still returned (so
     the lead is not lost) but flagged ``ambiguous`` for manual review.
+
+    DIFFERENT-ADDRESS mode (``amount_time_only=True``): for bridges that mint
+    to a DIFFERENT recipient than the source sender (so there is NO
+    same-address link to corroborate — e.g. matching a pool bridge's
+    destination-side disbursements). With no address link, amount+time alone is
+    the weakest signal, so this mode is deliberately strict and refuses to
+    guess: it returns ``None`` unless (a) the source amount is DISTINCTIVE
+    (≥ ``min_significant_digits`` significant digits — round amounts are too
+    coincidence-prone) AND (b) exactly ONE candidate qualifies (any second
+    qualifier → unresolvable → ``None``). A surviving match is ALWAYS "low".
     """
     if source_amount is None or source_amount <= 0:
         return None
@@ -135,6 +161,11 @@ def match_bridge_withdrawal(
         slippage_pct = _DEFAULT_SLIPPAGE_PCT
     if not (window_hours > 0):
         window_hours = _DEFAULT_WINDOW_HOURS
+    # DIFFERENT-address (amount+time-only) mode: with no same-address link to
+    # corroborate, a round source amount is too coincidence-prone to match
+    # across chains. Refuse it outright rather than surface noise.
+    if amount_time_only and _significant_digits(source_amount) < min_significant_digits:
+        return None
 
     window = timedelta(hours=window_hours)
     src_sym = source_token_symbol.strip().lower() if source_token_symbol else None
@@ -170,6 +201,14 @@ def match_bridge_withdrawal(
     scored.sort(key=lambda s: (s[0], s[1]))
     best_diff, best_delay, best = scored[0]
 
+    if amount_time_only:
+        # No same-address link → require a UNIQUE qualifying candidate. Any
+        # second qualifier (a different tx/address) makes the correlation
+        # unresolvable; refuse rather than guess a different-address dest.
+        distinct = {(c.tx_hash, c.address) for _d, _dl, c in scored}
+        if len(distinct) > 1:
+            return None
+
     # Ambiguity: is there another candidate whose amount-distance is within
     # the margin of the best's? If so we cannot single one out on amount.
     ambiguous = False
@@ -185,10 +224,21 @@ def match_bridge_withdrawal(
         and best_delay <= _TIGHT_WINDOW_HOURS * 3600
     )
     confidence: Literal["medium", "low"] = (
-        "medium" if (is_tight and not ambiguous) else "low"
+        # No same-address link → cap at "low" no matter how tight: amount+time
+        # alone is the weakest cross-chain signal.
+        "low" if amount_time_only
+        else ("medium" if (is_tight and not ambiguous) else "low")
     )
 
-    if ambiguous:
+    if amount_time_only:
+        reason = (
+            f"amount~{source_amount} matched a UNIQUE {best.chain} transfer "
+            f"within {best_diff:.2f}% of amount and {best_delay / 3600:.1f}h to "
+            "a DIFFERENT recipient address — an amount+time correlation with NO "
+            "same-address link; a weak circumstantial lead (low confidence), "
+            "NOT proof"
+        )
+    elif ambiguous:
         reason = (
             f"amount≈{source_amount} matched on {best.chain} within "
             f"{best_diff:.2f}% / {best_delay / 3600:.1f}h, but ≥1 other "

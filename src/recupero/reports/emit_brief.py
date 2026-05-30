@@ -1926,6 +1926,35 @@ def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
             "emit_brief: infrastructure-endpoint augmentation failed (%s)",
             _exc,
         )
+
+    # v0.32.1 (trace-depth #1, go-deeper): surface PEEL-CHAIN cashout
+    # candidates. A peel chain sheds small peels to cashout points (often
+    # exchange deposits / OTC) while forwarding the remainder onward; the
+    # peel recipients are concrete cashout subpoena leads. Pure, brief-time
+    # detection (no adapter). Confidence is the chain's (low/medium, never
+    # proof). Confirmed + inferred endpoints already in `_existing` win on
+    # dedup, so a peel lead never downgrades a stronger one.
+    try:
+        from recupero.trace.peel_chains import detect_peel_chains
+        for chain in detect_peel_chains(case):
+            for recipient in chain.peel_recipients:
+                addr_l = (recipient or "").lower()
+                if not addr_l or addr_l in _existing:
+                    continue
+                out.append({
+                    "address": recipient,
+                    "heuristic": "peel_chain_cashout",
+                    "attribution_confidence": chain.confidence,
+                    "note": (
+                        "Peel-chain cashout candidate: received a small 'peel' "
+                        f"off a {len(chain.hops)}-hop remainder run. Likely a "
+                        "cashout point (exchange deposit / OTC). Structural "
+                        "inference — a lead, not proof."
+                    ),
+                })
+                _existing.add(addr_l)
+    except Exception as _exc:  # noqa: BLE001 — best-effort augmentation
+        log.warning("emit_brief: peel-chain augmentation failed (%s)", _exc)
     return out
 
 

@@ -2421,8 +2421,14 @@ def _decode_stargate_v2(
         to_end = to_start + 64
         dest_address: str | None = None
         if to_end <= len(args_blob):
-            to_hex = args_blob[to_start:to_end][-40:]
-            if len(to_hex) == 40 and to_hex != "0" * 40:
+            to_slot = args_blob[to_start:to_end]
+            # v0.34: SendParam.to is bytes32. An EVM destination is right-aligned
+            # (top 12 bytes zero). If the top 12 bytes are NON-zero, the slot is
+            # a non-EVM address (e.g. a 32-byte Solana/Aptos pubkey) or a
+            # misaligned read — do NOT surface its low 20 bytes as an EVM wallet,
+            # which would FABRICATE a bogus destination at high confidence.
+            to_hex = to_slot[-40:]
+            if len(to_slot) == 64 and to_slot[:24] == "0" * 24 and to_hex != "0" * 40:
                 dest_address = "0x" + to_hex
 
         confidence = (

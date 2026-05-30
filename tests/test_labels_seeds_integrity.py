@@ -61,8 +61,15 @@ def _load_entries(path: Path) -> list[dict]:
         entries = raw
     elif isinstance(raw, dict):
         # high_risk.json / ransomware.json wrap under "addresses";
-        # issuers.json wraps under "tokens".
-        entries = raw.get("addresses") or raw.get("tokens") or []
+        # issuers.json wraps under "tokens". v0.34 (#229): also unwrap
+        # "entries" — a staging-file wrapper that previously slipped the
+        # whole file past every integrity guard (incl. the checksum guard).
+        entries = (
+            raw.get("addresses")
+            or raw.get("tokens")
+            or raw.get("entries")
+            or []
+        )
     else:
         entries = []
     return [e for e in entries if isinstance(e, dict) and list(e.keys()) != ["_section"]]

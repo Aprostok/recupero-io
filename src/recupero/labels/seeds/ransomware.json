@@ -1,87 +1,9 @@
 {
   "_meta": {
-    "description": "Known ransomware operator wallets — documented in public threat-intelligence reports, DOJ press releases, CISA advisories. Used by the risk scorer to flag direct exposure to ransomware infrastructure. Each entry includes the operator name, attribution source, severity (always 4 = critical for ransomware), and applicable CISA advisory or DOJ docket where available.",
+    "description": "Ransomware operator wallets for the risk scorer's ransomware-exposure flag. NOTE: this list is intentionally EMPTY as of v0.34 — see _v034_fabrication_removal. Real ransomware IOCs are collected in BTC/XMR (not Ethereum) and must be sourced from a verified feed (CISA advisories, OFAC SDN), never hand-typed.",
     "schema_version": 1,
-    "source_caveat": "Public attribution of ransomware addresses is messy. Sources cited here include CISA advisories, DOJ press releases, OFAC announcements, and reporting from Chainalysis / Elliptic / TRM public posts. Verify against the most recent advisory before acting; ransomware groups rotate infrastructure regularly. For active investigations, request the latest IOC list from your CISA / FBI liaison."
+    "source_caveat": "Public attribution of ransomware addresses is messy and infrastructure rotates constantly. Sanctioned ransomware addresses (e.g. DPRK-attributed) now load from the authoritative OFAC SDN feed (ofac_crypto_live.csv). For active investigations, request the latest IOC list from your CISA / FBI liaison.",
+    "_v034_fabrication_removal": "All 6 prior EVM entries were removed (verify-don't-fabricate sweep): FIVE — LockBit, BlackCat/ALPHV, Royal, REvil, DPRK Maui — were FABRICATED placeholders (hand-typed patterns such as a trailing '...b3e3b3e3b3e3' and descending hex sequences; on-chain eth_getTransactionCount=0 and balance=0, i.e. never transacted). ONE — Conti 0xa910f92acdaf488fa6ef02174fb86208ad7722ba — was a REAL but MIS-ATTRIBUTED high-traffic contract (985,000+ outgoing txs; a ransomware payment EOA never sends ~1M txs), so flagging it severity-4 ransomware would false-positive on legitimate traffic. Ransomware ransoms are paid in BTC/XMR, so EVM 'ransomware payment addresses' were inherently wrong. Repopulate ONLY from a verified source with on-chain-confirmed, correctly-attributed addresses."
   },
-  "addresses": [
-    {
-      "_section": "Conti ransomware (Russian-aligned, dissolved 2022 but successor groups active)"
-    },
-    {
-      "address": "0xa910f92acdaf488fa6ef02174fb86208ad7722ba",
-      "name": "Conti — ransomware payment address (DOJ-cited)",
-      "risk_category": "ransomware",
-      "severity": 4,
-      "operator": "Conti / TrickBot",
-      "source": "doj_press_2021",
-      "confidence": "high",
-      "notes": "Identified in DOJ filings against Conti operators. Operations dissolved May 2022 after Conti leaks; member groups continue under different brands (BlackCat, Royal, etc.)."
-    },
-    {
-      "_section": "LockBit ransomware (most prolific 2022-2024)"
-    },
-    {
-      "address": "0xb8d9b6a16e0f4f1e6d738fb9b3e3b3e3b3e3b3e3",
-      "name": "LockBit — affiliate payment address",
-      "risk_category": "ransomware",
-      "severity": 4,
-      "operator": "LockBit",
-      "source": "cisa_advisory_aa23-165a",
-      "confidence": "medium",
-      "notes": "LockBit RaaS payment infrastructure. CISA advisory AA23-165A (June 2023). Multi-affiliate operation — many addresses; this is one of the documented ones."
-    },
-    {
-      "_section": "BlackCat / ALPHV ransomware (Russian-aligned)"
-    },
-    {
-      "address": "0xc4e1f8a3b6f2e9d7c5a4b8e9d6c3a7f8e5d2c1b9",
-      "name": "BlackCat / ALPHV — payment address",
-      "risk_category": "ransomware",
-      "severity": 4,
-      "operator": "BlackCat / ALPHV",
-      "source": "cisa_advisory_aa23-353a",
-      "confidence": "medium",
-      "notes": "CISA advisory AA23-353A. BlackCat operations partially seized by FBI December 2023 but successor activity ongoing."
-    },
-    {
-      "_section": "Royal ransomware"
-    },
-    {
-      "address": "0xd7e2f5a4c1b8e9d6c3a7f8e5d2c1b9a4e3d6c5b8",
-      "name": "Royal — payment address",
-      "risk_category": "ransomware",
-      "severity": 4,
-      "operator": "Royal",
-      "source": "cisa_advisory_aa23-061a",
-      "confidence": "medium",
-      "notes": "CISA advisory AA23-061A. Royal succeeded Conti members in 2022; targets healthcare + critical infrastructure."
-    },
-    {
-      "_section": "REvil / Sodinokibi (largely disrupted 2022 but historical activity remains)"
-    },
-    {
-      "address": "0xf9c5a3b6e2d8f1c4a7b9e6d3c8a5f2e9d6c1b8a4",
-      "name": "REvil — historical payment address",
-      "risk_category": "ransomware",
-      "severity": 4,
-      "operator": "REvil / Sodinokibi",
-      "source": "doj_press_2021",
-      "confidence": "medium",
-      "notes": "REvil core operators arrested in Russia January 2022. Historical addresses still surface in laundering chains."
-    },
-    {
-      "_section": "DPRK-attributed ransomware (Lazarus sub-groups)"
-    },
-    {
-      "address": "0xab3a4eb88f9eb5e2f3c1d9c8a7e6f5d4c3b2a1f0",
-      "name": "DPRK Maui — ransomware against healthcare",
-      "risk_category": "ransomware",
-      "severity": 4,
-      "operator": "DPRK / Maui",
-      "source": "cisa_advisory_aa22-187a",
-      "confidence": "medium",
-      "notes": "CISA + FBI + Treasury joint advisory AA22-187A. Maui ransomware attributed to DPRK state actors targeting U.S. healthcare. ALSO meets OFAC sanctioned criteria — any direct exposure is SDN-grade."
-    }
-  ]
+  "addresses": []
 }

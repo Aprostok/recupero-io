@@ -4119,5 +4119,459 @@
     "verified": false,
     "_v032_1_round2_W5_addition": true,
     "_audit_status": "operator_unverified_v0_32_1_round2: address as provided by round-2 wire-up prompt; operator should re-confirm against pacific.manta.network docs."
+  },
+  {
+    "address": "0x095D2918B03b2e86D68551DCF11302121fb626c9",
+    "name": "Orbiter Finance Maker (0x095D...26c9)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "arbitrum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x095D2918B03b2e86D68551DCF11302121fb626c9",
+    "name": "Orbiter Finance Maker (0x095D...26c9)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x095D2918B03b2e86D68551DCF11302121fb626c9",
+    "name": "Orbiter Finance Maker (0x095D...26c9)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "optimism",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x095D2918B03b2e86D68551DCF11302121fb626c9",
+    "name": "Orbiter Finance Maker (0x095D...26c9)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "polygon",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "optimism",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x095D2918B03b2e86D68551DCF11302121fb626c9",
+    "name": "Orbiter Finance Maker (0x095D...26c9)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "zksync",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x41d3D33156aE7c62c094AAe2995003aE63f587B3",
+    "name": "Orbiter Finance Maker (0x41d3...87B3)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "arbitrum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x41d3D33156aE7c62c094AAe2995003aE63f587B3",
+    "name": "Orbiter Finance Maker (0x41d3...87B3)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x41d3D33156aE7c62c094AAe2995003aE63f587B3",
+    "name": "Orbiter Finance Maker (0x41d3...87B3)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "optimism",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x41d3D33156aE7c62c094AAe2995003aE63f587B3",
+    "name": "Orbiter Finance Maker (0x41d3...87B3)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "polygon",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "optimism",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x41d3D33156aE7c62c094AAe2995003aE63f587B3",
+    "name": "Orbiter Finance Maker (0x41d3...87B3)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "zksync",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x80C67432656d59144cEFf962E8fAF8926599bCF8",
+    "name": "Orbiter Finance Maker (0x80C6...bCF8)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "arbitrum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "bsc",
+      "ethereum",
+      "metis",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x80C67432656d59144cEFf962E8fAF8926599bCF8",
+    "name": "Orbiter Finance Maker (0x80C6...bCF8)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "bsc",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "metis",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x80C67432656d59144cEFf962E8fAF8926599bCF8",
+    "name": "Orbiter Finance Maker (0x80C6...bCF8)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "bsc",
+      "metis",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x80C67432656d59144cEFf962E8fAF8926599bCF8",
+    "name": "Orbiter Finance Maker (0x80C6...bCF8)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "metis",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "bsc",
+      "ethereum",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x80C67432656d59144cEFf962E8fAF8926599bCF8",
+    "name": "Orbiter Finance Maker (0x80C6...bCF8)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "optimism",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "bsc",
+      "ethereum",
+      "metis",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x80C67432656d59144cEFf962E8fAF8926599bCF8",
+    "name": "Orbiter Finance Maker (0x80C6...bCF8)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "polygon",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "bsc",
+      "ethereum",
+      "metis",
+      "optimism",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x80C67432656d59144cEFf962E8fAF8926599bCF8",
+    "name": "Orbiter Finance Maker (0x80C6...bCF8)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "zksync",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "bsc",
+      "ethereum",
+      "metis",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0xd7Aa9ba6cAAC7b0436c91396f22ca5a7F31664fC",
+    "name": "Orbiter Finance Maker (0xd7Aa...64fC)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "arbitrum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "ethereum",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0xd7Aa9ba6cAAC7b0436c91396f22ca5a7F31664fC",
+    "name": "Orbiter Finance Maker (0xd7Aa...64fC)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "optimism",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0xd7Aa9ba6cAAC7b0436c91396f22ca5a7F31664fC",
+    "name": "Orbiter Finance Maker (0xd7Aa...64fC)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "optimism",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "polygon",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0xd7Aa9ba6cAAC7b0436c91396f22ca5a7F31664fC",
+    "name": "Orbiter Finance Maker (0xd7Aa...64fC)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "polygon",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "optimism",
+      "zksync"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0xd7Aa9ba6cAAC7b0436c91396f22ca5a7F31664fC",
+    "name": "Orbiter Finance Maker (0xd7Aa...64fC)",
+    "protocol": "Orbiter Finance",
+    "category": "bridge",
+    "chain": "zksync",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "ethereum",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://docs.orbiter.finance/faq/maker-addresses",
+    "source": "orbiter_sdk_maker_list_mainnet",
+    "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "_v033_orbiter_maker_addition": true
   }
 ]

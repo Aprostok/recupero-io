@@ -121,6 +121,10 @@ def _build_entries() -> list[dict]:
                 "notes": _note(addr, meta["orbiter_chains"]),
                 "added_at": _ADDED_AT,
                 "verified": True,
+                # On-chain verified (EOA + bridge-scale nonce) → fresh
+                # last_verified_at so the confidence-decay budget
+                # (test_v029_1_label_db_sweep) doesn't flag these as stale.
+                "last_verified_at": _ADDED_AT,
                 "_v033_orbiter_maker_addition": True,
             })
     return entries

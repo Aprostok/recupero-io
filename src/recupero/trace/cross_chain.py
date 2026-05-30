@@ -187,8 +187,11 @@ def ingest_bridge_seeds(path: Path | None = None) -> dict[tuple[Chain, str], Bri
         info = BridgeInfo(
             chain=chain,
             address=addr_key,
-            name=entry.get("name", "(unknown bridge)"),
-            protocol=entry.get("protocol", entry.get("name", "(unknown)")),
+            name=entry.get("name") or "(unknown bridge)",
+            # `or` chain (not .get default) so an explicit null/empty protocol
+            # falls back to name -> "(unknown)" and BridgeInfo.protocol is
+            # always a str (was Any | None: a null protocol slipped through).
+            protocol=entry.get("protocol") or entry.get("name") or "(unknown)",
             confidence=entry.get("confidence", "medium"),
             follow_up_url=entry.get("follow_up_url"),
             supports_to_chains=supports,
@@ -278,6 +281,32 @@ def identify_cross_chain_handoffs(
                     "cross-chain decode failed for tx=%s bridge=%s: %s",
                     t.tx_hash, info.name, exc,
                 )
+
+        # v0.33.0 (go-deeper #4): Orbiter Finance encodes the destination
+        # network in the transfer AMOUNT suffix (no calldata, no adapter
+        # needed). Decode it as a medium-confidence LEAD. CRITICAL: set only
+        # the chain — leave decoded_destination_address None so the
+        # same-address lock-and-mint matcher (which skips handoffs that
+        # already carry a decoded address, see tracer line ~953) still pursues
+        # the continuation. Medium also means the high-only auto-continuation
+        # pass (tracer ~873) correctly does NOT fire on a coincidence-prone
+        # amount decode.
+        if decoded_chain is None and "orbiter" in (info.protocol or "").lower():
+            try:
+                from recupero.trace.orbiter import decode_orbiter_destination
+                od = decode_orbiter_destination(
+                    t.amount_raw, source_chain=t.chain.value
+                )
+                if od is not None and od.our_chain is not None:
+                    decoded_chain = od.our_chain
+                    decoded_confidence = "medium"
+                    log.info(
+                        "orbiter destination decoded: tx=%s amount=%s -> %s "
+                        "(code %d, medium)",
+                        t.tx_hash[:12], t.amount_raw, od.our_chain, od.code,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.debug("orbiter amount-decode failed tx=%s: %s", t.tx_hash, exc)
 
         handoffs.append(CrossChainHandoff(
             source_address=t.from_address,

@@ -78,25 +78,14 @@
   },
   {
     "address": "0x07687e702b410Fa43f4cB4Af7FA097918ffD2730",
-    "name": "Tornado Cash: 40 BNB (BSC)",
+    "name": "Tornado Cash: 10,000 DAI",
     "category": "mixer",
     "source": "tornado_docs",
     "confidence": "high",
-    "notes": "Tornado Cash mixer (BSC deployment). OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (Fifth Circuit held immutable smart contracts are not sanctionable property). Still a high-risk laundering mixer and DOJ prosecution of the founders continues, but the protocol is NOT currently OFAC-sanctioned.",
-    "added_at": "2026-05-17T00:00:00Z",
-    "chain": "bsc",
-    "_v030_chain_corrected": "v0.29.1 sweep stamped this entry chain='ethereum' from the row's missing chain field. Audit (V029_AUDIT_FINDINGS Tier-1) caught the contradiction with the row's name+notes ('BSC deployment'). Corrected to bsc."
-  },
-  {
-    "address": "0xfac583c0cf07ea434052c49115a4682172ab6b4f",
-    "name": "Sinbad.io (Treasury hash)",
-    "category": "mixer",
-    "source": "ofac_2023_11_29",
-    "confidence": "high",
-    "notes": "OFAC SANCTIONED Nov-2023. Successor to Blender.io. Used by Lazarus Group to launder $100M Atomic Wallet exploit funds.",
+    "notes": "Tornado Cash mixer (10,000 DAI pool). OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (Fifth Circuit held immutable smart contracts are not sanctionable property). Still a high-risk laundering mixer and DOJ prosecution of the founders continues, but the protocol is NOT currently OFAC-sanctioned. CHAIN/DENOMINATION CORRECTED v0.34: on-chain eth_getCode shows a 15KB contract on Ethereum and token() returns DAI (0x6b175474e89094c44da98b954eedeac495271d0f); eth_getCode on BSC returns 0x (no code) -- reversing the erroneous v0.30 'BSC deployment' relabel that trusted a bad name over the real chain.",
     "added_at": "2026-05-17T00:00:00Z",
     "chain": "ethereum",
-    "_v029_1_chain_backfill": true
+    "_v034_onchain_verified": "eth_getCode: contract on Ethereum (token()=DAI), no code on BSC"
   },
   {
     "address": "0xbA214C1c1928a32Bffe790263E38B4Af9bFCD659",

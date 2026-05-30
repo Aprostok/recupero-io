@@ -146,6 +146,7 @@ def load_high_risk_db(
     high_risk_path: Path | None = None,
     mixers_path: Path | None = None,
     ransomware_path: Path | None = None,
+    ofac_csv_path: Path | None = None,
 ) -> dict[str, HighRiskEntry]:
     """Load high-risk address labels from THREE seed files.
 
@@ -250,7 +251,10 @@ def load_high_risk_db(
     # land without a code deploy.
     try:
         from recupero.trace.ofac_sync import load_ofac_csv
-        for entry in load_ofac_csv():
+        # ofac_csv_path=None -> load_ofac_csv uses DEFAULT_OFAC_CSV_PATH (the
+        # committed authoritative feed). Tests pass an explicit missing path to
+        # isolate seed-loading behavior from the always-on OFAC feed.
+        for entry in load_ofac_csv(ofac_csv_path):
             # v0.31.5: an entry with `removed_at_utc` set was previously
             # OFAC-listed but has since been removed from the upstream
             # feed (e.g. Tornado Cash partial 2024 ruling). It stays

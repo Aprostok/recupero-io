@@ -20,64 +20,6 @@
       "notes": "Treasury attribution: this address was used to launder the proceeds of the $625M Ronin Bridge hack attributed to DPRK's Lazarus Group. Any U.S. person transacting with this address violates OFAC sanctions."
     },
     {
-      "address": "0xa7e5d5a720f06526557c513402f2e6b5fa20b008",
-      "name": "Lazarus Group (DPRK) — Harmony Horizon Bridge exploit",
-      "risk_category": "ofac_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2023-01-23",
-      "source": "ofac_sdn",
-      "confidence": "high",
-      "notes": "OFAC-sanctioned. Tied to the $100M Harmony Horizon Bridge exploit (June 2022)."
-    },
-    {
-      "address": "0xd882cfc20f52f2599d84b8e8d58c7fb62cfe344b",
-      "name": "DPRK / Lazarus laundering wallet",
-      "risk_category": "ofac_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2022-04-14",
-      "source": "ofac_sdn",
-      "confidence": "high"
-    },
-    {
-      "address": "0x7f367cc41522ce07553e823bf3be79a889debe1b",
-      "name": "DPRK / Lazarus laundering wallet",
-      "risk_category": "ofac_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2022-04-14",
-      "source": "ofac_sdn",
-      "confidence": "high"
-    },
-    {
-      "address": "0xb6f5ec1a0a9cd1526536d3f0426c429529471f40",
-      "name": "Hydra Marketplace — Russian darknet market (DOJ seizure 2022)",
-      "risk_category": "ofac_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2022-04-05",
-      "source": "ofac_sdn",
-      "confidence": "high",
-      "notes": "Hydra Marketplace was the largest Russian-language darknet market. Operations shut down by German + U.S. authorities in April 2022. Any related on-chain activity is OFAC-flagged."
-    },
-    {
-      "address": "0x308ed4b7b49797e1a98d3818bff6fe5385410370",
-      "name": "Garantex — sanctioned exchange",
-      "risk_category": "ofac_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2022-04-05",
-      "source": "ofac_sdn",
-      "confidence": "high",
-      "notes": "Garantex was sanctioned by OFAC for facilitating illicit transactions including ransomware payments. Any deposit address controlled by Garantex is OFAC-flagged."
-    },
-    {
-      "address": "0xc8a65fadf0e0ddaf421f28feab69bf6e2e589963",
-      "name": "Blender.io (mixer, sanctioned)",
-      "risk_category": "ofac_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2022-05-06",
-      "source": "ofac_sdn",
-      "confidence": "high",
-      "notes": "Blender.io was the first crypto mixer sanctioned by OFAC. Closed shortly after sanctions. Sinbad.io is its successor (also sanctioned)."
-    },
-    {
       "_section": "Tornado Cash pool/router contracts — OFAC-DELISTED 2025-03-21 (Fifth Circuit); now mixer_high_risk, NOT sanctioned. Additional contracts beyond mixers.json"
     },
     {
@@ -112,16 +54,6 @@
       "confidence": "high",
       "ofac_delisted_date": "2025-03-21",
       "notes": "Tornado Cash mixer. OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (Fifth Circuit held immutable smart contracts are not sanctionable property). Still a high-risk laundering mixer and DOJ prosecution of the founders continues, but the protocol is NOT currently OFAC-sanctioned."
-    },
-    {
-      "address": "0xb1c8094b234dce6e03f10a5b673c1d8c69739a00",
-      "name": "Sinbad.io (mixer, sanctioned)",
-      "risk_category": "mixer_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2023-11-29",
-      "source": "ofac_sdn",
-      "confidence": "high",
-      "notes": "Sinbad.io was sanctioned in November 2023 as the successor to Blender.io. Used by DPRK's Lazarus Group to launder Ronin Bridge / Atomic Wallet hack proceeds."
     },
     {
       "_section": "Non-sanctioned mixers (high-risk by behavior, not sanctioned)"
@@ -168,15 +100,6 @@
     },
     {
       "_section": "Solana addresses (DPRK, mixers, sanctioned)"
-    },
-    {
-      "address": "BcrW1fJRwSoNYRBn5UxbVKsKsXdNRwGsQbf5KAcDuwfV",
-      "name": "Lazarus Group (DPRK) — Solana laundering wallet",
-      "risk_category": "ofac_sanctioned",
-      "severity": 4,
-      "ofac_listing_date": "2023-08-22",
-      "source": "ofac_sdn",
-      "confidence": "high"
     }
   ]
 }

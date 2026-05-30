@@ -147,12 +147,36 @@ def test_delisting_marker_demotes_sanctioned_promotion() -> None:
     assert db[listed_addr].severity == 4
 
 
+def test_ofac_feed_provides_authoritative_attribution() -> None:
+    """v0.34 — sanctioned coverage comes from the committed OFAC SDN feed
+    (ofac_crypto_live.csv) with OFAC's OWN attribution, not hand-maintained
+    hardcoded labels (which a cross-check proved were systematically wrong).
+    Locks in: the feed loads, and previously-mislabeled addresses now resolve
+    to their true OFAC entity (and the fabricated 'Sinbad' EVM entry is gone)."""
+    db = load_high_risk_db()
+    # The feed is substantial (Treasury lists hundreds of crypto addresses).
+    assert len(db) > 500
+    # Previously hardcoded as "Garantex" — OFAC actually lists it under SUEX.
+    suex = db.get("0x308ed4b7b49797e1a98d3818bff6fe5385410370")
+    assert suex is not None and "SUEX" in suex.name
+    assert suex.risk_category == "ofac_sanctioned"
+    # Previously hardcoded as "Sinbad.io" — OFAC lists it under Mingming Wang.
+    wang = db.get("0xfac583c0cf07ea434052c49115a4682172ab6b4f")
+    assert wang is not None and "WANG" in wang.name.upper()
+    # The fabricated "Sinbad.io" EVM entry (actually a Tornado pool, not in SDN)
+    # must be gone.
+    assert "0xb1c8094b234dce6e03f10a5b673c1d8c69739a00" not in db
+
+
 def test_load_high_risk_missing_file_returns_empty() -> None:
-    """All seed files missing → empty dict, never raises."""
+    """All seed files missing → empty dict, never raises. The always-on OFAC
+    live feed is isolated via a missing ofac_csv_path so this asserts the
+    seed-loading behavior, not the committed authoritative feed."""
     db = load_high_risk_db(
         high_risk_path=Path("/does/not/exist.json"),
         mixers_path=Path("/does/not/exist2.json"),
         ransomware_path=Path("/does/not/exist3.json"),
+        ofac_csv_path=Path("/does/not/exist_ofac.csv"),
     )
     assert db == {}
 
@@ -173,6 +197,7 @@ def test_load_high_risk_with_custom_paths(tmp_path) -> None:
         high_risk_path=custom,
         mixers_path=Path("/nope.json"),
         ransomware_path=Path("/nope2.json"),
+        ofac_csv_path=Path("/nope_ofac.csv"),
     )
     assert len(db) == 1
     entry = next(iter(db.values()))

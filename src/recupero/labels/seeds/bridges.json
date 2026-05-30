@@ -180,24 +180,6 @@
     "chain": "ethereum"
   },
   {
-    "address": "0xa8cba66ef4ad65b7f6c97e6d5e58f9b9bfe9ab40",
-    "name": "Allbridge Core",
-    "category": "bridge",
-    "source": "allbridge_docs",
-    "confidence": "high",
-    "supports_to_chains": [
-      "solana",
-      "polygon",
-      "bsc",
-      "avalanche",
-      "tron"
-    ],
-    "follow_up_url": "https://app.allbridge.io",
-    "notes": "Stablecoin-focused bridge with Solana + Tron support",
-    "added_at": "2026-05-17T00:00:00Z",
-    "chain": "ethereum"
-  },
-  {
     "address": "0x88ad09518695c6c3712ac10a214be5109a655671",
     "name": "Gnosis Chain: Omnibridge",
     "category": "bridge",
@@ -4138,6 +4120,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4158,6 +4141,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4178,6 +4162,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4198,6 +4183,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4218,6 +4204,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, starknet, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4238,6 +4225,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4258,6 +4246,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4278,6 +4267,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4298,6 +4288,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4318,6 +4309,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, dydx, mainnet, nova, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4340,6 +4332,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4362,6 +4355,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4384,6 +4378,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4406,6 +4401,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4428,6 +4424,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4450,6 +4447,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4472,6 +4470,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, bnbchain, boba, immutableX, loopring, mainnet, metis, nova, optimism, polygon, starknet, zkspace, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4492,6 +4491,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4512,6 +4512,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4532,6 +4533,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4552,6 +4554,7 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
   },
   {
@@ -4572,6 +4575,688 @@
     "notes": "Orbiter Finance cross-rollup bridge Maker (EOA model): senders transfer directly to this externally-owned address (no contract call); the destination network is encoded in the final digits of the transfer amount (Orbiter internalId) and the Maker repays the SAME sender address on the destination chain, so continuation is recoverable via same-address lock-and-mint matching. Address from Orbiter-Finance/orbiter-sdk maker_list.mainnet.ts (makerAddress field), confirmed on-chain as an EOA with a bridge-scale outbound nonce. Orbiter routes: arbitrum, mainnet, optimism, polygon, zksync.",
     "added_at": "2026-05-29T00:00:00Z",
     "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
     "_v033_orbiter_maker_addition": true
+  },
+  {
+    "address": "0x609c690e8F7D68a59885c9132e812eEbDaAf0c9e",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "celo",
+      "linea",
+      "optimism",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x3C4FA639c8D7E65c603145adaD8bD12F2358312f",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "bsc",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "celo",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x7775d63836987f444E2F14AA0fA2602204D7D3E0",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "polygon",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "celo",
+      "ethereum",
+      "linea",
+      "optimism",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x9Ce3447B58D58e8602B7306316A5fF011B92d189",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "arbitrum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "avalanche",
+      "base",
+      "bsc",
+      "celo",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x9068E1C28941D0A680197Cc03be8aFe27ccaeea9",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "avalanche",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "base",
+      "bsc",
+      "celo",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x97E5BF5068eA6a9604Ee25851e6c9780Ff50d5ab",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "optimism",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "celo",
+      "ethereum",
+      "linea",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x001E3f136c2f804854581Da55Ad7660a2b35DEf7",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "base",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "bsc",
+      "celo",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x80858f5F8EFD2Ab6485Aba1A0B9557ED46C6ba0e",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "celo",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xf3Dd9d692A9b4Df331E3bb1C8f322BA0B299B907",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "linea",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "celo",
+      "ethereum",
+      "optimism",
+      "polygon",
+      "solana",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "TAuErcuAtU6BPt6YwL51JZ4RpDCPQASCU2",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "tron",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "celo",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon",
+      "solana"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "BrdgN2RPzEMWF96ZbnnJaUtQDQx7VRXYaHHbYCBvceWB",
+    "name": "Allbridge Core Bridge",
+    "protocol": "Allbridge",
+    "category": "bridge",
+    "chain": "solana",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "celo",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon",
+      "tron"
+    ],
+    "follow_up_url": "https://core.allbridge.io/",
+    "source": "allbridge_core_api_token_info",
+    "notes": "Allbridge Core entry-point Bridge contract (liquidity-pool stablecoin bridge). On-chain confirmed as a deployed contract/program; address from the official Allbridge Core API token-info. Funds bridged here surface on the destination chain via Allbridge's pool on that chain.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "arbitrum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "base",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "optimism",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "avalanche",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "polygon",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "bsc",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0x337685fdaB40D39bd02028545a4FfA7D287cC3E2",
+    "name": "Mayan Forwarder",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "linea",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_forwarder",
+    "notes": "Mayan Forwarder \u2014 the unified entry point for Mayan cross-chain swaps (Swift / MCTP / Wormhole-Swap), deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Mayan settles via Wormhole; follow up on the Mayan explorer.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "ethereum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "arbitrum",
+    "confidence": "high",
+    "supports_to_chains": [
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "base",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "optimism",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "polygon",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "bsc",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "avalanche",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "base",
+      "bsc",
+      "ethereum",
+      "linea",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
+  },
+  {
+    "address": "0xC38e4e6A15593f908255214653d3D947CA1c2338",
+    "name": "Mayan Swift",
+    "protocol": "Mayan",
+    "category": "bridge",
+    "chain": "linea",
+    "confidence": "high",
+    "supports_to_chains": [
+      "arbitrum",
+      "avalanche",
+      "base",
+      "bsc",
+      "ethereum",
+      "optimism",
+      "polygon"
+    ],
+    "follow_up_url": "https://explorer.mayan.finance/",
+    "source": "mayan_docs_swift",
+    "notes": "Mayan Swift settlement contract, deployed at the same address on every supported EVM chain. On-chain confirmed as a deployed contract. Swift is Mayan's auction-based cross-chain settlement.",
+    "added_at": "2026-05-29T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-05-29T00:00:00Z",
+    "_v033_wave_d_bridge_addition": true
   }
 ]

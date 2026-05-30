@@ -510,6 +510,112 @@ def match_lockmint_destination(
     )
 
 
+def bridge_address_on_chain(
+    bridge_db: dict[tuple[Chain, str], BridgeInfo],
+    protocol: str,
+    chain: Chain,
+) -> str | None:
+    """The bridge address for ``protocol`` on ``chain`` from the bridge DB, or
+    None — used to locate a pool/swap bridge's DESTINATION-side contract (whose
+    outflows disburse to the recipient)."""
+    if not protocol:
+        return None
+    for (c, addr), info in bridge_db.items():
+        if c == chain and info.protocol == protocol:
+            return addr
+    return None
+
+
+def match_pool_bridge_disbursement(
+    handoff: CrossChainHandoff,
+    *,
+    dst_adapter: Any,
+    dst_bridge_address: str,
+    window_hours: float = 24.0,
+    slippage_pct: Decimal = Decimal("2.0"),
+    max_candidates: int = 500,
+) -> Any:
+    """Locate the DIFFERENT-address destination of a POOL / native-SWAP bridge.
+
+    Pool bridges (Allbridge, Celer) and native-swap bridges (THORChain) deliver
+    to a recipient that is NOT the sender, so the same-address heuristic in
+    ``match_lockmint_destination`` cannot find it. Here we fetch the DESTINATION
+    bridge contract's OUTBOUND transfers in the settlement window and correlate
+    the source deposit by amount+time in the strict ``amount_time_only`` mode
+    (distinctive amount + UNIQUE match + "low" confidence — NEVER proof). The
+    matched recipient is the different-address destination.
+
+    Pure given the injected ``dst_adapter`` (only I/O is its outflow fetch).
+    Returns a ``BridgeMatchResult`` (always "low") or ``None``.
+    """
+    from datetime import datetime
+
+    from recupero.trace.bridge_matching import (
+        BridgeMatchCandidate,
+        match_bridge_withdrawal,
+    )
+
+    if handoff.amount_decimal is None or handoff.amount_decimal <= 0:
+        return None
+    if not dst_bridge_address:
+        return None
+    try:
+        src_time = datetime.fromisoformat(
+            handoff.block_time_iso.replace("Z", "+00:00")
+        )
+    except (TypeError, ValueError, AttributeError):
+        return None
+    try:
+        start_block = dst_adapter.block_at_or_before(src_time)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "disbursement match: block_at_or_before failed on %s: %s",
+            getattr(dst_adapter, "chain", "?"), exc,
+        )
+        return None
+
+    legs: list[dict[str, Any]] = []
+    for fetch in (dst_adapter.fetch_native_outflows, dst_adapter.fetch_erc20_outflows):
+        try:
+            try:
+                rows = fetch(dst_bridge_address, start_block, max_results=max_candidates)
+            except TypeError:
+                # Some adapters' outflow methods don't accept max_results.
+                rows = fetch(dst_bridge_address, start_block)
+            legs.extend(rows)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("disbursement match: outflow fetch failed: %s", exc)
+
+    candidates: list[BridgeMatchCandidate] = []
+    for row in legs:
+        token = row.get("token")
+        decimals = getattr(token, "decimals", 18) if token is not None else 18
+        try:
+            amt = Decimal(int(row["amount_raw"])) / (Decimal(10) ** int(decimals))
+        except (KeyError, TypeError, ValueError, ArithmeticError):
+            continue
+        row_chain = row.get("chain")
+        chain_str = getattr(row_chain, "value", None) or str(row_chain or "")
+        candidates.append(BridgeMatchCandidate(
+            chain=chain_str,
+            address=row.get("to", "") or "",
+            tx_hash=row.get("tx_hash", "") or "",
+            amount_decimal=amt,
+            block_time=row["block_time"],
+            token_symbol=getattr(token, "symbol", None) if token else None,
+            explorer_url=row.get("explorer_url"),
+        ))
+
+    return match_bridge_withdrawal(
+        source_amount=handoff.amount_decimal,
+        source_time=src_time,
+        candidates=candidates,
+        window_hours=window_hours,
+        slippage_pct=slippage_pct,
+        amount_time_only=True,
+    )
+
+
 __all__ = (
     "BridgeInfo",
     "CrossChainHandoff",
@@ -517,4 +623,6 @@ __all__ = (
     "identify_cross_chain_handoffs",
     "handoffs_to_brief_section",
     "match_lockmint_destination",
+    "bridge_address_on_chain",
+    "match_pool_bridge_disbursement",
 )

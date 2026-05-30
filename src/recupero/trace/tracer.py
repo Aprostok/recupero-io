@@ -716,6 +716,29 @@ def run_trace(
     return case
 
 
+def _ordered_lockmint_candidates(
+    decoded_chain: str | None,
+    candidates: tuple[str, ...] | list[str],
+) -> list[str]:
+    """Order the destination chains to try for lock-and-mint matching.
+
+    When a decoder named the destination chain (e.g. the Orbiter amount-suffix
+    decoder sets ``handoff.decoded_destination_chain``), it is AUTHORITATIVE
+    about where the funds went, so it goes FIRST — the caller then stops on a
+    match there. A multi-chain bridge's candidate list can coincidentally
+    amount+time-match on several chains; leading with the decoded chain cuts
+    both latency and that false-positive surface. With no decoded chain the
+    original candidate order is preserved exactly. De-duplicated; empties
+    dropped.
+    """
+    decoded = (decoded_chain or "").strip()
+    out: list[str] = [decoded] if decoded else []
+    for c in candidates:
+        if c and c != decoded and c not in out:
+            out.append(c)
+    return out
+
+
 def _continue_past_dex_and_bridges(
     *,
     case: Case,
@@ -952,7 +975,12 @@ def _continue_past_dex_and_bridges(
         for handoff in handoffs:
             if handoff.decoded_destination_address:
                 continue  # calldata already produced a destination
-            for cand_str in handoff.destination_chain_candidates:
+            # Wave F: lead with the decoder-named chain (authoritative) and
+            # stop on a match there — see _ordered_lockmint_candidates.
+            for cand_str in _ordered_lockmint_candidates(
+                handoff.decoded_destination_chain,
+                handoff.destination_chain_candidates,
+            ):
                 try:
                     cand_chain = Chain(cand_str)
                 except (ValueError, KeyError):

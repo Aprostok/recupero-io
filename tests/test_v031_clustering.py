@@ -242,9 +242,11 @@ def test_h1_btc_inputs_to_different_txs_not_clustered() -> None:
 # ----- H2: Common CEX withdrawal (EVM, ≤1h) ----- #
 
 
-def test_h2_two_withdrawals_within_1h_cluster() -> None:
-    """Two EVM addresses both receive from the same labeled CEX
-    deposit address within 1h → clustered (high)."""
+def test_h2_hot_wallet_withdrawals_cluster_at_medium() -> None:
+    """v0.34 (#225): two EVM addresses both receiving from the same shared
+    exchange HOT WALLET within 1h still cluster, but only at MEDIUM — a hot
+    wallet serves thousands of unrelated users, so co-timed withdrawals are
+    weak circumstantial evidence, not a high-confidence same-owner link."""
     cex = "0x" + "c" * 40
     addr_a = "0x" + "1" * 40
     addr_b = "0x" + "2" * 40
@@ -270,6 +272,36 @@ def test_h2_two_withdrawals_within_1h_cluster() -> None:
     assert addr_b in result
     assert result[addr_a] == result[addr_b]
 
+    meta = compute_clusters_with_metadata(case, label_store=label_store)
+    assert any("cex_withdrawal" in c["heuristics"] for c in meta)
+    assert meta[0]["confidence"] == "medium"
+
+
+def test_h2_deposit_address_withdrawals_cluster_at_high() -> None:
+    """v0.34 (#225): two EVM addresses both receiving from the same per-user
+    exchange DEPOSIT address within 1h cluster at HIGH — a deposit address is
+    assigned to a single account, so co-timed payouts strongly indicate the
+    same beneficiary."""
+    dep = "0x" + "d" * 40
+    addr_a = "0x" + "1" * 40
+    addr_b = "0x" + "2" * 40
+    t0 = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
+    label_store = _FakeLabelStore({
+        dep: _label(dep, LabelCategory.exchange_deposit, name="Coinbase deposit (user)"),
+    })
+    case = _mk_case([
+        _evm_transfer(
+            from_addr=dep, to_addr=addr_a,
+            usd=Decimal("50000"), block_time=t0, tx_suffix="aaaa",
+        ),
+        _evm_transfer(
+            from_addr=dep, to_addr=addr_b,
+            usd=Decimal("50000"),
+            block_time=t0 + timedelta(minutes=30), tx_suffix="bbbb",
+        ),
+    ])
+    result = compute_address_clusters(case, label_store=label_store)
+    assert result[addr_a] == result[addr_b]
     meta = compute_clusters_with_metadata(case, label_store=label_store)
     assert any("cex_withdrawal" in c["heuristics"] for c in meta)
     assert meta[0]["confidence"] == "high"

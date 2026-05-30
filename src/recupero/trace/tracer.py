@@ -971,7 +971,15 @@ def _continue_past_dex_and_bridges(
         "RECUPERO_LOCKMINT_MATCH", "",
     ).strip().lower() in ("1", "true", "yes", "on")
     if _lockmint_on and cross_chain_continue and handoffs:
-        from recupero.trace.cross_chain import match_lockmint_destination
+        from recupero.trace.cross_chain import (
+            bridge_address_on_chain,
+            ingest_bridge_seeds,
+            match_lockmint_destination,
+            match_pool_bridge_disbursement,
+        )
+        # Loaded once for the disbursement fallback (Wave #3): locate a pool/
+        # swap bridge's DESTINATION-side contract to follow its outflows.
+        _lm_bridge_db = ingest_bridge_seeds()
         for handoff in handoffs:
             if handoff.decoded_destination_address:
                 continue  # calldata already produced a destination
@@ -1004,6 +1012,22 @@ def _continue_past_dex_and_bridges(
                         handoff, dst_adapter=lm_adapter,
                         window_hours=xchain_window_h or 24.0,
                     )
+                    if match is None:
+                        # Wave #3: pool / native-swap bridges (Allbridge,
+                        # Celer, THORChain) disburse to a DIFFERENT recipient
+                        # than the sender, so same-address matching finds
+                        # nothing. Follow the DESTINATION bridge contract's
+                        # outflows instead (strict amount+time-only → "low").
+                        # Reuses lm_adapter while it is still open.
+                        _dst_bridge = bridge_address_on_chain(
+                            _lm_bridge_db, handoff.bridge_protocol, cand_chain,
+                        )
+                        if _dst_bridge:
+                            match = match_pool_bridge_disbursement(
+                                handoff, dst_adapter=lm_adapter,
+                                dst_bridge_address=_dst_bridge,
+                                window_hours=xchain_window_h or 24.0,
+                            )
                 except Exception as exc:  # noqa: BLE001
                     log.warning(
                         "lock-mint match failed on %s: %s", cand_chain.value, exc,

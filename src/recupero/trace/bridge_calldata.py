@@ -1432,7 +1432,6 @@ def _decode_lifi(
         (416 * 2, 480 * 2),   # BridgeData after a 4-slot prefix (swap-and-bridge)
     ]
     try:
-        best: tuple[str | None, str | None, str] = (None, None, "low")
         for recv_idx, chain_idx in candidates:
             if chain_idx + 64 > len(args_blob):
                 continue
@@ -1446,9 +1445,16 @@ def _decode_lifi(
                 continue  # Try next candidate
 
             recv_hex_full = args_blob[recv_idx:recv_idx + 64]
-            recv_hex = recv_hex_full[-40:]  # last 20 bytes
-            if len(recv_hex) != 40:
+            if len(recv_hex_full) != 64:
                 continue
+            # v0.34: a real ABI-encoded `address` is left-padded with 12 zero
+            # bytes. If the top 12 bytes are NOT zero, this 32-byte slot is a
+            # uint256 (amount/fee) or a misaligned read — NOT an address.
+            # Surfacing its low 20 bytes as a destination would FABRICATE a
+            # bogus wallet at high confidence. Reject and try the next candidate.
+            if recv_hex_full[:24] != "0" * 24:
+                continue
+            recv_hex = recv_hex_full[-40:]  # last 20 bytes
             # Reject obviously-zero recipient (sentinel for wrong offset)
             if recv_hex == "0" * 40:
                 continue

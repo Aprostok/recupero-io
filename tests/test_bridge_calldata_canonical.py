@@ -294,6 +294,22 @@ def test_op_stack_msg_sender_flag_only_on_non_to_variants() -> None:
     assert eth_to.destination_address is not None
 
 
+def test_extract_addr_slot_rejects_non_address_slot() -> None:
+    """v0.34 (#228): the shared slot->address guard (_extract_addr_slot, used by
+    every slot-index decoder) returns an address ONLY for a right-aligned ABI
+    slot (top 12 bytes zero). A uint256/non-EVM/misaligned slot returns None —
+    never a fabricated low-20-bytes 'address'."""
+    from recupero.trace.bridge_calldata import _extract_addr_slot
+    addr = "a" * 40
+    # Right-aligned address in slot 0 -> recovered.
+    assert _extract_addr_slot("0" * 24 + addr, 0) == "0x" + addr
+    # Non-zero top 12 bytes (a uint256 amount/fee, or misaligned read) -> None.
+    assert _extract_addr_slot("ff" * 12 + addr, 0) is None
+    # All-zero slot -> None; out-of-range slot index -> None.
+    assert _extract_addr_slot("0" * 64, 0) is None
+    assert _extract_addr_slot("0" * 24 + addr, 1) is None
+
+
 def test_optimism_withdraw_to_decodes_recipient_on_ethereum() -> None:
     """L2-side withdrawTo: recipient is on ethereum (the L1 side)."""
     l2_token = "1" * 40

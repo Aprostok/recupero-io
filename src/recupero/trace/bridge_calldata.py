@@ -1526,12 +1526,9 @@ def _decode_hop(
         chain_id = int(chain_hex, 16) if chain_hex else 0
         dest_chain = _EVM_CHAIN_BY_ID.get(chain_id)
 
-        # recipient address — slot [32..64], last 20 bytes (40 hex chars)
-        recipient_hex_full = args_blob[64:128]
-        recipient_hex = recipient_hex_full[-40:]
-        dest_address: str | None = None
-        if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
-            dest_address = "0x" + recipient_hex
+        # recipient address — slot 1, right-aligned ABI address. Shared
+        # _extract_addr_slot guard (v0.34 #228) rejects a non-address slot.
+        dest_address: str | None = _extract_addr_slot(args_blob, 1)
 
         confidence = (
             "high" if (dest_chain and dest_address)
@@ -1687,12 +1684,10 @@ def _decode_celer(
             raw_calldata_excerpt=full_data[:400],
         )
     try:
-        # receiver — slot [0..32], last 20 bytes
-        recipient_hex_full = args_blob[0:64]
-        recipient_hex = recipient_hex_full[-40:]
-        dest_address: str | None = None
-        if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
-            dest_address = "0x" + recipient_hex
+        # receiver — slot 0, right-aligned ABI address. The shared
+        # _extract_addr_slot guard (v0.34 #228) rejects a non-address
+        # (non-zero-top) slot so a misaligned read can't fabricate a dest.
+        dest_address: str | None = _extract_addr_slot(args_blob, 0)
 
         # dstChainId slot index depends on the method: send (ERC-20) → slot 3
         # [192..256]; sendNative → slot 2 [128..192].
@@ -1760,12 +1755,9 @@ def _decode_synapse(
             raw_calldata_excerpt=full_data[:400],
         )
     try:
-        # to — slot [0..32], last 20 bytes
-        recipient_hex_full = args_blob[0:64]
-        recipient_hex = recipient_hex_full[-40:]
-        dest_address: str | None = None
-        if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
-            dest_address = "0x" + recipient_hex
+        # to — slot 0, right-aligned ABI address. Shared _extract_addr_slot
+        # guard (v0.34 #228) rejects a non-address slot.
+        dest_address: str | None = _extract_addr_slot(args_blob, 0)
 
         # chainId — slot [32..64] (uint256, EVM chainID)
         chain_hex = args_blob[64:128]
@@ -1888,10 +1880,16 @@ def _decode_symbiosis(
                 raw_calldata_excerpt=full_data[:400],
             )
         recipient_hex_full = args_blob[recv_slot_start:recv_slot_end]
-        recipient_hex = recipient_hex_full[-40:]
         dest_address: str | None = None
-        if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
-            dest_address = "0x" + recipient_hex
+        # v0.34 (#228): right-aligned ABI address only — top 12 bytes must be
+        # zero, else the slot is a non-address / misaligned read and surfacing
+        # its low 20 bytes would fabricate a destination.
+        if (
+            len(recipient_hex_full) == 64
+            and recipient_hex_full[:24] == "0" * 24
+            and recipient_hex_full[-40:] != "0" * 40
+        ):
+            dest_address = "0x" + recipient_hex_full[-40:]
 
         # Destination chain ID lives inside `otherSideCalldata` (tuple
         # slot 8, an offset pointer into a nested calldata payload
@@ -2142,9 +2140,16 @@ def _decode_layerzero(
             recv_slot_start = body_idx + 64
             recv_slot_end = recv_slot_start + 64
             if recv_slot_end <= len(args_blob):
-                recv_hex = args_blob[recv_slot_start:recv_slot_end][-40:]
-                if len(recv_hex) == 40 and recv_hex != "0" * 40:
-                    dest_address = "0x" + recv_hex
+                recv_slot = args_blob[recv_slot_start:recv_slot_end]
+                # v0.34 (#228): bytes32 receiver — surface as EVM only if
+                # right-aligned (top 12 bytes zero); a non-EVM (Solana/Aptos)
+                # or misaligned slot must NOT fabricate an EVM destination.
+                if (
+                    len(recv_slot) == 64
+                    and recv_slot[:24] == "0" * 24
+                    and recv_slot[-40:] != "0" * 40
+                ):
+                    dest_address = "0x" + recv_slot[-40:]
 
         confidence = (
             "high" if (dest_chain and dest_address)
@@ -2307,12 +2312,9 @@ def _decode_multichain(
             raw_calldata_excerpt=full_data[:400],
         )
     try:
-        # to address — slot [32..64], last 20 bytes
-        recipient_hex_full = args_blob[64:128]
-        recipient_hex = recipient_hex_full[-40:]
-        dest_address: str | None = None
-        if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
-            dest_address = "0x" + recipient_hex
+        # to address — slot 1, right-aligned ABI address. Shared
+        # _extract_addr_slot guard (v0.34 #228) rejects a non-address slot.
+        dest_address: str | None = _extract_addr_slot(args_blob, 1)
 
         # toChainID — slot [96..128] (uint256, EVM chainID)
         chain_hex = args_blob[192:256]
@@ -2453,15 +2455,24 @@ def _decode_stargate_v2(
 
 
 def _extract_addr_slot(args_blob: str, slot_idx: int) -> str | None:
-    """Read a 32-byte slot (slot_idx 0-based) and treat its last 20
-    bytes as an EVM address. Return ``0x…`` lowercase, or ``None`` if
-    out of range or zero address."""
+    """Read a 32-byte slot (slot_idx 0-based) and return its EVM address.
+
+    v0.34 (#228): a real ABI-encoded ``address`` is right-aligned — the top 12
+    bytes are zero. If they are NOT zero the slot is a uint256 / non-EVM value /
+    misaligned read, NOT an address; surfacing its low 20 bytes would FABRICATE
+    a bogus destination at high confidence. Returns ``0x…`` lowercase only for a
+    properly-padded non-zero address, else ``None`` (out of range, zero, or
+    non-address slot). This is the shared guard for every slot-index decoder.
+    """
     start = slot_idx * 64
     end = start + 64
     if end > len(args_blob):
         return None
-    hex_addr = args_blob[start + 24:end]  # last 20 bytes = 40 hex chars
-    if len(hex_addr) != 40 or hex_addr == "0" * 40:
+    slot = args_blob[start:end]
+    if len(slot) != 64 or slot[:24] != "0" * 24:
+        return None
+    hex_addr = slot[24:]  # last 20 bytes = 40 hex chars
+    if hex_addr == "0" * 40:
         return None
     return "0x" + hex_addr
 

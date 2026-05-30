@@ -77,37 +77,41 @@
       "confidence": "high",
       "notes": "Blender.io was the first crypto mixer sanctioned by OFAC. Closed shortly after sanctions. Sinbad.io is its successor (also sanctioned)."
     },
-
     {
-      "_section": "Tornado Cash router contracts — sanctioned (additional contracts beyond mixers.json)"
+      "_section": "Tornado Cash pool/router contracts — OFAC-DELISTED 2025-03-21 (Fifth Circuit); now mixer_high_risk, NOT sanctioned. Additional contracts beyond mixers.json"
     },
     {
       "address": "0xff63dc3b3a51e7ad21d2a8a3c00c2dd1e1c0a85f",
       "name": "Tornado Cash: 100,000 DAI",
-      "risk_category": "mixer_sanctioned",
+      "risk_category": "mixer_high_risk",
       "severity": 4,
       "ofac_listing_date": "2022-08-08",
       "source": "ofac_sdn",
       "confidence": "high",
-      "notes": "Tornado Cash mixer — OFAC-sanctioned in August 2022. Sanctions partially overturned by federal court in 2024 but the protocol remains high-risk and many compliance regimes still treat it as sanctioned."
+      "notes": "Tornado Cash mixer. OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (Fifth Circuit held immutable smart contracts are not sanctionable property). Still a high-risk laundering mixer and DOJ prosecution of the founders continues, but the protocol is NOT currently OFAC-sanctioned.",
+      "ofac_delisted_date": "2025-03-21"
     },
     {
       "address": "0x07687e702b410fa43f4cb4af7fa097918ffd2730",
       "name": "Tornado Cash: 10 ETH (extended pools)",
-      "risk_category": "mixer_sanctioned",
+      "risk_category": "mixer_high_risk",
       "severity": 4,
       "ofac_listing_date": "2022-08-08",
       "source": "ofac_sdn",
-      "confidence": "high"
+      "confidence": "high",
+      "ofac_delisted_date": "2025-03-21",
+      "notes": "Tornado Cash mixer. OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (Fifth Circuit held immutable smart contracts are not sanctionable property). Still a high-risk laundering mixer and DOJ prosecution of the founders continues, but the protocol is NOT currently OFAC-sanctioned."
     },
     {
       "address": "0x23773e65ed146a459791799d01336db287f25334",
       "name": "Tornado Cash: 5,000 cDAI",
-      "risk_category": "mixer_sanctioned",
+      "risk_category": "mixer_high_risk",
       "severity": 4,
       "ofac_listing_date": "2022-08-08",
       "source": "ofac_sdn",
-      "confidence": "high"
+      "confidence": "high",
+      "ofac_delisted_date": "2025-03-21",
+      "notes": "Tornado Cash mixer. OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (Fifth Circuit held immutable smart contracts are not sanctionable property). Still a high-risk laundering mixer and DOJ prosecution of the founders continues, but the protocol is NOT currently OFAC-sanctioned."
     },
     {
       "address": "0xb1c8094b234dce6e03f10a5b673c1d8c69739a00",
@@ -119,7 +123,6 @@
       "confidence": "high",
       "notes": "Sinbad.io was sanctioned in November 2023 as the successor to Blender.io. Used by DPRK's Lazarus Group to launder Ronin Bridge / Atomic Wallet hack proceeds."
     },
-
     {
       "_section": "Non-sanctioned mixers (high-risk by behavior, not sanctioned)"
     },
@@ -139,9 +142,9 @@
       "severity": 4,
       "source": "tornado_docs",
       "confidence": "high",
-      "notes": "Pre-sanction TC pool. Activity before August 2022 is not OFAC-flagged but is still a strong laundering signal."
+      "notes": "Tornado Cash mixer. OFAC-sanctioned 2022-08-08; DELISTED 2025-03-21 (Fifth Circuit held immutable smart contracts are not sanctionable property). Still a high-risk laundering mixer and DOJ prosecution of the founders continues, but the protocol is NOT currently OFAC-sanctioned.",
+      "ofac_delisted_date": "2025-03-21"
     },
-
     {
       "_section": "Known scam / fraud operations (not officially sanctioned but documented in public reports)"
     },
@@ -163,7 +166,6 @@
       "confidence": "medium",
       "notes": "Inferno Drainer; reportedly shut down 2023 but historical activity ongoing in laundering chains."
     },
-
     {
       "_section": "Solana addresses (DPRK, mixers, sanctioned)"
     },

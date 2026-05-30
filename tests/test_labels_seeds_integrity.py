@@ -126,6 +126,83 @@ def test_no_malformed_evm_addresses_in_seeds() -> None:
 
 
 # ---------------------------------------------------------------------------
+# (3b) Checksum validity — v0.34 anti-fabrication guard (repo-wide)
+# ---------------------------------------------------------------------------
+#
+# Shape validity (3) is NOT enough: a FABRICATED placeholder can be
+# shape-valid yet checksum-invalid (the class of bug that put fake Sinbad /
+# Blender / ChipMixer / ransomware addresses in the registries). A real BTC or
+# Tron address CANNOT fail its base58check / bech32 checksum. This guard makes
+# it impossible to land a fabricated BTC/Tron literal in ANY seed file. (EVM and
+# Solana addresses carry no self-checksum in our lowercased/raw form, so they
+# stay shape-only — verify those on-chain before adding.)
+
+import hashlib  # noqa: E402
+
+_BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+_B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+
+def _bech32_checksum_ok(addr: str) -> bool:
+    if addr.lower() != addr and addr.upper() != addr:
+        return False
+    a = addr.lower()
+    pos = a.rfind("1")
+    if pos < 1 or pos + 7 > len(a) or len(a) > 90:
+        return False
+    hrp, data = a[:pos], a[pos + 1:]
+    if any(c not in _BECH32_CHARSET for c in data):
+        return False
+    values = [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+    values += [_BECH32_CHARSET.find(c) for c in data]
+    gen = [0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3]
+    chk = 1
+    for v in values:
+        b = chk >> 25
+        chk = ((chk & 0x1FFFFFF) << 5) ^ v
+        for i in range(5):
+            chk ^= gen[i] if ((b >> i) & 1) else 0
+    return chk in (1, 0x2BC830A3)
+
+
+def _base58check_ok(s: str) -> bool:
+    if any(c not in _B58_ALPHABET for c in s):
+        return False
+    num = 0
+    for c in s:
+        num = num * 58 + _B58_ALPHABET.index(c)
+    raw = num.to_bytes((num.bit_length() + 7) // 8, "big") if num else b""
+    raw = b"\x00" * (len(s) - len(s.lstrip("1"))) + raw
+    if len(raw) < 5:
+        return False
+    return hashlib.sha256(hashlib.sha256(raw[:-4]).digest()).digest()[:4] == raw[-4:]
+
+
+def test_no_checksum_invalid_btc_tron_addresses_in_seeds() -> None:
+    """Every BTC (bc1.../1.../3...) and Tron (T...) address in every seed file
+    must pass its real checksum. A failure means a FABRICATED/placeholder
+    literal slipped in — a real on-chain address can never fail its checksum."""
+    bad: list[str] = []
+    for path in _all_seed_files():
+        for i, e in enumerate(_load_entries(path)):
+            addr = e.get("address") or e.get("contract")
+            if not isinstance(addr, str):
+                continue
+            if addr.startswith(("bc1", "tb1")):
+                ok = _bech32_checksum_ok(addr)
+            elif addr.startswith("T") or addr[:1] in "13":
+                ok = _base58check_ok(addr)
+            else:
+                continue  # EVM / Solana — no self-checksum, shape-only (test 3)
+            if not ok:
+                bad.append(f"{path.name}[{i}] {addr!r} ({e.get('name', '')})")
+    assert not bad, (
+        "Fabricated (checksum-invalid) BTC/Tron addresses in seeds — a real "
+        "address can never fail its checksum:\n  " + "\n  ".join(bad)
+    )
+
+
+# ---------------------------------------------------------------------------
 # (2) Cross-file duplicates with conflicting categories
 # ---------------------------------------------------------------------------
 
@@ -153,8 +230,7 @@ def test_no_cross_file_category_conflicts() -> None:
     issuers.json."""
     addr_to_records: dict[str, list[tuple[str, str, str]]] = {}
     for path in _all_seed_files():
-        entries = _load_entries(path)
-        for i, e in enumerate(entries):
+        for e in _load_entries(path):
             addr = e.get("address") or e.get("contract")
             if not isinstance(addr, str) or not addr:
                 continue

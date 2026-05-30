@@ -786,6 +786,24 @@ def test_stargate_v2_send_token_arbitrum_high() -> None:
     assert out.bridge_method == "sendToken_v2"
 
 
+def test_stargate_v2_rejects_non_evm_to_slot() -> None:
+    """v0.34 (no fake wallets): SendParam.to is bytes32. A slot whose top 12
+    bytes are NON-zero is a non-EVM address (Solana/Aptos pubkey) or a
+    misaligned read, NOT an EVM address. The decoder must NOT surface its low
+    20 bytes as a high-confidence EVM destination — that would fabricate a
+    wallet. The chain still decodes from the intact dstEid."""
+    valid = _build_stargate_v2_send_token(dst_eid=30110, to_addr="b" * 40)
+    addr_slot = "0" * 24 + "b" * 40            # right-aligned EVM address
+    corrupt_slot = "ff" * 12 + "b" * 40         # non-EVM/uint256: nonzero top
+    assert addr_slot in valid
+    corrupted = valid.replace(addr_slot, corrupt_slot, 1)
+    out = decode_bridge_calldata(bridge_protocol="Stargate v2", input_data=corrupted)
+    assert isinstance(out, BridgeDecodeResult)
+    assert out.destination_chain == "arbitrum"          # dstEid intact
+    assert out.destination_address != "0x" + "b" * 40    # bogus addr NOT surfaced
+    assert out.destination_address is None
+
+
 def test_stargate_v2_truncated_calldata_returns_low() -> None:
     """Truncated Stargate v2 calldata → low.
 

@@ -18,11 +18,16 @@ Severity is on a 1-4 scale:
   2 = concerning (degraded reputation, no formal sanction)
   1 = minor (advisory only)
 
-A "verdict" string summarizes the score for the brief:
-  > 0    "SANCTIONED — direct exposure to OFAC SDN List"
-  3-7    "HIGH-RISK — significant exposure to mixers or scam ops"
-  1-2    "MODERATE — limited high-risk exposure"
-  0      "CLEAN — no detected high-risk interactions"
+A "verdict" string summarizes the score + exposure categories for the brief.
+OFAC / sanctioned-mixer exposure is DISPOSITIVE (any direct contact →
+SANCTIONED regardless of numeric score); otherwise the numeric score sets the
+tier (see _verdict_for_score):
+  any ofac_* exposure  "SANCTIONED — direct exposure to OFAC SDN List"
+  any mixer_sanctioned "SANCTIONED — direct exposure to sanctioned mixer"
+  score >= 8           "CRITICAL — extensive exposure to mixers / scam ops"
+  score >= 3           "HIGH-RISK — significant exposure to mixers or scam ops"
+  score >= 1           "MODERATE — limited high-risk exposure"
+  score == 0           "CLEAN — no detected high-risk interactions"
 
 Why this matters
 ----------------

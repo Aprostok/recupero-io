@@ -919,20 +919,16 @@ def _decode_stargate(
                         to_data_end = to_data_start + (to_len * 2)
                         if to_data_end <= len(args_blob):
                             to_bytes_hex = args_blob[to_data_start:to_data_end]
-                            if to_len == 20:
-                                # 20-byte payload → canonical EVM address.
-                                dest_address = "0x" + to_bytes_hex
-                            else:
-                                # v0.32.1 (forensic-audit MEDIUM): a non-20-byte
-                                # `to` blob is a NON-EVM destination (e.g. a
-                                # 32-byte Solana pubkey or a Tron/other-chain
-                                # address). Rendering it as "0x"+hex fabricated
-                                # a bogus EVM-looking address at high confidence
-                                # that the continuation pass could then seed on
-                                # the wrong chain. Leave dest_address unset so
-                                # the lead drops to lower confidence and surfaces
-                                # for manual follow-up rather than mis-tracing.
-                                dest_address = None
+                            # 20-byte payload → canonical EVM address. A
+                            # non-20-byte `to` blob is a NON-EVM destination
+                            # (e.g. a 32-byte Solana pubkey or a Tron/other-chain
+                            # address); rendering it as "0x"+hex would fabricate
+                            # a bogus EVM-looking address at high confidence that
+                            # the continuation pass could seed on the wrong
+                            # chain, so leave it None (v0.32.1 forensic-audit) —
+                            # the lead drops to lower confidence for manual
+                            # follow-up rather than mis-tracing.
+                            dest_address = "0x" + to_bytes_hex if to_len == 20 else None
             except (ValueError, IndexError):
                 dest_address = None
 
@@ -1698,13 +1694,9 @@ def _decode_celer(
         if len(recipient_hex) == 40 and recipient_hex != "0" * 40:
             dest_address = "0x" + recipient_hex
 
-        # dstChainId — slot index depends on which method
-        if method_name == "send":
-            # ERC-20 path: dstChainId at slot index 3 → hex chars [192..256]
-            chain_hex = args_blob[192:256]
-        else:
-            # sendNative path: dstChainId at slot index 2 → hex chars [128..192]
-            chain_hex = args_blob[128:192]
+        # dstChainId slot index depends on the method: send (ERC-20) → slot 3
+        # [192..256]; sendNative → slot 2 [128..192].
+        chain_hex = args_blob[192:256] if method_name == "send" else args_blob[128:192]
         chain_id = int(chain_hex, 16) if chain_hex else 0
         dest_chain = _EVM_CHAIN_BY_ID.get(chain_id)
 

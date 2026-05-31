@@ -2405,6 +2405,19 @@ def emit_brief(
     except Exception as _exc:  # noqa: BLE001 — non-fatal
         log.warning("emit_brief: recovery estimate section build failed: %s — falling back to empty", _exc)
         brief["RECOVERY_ESTIMATE"] = None
+
+    # v0.34 (operator-requested coverage-honesty): surface the trace's
+    # completeness notice so the LE handoff / freeze deliverables NEVER
+    # imply completeness when address-poisoning inflated the graph or a
+    # per-address fetch cap truncated an address. Only added when coverage
+    # is INCOMPLETE, so clean full-coverage briefs are byte-identical to
+    # before (no churn in existing golden artifacts).
+    try:
+        _cov = (getattr(case, "config_used", None) or {}).get("coverage")
+        if isinstance(_cov, dict) and not _cov.get("complete", True):
+            brief["COVERAGE_NOTICE"] = _cov
+    except Exception as _exc:  # noqa: BLE001 — non-fatal
+        log.warning("emit_brief: coverage notice surfacing failed: %s", _exc)
     return brief
 
 

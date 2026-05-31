@@ -554,3 +554,88 @@ def test_service_wallet_threshold_env_bad_value_keeps_default(
                 f"bad override {bad!r} should keep default(3); child {c} "
                 "must not be traversed"
             )
+
+
+# ---------- Test 9: value-directed tracing through a service wallet -------- #
+
+
+def _aggregator_graph() -> tuple[dict[str, Any], str, list[str]]:
+    """SEED --50 ETH--> N (a 5-outflow service wallet). N forwards exactly
+    50 ETH to TARGET (the real onward hop) plus 4 decoy outflows of other
+    amounts. Returns (edges, TARGET, decoys)."""
+    target = HOP_B
+    decoys = [f"0x{0xc1 + i:040x}" for i in range(4)]
+    edges: dict[str, Any] = {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="50")],
+        HOP_A: [
+            _native_row("0xnmatch", HOP_A, target, eth_amount="50"),   # value match
+            _native_row("0xn1", HOP_A, decoys[0], eth_amount="10"),
+            _native_row("0xn2", HOP_A, decoys[1], eth_amount="20"),
+            _native_row("0xn3", HOP_A, decoys[2], eth_amount="30"),
+            _native_row("0xn4", HOP_A, decoys[3], eth_amount="40"),
+        ],
+        target: [_native_row("0xt1", target, decoys[0], eth_amount="5")],
+    }
+    return edges, target, decoys
+
+
+def test_value_trace_follows_amount_matched_hop_through_service_wallet(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RECUPERO_VALUE_TRACE=1: at a high-fan-out node the tracer follows ONLY
+    the outflow whose amount matches the inbound funds (50 ETH -> 50 ETH),
+    NOT the decoys — isolating the real onward hop and recording it as a
+    medium-confidence value match."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3  # N's 5 outflows trip it
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, target, decoys = _aggregator_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_ON")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() in fetched, (
+        "value-matched onward hop was not traversed through the service wallet"
+    )
+    for d in decoys:
+        assert d.lower() not in fetched, (
+            f"decoy {d} (amount mismatch) must NOT be followed"
+        )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    matched = [h for h in hops if h["matched_to"].lower() == target.lower()]
+    assert matched, f"no value-match provenance recorded; got {hops}"
+    assert matched[0]["kind"] == "same_asset_amount"
+    assert matched[0]["confidence"] == "medium"  # sole same-asset match
+    assert matched[0]["ambiguous"] is False
+
+
+def test_value_trace_off_by_default_stops_at_service_wallet(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default (RECUPERO_VALUE_TRACE unset): a service wallet is still a dead
+    end — no onward hop is followed and no value-match provenance is recorded.
+    This keeps existing behavior byte-identical."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3
+    monkeypatch.delenv("RECUPERO_VALUE_TRACE", raising=False)
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, target, decoys = _aggregator_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_OFF")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() not in fetched, (
+        "value-trace OFF must NOT follow past a service wallet"
+    )
+    assert case.config_used["coverage"]["value_matched_hops"] == []

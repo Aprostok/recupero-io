@@ -453,6 +453,66 @@ def run_trace(
     budget_hit = False
     budget_hit_provider: str | None = None
 
+    # v0.34 (operator-requested "elite recall"): value-directed tracing. When
+    # RECUPERO_VALUE_TRACE is on, a high-fan-out node (service wallet /
+    # aggregator / pool) is not a dead end: we value-match the inbound funds
+    # against the node's outflows and follow ONLY the edge(s) whose amount
+    # (same-asset) or USD value (across a swap) match. ``inbound_by_key`` maps
+    # an address-key to the edge that delivered our funds there (so a later
+    # wave can match against it); ``value_matched`` accumulates the per-hop
+    # provenance (confidence is calibrated in value_matching — never "high").
+    _value_trace_enabled = os.environ.get(
+        "RECUPERO_VALUE_TRACE", "0",
+    ).strip().lower() in ("1", "true", "yes", "on")
+    inbound_by_key: dict[str, Transfer] = {}
+    value_matched: list[dict[str, Any]] = []
+
+    # v0.34: the per-transfer enqueue decision, factored out so the normal
+    # breadth-first path AND the value-matched service-wallet path share the
+    # exact same visited / contract / should_traverse gating. Returns True iff
+    # ``transfer``'s destination was newly enqueued. Closes over the loop-local
+    # ``next_wave`` (resolved at call time) plus the stable per-case caches.
+    def _consider_enqueue(transfer: Transfer, parent_depth: int) -> bool:
+        if not policy.should_traverse(transfer):
+            return False
+        dest = transfer.to_address
+        dest_key = _address_visited_key(chain, dest)
+        if dest_key in visited:
+            return False
+        # Contract check: one RPC per unique address, cached. Single-threaded
+        # between waves, so is_contract_cache needs no lock. Routed through
+        # contract_detection.is_contract so a transient RPC failure doesn't
+        # poison the cache as is_contract=True forever (returns None on
+        # twice-failed RPC, leaving the cache untouched for a later re-resolve).
+        if policy.stop_at_contract:
+            if dest_key not in is_contract_cache:
+                try:
+                    from recupero.trace.contract_detection import (
+                        is_contract as _is_contract_safe,
+                    )
+                    result_bool, _reason = _is_contract_safe(
+                        dest, chain.value, adapter, _contract_check_cache,
+                    )
+                    if result_bool is None:
+                        log.debug(
+                            "is_contract uncertain for %s (%s); treating as "
+                            "contract for this hop", dest, _reason,
+                        )
+                        is_contract_cache[dest_key] = True
+                    else:
+                        is_contract_cache[dest_key] = result_bool
+                except Exception as e:  # noqa: BLE001
+                    log.debug("is_contract check failed for %s: %s", dest, e)
+                    is_contract_cache[dest_key] = True
+            if is_contract_cache[dest_key]:
+                return False
+        next_wave.append((dest, parent_depth + 1))
+        visited.add(dest_key)
+        # Remember the edge that delivered funds to ``dest`` so a later wave
+        # can value-match ``dest``'s outflows against it.
+        inbound_by_key[dest_key] = transfer
+        return True
+
     while current_wave:
         # v0.16.11: cooperative deadline check between waves. We don't
         # interrupt in-flight wave work (would abandon per-tx evidence
@@ -525,76 +585,41 @@ def run_trace(
             if depth + 1 >= policy.max_depth:
                 continue
 
-            # Service-wallet cap: keep the transfers we observed (audit
-            # trail) but don't queue downstream. Without this, a single
-            # 500-outflow OTC desk / unlabeled exchange explodes BFS at
-            # the next depth.
+            # Service-wallet node (aggregator / pool / OTC desk / unlabeled
+            # exchange). DEFAULT: keep its transfers (audit trail) but do NOT
+            # queue downstream, else a single high-fan-out node explodes BFS.
+            #
+            # v0.34 elite recall: when RECUPERO_VALUE_TRACE is on AND we know
+            # the edge that delivered our funds to this node, value-match the
+            # node's outflows and follow ONLY the edge(s) whose amount
+            # (same-asset) or USD value (across a swap) match — isolating the
+            # real onward hop instead of stopping dead. Confidence is calibrated
+            # in value_matching (never "high"); every followed hop is recorded
+            # in ``value_matched`` for the audit trail.
             if is_service_wallet:
+                followed = 0
+                if _value_trace_enabled:
+                    inbound_t = inbound_by_key.get(
+                        _address_visited_key(chain, from_addr)
+                    )
+                    if inbound_t is not None:
+                        followed = _value_match_and_enqueue(
+                            inbound_transfer=inbound_t,
+                            node_outflows=hop_transfers,
+                            parent_depth=depth,
+                            node_addr=from_addr,
+                            enqueue_fn=_consider_enqueue,
+                            provenance_sink=value_matched,
+                        )
                 log.info(
-                    "service-wallet skip: not queueing %d destinations from %s",
-                    len(hop_transfers), from_addr,
+                    "service-wallet %s: %d outflow(s); %d value-matched onward "
+                    "hop(s) followed",
+                    from_addr, len(hop_transfers), followed,
                 )
                 continue
 
             for transfer in hop_transfers:
-                if not policy.should_traverse(transfer):
-                    continue
-                dest = transfer.to_address
-                dest_key = _address_visited_key(chain, dest)
-                if dest_key in visited:
-                    continue
-
-                # Contract check: one RPC per unique address, cached.
-                # Done here (single-threaded between waves) so we don't
-                # need to lock is_contract_cache.
-                #
-                # v0.32.1 W8 (round-2 wire-up): route through
-                # ``contract_detection.is_contract`` so transient RPC
-                # failures don't poison the cache as "is_contract=True"
-                # forever. Pre-W8 a single rate-limit hit on the
-                # is_contract probe would make BFS skip that address
-                # permanently for the rest of the worker's lifetime.
-                # The contract_detection helper:
-                #   * retries once on Exception (transient),
-                #   * returns (None, reason) on twice-failed RPC and
-                #     leaves the cache UNTOUCHED — letting later passes
-                #     re-resolve cleanly,
-                #   * caches verified True/False with a chain-aware key.
-                # We mirror into the legacy ``is_contract_cache`` (keyed
-                # by dest_key) so other code paths that read it
-                # (continuation pass, tracer:1157) keep working.
-                if policy.stop_at_contract:
-                    if dest_key not in is_contract_cache:
-                        try:
-                            from recupero.trace.contract_detection import (
-                                is_contract as _is_contract_safe,
-                            )
-                            result_bool, _reason = _is_contract_safe(
-                                dest, chain.value, adapter, _contract_check_cache,
-                            )
-                            if result_bool is None:
-                                # RPC failed twice; fall back to the
-                                # conservative "assume contract" gate to
-                                # avoid expanding into an unverifiable
-                                # destination. NB: we DO NOT cache None
-                                # so a later pass can re-resolve.
-                                log.debug(
-                                    "is_contract uncertain for %s (%s); "
-                                    "treating as contract for this hop",
-                                    dest, _reason,
-                                )
-                                is_contract_cache[dest_key] = True
-                            else:
-                                is_contract_cache[dest_key] = result_bool
-                        except Exception as e:  # noqa: BLE001
-                            log.debug("is_contract check failed for %s: %s", dest, e)
-                            # Be conservative: if we can't check, assume contract (skip)
-                            is_contract_cache[dest_key] = True
-                    if is_contract_cache[dest_key]:
-                        continue
-
-                next_wave.append((dest, depth + 1))
-                visited.add(dest_key)
+                _consider_enqueue(transfer, depth)
 
         current_wave = next_wave
 
@@ -849,6 +874,11 @@ def run_trace(
             # fetch-cap truncations above, which can hide a real onward hop.
             "poison_edges_pruned": sum(p.get("pruned", 0) for p in _poison_pruned),
             "poison_pruned_addresses": len(_poison_pruned),
+            # Value-directed onward hops followed through high-fan-out nodes
+            # (RECUPERO_VALUE_TRACE). Each carries calibrated confidence
+            # (medium/low — never high) + the match basis, so the deliverable
+            # can present them as INFERENCE leads, not asserted identity.
+            "value_matched_hops": list(value_matched),
             "reduced_parameters": {
                 "max_depth": int(cfg_max_depth),
                 "dust_threshold_usd": float(config.trace.dust_threshold_usd),
@@ -1424,6 +1454,67 @@ def _continue_past_dex_and_bridges(
                 )
         except Exception as exc:  # noqa: BLE001 — probe is best-effort
             log.warning("endpoint-diversity probe failed (non-fatal): %s", exc)
+
+
+def _value_match_and_enqueue(
+    *,
+    inbound_transfer: Any,
+    node_outflows: list[Transfer],
+    parent_depth: int,
+    node_addr: Address,
+    enqueue_fn: Any,
+    provenance_sink: list[dict[str, Any]],
+) -> int:
+    """At a high-fan-out node, follow ONLY the outflow(s) whose value matches
+    the inbound funds (v0.34 value-directed tracing).
+
+    Builds a ``Leg`` for the inbound edge and for each outflow, ranks them with
+    ``value_matching.match_onward_transfers`` (same-asset amount match, then
+    USD-value match across a swap), and enqueues each match via ``enqueue_fn``
+    (the BFS's shared per-transfer gate — so visited / contract / depth rules
+    still apply). Records one provenance row per ACTUALLY-enqueued hop, carrying
+    the calibrated confidence (never "high"). Returns the count enqueued.
+    """
+    from recupero.trace.value_matching import (
+        leg_from_transfer,
+        match_onward_transfers,
+    )
+
+    inbound_leg = leg_from_transfer(inbound_transfer)
+    if inbound_leg is None:
+        return 0
+
+    by_key: dict[tuple[str, str], Transfer] = {}
+    cand_legs = []
+    for t in node_outflows:
+        leg = leg_from_transfer(t)
+        if leg is None:
+            continue
+        by_key[(leg.tx_hash, leg.to_address.lower())] = t
+        cand_legs.append(leg)
+
+    matches = match_onward_transfers(inbound_leg, cand_legs)
+    followed = 0
+    for m in matches:
+        t = by_key.get((m.tx_hash, m.to_address.lower()))
+        if t is None:
+            continue
+        if not enqueue_fn(t, parent_depth):
+            # visited / contract / depth gate rejected it — don't claim a hop.
+            continue
+        provenance_sink.append({
+            "node": node_addr,
+            "inbound_tx": inbound_leg.tx_hash,
+            "matched_to": m.to_address,
+            "matched_tx": m.tx_hash,
+            "kind": m.kind,
+            "confidence": m.confidence,
+            "ambiguous": m.ambiguous,
+            "basis": m.basis,
+            "hop_depth": parent_depth + 1,
+        })
+        followed += 1
+    return followed
 
 
 def _process_wave(

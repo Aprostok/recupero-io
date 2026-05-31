@@ -43,6 +43,7 @@ their own section.
 | `RECUPERO_TRACE_MAX_HOPS_HARD_CEILING` | `64` | int | `[1, 1024]` | v0.32.1 | Upper bound on `RECUPERO_TRACE_MAX_HOPS`. v0.32.1+ industry-best raised from 8 → 64 so the tracer can chase 30-50 hop APT laundering chains. Operators on quota-constrained API plans set this lower. |
 | `RECUPERO_MAX_TRANSFERS_PER_ADDRESS` | `config.trace.max_transfers_per_address` (50000) | int | `>= 0`; 0 disables | v0.32.1 | Per-address fetch cap. Industry-best default bumped from 500 → 50000 so whale-wallet activity histories are followed in full. Set 0 to disable. |
 | `RECUPERO_TRACE_DUST_USD` | `config.trace.dust_threshold_usd` (10) | float | `[0, 1_000_000]`, finite | v0.16.x | Per-transfer USD floor; below this is dropped as noise. |
+| `RECUPERO_ETHERSCAN_RPS` | `4.0` (free-tier-safe) | float | `(0, 50]` | v0.34 | Etherscan V2 client requests/second — the combined per-chain rate, shared across the wave-thread pool. Default deliberately NOT raised: 4.0 already saturates the free tier (triggers 429 backoffs), so a higher default would only add retry-waits and slow free-tier traces. Set 15-20 on a paid tier to use the throughput you pay for. |
 | `RECUPERO_TRACE_TIMEOUT_SEC` | `540` | int | `>= 0` | v0.16.11 | Wall-clock deadline before BFS exits with `trace_status=partial_deadline_hit`. |
 | `RECUPERO_MAX_TRANSFERS_PER_CASE` | `50000` | int | `>= 0` | v0.16.11 | OOM defense — trace stops once this many transfers accumulate. |
 | `RECUPERO_TRACE_CONCURRENCY` | `5` | int | `>= 1` | v0.16.x | Thread-pool size for parallel per-wave fetches. |

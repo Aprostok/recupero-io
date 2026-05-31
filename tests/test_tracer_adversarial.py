@@ -117,7 +117,10 @@ class FixedPriceClient:
     def __init__(self, price: Decimal = Decimal("3000")) -> None:
         self.price = price
 
-    def price_at(self, token: TokenRef, when: datetime) -> PriceResult:
+    def price_at(
+        self, token: TokenRef, when: datetime, **_kwargs: Any,
+    ) -> PriceResult:
+        # **_kwargs absorbs skip_contract_api (v0.34 value-trace fast path).
         return PriceResult(usd_value=self.price, source="fake:fixed", error=None)
 
     def close(self) -> None:

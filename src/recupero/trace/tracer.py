@@ -562,6 +562,7 @@ def run_trace(
                 config=config,
                 evidence_dir=case_dir / "tx_evidence",
                 concurrency=trace_concurrency,
+                value_trace=_value_trace_enabled,
             )
         except BudgetExceededError as exc:
             # v0.32 — per-case API budget tripped mid-wave. Same
@@ -629,6 +630,19 @@ def run_trace(
                         provenance_sink=value_matched,
                     )
                     all_transfers.extend(matched_transfers)
+                    # Finalize: the lightweight pass skipped per-outflow evidence
+                    # (the RPC cost). Now write evidence for the value-matched
+                    # money-path hop(s) only — the few that survive into the case.
+                    for _mt in matched_transfers:
+                        try:
+                            write_evidence_receipt(
+                                adapter, _mt.tx_hash, case_dir / "tx_evidence",
+                            )
+                        except Exception as _ev_exc:  # noqa: BLE001
+                            log.warning(
+                                "evidence receipt failed for matched hop tx=%s: %s",
+                                _mt.tx_hash, _ev_exc,
+                            )
                 log.info(
                     "service-wallet %s: %d outflow(s); %d value-matched onward "
                     "hop(s) followed",
@@ -1554,6 +1568,7 @@ def _process_wave(
     config: RecuperoConfig,
     evidence_dir: Path,
     concurrency: int,
+    value_trace: bool = False,
 ) -> list[tuple[Address, int, list[Transfer], bool]]:
     """Run ``_trace_one_hop`` on every address in the wave, returning the
     aggregated results. Internal errors per-address are caught and
@@ -1582,6 +1597,7 @@ def _process_wave(
                 hop_depth=depth,
                 parent_transfer_id=None,
                 evidence_dir=evidence_dir,
+                value_trace=value_trace,
             )
             return (addr, depth, transfers, is_service_wallet)
         except Exception as e:  # noqa: BLE001
@@ -1627,6 +1643,7 @@ def _trace_one_hop(
     hop_depth: int,
     parent_transfer_id: str | None,
     evidence_dir: Path,
+    value_trace: bool = False,
 ) -> tuple[list[Transfer], bool]:
     """Fetch + label + price all outflows from one address.
 
@@ -1634,6 +1651,17 @@ def _trace_one_hop(
     is True, the address has more outflows than
     ``policy.service_wallet_outflow_threshold`` — caller should keep the
     transfers but stop BFS traversal at this address.
+
+    v0.34 value-directed fast path: when ``value_trace`` is on AND this address
+    is a high-fan-out service wallet, we build its (up to thousands of) outflows
+    LIGHTWEIGHT — cheap price (no per-token CoinGecko contract-resolution API),
+    label kept (in-memory), but SKIP the two per-outflow Etherscan RPCs
+    (``is_contract`` + evidence-receipt fetch) and the dust filter. The caller
+    value-matches these to pick the real onward hop(s) and FINALIZES only those
+    few (writes their evidence). This turns an ~8k-RPC, multi-minute node into a
+    sub-second one, so a deep endpoint behind an aggregator is reachable. For
+    NON-service-wallet nodes (and whenever value_trace is off) the full,
+    fully-evidenced path runs unchanged.
     """
     start_time = incident_time - timedelta(minutes=config.trace.incident_buffer_minutes)
     start_block = adapter.block_at_or_before(start_time)
@@ -1742,6 +1770,12 @@ def _trace_one_hop(
             policy.service_wallet_outflow_threshold,
         )
 
+    # v0.34 value-directed fast path: build a high-fan-out node's outflows
+    # cheaply (no per-token price API, no per-outflow is_contract / evidence
+    # RPC, no dust filter) so the caller can value-match them and finalize only
+    # the matched few. ``_lightweight`` gates the expensive ops in the loop.
+    _lightweight = value_trace and is_service_wallet
+
     # Cap to avoid runaway on chatty addresses. ``_cap`` honors the
     # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` env-var override resolved
     # above; ``_cap <= 0`` disables the slice (industry-best mode).
@@ -1772,7 +1806,15 @@ def _trace_one_hop(
         transfer = _build_transfer(raw, hop_depth=hop_depth, parent_transfer_id=parent_transfer_id)
 
         # Pricing — price_at returns per-unit USD price; transfer value = price × amount
-        result = price_client.price_at(transfer.token, transfer.block_time)
+        # Lightweight (value-trace service-wallet) pass skips the per-token
+        # CoinGecko contract-resolution API so ranking thousands of outflows
+        # stays cheap; real-rail tokens still price via hint/stablecoin/static map.
+        if _lightweight:
+            result = price_client.price_at(
+                transfer.token, transfer.block_time, skip_contract_api=True,
+            )
+        else:
+            result = price_client.price_at(transfer.token, transfer.block_time)
         usd_value: Decimal | None = None
         pricing_error = result.error
         # Wave-2 adversarial hardening: reject non-finite prices /
@@ -1820,8 +1862,11 @@ def _trace_one_hop(
             "pricing_error": pricing_error,
         })
 
-        # Dust filter (after pricing)
-        if not policy.should_include(transfer):
+        # Dust filter (after pricing). SKIPPED in the lightweight pass so the
+        # value-matcher sees every candidate (a sub-dust edge simply won't match
+        # a high-value inbound); these transfers are transient — only the matched
+        # few are kept by the caller.
+        if not _lightweight and not policy.should_include(transfer):
             log.debug("skipping (dust) tx=%s usd=%s", transfer.tx_hash, transfer.usd_value_at_tx)
             continue
 
@@ -1834,11 +1879,18 @@ def _trace_one_hop(
         label = lookup_pit_safe(label_store, transfer.to_address,
             chain=adapter.chain,
             point_in_time=incident_time,)
-        try:
-            is_contract = adapter.is_contract(transfer.to_address)
-        except Exception as e:  # noqa: BLE001
-            log.warning("is_contract check failed for %s: %s", transfer.to_address, e)
+        # is_contract is an Etherscan RPC per destination. In the lightweight
+        # pass we defer it (placeholder False) — these are throwaway candidates;
+        # only the value-matched onward hop(s) get a proper resolution when the
+        # next wave fetches them.
+        if _lightweight:
             is_contract = False
+        else:
+            try:
+                is_contract = adapter.is_contract(transfer.to_address)
+            except Exception as e:  # noqa: BLE001
+                log.warning("is_contract check failed for %s: %s", transfer.to_address, e)
+                is_contract = False
 
         counterparty = Counterparty(
             address=transfer.to_address,
@@ -1849,11 +1901,16 @@ def _trace_one_hop(
         transfer = transfer.model_copy(update={"counterparty": counterparty})
         transfers.append(transfer)
 
-        # Persist evidence receipt immediately (partial output > no output)
-        try:
-            write_evidence_receipt(adapter, transfer.tx_hash, evidence_dir)
-        except Exception as e:  # noqa: BLE001
-            log.warning("evidence receipt failed tx=%s: %s", transfer.tx_hash, e)
+        # Persist evidence receipt immediately (partial output > no output).
+        # SKIPPED in the lightweight pass — it is a per-tx RPC fetch and the
+        # dominant cost at a high-fan-out node. The caller writes evidence for
+        # the value-matched onward hop(s) only (see _value_match_and_enqueue
+        # finalize in run_trace).
+        if not _lightweight:
+            try:
+                write_evidence_receipt(adapter, transfer.tx_hash, evidence_dir)
+            except Exception as e:  # noqa: BLE001
+                log.warning("evidence receipt failed tx=%s: %s", transfer.tx_hash, e)
 
         log.info(
             "kept tx=%s to=%s amount=%s %s usd=%s label=%s",

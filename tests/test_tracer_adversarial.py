@@ -465,3 +465,92 @@ def test_continuation_pass_cap_truncation_lands_in_coverage(
     assert "recall-complete" in cov["recommendation"], (
         "a reduced trace must carry the recall-complete recommendation"
     )
+
+
+# ---------- Test 8: service-wallet outflow threshold env override ---------- #
+
+
+def _fanout_graph(n: int) -> tuple[dict[str, Any], list[str]]:
+    """Seed → n children, each child → 1 grandchild. Lets a test detect
+    whether the seed's children were TRAVERSED (fetched) or stopped at."""
+    children = [f"0x{i + 1:040x}" for i in range(n)]
+    edges: dict[str, Any] = {
+        SEED: [_native_row(f"0xfeed{i:02x}", SEED, c) for i, c in enumerate(children)]
+    }
+    for i, c in enumerate(children):
+        edges[c] = [_native_row(f"0xbeef{i:02x}", c, f"0x{i + 1000:040x}")]
+    return edges, children
+
+
+def test_service_wallet_threshold_stops_traversal_by_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A seed emitting more outflows than the service-wallet threshold is
+    treated as a distributor: its transfers are kept but its children are NOT
+    traversed."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3  # seed emits 5 > 3
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, children = _fanout_graph(5)
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    _run(config, env, tmp_path / "cases" / "SW1")
+
+    fetched = set(adapter.fetch_calls)
+    for c in children:
+        assert c.lower() not in fetched, (
+            f"service-wallet stop failed: child {c} was traversed"
+        )
+
+
+def test_service_wallet_threshold_env_override_allows_traversal(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34: RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD raises the gate so a
+    deep recall-complete run crosses a high-throughput aggregator/pool on the
+    laundering path instead of silently stopping at it."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3  # config still low
+    monkeypatch.setenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", "100")
+
+    edges, children = _fanout_graph(5)
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    _run(config, env, tmp_path / "cases" / "SW2")
+
+    fetched = set(adapter.fetch_calls)
+    traversed = [c for c in children if c.lower() in fetched]
+    assert traversed, (
+        "env override to 100 should make the 5-outflow seed NOT a service "
+        "wallet, so its children are traversed — none were"
+    )
+
+
+def test_service_wallet_threshold_env_bad_value_keeps_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-int / non-positive override is ignored (keeps the config
+    default) rather than crashing or disabling the gate."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3
+    for bad in ("abc", "0", "-5", "  "):
+        monkeypatch.setenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", bad)
+        edges, children = _fanout_graph(5)
+        adapter = GraphAdapter(edges)
+        _wire(monkeypatch, adapter, FixedPriceClient())
+        _run(config, env, tmp_path / "cases" / f"SW_{bad.strip() or 'blank'}")
+        fetched = set(adapter.fetch_calls)
+        for c in children:
+            assert c.lower() not in fetched, (
+                f"bad override {bad!r} should keep default(3); child {c} "
+                "must not be traversed"
+            )

@@ -340,6 +340,35 @@ def run_trace(
         policy.service_wallet_outflow_threshold = (
             config.trace.service_wallet_outflow_threshold
         )
+    # v0.34 (operator-requested "elite recall"): per-run override of the
+    # service-wallet outflow threshold. A wallet emitting more than this many
+    # outflows is treated as a service/distributor and BFS traversal STOPS
+    # there (its transfers are kept, but its children are not followed). The
+    # default (200) deliberately halts at exchange hot wallets / token
+    # distributors, but it also halts at a high-throughput DeFi aggregator /
+    # pool that sits ON the laundering path — silently missing everything past
+    # it. Raise this (e.g. 25000) for a deep recall-complete run so the trace
+    # crosses the aggregator while still stopping at true mega-services.
+    # Process env (not .env), mirroring the other RECUPERO_* trace knobs;
+    # clamped to >= 1; bad/blank/non-positive values keep the resolved default.
+    _sw_env = os.environ.get("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD")
+    if _sw_env is not None and _sw_env.strip():
+        try:
+            _sw_val = int(_sw_env)
+        except (TypeError, ValueError):
+            log.warning(
+                "RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD=%r is not an int; "
+                "keeping %d", _sw_env, policy.service_wallet_outflow_threshold,
+            )
+        else:
+            if _sw_val >= 1:
+                policy.service_wallet_outflow_threshold = _sw_val
+            else:
+                log.warning(
+                    "RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD=%r must be >= 1; "
+                    "keeping %d", _sw_env,
+                    policy.service_wallet_outflow_threshold,
+                )
 
     started = utcnow()
     log.info(

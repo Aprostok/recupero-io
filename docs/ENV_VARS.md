@@ -49,6 +49,7 @@ their own section.
 | `RECUPERO_TRACE_TIMEOUT_SEC` | `540` | int | `>= 0` | v0.16.11 | Wall-clock deadline before BFS exits with `trace_status=partial_deadline_hit`. |
 | `RECUPERO_MAX_TRANSFERS_PER_CASE` | `50000` | int | `>= 0` | v0.16.11 | OOM defense — trace stops once this many transfers accumulate. |
 | `RECUPERO_TRACE_CONCURRENCY` | `5` | int | `>= 1` | v0.16.x | Thread-pool size for parallel per-wave fetches. |
+| `RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD` | `config.trace.service_wallet_outflow_threshold` (200) | int | `>= 1` | v0.34 | A wallet emitting more outflows than this is treated as a service/distributor: its transfers are kept but BFS traversal STOPS there (children not followed). Default 200 halts at exchange hot wallets / token distributors — but ALSO at a high-throughput DeFi aggregator/pool that sits ON the laundering path, silently missing everything past it. Raise (e.g. 25000) for a deep recall-complete run so the trace crosses the aggregator while still stopping at true mega-services. Bad/blank/non-positive keeps the resolved default. |
 | `RECUPERO_MAX_CONTINUATION_SEEDS` | `25` | int | `>= 0` | v0.16.x | Cap on same-chain bridge / DEX continuation seeds per case. |
 | `RECUPERO_MAX_CROSS_CHAIN_SEEDS` | `10` | int | `>= 0` | v0.16.13 | Cap on cross-chain destination seeds across all chains. |
 | `RECUPERO_DISABLE_PASS2` | unset | bool | `=1` to disable | v0.20.x | Kill switch for the perpetrator-trace pass-2 stage. |

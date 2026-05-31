@@ -247,6 +247,53 @@ def trace_cmd(
             raise typer.Exit(code=3) from None
         raise
 
+    # v0.34 multi-chain perpetrator pivot (opt-in: RECUPERO_PIVOT_MULTICHAIN).
+    # A victim trace on one chain only sees the victim's slice on that chain;
+    # the perpetrator splits the haul ACROSS chains via the consolidation hub.
+    # Re-trace the hub on every pivot chain (value-directed) and merge — this
+    # surfaces funds the single-chain victim trace structurally cannot reach
+    # (e.g. the Arbitrum-bridged → Ethereum-DAI branch in the Zigha case).
+    from recupero.trace.pivot_trace import (
+        identify_pivot_hub,
+        is_pivot_enabled,
+        run_pivot_multichain,
+    )
+    if is_pivot_enabled():
+        hub = identify_pivot_hub(case)
+        if hub is None:
+            console.print(
+                "[dim]pivot: no consolidation hub identified — "
+                "skipping multi-chain pivot[/]"
+            )
+        else:
+            hub_addr, hub_chain = hub
+            console.print(
+                f"[bold]pivot:[/] re-tracing hub {hub_addr} across chains "
+                f"(discovered on {hub_chain.value})"
+            )
+            pivot_cases = run_pivot_multichain(
+                hub_address=hub_addr,
+                hub_chain=hub_chain,
+                incident_time=when,
+                parent_case_id=case_id,
+                config=cfg,
+                env=env,
+                case_dir=case_dir,
+            )
+            if pivot_cases:
+                from recupero.trace.perpetrator_trace import (
+                    merge_perpetrator_findings,
+                )
+                case = merge_perpetrator_findings(case, pivot_cases)
+                console.print(
+                    f"[bold green]pivot:[/] merged "
+                    f"{len(pivot_cases)} cross-chain hub trace(s) into the case"
+                )
+            else:
+                console.print(
+                    "[dim]pivot: hub inactive on other chains — no merge[/]"
+                )
+
     case_path = store.write_case(case)
 
     _print_summary(case)

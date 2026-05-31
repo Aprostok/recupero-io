@@ -147,6 +147,7 @@ def run_trace(
     config: RecuperoConfig,
     env: RecuperoEnv,
     case_dir: Path,
+    value_trace: bool | None = None,
 ) -> Case:
     """End-to-end trace. Writes evidence receipts as it goes; caller writes case.json.
 
@@ -463,9 +464,14 @@ def run_trace(
     # leg), and value-matching must reference the LARGEST (our actual funds),
     # not whichever edge happened to be seen first. ``value_matched``
     # accumulates the per-hop provenance (confidence calibrated — never "high").
-    _value_trace_enabled = os.environ.get(
-        "RECUPERO_VALUE_TRACE", "0",
-    ).strip().lower() in ("1", "true", "yes", "on")
+    # Explicit ``value_trace`` arg wins (used by the multi-chain perpetrator
+    # pivot to force directed tracing on a re-trace); otherwise read the env.
+    _value_trace_enabled = (
+        value_trace if value_trace is not None
+        else os.environ.get(
+            "RECUPERO_VALUE_TRACE", "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+    )
     inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
 

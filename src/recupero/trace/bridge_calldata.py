@@ -159,6 +159,20 @@ _DEBRIDGE_METHODS = {
     # send(...) — deBridgeGate forwarding call. Wraps an arbitrary
     # destination-chain payload + bridges via DLN.
     "0xb3c10b67": ("DeBridge", "send"),
+    # v0.34 — createSaltedOrder(tuple _orderCreation, uint64 _salt,
+    # bytes _affiliateFee, uint32 _referralCode, bytes _permitEnvelope,
+    # bytes _metadata). VERIFIED against authoritative on-chain data: this
+    # is the selector the live DLN Source (0xeF4fB24a…) actually receives
+    # for order creation — the v0.28.0 selectors above were inferred from
+    # docs and never matched a real DLN order, so DeBridge cross-chain
+    # continuation silently dead-ended (decode returned None → no
+    # destination → no high-confidence seed). Confirmed on the Zigha
+    # consolidation hub: 12 createSaltedOrder calls bridged ~$17M USDC→DAI
+    # Arbitrum→Ethereum. The first arg is the SAME OrderCreation tuple
+    # (giveToken, giveAmount, takeToken, takeAmount, takeChainId@slot4,
+    # receiverDst@slot5, …), so _decode_debridge's existing slot-scan
+    # extracts it unchanged. See tests/fixtures/zigha_dln_createsaltedorder.json.
+    "0xb9303701": ("DeBridge", "createSaltedOrder"),
 }
 
 # v0.28.0: 1inch router method recognition. 1inch Fusion+ deploys

@@ -367,3 +367,53 @@ def test_wormhole_solana_all_zero_recipient_is_not_fabricated() -> None:
     assert out.destination_chain == "solana"
     assert out.destination_address is None
     assert out.confidence == "medium"
+
+
+# ---- v0.34: real deBridge DLN createSaltedOrder (Zigha hub, on-chain) ---- #
+
+
+def test_debridge_createsaltedorder_real_calldata_decodes_high() -> None:
+    """Pin the DeBridge decoder against AUTHORITATIVE on-chain data.
+
+    The Zigha consolidation hub bridged ~$17M USDC->DAI Arbitrum->Ethereum via
+    12 DLN `createSaltedOrder` (selector 0xb9303701) calls. Pre-v0.34 that
+    selector was absent from `_DEBRIDGE_METHODS`, so `decode_bridge_calldata`
+    returned None and the cross-chain continuation silently dead-ended at the
+    bridge. With the selector added, the existing OrderCreation slot-scan
+    (takeChainId@slot4, receiverDst@slot5) must recover the real destination:
+    Ethereum + 0xc1ee32fa... at HIGH confidence (both fields extracted).
+
+    Fixture provenance: tests/fixtures/zigha_dln_createsaltedorder.json
+    (tx 0xd4bf228f… on Arbitrum, captured via Etherscan v2).
+    """
+    import json
+    from pathlib import Path
+
+    fx = json.loads(
+        (Path(__file__).parent / "fixtures" / "zigha_dln_createsaltedorder.json")
+        .read_text(encoding="utf-8")
+    )
+    assert fx["calldata"][:10] == "0xb9303701"
+
+    out = decode_bridge_calldata(
+        bridge_protocol=fx["bridge_protocol"],  # "deBridge DLN Source"
+        input_data=fx["calldata"],
+    )
+    assert out is not None, "createSaltedOrder selector must now be recognized"
+    assert out.bridge_method == "createSaltedOrder"
+    assert out.destination_chain == fx["expected_destination_chain"]  # ethereum
+    assert (
+        (out.destination_address or "").lower()
+        == fx["expected_destination_address"].lower()  # 0xc1ee32fa...
+    )
+    # both chain + receiver extracted from real calldata -> high
+    assert out.confidence == "high"
+
+
+def test_debridge_createsaltedorder_selector_registered() -> None:
+    """Guard the specific selector so a future refactor can't silently drop the
+    real DLN order method again (the bug this fixes)."""
+    from recupero.trace.bridge_calldata import _DEBRIDGE_METHODS
+
+    assert "0xb9303701" in _DEBRIDGE_METHODS
+    assert _DEBRIDGE_METHODS["0xb9303701"] == ("DeBridge", "createSaltedOrder")

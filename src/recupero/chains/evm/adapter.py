@@ -17,6 +17,7 @@ CHAIN_PROFILES — no code changes needed.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -29,6 +30,42 @@ from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 
 log = logging.getLogger(__name__)
+
+# v0.34: Etherscan V2 client requests/second, configurable so a paid API tier
+# can be driven at its full throughput. The default (4.0) is the free-tier-safe
+# value the tracer has always used — DELIBERATELY not raised, because live runs
+# show 4.0 already brushes the free tier's limit (it triggers backoff/retry);
+# raising the default would cause MORE 429s -> more backoff -> a SLOWER trace
+# for free-tier users. Paid users set ``RECUPERO_ETHERSCAN_RPS`` (e.g. 15-20 on
+# a ~20 rps plan) to actually use the headroom they pay for. The limiter is
+# shared across all wave threads of one chain adapter, so this is the COMBINED
+# per-chain rps, not per-thread.
+_DEFAULT_ETHERSCAN_RPS = 4.0
+_MAX_ETHERSCAN_RPS = 50.0
+
+
+def _resolve_etherscan_rps() -> float:
+    """Resolve the Etherscan rps from ``RECUPERO_ETHERSCAN_RPS`` (float),
+    falling back to the free-tier-safe default. Clamped to (0, 50]; a missing
+    / empty / non-numeric / non-positive value yields the default."""
+    raw = os.environ.get("RECUPERO_ETHERSCAN_RPS")
+    if raw is None or not raw.strip():
+        return _DEFAULT_ETHERSCAN_RPS
+    try:
+        rps = float(raw)
+    except (TypeError, ValueError):
+        log.warning(
+            "RECUPERO_ETHERSCAN_RPS=%r is not a number; using default %.1f",
+            raw, _DEFAULT_ETHERSCAN_RPS,
+        )
+        return _DEFAULT_ETHERSCAN_RPS
+    if not (rps > 0):
+        log.warning(
+            "RECUPERO_ETHERSCAN_RPS=%r must be > 0; using default %.1f",
+            raw, _DEFAULT_ETHERSCAN_RPS,
+        )
+        return _DEFAULT_ETHERSCAN_RPS
+    return min(rps, _MAX_ETHERSCAN_RPS)
 
 
 @dataclass(frozen=True)
@@ -139,7 +176,7 @@ class EvmAdapter(ChainAdapter):
             api_key=env.ETHERSCAN_API_KEY,
             api_base=self.profile.api_base,
             chain_id=self.profile.chain_id,
-            requests_per_second=4.0,
+            requests_per_second=_resolve_etherscan_rps(),
         )
         self._is_contract_cache: dict[str, bool] = {}
 

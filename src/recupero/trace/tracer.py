@@ -580,7 +580,24 @@ def run_trace(
         # --- Aggregate results + build next wave (single-threaded) ---
         for from_addr, depth, hop_transfers, is_service_wallet in wave_results:
             addresses_processed += 1
-            all_transfers.extend(hop_transfers)
+
+            # v0.34 value-directed tracing: at a service-wallet node we record
+            # ONLY the value-matched onward hop(s) (the money path), not the
+            # node's full commingled outflow set. ``sw_value_trace`` flags that
+            # case so we DON'T bulk-extend ``all_transfers`` here (a mixer's
+            # thousands of unrelated outflows would otherwise burn the per-case
+            # transfer budget before a deep endpoint is reached AND flood the
+            # deliverable with noise). Every other case keeps the full set, so
+            # default (value-trace OFF) behavior is byte-identical.
+            sw_value_trace = (
+                is_service_wallet
+                and _value_trace_enabled
+                and depth + 1 < policy.max_depth
+                and inbound_by_key.get(_address_visited_key(chain, from_addr))
+                is not None
+            )
+            if not sw_value_trace:
+                all_transfers.extend(hop_transfers)
 
             if depth + 1 >= policy.max_depth:
                 continue
@@ -595,22 +612,23 @@ def run_trace(
             # (same-asset) or USD value (across a swap) match — isolating the
             # real onward hop instead of stopping dead. Confidence is calibrated
             # in value_matching (never "high"); every followed hop is recorded
-            # in ``value_matched`` for the audit trail.
+            # in ``value_matched`` for the audit trail, and the matched
+            # Transfer(s) are the ONLY ones added to the case from this node.
             if is_service_wallet:
                 followed = 0
-                if _value_trace_enabled:
+                if sw_value_trace:
                     inbound_t = inbound_by_key.get(
                         _address_visited_key(chain, from_addr)
                     )
-                    if inbound_t is not None:
-                        followed = _value_match_and_enqueue(
-                            inbound_transfer=inbound_t,
-                            node_outflows=hop_transfers,
-                            parent_depth=depth,
-                            node_addr=from_addr,
-                            enqueue_fn=_consider_enqueue,
-                            provenance_sink=value_matched,
-                        )
+                    followed, matched_transfers = _value_match_and_enqueue(
+                        inbound_transfer=inbound_t,
+                        node_outflows=hop_transfers,
+                        parent_depth=depth,
+                        node_addr=from_addr,
+                        enqueue_fn=_consider_enqueue,
+                        provenance_sink=value_matched,
+                    )
+                    all_transfers.extend(matched_transfers)
                 log.info(
                     "service-wallet %s: %d outflow(s); %d value-matched onward "
                     "hop(s) followed",
@@ -1464,7 +1482,7 @@ def _value_match_and_enqueue(
     node_addr: Address,
     enqueue_fn: Any,
     provenance_sink: list[dict[str, Any]],
-) -> int:
+) -> tuple[int, list[Transfer]]:
     """At a high-fan-out node, follow ONLY the outflow(s) whose value matches
     the inbound funds (v0.34 value-directed tracing).
 
@@ -1473,7 +1491,13 @@ def _value_match_and_enqueue(
     USD-value match across a swap), and enqueues each match via ``enqueue_fn``
     (the BFS's shared per-transfer gate — so visited / contract / depth rules
     still apply). Records one provenance row per ACTUALLY-enqueued hop, carrying
-    the calibrated confidence (never "high"). Returns the count enqueued.
+    the calibrated confidence (never "high").
+
+    Returns ``(followed_count, matched_transfers)`` where ``matched_transfers``
+    are the Transfer objects that were enqueued — the caller records ONLY these
+    on the case (the money path), not the node's full commingled outflow set,
+    so a mixer/aggregator's thousands of unrelated outflows neither bloat the
+    per-case transfer budget nor pollute the deliverable.
     """
     from recupero.trace.value_matching import (
         leg_from_transfer,
@@ -1482,7 +1506,7 @@ def _value_match_and_enqueue(
 
     inbound_leg = leg_from_transfer(inbound_transfer)
     if inbound_leg is None:
-        return 0
+        return 0, []
 
     by_key: dict[tuple[str, str], Transfer] = {}
     cand_legs = []
@@ -1495,6 +1519,7 @@ def _value_match_and_enqueue(
 
     matches = match_onward_transfers(inbound_leg, cand_legs)
     followed = 0
+    matched_transfers: list[Transfer] = []
     for m in matches:
         t = by_key.get((m.tx_hash, m.to_address.lower()))
         if t is None:
@@ -1502,6 +1527,7 @@ def _value_match_and_enqueue(
         if not enqueue_fn(t, parent_depth):
             # visited / contract / depth gate rejected it — don't claim a hop.
             continue
+        matched_transfers.append(t)
         provenance_sink.append({
             "node": node_addr,
             "inbound_tx": inbound_leg.tx_hash,
@@ -1514,7 +1540,7 @@ def _value_match_and_enqueue(
             "hop_depth": parent_depth + 1,
         })
         followed += 1
-    return followed
+    return followed, matched_transfers
 
 
 def _process_wave(

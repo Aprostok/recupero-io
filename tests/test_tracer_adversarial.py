@@ -384,10 +384,84 @@ def test_mixed_case_address_does_not_re_visit(
     adapter = GraphAdapter(edges)
     _wire(monkeypatch, adapter, FixedPriceClient())
 
-    case = _run(config, env, tmp_path / "cases" / "CASE")
+    _run(config, env, tmp_path / "cases" / "CASE")
 
     # HOP_A must be fetched at most once regardless of case variants.
     a_fetches = [f for f in adapter.fetch_calls if f == HOP_A.lower()]
     assert len(a_fetches) <= 1, (
         f"mixed-case re-entry not deduped; fetches={adapter.fetch_calls}"
+    )
+
+
+# ---------- Test 7: coverage capture spans the continuation pass ---------- #
+
+
+def test_continuation_pass_cap_truncation_lands_in_coverage(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 regression: a per-address fetch cap that fires DURING the
+    DEX/bridge continuation pass (NOT the primary BFS) MUST still land in
+    ``coverage.per_address_cap_truncations`` and flip ``coverage.complete``
+    to False.
+
+    The bug: the coverage block was computed BEFORE
+    ``_continue_past_dex_and_bridges`` ran, so it snapshotted
+    ``_COVERAGE_TRUNCATIONS`` too early. The deep, chatty aggregator/pool
+    addresses are typically only reached in the continuation pass, so that
+    is exactly where the per-address fetch cap usually fires — and those
+    truncations were silently dropped, leaving a CAPPED trace stamped
+    ``complete=True`` with ``per_address_cap_truncations=[]``. (Observed live:
+    a completed run logged 3 "capping outflows" events yet wrote
+    cap_truncations=0 / complete=True.)
+
+    This test drives the cap from inside the continuation hook and asserts it
+    survives to the final coverage dict. RED before the fix, GREEN after.
+    """
+    from recupero.trace import tracer as tracer_mod
+
+    config, env = cfg
+    config.trace.max_depth = 2  # >= 2 so the continuation pass is allowed
+
+    # One real transfer so the trace is genuinely "complete" with data
+    # (no_data=False) — isolating the cap truncation as the ONLY thing that
+    # should reduce coverage.
+    edges = {SEED: [_native_row("0xaa", SEED, HOP_A)]}
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    # Simulate the continuation pass reaching a chatty address that trips the
+    # per-address fetch cap, recording a truncation exactly as
+    # ``_trace_one_hop`` does at its cap site.
+    cont_addr = "0x00000000000000000000000000000000c0117a7e"
+
+    def _fake_continue(**_kwargs: Any) -> None:
+        tracer_mod._COVERAGE_TRUNCATIONS.append({
+            "address": cont_addr,
+            "kind": "per_address_fetch_cap",
+            "raw_outflows": 9200,
+            "kept": 2500,
+            "dropped": 6700,
+            "hop_depth": 2,
+        })
+
+    monkeypatch.setattr(
+        tracer_mod, "_continue_past_dex_and_bridges", _fake_continue,
+    )
+
+    case = _run(config, env, tmp_path / "cases" / "CONTCAP")
+
+    cov = case.config_used["coverage"]
+    addrs = [t["address"] for t in cov["per_address_cap_truncations"]]
+    assert cont_addr in addrs, (
+        "a per-address fetch cap recorded during the continuation pass was "
+        "dropped from coverage — the coverage block must be computed AFTER "
+        f"_continue_past_dex_and_bridges. got truncations={addrs!r}"
+    )
+    assert cov["complete"] is False, (
+        "a trace that capped an address (even in the continuation pass) must "
+        "NOT be stamped coverage.complete=True"
+    )
+    assert "recall-complete" in cov["recommendation"], (
+        "a reduced trace must carry the recall-complete recommendation"
     )

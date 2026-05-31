@@ -1025,13 +1025,21 @@ def _continue_past_dex_and_bridges(
     # (address, depth_hint, provenance_tag)
 
     # --- DEX swap output recipients ---
+    # v0.34: pass the adapter so a settler-style swap (0x / Matcha) whose output
+    # isn't in case.transfers gets recovered from the swap tx's receipt logs.
     try:
-        swaps = detect_dex_swaps(case)
+        swaps = detect_dex_swaps(case, adapter=adapter)
     except Exception as exc:  # noqa: BLE001
         log.warning("dex-swap detection failed; skipping continuation: %s", exc)
         swaps = []
     for swap in swaps:
-        if swap.confidence != "high":
+        # Follow HIGH-confidence in-trace swap outputs AND log-resolved outputs
+        # (medium, but structurally certain — the Transfer event is on-chain).
+        # The latter is what crosses a 0x token->DAI swap that would otherwise
+        # dead-end at the settler.
+        if swap.confidence != "high" and (
+            getattr(swap, "output_source", "in_trace") != "receipt_logs"
+        ):
             continue
         if not swap.output_recipient:
             continue

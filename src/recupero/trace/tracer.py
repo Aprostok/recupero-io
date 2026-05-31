@@ -634,13 +634,47 @@ def run_trace(
     except (TypeError, ValueError):
         _resolved_addr_cap = config.trace.max_transfers_per_address
     _coverage_reduced = bool(_cap_truncations) or bool(_poison_events)
+    # v0.34 (coverage-honesty hardening): a trace that fetched ZERO transfers
+    # is NEVER "complete" — it is almost always an API key/access failure
+    # (invalid or rate-limited key returning NOTOK), a wrong seed/incident
+    # time, or a dead RPC — NOT a genuinely empty wallet. Previously such a
+    # run wrote trace_status="complete" + coverage.complete=True (no cap, no
+    # poisoning, no timeout), silently presenting an utterly empty trace as a
+    # finished one. That is the exact silent-incompleteness this notice exists
+    # to prevent, so an empty result must flip complete=False with a loud,
+    # distinct recommendation.
+    _no_data = not all_transfers
+    if _no_data:
+        _recommendation = (
+            "Trace fetched ZERO transfers. This is almost always an API "
+            "key/access failure (invalid or rate-limited key returning NOTOK), "
+            "a wrong seed address / incident time, or a dead RPC endpoint — "
+            "NOT a genuinely empty wallet. The result is NOT usable; fix API "
+            "access (verify ETHERSCAN_API_KEY + tier) and re-run before relying "
+            "on this case."
+        )
+    elif _coverage_reduced:
+        _recommendation = (
+            "Coverage may be INCOMPLETE: address-poisoning and/or a "
+            "per-address fetch cap was in effect, so funds split below "
+            "the dust floor, sent beyond the fetch cap, or routed past "
+            "the depth limit can be missed. Before relying on "
+            "completeness for asset recovery, re-run recall-complete "
+            "(e.g. --max-depth 8 --dust-threshold-usd 50 with "
+            "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=0), ideally on a paid "
+            "API tier."
+        )
+    else:
+        _recommendation = ""
     case.config_used = {
         **(case.config_used or {}),
         "coverage": {
             "complete": (
                 case.config_used.get("trace_status") == "complete"
                 and not _coverage_reduced
+                and not _no_data
             ),
+            "no_data": _no_data,
             "poisoning_detected": bool(_poison_events),
             "poisoning_event_count": len(_poison_events),
             "per_address_cap_truncations": _cap_truncations,
@@ -649,16 +683,7 @@ def run_trace(
                 "dust_threshold_usd": float(config.trace.dust_threshold_usd),
                 "max_transfers_per_address": int(_resolved_addr_cap),
             },
-            "recommendation": (
-                "Coverage may be INCOMPLETE: address-poisoning and/or a "
-                "per-address fetch cap was in effect, so funds split below "
-                "the dust floor, sent beyond the fetch cap, or routed past "
-                "the depth limit can be missed. Before relying on "
-                "completeness for asset recovery, re-run recall-complete "
-                "(e.g. --max-depth 8 --dust-threshold-usd 50 with "
-                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=0), ideally on a paid "
-                "API tier."
-            ) if _coverage_reduced else "",
+            "recommendation": _recommendation,
         },
     }
 

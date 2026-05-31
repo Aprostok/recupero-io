@@ -458,13 +458,15 @@ def run_trace(
     # aggregator / pool) is not a dead end: we value-match the inbound funds
     # against the node's outflows and follow ONLY the edge(s) whose amount
     # (same-asset) or USD value (across a swap) match. ``inbound_by_key`` maps
-    # an address-key to the edge that delivered our funds there (so a later
-    # wave can match against it); ``value_matched`` accumulates the per-hop
-    # provenance (confidence is calibrated in value_matching — never "high").
+    # an address-key to ALL edges that delivered funds there — a node commonly
+    # receives our funds via several transfers (e.g. ETH dust + a large token
+    # leg), and value-matching must reference the LARGEST (our actual funds),
+    # not whichever edge happened to be seen first. ``value_matched``
+    # accumulates the per-hop provenance (confidence calibrated — never "high").
     _value_trace_enabled = os.environ.get(
         "RECUPERO_VALUE_TRACE", "0",
     ).strip().lower() in ("1", "true", "yes", "on")
-    inbound_by_key: dict[str, Transfer] = {}
+    inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
 
     # v0.34: the per-transfer enqueue decision, factored out so the normal
@@ -477,6 +479,13 @@ def run_trace(
             return False
         dest = transfer.to_address
         dest_key = _address_visited_key(chain, dest)
+        # Record EVERY value-bearing edge to ``dest`` (even when dest is already
+        # queued) so value-matching at dest can reference the LARGEST inbound
+        # (our funds) rather than just the first edge seen. This must happen
+        # before the visited short-circuit below — otherwise a node funded by
+        # several edges (e.g. ETH dust THEN a large token leg) gets matched
+        # against the wrong/smallest one and the real onward hop is missed.
+        inbound_by_key.setdefault(dest_key, []).append(transfer)
         if dest_key in visited:
             return False
         # Contract check: one RPC per unique address, cached. Single-threaded
@@ -508,9 +517,7 @@ def run_trace(
                 return False
         next_wave.append((dest, parent_depth + 1))
         visited.add(dest_key)
-        # Remember the edge that delivered funds to ``dest`` so a later wave
-        # can value-match ``dest``'s outflows against it.
-        inbound_by_key[dest_key] = transfer
+        # (inbound edge already recorded above, before the visited guard.)
         return True
 
     while current_wave:
@@ -593,7 +600,17 @@ def run_trace(
             # still follows all of its outflows — every post-incident outflow
             # from the victim is suspect. At max depth we record but don't
             # recurse. Confidence is calibrated in value_matching (never "high").
-            inbound_t = inbound_by_key.get(_address_visited_key(chain, from_addr))
+            # Reference the LARGEST-USD inbound to this node — that is our
+            # traced funds (a node often also receives ETH-dust / poison edges;
+            # matching against those would miss the real onward hop). Unpriced
+            # inbounds sort as 0 so a priced leg always wins when present.
+            _inbounds = inbound_by_key.get(
+                _address_visited_key(chain, from_addr)
+            ) or []
+            inbound_t = (
+                max(_inbounds, key=lambda _t: _t.usd_value_at_tx or Decimal(0))
+                if _inbounds else None
+            )
             directed = (
                 _value_trace_enabled
                 and inbound_t is not None

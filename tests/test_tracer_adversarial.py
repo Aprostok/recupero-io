@@ -686,3 +686,49 @@ def test_value_trace_is_directed_at_normal_nodes_too(
         )
     hops = case.config_used["coverage"]["value_matched_hops"]
     assert any(h["matched_to"].lower() == target.lower() for h in hops)
+
+
+def test_value_trace_matches_against_largest_inbound_not_first(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 regression (live Zigha bug): a node funded by SEVERAL edges must
+    value-match against the LARGEST (our funds), not whichever edge was seen
+    first. Here the seed sends N a small 0.5 ETH leg FIRST, then a large 50 ETH
+    leg. N forwards 50 ETH to TARGET and 0.5 ETH to a decoy. The trace must
+    follow TARGET (matched to the 50 ETH inbound). Before the fix, only the
+    first edge (0.5 ETH) was recorded as N's inbound, so the matcher chased the
+    decoy and missed the real onward hop — exactly why the live trace stalled
+    one hop after the seed."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    target = HOP_B
+    decoy = "0x00000000000000000000000000000000d3c0y000"
+    edges: dict[str, Any] = {
+        SEED: [
+            _native_row("0xsmall", SEED, HOP_A, eth_amount="0.5"),  # small, FIRST
+            _native_row("0xbig", SEED, HOP_A, eth_amount="50"),     # large, SECOND
+        ],
+        HOP_A: [
+            _native_row("0xbigout", HOP_A, target, eth_amount="50"),    # == large in
+            _native_row("0xsmallout", HOP_A, decoy, eth_amount="0.5"),  # == small in
+        ],
+        target: [_native_row("0xt1", target, decoy, eth_amount="1")],
+    }
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_MULTI_IN")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() in fetched, (
+        "must follow the hop matching the LARGEST inbound (50 ETH -> TARGET)"
+    )
+    assert decoy.lower() not in fetched, (
+        "must NOT chase the small-inbound (0.5 ETH) decoy hop"
+    )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    assert any(h["matched_to"].lower() == target.lower() for h in hops)

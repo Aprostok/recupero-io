@@ -114,6 +114,20 @@ def _address_visited_key(chain: Chain, address: Address) -> str:
     return address  # preserve case for base58 chains
 
 
+# v0.34 (operator-requested coverage-honesty): per-case accumulator of
+# points where the trace TRUNCATED coverage — currently the per-address
+# fetch cap slicing a chatty/poisoned address's outflows. Cleared at the
+# start of every ``run_trace`` (mirrors the BTC co-spend / CoinJoin
+# registries below) so sequential in-process runs never bleed. Surfaced in
+# ``case.config_used["coverage"]`` so a reduced-parameter trace can NEVER be
+# silently rendered as "complete" in an LE deliverable.
+_COVERAGE_TRUNCATIONS: list[dict[str, Any]] = []
+
+
+def _clear_coverage_truncations() -> None:
+    _COVERAGE_TRUNCATIONS.clear()
+
+
 def run_trace(
     *,
     chain: Chain,
@@ -153,6 +167,7 @@ def run_trace(
     )
     _clear_btc_inputs()
     _clear_btc_coinjoin()
+    _clear_coverage_truncations()
 
     # v0.32 — per-case API budget. One CaseBudget per case, propagated
     # to every chain + pricing client. When the cap trips, BFS catches
@@ -593,6 +608,58 @@ def run_trace(
     case.config_used = {
         **(case.config_used or {}),
         "api_budget": case_budget.snapshot(),
+    }
+
+    # v0.34 (operator-requested coverage-honesty): a trace that ran with
+    # reduced parameters — a per-address fetch cap that truncated an
+    # address, and/or address-poisoning that inflated the transfer graph —
+    # may have DROPPED a real onward hop. An LE deliverable must never imply
+    # completeness in that case. Detect poisoning (best-effort; never breaks
+    # a trace) + read the per-address cap truncations recorded during the
+    # wave loop, and surface a loud notice recommending a recall-complete
+    # re-run. ``coverage.complete`` is True ONLY when the trace finished
+    # cleanly AND nothing reduced coverage.
+    try:
+        from recupero.trace.address_poisoning import detect_poisoning_attempts
+        _poison_events = detect_poisoning_attempts(all_transfers, seed_address)
+    except Exception as _pe:  # noqa: BLE001
+        log.debug("poisoning detection failed (non-fatal): %s", _pe)
+        _poison_events = []
+    _cap_truncations = list(_COVERAGE_TRUNCATIONS)
+    try:
+        _resolved_addr_cap = int(os.environ.get(
+            "RECUPERO_MAX_TRANSFERS_PER_ADDRESS",
+            str(config.trace.max_transfers_per_address),
+        ))
+    except (TypeError, ValueError):
+        _resolved_addr_cap = config.trace.max_transfers_per_address
+    _coverage_reduced = bool(_cap_truncations) or bool(_poison_events)
+    case.config_used = {
+        **(case.config_used or {}),
+        "coverage": {
+            "complete": (
+                case.config_used.get("trace_status") == "complete"
+                and not _coverage_reduced
+            ),
+            "poisoning_detected": bool(_poison_events),
+            "poisoning_event_count": len(_poison_events),
+            "per_address_cap_truncations": _cap_truncations,
+            "reduced_parameters": {
+                "max_depth": int(cfg_max_depth),
+                "dust_threshold_usd": float(config.trace.dust_threshold_usd),
+                "max_transfers_per_address": int(_resolved_addr_cap),
+            },
+            "recommendation": (
+                "Coverage may be INCOMPLETE: address-poisoning and/or a "
+                "per-address fetch cap was in effect, so funds split below "
+                "the dust floor, sent beyond the fetch cap, or routed past "
+                "the depth limit can be missed. Before relying on "
+                "completeness for asset recovery, re-run recall-complete "
+                "(e.g. --max-depth 8 --dust-threshold-usd 50 with "
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=0), ideally on a paid "
+                "API tier."
+            ) if _coverage_reduced else "",
+        },
     }
 
     log.info(
@@ -1445,6 +1512,17 @@ def _trace_one_hop(
             "capping outflows from %d to %d for address %s",
             len(raw_outflows), _cap, from_address,
         )
+        # v0.34 coverage-honesty: record the truncation so the case carries
+        # a "coverage incomplete" notice — dropping the tail of a chatty /
+        # poisoned address can hide a real onward hop.
+        _COVERAGE_TRUNCATIONS.append({
+            "address": from_address,
+            "kind": "per_address_fetch_cap",
+            "raw_outflows": len(raw_outflows),
+            "kept": _cap,
+            "dropped": len(raw_outflows) - _cap,
+            "hop_depth": hop_depth,
+        })
         raw_outflows = raw_outflows[:_cap]
 
     transfers: list[Transfer] = []

@@ -116,6 +116,17 @@ ALLOWED: dict[tuple[str, str], str] = {
     # paired with _SYNTHETIC_COINJOIN_KEYS. Same lock discipline.
     ("chains/bitcoin/adapter.py", "_SYNTHETIC_COINJOIN_META"):
         "lock-guarded by _SYNTHETIC_LOCK",
+
+    # v0.34 trace/tracer.py: per-case accumulator of per-address fetch-cap
+    # truncations, feeding the coverage-completeness notice. Appended ONLY by
+    # _trace_one_hop (a pure list.append, which is GIL-atomic — no read-modify-
+    # write, so no lock needed). Cleared by _clear_coverage_truncations() at the
+    # START of every run_trace, BEFORE any ThreadPoolExecutor wave thread is
+    # submitted, and read exactly once at case assembly AFTER all waves join —
+    # so there is never a concurrent read-during-write. Same per-case lifetime
+    # contract as the Bitcoin registries above.
+    ("trace/tracer.py", "_COVERAGE_TRUNCATIONS"):
+        "GIL-atomic appends; cleared pre-wave + read post-join, no read-during-write",
 }
 
 

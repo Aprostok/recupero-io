@@ -582,71 +582,71 @@ def run_trace(
         for from_addr, depth, hop_transfers, is_service_wallet in wave_results:
             addresses_processed += 1
 
-            # v0.34 value-directed tracing: at a service-wallet node we record
-            # ONLY the value-matched onward hop(s) (the money path), not the
-            # node's full commingled outflow set. ``sw_value_trace`` flags that
-            # case so we DON'T bulk-extend ``all_transfers`` here (a mixer's
-            # thousands of unrelated outflows would otherwise burn the per-case
-            # transfer budget before a deep endpoint is reached AND flood the
-            # deliverable with noise). Every other case keeps the full set, so
-            # default (value-trace OFF) behavior is byte-identical.
-            sw_value_trace = (
-                is_service_wallet
-                and _value_trace_enabled
+            # v0.34 value-directed tracing ("follow the money"). When
+            # RECUPERO_VALUE_TRACE is on, EVERY non-origin node (one reached via
+            # a known inbound edge) follows ONLY the outflow(s) whose value
+            # matches the funds that arrived — not all of them. This is what
+            # bounds the trace to the laundering PATH (<=K onward hops per node)
+            # instead of exploding the whole graph: an uncapped breadth-first
+            # follow-everything fans out combinatorially over depth, but a
+            # directed value-trace stays narrow. The seed (depth 0, no inbound)
+            # still follows all of its outflows — every post-incident outflow
+            # from the victim is suspect. At max depth we record but don't
+            # recurse. Confidence is calibrated in value_matching (never "high").
+            inbound_t = inbound_by_key.get(_address_visited_key(chain, from_addr))
+            directed = (
+                _value_trace_enabled
+                and inbound_t is not None
                 and depth + 1 < policy.max_depth
-                and inbound_by_key.get(_address_visited_key(chain, from_addr))
-                is not None
             )
-            if not sw_value_trace:
-                all_transfers.extend(hop_transfers)
+
+            if directed:
+                # Keep ONLY the matched money-path hop(s) on the case — not the
+                # node's full (possibly commingled) outflow set.
+                followed, matched_transfers = _value_match_and_enqueue(
+                    inbound_transfer=inbound_t,
+                    node_outflows=hop_transfers,
+                    parent_depth=depth,
+                    node_addr=from_addr,
+                    enqueue_fn=_consider_enqueue,
+                    provenance_sink=value_matched,
+                )
+                all_transfers.extend(matched_transfers)
+                # Finalize: write evidence for the matched hop(s). (The
+                # service-wallet lightweight pass skipped per-outflow evidence;
+                # the full path already wrote it — re-writing is an idempotent
+                # file write.)
+                for _mt in matched_transfers:
+                    try:
+                        write_evidence_receipt(
+                            adapter, _mt.tx_hash, case_dir / "tx_evidence",
+                        )
+                    except Exception as _ev_exc:  # noqa: BLE001
+                        log.warning(
+                            "evidence receipt failed for matched hop tx=%s: %s",
+                            _mt.tx_hash, _ev_exc,
+                        )
+                log.info(
+                    "value-trace %s (depth=%d): %d outflow(s) -> %d matched "
+                    "onward hop(s) followed",
+                    from_addr, depth, len(hop_transfers), followed,
+                )
+                continue
+
+            # Non-directed: the seed (no inbound), at/near max depth, or
+            # value-trace OFF. Keep the full outflow set for the audit trail.
+            all_transfers.extend(hop_transfers)
 
             if depth + 1 >= policy.max_depth:
                 continue
 
-            # Service-wallet node (aggregator / pool / OTC desk / unlabeled
-            # exchange). DEFAULT: keep its transfers (audit trail) but do NOT
-            # queue downstream, else a single high-fan-out node explodes BFS.
-            #
-            # v0.34 elite recall: when RECUPERO_VALUE_TRACE is on AND we know
-            # the edge that delivered our funds to this node, value-match the
-            # node's outflows and follow ONLY the edge(s) whose amount
-            # (same-asset) or USD value (across a swap) match — isolating the
-            # real onward hop instead of stopping dead. Confidence is calibrated
-            # in value_matching (never "high"); every followed hop is recorded
-            # in ``value_matched`` for the audit trail, and the matched
-            # Transfer(s) are the ONLY ones added to the case from this node.
+            # Service-wallet node with value-trace OFF (or no inbound): keep its
+            # transfers but do NOT queue downstream, else a single high-fan-out
+            # node explodes BFS at the next depth.
             if is_service_wallet:
-                followed = 0
-                if sw_value_trace:
-                    inbound_t = inbound_by_key.get(
-                        _address_visited_key(chain, from_addr)
-                    )
-                    followed, matched_transfers = _value_match_and_enqueue(
-                        inbound_transfer=inbound_t,
-                        node_outflows=hop_transfers,
-                        parent_depth=depth,
-                        node_addr=from_addr,
-                        enqueue_fn=_consider_enqueue,
-                        provenance_sink=value_matched,
-                    )
-                    all_transfers.extend(matched_transfers)
-                    # Finalize: the lightweight pass skipped per-outflow evidence
-                    # (the RPC cost). Now write evidence for the value-matched
-                    # money-path hop(s) only — the few that survive into the case.
-                    for _mt in matched_transfers:
-                        try:
-                            write_evidence_receipt(
-                                adapter, _mt.tx_hash, case_dir / "tx_evidence",
-                            )
-                        except Exception as _ev_exc:  # noqa: BLE001
-                            log.warning(
-                                "evidence receipt failed for matched hop tx=%s: %s",
-                                _mt.tx_hash, _ev_exc,
-                            )
                 log.info(
-                    "service-wallet %s: %d outflow(s); %d value-matched onward "
-                    "hop(s) followed",
-                    from_addr, len(hop_transfers), followed,
+                    "service-wallet skip: not queueing %d destinations from %s",
+                    len(hop_transfers), from_addr,
                 )
                 continue
 

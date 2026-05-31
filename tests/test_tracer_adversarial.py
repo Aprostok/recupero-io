@@ -642,3 +642,47 @@ def test_value_trace_off_by_default_stops_at_service_wallet(
         "value-trace OFF must NOT follow past a service wallet"
     )
     assert case.config_used["coverage"]["value_matched_hops"] == []
+
+
+def test_value_trace_is_directed_at_normal_nodes_too(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 directed trace: with value-trace ON, even a NORMAL (non-service-
+    wallet, < threshold outflows) node follows ONLY the value-matched onward
+    hop — not all its outflows. This is what bounds the trace to the money path
+    and stops the uncapped fan-out from exploding the whole graph. The seed
+    (no inbound) still follows all of its outflows."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200  # M's 4 outflows < 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    target = HOP_B
+    decoys = [f"0x{0xd1 + i:040x}" for i in range(3)]
+    edges: dict[str, Any] = {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="50")],
+        HOP_A: [  # 4 outflows — NOT a service wallet
+            _native_row("0xmatch", HOP_A, target, eth_amount="50"),   # value match
+            _native_row("0xd1", HOP_A, decoys[0], eth_amount="10"),
+            _native_row("0xd2", HOP_A, decoys[1], eth_amount="20"),
+            _native_row("0xd3", HOP_A, decoys[2], eth_amount="30"),
+        ],
+        target: [_native_row("0xt1", target, decoys[0], eth_amount="5")],
+    }
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_DIRECTED")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() in fetched, (
+        "directed value-trace should follow the amount-matched hop at a normal node"
+    )
+    for d in decoys:
+        assert d.lower() not in fetched, (
+            f"decoy {d} (amount mismatch) must NOT be followed even at a normal node"
+        )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    assert any(h["matched_to"].lower() == target.lower() for h in hops)

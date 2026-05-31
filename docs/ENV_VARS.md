@@ -68,6 +68,7 @@ their own section.
 | **Cross-chain** | | | | | |
 | `RECUPERO_CROSS_CHAIN_CONTINUATION` | `1` (on) | bool | opt-out via `0/false/no/off` | v0.28.0 | Master switch for cross-chain BFS continuation. |
 | `RECUPERO_CROSSCHAIN_WINDOW_HOURS` | `24` | float | `[0, 720]`, finite | v0.31.0 | Time window past source-bridge tx to accept dst transfers; 0 disables filter. |
+| `RECUPERO_DEST_CONTINUATION_WAVES` | `2` | int | `>= 0` | v0.34 | Extra swap-decode waves run on a cross-chain DESTINATION adapter so a bridge→swap (e.g. 0x→DAI) composes instead of dead-ending at the settler. 0 disables; each wave follows the prior wave's resolved swap outputs one hop deeper. |
 | `RECUPERO_LOCKMINT_MATCH` | `0` (off) | bool | opt-in via `1/true/yes/on` | v0.32.1 | Opt-in lock-and-mint cross-chain matching: for bridge handoffs with no decoded destination (Celer/Orbiter/Multichain), correlate the perpetrator's inbound transfers on each candidate chain by amount+time and continue the trail. Inferential (correlation, never proof — medium/low confidence) and costs extra inbound fetches, hence default OFF. |
 | `RECUPERO_ENDPOINT_DIVERSITY_PROBE` | `0` (off) | bool | opt-in via `1/true/yes/on` | v0.32.1 | Opt-in behavioral recognition of UNLABELED exchange/service infrastructure: probes the broader in/out activity of the top unlabeled terminal endpoints and flags those with high counterparty diversity as likely infrastructure (a subpoena lead the label DB missed). Inferential (medium/low confidence, never proof); low/asymmetric diversity is left unclassified so a perpetrator's own consolidation hub is never mislabeled. Costs extra fetches, hence default OFF. |
 | **Dust / CEX-continuity heuristics** | | | | | |
@@ -310,6 +311,28 @@ Setting to 0 disables the filter (legacy behavior).
   silently disabling the filter — fixed by the `isfinite` check.
 * **When to override:** raise to 168 (1 week) for slow consolidation
   paths; lower to 6 for fast-moving bridge sweeps.
+
+#### `RECUPERO_DEST_CONTINUATION_WAVES`
+
+How many ADDITIONAL swap-resolution waves to run on a cross-chain
+*destination* adapter after the shallow handoff hop
+(`src/recupero/trace/tracer.py`, `_continue_past_dex_and_bridges`). The
+cross-chain continuation lands the bridged funds on the destination
+chain in a single hop, but a 0x / Matcha settler pays the converted
+token (e.g. DAI) from its own balance — an outflow recoverable only
+from the *destination* tx's receipt logs. Without a destination-side
+swap pass the trace dead-ends at the settler (the Zigha gap: Arbitrum
+hub → DeBridge → Ethereum receiver → 0x swap → DAI). Each wave resolves
+swap outputs among the prior wave's transfers (via the destination
+adapter's receipt logs) and follows them one hop deeper. Default 2;
+`0` restores the pre-v0.34 single-hop-only behavior.
+
+* **Failure modes:** none — a non-int value falls back to 2; a wave
+  whose `_process_wave` raises is logged and breaks the loop. Bounded
+  to the one destination chain (no further cross-chain recursion) and
+  to the per-case transfer budget + `visited` set already in force.
+* **When to override:** raise for laundering paths with several
+  post-bridge swap hops; set `0` to reproduce pre-v0.34 traces exactly.
 
 ### Dust / CEX heuristics
 

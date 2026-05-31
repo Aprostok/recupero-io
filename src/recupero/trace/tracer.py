@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from eth_utils import to_checksum_address
@@ -983,6 +984,83 @@ def _ordered_lockmint_candidates(
     return out
 
 
+def _tx_within_window(
+    tx: Transfer,
+    src_time: datetime | None,
+    window_end: datetime | None,
+) -> bool:
+    """True if ``tx`` falls in the cross-chain settlement window.
+
+    When ``window_end`` (or ``src_time``) is None the filter is disabled and
+    everything passes (legacy ``RECUPERO_CROSSCHAIN_WINDOW_HOURS=0`` behavior).
+    """
+    if window_end is None or src_time is None:
+        return True
+    return src_time <= tx.block_time <= window_end
+
+
+def _collect_swap_output_seeds(
+    transfers: list[Transfer],
+    *,
+    chain: Chain,
+    adapter: ChainAdapter,
+    visited: set[str],
+    dex_router_db: dict[str, dict] | None = None,
+) -> list[Address]:
+    """Resolve DEX-aggregator (0x / Matcha settler-style) swap OUTPUT recipients
+    among ``transfers`` and return the NEW ones to follow on ``chain``.
+
+    Shared by the source-chain continuation AND the cross-chain destination
+    continuation so a token->DAI swap is followed regardless of which chain it
+    happened on. ``adapter`` MUST be the adapter for ``chain``: a settler swap
+    whose output isn't already present in ``transfers`` is recovered from the
+    swap tx's RECEIPT LOGS via that adapter (``detect_dex_swaps(..., adapter=
+    adapter)``) — the destination chain's settler payout is invisible to the
+    source-chain adapter, which is exactly why this must run per-chain.
+
+    Only HIGH-confidence in-trace outputs and log-resolved (``output_source ==
+    'receipt_logs'``) outputs are returned — never a low/medium in-trace guess.
+    A DEX swap output is paid on the swap's OWN chain, so every returned
+    recipient is a same-chain seed. Marks each returned recipient in ``visited``
+    so the caller won't re-enqueue it.
+    """
+    from recupero.trace.dex_swaps import detect_dex_swaps
+
+    if not transfers:
+        return []
+    # detect_dex_swaps reads only ``.transfers`` — a lightweight view keeps this
+    # reusable for the destination-chain pass (whose transfers aren't a Case).
+    view = SimpleNamespace(transfers=list(transfers))
+    try:
+        swaps = detect_dex_swaps(view, dex_router_db, adapter=adapter)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "dex-swap detection failed on %s; skipping continuation: %s",
+            chain.value, exc,
+        )
+        return []
+
+    seeds: list[Address] = []
+    for swap in swaps:
+        # Follow HIGH-confidence in-trace swap outputs AND log-resolved outputs
+        # (medium, but structurally certain — the Transfer event is on-chain).
+        # The latter is what crosses a 0x token->DAI swap that would otherwise
+        # dead-end at the settler.
+        if swap.confidence != "high" and (
+            getattr(swap, "output_source", "in_trace") != "receipt_logs"
+        ):
+            continue
+        if not swap.output_recipient:
+            continue
+        recipient = swap.output_recipient
+        recipient_key = _address_visited_key(chain, recipient)
+        if recipient_key in visited:
+            continue
+        seeds.append(recipient)
+        visited.add(recipient_key)
+    return seeds
+
+
 def _continue_past_dex_and_bridges(
     *,
     case: Case,
@@ -1019,7 +1097,6 @@ def _continue_past_dex_and_bridges(
     # tens of ms to load; only pay that cost when continuation is
     # actually possible.
     from recupero.trace.cross_chain import identify_cross_chain_handoffs
-    from recupero.trace.dex_swaps import detect_dex_swaps
 
     continuation_seeds: list[tuple[Address, int, str]] = []
     # (address, depth_hint, provenance_tag)
@@ -1027,35 +1104,15 @@ def _continue_past_dex_and_bridges(
     # --- DEX swap output recipients ---
     # v0.34: pass the adapter so a settler-style swap (0x / Matcha) whose output
     # isn't in case.transfers gets recovered from the swap tx's receipt logs.
-    try:
-        swaps = detect_dex_swaps(case, adapter=adapter)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("dex-swap detection failed; skipping continuation: %s", exc)
-        swaps = []
-    for swap in swaps:
-        # Follow HIGH-confidence in-trace swap outputs AND log-resolved outputs
-        # (medium, but structurally certain — the Transfer event is on-chain).
-        # The latter is what crosses a 0x token->DAI swap that would otherwise
-        # dead-end at the settler.
-        if swap.confidence != "high" and (
-            getattr(swap, "output_source", "in_trace") != "receipt_logs"
-        ):
-            continue
-        if not swap.output_recipient:
-            continue
-        # The output recipient on a DEX swap is on the SAME chain as
-        # the swap itself. Safe to queue without multi-chain state.
-        recipient = swap.output_recipient
-        recipient_key = _address_visited_key(chain, recipient)
-        if recipient_key in visited:
-            continue
-        # Don't continue if the recipient is itself a router (swap
-        # output going back into another aggregator). The next pass
-        # will re-detect and we'd loop forever otherwise.
-        # depth_hint=1 puts the continuation at depth 1 from the
-        # original swap — under max_depth=2 that's the last hop.
+    # Factored into _collect_swap_output_seeds so the SAME settler-output
+    # resolution runs on the cross-chain DESTINATION wave below (with the
+    # destination adapter) — see the dest-chain continuation in the
+    # cross_chain_seeds loop. depth_hint=1 puts each recipient at the last hop
+    # under max_depth>=2.
+    for recipient in _collect_swap_output_seeds(
+        case.transfers, chain=chain, adapter=adapter, visited=visited,
+    ):
         continuation_seeds.append((recipient, 1, "dex_swap_output"))
-        visited.add(recipient_key)
 
     # --- Bridge handoffs (same-chain + cross-chain) ---
     #
@@ -1449,24 +1506,88 @@ def _continue_past_dex_and_bridges(
                 # later seeds with later source times are still
                 # covered.
                 src_time = earliest_src_time_by_chain.get(dst_chain)
-                if xchain_window_h > 0 and src_time is not None:
-                    window_end = src_time + timedelta(hours=xchain_window_h)
-                    dropped = 0
-                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
-                        for tx in hop_transfers:
-                            if src_time <= tx.block_time <= window_end:
-                                new_transfers.append(tx)
-                            else:
-                                dropped += 1
-                    if dropped:
-                        log.info(
-                            "cross-chain window filter (%.1fh) dropped %d "
-                            "out-of-range transfers on %s",
-                            xchain_window_h, dropped, dst_chain.value,
+                window_end = (
+                    src_time + timedelta(hours=xchain_window_h)
+                    if (xchain_window_h > 0 and src_time is not None)
+                    else None
+                )
+                chain_new: list[Transfer] = []
+                dropped = 0
+                for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                    for tx in hop_transfers:
+                        if _tx_within_window(tx, src_time, window_end):
+                            chain_new.append(tx)
+                        else:
+                            dropped += 1
+                if dropped:
+                    log.info(
+                        "cross-chain window filter (%.1fh) dropped %d "
+                        "out-of-range transfers on %s",
+                        xchain_window_h, dropped, dst_chain.value,
+                    )
+                new_transfers.extend(chain_new)
+
+                # v0.34 (compose bridge -> swap -> onward): the cross-chain wave
+                # above is a SINGLE shallow hop. It captures the destination
+                # receiver's direct outflows (e.g. the deposit INTO a 0x /
+                # Matcha settler) but NOT the settler's token->DAI payout — that
+                # is paid from the settler's own balance and is recoverable only
+                # from the swap tx RECEIPT LOGS using the DESTINATION chain's
+                # adapter. Without this pass the trace dead-ends at the settler
+                # on the destination chain (the exact Zigha gap: Arbitrum hub ->
+                # DeBridge -> Ethereum receiver -> 0x swap -> DAI). Run up to
+                # RECUPERO_DEST_CONTINUATION_WAVES extra waves on dst_adapter,
+                # each resolving swap outputs among the prior wave's transfers
+                # and following them one hop deeper. Bounded to this ONE
+                # destination chain (no further cross-chain recursion) and to
+                # the per-case transfer budget + visited set already in force.
+                try:
+                    _dest_waves = int(os.environ.get(
+                        "RECUPERO_DEST_CONTINUATION_WAVES", "2",
+                    ))
+                except (TypeError, ValueError):
+                    _dest_waves = 2
+                _frontier = chain_new
+                for _wi in range(max(0, _dest_waves)):
+                    if not _frontier:
+                        break
+                    _dseeds = _collect_swap_output_seeds(
+                        _frontier, chain=dst_chain, adapter=dst_adapter,
+                        visited=visited,
+                    )
+                    if not _dseeds:
+                        break
+                    log.info(
+                        "dest-chain swap continuation on %s: %d swap-output "
+                        "seed(s) (wave %d/%d) — composing bridge->swap->onward",
+                        dst_chain.value, len(_dseeds), _wi + 1, _dest_waves,
+                    )
+                    try:
+                        _dres = _process_wave(
+                            [(_a, 1) for _a in _dseeds],
+                            adapter=dst_adapter,
+                            label_store=label_store,
+                            price_client=price_client,
+                            policy=policy,
+                            incident_time=dst_anchor_time,
+                            config=config,
+                            evidence_dir=evidence_dir,
+                            concurrency=trace_concurrency,
                         )
-                else:
-                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
-                        new_transfers.extend(hop_transfers)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "dest-chain swap continuation wave on %s failed: %s",
+                            dst_chain.value, exc,
+                        )
+                        break
+                    _next_frontier: list[Transfer] = []
+                    for _fa, _fd, _hts, _isvc in _dres:
+                        for tx in _hts:
+                            if not _tx_within_window(tx, src_time, window_end):
+                                continue
+                            new_transfers.append(tx)
+                            _next_frontier.append(tx)
+                    _frontier = _next_frontier
             finally:
                 try:
                     dst_adapter.close()

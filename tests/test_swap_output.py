@@ -213,3 +213,101 @@ def test_detect_dex_swaps_without_adapter_still_dead_ends() -> None:
     assert len(swaps) == 1
     assert swaps[0].output_recipient is None
     assert swaps[0].output_source == "in_trace"
+
+
+# --------- _collect_swap_output_seeds (tracer continuation helper) -----------
+#
+# v0.34: the SAME helper runs on (a) the source-chain transfers and (b) the
+# cross-chain DESTINATION wave's transfers (with the destination adapter). (b)
+# is what composes bridge -> swap -> DAI: the bridged funds land on the
+# destination chain, swap to DAI via a 0x settler, and the settler's payout is
+# resolved from the DESTINATION tx's receipt logs. Pre-fix the swap decoder ran
+# only on the source chain, so the trace dead-ended at the settler.
+
+
+def _settler_input_transfer():
+    return SimpleNamespace(
+        tx_hash="0xswaptx",
+        to_address=SETTLER,
+        from_address=SWAPPER,
+        token=SimpleNamespace(symbol="USDC", contract=USDC),
+        amount_decimal=Decimal("3000000"),
+        usd_value_at_tx=Decimal("3000000"),
+        explorer_url="https://etherscan.io/tx/0xswaptx",
+        block_time=datetime(2025, 10, 9, tzinfo=UTC),
+    )
+
+
+def _zigha_receipt_adapter():
+    receipt = _receipt(
+        _log(USDC, SWAPPER, SETTLER, 3_000_000 * 10**6),       # input leg
+        _log(DAI, SETTLER, PROXY, 2_900_000 * 10**18),          # internal hop
+        _log(DAI, PROXY, RECIPIENT, 2_900_000 * 10**18),        # output -> terminal
+    )
+    return SimpleNamespace(
+        fetch_evidence_receipt=lambda _tx: SimpleNamespace(raw_receipt=receipt)
+    )
+
+
+def test_collect_swap_output_seeds_resolves_settler_output_via_receipt_logs() -> None:
+    """A 0x settler swap whose DAI output isn't in the trace is resolved from the
+    receipt logs and returned as a same-chain seed — and marked visited so the
+    caller won't re-enqueue it. This is the unit that composes bridge->swap->DAI
+    on the cross-chain destination wave."""
+    from recupero.models import Chain
+    from recupero.trace.tracer import (
+        _address_visited_key,
+        _collect_swap_output_seeds,
+    )
+
+    chain = Chain("ethereum")
+    visited: set[str] = set()
+    seeds = _collect_swap_output_seeds(
+        [_settler_input_transfer()],
+        chain=chain,
+        adapter=_zigha_receipt_adapter(),
+        visited=visited,
+        dex_router_db={SETTLER: {"name": "0x: MainnetSettler"}},
+    )
+    assert seeds == [RECIPIENT]
+    assert _address_visited_key(chain, RECIPIENT) in visited
+
+
+def test_collect_swap_output_seeds_respects_visited() -> None:
+    """A recipient already reached by the primary BFS is not returned again —
+    no duplicate continuation seeds."""
+    from recupero.models import Chain
+    from recupero.trace.tracer import (
+        _address_visited_key,
+        _collect_swap_output_seeds,
+    )
+
+    chain = Chain("ethereum")
+    visited = {_address_visited_key(chain, RECIPIENT)}
+    seeds = _collect_swap_output_seeds(
+        [_settler_input_transfer()],
+        chain=chain,
+        adapter=_zigha_receipt_adapter(),
+        visited=visited,
+        dex_router_db={SETTLER: {"name": "0x: MainnetSettler"}},
+    )
+    assert seeds == []
+
+
+def test_collect_swap_output_seeds_empty_and_no_adapter() -> None:
+    """No transfers -> no seeds. And WITHOUT an adapter a settler swap can't be
+    receipt-resolved, so nothing is followed — proving the adapter is what
+    unlocks the destination-chain hop and that default behavior is unchanged."""
+    from recupero.models import Chain
+    from recupero.trace.tracer import _collect_swap_output_seeds
+
+    chain = Chain("ethereum")
+    assert _collect_swap_output_seeds(
+        [], chain=chain, adapter=None, visited=set(),
+        dex_router_db={SETTLER: {"name": "0x: MainnetSettler"}},
+    ) == []
+    assert _collect_swap_output_seeds(
+        [_settler_input_transfer()],
+        chain=chain, adapter=None, visited=set(),
+        dex_router_db={SETTLER: {"name": "0x: MainnetSettler"}},
+    ) == []

@@ -15,6 +15,7 @@ Stablecoin shortcut: USDT, USDC, DAI, BUSD, FDUSD treated as $1.00 with a
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -288,6 +289,27 @@ class PriceResult:
     error: str | None
 
 
+def _resolve_coingecko_rps(config_default: float) -> float:
+    """v0.34: CoinGecko client requests/second, configurable via
+    ``RECUPERO_COINGECKO_RPS`` so a paid (pro) CoinGecko tier's throughput is
+    usable. The demo tier self-paces to a low rate and SILENTLY sleeps — the
+    historical bottleneck where pricing thousands of transfers crawled at the
+    demo limit with no error in the log. On a paid plan set ``COINGECKO_TIER=pro``
+    (switches to the pro endpoint + key header) AND this knob to the plan's
+    per-second limit (e.g. ~5-8 for a 300-500/min plan). Falls back to the
+    config default; clamped to (0, 100]; bad/empty/non-positive -> default."""
+    raw = os.environ.get("RECUPERO_COINGECKO_RPS")
+    if raw is None or not raw.strip():
+        return config_default
+    try:
+        rps = float(raw)
+    except (TypeError, ValueError):
+        return config_default
+    if not (rps > 0):
+        return config_default
+    return min(rps, 100.0)
+
+
 class _RateLimiter:
     def __init__(self, rps: float) -> None:
         self.min_interval = 1.0 / rps if rps > 0 else 0.0
@@ -360,7 +382,9 @@ class CoinGeckoClient:
             dsn=effective_dsn if effective_dsn else None,
             cache_dir=cache_dir,
         )
-        self.limiter = _RateLimiter(config.pricing.requests_per_second)
+        self.limiter = _RateLimiter(
+            _resolve_coingecko_rps(config.pricing.requests_per_second)
+        )
         self._is_pro = (env.COINGECKO_TIER or "demo").lower() == "pro"
         # Split connect vs read timeout: api.coingecko.com is rate-limited
         # and occasionally slow-loris during burst. A 10s connect cap fails

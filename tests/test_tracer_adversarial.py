@@ -688,6 +688,173 @@ def test_value_trace_is_directed_at_normal_nodes_too(
     assert any(h["matched_to"].lower() == target.lower() for h in hops)
 
 
+# ---------- v0.34 perf: prune-before-enrich (lightweight on high fan-out) ---------- #
+
+
+class _CountingAdapter(ChainAdapter):
+    """Adapter that returns a fixed outflow list and COUNTS the expensive
+    per-outflow RPCs (is_contract, evidence-receipt) so a test can prove the
+    lightweight (cheap-build) path engaged."""
+
+    chain = Chain.ethereum
+
+    def __init__(self, outflows: list[dict[str, Any]]) -> None:
+        self._outflows = outflows
+        self.is_contract_calls = 0
+        self.evidence_calls = 0
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 19000000
+
+    def is_contract(self, address: str) -> bool:
+        self.is_contract_calls += 1
+        return False
+
+    def fetch_native_outflows(
+        self, from_address: str, start_block: int, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        return list(self._outflows)
+
+    def fetch_erc20_outflows(
+        self, from_address: str, start_block: int, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
+        self.evidence_calls += 1
+        return EvidenceReceipt(
+            chain=Chain.ethereum, tx_hash=tx_hash, block_number=19000001,
+            block_time=datetime(2025, 1, 15, tzinfo=UTC),
+            raw_transaction={"hash": tx_hash}, raw_receipt={"status": "0x1"},
+            raw_block_header={"number": "0x1221b81"},
+            fetched_at=datetime.now(UTC), fetched_from="fake",
+            explorer_url=self.explorer_tx_url(tx_hash),
+        )
+
+    def explorer_tx_url(self, tx_hash: str) -> str:
+        return f"https://etherscan.io/tx/{tx_hash}"
+
+    def explorer_address_url(self, address: str) -> str:
+        return f"https://etherscan.io/address/{address}"
+
+
+class _RecordingPrice:
+    """Records the ``skip_contract_api`` flag of every price_at call."""
+
+    def __init__(self) -> None:
+        self.skip_flags: list[bool] = []
+
+    def price_at(
+        self, token: TokenRef, when: datetime, *, skip_contract_api: bool = False,
+    ) -> PriceResult:
+        self.skip_flags.append(skip_contract_api)
+        return PriceResult(usd_value=Decimal("3000"), source="fake", error=None)
+
+    def close(self) -> None:
+        pass
+
+
+def _hop_outflows(n: int) -> list[dict[str, Any]]:
+    return [
+        _native_row(f"0x{i:064x}", HOP_A, f"0x{(i + 1):040x}", eth_amount="1")
+        for i in range(n)
+    ]
+
+
+def test_value_trace_lightweight_engages_for_high_fanout_nonseed(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 perf: a NON-seed node with more outflows than
+    RECUPERO_VALUE_TRACE_ENRICH_CEILING is built CHEAPLY under value-trace even
+    when it is BELOW the service-wallet threshold — skipping the per-token
+    CoinGecko contract API, the per-dest is_contract RPC, and the per-tx evidence
+    fetch (the ~3-RPC-per-outflow wall that made a 10k-outflow node take hours).
+    The aggregation finalizes the expensive ops for only the value-matched hops."""
+    from recupero.trace import tracer as tracer_mod
+    from recupero.trace.policies import TracePolicy
+
+    config, _env = cfg
+    monkeypatch.setattr(tracer_mod, "lookup_pit_safe", lambda *a, **k: None)
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+
+    adapter = _CountingAdapter(_hop_outflows(60))   # 60 > 50 ceiling
+    price = _RecordingPrice()
+    policy = TracePolicy(max_depth=3, service_wallet_outflow_threshold=1000)  # 60 < 1000
+
+    transfers, is_service = tracer_mod._trace_one_hop(
+        adapter=adapter, label_store=object(), price_client=price, policy=policy,
+        from_address=HOP_A, incident_time=datetime(2025, 1, 15, tzinfo=UTC),
+        config=config, hop_depth=1, parent_transfer_id=None,
+        evidence_dir=tmp_path, value_trace=True,
+    )
+
+    assert is_service is False                      # below the service-wallet bar
+    assert len(transfers) == 60                     # lightweight skips dust filter
+    assert all(price.skip_flags)                    # every price call skipped the contract API
+    assert adapter.is_contract_calls == 0           # is_contract deferred to matched hops
+    assert adapter.evidence_calls == 0              # evidence deferred to matched hops
+
+
+def test_value_trace_full_path_when_below_enrich_ceiling(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A small non-seed node (<= ceiling, not a service wallet) keeps the full,
+    fully-evidenced path — the cheap path must not silently swallow normal nodes."""
+    from recupero.trace import tracer as tracer_mod
+    from recupero.trace.policies import TracePolicy
+
+    config, _env = cfg
+    monkeypatch.setattr(tracer_mod, "lookup_pit_safe", lambda *a, **k: None)
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+
+    adapter = _CountingAdapter(_hop_outflows(5))    # 5 <= 50 ceiling
+    price = _RecordingPrice()
+    policy = TracePolicy(max_depth=3, service_wallet_outflow_threshold=1000)
+
+    transfers, is_service = tracer_mod._trace_one_hop(
+        adapter=adapter, label_store=object(), price_client=price, policy=policy,
+        from_address=HOP_A, incident_time=datetime(2025, 1, 15, tzinfo=UTC),
+        config=config, hop_depth=1, parent_transfer_id=None,
+        evidence_dir=tmp_path, value_trace=True,
+    )
+
+    assert is_service is False
+    assert len(transfers) == 5
+    assert not any(price.skip_flags)                # full pricing (contract API allowed)
+    assert adapter.is_contract_calls == 5           # is_contract per destination
+    assert adapter.evidence_calls == 5              # evidence per kept transfer
+
+
+def test_value_trace_seed_never_lightweight_even_if_high_fanout(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The seed (hop_depth 0) is non-directed — every outflow is kept and must
+    stay fully evidenced — so the count-based cheap trigger must NOT fire on it."""
+    from recupero.trace import tracer as tracer_mod
+    from recupero.trace.policies import TracePolicy
+
+    config, _env = cfg
+    monkeypatch.setattr(tracer_mod, "lookup_pit_safe", lambda *a, **k: None)
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+
+    adapter = _CountingAdapter(_hop_outflows(60))   # 60 > 50, but at the SEED
+    price = _RecordingPrice()
+    policy = TracePolicy(max_depth=3, service_wallet_outflow_threshold=1000)
+
+    tracer_mod._trace_one_hop(
+        adapter=adapter, label_store=object(), price_client=price, policy=policy,
+        from_address=SEED, incident_time=datetime(2025, 1, 15, tzinfo=UTC),
+        config=config, hop_depth=0, parent_transfer_id=None,
+        evidence_dir=tmp_path, value_trace=True,
+    )
+
+    assert not any(price.skip_flags)                # seed fully priced
+    assert adapter.is_contract_calls == 60          # seed fully enriched
+
+
 def test_value_trace_matches_against_largest_inbound_not_first(
     cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

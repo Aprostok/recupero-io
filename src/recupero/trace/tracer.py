@@ -1926,7 +1926,35 @@ def _trace_one_hop(
     # cheaply (no per-token price API, no per-outflow is_contract / evidence
     # RPC, no dust filter) so the caller can value-match them and finalize only
     # the matched few. ``_lightweight`` gates the expensive ops in the loop.
-    _lightweight = value_trace and is_service_wallet
+    #
+    # v0.34 perf (prune-before-enrich): the cheap build must engage for ANY
+    # high-fan-out node under value-trace, not just those above the
+    # service-wallet threshold. The full path does ~3 Etherscan RPCs per kept
+    # outflow (per-token CoinGecko contract-resolution + per-dest is_contract +
+    # per-tx evidence receipt); on a node with thousands of outflows that is the
+    # multi-hour wall we hit when a 10k-outflow node sat just UNDER the
+    # service-wallet bar. The wave aggregation value-matches the cheaply-built
+    # set and FINALIZES the expensive ops (is_contract + evidence) for ONLY the
+    # matched onward hop(s) (see run_trace ~643). Gate the count-based trigger on
+    # hop_depth>=1 so the seed (depth 0, non-directed — every outflow is kept and
+    # must stay fully evidenced) is never cheapened. The service-wallet branch is
+    # preserved unchanged. Ceiling tunable via RECUPERO_VALUE_TRACE_ENRICH_CEILING
+    # (default 50; <=0 disables the count trigger, leaving only the service-wallet
+    # behavior).
+    try:
+        _enrich_ceiling = int(
+            os.environ.get("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+        )
+    except (TypeError, ValueError):
+        _enrich_ceiling = 50
+    _lightweight = value_trace and (
+        is_service_wallet
+        or (
+            hop_depth >= 1
+            and _enrich_ceiling > 0
+            and len(raw_outflows) > _enrich_ceiling
+        )
+    )
 
     # Cap to avoid runaway on chatty addresses. ``_cap`` honors the
     # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` env-var override resolved

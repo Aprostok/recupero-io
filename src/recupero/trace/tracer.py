@@ -123,9 +123,19 @@ def _address_visited_key(chain: Chain, address: Address) -> str:
 # silently rendered as "complete" in an LE deliverable.
 _COVERAGE_TRUNCATIONS: list[dict[str, Any]] = []
 
+# v0.34 (operator-requested "elite recall"): per-case accumulator of poison
+# edges dropped BEFORE pricing (currently zero-value transfers — the canonical
+# address-poisoning primitive). This is NOISE removal, not coverage reduction:
+# a zero-value edge moves no funds, so dropping it never hides a real onward
+# hop and does NOT flip coverage.complete. Surfaced as an INFORMATIONAL
+# ``coverage.poison_edges_pruned`` count for the audit trail. Cleared at the
+# start of every ``run_trace`` like the other module-level registries.
+_POISON_PRUNED: list[dict[str, Any]] = []
+
 
 def _clear_coverage_truncations() -> None:
     _COVERAGE_TRUNCATIONS.clear()
+    _POISON_PRUNED.clear()
 
 
 def run_trace(
@@ -751,6 +761,7 @@ def run_trace(
         log.debug("poisoning detection failed (non-fatal): %s", _pe)
         _poison_events = []
     _cap_truncations = list(_COVERAGE_TRUNCATIONS)
+    _poison_pruned = list(_POISON_PRUNED)
     try:
         _resolved_addr_cap = int(os.environ.get(
             "RECUPERO_MAX_TRANSFERS_PER_ADDRESS",
@@ -803,6 +814,12 @@ def run_trace(
             "poisoning_detected": bool(_poison_events),
             "poisoning_event_count": len(_poison_events),
             "per_address_cap_truncations": _cap_truncations,
+            # Informational: zero-value poison edges dropped pre-pricing. This
+            # is NOISE removal (a zero-value edge moves no funds), so it does
+            # NOT feed ``_coverage_reduced`` / flip ``complete`` — unlike the
+            # fetch-cap truncations above, which can hide a real onward hop.
+            "poison_edges_pruned": sum(p.get("pruned", 0) for p in _poison_pruned),
+            "poison_pruned_addresses": len(_poison_pruned),
             "reduced_parameters": {
                 "max_depth": int(cfg_max_depth),
                 "dust_threshold_usd": float(config.trace.dust_threshold_usd),
@@ -1535,6 +1552,35 @@ def _trace_one_hop(
     )
 
     log.info("fetched %d raw outflows", len(raw_outflows))
+
+    # v0.34 (operator-requested "elite recall"): prune UNAMBIGUOUS poison edges
+    # BEFORE pricing/following so the tracer can run UNCAPPED without drowning
+    # in address-poisoning spam. Zero-value transfers move no funds and are the
+    # canonical poisoning primitive; dropping them here (a) avoids a CoinGecko
+    # contract-resolution call per throwaway poison token — the historical
+    # multi-hour "freeze" — and (b) keeps the per-address fetch cap from ever
+    # having to truncate a real onward hop. This is NOISE removal: it never
+    # drops a value-bearing edge, so it does NOT reduce coverage. Runs BEFORE
+    # the service-wallet check so that count reflects REAL edges, not poison.
+    # Opt-out: RECUPERO_POISON_PRUNE in {0,false,no,off}.
+    if os.environ.get("RECUPERO_POISON_PRUNE", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    ):
+        from recupero.trace.poison_pruning import prune_poison_outflows
+        _pre_prune = len(raw_outflows)
+        raw_outflows, _pruned_edges = prune_poison_outflows(raw_outflows)
+        if _pruned_edges:
+            log.info(
+                "poison-pruned %d zero-value outflow(s) from %s (%d -> %d kept)",
+                len(_pruned_edges), from_address, _pre_prune, len(raw_outflows),
+            )
+            _POISON_PRUNED.append({
+                "address": from_address,
+                "kind": "zero_value_poison",
+                "pruned": len(_pruned_edges),
+                "raw_outflows": _pre_prune,
+                "hop_depth": hop_depth,
+            })
 
     # Service-wallet detection: a wallet emitting more outflows than the
     # threshold is almost certainly an unlabeled exchange / OTC desk /

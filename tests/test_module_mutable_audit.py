@@ -127,6 +127,15 @@ ALLOWED: dict[tuple[str, str], str] = {
     # contract as the Bitcoin registries above.
     ("trace/tracer.py", "_COVERAGE_TRUNCATIONS"):
         "GIL-atomic appends; cleared pre-wave + read post-join, no read-during-write",
+
+    # v0.34 trace/tracer.py: per-case accumulator of zero-value poison edges
+    # dropped pre-pricing. Identical concurrency contract to
+    # _COVERAGE_TRUNCATIONS above: appended ONLY by _trace_one_hop (GIL-atomic
+    # list.append, no read-modify-write), cleared by _clear_coverage_truncations()
+    # before any wave thread is submitted, and read once at case assembly after
+    # all waves join — no concurrent read-during-write.
+    ("trace/tracer.py", "_POISON_PRUNED"):
+        "GIL-atomic appends; cleared pre-wave + read post-join, no read-during-write",
 }
 
 

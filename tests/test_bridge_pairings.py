@@ -300,3 +300,89 @@ def test_across_wrong_depositid_returns_none() -> None:
         src_block_time=datetime(2025, 10, 9, tzinfo=UTC), source_chain="base",
     )
     assert out is None
+
+
+# ===================== Celer cBridge (scan shape, srcTransferId @ word 6) ====
+# Verified real pair: BSC Send 0xc31bb378 (transferId word0 0x00c9ad07…) →
+# Ethereum Relay 0x05e78067 (srcTransferId word6 == 0x00c9ad07…; Relay's OWN
+# transferId at word0 is a DIFFERENT value).
+
+CELER_SEND_T0 = "0x89d8051e597ab4178a863a5190407b98abfeff406aa8db90c59af76612e58f01"
+CELER_RELAY_T0 = "0x79fa08de5149d912dce8e5e8da7a7c17ccdf23dd5d3bfe196802e6eb86347c7c"
+CELER_ETH = "0x5427fefa711eff984124bfbb1ab6fbf5e3da1820"
+CELER_BSC = "0xdd90e5e87a2081dcf0391920868ebc2ffb81a1af"
+CELER_XFER_ID = "0x00c9ad0717db05159a0972b87406d58516a1dc0f05196e864ff0dc4db5e94823"
+CELER_DEST_OWN_ID = "0xe0fbdda0000000000000000000000000000000000000000000000000deadbeef"
+CELER_RECIP = "0x647b320cab32125725a0142570af2dfe91212f99"
+USDT = "0xdac17f958d2ee523a2206206994597c13d831ec7"
+CELER_AMOUNT = 187331216712
+
+
+def _celer_source_receipt(xfer_id: str = CELER_XFER_ID) -> dict[str, Any]:
+    # Send: data word0=transferId, then sender/receiver/token/amount/dstChainId/nonce.
+    data = "0x" + _word(xfer_id) + _word("0x0") * 6
+    return {"logs": [{"address": CELER_BSC, "topics": [CELER_SEND_T0], "data": data}]}
+
+
+def _celer_relay_log(src_xfer_id: str = CELER_XFER_ID, tx: str = "0xrelaytx") -> dict[str, Any]:
+    # Relay: word0=dest's OWN transferId (different), w1 sender, w2 receiver,
+    # w3 token, w4 amount, w5 srcChainId, w6=srcTransferId (the pairing key).
+    data = "0x" + (
+        _word(CELER_DEST_OWN_ID) + _word("0x0") + _word("0x0") + _word("0x0")
+        + _word("0x0") + _word("0x38") + _word(src_xfer_id)
+    )
+    return {"address": CELER_ETH, "topics": [CELER_RELAY_T0], "data": data,
+            "transactionHash": tx}
+
+
+class _FakeCelerAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if address.lower() == CELER_ETH and topic0.lower() == CELER_RELAY_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": [{
+            "address": USDT,
+            "topics": [ERC20_TRANSFER, _topic_addr(CELER_ETH), _topic_addr(CELER_RECIP)],
+            "data": hex(CELER_AMOUNT),
+        }]})
+
+
+def test_celer_confirm_srctransferid_at_word6_high() -> None:
+    """The cross-chain key is Relay.srcTransferId (word 6) — the scan-the-payload
+    match must land on it, NOT on Relay's own word-0 transferId."""
+    adapter = _FakeCelerAdapter([_celer_relay_log()])
+    out = confirm_bridge_destination(
+        protocol="Celer", destination_chain="ethereum",
+        source_receipt=_celer_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="bsc",
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id == CELER_XFER_ID
+    assert out.dst_tx == "0xrelaytx"
+    assert (out.recipient or "").lower() == CELER_RECIP
+    assert out.raw_amount == CELER_AMOUNT
+
+
+def test_celer_tampered_srctransferid_returns_none() -> None:
+    adapter = _FakeCelerAdapter([_celer_relay_log(src_xfer_id="0x" + "ab" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Celer", destination_chain="ethereum",
+        source_receipt=_celer_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="bsc",
+    )
+    assert out is None
+
+
+def test_celer_registry_resolves() -> None:
+    spec = get_pair_spec("Celer cBridge")
+    assert spec is not None and spec.protocol == "Celer"
+    assert spec.dest_contract_for("bsc") == CELER_BSC

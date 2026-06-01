@@ -169,7 +169,37 @@ _ACROSS = BridgePairSpec(
     notes="Across V3 FundsDeposited→FilledRelay; verified Base→Ethereum pair.",
 )
 
-_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS)
+# Celer cBridge — per-chain pool bridges. The source `Send` event carries the
+# 32-byte transferId in DATA word 0; the destination `Relay` event carries it
+# again as `srcTransferId` in DATA word 6 (Relay word 0 is the dest's OWN
+# transferId — NOT the cross-chain key). A 32-byte id is unforgeable, so the
+# scan-the-payload match (dest_id_topic=None) lands on word 6 unambiguously.
+# VERIFIED real pair: BSC Send 0xc31bb378 (transferId 0x00c9ad07…) → Ethereum
+# Relay 0x05e78067 (srcTransferId 0x00c9ad07…), USDT 187,331.
+_CELER_CBRIDGES: dict[str, str] = {
+    "ethereum": "0x5427fefa711eff984124bfbb1ab6fbf5e3da1820",
+    "bsc": "0xdd90e5e87a2081dcf0391920868ebc2ffb81a1af",
+    "arbitrum": "0x1619de6b6b20ed217a58d00f37b9d47c7663feca",
+    "optimism": "0x9d39fc627a6d9d9f8c831c16995b209548cc3401",
+    "polygon": "0x88dcdc47d2f83a99cf0000fdf667a468bb958a78",
+}
+_CELER = BridgePairSpec(
+    protocol="Celer",
+    source_contracts=frozenset(_CELER_CBRIDGES.values()),
+    source_event_topic0=(
+        "0x89d8051e597ab4178a863a5190407b98abfeff406aa8db90c59af76612e58f01"
+    ),
+    source_order_id_word=0,             # Send.transferId
+    dest_contracts=_CELER_CBRIDGES,
+    dest_event_topic0=(
+        "0x79fa08de5149d912dce8e5e8da7a7c17ccdf23dd5d3bfe196802e6eb86347c7c"
+    ),
+    # 32-byte id scanned in the Relay payload → finds srcTransferId at word 6.
+    max_fee_pct=Decimal("1.0"),
+    notes="Celer cBridge Send.transferId(w0)==Relay.srcTransferId(w6); verified BSC→Eth.",
+)
+
+_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS, _CELER)
 
 
 def get_pair_spec(protocol: str | None) -> BridgePairSpec | None:

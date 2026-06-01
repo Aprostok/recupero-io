@@ -36,6 +36,16 @@ confirmed against a **real on-chain source+destination pair** live in
   pair: `FundsDeposited`→`FilledRelay`, paired on `(depositId, originChainId)`
   in indexed topics, server-filtered; per-chain SpokePool addresses). depositId
   is a small int unique only per origin chain, so it is paired with originChainId.
+* **32-byte data id (scan)** — **Celer cBridge** (verified vs a real BSC→Ethereum
+  pair: `Send.transferId` (data word 0) == `Relay.srcTransferId` (data word 6);
+  Relay's own word-0 id is NOT the cross-chain key). Per-chain cBridge addresses.
+
+Verified-and-queued (pairing confirmed on-chain; pending a small engine hook):
+**Hop** (`TransferSent.transferId`↔`WithdrawalBonded.transferId`, both indexed
+bytes32 — confirmed Base→Optimism pair; needs address-less `getLogs` which is
+confirmed working) and **Synapse** (kappa is NOT emitted on the source; it is
+`keccak256(ascii("0x"+sourceTxHash))` and appears as the dest mint's `topics[2]`
+— verified vs 5 real pairs; needs a derived-id hook + multi-event topic0).
 
 Protocol + order-id + destination chain are resolved from the source tx's EVENT
 LOGS (`identify_source`), not the tx `to` — robust to periphery/multicall
@@ -89,8 +99,8 @@ ship a signature that hasn't matched a real tx. For each new protocol:
 
 ## Candidate protocols to add next (each needs the recipe above)
 
-Stargate/LayerZero, Wormhole, CCIP, Synapse, Hop, Celer cBridge,
-Connext, Axelar, Squid, Symbiosis, Allbridge, Mayan, Orbiter — plus the
+Stargate/LayerZero, Wormhole, CCIP, Connext, Axelar, Squid, Symbiosis,
+Allbridge, Mayan, Orbiter — plus the
 canonical rollup bridges (Arbitrum/Optimism/Base/Polygon/zkSync), whose deposits
 are deterministic (L2 mint to the depositor) and confirmable by
 `(depositor, token, amount, window)`.

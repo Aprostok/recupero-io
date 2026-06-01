@@ -133,7 +133,9 @@ def test_registry_resolves_debridge_by_label_substring() -> None:
     assert get_pair_spec("DeBridge") is not None
     assert get_pair_spec("Connext") is not None     # v0.34 verified-core addition
     assert get_pair_spec("Wormhole") is not None    # v0.34 verified-core addition
-    assert get_pair_spec("Stargate") is None        # not in verified core yet
+    assert get_pair_spec("Stargate") is not None    # v0.34.3 verified-core addition
+    assert get_pair_spec("Stargate V2").protocol == "Stargate"
+    assert get_pair_spec("Orbiter") is None         # not in verified core yet
     assert get_pair_spec(None) is None
 
 
@@ -1207,3 +1209,113 @@ def test_synapse_rfq_tampered_txid_returns_none() -> None:
         order_id=RFQ_TXID,
     )
     assert out is None
+
+
+# ========= Stargate V2 / LayerZero OFT (GUID composite, eid namespace) =======
+# Cross-chain id = LayerZero GUID (bytes32), indexed topic1 on BOTH OFTSent
+# (source) + OFTReceived (dest). dstEid/srcEid are LayerZero ENDPOINT ids, NOT
+# EVM chain ids. Source pinned to verified Stargate pools (OFTSent is generic);
+# dest queried address-LESS (guid globally unique). recipient = toAddress
+# (topic2), amount = amountReceivedLD (data word1). VERIFIED vs real ETH→Base
+# pair: source 0xff3ab5d7… (guid 0xb7b985ee…, dstEid 30184=base) → dest
+# 0xb0c2faf5… (same guid, recipient 0xbc9a201c…, amountReceivedLD 12097000000000000).
+SG_SENT_T0 = "0x85496b760a4b7f8d66384b9df21b381f5d1b1e79f229a47aaf4c232edc2fe59a"
+SG_RECV_T0 = "0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c"
+SG_POOL_ETH = "0xc026395860db2d07ee33e05fe50ed7bd583189c7"  # ETH USDC pool (in set)
+SG_GUID = "0xb7b985eee266496ac37846035bedacdd8aefacc0a19d773c9a2fe0098362a3a4"
+SG_RECIPIENT = "0xbc9a201cf79ccded23f888cc8375c6ab6e0fa9ef"
+SG_AMT = 12097000000000000
+SG_NON_POOL = "0x" + "99" * 20  # a NON-Stargate OFT token (must NOT be labeled Stargate)
+
+
+def _sg_source_receipt(emitter: str = SG_POOL_ETH, guid: str = SG_GUID,
+                       dst_eid: int = 30184) -> dict[str, Any]:
+    # OFTSent data: word0=dstEid, word1=amountSentLD, word2=amountReceivedLD.
+    data = "0x" + _word(hex(dst_eid)) + _word(hex(SG_AMT + 3000)) + _word(hex(SG_AMT))
+    return {"logs": [{
+        "address": emitter,
+        "topics": [SG_SENT_T0, guid, _topic_addr("0x" + "33" * 20)],  # topic2=fromAddress
+        "data": data,
+    }]}
+
+
+def _sg_received_log(guid: str = SG_GUID, recipient: str = SG_RECIPIENT,
+                     amt: int = SG_AMT, tx: str = "0xrecv") -> dict[str, Any]:
+    # OFTReceived data: word0=srcEid, word1=amountReceivedLD.
+    data = "0x" + _word(hex(30101)) + _word(hex(amt))  # srcEid=ethereum
+    return {
+        "address": "0xdc181bd607330aeebef6ea62e03e5e1fb4b6f7c7",  # base pool
+        "topics": [SG_RECV_T0, guid, _topic_addr(recipient)],  # topic2=toAddress
+        "data": data,
+        "transactionHash": tx,
+    }
+
+
+class _FakeStargateAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        # dest_wildcard → address is "" (address-LESS); match on topic0 alone.
+        if topic0.lower() == SG_RECV_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": []})  # native fill: no ERC-20
+
+    def close(self) -> None:
+        pass
+
+
+def test_stargate_registry_resolves() -> None:
+    assert get_pair_spec("Stargate").protocol == "Stargate"
+    assert get_pair_spec("Stargate V2").protocol == "Stargate"
+
+
+def test_stargate_identify_source_reads_guid_and_eid_dest_chain() -> None:
+    ident = identify_source(_sg_source_receipt())
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Stargate"
+    assert oid.lower() == SG_GUID
+    # dstEid 30184 resolves to base via the LayerZero eid namespace (NOT chain id).
+    assert dest_chain == "base"
+
+
+def test_stargate_confirm_wildcard_guid_match_high() -> None:
+    adapter = _FakeStargateAdapter([_sg_received_log()])
+    out = confirm_bridge_destination(
+        protocol="Stargate", destination_chain="base",
+        source_receipt=_sg_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=SG_GUID,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id.lower() == SG_GUID
+    assert out.dst_tx == "0xrecv"
+    assert (out.recipient or "").lower() == SG_RECIPIENT
+    assert out.raw_amount == SG_AMT
+
+
+def test_stargate_tampered_guid_returns_none() -> None:
+    adapter = _FakeStargateAdapter([_sg_received_log(guid="0x" + "cd" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Stargate", destination_chain="base",
+        source_receipt=_sg_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=SG_GUID,
+    )
+    assert out is None
+
+
+def test_stargate_non_pool_oft_not_mislabeled() -> None:
+    """OFTSent is the GENERIC LayerZero OFT event — any OFT token emits it. The
+    source is pinned to the verified Stargate pool set, so an OFTSent from a
+    NON-pool address must NOT be recognized as Stargate (no protocol mislabel)."""
+    ident = identify_source(_sg_source_receipt(emitter=SG_NON_POOL))
+    assert ident is None

@@ -64,6 +64,20 @@ _WH_CHAIN_ID: dict[str, int] = {
     "base": 30,
 }
 
+#: chain value → LayerZero V2 ENDPOINT id (NOT the EVM chain id). Stargate (and
+#: every LayerZero OFT) stamps the destination as this eid in OFTSent.dstEid and
+#: the source as srcEid in OFTReceived. Source: LayerZero deployed-endpoints docs.
+_LZ_EID: dict[str, int] = {
+    "ethereum": 30101,
+    "bsc": 30102,
+    "avalanche": 30106,
+    "polygon": 30109,
+    "arbitrum": 30110,
+    "optimism": 30111,
+    "base": 30184,
+}
+_CHAIN_BY_LZ_EID: dict[int, str] = {v: k for k, v in _LZ_EID.items()}
+
 
 @dataclass(frozen=True)
 class BridgePairSpec:
@@ -532,10 +546,70 @@ _WORMHOLE = BridgePairSpec(
     notes="Wormhole VAA (emitterChainId,emitterAddress,sequence): LogMessagePublished→TransferRedeemed; verified ARB→ETH pair.",
 )
 
+# Stargate V2 — Stargate's pools are LayerZero OFTs; the cross-chain id is the
+# LayerZero GUID (bytes32), emitted INDEXED as topic1 on BOTH the source OFTSent
+# and the destination OFTReceived. dstEid/srcEid are LayerZero ENDPOINT ids
+# (chain_id_scheme="layerzero", via _LZ_EID), NOT EVM chain ids. The source is
+# pinned to the VERIFIED Stargate pool set — OFTSent is the generic OFT standard
+# event, so matching topic0 alone would mislabel ANY OFT token as Stargate. The
+# dest is queried address-LESS (dest_wildcard) since the guid is globally unique
+# and the pools are per-token/per-chain. Recipient = toAddress (OFTReceived
+# topic2); delivered amount = amountReceivedLD (data word1). VERIFIED real pair:
+# source Ethereum StargatePoolNative 0x77b2…ce57931 tx 0xff3ab5d7… (guid
+# 0xb7b985ee…, dstEid 30184=base) → dest Base 0xdc181b… tx 0xb0c2faf5… (same guid
+# topic1, recipient 0xbc9a201c…, amountReceivedLD == source's, exactly).
+_STARGATE_POOLS = frozenset({
+    # ethereum: Native / USDC / USDT
+    "0x77b2043768d28e9c9ab44e1abfc95944bce57931",
+    "0xc026395860db2d07ee33e05fe50ed7bd583189c7",
+    "0x933597a323eb81cae705c5bc29985172fd5a3973",
+    # arbitrum (e8cd…/ce8c… are CREATE2-shared with optimism)
+    "0xa45b5130f36cdca45667738e2a258ab09f4a5f7f",
+    "0xe8cdf27acd73a434d661c84887215f7598e7d0d3",
+    "0xce8cca271ebc0533920c83d39f417ed6a0abb7d0",
+    # base
+    "0xdc181bd607330aeebef6ea62e03e5e1fb4b6f7c7",
+    "0x27a16dc786820b16e5c9028b75b99f6f604b5d26",
+    # optimism
+    "0x19cfce47ed54a88614648dc3f19a5980097007dd",
+    # polygon
+    "0x9aa02d4fae7f58b8e8f34c66e756cc734dac7fe4",
+    "0xd47b03ee6d86cf251ee7860fb2acf9f91b9fd4d7",
+    # bsc
+    "0x962bd449e630b0d928f308ce63f1a21f02576057",
+    "0x138eb30f73bc423c6455c53df6d89cb01d9ebc63",
+})
+_STARGATE = BridgePairSpec(
+    protocol="Stargate",
+    source_contracts=_STARGATE_POOLS,
+    source_event_topic0=(  # OFTSent(bytes32,uint32,address,uint256,uint256)
+        "0x85496b760a4b7f8d66384b9df21b381f5d1b1e79f229a47aaf4c232edc2fe59a"
+    ),
+    source_order_id_topic=1,            # guid (indexed)
+    source_dest_chain_word=0,           # dstEid (LayerZero eid) — data word 0
+    chain_id_scheme="layerzero",
+    dest_wildcard=True,                 # guid is globally unique; pools are many
+    dest_event_topic0=(  # OFTReceived(bytes32,uint32,address,uint256)
+        "0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c"
+    ),
+    dest_id_topic=1,                    # guid (indexed) on the fill
+    dest_recipient_topic=2,             # toAddress (indexed) on OFTReceived
+    dest_amount_word=1,                 # amountReceivedLD — data word 1
+    max_fee_pct=Decimal("1.0"),
+    # OFT delivers the SAME token 1:1, but LD = LOCAL decimals can differ per
+    # chain, so raw amounts aren't always comparable — skip same-asset
+    # conservation to avoid a false violation on a legit decimals mismatch.
+    same_asset=False,
+    notes="Stargate V2 / LayerZero OFT guid(topic1) matched source OFTSent↔dest OFTReceived; "
+          "dest wildcard (guid globally unique); source pinned to verified pools; eid namespace; "
+          "verified vs real ETH→Base pair (guid 0xb7b985ee…).",
+)
+
 _REGISTRY: tuple[BridgePairSpec, ...] = (
     # _SYNAPSE_RFQ MUST precede classic _SYNAPSE: get_pair_spec matches by
     # substring, so "Synapse RFQ" would otherwise resolve to classic "Synapse".
-    _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE_RFQ, _SYNAPSE, _CCIP, _CONNEXT, _WORMHOLE,
+    _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE_RFQ, _SYNAPSE, _CCIP, _CONNEXT,
+    _WORMHOLE, _STARGATE,
 )
 
 
@@ -729,8 +803,14 @@ def identify_source(
             elif spec.source_dest_chain_word is not None:
                 cid_word = _data_word(lg.get("data"), spec.source_dest_chain_word)
             if cid_word:
+                # The chain-id namespace depends on the protocol: a real EVM
+                # chain id (default) or a LayerZero endpoint id (Stargate/OFT).
+                cid_by = (
+                    _CHAIN_BY_LZ_EID if spec.chain_id_scheme == "layerzero"
+                    else _CHAIN_BY_REAL_ID
+                )
                 try:
-                    dest_chain = _CHAIN_BY_REAL_ID.get(int(cid_word, 16))
+                    dest_chain = cid_by.get(int(cid_word, 16))
                 except ValueError:
                     dest_chain = None
             return spec, oid, dest_chain

@@ -482,17 +482,17 @@ def run_trace(
     # ``transfer``'s destination was newly enqueued. Closes over the loop-local
     # ``next_wave`` (resolved at call time) plus the stable per-case caches.
     def _consider_enqueue(transfer: Transfer, parent_depth: int) -> bool:
-        if not policy.should_traverse(transfer):
-            return False
         dest = transfer.to_address
         dest_key = _address_visited_key(chain, dest)
-        # Record EVERY value-bearing edge to ``dest`` (even when dest is already
-        # queued) so value-matching at dest can reference the LARGEST inbound
-        # (our funds) rather than just the first edge seen. This must happen
-        # before the visited short-circuit below — otherwise a node funded by
-        # several edges (e.g. ETH dust THEN a large token leg) gets matched
-        # against the wrong/smallest one and the real onward hop is missed.
+        # Record EVERY value-bearing edge to ``dest`` BEFORE any gate (traverse
+        # or visited) so value-matching at dest references the LARGEST inbound
+        # (our funds), decoupled from the traverse decision — a node funded by
+        # several edges (e.g. ETH dust THEN a large token leg) must match against
+        # the largest, and a larger inbound arriving on a non-traversable edge
+        # must still inform the match rather than being dropped before recording.
         inbound_by_key.setdefault(dest_key, []).append(transfer)
+        if not policy.should_traverse(transfer):
+            return False
         if dest_key in visited:
             return False
         # Contract check: one RPC per unique address, cached. Single-threaded
@@ -614,9 +614,8 @@ def run_trace(
             _inbounds = inbound_by_key.get(
                 _address_visited_key(chain, from_addr)
             ) or []
-            inbound_t = (
-                max(_inbounds, key=lambda _t: _t.usd_value_at_tx or Decimal(0))
-                if _inbounds else None
+            inbound_t = _select_traced_inbound(
+                _inbounds, policy.dust_threshold_usd,
             )
             directed = (
                 _value_trace_enabled
@@ -658,8 +657,17 @@ def run_trace(
                 continue
 
             # Non-directed: the seed (no inbound), at/near max depth, or
-            # value-trace OFF. Keep the full outflow set for the audit trail.
-            all_transfers.extend(hop_transfers)
+            # value-trace OFF. Keep the full outflow set for the audit trail —
+            # but dust-filter it. A node built under the lightweight pass SKIPS
+            # the per-outflow dust filter (it's applied later only to matched
+            # hops); a terminal-depth lightweight node is non-directed, so
+            # without this it would extend its sub-dust / poison edges into the
+            # case. ``should_include`` is idempotent for full-path transfers
+            # (they already passed it in _trace_one_hop), so this only filters
+            # the lightweight-built set. (v0.34 audit fix — coverage hygiene.)
+            all_transfers.extend(
+                t for t in hop_transfers if policy.should_include(t)
+            )
 
             if depth + 1 >= policy.max_depth:
                 continue
@@ -1640,6 +1648,45 @@ def _continue_past_dex_and_bridges(
             log.warning("endpoint-diversity probe failed (non-fatal): %s", exc)
 
 
+def _select_traced_inbound(
+    inbounds: list[Transfer], dust_threshold_usd: Decimal
+) -> Transfer | None:
+    """Pick the inbound edge representing the TRACED funds among several edges
+    into a node (v0.34 audit fix).
+
+    Prefer the largest PRICED inbound ABOVE the dust threshold (our funds, when
+    priceable). If every priced inbound is dust, fall back to the largest
+    UNPRICED inbound by token amount — so a tiny priced poison/dust edge can't
+    displace the real (often unpriced — e.g. an illiquid/new token, or a leg
+    built under the lightweight ``skip_contract_api`` pass) laundering leg and
+    send the matcher chasing the wrong amount, missing the real onward hop.
+    Previously ``max(usd_value or 0)`` let a $5 priced dust beat the unpriced
+    real funds (which sorted as 0).
+    """
+    if not inbounds:
+        return None
+    meaningful = [
+        t for t in inbounds
+        if t.usd_value_at_tx is not None
+        and t.usd_value_at_tx.is_finite()
+        and t.usd_value_at_tx > dust_threshold_usd
+    ]
+    if meaningful:
+        return max(meaningful, key=lambda t: t.usd_value_at_tx)
+    unpriced = [t for t in inbounds if t.usd_value_at_tx is None]
+    if unpriced:
+        # real funds are often the unpriced leg; rank by token amount (best
+        # available signal absent USD) rather than chasing priced dust.
+        return max(unpriced, key=lambda t: t.amount_decimal or Decimal(0))
+    # every inbound is priced-but-dust → take the largest priced one.
+    return max(
+        inbounds,
+        key=lambda t: (
+            t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0)
+        ),
+    )
+
+
 def _value_match_and_enqueue(
     *,
     inbound_transfer: Any,
@@ -1959,7 +2006,17 @@ def _trace_one_hop(
     # Cap to avoid runaway on chatty addresses. ``_cap`` honors the
     # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` env-var override resolved
     # above; ``_cap <= 0`` disables the slice (industry-best mode).
-    if _cap and _cap > 0 and len(raw_outflows) > _cap:
+    #
+    # v0.34 audit fix (coverage): the slice is positional (``[:_cap]``) and
+    # adapters fetch ASCENDING by block, so it keeps the EARLIEST outflows and
+    # silently drops the tail — but the onward laundering hop occurs AFTER the
+    # inflow, so the tail is exactly where the money path lives. The slice's only
+    # purpose is to bound the EXPENSIVE per-outflow work; under ``_lightweight``
+    # that work is already skipped (cheap build, value-matched to ≤K, finalized
+    # only on the matched hop), so capping a lightweight node both is unnecessary
+    # AND drops the money path. Skip the per-address slice when lightweight; the
+    # per-CASE transfer cap still bounds total memory.
+    if not _lightweight and _cap and _cap > 0 and len(raw_outflows) > _cap:
         log.warning(
             "capping outflows from %d to %d for address %s",
             len(raw_outflows), _cap, from_address,

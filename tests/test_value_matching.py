@@ -216,3 +216,86 @@ def test_leg_from_transfer_nested_token_object() -> None:
     leg = leg_from_transfer(_T())
     assert leg is not None
     assert leg.token_symbol == "USDC"
+
+
+# ---------- v0.34 audit fix: token-symbol-spoofing / contract identity --------
+
+_DAI = "0x6b175474e89094c44da98b954eedeac495271d0f"
+_SCAM = "0x" + "ba" * 20
+
+
+def _cleg(amount, *, symbol="DAI", contract=None, usd=None, to="0xout",
+          tx="0xout", mins=5):
+    return Leg(
+        to_address=to, tx_hash=tx, token_symbol=symbol,
+        amount=Decimal(str(amount)),
+        usd_value=None if usd is None else Decimal(str(usd)),
+        when=T0 + timedelta(minutes=mins), token_contract=contract,
+    )
+
+
+def test_spoof_symbol_different_contract_is_not_same_asset() -> None:
+    """A scam token with a colliding symbol ("DAI") at a matching amount must
+    NOT be treated as a same-asset forward — that would fabricate a destination
+    at medium. With no USD it yields NO match at all."""
+    inbound = Leg(to_address="0xnode", tx_hash="0xin", token_symbol="DAI",
+                  amount=Decimal("1000"), usd_value=None, when=T0,
+                  token_contract=_DAI)
+    cand = _cleg(1000, symbol="DAI", contract=_SCAM, to="0xscam")
+    assert match_onward_transfers(inbound, [cand]) == []
+
+
+def test_same_contract_same_asset_is_medium() -> None:
+    inbound = Leg(to_address="0xnode", tx_hash="0xin", token_symbol="DAI",
+                  amount=Decimal("1000"), usd_value=None, when=T0,
+                  token_contract=_DAI)
+    cand = _cleg(1000, symbol="DAI", contract=_DAI, to="0xreal")
+    matches = match_onward_transfers(inbound, [cand])
+    assert len(matches) == 1
+    assert matches[0].kind == "same_asset_amount"
+    assert matches[0].confidence == "medium"
+    assert matches[0].to_address == "0xreal"
+
+
+def test_native_no_contract_both_sides_matches() -> None:
+    """Native ETH (no contract on either side) still same-asset matches."""
+    inbound = Leg(to_address="0xnode", tx_hash="0xin", token_symbol="ETH",
+                  amount=Decimal("50"), usd_value=None, when=T0,
+                  token_contract=None)
+    cand = _cleg(50, symbol="ETH", contract=None, to="0xreal")
+    matches = match_onward_transfers(inbound, [cand])
+    assert len(matches) == 1 and matches[0].kind == "same_asset_amount"
+
+
+def test_spoof_symbol_with_usd_demotes_to_cross_asset_low_not_medium() -> None:
+    """When both legs are priced, a colliding-symbol/different-contract pair can
+    still match on USD — but only at LOW (cross-asset), never the medium
+    same-asset tier."""
+    inbound = Leg(to_address="0xnode", tx_hash="0xin", token_symbol="DAI",
+                  amount=Decimal("1000"), usd_value=Decimal("1000"), when=T0,
+                  token_contract=_DAI)
+    cand = _cleg(1000, symbol="DAI", contract=_SCAM, usd=1000, to="0xscam")
+    matches = match_onward_transfers(inbound, [cand])
+    assert len(matches) == 1
+    assert matches[0].kind == "usd_value_cross_asset"
+    assert matches[0].confidence == "low"
+
+
+def test_naive_block_time_is_normalized_and_does_not_crash() -> None:
+    """A naive block_time (dict path) must be normalized to UTC so the
+    time-window comparison against an aware inbound doesn't raise TypeError
+    (which would abort the whole wave aggregation)."""
+    from datetime import datetime as _dt
+    leg = leg_from_transfer({
+        "to_address": "0xout", "tx_hash": "0xy",
+        "token": {"symbol": "DAI", "contract": _DAI},
+        "amount_decimal": Decimal("1000"),
+        "block_time": _dt(2025, 10, 9, 12, 5),  # NAIVE (no tzinfo)
+    })
+    assert leg is not None and leg.when.tzinfo is not None
+    inbound = Leg(to_address="0xnode", tx_hash="0xin", token_symbol="DAI",
+                  amount=Decimal("1000"), usd_value=None, when=T0,
+                  token_contract=_DAI)
+    # must not raise (aware inbound vs normalized candidate)
+    matches = match_onward_transfers(inbound, [leg])
+    assert len(matches) == 1 and matches[0].kind == "same_asset_amount"

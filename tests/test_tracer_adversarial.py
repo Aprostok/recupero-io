@@ -899,3 +899,42 @@ def test_value_trace_matches_against_largest_inbound_not_first(
     )
     hops = case.config_used["coverage"]["value_matched_hops"]
     assert any(h["matched_to"].lower() == target.lower() for h in hops)
+
+
+# ---- v0.34 audit fix: dust-aware inbound selection (_select_traced_inbound) ----
+
+
+def test_select_traced_inbound_prefers_unpriced_real_over_priced_dust() -> None:
+    """A tiny PRICED dust inbound must NOT displace the large UNPRICED real
+    funds — otherwise the matcher chases the dust amount and misses the hop."""
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbound
+    dust = SimpleNamespace(usd_value_at_tx=Decimal("5"), amount_decimal=Decimal("5"))
+    real = SimpleNamespace(usd_value_at_tx=None, amount_decimal=Decimal("3000000"))
+    assert _select_traced_inbound([dust, real], Decimal("10")) is real
+
+
+def test_select_traced_inbound_meaningful_priced_wins() -> None:
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbound
+    big = SimpleNamespace(usd_value_at_tx=Decimal("3000000"), amount_decimal=Decimal("3000000"))
+    huge_unpriced = SimpleNamespace(usd_value_at_tx=None, amount_decimal=Decimal("9" * 18))
+    # a genuinely-large PRICED inbound is "our funds" — it wins over a larger
+    # raw-amount unpriced (likely a high-supply meme/poison) leg.
+    assert _select_traced_inbound([huge_unpriced, big], Decimal("10")) is big
+
+
+def test_select_traced_inbound_all_priced_dust_picks_largest() -> None:
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbound
+    a = SimpleNamespace(usd_value_at_tx=Decimal("3"), amount_decimal=Decimal("3"))
+    b = SimpleNamespace(usd_value_at_tx=Decimal("8"), amount_decimal=Decimal("8"))
+    assert _select_traced_inbound([a, b], Decimal("10")) is b
+
+
+def test_select_traced_inbound_empty_is_none() -> None:
+    from recupero.trace.tracer import _select_traced_inbound
+    assert _select_traced_inbound([], Decimal("10")) is None

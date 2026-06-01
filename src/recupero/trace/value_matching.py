@@ -52,7 +52,7 @@ guess when nothing matches.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -73,6 +73,23 @@ class Leg:
     amount: Decimal
     usd_value: Decimal | None
     when: datetime
+    # v0.34 forensic hardening: the canonical on-chain token identity (lowercased
+    # contract address; None for the chain's native asset). A same-asset match
+    # REQUIRES contract identity — comparing only ``token_symbol`` lets a
+    # scam/spoof token with a colliding symbol (a fake "USDC") be matched as the
+    # real asset and promoted to medium confidence, fabricating a destination.
+    token_contract: str | None = None
+
+
+def _same_token(a: str | None, b: str | None) -> bool:
+    """Same on-chain asset? Requires contract identity when contracts are known;
+    both-None means the native asset (matched by symbol). A known contract never
+    matches an unknown one — so a spoof-symbol token is NOT treated as same-asset."""
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    return a.strip().lower() == b.strip().lower()
 
 
 @dataclass(frozen=True)
@@ -127,18 +144,33 @@ def leg_from_transfer(t: Any) -> Leg | None:
     when = _get("block_time", "when", "timestamp")
     amount = _to_decimal(_get("amount_decimal", "amount", "amount_decimal_value"))
 
-    # token symbol: token.symbol (TokenRef) or a flat field
+    # token symbol + canonical contract: token.symbol/.contract (TokenRef) or
+    # flat fields. The contract is the on-chain identity used to defeat
+    # symbol-spoofing in the same-asset match.
     symbol = None
+    contract = None
     tok = _get("token")
     if tok is not None:
-        symbol = getattr(tok, "symbol", None) if not isinstance(tok, dict) else tok.get("symbol")
+        if isinstance(tok, dict):
+            symbol = tok.get("symbol")
+            contract = tok.get("contract")
+        else:
+            symbol = getattr(tok, "symbol", None)
+            contract = getattr(tok, "contract", None)
     if symbol is None:
         symbol = _get("token_symbol", "symbol")
+    if contract is None:
+        contract = _get("token_contract", "contract")
 
     usd = _to_decimal(_get("usd_value_at_tx", "usd_value", "value_usd"))
 
     if not to_address or amount is None or when is None or not isinstance(when, datetime):
         return None
+    # Normalize to tz-aware UTC: a naive block_time (dict path / hand-built seed)
+    # vs an aware one would raise TypeError in the time-window comparison and
+    # abort the whole wave aggregation.
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
     return Leg(
         to_address=str(to_address),
         tx_hash=str(tx_hash),
@@ -146,6 +178,7 @@ def leg_from_transfer(t: Any) -> Leg | None:
         amount=amount,
         usd_value=usd,
         when=when,
+        token_contract=(str(contract).lower() if contract else None),
     )
 
 
@@ -185,11 +218,15 @@ def match_onward_transfers(
             continue
 
         matched_amount = False
-        # 1) Same-asset amount match (strongest).
+        # 1) Same-asset amount match (strongest). Requires the SAME on-chain
+        #    token (canonical contract identity), not just a matching symbol —
+        #    otherwise a spoof token with a colliding symbol is matched as the
+        #    real asset and a fabricated destination is followed at medium.
         if (
             inbound.amount > 0
             and c.token_symbol
             and c.token_symbol == inbound.token_symbol
+            and _same_token(inbound.token_contract, c.token_contract)
         ):
             diff_pct = abs(c.amount - inbound.amount) / inbound.amount * Decimal(100)
             if diff_pct <= amount_tol_pct:

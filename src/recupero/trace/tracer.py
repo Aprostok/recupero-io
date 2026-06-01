@@ -1060,14 +1060,28 @@ def _tx_within_window(
     src_time: datetime | None,
     window_end: datetime | None,
 ) -> bool:
-    """True if ``tx`` falls in the cross-chain settlement window.
+    """True if ``tx`` is an in-scope onward hop of bridged funds.
 
-    When ``window_end`` (or ``src_time``) is None the filter is disabled and
-    everything passes (legacy ``RECUPERO_CROSSCHAIN_WINDOW_HOURS=0`` behavior).
+    LOWER bound (always, when ``src_time`` is known): the hop must occur AT OR
+    AFTER the bridge handoff — pre-bridge activity on a (possibly reused)
+    destination address is not the onward movement of these funds.
+
+    UPPER bound (only when ``window_end`` is set): the hop must be within the
+    operator-configured settlement window. **By default there is NO upper
+    bound** — laundering parks funds and moves them LATER, so a dormant
+    destination funded days/weeks after the bridge MUST still be followed
+    (v0.34.4: the prior 24h cap silently dropped the dormant DAI holders in the
+    Zigha case — ~$16.9M of traced-but-recoverable-later funds). We rely on
+    value-direction + the high-confidence handoff gate to stay on the laundered
+    money rather than a time cap. ``src_time is None`` disables the filter.
     """
-    if window_end is None or src_time is None:
+    if src_time is None:
         return True
-    return src_time <= tx.block_time <= window_end
+    if tx.block_time < src_time:
+        return False
+    if window_end is None:
+        return True
+    return tx.block_time <= window_end
 
 
 def _collect_swap_output_seeds(
@@ -1336,13 +1350,17 @@ def _continue_past_dex_and_bridges(
     # same destination doesn't get traced twice. Keyed on (chain, addr).
     cross_chain_visited: set[tuple[str, str]] = set()
 
-    # v0.31.0 — Configurable cross-chain time window. Default 24h
-    # past the source bridge tx; 0 disables the filter (legacy
-    # behavior). Clamped to [0, 720] hours (30d max — bridge handoffs
-    # can hop in seconds or hours, never months in real cases).
+    # v0.34.4 — Cross-chain UPPER window cap. DEFAULT 0 = NO upper cap
+    # (lower-bound-only: keep every onward hop at/after the bridge handoff).
+    # This is the dormancy-aware default: laundered funds are parked and moved
+    # LATER, so a fixed upper cap structurally drops the dormant destinations we
+    # most need to track (the Zigha ~$16.9M DAI miss). Set a positive value only
+    # if an operator wants to bound trace size for cost control; the lower bound
+    # (hop must be after the bridge) always applies. Clamped to [0, 8760] hours
+    # (1y) when set.
     try:
         xchain_window_h = float(os.environ.get(
-            "RECUPERO_CROSSCHAIN_WINDOW_HOURS", "24",
+            "RECUPERO_CROSSCHAIN_WINDOW_HOURS", "0",
         ))
         # Reject NaN / ±Inf. v0.31.1: the earlier check only rejected
         # +Infinity (and NaN via self-inequality); -Infinity would slip
@@ -1352,13 +1370,14 @@ def _continue_past_dex_and_bridges(
         import math as _m
         if not _m.isfinite(xchain_window_h):
             raise ValueError("non-finite")
-        xchain_window_h = max(0.0, min(720.0, xchain_window_h))
+        xchain_window_h = max(0.0, min(8760.0, xchain_window_h))
     except (TypeError, ValueError):
         log.warning(
-            "RECUPERO_CROSSCHAIN_WINDOW_HOURS=%r rejected; using default 24h",
+            "RECUPERO_CROSSCHAIN_WINDOW_HOURS=%r rejected; using default "
+            "(no upper cap, lower-bound-only)",
             os.environ.get("RECUPERO_CROSSCHAIN_WINDOW_HOURS"),
         )
-        xchain_window_h = 24.0
+        xchain_window_h = 0.0
 
     for handoff in handoffs:
         # Same-chain destination from decoded calldata.

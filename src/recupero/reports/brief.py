@@ -1697,9 +1697,7 @@ def _build_identified_wallets(
             return True
         if agg["min_hop"] <= _SECTION_5_HOP_DEPTH_FLOOR:
             return True
-        if agg["usd_in"] >= _SECTION_5_USD_INCLUSION_FLOOR_DEFAULT:
-            return True
-        return False
+        return agg["usd_in"] >= _SECTION_5_USD_INCLUSION_FLOOR_DEFAULT
 
     filtered = {k: v for k, v in seen.items() if _is_high_signal(k)}
     dropped = len(seen) - len(filtered)

@@ -277,9 +277,7 @@ class EvmAdapter(ChainAdapter):
         """
         if str(tx.get("isError", "")).strip() == "1":
             return True
-        if str(tx.get("txreceipt_status", "")).strip() == "0":
-            return True
-        return False
+        return str(tx.get("txreceipt_status", "")).strip() == "0"
 
     def fetch_native_outflows(
         self, from_address: Address, start_block: int,

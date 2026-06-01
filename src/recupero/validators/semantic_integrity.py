@@ -1019,8 +1019,7 @@ def _host_from_url(url: str) -> str:
     m = _URL_HOST_RE.search(url)
     if not m:
         return ""
-    host = m.group(1).split(":", 1)[0].lower()
-    return host
+    return m.group(1).split(":", 1)[0].lower()
 
 
 def _host_in_allowed(host: str, allowed: tuple[str, ...]) -> bool:
@@ -1350,7 +1349,7 @@ def _base_used_as_chain(text: str, start: int, end: int) -> bool:
         "base rate", "base case", …).
     False otherwise (treated as the English word, not a chain).
     """
-    original = text[start:end]
+    text[start:end]
     # Following word (skip punctuation/whitespace).
     tail = text[end:end + 40].lstrip(" \t\n\r.,;:)(-—–")
     next_word = re.match(r"[A-Za-z0-9]+", tail)

@@ -453,6 +453,7 @@ def build_all_deliverables(
                     build_cooperation_profile,
                     recommend_legal_instrument,
                 )
+
                 # Pull OFAC + IC3 signals for the instrument recommender.
                 # v0.32.1 (financial-audit CRITICAL): read the canonical
                 # RISK_ASSESSMENT.summary.ofac_exposed_count shape via the

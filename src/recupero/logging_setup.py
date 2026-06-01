@@ -274,8 +274,7 @@ def _redact(text: str) -> str:
     text = _AWS_ACCESS_KEY_PATTERN.sub("***", text)
     text = _JWT_PATTERN.sub("***", text)
     text = _SUPABASE_NEWKEY_PATTERN.sub("***", text)
-    text = _LITERAL_KEY_PATTERN.sub("***", text)
-    return text
+    return _LITERAL_KEY_PATTERN.sub("***", text)
 
 
 # Adversarial-input wave (v0.20.2): log-injection defense. An attacker

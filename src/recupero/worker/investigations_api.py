@@ -97,8 +97,7 @@ def _redact(text: str, secret: str) -> str:
     if not secret:
         return text
     out = text.replace(secret, "***REDACTED***")
-    out = out.replace(f"Bearer {secret}", "Bearer ***REDACTED***")
-    return out
+    return out.replace(f"Bearer {secret}", "Bearer ***REDACTED***")
 
 
 # Column projection for the list endpoint. Keep this tight — the
@@ -266,7 +265,7 @@ def get_investigation_detail(
 def _render_list_row(row: dict[str, Any]) -> dict[str, Any]:
     """Render one DB row into the list-item shape. Adds computed
     fields and stringifies non-JSON-native types."""
-    out = {
+    return {
         "id": str(row["id"]),
         "case_id": str(row["case_id"]) if row["case_id"] else None,
         "status": row["status"],
@@ -286,7 +285,6 @@ def _render_list_row(row: dict[str, Any]) -> dict[str, Any]:
         # Computed convenience for the UI — saves a per-row case_id null check.
         "is_wallet_trace": row["case_id"] is None,
     }
-    return out
 
 
 def _render_detail_row(row: dict[str, Any]) -> dict[str, Any]:
@@ -296,7 +294,7 @@ def _render_detail_row(row: dict[str, Any]) -> dict[str, Any]:
     and ``is_wallet_trace`` so the UI doesn't have to compute them
     from raw columns.
     """
-    out = {
+    return {
         "id": str(row["id"]),
         "case_id": str(row["case_id"]) if row["case_id"] else None,
         "status": row["status"],
@@ -351,7 +349,6 @@ def _render_detail_row(row: dict[str, Any]) -> dict[str, Any]:
         # days-remaining / etc.
         "engagement": _build_engagement_summary(row),
     }
-    return out
 
 
 def _build_engagement_summary(row: dict[str, Any]) -> dict[str, Any]:

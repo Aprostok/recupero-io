@@ -225,8 +225,7 @@ def _normalize_issuer_name(raw: str) -> str:
     # the \s class either way).
     out = unicodedata.normalize("NFKC", raw)
     # Collapse every \s+ run to a single ASCII space, then strip.
-    out = re.sub(r"\s+", " ", out).strip()
-    return out
+    return re.sub(r"\s+", " ", out).strip()
 
 
 def build_cooperation_profile(

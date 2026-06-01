@@ -180,9 +180,7 @@ def is_bech32_address(s: str) -> bool:
     if program_bytes is None or not (2 <= len(program_bytes) <= 40):
         return False
     # v0 must be P2WPKH (20 bytes) or P2WSH (32 bytes).
-    if witness_version == 0 and len(program_bytes) not in (20, 32):
-        return False
-    return True
+    return not (witness_version == 0 and len(program_bytes) not in (20, 32))
 
 
 def _convertbits(

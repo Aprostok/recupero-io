@@ -2921,7 +2921,7 @@ def _check_orphan_artifacts_on_disk(briefs_dir: Path) -> list[Violation]:
                     if isinstance(v, str) and v
                 )
                 declared.update(
-                    Path(k).name for k in block.keys() if isinstance(k, str)
+                    Path(k).name for k in block if isinstance(k, str)
                 )
             elif isinstance(block, list):
                 for item in block:

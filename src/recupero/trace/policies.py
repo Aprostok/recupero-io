@@ -146,13 +146,7 @@ class TracePolicy:
         # ($0), so we refuse to assume an unknown-value transfer is dust
         # unless its on-chain amount is negligible. `amount_decimal` is the
         # human-units amount (1.0 ETH not 10^18).
-        if (
-            transfer.usd_value_at_tx is None
-            and transfer.amount_decimal is not None
-            and transfer.amount_decimal < Decimal("0.001")
-        ):
-            return False
-        return True
+        return not (transfer.usd_value_at_tx is None and transfer.amount_decimal is not None and transfer.amount_decimal < Decimal("0.001"))
 
     def should_traverse(self, transfer: Transfer) -> bool:
         """Recursion: should we follow this transfer's destination as a new seed?
@@ -184,15 +178,11 @@ class TracePolicy:
             return False
         if self.stop_at_mixer and cat == LabelCategory.mixer:
             return False
-        if self.stop_at_bridge and cat == LabelCategory.bridge:
-            return False
-        return True
+        return not (self.stop_at_bridge and cat == LabelCategory.bridge)
 
     def should_traverse_address(self, *, is_contract: bool) -> bool:
         """Secondary check — applied per destination, independent of the
         transfer label. Returns True if the address is OK to traverse;
         False if it should be treated as terminal.
         """
-        if self.stop_at_contract and is_contract:
-            return False
-        return True
+        return not (self.stop_at_contract and is_contract)

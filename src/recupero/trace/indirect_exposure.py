@@ -189,7 +189,7 @@ def compute_indirect_exposure(
     results: dict[str, IndirectExposureResult] = {}
 
     case_addresses = set(forward_flows.keys()) | {
-        a for receivers in forward_flows.values() for a in receivers.keys()
+        a for receivers in forward_flows.values() for a in receivers
     }
     sources_in_case = case_addresses & set(high_risk_db.keys())
 
@@ -628,7 +628,7 @@ def compute_label_exposure_scores(
 
     while frontier:
         next_frontier: list[tuple[str, int, float]] = []
-        for addr, hop, frac_in in frontier:
+        for addr, hop, _frac_in in frontier:
             if hop >= effective_max:
                 continue
             next_hop = hop + 1

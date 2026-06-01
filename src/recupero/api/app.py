@@ -1355,9 +1355,7 @@ def _intake_post_csrf_ok(request: Request) -> bool:
                 return False
         return True
     allow = {o.strip().lower() for o in raw_allow.split(",") if o.strip()}
-    if origin and origin.lower() in allow:
-        return True
-    return False
+    return bool(origin and origin.lower() in allow)
 
 
 def _intake_rl_client_ip(request: Request) -> str:

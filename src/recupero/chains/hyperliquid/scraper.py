@@ -106,7 +106,7 @@ def scrape_hyperliquid_case(
 
     transfers = _events_to_transfers(events, user_address)
     now = datetime.now(UTC)
-    case = Case(
+    return Case(
         case_id=case_id,
         seed_address=user_address,
         chain=Chain.ethereum,   # Hyperliquid uses Ethereum-compatible addresses
@@ -115,7 +115,6 @@ def scrape_hyperliquid_case(
         trace_completed_at=now,
         transfers=transfers,
     )
-    return case
 
 
 def _events_to_transfers(

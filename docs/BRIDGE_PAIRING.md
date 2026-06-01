@@ -93,8 +93,10 @@ ship a signature that hasn't matched a real tx. For each new protocol:
    destination fill (Etherscan v2 across chains — `chainid` param; one Standard
    key covers all EVM). The empirical shortcut used for DLN: start from a *known*
    destination receiver + amount and walk back to the fill tx, then read its logs.
-   (See the throwaway `scripts/zigha_bridge_decode_check.py` /
-   `scripts/zigha_dln_dest_verify.py` for the pattern.)
+   The Connext + Wormhole specs were verified this way: fetch the source tx
+   receipt + the dest fill receipt and assert the cross-chain id is byte-identical
+   on both (a throwaway probe is enough — its verified output then lives in the
+   `BridgePairSpec` constants + a real-data test, so the probe is discarded).
 2. **Pin the SOURCE order-id.** In the source tx receipt, find the
    order-creation event emitted by the source bridge contract; record its
    `topic0` and the **data-word index** (or topic index) of the order-id. Verify

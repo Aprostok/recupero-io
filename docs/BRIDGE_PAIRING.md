@@ -40,12 +40,18 @@ confirmed against a **real on-chain source+destination pair** live in
   pair: `Send.transferId` (data word 0) == `Relay.srcTransferId` (data word 6);
   Relay's own word-0 id is NOT the cross-chain key). Per-chain cBridge addresses.
 
-Verified-and-queued (pairing confirmed on-chain; pending a small engine hook):
-**Hop** (`TransferSent.transferId`↔`WithdrawalBonded.transferId`, both indexed
-bytes32 — confirmed Base→Optimism pair; needs address-less `getLogs` which is
-confirmed working) and **Synapse** (kappa is NOT emitted on the source; it is
-`keccak256(ascii("0x"+sourceTxHash))` and appears as the dest mint's `topics[2]`
-— verified vs 5 real pairs; needs a derived-id hook + multi-event topic0).
+* **32-byte indexed id (address-less)** — **Hop** (`TransferSent.transferId`
+  (topic1) == `WithdrawalBonded.transferId` (topic1), both indexed bytes32 —
+  verified Base→Optimism). Per-token emitters are many, so the dest is found
+  address-LESS via `getLogs(topic0=WithdrawalBonded, topic1=transferId)`; the
+  source emitters load from `bridges.json`.
+* **derived id** — **Synapse** (kappa is NOT emitted on the source; it is
+  `keccak256(ascii("0x"+sourceTxHash))` and appears as the destination mint's
+  `topics[2]` — verified vs 5 real Eth→BSC pairs). The source `TokenDeposit`/
+  `TokenRedeem` event recognizes the tx (so we don't derive for non-Synapse
+  txs); destination is matched across the 4 mint/withdraw event topic0s.
+
+All five are live-confirmed end-to-end via `confirm-bridge`.
 
 Protocol + order-id + destination chain are resolved from the source tx's EVENT
 LOGS (`identify_source`), not the tx `to` — robust to periphery/multicall

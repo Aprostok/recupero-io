@@ -88,6 +88,23 @@ class BridgePairSpec:
     # the destination chain can be read straight from the source event rather
     # than decoded from calldata (robust to periphery/multicall entrypoints).
     source_dest_chain_topic: int | None = None
+    # when True, the destination fill is queried address-LESS (Etherscan getLogs
+    # by topic0 + the id topic, across ALL emitters) — for protocols with many
+    # per-token/per-pool contracts (Hop) where the id is a globally-unique
+    # indexed bytes32 so no address is needed to disambiguate.
+    dest_wildcard: bool = False
+    # v0.34 Synapse shape: the cross-chain id is NOT emitted on the source — it
+    # is DERIVED from the source tx hash. "event" (default) reads it from the
+    # source event; "keccak_ascii_txhash" computes keccak256(ascii("0x"+txHash)).
+    source_id_kind: str = "event"
+    # extra source-event topic0s for protocol RECOGNITION (a protocol with
+    # several source event variants, e.g. Synapse TokenDeposit/TokenRedeem/…).
+    source_event_topics: tuple[str, ...] = ()
+    # destinationChainId in a source-event DATA word (real chain id), when not a
+    # topic (Synapse TokenRedeem.chainId is data word 0).
+    source_dest_chain_word: int | None = None
+    # extra destination fill topic0s (Synapse TokenMint/TokenWithdraw/…AndSwap).
+    dest_event_topics: tuple[str, ...] = ()
     notes: str = ""
 
     def dest_contract_for(self, chain: str | None) -> str | None:
@@ -199,7 +216,88 @@ _CELER = BridgePairSpec(
     notes="Celer cBridge Send.transferId(w0)==Relay.srcTransferId(w6); verified BSC→Eth.",
 )
 
-_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS, _CELER)
+def _load_addresses_by_name(substr: str) -> frozenset[str]:
+    """Load bridge contract addresses whose label name/protocol contains
+    ``substr`` (case-insensitive) from bridges.json — for protocols with many
+    per-token contracts (Hop). Best-effort: returns empty on any load failure
+    (the protocol then just isn't recognized, rather than raising)."""
+    try:
+        from recupero.trace.cross_chain import ingest_bridge_seeds
+        db = ingest_bridge_seeds()
+        s = substr.lower()
+        out = {
+            addr.lower()
+            for (_chain, addr), info in db.items()
+            if s in (info.name or "").lower() or s in (info.protocol or "").lower()
+        }
+        return frozenset(out)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("bridge-pairing: failed to load %r addresses: %s", substr, exc)
+        return frozenset()
+
+
+# Hop — per-token L2 bridges. transferId is a globally-unique indexed bytes32 on
+# BOTH the source `TransferSent` (topic1) and the destination `WithdrawalBonded`
+# (topic1), so the destination is found address-LESS by (topic0, transferId).
+# The source emitters (many per-token addresses) are loaded from bridges.json.
+# VERIFIED real pair: Base TransferSent 0x3ba95375 → Optimism WithdrawalBonded
+# 0x1942dd58, transferId 0x2a9767e8…, both indexed topic1.
+_HOP = BridgePairSpec(
+    protocol="Hop",
+    source_contracts=_load_addresses_by_name("Hop:"),
+    source_event_topic0=(
+        "0xe35dddd4ea75d7e9b3fe93af4f4e40e778c3da4074c9d93e7c6536f1e803c1eb"
+    ),
+    source_order_id_topic=1,            # transferId (indexed)
+    source_dest_chain_topic=2,          # destination chainId (indexed real id)
+    dest_event_topic0=(
+        "0x0c3d250c7831051e78aa6a56679e590374c7c424415ffe4aa474491def2fe705"
+    ),
+    dest_id_topic=1,                    # transferId (indexed)
+    dest_wildcard=True,                 # WithdrawalBonded across any Hop bridge
+    max_fee_pct=Decimal("1.0"),
+    notes="Hop TransferSent.transferId(topic1)==WithdrawalBonded.transferId(topic1); verified Base→Optimism.",
+)
+
+# Synapse — kappa is NOT emitted on the source; it is derived
+# keccak256(ascii("0x"+sourceTxHash)) and appears as the destination mint's
+# indexed topic2. Source events (TokenDeposit/TokenRedeem) are used only to
+# RECOGNIZE the tx as Synapse before deriving. VERIFIED vs 5 real Eth→BSC pairs.
+# Legacy kappa-emitting bridges (the bridges.json "SynapseRouter" entries are
+# the front-end routers, NOT these).
+_SYNAPSE_BRIDGES: dict[str, str] = {
+    "ethereum": "0x2796317b0ff8538f253012862c06787adfb8ceb6",
+    "bsc": "0xd123f70ae324d34a9e76b67a27bf77593ba8749f",
+    "polygon": "0x8f5bbb2bb8c2ee94639e55d5f41de9b4839c1280",
+    "optimism": "0xaf41a65f786339e7911f4acdad6bd49426f2dc6b",
+    "arbitrum": "0x6f4e8eba4d337f874ab57478acc2cb5bacdc19c9",
+}
+_SYNAPSE = BridgePairSpec(
+    protocol="Synapse",
+    source_contracts=frozenset(_SYNAPSE_BRIDGES.values()),
+    source_event_topic0=(  # TokenDeposit
+        "0xda5273705dbef4bf1b902a131c2eac086b7e1476a8ab0cb4da08af1fe1bd8e3b"
+    ),
+    source_event_topics=(  # TokenRedeem (other recognition variant)
+        "0xdc5bad4651c5fbe9977a696aadc65996c468cde1448dd468ec0d83bf61c4b57c",
+    ),
+    source_id_kind="keccak_ascii_txhash",
+    source_dest_chain_word=0,           # chainId is data word 0 of TokenDeposit/Redeem
+    dest_contracts=_SYNAPSE_BRIDGES,
+    dest_event_topic0=(  # TokenMint
+        "0xbf14b9fde87f6e1c29a7e0787ad1d0d64b4648d8ae63da21524d9fd0f283dd38"
+    ),
+    dest_event_topics=(  # TokenWithdraw / TokenMintAndSwap / TokenWithdrawAndRemove
+        "0x8b0afdc777af6946e53045a4a75212769075d30455a212ac51c9b16f9c5c9b26",
+        "0x4f56ec39e98539920503fd54ee56ae0cbebe9eb15aa778f18de67701eeae7c65",
+        "0xc1a608d0f8122d014d03cc915a91d98cef4ebaf31ea3552320430cba05211b6d",
+    ),
+    dest_id_topic=2,                    # kappa (indexed)
+    max_fee_pct=Decimal("1.0"),
+    notes="Synapse kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs.",
+)
+
+_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS, _CELER, _HOP, _SYNAPSE)
 
 
 def get_pair_spec(protocol: str | None) -> BridgePairSpec | None:
@@ -246,6 +344,27 @@ def _topic(topics: list[str] | None, idx: int) -> str | None:
     return _norm_word(topics[idx])
 
 
+def _source_topic0s(spec: BridgePairSpec) -> tuple[str, ...]:
+    return (spec.source_event_topic0, *spec.source_event_topics)
+
+
+def _dest_topic0s(spec: BridgePairSpec) -> tuple[str, ...]:
+    return (spec.dest_event_topic0, *spec.dest_event_topics)
+
+
+def _derive_keccak_ascii_txhash(raw_receipt: dict[str, Any] | None) -> str | None:
+    """Synapse-style derived id: keccak256 of the lowercase ASCII STRING of the
+    source tx hash (the form the Synapse validator uses for kappa). VERIFIED vs
+    5 real Synapse pairs."""
+    if not isinstance(raw_receipt, dict):
+        return None
+    txh = raw_receipt.get("transactionHash") or raw_receipt.get("transaction_hash")
+    if not txh or not isinstance(txh, str):
+        return None
+    from eth_utils import keccak
+    return "0x" + keccak(text=txh.lower()).hex()
+
+
 def extract_source_order_id(
     spec: BridgePairSpec, raw_source_receipt: dict[str, Any] | None
 ) -> str | None:
@@ -255,16 +374,24 @@ def extract_source_order_id(
     """
     if not isinstance(raw_source_receipt, dict):
         return None
+    # Derived-id shape (Synapse): the id is not emitted — compute it from the
+    # source tx hash. Only trust it when a source event from this protocol IS
+    # present in the receipt (so we don't derive a kappa for a non-Synapse tx).
+    if spec.source_id_kind == "keccak_ascii_txhash":
+        if _has_source_event(spec, raw_source_receipt):
+            return _derive_keccak_ascii_txhash(raw_source_receipt)
+        return None
     logs = raw_source_receipt.get("logs")
     if not isinstance(logs, list):
         return None
+    src_t0s = _source_topic0s(spec)
     for lg in logs:
         if not isinstance(lg, dict):
             continue
         if (lg.get("address") or "").lower() not in spec.source_contracts:
             continue
         topics = lg.get("topics") or []
-        if _topic(topics, 0) != spec.source_event_topic0:
+        if _topic(topics, 0) not in src_t0s:
             continue
         if spec.source_order_id_topic is not None:
             oid = _topic(topics, spec.source_order_id_topic)
@@ -273,6 +400,22 @@ def extract_source_order_id(
         if oid and oid != "0x" + "0" * 64:
             return oid
     return None
+
+
+def _has_source_event(spec: BridgePairSpec, raw_receipt: dict[str, Any]) -> bool:
+    """True if the receipt contains a recognized source event from this spec's
+    emitter set — the gate that prevents deriving an id for an unrelated tx."""
+    logs = raw_receipt.get("logs")
+    if not isinstance(logs, list):
+        return False
+    src_t0s = _source_topic0s(spec)
+    for lg in logs:
+        if not isinstance(lg, dict):
+            continue
+        if (lg.get("address") or "").lower() in spec.source_contracts and \
+                _topic(lg.get("topics") or [], 0) in src_t0s:
+            return True
+    return False
 
 
 def identify_source(
@@ -301,22 +444,29 @@ def identify_source(
         topics = lg.get("topics") or []
         t0 = _topic(topics, 0)
         for spec in _REGISTRY:
-            if emitter not in spec.source_contracts or t0 != spec.source_event_topic0:
+            if emitter not in spec.source_contracts or t0 not in _source_topic0s(spec):
                 continue
-            if spec.source_order_id_topic is not None:
+            # order id: derived (Synapse) or read from the event topic/word.
+            if spec.source_id_kind == "keccak_ascii_txhash":
+                oid = _derive_keccak_ascii_txhash(raw_source_receipt)
+            elif spec.source_order_id_topic is not None:
                 oid = _topic(topics, spec.source_order_id_topic)
             else:
                 oid = _data_word(lg.get("data"), spec.source_order_id_word or 0)
             if not oid or oid == "0x" + "0" * 64:
                 continue
+            # destination chain from a source-event topic OR data word (real id).
             dest_chain: str | None = None
+            cid_word: str | None = None
             if spec.source_dest_chain_topic is not None:
                 cid_word = _topic(topics, spec.source_dest_chain_topic)
-                if cid_word:
-                    try:
-                        dest_chain = _CHAIN_BY_REAL_ID.get(int(cid_word, 16))
-                    except ValueError:
-                        dest_chain = None
+            elif spec.source_dest_chain_word is not None:
+                cid_word = _data_word(lg.get("data"), spec.source_dest_chain_word)
+            if cid_word:
+                try:
+                    dest_chain = _CHAIN_BY_REAL_ID.get(int(cid_word, 16))
+                except ValueError:
+                    dest_chain = None
             return spec, oid, dest_chain
     return None
 
@@ -380,9 +530,15 @@ def confirm_bridge_destination(
     if not oid or oid == "0x" + "0" * 64:
         return None
 
-    dst_contract = spec.dest_contract_for(destination_chain)
-    if not dst_contract:
-        return None
+    # Resolve the destination contract. dest_wildcard protocols (Hop) query
+    # address-LESS (across all per-token emitters) since the id is globally
+    # unique; others use the per-chain / deterministic contract.
+    if spec.dest_wildcard:
+        query_addr = ""  # omit address → Etherscan getLogs searches all emitters
+    else:
+        query_addr = spec.dest_contract_for(destination_chain) or ""
+        if not query_addr:
+            return None
 
     try:
         from_block = dst_adapter.block_at_or_before(src_block_time)
@@ -396,22 +552,12 @@ def confirm_bridge_destination(
     except Exception:  # noqa: BLE001
         to_block = "latest"
 
-    # Build the destination log query. Composite shape filters the id server-side
-    # at its topic; 32-byte shape scans the payload.
+    # Composite shape filters the id server-side at its topic; 32-byte shape
+    # scans the payload.
     topics_filter: list[str | None] | None = None
-    if spec.dest_id_topic is not None:
+    if spec.dest_id_topic is not None and 1 <= spec.dest_id_topic <= 3:
         topics_filter = [None, None, None]
-        if 1 <= spec.dest_id_topic <= 3:
-            topics_filter[spec.dest_id_topic - 1] = oid
-
-    try:
-        logs = dst_adapter.fetch_logs(
-            dst_contract, spec.dest_event_topic0,
-            from_block=from_block, to_block=to_block, topics=topics_filter,
-        )
-    except Exception as exc:  # noqa: BLE001
-        log.warning("confirm: dest fetch_logs failed: %s", exc)
-        return None
+        topics_filter[spec.dest_id_topic - 1] = oid
 
     # Expected origin-chain-id topic value for the composite shape.
     want_origin = None
@@ -420,54 +566,65 @@ def confirm_bridge_destination(
         if cid is not None:
             want_origin = "0x" + f"{cid:064x}"
 
-    for lg in logs or []:
-        if not isinstance(lg, dict):
+    # A protocol may emit the fill under several event signatures (Synapse
+    # TokenMint/TokenWithdraw/…). Query each; first id-match wins.
+    for dest_t0 in _dest_topic0s(spec):
+        try:
+            logs = dst_adapter.fetch_logs(
+                query_addr, dest_t0,
+                from_block=from_block, to_block=to_block, topics=topics_filter,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("confirm: dest fetch_logs failed: %s", exc)
             continue
-        if spec.dest_id_topic is not None:
-            # composite shape: confirm the id topic + (origin chain id topic)
-            if _topic(lg.get("topics"), spec.dest_id_topic) != oid:
+        for lg in logs or []:
+            if not isinstance(lg, dict):
                 continue
-            if want_origin is not None and _topic(
-                lg.get("topics"), spec.dest_origin_chain_topic
-            ) != want_origin:
-                continue
-        else:
-            # 32-byte shape: scan the payload (+ topics) for the exact id.
-            words = _all_words(lg.get("data")) | {
-                _norm_word(t) for t in (lg.get("topics") or [])
-            }
-            if oid not in words:
-                continue
-        dst_tx = lg.get("transactionHash") or lg.get("transaction_hash") or ""
-        recipient, raw_amount = _fill_recipient_amount(
-            dst_adapter, dst_tx,
-            infra={dst_contract, *spec.source_contracts},
-        )
-        log.info(
-            "bridge destination CONFIRMED (id match): protocol=%s id=%s "
-            "dst_chain=%s dst_tx=%s recipient=%s",
-            spec.protocol, oid[:14] + "…", destination_chain, dst_tx, recipient,
-        )
-        return ConfirmedDestination(
-            protocol=spec.protocol,
-            order_id=oid,
-            dst_chain=destination_chain or "",
-            dst_tx=dst_tx,
-            dst_contract=dst_contract,
-            recipient=recipient,
-            raw_amount=raw_amount,
-            confidence="high",
-            basis=(
-                f"protocol id {oid} matched on both the {spec.protocol} source "
-                f"event ({spec.source_event_topic0[:10]}…) and the destination "
-                f"fill ({spec.dest_event_topic0[:10]}…)"
-                + (
-                    f" with origin-chain-id == {source_chain}"
-                    if spec.dest_origin_chain_topic is not None else ""
-                )
-                + " — cryptographic match"
-            ),
-        )
+            if spec.dest_id_topic is not None:
+                # composite/topic shape: confirm the id topic + (origin chain id)
+                if _topic(lg.get("topics"), spec.dest_id_topic) != oid:
+                    continue
+                if want_origin is not None and _topic(
+                    lg.get("topics"), spec.dest_origin_chain_topic
+                ) != want_origin:
+                    continue
+            else:
+                # 32-byte shape: scan the payload (+ topics) for the exact id.
+                words = _all_words(lg.get("data")) | {
+                    _norm_word(t) for t in (lg.get("topics") or [])
+                }
+                if oid not in words:
+                    continue
+            dst_tx = lg.get("transactionHash") or lg.get("transaction_hash") or ""
+            emitter = (lg.get("address") or query_addr or "").lower()
+            recipient, raw_amount = _fill_recipient_amount(
+                dst_adapter, dst_tx,
+                infra={emitter, query_addr, *spec.source_contracts},
+            )
+            log.info(
+                "bridge destination CONFIRMED (id match): protocol=%s id=%s "
+                "dst_chain=%s dst_tx=%s recipient=%s",
+                spec.protocol, oid[:14] + "…", destination_chain, dst_tx, recipient,
+            )
+            return ConfirmedDestination(
+                protocol=spec.protocol,
+                order_id=oid,
+                dst_chain=destination_chain or "",
+                dst_tx=dst_tx,
+                dst_contract=emitter or query_addr,
+                recipient=recipient,
+                raw_amount=raw_amount,
+                confidence="high",
+                basis=(
+                    f"protocol id {oid} matched on both the {spec.protocol} "
+                    f"source event and the destination fill ({dest_t0[:10]}…)"
+                    + (
+                        f" with origin-chain-id == {source_chain}"
+                        if spec.dest_origin_chain_topic is not None else ""
+                    )
+                    + " — cryptographic match"
+                ),
+            )
     return None
 
 

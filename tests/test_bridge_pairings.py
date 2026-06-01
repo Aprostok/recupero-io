@@ -20,6 +20,7 @@ from recupero.trace.bridge_pairings import (
     confirm_bridge_destination,
     extract_source_order_id,
     get_pair_spec,
+    identify_source,
 )
 
 ORDER_ID = "0x57825e7d05231475614b6156ca01b74c8743fd70fb73210da95f7413f4871f9b"
@@ -386,3 +387,188 @@ def test_celer_registry_resolves() -> None:
     spec = get_pair_spec("Celer cBridge")
     assert spec is not None and spec.protocol == "Celer"
     assert spec.dest_contract_for("bsc") == CELER_BSC
+
+
+# ===================== Hop (indexed transferId, address-less dest) ==========
+# Verified real pair: Base TransferSent 0x3ba95375 → Optimism WithdrawalBonded
+# 0x1942dd58, transferId 0x2a9767e8…, both indexed topic1.
+
+HOP_SENT_T0 = "0xe35dddd4ea75d7e9b3fe93af4f4e40e778c3da4074c9d93e7c6536f1e803c1eb"
+HOP_BOND_T0 = "0x0c3d250c7831051e78aa6a56679e590374c7c424415ffe4aa474491def2fe705"
+HOP_SRC_EMITTER = "0x3666f603cc164936c1b87e207f36beba4ac5f18a"  # Hop ETH L2 Bridge (Base)
+HOP_DEST_EMITTER = "0x83f6244bd87662118d96d9a6d44f09dfff14b30e"  # Hop ETH L2 Bridge (Optimism)
+HOP_XFER = "0x2a9767e8a94802c4b86df8c0bfa9e03a2b8c29dc6f419e1321cb4fc47290cdfd"
+HOP_RECIP = "0xf8284721424e03b07056c3809f25eea780d8473e"
+
+
+def _hop_source_receipt(xfer: str = HOP_XFER, dest_chain_id: int = 10) -> dict[str, Any]:
+    # TransferSent: topic1=transferId, topic2=destChainId, topic3=recipient.
+    return {"logs": [{
+        "address": HOP_SRC_EMITTER,
+        "topics": [HOP_SENT_T0, xfer, _padint(dest_chain_id), _topic_addr(HOP_RECIP)],
+        "data": "0x" + _word("0x2d79883d2000"),  # amount
+    }]}
+
+
+def _hop_bond_log(xfer: str = HOP_XFER, tx: str = "0xhopbond") -> dict[str, Any]:
+    return {"address": HOP_DEST_EMITTER, "topics": [HOP_BOND_T0, xfer],
+            "data": "0x" + _word("0x2d79883d2000"), "transactionHash": tx}
+
+
+class _FakeHopAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        # address-less (wildcard) query → address is "" for Hop.
+        if topic0.lower() == HOP_BOND_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": [{
+            "address": USDC,
+            "topics": [ERC20_TRANSFER, _topic_addr(HOP_DEST_EMITTER), _topic_addr(HOP_RECIP)],
+            "data": hex(50000000000000),
+        }]})
+
+
+def test_hop_source_emitters_loaded_from_bridges_json() -> None:
+    spec = get_pair_spec("Hop")
+    assert spec is not None and spec.dest_wildcard is True
+    assert HOP_SRC_EMITTER in spec.source_contracts, (
+        "Hop source emitters must load from bridges.json"
+    )
+
+
+def test_hop_confirm_indexed_transferid_high() -> None:
+    adapter = _FakeHopAdapter([_hop_bond_log()])
+    out = confirm_bridge_destination(
+        protocol="Hop", destination_chain="optimism",
+        source_receipt=_hop_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="base",
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id == HOP_XFER
+    assert out.dst_tx == "0xhopbond"
+    assert (out.recipient or "").lower() == HOP_RECIP
+
+
+def test_hop_tampered_transferid_returns_none() -> None:
+    adapter = _FakeHopAdapter([_hop_bond_log(xfer="0x" + "ab" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Hop", destination_chain="optimism",
+        source_receipt=_hop_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="base",
+    )
+    assert out is None
+
+
+def test_hop_identify_source_reads_dest_chain_from_topic() -> None:
+    ident = identify_source(_hop_source_receipt(dest_chain_id=10))
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Hop"
+    assert oid == HOP_XFER
+    assert dest_chain == "optimism"
+
+
+# ===================== Synapse (derived kappa = keccak(ascii(srcTxHash))) ====
+# Verified vs 5 real Eth→BSC pairs: src TokenDeposit 0x1deca897… → derived kappa
+# 0x867be90c… == dest BSC TokenMint topics[2].
+
+SYN_SRC_TX = "0x1deca8979d670d04eec269502cc5435aeaabb0354f72615514ede521419f0282"
+SYN_KAPPA = "0x867be90cef9605d157d3f2cb76101c03e53bffb3af0386a69afe80ba32de8483"
+SYN_ETH = "0x2796317b0ff8538f253012862c06787adfb8ceb6"
+SYN_BSC = "0xd123f70ae324d34a9e76b67a27bf77593ba8749f"
+SYN_DEPOSIT_T0 = "0xda5273705dbef4bf1b902a131c2eac086b7e1476a8ab0cb4da08af1fe1bd8e3b"
+SYN_MINT_T0 = "0xbf14b9fde87f6e1c29a7e0787ad1d0d64b4648d8ae63da21524d9fd0f283dd38"
+SYN_RECIP = "0xfdff0b5600000000000000000000000000000000"
+
+
+def _syn_source_receipt(src_tx: str = SYN_SRC_TX, dest_chain_id: int = 56) -> dict[str, Any]:
+    # TokenDeposit(to indexed, chainId, token, amount): chainId = data word 0.
+    return {
+        "transactionHash": src_tx,
+        "logs": [{
+            "address": SYN_ETH,
+            "topics": [SYN_DEPOSIT_T0, _topic_addr("0x" + "ab" * 20)],
+            "data": "0x" + _word(_padint(dest_chain_id)) + _word("0x0") + _word("0x0"),
+        }],
+    }
+
+
+def _syn_mint_log(kappa: str = SYN_KAPPA, tx: str = "0xsynmint") -> dict[str, Any]:
+    return {"address": SYN_BSC,
+            "topics": [SYN_MINT_T0, _topic_addr(SYN_RECIP), kappa],
+            "data": "0x", "transactionHash": tx}
+
+
+class _FakeSynapseAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if address.lower() == SYN_BSC and topic0.lower() == SYN_MINT_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": [{
+            "address": USDT,
+            "topics": [ERC20_TRANSFER, _topic_addr(SYN_BSC), _topic_addr(SYN_RECIP)],
+            "data": hex(5000000),
+        }]})
+
+
+def test_synapse_extract_derives_kappa_from_txhash() -> None:
+    spec = get_pair_spec("Synapse")
+    # The derived id must equal the real on-chain kappa for the verified tx.
+    assert extract_source_order_id(spec, _syn_source_receipt()) == SYN_KAPPA
+
+
+def test_synapse_derive_requires_a_recognized_source_event() -> None:
+    """No Synapse source event in the receipt → don't derive a kappa for an
+    unrelated tx."""
+    spec = get_pair_spec("Synapse")
+    assert extract_source_order_id(spec, {"transactionHash": SYN_SRC_TX, "logs": []}) is None
+
+
+def test_synapse_confirm_derived_kappa_match_high() -> None:
+    adapter = _FakeSynapseAdapter([_syn_mint_log()])
+    out = confirm_bridge_destination(
+        protocol="Synapse", destination_chain="bsc",
+        source_receipt=_syn_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="ethereum",
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id == SYN_KAPPA
+    assert out.dst_tx == "0xsynmint"
+    assert (out.recipient or "").lower() == SYN_RECIP
+
+
+def test_synapse_tampered_kappa_returns_none() -> None:
+    adapter = _FakeSynapseAdapter([_syn_mint_log(kappa="0x" + "cd" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Synapse", destination_chain="bsc",
+        source_receipt=_syn_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="ethereum",
+    )
+    assert out is None
+
+
+def test_synapse_identify_source_derives_and_reads_dest_chain_word() -> None:
+    ident = identify_source(_syn_source_receipt(dest_chain_id=56))
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Synapse"
+    assert oid == SYN_KAPPA
+    assert dest_chain == "bsc"

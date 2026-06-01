@@ -598,11 +598,15 @@ class EvmAdapter(ChainAdapter):
         params: dict[str, str] = {
             "module": "logs",
             "action": "getLogs",
-            "address": address,
             "fromBlock": _blk(from_block),
             "toBlock": _blk(to_block),
             "topic0": topic0,
         }
+        # address is optional: an empty address means "search all emitters"
+        # (used by bridge-pairing for protocols with many per-token contracts,
+        # disambiguated by a globally-unique indexed id topic).
+        if address:
+            params["address"] = address
         # topic1..topic3: Etherscan needs the topicX_Y_opr operator between
         # consecutive indexed topics. We only ever AND them.
         for i, t in enumerate((topics or []), start=1):

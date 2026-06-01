@@ -204,12 +204,16 @@ def test_v_cfi01_freezable_destinations_get_freezable_emoji() -> None:
     assert "Freezability HIGH" in usdt_dest["notes"]
 
 
-def test_dai_destination_classified_unrecoverable_not_freezable() -> None:
+def test_dai_destination_classified_tracked_not_freezable() -> None:
     """DAI is in freeze_asks (the dormant detector found it) but
-    freeze_capability='no' (Sky Protocol is permissionless). The
-    mechanical fallback note must emit ⬛ UNRECOVERABLE, NOT 🟩 —
-    otherwise the brief would tell the issuer (Sky) to freeze
-    funds they have no authority to freeze."""
+    freeze_capability='no' (Sky Protocol is permissionless).
+
+    v0.34.4: the funds are IDENTIFIED and still sitting there, so they are NOT
+    written off as UNRECOVERABLE — they are 🟪 TRACKED (monitored for movement,
+    recoverable later if they move to a freezable venue or the perpetrator is
+    identified). The protective invariant is unchanged and PRESERVED: it must
+    NOT be 🟩 FREEZABLE — the brief must never tell Sky to freeze funds it has
+    no authority to freeze."""
     transfers = [
         _transfer(from_addr=VICTIM, to_addr=PERP_HUB,
                   usd=Decimal("100000"), tx_hash="0xhub"),
@@ -225,8 +229,10 @@ def test_dai_destination_classified_unrecoverable_not_freezable() -> None:
     )
     destinations = _extract_destinations(case, {}, freeze_targets)
     dai_dest = next(d for d in destinations if d["address"] == DAI_DEST)
-    assert dai_dest["status"] == "UNRECOVERABLE"
-    assert "⬛" in dai_dest["notes"]
+    assert dai_dest["status"] == "TRACKED"
+    assert dai_dest["status"] != "FREEZABLE"  # the protective invariant
+    assert "🟪" in dai_dest["notes"]
+    assert "monitoring" in dai_dest["notes"].lower()
     assert "Sky Protocol" in dai_dest["notes"]
 
 

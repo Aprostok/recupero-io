@@ -128,6 +128,32 @@ def test_derive_excludes_no_capability_holdings():
     assert SKY_DEST.lower() not in addrs
 
 
+def test_derive_includes_tracked_holding_under_low_capability():
+    """v0.34.4: a TRACKED holding (identified funds we can't freeze TODAY but
+    that still sit there) under a LOW/NO-capability issuer MUST be watched —
+    that's the whole point of TRACKED: alert us if/when the funds move so we can
+    recover them later. Only NON-TRACKED holdings under such issuers stay carved
+    out. This is the Zigha dormant-DAI case (~$16.9M)."""
+    brief = _v_cfi01_shape_brief()
+    # Sky Protocol DAI, LOW capability, but the funds are identified + held →
+    # classified TRACKED upstream.
+    brief["ALL_ISSUER_HOLDINGS"][2]["holdings"][0]["status"] = "TRACKED"
+    seeds = derive_subscriptions_from_brief(
+        brief,
+        case_id=CASE_ID,
+        investigator_email=INVESTIGATOR,
+    )
+    by_addr = {s.address.lower(): s for s in seeds}
+    assert SKY_DEST.lower() in by_addr, (
+        "TRACKED holding under a LOW-capability issuer was NOT subscribed — "
+        "dormant recoverable-later funds would go unmonitored (the Zigha "
+        "$16.9M DAI failure mode)."
+    )
+    # watched for ANY movement so we catch it the moment it relocates.
+    assert by_addr[SKY_DEST.lower()].trigger_type == "any_movement"
+    assert "TRACKED" in (by_addr[SKY_DEST.lower()].label or "")
+
+
 def test_derive_routes_ofac_addresses_to_ofac_contact_trigger():
     """An address flagged in RISK_ASSESSMENT as OFAC-exposed must
     get trigger_type='ofac_contact' (fires on inflows too, not just

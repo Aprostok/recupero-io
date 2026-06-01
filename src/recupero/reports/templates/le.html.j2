@@ -508,6 +508,8 @@
         <span class="label-pill" style="color:#2F6B3E;">FREEZABLE</span>
         {% elif h.status == 'INVESTIGATE' %}
         <span class="label-pill" style="color:#7C2D12;">INVESTIGATE</span>
+        {% elif h.status == 'TRACKED' %}
+        <span class="label-pill" style="color:#6D28D9;">TRACKED</span>
         {% elif h.status == 'UNRECOVERABLE' %}
         <span class="label-pill" style="color:#6B7280;">UNRECOVERABLE</span>
         {% elif h.status == 'EXCHANGE' %}
@@ -601,6 +603,8 @@
         <span class="label-pill" style="color:#2F6B3E; font-weight:600;">FREEZABLE</span>
         {% elif h.status == 'INVESTIGATE' %}
         <span class="label-pill" style="color:#7C2D12; font-weight:600;">INVESTIGATE</span>
+        {% elif h.status == 'TRACKED' %}
+        <span class="label-pill" style="color:#6D28D9; font-weight:600;">TRACKED</span>
         {% elif h.status == 'UNRECOVERABLE' %}
         <span class="label-pill" style="color:#6B7280; font-weight:600;">UNRECOVERABLE</span>
         {% elif h.status == 'EXCHANGE' %}

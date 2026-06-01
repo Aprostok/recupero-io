@@ -281,14 +281,15 @@ def test_window_negative_inf(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("RECUPERO_CROSSCHAIN_WINDOW_HOURS", "-Infinity")
     import math as _m
     try:
-        v = float(os.environ.get("RECUPERO_CROSSCHAIN_WINDOW_HOURS", "24"))
+        v = float(os.environ.get("RECUPERO_CROSSCHAIN_WINDOW_HOURS", "0"))
         if not _m.isfinite(v):
             raise ValueError("non-finite")
-        result = max(0.0, min(720.0, v))
+        result = max(0.0, min(8760.0, v))
     except (TypeError, ValueError):
-        result = 24.0
-    # Post-fix: -inf is rejected → falls back to the 24h default.
-    assert result == 24.0
+        result = 0.0
+    # Post-fix: -inf is rejected → falls back to the default (v0.34.4: the
+    # default is now 0 = NO upper cap / lower-bound-only, dormancy-aware).
+    assert result == 0.0
 
 
 # ─────────────────────────────────────────────────────────────────────────────

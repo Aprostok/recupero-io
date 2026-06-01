@@ -197,20 +197,32 @@ def derive_subscriptions_from_brief(
         if not isinstance(entry, dict):
             continue
         capability = (entry.get("freeze_capability") or "").upper()
-        if capability in _SKIP_CAPABILITIES:
-            log.debug(
-                "subscriber: skipping issuer %s (freeze_capability=%s)",
-                entry.get("issuer"), capability,
-            )
-            continue
+        skip_issuer = capability in _SKIP_CAPABILITIES
         issuer = entry.get("issuer") or "(unknown issuer)"
         for holding in entry.get("holdings") or []:
             if not isinstance(holding, dict):
                 continue
+            # v0.34.4: even under a LOW/NO-capability issuer (DAI / Sky etc.),
+            # a TRACKED holding — funds we've IDENTIFIED that still sit there —
+            # MUST be watched: if they later move to a freezable venue we want
+            # the alert so we can act for recovery. That's the whole point of
+            # the TRACKED category. Non-TRACKED holdings under such issuers stay
+            # carved out (monitoring them would just be noise).
+            hstatus = (holding.get("status") or "").upper()
+            if skip_issuer and hstatus != "TRACKED":
+                log.debug(
+                    "subscriber: skipping %s holding under issuer %s "
+                    "(freeze_capability=%s, status=%s)",
+                    holding.get("address"), entry.get("issuer"), capability, hstatus,
+                )
+                continue
+            label = f"{issuer} — case {case_id}"
+            if hstatus == "TRACKED":
+                label += " [TRACKED — monitor for movement]"
             _add(
                 address=holding.get("address"),
                 chain=holding.get("chain") or primary_chain_lc,
-                label=f"{issuer} — case {case_id}",
+                label=label,
             )
 
     return list(seeds.values())

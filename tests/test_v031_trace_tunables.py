@@ -164,29 +164,34 @@ def _read_back_window(monkeypatch: pytest.MonkeyPatch, env_value: str | None) ->
         monkeypatch.setenv("RECUPERO_CROSSCHAIN_WINDOW_HOURS", env_value)
     try:
         xchain_window_h = float(os.environ.get(
-            "RECUPERO_CROSSCHAIN_WINDOW_HOURS", "24",
+            "RECUPERO_CROSSCHAIN_WINDOW_HOURS", "0",
         ))
         if xchain_window_h != xchain_window_h or xchain_window_h == float("inf"):
             raise ValueError("non-finite")
-        return max(0.0, min(720.0, xchain_window_h))
+        return max(0.0, min(8760.0, xchain_window_h))
     except (TypeError, ValueError):
-        return 24.0
+        return 0.0
 
 
-def test_window_default_24_hours(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _read_back_window(monkeypatch, None) == 24.0
+def test_window_default_no_upper_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """v0.34.4: default is now 0 = NO upper cap (lower-bound-only). Laundered
+    funds are parked and moved LATER, so a fixed upper window structurally drops
+    dormant destinations (the Zigha ~$16.9M DAI miss)."""
+    assert _read_back_window(monkeypatch, None) == 0.0
 
 
-def test_window_zero_disables_filter(monkeypatch: pytest.MonkeyPatch) -> None:
-    """0 explicitly disables the time-window filter."""
+def test_window_zero_is_no_upper_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    """0 = no upper cap (the lower bound — hop must be after the bridge —
+    always applies in _tx_within_window)."""
     assert _read_back_window(monkeypatch, "0") == 0.0
 
 
-def test_window_clamps_above_30_days(monkeypatch: pytest.MonkeyPatch) -> None:
-    """720h = 30d cap. Cross-chain handoffs in real cases land within
-    hours, never months."""
-    assert _read_back_window(monkeypatch, "1000") == 720.0
-    assert _read_back_window(monkeypatch, "9999") == 720.0
+def test_window_optional_upper_cap_clamps_at_one_year(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An operator MAY set a positive upper cap for cost control; clamped at
+    8760h = 1 year (was 720h/30d — raised so a legitimately long dormancy a
+    bounded operator still wants is representable)."""
+    assert _read_back_window(monkeypatch, "100") == 100.0
+    assert _read_back_window(monkeypatch, "999999") == 8760.0
 
 
 def test_window_clamps_below_zero(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -194,13 +199,40 @@ def test_window_clamps_below_zero(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_window_rejects_nan_and_inf(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _read_back_window(monkeypatch, "NaN") == 24.0
-    assert _read_back_window(monkeypatch, "Infinity") == 24.0
+    assert _read_back_window(monkeypatch, "NaN") == 0.0
+    assert _read_back_window(monkeypatch, "Infinity") == 0.0
 
 
 def test_window_garbage_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert _read_back_window(monkeypatch, "abc") == 24.0
-    assert _read_back_window(monkeypatch, "") == 24.0
+    assert _read_back_window(monkeypatch, "abc") == 0.0
+    assert _read_back_window(monkeypatch, "") == 0.0
+
+
+def test_tx_within_window_keeps_dormant_onward_hop_no_cap() -> None:
+    """v0.34.4 REGRESSION (the Zigha $16.9M DAI miss): with no upper cap
+    (window_end=None), a dormant onward hop funded WEEKS after the bridge MUST
+    be kept — it is the laundered funds resting then moving. A pre-bridge tx is
+    still dropped (lower bound). The predicate only reads tx.block_time, so a
+    light stub stands in for a full Transfer."""
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _tx_within_window
+
+    src_time = datetime(2025, 10, 9, 2, 0, tzinfo=UTC)
+    def _tx(when: datetime):
+        return SimpleNamespace(block_time=when)
+
+    # 21 days AFTER the bridge, no upper cap → KEPT (was dropped by the old 24h cap).
+    assert _tx_within_window(_tx(src_time + timedelta(days=21)), src_time, None) is True
+    # exactly at the bridge time → kept (inclusive lower bound).
+    assert _tx_within_window(_tx(src_time), src_time, None) is True
+    # one second BEFORE the bridge → dropped (not these funds' onward movement).
+    assert _tx_within_window(_tx(src_time - timedelta(seconds=1)), src_time, None) is False
+    # with an explicit operator upper cap, the cap still applies.
+    cap = src_time + timedelta(hours=24)
+    assert _tx_within_window(_tx(src_time + timedelta(hours=48)), src_time, cap) is False
+    # src_time None → filter disabled (keep).
+    assert _tx_within_window(_tx(src_time), None, None) is True
 
 
 # ─────────────────────────────────────────────────────────────────────────────

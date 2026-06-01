@@ -1065,11 +1065,15 @@ def test_v_cfi01_brief_synthesizer_status_policy(
     # letter template can render "received at" instead of "currently held".
     assert by_addr[USDT_DEST_2]["evidence_type"] == "historical_inflow"
 
-    # 3. Capability=no → UNRECOVERABLE (regardless of evidence type)
-    assert by_addr[PERP_HUB]["status"] == "UNRECOVERABLE", (
-        f"Sky Protocol (cap=no) ask must be UNRECOVERABLE, not "
-        f"FREEZABLE. Got status={by_addr[PERP_HUB]['status']}"
+    # 3. Capability=no → TRACKED (v0.34.4: identified + still held but not
+    #    freezable today → monitored for movement, recoverable later). It must
+    #    NOT be FREEZABLE (the protective invariant — never ask Sky to freeze
+    #    funds it can't), and must NOT contribute to recoverable totals.
+    assert by_addr[PERP_HUB]["status"] == "TRACKED", (
+        f"Sky Protocol (cap=no) ask must be TRACKED (identified + monitored), "
+        f"not written off. Got status={by_addr[PERP_HUB]['status']}"
     )
+    assert by_addr[PERP_HUB]["status"] != "FREEZABLE"
 
     # Evidence type provenance threaded through.
     assert by_addr[USDT_DEST_1]["evidence_type"] == "current_balance"

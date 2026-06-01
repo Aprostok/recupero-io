@@ -1081,7 +1081,9 @@ def _synthesize_freeze_brief_from_asks(
                 ),
             })
             # Status policy (mirrors emit_brief._extract_freezable):
-            #   * capability=no/low                 → UNRECOVERABLE
+            #   * capability=no/low                 → TRACKED (v0.34.4: identified
+            #       + still holds value but not freezable today → monitor for
+            #       movement, recoverable later; NOT written off as UNRECOVERABLE)
             #   * usd > $1K (dust line)             → FREEZABLE
             #   * sub-dust                          → INVESTIGATE
             # historical_inflow at a freezable issuer stays FREEZABLE;
@@ -1091,13 +1093,15 @@ def _synthesize_freeze_brief_from_asks(
             # total_usd and breaks the classifier — don't.
             evidence_type = (e.get("evidence_type") or "current_balance").lower()
             if cap_raw in ("no", "low"):
-                status = "UNRECOVERABLE"
+                status = "TRACKED"
             elif usd > 1000:
                 status = "FREEZABLE"
             else:
                 status = "INVESTIGATE"
-            # total_recoverable only includes FREEZABLE — UNRECOVERABLE
-            # rows (e.g., DAI) must NOT contribute to MAX_RECOVERABLE_USD.
+            # total_recoverable only includes FREEZABLE — TRACKED rows (e.g.,
+            # DAI: identified, monitored, not freezable TODAY) must NOT
+            # contribute to MAX_RECOVERABLE_USD (they're recoverable LATER, not
+            # now), same as the old UNRECOVERABLE handling.
             if status == "FREEZABLE" and usd > 0:
                 total_recoverable += usd
             # v0.20.2 (audit-round-2 finding #2): top-level

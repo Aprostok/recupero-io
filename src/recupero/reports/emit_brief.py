@@ -593,10 +593,16 @@ def _mechanical_destination_note(
         # DORMANT/UNRECOVERABLE-flavored note so the operator doesn't
         # send a useless freeze letter to a non-freezing issuer.
         if capability_blocks_freeze(capability_raw):
+            # v0.34.4: NOT written off as UNRECOVERABLE. The funds are
+            # IDENTIFIED and still sitting here; the issuer just can't freeze
+            # them today. Flag TRACKED so they're surfaced + auto-monitored —
+            # recoverable LATER if they move to a freezable venue or the
+            # perpetrator is identified.
             return (
-                f"⬛ UNRECOVERABLE — Holds {balance_str} {symbol} ({issuer}). "
-                f"{cap_phrase}. Candidate for seizure if perpetrator "
-                "identified, but no issuer-level freeze pathway."
+                f"🟪 TRACKED — Holds {balance_str} {symbol} ({issuer}). "
+                f"{cap_phrase}. Funds identified but not currently freezable; "
+                "flagged for ongoing monitoring — recoverable later if moved to "
+                "a freezable venue or on perpetrator identification."
             )
         # Genuine freezable target (capability=yes/HIGH or
         # limited/MEDIUM both qualify — limited still has a freeze
@@ -681,6 +687,8 @@ def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:
         return "FREEZABLE"
     if note.startswith("🟧"):
         return "INVESTIGATE"
+    if note.startswith("🟪"):  # v0.34.4 — identified, non-freezable, monitored
+        return "TRACKED"
     if note.startswith("⬛"):
         return "UNRECOVERABLE"
     if note.startswith("🟦"):
@@ -691,6 +699,8 @@ def _classify_address_status(addr: str, editorial_notes: dict[str, str]) -> str:
         return "FREEZABLE"
     if upper.startswith("[INVESTIGATE]"):
         return "INVESTIGATE"
+    if upper.startswith("[TRACKED]"):
+        return "TRACKED"
     if upper.startswith("[UNRECOVERABLE]"):
         return "UNRECOVERABLE"
     if upper.startswith("[EXCHANGE]"):
@@ -747,6 +757,9 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
         total_usd = Decimal("0")          # only FREEZABLE-status holdings
         total_suspected_usd = Decimal("0")  # INVESTIGATE-status holdings
         total_excluded_usd = Decimal("0")   # UNRECOVERABLE/EXCHANGE/TRANSIT/UNKNOWN
+        total_tracked_usd = Decimal("0")    # v0.34.4 TRACKED — identified,
+        # non-freezable-today, still holds value; monitored for movement so it's
+        # recoverable LATER (e.g. dormant DAI holders holding stolen funds).
         symbol = None
         capability = None
         primary_contact = None
@@ -781,8 +794,15 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             #     FREEZABLE so AI-editorial-failure / cost-limit cases
             #     don't silently route to unrecoverable
             ask_capability = a.get("freeze_capability")
+            # v0.34.4: a holding the issuer CANNOT freeze but that we've
+            # IDENTIFIED and still HOLDS value is TRACKED (watch for movement),
+            # not UNRECOVERABLE. It's recoverable LATER if the funds move to a
+            # freezable venue or the perpetrator is identified — so we surface
+            # it as its own category and auto-subscribe it to monitoring rather
+            # than writing it off. (UNRECOVERABLE stays for mixers / genuinely
+            # gone funds, set explicitly by the note classifier.)
             if status == "FREEZABLE" and capability_blocks_freeze(ask_capability):
-                status = "UNRECOVERABLE"
+                status = "TRACKED"
             if status == "UNKNOWN" and capability_is_freezable(ask_capability):
                 status = "FREEZABLE"
 
@@ -790,6 +810,8 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
                 total_usd += holding_usd
             elif status == "INVESTIGATE":
                 total_suspected_usd += holding_usd
+            elif status == "TRACKED":
+                total_tracked_usd += holding_usd
             else:  # UNRECOVERABLE / EXCHANGE / TRANSIT / UNKNOWN
                 total_excluded_usd += holding_usd
 
@@ -870,6 +892,8 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             "total_usd": usd(total_usd),
             "total_suspected_usd": usd(total_suspected_usd),
             "total_excluded_usd": usd(total_excluded_usd),
+            # v0.34.4: identified, non-freezable-today, monitored-for-movement.
+            "total_tracked_usd": usd(total_tracked_usd),
             "freeze_capability": cap_display,
             "holdings": holdings,
             "contact_email": meta.get("contact_email") or primary_contact or "",

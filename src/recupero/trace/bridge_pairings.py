@@ -127,6 +127,15 @@ class BridgePairSpec:
     # is never reported as a delivered destination.
     dest_state_word: int | None = None
     dest_state_ok: int | None = None
+    # v0.34.3 — read the recipient/amount straight off the MATCHED fill event
+    # rather than scanning the dest tx for ERC-20 Transfers. Needed for protocols
+    # that deliver NATIVE value (Synapse RFQ BridgeRelayed pays ETH to `to`, which
+    # emits no ERC-20 Transfer, so the generic scanner finds nothing). When
+    # ``dest_recipient_topic`` is set, recipient = the address in that fill topic;
+    # when ``dest_amount_word`` is set, raw_amount = that fill data word. Both fall
+    # back to the ERC-20 scan when absent/zero — never fabricated.
+    dest_recipient_topic: int | None = None
+    dest_amount_word: int | None = None
     # v0.34 Phase 2 — conservation: True when the protocol delivers the SAME
     # asset on both chains (canonical/liquidity bridge), so the raw deposit and
     # fill amounts are directly comparable and must satisfy the fee bound
@@ -363,11 +372,49 @@ _SYNAPSE = BridgePairSpec(
     max_fee_pct=Decimal("1.0"),
     # …AndSwap variants deliver a DIFFERENT token than deposited — not same-asset.
     same_asset=False,
-    notes="Synapse kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs. "
-          "v0.34.3 STALENESS: source TokenDeposit/TokenRedeem events are SILENT on-chain now "
-          "(Synapse volume collapsed / source event moved); the dest mint contract is still live, "
-          "so historical Synapse cases still confirm but CURRENT source detection is stale. Tracked "
-          "by scripts/_v034_bridge_staleness.py (acknowledged); refresh when a current deposit pair is found.",
+    notes="Synapse (CLASSIC bridge) kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs. "
+          "v0.34.3: the CLASSIC TokenDeposit/TokenRedeem source events are SILENT on-chain now — Synapse's "
+          "current volume MOVED to the RFQ/FastBridge rail (see _SYNAPSE_RFQ below), which is covered "
+          "separately and verified vs a real Optimism→Ethereum pair. This classic spec is retained for "
+          "HISTORICAL Synapse cases (the dest TokenMint/TokenWithdraw contract is still live and confirms "
+          "them). Tracked by scripts/_v034_bridge_staleness.py (acknowledged: historical rail).",
+)
+
+# Synapse RFQ / FastBridgeV2 — Synapse's CURRENT (intent-based) rail, deployed at
+# the SAME deterministic CREATE2 address on every EVM chain. The cross-chain id is
+# the `transactionId` (bytes32), emitted INDEXED as topic1 on BOTH the source
+# `BridgeRequested` and the destination `BridgeRelayed` — a clean cryptographic
+# pairing (no derivation needed, unlike the classic kappa). Recipient is `to`
+# (BridgeRelayed topic3) and the delivered amount is destAmount (data word 4),
+# read straight off the matched fill event (RFQ delivers NATIVE value, no ERC-20
+# Transfer to scan). destChainId is a REAL chain id in BridgeRequested data word 1
+# (word 0 is the dynamic `request` offset). Event sigs from synapsecns/sanguine
+# IFastBridge.sol. VERIFIED vs a real pair: source Optimism tx 0xdf6da3c0… (txid
+# 0xf88b22a5…, destChainId=1) → dest Ethereum tx 0x13b91389… (same txid topic1,
+# recipient 0x77bde4b2…); source-committed destAmount == dest-delivered destAmount
+# (951302461322824), originAmount ≥ destAmount (relayer fee = the difference).
+_FASTBRIDGE_RFQ = "0x5523d3c98809dddb82c686e152f5c58b1b0fb59e"
+_SYNAPSE_RFQ = BridgePairSpec(
+    protocol="Synapse RFQ",
+    source_contracts=frozenset({_FASTBRIDGE_RFQ}),
+    source_event_topic0=(  # BridgeRequested(bytes32,address,bytes,uint32,address,address,uint256,uint256,bool)
+        "0x120ea0364f36cdac7983bcfdd55270ca09d7f9b314a2ebc425a3b01ab1d6403a"
+    ),
+    source_order_id_topic=1,            # transactionId (indexed)
+    source_dest_chain_word=1,           # destChainId (real id) — data word 1
+    dest_contract=_FASTBRIDGE_RFQ,
+    dest_event_topic0=(  # BridgeRelayed(bytes32,address,address,uint32,address,address,uint256,uint256,uint256)
+        "0xf8ae392d784b1ea5e8881bfa586d81abf07ef4f1e2fc75f7fe51c90f05199a5c"
+    ),
+    dest_id_topic=1,                    # transactionId (indexed) on the fill
+    dest_recipient_topic=3,             # `to` (indexed) on BridgeRelayed
+    dest_amount_word=4,                 # destAmount — data word 4
+    max_fee_pct=Decimal("1.0"),
+    # RFQ is intent-based: originToken may differ from destToken (a swap), so raw
+    # deposit/fill amounts are NOT comparable — skip same-asset conservation.
+    same_asset=False,
+    notes="Synapse RFQ/FastBridgeV2 transactionId(topic1) matched source BridgeRequested↔dest "
+          "BridgeRelayed; deterministic CREATE2 0x5523…; verified vs real OP→ETH pair (txid 0xf88b22a5…).",
 )
 
 # Chainlink CCIP — messageId is a globally-unique bytes32 in the OnRamp
@@ -486,7 +533,9 @@ _WORMHOLE = BridgePairSpec(
 )
 
 _REGISTRY: tuple[BridgePairSpec, ...] = (
-    _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE, _CCIP, _CONNEXT, _WORMHOLE,
+    # _SYNAPSE_RFQ MUST precede classic _SYNAPSE: get_pair_spec matches by
+    # substring, so "Synapse RFQ" would otherwise resolve to classic "Synapse".
+    _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE_RFQ, _SYNAPSE, _CCIP, _CONNEXT, _WORMHOLE,
 )
 
 
@@ -899,10 +948,29 @@ def confirm_bridge_destination(
                     continue
             dst_tx = lg.get("transactionHash") or lg.get("transaction_hash") or ""
             emitter = (lg.get("address") or query_addr or "").lower()
-            recipient, raw_amount = _fill_recipient_amount(
-                dst_adapter, dst_tx,
-                infra={emitter, query_addr, *spec.source_contracts},
-            )
+            recipient = None
+            raw_amount = None
+            # Prefer the recipient/amount carried by the matched fill event itself
+            # (Synapse RFQ native-ETH fills emit no ERC-20 Transfer to scan).
+            if spec.dest_recipient_topic is not None:
+                rt = _topic(lg.get("topics"), spec.dest_recipient_topic)
+                if rt and rt != "0x" + "0" * 64:
+                    recipient = "0x" + rt[-40:]
+                if spec.dest_amount_word is not None:
+                    aw = _data_word(lg.get("data"), spec.dest_amount_word)
+                    try:
+                        raw_amount = int(aw, 16) if aw else None
+                    except ValueError:
+                        raw_amount = None
+            # Fall back to the ERC-20 payout scan when the event didn't yield a
+            # recipient (token fills, or a spec without the topic configured).
+            if recipient is None:
+                recipient, scanned_amt = _fill_recipient_amount(
+                    dst_adapter, dst_tx,
+                    infra={emitter, query_addr, *spec.source_contracts},
+                )
+                if raw_amount is None:
+                    raw_amount = scanned_amt
             # raw amount deposited into the source bridge (same-asset only) for
             # the Phase-2 conservation check; None for cross-asset / wildcard.
             src_raw = (

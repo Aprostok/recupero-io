@@ -32,7 +32,11 @@ from recupero.trace.bridge_pairings import _REGISTRY
 # The monitor still reports them, but only NEW (unacknowledged) drift fails CI —
 # so this stays a useful gate without going permanently red on a deprecated rail.
 _ACKNOWLEDGED = {
-    "Synapse": "source deposit event silent on-chain; historical cases still confirm",
+    "Synapse": "CLASSIC rail — source TokenDeposit silent; current volume MOVED to "
+               "Synapse RFQ (now covered + verified); dest mint still confirms historical cases",
+    "Synapse RFQ": "intent rail at 0x5523… — low source volume so BridgeRequested may be "
+                   "silent in-window, but signature VERIFIED vs a real OP→ETH pair and dest "
+                   "BridgeRelayed is live; confirms when used",
     "Connext": "Amarok deprecated (→Everclear); contracts dormant; historical cases confirm",
 }
 

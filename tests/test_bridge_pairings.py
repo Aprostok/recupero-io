@@ -1090,3 +1090,120 @@ def test_wormhole_identify_source() -> None:
     assert spec.protocol == "Wormhole"
     assert int(oid, 16) == WH_SEQ
     assert dest_chain is None  # WH dest chain is in the VAA payload, not a source topic
+
+
+# ============ Synapse RFQ / FastBridgeV2 (composite-key, NATIVE fill) =========
+# Synapse's CURRENT rail. transactionId (bytes32) is indexed topic1 on BOTH the
+# source BridgeRequested and the dest BridgeRelayed; recipient = `to` (topic3) and
+# delivered amount = destAmount (data word4) read straight off the fill (RFQ pays
+# NATIVE value → no ERC-20 Transfer to scan). VERIFIED vs a real OP→ETH pair:
+# source Optimism 0xdf6da3c0… (txid 0xf88b22a5…, destChainId=1) → dest Ethereum
+# 0x13b91389… (same txid, recipient 0x77bde4b2…, destAmount 951302461322824).
+RFQ_FASTBRIDGE = "0x5523d3c98809dddb82c686e152f5c58b1b0fb59e"
+RFQ_REQ_T0 = "0x120ea0364f36cdac7983bcfdd55270ca09d7f9b314a2ebc425a3b01ab1d6403a"
+RFQ_REL_T0 = "0xf8ae392d784b1ea5e8881bfa586d81abf07ef4f1e2fc75f7fe51c90f05199a5c"
+RFQ_TXID = "0xf88b22a5d700ba0b0a5214f96350f4971f84deffd12c5afcc71ccf74f36b11fb"
+RFQ_RECIPIENT = "0x77bde4b24ba28beb54a259729c3b978056adbfa9"
+RFQ_DEST_AMT = 951302461322824
+RFQ_ZERO = "0x" + "0" * 40  # native ETH (address(0)) origin/dest token
+
+
+def _rfq_source_receipt(txid: str = RFQ_TXID, dest_chain_id: int = 1) -> dict[str, Any]:
+    # BridgeRequested data: word0=offset(request), word1=destChainId, word2=originToken,
+    # word3=destToken, word4=originAmount, word5=destAmount, word6=sendChainGas.
+    data = "0x" + "".join([
+        _word("0x120"), _word(hex(dest_chain_id)), _word(RFQ_ZERO), _word(RFQ_ZERO),
+        _word(hex(1037653722759876)), _word(hex(RFQ_DEST_AMT)), _word("0x0"),
+    ])
+    return {"logs": [{
+        "address": RFQ_FASTBRIDGE,
+        "topics": [RFQ_REQ_T0, txid, _topic_addr("0x" + "11" * 20)],  # topic1=txid, topic2=sender
+        "data": data,
+    }]}
+
+
+def _rfq_relayed_log(
+    txid: str = RFQ_TXID, recipient: str = RFQ_RECIPIENT,
+    amt: int = RFQ_DEST_AMT, tx: str = "0xrel", origin_chain_id: int = 10,
+) -> dict[str, Any]:
+    # BridgeRelayed data: word0=originChainId, word1=originToken, word2=destToken,
+    # word3=originAmount, word4=destAmount, word5=chainGasAmount.
+    data = "0x" + "".join([
+        _word(hex(origin_chain_id)), _word(RFQ_ZERO), _word(RFQ_ZERO),
+        _word(hex(1037653722759876)), _word(hex(amt)), _word("0x0"),
+    ])
+    return {
+        "address": RFQ_FASTBRIDGE,
+        # topic1=txid, topic2=relayer, topic3=to(recipient)
+        "topics": [RFQ_REL_T0, txid, _topic_addr("0x" + "22" * 20), _topic_addr(recipient)],
+        "data": data,
+        "transactionHash": tx,
+    }
+
+
+class _FakeRfqAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if address.lower() == RFQ_FASTBRIDGE and topic0.lower() == RFQ_REL_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        # RFQ delivers NATIVE ETH — the fill tx has NO ERC-20 Transfer. If the
+        # confirm engine still returns the right recipient/amount, they MUST come
+        # from the event topics/words (the point of dest_recipient_topic).
+        return SimpleNamespace(raw_receipt={"logs": []})
+
+    def close(self) -> None:
+        pass
+
+
+def test_synapse_rfq_resolution_order_does_not_shadow_classic() -> None:
+    """get_pair_spec matches by substring; _SYNAPSE_RFQ must precede classic
+    _SYNAPSE so 'Synapse RFQ' resolves to RFQ while plain 'Synapse' / a
+    'Synapse: Bridge' label still resolve to the classic spec."""
+    assert get_pair_spec("Synapse RFQ").protocol == "Synapse RFQ"
+    assert get_pair_spec("Synapse").protocol == "Synapse"
+    assert get_pair_spec("Synapse: Bridge").protocol == "Synapse"
+
+
+def test_synapse_rfq_identify_source_reads_txid_and_dest_chain() -> None:
+    ident = identify_source(_rfq_source_receipt())
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Synapse RFQ"
+    assert oid.lower() == RFQ_TXID
+    assert dest_chain == "ethereum"  # destChainId=1, read from source data word1
+
+
+def test_synapse_rfq_confirm_native_fill_recipient_amount_from_event_high() -> None:
+    adapter = _FakeRfqAdapter([_rfq_relayed_log()])
+    out = confirm_bridge_destination(
+        protocol="Synapse RFQ", destination_chain="ethereum",
+        source_receipt=_rfq_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="optimism",
+        order_id=RFQ_TXID,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id.lower() == RFQ_TXID
+    assert out.dst_tx == "0xrel"
+    # recipient + amount came from the fill EVENT (the receipt has no transfers).
+    assert (out.recipient or "").lower() == RFQ_RECIPIENT
+    assert out.raw_amount == RFQ_DEST_AMT
+
+
+def test_synapse_rfq_tampered_txid_returns_none() -> None:
+    adapter = _FakeRfqAdapter([_rfq_relayed_log(txid="0x" + "ab" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Synapse RFQ", destination_chain="ethereum",
+        source_receipt=_rfq_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="optimism",
+        order_id=RFQ_TXID,
+    )
+    assert out is None

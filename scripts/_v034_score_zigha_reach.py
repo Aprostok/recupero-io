@@ -8,7 +8,8 @@ import json
 import pathlib
 import sys
 
-CASE = pathlib.Path("data/cases/ZIGHA-VERIFY/case.json")
+_CASE_ID = sys.argv[1] if len(sys.argv) > 1 else "ZIGHA-VERIFY"
+CASE = pathlib.Path(f"data/cases/{_CASE_ID}/case.json")
 GT = pathlib.Path("tests/fixtures/zigha_ground_truth.json")
 
 case = json.loads(CASE.read_text(encoding="utf-8"))

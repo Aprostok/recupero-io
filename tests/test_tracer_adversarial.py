@@ -975,6 +975,27 @@ def test_select_traced_inbounds_empty() -> None:
     assert _select_traced_inbounds([], Decimal("10")) == []
 
 
+def test_select_traced_inbounds_skips_homoglyph_poison() -> None:
+    """A large UNPRICED homoglyph-poison inbound (Lisu "USDC") must be ignored,
+    and the REAL (smaller) unpriced USDC leg selected — otherwise the
+    unpriced-same-asset follow chases address-poisoning spam (the Zigha
+    Arbitrum failure mode)."""
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbounds
+    poison = SimpleNamespace(
+        usd_value_at_tx=None, amount_decimal=Decimal("9999999"),
+        token=SimpleNamespace(symbol="ꓴꓢꓓС", contract="0xb4094bd2"),
+    )
+    real = SimpleNamespace(
+        usd_value_at_tx=None, amount_decimal=Decimal("349999"),
+        token=SimpleNamespace(symbol="USDC", contract="0xaf88d065"),
+    )
+    out = _select_traced_inbounds([poison, real], Decimal("10"))
+    assert real in out
+    assert poison not in out
+
+
 # ---- v0.34.1: dead-end detection (coverage honesty) ----
 
 

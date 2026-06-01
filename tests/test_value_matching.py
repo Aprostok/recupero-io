@@ -299,3 +299,42 @@ def test_naive_block_time_is_normalized_and_does_not_crash() -> None:
     # must not raise (aware inbound vs normalized candidate)
     matches = match_onward_transfers(inbound, [leg])
     assert len(matches) == 1 and matches[0].kind == "same_asset_amount"
+
+
+# ---- v0.34.2: homoglyph / address-poisoning token rejection ----
+
+
+def test_is_confusable_token_symbol() -> None:
+    from recupero.trace.value_matching import is_confusable_token_symbol
+    # legit ASCII symbols → not confusable
+    assert not is_confusable_token_symbol("USDC")
+    assert not is_confusable_token_symbol("WETH")
+    assert not is_confusable_token_symbol("USDC.e")
+    assert not is_confusable_token_symbol("")
+    assert not is_confusable_token_symbol(None)
+    # homoglyph poison (Lisu "USDC", "₮" glyph, Cyrillic) → confusable
+    assert is_confusable_token_symbol("ꓴꓢꓓС")     # Lisu mimic of USDC
+    assert is_confusable_token_symbol("USD₮0")     # ₮ = U+20AE
+    assert is_confusable_token_symbol("UЅDС")      # Cyrillic S/C
+
+
+def test_leg_from_transfer_rejects_homoglyph_token() -> None:
+    """A homoglyph-poison token must NOT produce a matchable leg — otherwise the
+    unpriced-same-asset follow would chase address-poisoning spam."""
+    leg = leg_from_transfer({
+        "to_address": "0xpoison", "tx_hash": "0xp",
+        "token": {"symbol": "ꓴꓢꓓС", "contract": "0xb4094bd2"},
+        "amount_decimal": Decimal("349999"),
+        "block_time": datetime(2025, 10, 9, 12, 0, tzinfo=UTC),
+    })
+    assert leg is None
+
+
+def test_real_usdc_leg_still_built() -> None:
+    leg = leg_from_transfer({
+        "to_address": "0xreal", "tx_hash": "0xr",
+        "token": {"symbol": "USDC", "contract": "0xaf88d065"},
+        "amount_decimal": Decimal("349999"),
+        "block_time": datetime(2025, 10, 9, 12, 0, tzinfo=UTC),
+    })
+    assert leg is not None and leg.token_symbol == "USDC"

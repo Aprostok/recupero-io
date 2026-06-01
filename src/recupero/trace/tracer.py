@@ -1943,6 +1943,19 @@ def _select_traced_inbounds(
     Following BOTH legs is bounded: same-asset matching only fires on an exact
     amount match, so this adds the real onward hop, not a fan-out.
     """
+    from recupero.trace.value_matching import is_confusable_token_symbol
+
+    if not inbounds:
+        return []
+    # Exclude homoglyph/impersonation-token inbounds (address-poisoning spam):
+    # the tracer must not select a poison leg as the funds to follow. Legit
+    # symbols are ASCII; a non-ASCII symbol is a mimic of a real asset.
+    inbounds = [
+        t for t in inbounds
+        if not is_confusable_token_symbol(
+            getattr(getattr(t, "token", None), "symbol", None)
+        )
+    ]
     if not inbounds:
         return []
     primary = _select_traced_inbound(inbounds, dust_threshold_usd)

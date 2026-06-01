@@ -81,6 +81,22 @@ class Leg:
     token_contract: str | None = None
 
 
+def is_confusable_token_symbol(symbol: str | None) -> bool:
+    """True if a token symbol is an address-poisoning / impersonation token —
+    one whose symbol contains NON-ASCII characters (Cyrillic/Lisu/fullwidth
+    homoglyphs, the ``₮`` glyph, etc.) used to mimic a real asset (e.g. the Lisu
+    "ꓴꓢꓓС" mimicking "USDC", or "USD₮0" mimicking "USDT"). Legit token symbols
+    are printable ASCII. The value-tracer must NEVER follow funds through such a
+    token: with the v0.34.1 unpriced-same-asset follow, a large unpriced
+    homoglyph-poison transfer would otherwise be chased as if it were the real
+    asset, fabricating a destination. (Observed live: the Zigha seed's Arbitrum
+    outflows were dominated by "ꓴꓢꓓС" poison interleaved with real USDC.)
+    """
+    if not symbol:
+        return False
+    return any(ord(c) > 0x7F for c in symbol)
+
+
 def _same_token(a: str | None, b: str | None) -> bool:
     """Same on-chain asset? Requires contract identity when contracts are known;
     both-None means the native asset (matched by symbol). A known contract never
@@ -165,6 +181,12 @@ def leg_from_transfer(t: Any) -> Leg | None:
     usd = _to_decimal(_get("usd_value_at_tx", "usd_value", "value_usd"))
 
     if not to_address or amount is None or when is None or not isinstance(when, datetime):
+        return None
+    # v0.34.2: never build a matchable leg for a homoglyph/impersonation token —
+    # the value-tracer must not follow funds through address-poisoning spam (a
+    # large UNPRICED homoglyph "USDC" would otherwise be chased by the
+    # unpriced-same-asset follow as if it were the real asset).
+    if is_confusable_token_symbol(str(symbol or "")):
         return None
     # Normalize to tz-aware UTC: a naive block_time (dict path / hand-built seed)
     # vs an aware one would raise TypeError in the time-window comparison and

@@ -289,5 +289,16 @@
     "added_at": "2026-05-17T00:00:00Z",
     "chain": "ethereum",
     "_v029_1_chain_backfill": true
+  },
+  {
+    "address": "0x207e1074858a7e78f17002075739ed2745dbaece",
+    "name": "0x: MainnetSettler",
+    "category": "defi_protocol",
+    "subcategory": "dex_aggregator",
+    "source": "etherscan_verified_contract_name + zigha_backward_trace_v034",
+    "confidence": "high",
+    "notes": "0x Protocol / Matcha v4 Settler settlement contract (Etherscan-verified contract name 'MainnetSettler'). Swaps route through it; the converted-token output is paid from the settler and is recovered from the tx receipt logs by swap_output.resolve_swap_output (the BFS never traverses a settler's outflows, so detect_dex_swaps' in-trace pairing alone dead-ends here). Confirmed as the token->DAI conversion point in the Zigha laundering path.",
+    "added_at": "2026-05-31T00:00:00Z",
+    "chain": "ethereum"
   }
 ]

@@ -165,3 +165,70 @@ def test_price_at_rejects_cached_nan() -> None:
             f"Cached NaN propagated as {result.usd_value!r} — cache "
             f"poison surfaces as a NaN USD value in case.json."
         )
+
+
+def test_skip_contract_api_does_not_call_resolution_api() -> None:
+    """v0.34 value-trace fast path: ``price_at(skip_contract_api=True)`` must
+    NOT make a per-token contract->id resolution API call for an unmapped
+    ERC-20 — it returns unpriced fast. This is what lets value-directed tracing
+    rank a high-fan-out node's thousands of outflows cheaply. (The normal pass,
+    without the flag, still resolves via API.)"""
+    from datetime import UTC, datetime
+
+    from recupero.models import Chain, TokenRef
+
+    client = _build_client()
+    client._contract_id_cache = {}  # empty -> no static-map short-circuit
+    client.cache = MagicMock()
+    client.cache.get.return_value = None
+
+    def _boom(*_a, **_k):
+        raise AssertionError(
+            "_fetch_contract_to_id was called despite skip_contract_api=True"
+        )
+
+    client._fetch_contract_to_id = _boom
+
+    token = TokenRef(
+        chain=Chain.ethereum,
+        contract="0x000000000000000000000000000000000000dEaD",
+        symbol="SCAM",          # not a stablecoin symbol
+        decimals=18,
+        coingecko_id=None,       # no hint -> would normally hit the API
+    )
+    result = client.price_at(
+        token, datetime(2024, 1, 1, tzinfo=UTC), skip_contract_api=True,
+    )
+    assert result.usd_value is None
+    assert result.error == "no_coingecko_mapping"
+
+
+def test_skip_contract_api_off_does_resolve_via_api() -> None:
+    """Sanity counter-test: WITHOUT the flag, the same unmapped token DOES go
+    through the resolution API path (so the fast path is a real divergence,
+    not a no-op)."""
+    from datetime import UTC, datetime
+
+    from recupero.models import Chain, TokenRef
+
+    client = _build_client()
+    client._contract_id_cache = {}
+    client.cache = MagicMock()
+    client.cache.get.return_value = None
+    called = {"n": 0}
+
+    def _resolve(_chain, _canon):
+        # pretend CoinGecko 404 (unknown token) — implicit None return
+        called["n"] += 1
+
+    client._fetch_contract_to_id = _resolve
+
+    token = TokenRef(
+        chain=Chain.ethereum,
+        contract="0x000000000000000000000000000000000000dEaD",
+        symbol="SCAM",
+        decimals=18,
+        coingecko_id=None,
+    )
+    client.price_at(token, datetime(2024, 1, 1, tzinfo=UTC))  # no skip flag
+    assert called["n"] == 1, "normal pass must attempt API contract resolution"

@@ -94,6 +94,12 @@ class DEXSwap:
     output_amount_usd: Decimal | None
     output_recipient: str | None  # where the output tokens landed
     confidence: str               # 'high' | 'medium' | 'low'
+    # v0.34: how the output was found — "in_trace" (paired from case.transfers)
+    # or "receipt_logs" (recovered from the swap tx's ERC-20 Transfer logs, for
+    # settler-style aggregators like 0x where the output is the settler's own
+    # outflow the BFS never traversed). The continuation follows BOTH so a 0x
+    # token->DAI swap no longer dead-ends.
+    output_source: str = "in_trace"
 
 
 def load_dex_routers(
@@ -142,9 +148,44 @@ def load_dex_routers(
     return out
 
 
+def _resolve_output_from_receipt(
+    adapter: object,
+    tx_hash: str,
+    *,
+    input_token_contract: str | None,
+    swapper: str,
+    infra_addresses: set[str],
+):
+    """Fetch a swap tx's receipt + recover its output from the ERC-20 Transfer
+    logs. Returns a ``SwapOutput`` or None. Best-effort — any fetch/parse
+    failure degrades to None (no output) rather than raising."""
+    from recupero.trace.swap_output import (
+        parse_erc20_transfers,
+        resolve_swap_output,
+    )
+    try:
+        receipt = adapter.fetch_evidence_receipt(tx_hash)
+        raw = getattr(receipt, "raw_receipt", None)
+    except Exception as exc:  # noqa: BLE001 — receipt fetch is best-effort
+        log.debug("swap-output receipt fetch failed tx=%s: %s", tx_hash, exc)
+        return None
+    parsed = parse_erc20_transfers(raw)
+    if not parsed:
+        return None
+    inputs = {input_token_contract.lower()} if input_token_contract else set()
+    return resolve_swap_output(
+        parsed,
+        swapper=swapper,
+        input_token_contracts=inputs,
+        infra_addresses=infra_addresses,
+    )
+
+
 def detect_dex_swaps(
     case: Case,
     dex_router_db: dict[str, dict] | None = None,
+    *,
+    adapter: object | None = None,
 ) -> list[DEXSwap]:
     """Scan ``case.transfers`` for DEX swap events.
 
@@ -155,6 +196,14 @@ def detect_dex_swaps(
          same tx that go FROM the router to some other address
          — these are the output side.
       3. Pair input + output to produce DEXSwap records.
+
+    v0.34: when no output can be paired from ``case.transfers`` AND an
+    ``adapter`` is supplied, fetch the swap tx's RECEIPT and recover the output
+    from its ERC-20 ``Transfer`` logs (``swap_output.resolve_swap_output``).
+    This is what catches 0x Protocol / Matcha settler swaps, where the converted
+    token (e.g. DAI) is paid out by the settler — an outflow the BFS never
+    traversed, so it's absent from ``case.transfers``. Such outputs are marked
+    ``output_source="receipt_logs"`` so the continuation still follows them.
 
     Returns swaps sorted by input_amount_usd descending.
     """
@@ -238,7 +287,40 @@ def detect_dex_swaps(
                         key=lambda ot: ot.amount_decimal or Decimal("0"),
                     )
 
-            confidence = "high" if best_output is not None else "medium"
+            # v0.34: still no in-trace output — a settler-style swap (0x /
+            # Matcha) pays the converted token from the settler's own balance,
+            # an outflow the BFS never traversed. Recover it from the swap tx's
+            # receipt logs (an on-chain fact) so the trace doesn't dead-end.
+            output_source = "in_trace"
+            log_out = None
+            if best_output is None and adapter is not None:
+                log_out = _resolve_output_from_receipt(
+                    adapter, tx_hash,
+                    input_token_contract=getattr(in_t.token, "contract", None),
+                    swapper=in_t.from_address,
+                    infra_addresses=set(routers.keys()) | input_router_addresses,
+                )
+                if log_out is not None:
+                    output_source = "receipt_logs"
+
+            if best_output is not None:
+                confidence = "high"
+                out_symbol = best_output.token.symbol
+                out_amount = best_output.amount_decimal
+                out_usd = best_output.usd_value_at_tx
+                out_recipient = best_output.to_address.lower()
+            elif log_out is not None:
+                # Structural (the Transfer event exists) but "which output is
+                # ours" is a heuristic → medium, never high.
+                confidence = "medium"
+                out_symbol = None       # logs give the contract, not a symbol
+                out_amount = None       # raw amount; decimals unknown here
+                out_usd = None
+                out_recipient = log_out.output_recipient
+            else:
+                confidence = "medium"
+                out_symbol = out_amount = out_usd = out_recipient = None
+
             swaps.append(DEXSwap(
                 tx_hash=tx_hash,
                 explorer_url=in_t.explorer_url,
@@ -251,19 +333,12 @@ def detect_dex_swaps(
                 input_token_symbol=in_t.token.symbol,
                 input_amount_decimal=in_t.amount_decimal,
                 input_amount_usd=in_t.usd_value_at_tx,
-                output_token_symbol=(
-                    best_output.token.symbol if best_output else None
-                ),
-                output_amount_decimal=(
-                    best_output.amount_decimal if best_output else None
-                ),
-                output_amount_usd=(
-                    best_output.usd_value_at_tx if best_output else None
-                ),
-                output_recipient=(
-                    best_output.to_address.lower() if best_output else None
-                ),
+                output_token_symbol=out_symbol,
+                output_amount_decimal=out_amount,
+                output_amount_usd=out_usd,
+                output_recipient=out_recipient,
                 confidence=confidence,
+                output_source=output_source,
             ))
 
     swaps.sort(

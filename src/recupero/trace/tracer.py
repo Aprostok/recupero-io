@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from eth_utils import to_checksum_address
@@ -123,9 +124,19 @@ def _address_visited_key(chain: Chain, address: Address) -> str:
 # silently rendered as "complete" in an LE deliverable.
 _COVERAGE_TRUNCATIONS: list[dict[str, Any]] = []
 
+# v0.34 (operator-requested "elite recall"): per-case accumulator of poison
+# edges dropped BEFORE pricing (currently zero-value transfers — the canonical
+# address-poisoning primitive). This is NOISE removal, not coverage reduction:
+# a zero-value edge moves no funds, so dropping it never hides a real onward
+# hop and does NOT flip coverage.complete. Surfaced as an INFORMATIONAL
+# ``coverage.poison_edges_pruned`` count for the audit trail. Cleared at the
+# start of every ``run_trace`` like the other module-level registries.
+_POISON_PRUNED: list[dict[str, Any]] = []
+
 
 def _clear_coverage_truncations() -> None:
     _COVERAGE_TRUNCATIONS.clear()
+    _POISON_PRUNED.clear()
 
 
 def run_trace(
@@ -137,6 +148,7 @@ def run_trace(
     config: RecuperoConfig,
     env: RecuperoEnv,
     case_dir: Path,
+    value_trace: bool | None = None,
 ) -> Case:
     """End-to-end trace. Writes evidence receipts as it goes; caller writes case.json.
 
@@ -330,6 +342,35 @@ def run_trace(
         policy.service_wallet_outflow_threshold = (
             config.trace.service_wallet_outflow_threshold
         )
+    # v0.34 (operator-requested "elite recall"): per-run override of the
+    # service-wallet outflow threshold. A wallet emitting more than this many
+    # outflows is treated as a service/distributor and BFS traversal STOPS
+    # there (its transfers are kept, but its children are not followed). The
+    # default (200) deliberately halts at exchange hot wallets / token
+    # distributors, but it also halts at a high-throughput DeFi aggregator /
+    # pool that sits ON the laundering path — silently missing everything past
+    # it. Raise this (e.g. 25000) for a deep recall-complete run so the trace
+    # crosses the aggregator while still stopping at true mega-services.
+    # Process env (not .env), mirroring the other RECUPERO_* trace knobs;
+    # clamped to >= 1; bad/blank/non-positive values keep the resolved default.
+    _sw_env = os.environ.get("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD")
+    if _sw_env is not None and _sw_env.strip():
+        try:
+            _sw_val = int(_sw_env)
+        except (TypeError, ValueError):
+            log.warning(
+                "RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD=%r is not an int; "
+                "keeping %d", _sw_env, policy.service_wallet_outflow_threshold,
+            )
+        else:
+            if _sw_val >= 1:
+                policy.service_wallet_outflow_threshold = _sw_val
+            else:
+                log.warning(
+                    "RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD=%r must be >= 1; "
+                    "keeping %d", _sw_env,
+                    policy.service_wallet_outflow_threshold,
+                )
 
     started = utcnow()
     log.info(
@@ -414,6 +455,78 @@ def run_trace(
     budget_hit = False
     budget_hit_provider: str | None = None
 
+    # v0.34 (operator-requested "elite recall"): value-directed tracing. When
+    # RECUPERO_VALUE_TRACE is on, a high-fan-out node (service wallet /
+    # aggregator / pool) is not a dead end: we value-match the inbound funds
+    # against the node's outflows and follow ONLY the edge(s) whose amount
+    # (same-asset) or USD value (across a swap) match. ``inbound_by_key`` maps
+    # an address-key to ALL edges that delivered funds there — a node commonly
+    # receives our funds via several transfers (e.g. ETH dust + a large token
+    # leg), and value-matching must reference the LARGEST (our actual funds),
+    # not whichever edge happened to be seen first. ``value_matched``
+    # accumulates the per-hop provenance (confidence calibrated — never "high").
+    # Explicit ``value_trace`` arg wins (used by the multi-chain perpetrator
+    # pivot to force directed tracing on a re-trace); otherwise read the env.
+    _value_trace_enabled = (
+        value_trace if value_trace is not None
+        else os.environ.get(
+            "RECUPERO_VALUE_TRACE", "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+    )
+    inbound_by_key: dict[str, list[Transfer]] = {}
+    value_matched: list[dict[str, Any]] = []
+
+    # v0.34: the per-transfer enqueue decision, factored out so the normal
+    # breadth-first path AND the value-matched service-wallet path share the
+    # exact same visited / contract / should_traverse gating. Returns True iff
+    # ``transfer``'s destination was newly enqueued. Closes over the loop-local
+    # ``next_wave`` (resolved at call time) plus the stable per-case caches.
+    def _consider_enqueue(transfer: Transfer, parent_depth: int) -> bool:
+        dest = transfer.to_address
+        dest_key = _address_visited_key(chain, dest)
+        # Record EVERY value-bearing edge to ``dest`` BEFORE any gate (traverse
+        # or visited) so value-matching at dest references the LARGEST inbound
+        # (our funds), decoupled from the traverse decision — a node funded by
+        # several edges (e.g. ETH dust THEN a large token leg) must match against
+        # the largest, and a larger inbound arriving on a non-traversable edge
+        # must still inform the match rather than being dropped before recording.
+        inbound_by_key.setdefault(dest_key, []).append(transfer)
+        if not policy.should_traverse(transfer):
+            return False
+        if dest_key in visited:
+            return False
+        # Contract check: one RPC per unique address, cached. Single-threaded
+        # between waves, so is_contract_cache needs no lock. Routed through
+        # contract_detection.is_contract so a transient RPC failure doesn't
+        # poison the cache as is_contract=True forever (returns None on
+        # twice-failed RPC, leaving the cache untouched for a later re-resolve).
+        if policy.stop_at_contract:
+            if dest_key not in is_contract_cache:
+                try:
+                    from recupero.trace.contract_detection import (
+                        is_contract as _is_contract_safe,
+                    )
+                    result_bool, _reason = _is_contract_safe(
+                        dest, chain.value, adapter, _contract_check_cache,
+                    )
+                    if result_bool is None:
+                        log.debug(
+                            "is_contract uncertain for %s (%s); treating as "
+                            "contract for this hop", dest, _reason,
+                        )
+                        is_contract_cache[dest_key] = True
+                    else:
+                        is_contract_cache[dest_key] = result_bool
+                except Exception as e:  # noqa: BLE001
+                    log.debug("is_contract check failed for %s: %s", dest, e)
+                    is_contract_cache[dest_key] = True
+            if is_contract_cache[dest_key]:
+                return False
+        next_wave.append((dest, parent_depth + 1))
+        visited.add(dest_key)
+        # (inbound edge already recorded above, before the visited guard.)
+        return True
+
     while current_wave:
         # v0.16.11: cooperative deadline check between waves. We don't
         # interrupt in-flight wave work (would abandon per-tx evidence
@@ -463,6 +576,7 @@ def run_trace(
                 config=config,
                 evidence_dir=case_dir / "tx_evidence",
                 concurrency=trace_concurrency,
+                value_trace=_value_trace_enabled,
             )
         except BudgetExceededError as exc:
             # v0.32 — per-case API budget tripped mid-wave. Same
@@ -481,15 +595,86 @@ def run_trace(
         # --- Aggregate results + build next wave (single-threaded) ---
         for from_addr, depth, hop_transfers, is_service_wallet in wave_results:
             addresses_processed += 1
-            all_transfers.extend(hop_transfers)
+
+            # v0.34 value-directed tracing ("follow the money"). When
+            # RECUPERO_VALUE_TRACE is on, EVERY non-origin node (one reached via
+            # a known inbound edge) follows ONLY the outflow(s) whose value
+            # matches the funds that arrived — not all of them. This is what
+            # bounds the trace to the laundering PATH (<=K onward hops per node)
+            # instead of exploding the whole graph: an uncapped breadth-first
+            # follow-everything fans out combinatorially over depth, but a
+            # directed value-trace stays narrow. The seed (depth 0, no inbound)
+            # still follows all of its outflows — every post-incident outflow
+            # from the victim is suspect. At max depth we record but don't
+            # recurse. Confidence is calibrated in value_matching (never "high").
+            # Reference the LARGEST-USD inbound to this node — that is our
+            # traced funds (a node often also receives ETH-dust / poison edges;
+            # matching against those would miss the real onward hop). Unpriced
+            # inbounds sort as 0 so a priced leg always wins when present.
+            _inbounds = inbound_by_key.get(
+                _address_visited_key(chain, from_addr)
+            ) or []
+            inbound_t = _select_traced_inbound(
+                _inbounds, policy.dust_threshold_usd,
+            )
+            directed = (
+                _value_trace_enabled
+                and inbound_t is not None
+                and depth + 1 < policy.max_depth
+            )
+
+            if directed:
+                # Keep ONLY the matched money-path hop(s) on the case — not the
+                # node's full (possibly commingled) outflow set.
+                followed, matched_transfers = _value_match_and_enqueue(
+                    inbound_transfer=inbound_t,
+                    node_outflows=hop_transfers,
+                    parent_depth=depth,
+                    node_addr=from_addr,
+                    enqueue_fn=_consider_enqueue,
+                    provenance_sink=value_matched,
+                )
+                all_transfers.extend(matched_transfers)
+                # Finalize: write evidence for the matched hop(s). (The
+                # service-wallet lightweight pass skipped per-outflow evidence;
+                # the full path already wrote it — re-writing is an idempotent
+                # file write.)
+                for _mt in matched_transfers:
+                    try:
+                        write_evidence_receipt(
+                            adapter, _mt.tx_hash, case_dir / "tx_evidence",
+                        )
+                    except Exception as _ev_exc:  # noqa: BLE001
+                        log.warning(
+                            "evidence receipt failed for matched hop tx=%s: %s",
+                            _mt.tx_hash, _ev_exc,
+                        )
+                log.info(
+                    "value-trace %s (depth=%d): %d outflow(s) -> %d matched "
+                    "onward hop(s) followed",
+                    from_addr, depth, len(hop_transfers), followed,
+                )
+                continue
+
+            # Non-directed: the seed (no inbound), at/near max depth, or
+            # value-trace OFF. Keep the full outflow set for the audit trail —
+            # but dust-filter it. A node built under the lightweight pass SKIPS
+            # the per-outflow dust filter (it's applied later only to matched
+            # hops); a terminal-depth lightweight node is non-directed, so
+            # without this it would extend its sub-dust / poison edges into the
+            # case. ``should_include`` is idempotent for full-path transfers
+            # (they already passed it in _trace_one_hop), so this only filters
+            # the lightweight-built set. (v0.34 audit fix — coverage hygiene.)
+            all_transfers.extend(
+                t for t in hop_transfers if policy.should_include(t)
+            )
 
             if depth + 1 >= policy.max_depth:
                 continue
 
-            # Service-wallet cap: keep the transfers we observed (audit
-            # trail) but don't queue downstream. Without this, a single
-            # 500-outflow OTC desk / unlabeled exchange explodes BFS at
-            # the next depth.
+            # Service-wallet node with value-trace OFF (or no inbound): keep its
+            # transfers but do NOT queue downstream, else a single high-fan-out
+            # node explodes BFS at the next depth.
             if is_service_wallet:
                 log.info(
                     "service-wallet skip: not queueing %d destinations from %s",
@@ -498,64 +683,7 @@ def run_trace(
                 continue
 
             for transfer in hop_transfers:
-                if not policy.should_traverse(transfer):
-                    continue
-                dest = transfer.to_address
-                dest_key = _address_visited_key(chain, dest)
-                if dest_key in visited:
-                    continue
-
-                # Contract check: one RPC per unique address, cached.
-                # Done here (single-threaded between waves) so we don't
-                # need to lock is_contract_cache.
-                #
-                # v0.32.1 W8 (round-2 wire-up): route through
-                # ``contract_detection.is_contract`` so transient RPC
-                # failures don't poison the cache as "is_contract=True"
-                # forever. Pre-W8 a single rate-limit hit on the
-                # is_contract probe would make BFS skip that address
-                # permanently for the rest of the worker's lifetime.
-                # The contract_detection helper:
-                #   * retries once on Exception (transient),
-                #   * returns (None, reason) on twice-failed RPC and
-                #     leaves the cache UNTOUCHED — letting later passes
-                #     re-resolve cleanly,
-                #   * caches verified True/False with a chain-aware key.
-                # We mirror into the legacy ``is_contract_cache`` (keyed
-                # by dest_key) so other code paths that read it
-                # (continuation pass, tracer:1157) keep working.
-                if policy.stop_at_contract:
-                    if dest_key not in is_contract_cache:
-                        try:
-                            from recupero.trace.contract_detection import (
-                                is_contract as _is_contract_safe,
-                            )
-                            result_bool, _reason = _is_contract_safe(
-                                dest, chain.value, adapter, _contract_check_cache,
-                            )
-                            if result_bool is None:
-                                # RPC failed twice; fall back to the
-                                # conservative "assume contract" gate to
-                                # avoid expanding into an unverifiable
-                                # destination. NB: we DO NOT cache None
-                                # so a later pass can re-resolve.
-                                log.debug(
-                                    "is_contract uncertain for %s (%s); "
-                                    "treating as contract for this hop",
-                                    dest, _reason,
-                                )
-                                is_contract_cache[dest_key] = True
-                            else:
-                                is_contract_cache[dest_key] = result_bool
-                        except Exception as e:  # noqa: BLE001
-                            log.debug("is_contract check failed for %s: %s", dest, e)
-                            # Be conservative: if we can't check, assume contract (skip)
-                            is_contract_cache[dest_key] = True
-                    if is_contract_cache[dest_key]:
-                        continue
-
-                next_wave.append((dest, depth + 1))
-                visited.add(dest_key)
+                _consider_enqueue(transfer, depth)
 
         current_wave = next_wave
 
@@ -610,57 +738,15 @@ def run_trace(
         "api_budget": case_budget.snapshot(),
     }
 
-    # v0.34 (operator-requested coverage-honesty): a trace that ran with
-    # reduced parameters — a per-address fetch cap that truncated an
-    # address, and/or address-poisoning that inflated the transfer graph —
-    # may have DROPPED a real onward hop. An LE deliverable must never imply
-    # completeness in that case. Detect poisoning (best-effort; never breaks
-    # a trace) + read the per-address cap truncations recorded during the
-    # wave loop, and surface a loud notice recommending a recall-complete
-    # re-run. ``coverage.complete`` is True ONLY when the trace finished
-    # cleanly AND nothing reduced coverage.
-    try:
-        from recupero.trace.address_poisoning import detect_poisoning_attempts
-        _poison_events = detect_poisoning_attempts(all_transfers, seed_address)
-    except Exception as _pe:  # noqa: BLE001
-        log.debug("poisoning detection failed (non-fatal): %s", _pe)
-        _poison_events = []
-    _cap_truncations = list(_COVERAGE_TRUNCATIONS)
-    try:
-        _resolved_addr_cap = int(os.environ.get(
-            "RECUPERO_MAX_TRANSFERS_PER_ADDRESS",
-            str(config.trace.max_transfers_per_address),
-        ))
-    except (TypeError, ValueError):
-        _resolved_addr_cap = config.trace.max_transfers_per_address
-    _coverage_reduced = bool(_cap_truncations) or bool(_poison_events)
-    case.config_used = {
-        **(case.config_used or {}),
-        "coverage": {
-            "complete": (
-                case.config_used.get("trace_status") == "complete"
-                and not _coverage_reduced
-            ),
-            "poisoning_detected": bool(_poison_events),
-            "poisoning_event_count": len(_poison_events),
-            "per_address_cap_truncations": _cap_truncations,
-            "reduced_parameters": {
-                "max_depth": int(cfg_max_depth),
-                "dust_threshold_usd": float(config.trace.dust_threshold_usd),
-                "max_transfers_per_address": int(_resolved_addr_cap),
-            },
-            "recommendation": (
-                "Coverage may be INCOMPLETE: address-poisoning and/or a "
-                "per-address fetch cap was in effect, so funds split below "
-                "the dust floor, sent beyond the fetch cap, or routed past "
-                "the depth limit can be missed. Before relying on "
-                "completeness for asset recovery, re-run recall-complete "
-                "(e.g. --max-depth 8 --dust-threshold-usd 50 with "
-                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=0), ideally on a paid "
-                "API tier."
-            ) if _coverage_reduced else "",
-        },
-    }
+    # v0.34 coverage-honesty (operator-requested): the coverage computation —
+    # poisoning detection, per-address cap truncations, no-data, and the
+    # ``coverage.complete`` flag — runs AFTER the DEX/bridge continuation pass
+    # (see the block just before ``_apply_dust_attack_filter`` below), NOT
+    # here. Computing it here (pre-continuation) silently dropped (a) cap
+    # truncations from the continuation pass — the deep, chatty aggregator/pool
+    # addresses are typically only reached there, never in the primary BFS — and
+    # (b) the final ``trace_status`` (e.g. ``partial_budget_hit`` the
+    # continuation pass can set), so a truncated trace was stamped ``complete``.
 
     log.info(
         "primary trace complete case=%s addresses_traced=%d transfers=%d total_usd=%s endpoints=%d duration=%.1fs status=%s",
@@ -766,6 +852,106 @@ def run_trace(
         except Exception:  # noqa: BLE001
             pass
 
+    # v0.34 (operator-requested coverage-honesty): a trace that ran with
+    # reduced parameters — a per-address fetch cap that truncated an
+    # address, and/or address-poisoning that inflated the transfer graph —
+    # may have DROPPED a real onward hop. An LE deliverable must never imply
+    # completeness in that case. Detect poisoning (best-effort; never breaks
+    # a trace) + read the per-address cap truncations recorded during the
+    # wave loop AND the DEX/bridge continuation pass, and surface a loud
+    # notice recommending a recall-complete re-run. ``coverage.complete`` is
+    # True ONLY when the trace finished cleanly AND nothing reduced coverage.
+    #
+    # This runs AFTER ``_continue_past_dex_and_bridges`` (above) on purpose:
+    #   (a) the continuation pass is where the deep, chatty aggregator/pool
+    #       addresses are typically reached, so it is where the per-address
+    #       fetch cap usually fires — capturing truncations before it ran
+    #       silently reported zero and stamped a capped trace ``complete``;
+    #   (b) the continuation pass can downgrade ``trace_status`` (e.g.
+    #       ``partial_budget_hit``), and ``complete`` must reflect that final
+    #       status.
+    # It reads ``case.transfers`` (the FULL post-continuation graph — the
+    # continuation rebinds it), not the primary-only ``all_transfers``.
+    try:
+        from recupero.trace.address_poisoning import detect_poisoning_attempts
+        _poison_events = detect_poisoning_attempts(case.transfers, seed_address)
+    except Exception as _pe:  # noqa: BLE001
+        log.debug("poisoning detection failed (non-fatal): %s", _pe)
+        _poison_events = []
+    _cap_truncations = list(_COVERAGE_TRUNCATIONS)
+    _poison_pruned = list(_POISON_PRUNED)
+    try:
+        _resolved_addr_cap = int(os.environ.get(
+            "RECUPERO_MAX_TRANSFERS_PER_ADDRESS",
+            str(config.trace.max_transfers_per_address),
+        ))
+    except (TypeError, ValueError):
+        _resolved_addr_cap = config.trace.max_transfers_per_address
+    _coverage_reduced = bool(_cap_truncations) or bool(_poison_events)
+    # v0.34 (coverage-honesty hardening): a trace that fetched ZERO transfers
+    # is NEVER "complete" — it is almost always an API key/access failure
+    # (invalid or rate-limited key returning NOTOK), a wrong seed/incident
+    # time, or a dead RPC — NOT a genuinely empty wallet. Previously such a
+    # run wrote trace_status="complete" + coverage.complete=True (no cap, no
+    # poisoning, no timeout), silently presenting an utterly empty trace as a
+    # finished one. That is the exact silent-incompleteness this notice exists
+    # to prevent, so an empty result must flip complete=False with a loud,
+    # distinct recommendation.
+    _no_data = not case.transfers
+    if _no_data:
+        _recommendation = (
+            "Trace fetched ZERO transfers. This is almost always an API "
+            "key/access failure (invalid or rate-limited key returning NOTOK), "
+            "a wrong seed address / incident time, or a dead RPC endpoint — "
+            "NOT a genuinely empty wallet. The result is NOT usable; fix API "
+            "access (verify ETHERSCAN_API_KEY + tier) and re-run before relying "
+            "on this case."
+        )
+    elif _coverage_reduced:
+        _recommendation = (
+            "Coverage may be INCOMPLETE: address-poisoning and/or a "
+            "per-address fetch cap was in effect, so funds split below "
+            "the dust floor, sent beyond the fetch cap, or routed past "
+            "the depth limit can be missed. Before relying on "
+            "completeness for asset recovery, re-run recall-complete "
+            "(e.g. --max-depth 8 --dust-threshold-usd 50 with "
+            "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=0), ideally on a paid "
+            "API tier."
+        )
+    else:
+        _recommendation = ""
+    case.config_used = {
+        **(case.config_used or {}),
+        "coverage": {
+            "complete": (
+                case.config_used.get("trace_status") == "complete"
+                and not _coverage_reduced
+                and not _no_data
+            ),
+            "no_data": _no_data,
+            "poisoning_detected": bool(_poison_events),
+            "poisoning_event_count": len(_poison_events),
+            "per_address_cap_truncations": _cap_truncations,
+            # Informational: zero-value poison edges dropped pre-pricing. This
+            # is NOISE removal (a zero-value edge moves no funds), so it does
+            # NOT feed ``_coverage_reduced`` / flip ``complete`` — unlike the
+            # fetch-cap truncations above, which can hide a real onward hop.
+            "poison_edges_pruned": sum(p.get("pruned", 0) for p in _poison_pruned),
+            "poison_pruned_addresses": len(_poison_pruned),
+            # Value-directed onward hops followed through high-fan-out nodes
+            # (RECUPERO_VALUE_TRACE). Each carries calibrated confidence
+            # (medium/low — never high) + the match basis, so the deliverable
+            # can present them as INFERENCE leads, not asserted identity.
+            "value_matched_hops": list(value_matched),
+            "reduced_parameters": {
+                "max_depth": int(cfg_max_depth),
+                "dust_threshold_usd": float(config.trace.dust_threshold_usd),
+                "max_transfers_per_address": int(_resolved_addr_cap),
+            },
+            "recommendation": _recommendation,
+        },
+    }
+
     # v0.31.2 — dust-attack pattern filter (off by default).
     #
     # A perpetrator sending many sub-cent transfers to many distinct
@@ -806,6 +992,175 @@ def _ordered_lockmint_candidates(
     return out
 
 
+def _tx_within_window(
+    tx: Transfer,
+    src_time: datetime | None,
+    window_end: datetime | None,
+) -> bool:
+    """True if ``tx`` falls in the cross-chain settlement window.
+
+    When ``window_end`` (or ``src_time``) is None the filter is disabled and
+    everything passes (legacy ``RECUPERO_CROSSCHAIN_WINDOW_HOURS=0`` behavior).
+    """
+    if window_end is None or src_time is None:
+        return True
+    return src_time <= tx.block_time <= window_end
+
+
+def _collect_swap_output_seeds(
+    transfers: list[Transfer],
+    *,
+    chain: Chain,
+    adapter: ChainAdapter,
+    visited: set[str],
+    dex_router_db: dict[str, dict] | None = None,
+) -> list[Address]:
+    """Resolve DEX-aggregator (0x / Matcha settler-style) swap OUTPUT recipients
+    among ``transfers`` and return the NEW ones to follow on ``chain``.
+
+    Shared by the source-chain continuation AND the cross-chain destination
+    continuation so a token->DAI swap is followed regardless of which chain it
+    happened on. ``adapter`` MUST be the adapter for ``chain``: a settler swap
+    whose output isn't already present in ``transfers`` is recovered from the
+    swap tx's RECEIPT LOGS via that adapter (``detect_dex_swaps(..., adapter=
+    adapter)``) — the destination chain's settler payout is invisible to the
+    source-chain adapter, which is exactly why this must run per-chain.
+
+    Only HIGH-confidence in-trace outputs and log-resolved (``output_source ==
+    'receipt_logs'``) outputs are returned — never a low/medium in-trace guess.
+    A DEX swap output is paid on the swap's OWN chain, so every returned
+    recipient is a same-chain seed. Marks each returned recipient in ``visited``
+    so the caller won't re-enqueue it.
+    """
+    from recupero.trace.dex_swaps import detect_dex_swaps
+
+    if not transfers:
+        return []
+    # detect_dex_swaps reads only ``.transfers`` — a lightweight view keeps this
+    # reusable for the destination-chain pass (whose transfers aren't a Case).
+    view = SimpleNamespace(transfers=list(transfers))
+    try:
+        swaps = detect_dex_swaps(view, dex_router_db, adapter=adapter)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "dex-swap detection failed on %s; skipping continuation: %s",
+            chain.value, exc,
+        )
+        return []
+
+    seeds: list[Address] = []
+    for swap in swaps:
+        # Follow HIGH-confidence in-trace swap outputs AND log-resolved outputs
+        # (medium, but structurally certain — the Transfer event is on-chain).
+        # The latter is what crosses a 0x token->DAI swap that would otherwise
+        # dead-end at the settler.
+        if swap.confidence != "high" and (
+            getattr(swap, "output_source", "in_trace") != "receipt_logs"
+        ):
+            continue
+        if not swap.output_recipient:
+            continue
+        recipient = swap.output_recipient
+        recipient_key = _address_visited_key(chain, recipient)
+        if recipient_key in visited:
+            continue
+        seeds.append(recipient)
+        visited.add(recipient_key)
+    return seeds
+
+
+def _confirm_bridge_handoffs(
+    handoffs: list[Any],
+    *,
+    src_adapter: ChainAdapter,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+    window_hours: float,
+    incident_time: datetime,
+) -> list[tuple[Any, Any, datetime]]:
+    """Cryptographically CONFIRM each cross-chain handoff's destination via the
+    bridge-pairing oracle — the protocol's own order/message id matched on BOTH
+    chains (``bridge_pairings.confirm_bridge_destination``). This is the only
+    cross-chain edge basis that is genuine proof (vs the heuristic calldata
+    decode / amount-time correlation). Best-effort; never raises.
+
+    Returns ``(handoff, ConfirmedDestination, src_block_time)`` per confirmed
+    handoff. Opt-in caller-gated (``RECUPERO_BRIDGE_CONFIRM``) — it fetches the
+    source receipt and queries the destination chain's logs.
+    """
+    from recupero.trace.bridge_pairings import (
+        confirm_bridge_destination,
+        get_pair_spec,
+        identify_source,
+    )
+
+    out: list[tuple[Any, Any, datetime]] = []
+    seen_order_ids: set[str] = set()
+    for h in handoffs:
+        protocol = getattr(h, "bridge_protocol", None)
+        if get_pair_spec(protocol) is None:
+            continue
+        try:
+            ev = src_adapter.fetch_evidence_receipt(h.source_tx_hash)
+            src_receipt = getattr(ev, "raw_receipt", None)
+            ev_block_time = getattr(ev, "block_time", None)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("bridge-confirm: source receipt fetch failed: %s", exc)
+            continue
+        # protocol id + destination chain from the source event (robust to
+        # periphery entrypoints); fall back to the calldata-decoded dest chain.
+        ident = identify_source(src_receipt)
+        order_id = ident[1] if ident else None
+        dest_chain_str = (
+            (ident[2] if ident else None)
+            or getattr(h, "decoded_destination_chain", None)
+        )
+        if not dest_chain_str:
+            continue
+        try:
+            dest_chain = Chain(dest_chain_str)
+        except (ValueError, KeyError):
+            continue
+        try:
+            src_iso = (h.block_time_iso or "").replace("Z", "+00:00")
+            sbt = datetime.fromisoformat(src_iso)
+            if sbt.tzinfo is None:
+                sbt = sbt.replace(tzinfo=UTC)
+        except (TypeError, ValueError, AttributeError):
+            sbt = ev_block_time or incident_time
+        try:
+            dst_adapter = ChainAdapter.for_chain(dest_chain, (config, env))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bridge-confirm: dst adapter for %s failed: %s", dest_chain_str, exc)
+            continue
+        src_chain_val = (
+            h.source_chain.value if getattr(h, "source_chain", None) else None
+        )
+        try:
+            confirmed = confirm_bridge_destination(
+                protocol=protocol,
+                destination_chain=dest_chain_str,
+                source_receipt=src_receipt,
+                dst_adapter=dst_adapter,
+                src_block_time=sbt,
+                source_chain=src_chain_val,
+                window_hours=window_hours or 24.0,
+                order_id=order_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bridge-confirm failed for %s: %s", protocol, exc)
+            confirmed = None
+        finally:
+            try:  # noqa: SIM105
+                dst_adapter.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if confirmed and confirmed.order_id not in seen_order_ids:
+            seen_order_ids.add(confirmed.order_id)
+            out.append((h, confirmed, sbt))
+    return out
+
+
 def _continue_past_dex_and_bridges(
     *,
     case: Case,
@@ -842,35 +1197,22 @@ def _continue_past_dex_and_bridges(
     # tens of ms to load; only pay that cost when continuation is
     # actually possible.
     from recupero.trace.cross_chain import identify_cross_chain_handoffs
-    from recupero.trace.dex_swaps import detect_dex_swaps
 
     continuation_seeds: list[tuple[Address, int, str]] = []
     # (address, depth_hint, provenance_tag)
 
     # --- DEX swap output recipients ---
-    try:
-        swaps = detect_dex_swaps(case)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("dex-swap detection failed; skipping continuation: %s", exc)
-        swaps = []
-    for swap in swaps:
-        if swap.confidence != "high":
-            continue
-        if not swap.output_recipient:
-            continue
-        # The output recipient on a DEX swap is on the SAME chain as
-        # the swap itself. Safe to queue without multi-chain state.
-        recipient = swap.output_recipient
-        recipient_key = _address_visited_key(chain, recipient)
-        if recipient_key in visited:
-            continue
-        # Don't continue if the recipient is itself a router (swap
-        # output going back into another aggregator). The next pass
-        # will re-detect and we'd loop forever otherwise.
-        # depth_hint=1 puts the continuation at depth 1 from the
-        # original swap — under max_depth=2 that's the last hop.
+    # v0.34: pass the adapter so a settler-style swap (0x / Matcha) whose output
+    # isn't in case.transfers gets recovered from the swap tx's receipt logs.
+    # Factored into _collect_swap_output_seeds so the SAME settler-output
+    # resolution runs on the cross-chain DESTINATION wave below (with the
+    # destination adapter) — see the dest-chain continuation in the
+    # cross_chain_seeds loop. depth_hint=1 puts each recipient at the last hop
+    # under max_depth>=2.
+    for recipient in _collect_swap_output_seeds(
+        case.transfers, chain=chain, adapter=adapter, visited=visited,
+    ):
         continuation_seeds.append((recipient, 1, "dex_swap_output"))
-        visited.add(recipient_key)
 
     # --- Bridge handoffs (same-chain + cross-chain) ---
     #
@@ -1022,6 +1364,91 @@ def _continue_past_dex_and_bridges(
             except (TypeError, ValueError, AttributeError):
                 src_block_time = incident_time
             cross_chain_seeds.append((dest_chain, decoded_addr, 1, src_block_time))
+
+    # v0.34: CRYPTOGRAPHIC bridge-destination confirmation (opt-in).
+    # The handoff loop above seeds a destination only from the heuristic
+    # calldata decode (receiverDst). This pass instead asks the bridge-pairing
+    # ORACLE to confirm the destination by the protocol's own cross-chain id
+    # matched on BOTH chains — the only cross-chain basis that is genuine proof.
+    # A confirmed destination is PREFERRED (it carries the real fill recipient
+    # and is recorded for the Phase-2 validator + brief); it is added as a
+    # continuation seed (deduped against the heuristic seeds). Gated by
+    # RECUPERO_BRIDGE_CONFIRM (it makes live destination-chain log queries),
+    # default OFF — consistent with RECUPERO_LOCKMINT_MATCH, so prod traces are
+    # byte-for-byte unchanged unless an operator opts in.
+    _bridge_confirm_on = os.environ.get(
+        "RECUPERO_BRIDGE_CONFIRM", "",
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if _bridge_confirm_on and cross_chain_continue and handoffs:
+        try:
+            _confs = _confirm_bridge_handoffs(
+                handoffs,
+                src_adapter=adapter,
+                config=config,
+                env=env,
+                window_hours=xchain_window_h,
+                incident_time=incident_time,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bridge-confirm pass failed: %s", exc)
+            _confs = []
+        _conf_records: list[dict[str, Any]] = []
+        for (h, c, sbt) in _confs:
+            _conf_records.append({
+                "protocol": c.protocol,
+                "order_id": c.order_id,
+                "source_chain": (
+                    h.source_chain.value if getattr(h, "source_chain", None) else None
+                ),
+                "source_tx": getattr(h, "source_tx_hash", None),
+                "dst_chain": c.dst_chain,
+                "dst_tx": c.dst_tx,
+                "recipient": c.recipient,
+                "raw_amount": str(c.raw_amount) if c.raw_amount is not None else None,
+                "src_raw_amount": (
+                    str(c.src_raw_amount) if c.src_raw_amount is not None else None
+                ),
+                "same_asset": c.same_asset,
+                "confidence": c.confidence,
+                "basis": c.basis,
+            })
+            # Seed the cryptographically-confirmed recipient on the dest chain
+            # (deduped against the heuristic cross_chain_seeds via the same
+            # cross_chain_visited set). No recipient -> recorded but not seeded.
+            if not c.recipient:
+                continue
+            try:
+                _dchain = Chain(c.dst_chain)
+            except (ValueError, KeyError):
+                continue
+            _xkey = (_dchain.value, _address_visited_key(_dchain, c.recipient))
+            if _xkey in cross_chain_visited:
+                continue
+            cross_chain_visited.add(_xkey)
+            cross_chain_seeds.append((_dchain, c.recipient, 1, sbt))
+        if _conf_records:
+            case.config_used = {
+                **(case.config_used or {}),
+                "bridge_confirmations": _conf_records,
+            }
+            log.info(
+                "bridge-confirm: %d cryptographically-confirmed cross-chain "
+                "destination(s)", len(_conf_records),
+            )
+            # Phase 2 self-audit: every confirmed edge must carry its proof and
+            # (same-asset only) conserve value. Log any violation — the trace
+            # never asserts a high cross-chain edge it can't back up.
+            try:
+                from recupero.validators.cross_chain_integrity import (
+                    validate_bridge_confirmations,
+                )
+                for _v in validate_bridge_confirmations(_conf_records):
+                    log.warning(
+                        "bridge-confirm self-audit [%s/%s]: %s",
+                        _v.check, _v.severity, _v.detail,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.debug("bridge-confirm self-audit skipped: %s", exc)
 
     # v0.32.1 (trace-depth #1 wiring): lock-and-mint cross-chain matching.
     # OPT-IN via RECUPERO_LOCKMINT_MATCH because it is the more INFERENTIAL,
@@ -1264,24 +1691,88 @@ def _continue_past_dex_and_bridges(
                 # later seeds with later source times are still
                 # covered.
                 src_time = earliest_src_time_by_chain.get(dst_chain)
-                if xchain_window_h > 0 and src_time is not None:
-                    window_end = src_time + timedelta(hours=xchain_window_h)
-                    dropped = 0
-                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
-                        for tx in hop_transfers:
-                            if src_time <= tx.block_time <= window_end:
-                                new_transfers.append(tx)
-                            else:
-                                dropped += 1
-                    if dropped:
-                        log.info(
-                            "cross-chain window filter (%.1fh) dropped %d "
-                            "out-of-range transfers on %s",
-                            xchain_window_h, dropped, dst_chain.value,
+                window_end = (
+                    src_time + timedelta(hours=xchain_window_h)
+                    if (xchain_window_h > 0 and src_time is not None)
+                    else None
+                )
+                chain_new: list[Transfer] = []
+                dropped = 0
+                for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
+                    for tx in hop_transfers:
+                        if _tx_within_window(tx, src_time, window_end):
+                            chain_new.append(tx)
+                        else:
+                            dropped += 1
+                if dropped:
+                    log.info(
+                        "cross-chain window filter (%.1fh) dropped %d "
+                        "out-of-range transfers on %s",
+                        xchain_window_h, dropped, dst_chain.value,
+                    )
+                new_transfers.extend(chain_new)
+
+                # v0.34 (compose bridge -> swap -> onward): the cross-chain wave
+                # above is a SINGLE shallow hop. It captures the destination
+                # receiver's direct outflows (e.g. the deposit INTO a 0x /
+                # Matcha settler) but NOT the settler's token->DAI payout — that
+                # is paid from the settler's own balance and is recoverable only
+                # from the swap tx RECEIPT LOGS using the DESTINATION chain's
+                # adapter. Without this pass the trace dead-ends at the settler
+                # on the destination chain (the exact Zigha gap: Arbitrum hub ->
+                # DeBridge -> Ethereum receiver -> 0x swap -> DAI). Run up to
+                # RECUPERO_DEST_CONTINUATION_WAVES extra waves on dst_adapter,
+                # each resolving swap outputs among the prior wave's transfers
+                # and following them one hop deeper. Bounded to this ONE
+                # destination chain (no further cross-chain recursion) and to
+                # the per-case transfer budget + visited set already in force.
+                try:
+                    _dest_waves = int(os.environ.get(
+                        "RECUPERO_DEST_CONTINUATION_WAVES", "2",
+                    ))
+                except (TypeError, ValueError):
+                    _dest_waves = 2
+                _frontier = chain_new
+                for _wi in range(max(0, _dest_waves)):
+                    if not _frontier:
+                        break
+                    _dseeds = _collect_swap_output_seeds(
+                        _frontier, chain=dst_chain, adapter=dst_adapter,
+                        visited=visited,
+                    )
+                    if not _dseeds:
+                        break
+                    log.info(
+                        "dest-chain swap continuation on %s: %d swap-output "
+                        "seed(s) (wave %d/%d) — composing bridge->swap->onward",
+                        dst_chain.value, len(_dseeds), _wi + 1, _dest_waves,
+                    )
+                    try:
+                        _dres = _process_wave(
+                            [(_a, 1) for _a in _dseeds],
+                            adapter=dst_adapter,
+                            label_store=label_store,
+                            price_client=price_client,
+                            policy=policy,
+                            incident_time=dst_anchor_time,
+                            config=config,
+                            evidence_dir=evidence_dir,
+                            concurrency=trace_concurrency,
                         )
-                else:
-                    for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
-                        new_transfers.extend(hop_transfers)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "dest-chain swap continuation wave on %s failed: %s",
+                            dst_chain.value, exc,
+                        )
+                        break
+                    _next_frontier: list[Transfer] = []
+                    for _fa, _fd, _hts, _isvc in _dres:
+                        for tx in _hts:
+                            if not _tx_within_window(tx, src_time, window_end):
+                                continue
+                            new_transfers.append(tx)
+                            _next_frontier.append(tx)
+                    _frontier = _next_frontier
             finally:
                 try:
                     dst_adapter.close()
@@ -1334,6 +1825,114 @@ def _continue_past_dex_and_bridges(
             log.warning("endpoint-diversity probe failed (non-fatal): %s", exc)
 
 
+def _select_traced_inbound(
+    inbounds: list[Transfer], dust_threshold_usd: Decimal
+) -> Transfer | None:
+    """Pick the inbound edge representing the TRACED funds among several edges
+    into a node (v0.34 audit fix).
+
+    Prefer the largest PRICED inbound ABOVE the dust threshold (our funds, when
+    priceable). If every priced inbound is dust, fall back to the largest
+    UNPRICED inbound by token amount — so a tiny priced poison/dust edge can't
+    displace the real (often unpriced — e.g. an illiquid/new token, or a leg
+    built under the lightweight ``skip_contract_api`` pass) laundering leg and
+    send the matcher chasing the wrong amount, missing the real onward hop.
+    Previously ``max(usd_value or 0)`` let a $5 priced dust beat the unpriced
+    real funds (which sorted as 0).
+    """
+    if not inbounds:
+        return None
+    meaningful = [
+        t for t in inbounds
+        if t.usd_value_at_tx is not None
+        and t.usd_value_at_tx.is_finite()
+        and t.usd_value_at_tx > dust_threshold_usd
+    ]
+    if meaningful:
+        return max(meaningful, key=lambda t: t.usd_value_at_tx)
+    unpriced = [t for t in inbounds if t.usd_value_at_tx is None]
+    if unpriced:
+        # real funds are often the unpriced leg; rank by token amount (best
+        # available signal absent USD) rather than chasing priced dust.
+        return max(unpriced, key=lambda t: t.amount_decimal or Decimal(0))
+    # every inbound is priced-but-dust → take the largest priced one.
+    return max(
+        inbounds,
+        key=lambda t: (
+            t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0)
+        ),
+    )
+
+
+def _value_match_and_enqueue(
+    *,
+    inbound_transfer: Any,
+    node_outflows: list[Transfer],
+    parent_depth: int,
+    node_addr: Address,
+    enqueue_fn: Any,
+    provenance_sink: list[dict[str, Any]],
+) -> tuple[int, list[Transfer]]:
+    """At a high-fan-out node, follow ONLY the outflow(s) whose value matches
+    the inbound funds (v0.34 value-directed tracing).
+
+    Builds a ``Leg`` for the inbound edge and for each outflow, ranks them with
+    ``value_matching.match_onward_transfers`` (same-asset amount match, then
+    USD-value match across a swap), and enqueues each match via ``enqueue_fn``
+    (the BFS's shared per-transfer gate — so visited / contract / depth rules
+    still apply). Records one provenance row per ACTUALLY-enqueued hop, carrying
+    the calibrated confidence (never "high").
+
+    Returns ``(followed_count, matched_transfers)`` where ``matched_transfers``
+    are the Transfer objects that were enqueued — the caller records ONLY these
+    on the case (the money path), not the node's full commingled outflow set,
+    so a mixer/aggregator's thousands of unrelated outflows neither bloat the
+    per-case transfer budget nor pollute the deliverable.
+    """
+    from recupero.trace.value_matching import (
+        leg_from_transfer,
+        match_onward_transfers,
+    )
+
+    inbound_leg = leg_from_transfer(inbound_transfer)
+    if inbound_leg is None:
+        return 0, []
+
+    by_key: dict[tuple[str, str], Transfer] = {}
+    cand_legs = []
+    for t in node_outflows:
+        leg = leg_from_transfer(t)
+        if leg is None:
+            continue
+        by_key[(leg.tx_hash, leg.to_address.lower())] = t
+        cand_legs.append(leg)
+
+    matches = match_onward_transfers(inbound_leg, cand_legs)
+    followed = 0
+    matched_transfers: list[Transfer] = []
+    for m in matches:
+        t = by_key.get((m.tx_hash, m.to_address.lower()))
+        if t is None:
+            continue
+        if not enqueue_fn(t, parent_depth):
+            # visited / contract / depth gate rejected it — don't claim a hop.
+            continue
+        matched_transfers.append(t)
+        provenance_sink.append({
+            "node": node_addr,
+            "inbound_tx": inbound_leg.tx_hash,
+            "matched_to": m.to_address,
+            "matched_tx": m.tx_hash,
+            "kind": m.kind,
+            "confidence": m.confidence,
+            "ambiguous": m.ambiguous,
+            "basis": m.basis,
+            "hop_depth": parent_depth + 1,
+        })
+        followed += 1
+    return followed, matched_transfers
+
+
 def _process_wave(
     wave: list[tuple[Address, int]],
     *,
@@ -1345,6 +1944,7 @@ def _process_wave(
     config: RecuperoConfig,
     evidence_dir: Path,
     concurrency: int,
+    value_trace: bool = False,
 ) -> list[tuple[Address, int, list[Transfer], bool]]:
     """Run ``_trace_one_hop`` on every address in the wave, returning the
     aggregated results. Internal errors per-address are caught and
@@ -1373,6 +1973,7 @@ def _process_wave(
                 hop_depth=depth,
                 parent_transfer_id=None,
                 evidence_dir=evidence_dir,
+                value_trace=value_trace,
             )
             return (addr, depth, transfers, is_service_wallet)
         except Exception as e:  # noqa: BLE001
@@ -1418,6 +2019,7 @@ def _trace_one_hop(
     hop_depth: int,
     parent_transfer_id: str | None,
     evidence_dir: Path,
+    value_trace: bool = False,
 ) -> tuple[list[Transfer], bool]:
     """Fetch + label + price all outflows from one address.
 
@@ -1425,6 +2027,17 @@ def _trace_one_hop(
     is True, the address has more outflows than
     ``policy.service_wallet_outflow_threshold`` — caller should keep the
     transfers but stop BFS traversal at this address.
+
+    v0.34 value-directed fast path: when ``value_trace`` is on AND this address
+    is a high-fan-out service wallet, we build its (up to thousands of) outflows
+    LIGHTWEIGHT — cheap price (no per-token CoinGecko contract-resolution API),
+    label kept (in-memory), but SKIP the two per-outflow Etherscan RPCs
+    (``is_contract`` + evidence-receipt fetch) and the dust filter. The caller
+    value-matches these to pick the real onward hop(s) and FINALIZES only those
+    few (writes their evidence). This turns an ~8k-RPC, multi-minute node into a
+    sub-second one, so a deep endpoint behind an aggregator is reachable. For
+    NON-service-wallet nodes (and whenever value_trace is off) the full,
+    fully-evidenced path runs unchanged.
     """
     start_time = incident_time - timedelta(minutes=config.trace.incident_buffer_minutes)
     start_block = adapter.block_at_or_before(start_time)
@@ -1490,6 +2103,35 @@ def _trace_one_hop(
 
     log.info("fetched %d raw outflows", len(raw_outflows))
 
+    # v0.34 (operator-requested "elite recall"): prune UNAMBIGUOUS poison edges
+    # BEFORE pricing/following so the tracer can run UNCAPPED without drowning
+    # in address-poisoning spam. Zero-value transfers move no funds and are the
+    # canonical poisoning primitive; dropping them here (a) avoids a CoinGecko
+    # contract-resolution call per throwaway poison token — the historical
+    # multi-hour "freeze" — and (b) keeps the per-address fetch cap from ever
+    # having to truncate a real onward hop. This is NOISE removal: it never
+    # drops a value-bearing edge, so it does NOT reduce coverage. Runs BEFORE
+    # the service-wallet check so that count reflects REAL edges, not poison.
+    # Opt-out: RECUPERO_POISON_PRUNE in {0,false,no,off}.
+    if os.environ.get("RECUPERO_POISON_PRUNE", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    ):
+        from recupero.trace.poison_pruning import prune_poison_outflows
+        _pre_prune = len(raw_outflows)
+        raw_outflows, _pruned_edges = prune_poison_outflows(raw_outflows)
+        if _pruned_edges:
+            log.info(
+                "poison-pruned %d zero-value outflow(s) from %s (%d -> %d kept)",
+                len(_pruned_edges), from_address, _pre_prune, len(raw_outflows),
+            )
+            _POISON_PRUNED.append({
+                "address": from_address,
+                "kind": "zero_value_poison",
+                "pruned": len(_pruned_edges),
+                "raw_outflows": _pre_prune,
+                "hop_depth": hop_depth,
+            })
+
     # Service-wallet detection: a wallet emitting more outflows than the
     # threshold is almost certainly an unlabeled exchange / OTC desk /
     # token distributor. Caller stops BFS at this address.
@@ -1504,10 +2146,54 @@ def _trace_one_hop(
             policy.service_wallet_outflow_threshold,
         )
 
+    # v0.34 value-directed fast path: build a high-fan-out node's outflows
+    # cheaply (no per-token price API, no per-outflow is_contract / evidence
+    # RPC, no dust filter) so the caller can value-match them and finalize only
+    # the matched few. ``_lightweight`` gates the expensive ops in the loop.
+    #
+    # v0.34 perf (prune-before-enrich): the cheap build must engage for ANY
+    # high-fan-out node under value-trace, not just those above the
+    # service-wallet threshold. The full path does ~3 Etherscan RPCs per kept
+    # outflow (per-token CoinGecko contract-resolution + per-dest is_contract +
+    # per-tx evidence receipt); on a node with thousands of outflows that is the
+    # multi-hour wall we hit when a 10k-outflow node sat just UNDER the
+    # service-wallet bar. The wave aggregation value-matches the cheaply-built
+    # set and FINALIZES the expensive ops (is_contract + evidence) for ONLY the
+    # matched onward hop(s) (see run_trace ~643). Gate the count-based trigger on
+    # hop_depth>=1 so the seed (depth 0, non-directed — every outflow is kept and
+    # must stay fully evidenced) is never cheapened. The service-wallet branch is
+    # preserved unchanged. Ceiling tunable via RECUPERO_VALUE_TRACE_ENRICH_CEILING
+    # (default 50; <=0 disables the count trigger, leaving only the service-wallet
+    # behavior).
+    try:
+        _enrich_ceiling = int(
+            os.environ.get("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+        )
+    except (TypeError, ValueError):
+        _enrich_ceiling = 50
+    _lightweight = value_trace and (
+        is_service_wallet
+        or (
+            hop_depth >= 1
+            and _enrich_ceiling > 0
+            and len(raw_outflows) > _enrich_ceiling
+        )
+    )
+
     # Cap to avoid runaway on chatty addresses. ``_cap`` honors the
     # ``RECUPERO_MAX_TRANSFERS_PER_ADDRESS`` env-var override resolved
     # above; ``_cap <= 0`` disables the slice (industry-best mode).
-    if _cap and _cap > 0 and len(raw_outflows) > _cap:
+    #
+    # v0.34 audit fix (coverage): the slice is positional (``[:_cap]``) and
+    # adapters fetch ASCENDING by block, so it keeps the EARLIEST outflows and
+    # silently drops the tail — but the onward laundering hop occurs AFTER the
+    # inflow, so the tail is exactly where the money path lives. The slice's only
+    # purpose is to bound the EXPENSIVE per-outflow work; under ``_lightweight``
+    # that work is already skipped (cheap build, value-matched to ≤K, finalized
+    # only on the matched hop), so capping a lightweight node both is unnecessary
+    # AND drops the money path. Skip the per-address slice when lightweight; the
+    # per-CASE transfer cap still bounds total memory.
+    if not _lightweight and _cap and _cap > 0 and len(raw_outflows) > _cap:
         log.warning(
             "capping outflows from %d to %d for address %s",
             len(raw_outflows), _cap, from_address,
@@ -1534,7 +2220,15 @@ def _trace_one_hop(
         transfer = _build_transfer(raw, hop_depth=hop_depth, parent_transfer_id=parent_transfer_id)
 
         # Pricing — price_at returns per-unit USD price; transfer value = price × amount
-        result = price_client.price_at(transfer.token, transfer.block_time)
+        # Lightweight (value-trace service-wallet) pass skips the per-token
+        # CoinGecko contract-resolution API so ranking thousands of outflows
+        # stays cheap; real-rail tokens still price via hint/stablecoin/static map.
+        if _lightweight:
+            result = price_client.price_at(
+                transfer.token, transfer.block_time, skip_contract_api=True,
+            )
+        else:
+            result = price_client.price_at(transfer.token, transfer.block_time)
         usd_value: Decimal | None = None
         pricing_error = result.error
         # Wave-2 adversarial hardening: reject non-finite prices /
@@ -1582,8 +2276,11 @@ def _trace_one_hop(
             "pricing_error": pricing_error,
         })
 
-        # Dust filter (after pricing)
-        if not policy.should_include(transfer):
+        # Dust filter (after pricing). SKIPPED in the lightweight pass so the
+        # value-matcher sees every candidate (a sub-dust edge simply won't match
+        # a high-value inbound); these transfers are transient — only the matched
+        # few are kept by the caller.
+        if not _lightweight and not policy.should_include(transfer):
             log.debug("skipping (dust) tx=%s usd=%s", transfer.tx_hash, transfer.usd_value_at_tx)
             continue
 
@@ -1596,11 +2293,18 @@ def _trace_one_hop(
         label = lookup_pit_safe(label_store, transfer.to_address,
             chain=adapter.chain,
             point_in_time=incident_time,)
-        try:
-            is_contract = adapter.is_contract(transfer.to_address)
-        except Exception as e:  # noqa: BLE001
-            log.warning("is_contract check failed for %s: %s", transfer.to_address, e)
+        # is_contract is an Etherscan RPC per destination. In the lightweight
+        # pass we defer it (placeholder False) — these are throwaway candidates;
+        # only the value-matched onward hop(s) get a proper resolution when the
+        # next wave fetches them.
+        if _lightweight:
             is_contract = False
+        else:
+            try:
+                is_contract = adapter.is_contract(transfer.to_address)
+            except Exception as e:  # noqa: BLE001
+                log.warning("is_contract check failed for %s: %s", transfer.to_address, e)
+                is_contract = False
 
         counterparty = Counterparty(
             address=transfer.to_address,
@@ -1611,11 +2315,16 @@ def _trace_one_hop(
         transfer = transfer.model_copy(update={"counterparty": counterparty})
         transfers.append(transfer)
 
-        # Persist evidence receipt immediately (partial output > no output)
-        try:
-            write_evidence_receipt(adapter, transfer.tx_hash, evidence_dir)
-        except Exception as e:  # noqa: BLE001
-            log.warning("evidence receipt failed tx=%s: %s", transfer.tx_hash, e)
+        # Persist evidence receipt immediately (partial output > no output).
+        # SKIPPED in the lightweight pass — it is a per-tx RPC fetch and the
+        # dominant cost at a high-fan-out node. The caller writes evidence for
+        # the value-matched onward hop(s) only (see _value_match_and_enqueue
+        # finalize in run_trace).
+        if not _lightweight:
+            try:
+                write_evidence_receipt(adapter, transfer.tx_hash, evidence_dir)
+            except Exception as e:  # noqa: BLE001
+                log.warning("evidence receipt failed tx=%s: %s", transfer.tx_hash, e)
 
         log.info(
             "kept tx=%s to=%s amount=%s %s usd=%s label=%s",

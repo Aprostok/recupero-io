@@ -103,3 +103,33 @@ def test_missing_coverage_key_adds_no_notice() -> None:
     case.config_used = cu
     brief = _emit(case)
     assert "COVERAGE_NOTICE" not in brief
+
+
+def test_zero_transfer_trace_surfaces_not_usable_notice() -> None:
+    """v0.34 hardening: a trace that fetched ZERO transfers (API key/access
+    failure, wrong seed, dead RPC) must NEVER read complete — it surfaces a
+    COVERAGE_NOTICE flagging the result as NOT usable. This is the exact
+    silent-failure the live Zigha 6/s run exposed (Invalid API Key -> 0
+    transfers -> previously stamped complete=True)."""
+    case = _build_v_cfi01_case()
+    case.config_used = {
+        **(case.config_used or {}),
+        "trace_status": "complete",   # deceptive: no cap/timeout/budget hit
+        "coverage": {
+            "complete": False,        # ...but no_data forces it False
+            "no_data": True,
+            "poisoning_detected": False,
+            "poisoning_event_count": 0,
+            "per_address_cap_truncations": [],
+            "recommendation": (
+                "Trace fetched ZERO transfers. This is almost always an API "
+                "key/access failure ... The result is NOT usable; fix API "
+                "access and re-run."
+            ),
+        },
+    }
+    brief = _emit(case)
+    assert "COVERAGE_NOTICE" in brief
+    assert brief["COVERAGE_NOTICE"]["no_data"] is True
+    assert brief["COVERAGE_NOTICE"]["complete"] is False
+    assert "ZERO transfers" in brief["COVERAGE_NOTICE"]["recommendation"]

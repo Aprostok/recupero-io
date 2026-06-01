@@ -15,6 +15,7 @@ Stablecoin shortcut: USDT, USDC, DAI, BUSD, FDUSD treated as $1.00 with a
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -288,6 +289,27 @@ class PriceResult:
     error: str | None
 
 
+def _resolve_coingecko_rps(config_default: float) -> float:
+    """v0.34: CoinGecko client requests/second, configurable via
+    ``RECUPERO_COINGECKO_RPS`` so a paid (pro) CoinGecko tier's throughput is
+    usable. The demo tier self-paces to a low rate and SILENTLY sleeps — the
+    historical bottleneck where pricing thousands of transfers crawled at the
+    demo limit with no error in the log. On a paid plan set ``COINGECKO_TIER=pro``
+    (switches to the pro endpoint + key header) AND this knob to the plan's
+    per-second limit (e.g. ~5-8 for a 300-500/min plan). Falls back to the
+    config default; clamped to (0, 100]; bad/empty/non-positive -> default."""
+    raw = os.environ.get("RECUPERO_COINGECKO_RPS")
+    if raw is None or not raw.strip():
+        return config_default
+    try:
+        rps = float(raw)
+    except (TypeError, ValueError):
+        return config_default
+    if not (rps > 0):
+        return config_default
+    return min(rps, 100.0)
+
+
 class _RateLimiter:
     def __init__(self, rps: float) -> None:
         self.min_interval = 1.0 / rps if rps > 0 else 0.0
@@ -360,7 +382,9 @@ class CoinGeckoClient:
             dsn=effective_dsn if effective_dsn else None,
             cache_dir=cache_dir,
         )
-        self.limiter = _RateLimiter(config.pricing.requests_per_second)
+        self.limiter = _RateLimiter(
+            _resolve_coingecko_rps(config.pricing.requests_per_second)
+        )
         self._is_pro = (env.COINGECKO_TIER or "demo").lower() == "pro"
         # Split connect vs read timeout: api.coingecko.com is rate-limited
         # and occasionally slow-loris during burst. A 10s connect cap fails
@@ -472,12 +496,22 @@ class CoinGeckoClient:
 
     # ---------- Public API ----------
 
-    def price_at(self, token: TokenRef, when: datetime) -> PriceResult:
+    def price_at(
+        self, token: TokenRef, when: datetime, *, skip_contract_api: bool = False,
+    ) -> PriceResult:
         """Returns USD price PER UNIT of `token` at `when` (daily granularity).
 
         IMPORTANT: this is the per-token price, not the value of any specific
         transfer. To compute the USD value of a transfer, multiply this by
         the transfer's amount_decimal.
+
+        ``skip_contract_api`` (v0.34): when True, do NOT make a per-token
+        CoinGecko contract->id resolution API call for an unmapped ERC-20 — use
+        only the token's coingecko_id hint, the static contract map, the
+        stablecoin shortcut, and the in-process cache. Unknown tokens return
+        unpriced (fast) instead of stalling. Used by value-directed tracing to
+        rank a high-fan-out node's thousands of outflows cheaply (the real-rail
+        tokens — ETH / stablecoins / mapped majors — still price correctly).
         """
         # Stablecoin shortcut — but ONLY for the genuine canonical contract on
         # the SAME CHAIN. Spoofed tokens with the same symbol at attacker-
@@ -508,7 +542,9 @@ class CoinGeckoClient:
             )
 
         # Resolve to coingecko_id (via token's hint, static map, or API)
-        cg_id = token.coingecko_id or self._resolve_cg_id(token)
+        cg_id = token.coingecko_id or self._resolve_cg_id(
+            token, skip_api=skip_contract_api,
+        )
         if not cg_id:
             # Before giving up, if this was a stablecoin-symbol token we couldn't
             # resolve, surface the spoof-suspicion clearly rather than a generic
@@ -607,7 +643,7 @@ class CoinGeckoClient:
 
     # ---------- Internals ----------
 
-    def _resolve_cg_id(self, token: TokenRef) -> str | None:
+    def _resolve_cg_id(self, token: TokenRef, *, skip_api: bool = False) -> str | None:
         if token.contract is None:
             # Native — caller should have set coingecko_id ('ethereum' for ETH)
             return None
@@ -624,6 +660,15 @@ class CoinGeckoClient:
         cache_key = (token.chain, canon)
         if cache_key in self._contract_id_cache:
             return self._contract_id_cache[cache_key]
+        if skip_api:
+            # v0.34 fast path (value-trace at high-fan-out nodes): resolve from
+            # the static map / in-process cache ONLY; do NOT make a per-token
+            # CoinGecko contract->id API call. Unknown tokens return None
+            # (unpriced) instead of stalling on thousands of throwaway-token
+            # resolutions. The few real-rail tokens (ETH/stablecoins/major) are
+            # already covered by the hint / stablecoin shortcut / static map.
+            # Not cached as None so a later FULL pass can still resolve it.
+            return None
         try:
             cg_id = self._fetch_contract_to_id(token.chain, canon)
         except Exception as e:  # noqa: BLE001

@@ -247,6 +247,53 @@ def trace_cmd(
             raise typer.Exit(code=3) from None
         raise
 
+    # v0.34 multi-chain perpetrator pivot (opt-in: RECUPERO_PIVOT_MULTICHAIN).
+    # A victim trace on one chain only sees the victim's slice on that chain;
+    # the perpetrator splits the haul ACROSS chains via the consolidation hub.
+    # Re-trace the hub on every pivot chain (value-directed) and merge — this
+    # surfaces funds the single-chain victim trace structurally cannot reach
+    # (e.g. the Arbitrum-bridged → Ethereum-DAI branch in the Zigha case).
+    from recupero.trace.pivot_trace import (
+        identify_pivot_hub,
+        is_pivot_enabled,
+        run_pivot_multichain,
+    )
+    if is_pivot_enabled():
+        hub = identify_pivot_hub(case)
+        if hub is None:
+            console.print(
+                "[dim]pivot: no consolidation hub identified — "
+                "skipping multi-chain pivot[/]"
+            )
+        else:
+            hub_addr, hub_chain = hub
+            console.print(
+                f"[bold]pivot:[/] re-tracing hub {hub_addr} across chains "
+                f"(discovered on {hub_chain.value})"
+            )
+            pivot_cases = run_pivot_multichain(
+                hub_address=hub_addr,
+                hub_chain=hub_chain,
+                incident_time=when,
+                parent_case_id=case_id,
+                config=cfg,
+                env=env,
+                case_dir=case_dir,
+            )
+            if pivot_cases:
+                from recupero.trace.perpetrator_trace import (
+                    merge_perpetrator_findings,
+                )
+                case = merge_perpetrator_findings(case, pivot_cases)
+                console.print(
+                    f"[bold green]pivot:[/] merged "
+                    f"{len(pivot_cases)} cross-chain hub trace(s) into the case"
+                )
+            else:
+                console.print(
+                    "[dim]pivot: hub inactive on other chains — no merge[/]"
+                )
+
     case_path = store.write_case(case)
 
     _print_summary(case)
@@ -254,6 +301,128 @@ def trace_cmd(
     console.print(f"[bold green]Wrote[/] {case_dir / 'transfers.csv'}")
 
     _sync_to_bucket(investigation_id, case_dir)
+
+
+@app.command("confirm-bridge")
+def confirm_bridge_cmd(
+    chain: str = typer.Option(..., help="SOURCE chain of the bridge tx (e.g. arbitrum)."),
+    tx: str = typer.Option(..., "--tx", help="Source bridge transaction hash."),
+    window_hours: float = typer.Option(
+        24.0, help="Settlement window (hours past the source tx) to scan the "
+                   "destination chain for the matching fill event.",
+    ),
+) -> None:
+    """Find the on-chain DESTINATION of a cross-chain bridge transaction by
+    matching the protocol's own order/message ID on both chains.
+
+    This is the answer-key-free confirmation: a bridge stamps a unique id on the
+    source order and the destination fill references the SAME id, so an exact
+    match is cryptographic proof (confidence=high) — not amount/time guesswork.
+    Prints the confirmed destination tx + recipient + amount, or reports that no
+    matching fill was found within the window (it never fabricates a destination).
+
+      recupero confirm-bridge --chain arbitrum --tx 0xd4bf228f...
+    """
+    cfg, env = load_config()
+    try:
+        src_chain = Chain(chain)
+    except ValueError:
+        console.print(f"[bold red]Unknown chain:[/] {chain}")
+        raise typer.Exit(code=2) from None
+    if not env.ETHERSCAN_API_KEY:
+        console.print("[bold red]Missing ETHERSCAN_API_KEY in .env[/]")
+        raise typer.Exit(code=2)
+
+    from recupero.chains.base import ChainAdapter
+    from recupero.trace.bridge_calldata import decode_bridge_calldata
+    from recupero.trace.bridge_pairings import (
+        confirm_bridge_destination,
+        identify_source,
+    )
+
+    adapter = ChainAdapter.for_chain(src_chain, (cfg, env))
+    try:
+        ev = adapter.fetch_evidence_receipt(tx)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[bold red]Could not fetch source tx:[/] {exc}")
+        adapter.close()
+        raise typer.Exit(code=3) from None
+
+    input_data = (ev.raw_transaction or {}).get("input") or "0x"
+
+    # Identify the protocol + order-id from the receipt's EVENT LOGS (robust to
+    # periphery / multicall entrypoints where the tx `to` isn't the bridge).
+    identified = identify_source(ev.raw_receipt)
+    if identified is None:
+        console.print(
+            f"[yellow]No verified bridge-pairing source event found in {tx}.[/] "
+            "Supported core: deBridge DLN, Across. See docs/BRIDGE_PAIRING.md."
+        )
+        adapter.close()
+        raise typer.Exit(code=0)
+    spec, order_id, dst_chain_str = identified
+    protocol = spec.protocol
+
+    # Destination chain: from the source event when available (Across), else
+    # decode it from the source calldata (DLN takeChainId).
+    if not dst_chain_str:
+        decoded = decode_bridge_calldata(bridge_protocol=protocol, input_data=input_data)
+        dst_chain_str = decoded.destination_chain if decoded else None
+    if not dst_chain_str:
+        console.print(
+            f"[yellow]Recognized {protocol} (order-id {order_id[:14]}…) but could "
+            "not determine the destination chain.[/]"
+        )
+        adapter.close()
+        raise typer.Exit(code=0)
+
+    console.print(
+        f"[bold]Source:[/] {protocol} on {src_chain.value}  tx={tx}\n"
+        f"[bold]Order id:[/] {order_id}\n"
+        f"[bold]Destination chain:[/] {dst_chain_str}  "
+        f"(scanning ±{window_hours:.0f}h for the matching fill)"
+    )
+    try:
+        dst_chain = Chain(dst_chain_str)
+    except (ValueError, KeyError):
+        console.print(f"[bold red]Destination chain {dst_chain_str} not in Chain enum[/]")
+        adapter.close()
+        raise typer.Exit(code=0) from None
+
+    dst_adapter = ChainAdapter.for_chain(dst_chain, (cfg, env))
+    try:
+        confirmed = confirm_bridge_destination(
+            protocol=protocol,
+            destination_chain=dst_chain_str,
+            source_receipt=ev.raw_receipt,
+            dst_adapter=dst_adapter,
+            src_block_time=ev.block_time,
+            source_chain=src_chain.value,
+            window_hours=window_hours,
+            order_id=order_id,
+        )
+    finally:
+        dst_adapter.close()
+        adapter.close()
+
+    if confirmed is None:
+        console.print(
+            "\n[bold yellow]UNCONFIRMED[/] — no destination fill with a matching "
+            "order-id found in the window. (Not fabricating a destination.)"
+        )
+        raise typer.Exit(code=0)
+
+    console.print(
+        f"\n[bold green]CONFIRMED (cryptographic order-id match):[/]\n"
+        f"  protocol      : {confirmed.protocol}\n"
+        f"  order_id      : {confirmed.order_id}\n"
+        f"  dest chain    : {confirmed.dst_chain}\n"
+        f"  dest tx       : {confirmed.dst_tx}\n"
+        f"  recipient     : {confirmed.recipient}\n"
+        f"  raw amount    : {confirmed.raw_amount}\n"
+        f"  confidence    : {confirmed.confidence}\n"
+        f"  basis         : {confirmed.basis}"
+    )
 
 
 @app.command("show")

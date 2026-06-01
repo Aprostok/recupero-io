@@ -572,6 +572,60 @@ class EvmAdapter(ChainAdapter):
                 continue
         return out
 
+    def fetch_logs(
+        self,
+        address: Address,
+        topic0: str,
+        *,
+        from_block: int,
+        to_block: int | str = "latest",
+        topics: list[str | None] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Etherscan v2 ``eth_getLogs`` for ``address`` + ``topic0`` over a block
+        range, with optional additional indexed topic filters. Used by the
+        bridge source↔destination pairing engine to find a destination fill
+        event by its protocol order-id. Best-effort: any error / malformed body
+        yields ``[]`` (the pairing then reports "unconfirmed" rather than
+        raising).
+        """
+        def _blk(b: int | str) -> str:
+            # Etherscan's logs/getLogs uses DECIMAL block numbers (not hex);
+            # "latest" is accepted as a sentinel for the chain tip.
+            if isinstance(b, str):
+                return b
+            return str(int(b))
+
+        params: dict[str, str] = {
+            "module": "logs",
+            "action": "getLogs",
+            "fromBlock": _blk(from_block),
+            "toBlock": _blk(to_block),
+            "topic0": topic0,
+        }
+        # address is optional: an empty address means "search all emitters"
+        # (used by bridge-pairing for protocols with many per-token contracts,
+        # disambiguated by a globally-unique indexed id topic).
+        if address:
+            params["address"] = address
+        # topic1..topic3: Etherscan needs the topicX_Y_opr operator between
+        # consecutive indexed topics. We only ever AND them.
+        for i, t in enumerate((topics or []), start=1):
+            if t is None or i > 3:
+                continue
+            params[f"topic{i}"] = t
+            params[f"topic0_{i}_opr"] = "and"
+        try:
+            data = self.client._call(**params)
+        except Exception as exc:  # noqa: BLE001 — pairing is best-effort
+            log.warning("fetch_logs getLogs failed for %s: %s", address, exc)
+            return []
+        # _call normalizes "No records found" to {"result": []}; a real error
+        # raised above. result is the list of log dicts.
+        result = data.get("result") if isinstance(data, dict) else None
+        if not isinstance(result, list):
+            return []
+        return [lg for lg in result if isinstance(lg, dict)]
+
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
         raw_tx = self.client.get_transaction_by_hash(tx_hash)
         raw_receipt = self.client.get_transaction_receipt(tx_hash)

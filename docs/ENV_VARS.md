@@ -41,12 +41,20 @@ their own section.
 | **Trace tuning** | | | | | |
 | `RECUPERO_TRACE_MAX_HOPS` | `config.trace.max_depth` (4) | int | `[1, RECUPERO_TRACE_MAX_HOPS_HARD_CEILING]` | v0.16.x | BFS depth cap; raise for deep-laundering paths. Industry-best ceiling 64 in v0.32.1+. |
 | `RECUPERO_TRACE_MAX_HOPS_HARD_CEILING` | `64` | int | `[1, 1024]` | v0.32.1 | Upper bound on `RECUPERO_TRACE_MAX_HOPS`. v0.32.1+ industry-best raised from 8 → 64 so the tracer can chase 30-50 hop APT laundering chains. Operators on quota-constrained API plans set this lower. |
-| `RECUPERO_MAX_TRANSFERS_PER_ADDRESS` | `config.trace.max_transfers_per_address` (50000) | int | `>= 0`; 0 disables | v0.32.1 | Per-address fetch cap. Industry-best default bumped from 500 → 50000 so whale-wallet activity histories are followed in full. Set 0 to disable. |
+| `RECUPERO_MAX_TRANSFERS_PER_ADDRESS` | `config.trace.max_transfers_per_address` (50000) | int | `>= 0`; 0 disables | v0.32.1 | Per-address fetch cap. Industry-best default bumped from 500 → 50000 so whale-wallet activity histories are followed in full. Set 0 to disable — pair with `RECUPERO_POISON_PRUNE=1` (the default) so an uncapped trace doesn't drown in address-poisoning spam. NOTE: this cap is a *blunt* defense — it keeps the FIRST N outflows and drops the tail, which can silently hide a real onward hop on a chatty/poisoned address. Prefer `0` (uncapped) + poison-pruning for elite recall. |
+| `RECUPERO_POISON_PRUNE` | `1` (on) | bool | `{0,false,no,off}` to disable | v0.34 | Drop UNAMBIGUOUS poison edges (zero-value transfers — the canonical address-poisoning primitive) BEFORE pricing/following. Lets the tracer run UNCAPPED without (a) paying a CoinGecko contract-resolution call per throwaway poison token, or (b) ever truncating a real onward hop. NOISE removal only — never drops a value-bearing transfer — so it does NOT reduce coverage. Surfaced as informational `coverage.poison_edges_pruned`. |
 | `RECUPERO_TRACE_DUST_USD` | `config.trace.dust_threshold_usd` (10) | float | `[0, 1_000_000]`, finite | v0.16.x | Per-transfer USD floor; below this is dropped as noise. |
-| `RECUPERO_ETHERSCAN_RPS` | `4.0` (free-tier-safe) | float | `(0, 50]` | v0.34 | Etherscan V2 client requests/second — the combined per-chain rate, shared across the wave-thread pool. Default deliberately NOT raised: 4.0 already saturates the free tier (triggers 429 backoffs), so a higher default would only add retry-waits and slow free-tier traces. Set 15-20 on a paid tier to use the throughput you pay for. |
+| `RECUPERO_ETHERSCAN_RPS` | `4.0` (free-tier-safe) | float | `(0, 50]` | v0.34 | Etherscan V2 client requests/second — the combined per-chain rate, shared across the wave-thread pool. Default deliberately NOT raised: 4.0 already saturates the free tier (triggers 429 backoffs), so a higher default would only add retry-waits and slow free-tier traces. Set 15-20 on a paid tier to use the throughput you pay for. Run ~10-20% UNDER the plan's per-second cap (e.g. 9 on a 10/s plan) — sitting exactly at the ceiling triggers 429s. |
+| `RECUPERO_COINGECKO_RPS` | `config.pricing.requests_per_second` | float | `(0, 100]` | v0.34 | CoinGecko price client requests/second. The demo tier self-paces to ~0.5/s and SILENTLY sleeps — the historical "freeze" where pricing thousands of transfers crawled with no error logged. On a paid plan set `COINGECKO_TIER=pro` AND this knob to ~10-20% under the plan's per-second cap (e.g. 4 on a 300/min = 5/s Basic plan). |
 | `RECUPERO_TRACE_TIMEOUT_SEC` | `540` | int | `>= 0` | v0.16.11 | Wall-clock deadline before BFS exits with `trace_status=partial_deadline_hit`. |
 | `RECUPERO_MAX_TRANSFERS_PER_CASE` | `50000` | int | `>= 0` | v0.16.11 | OOM defense — trace stops once this many transfers accumulate. |
 | `RECUPERO_TRACE_CONCURRENCY` | `5` | int | `>= 1` | v0.16.x | Thread-pool size for parallel per-wave fetches. |
+| `RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD` | `config.trace.service_wallet_outflow_threshold` (200) | int | `>= 1` | v0.34 | A wallet emitting more outflows than this is treated as a service/distributor: its transfers are kept but BFS traversal STOPS there (children not followed). Default 200 halts at exchange hot wallets / token distributors — but ALSO at a high-throughput DeFi aggregator/pool that sits ON the laundering path, silently missing everything past it. Raise (e.g. 25000) for a deep recall-complete run so the trace crosses the aggregator while still stopping at true mega-services. Bad/blank/non-positive keeps the resolved default. |
+| `RECUPERO_VALUE_TRACE` | unset (off) | bool | `{1,true,yes,on}` to enable | v0.34 | Value-directed tracing. At a high-fan-out node (service wallet / aggregator / pool) — instead of stopping or following every edge — follow ONLY the outflow(s) whose **amount matches** the inbound funds (same-asset forwarding) or whose **USD value matches** across an asset conversion (swap), within a 72h window. This isolates the real onward hop behind a commingling node. Matches are INFERENCE: confidence is calibrated `medium` (sole same-asset amount match) or `low` (ambiguous / cross-asset) — **never `high`** — and surfaced under `coverage.value_matched_hops` with the match basis. Pair with `RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD` (raise it so the node is *reached*) for deep recall. |
+| `RECUPERO_VALUE_TRACE_ENRICH_CEILING` | `50` | int | `>= 0` (0 disables) | v0.34 | Under value-trace, any non-seed node with MORE than this many outflows is built CHEAPLY (skip per-token CoinGecko contract-resolution + per-dest `is_contract` RPC + per-tx evidence fetch) — the wave aggregation value-matches the cheap set and re-does the expensive ops for ONLY the matched onward hop(s). Prevents the multi-hour wall where a high-fan-out node sits just under `RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD` and gets ~3 Etherscan RPCs per outflow. Lower for faster/cheaper runs; `0` disables the count trigger (only true service wallets get the cheap path). The seed (depth 0) is always fully enriched. |
+| `RECUPERO_PIVOT_MULTICHAIN` | unset (off) | bool | `{1,true,yes,on}` to enable | v0.34 | Multi-chain perpetrator pivot. After the victim trace, identify the consolidation **hub** (largest-USD unlabeled EOA recipient) and **re-trace it on every pivot chain** (value-directed), merging the findings. A victim trace on one chain can't see funds the perp split across chains (e.g. Arbitrum-bridged → Ethereum-DAI); pivoting on the hub surfaces them. OPT-IN — multiplies API cost by the number of pivot chains. |
+| `RECUPERO_PIVOT_CHAINS` | `ethereum,arbitrum,base,optimism,polygon,bsc` | csv | `Chain` enum names | v0.34 | Comma-separated chains the multi-chain pivot re-traces the hub on (one Etherscan V2 key covers all EVM via chain_id). Unknown names skipped; the hub's discovery chain is auto-excluded. |
+| `RECUPERO_PIVOT_MIN_USD` | `50000` | Decimal | `>= 0` | v0.34 | Minimum inbound USD for an address to qualify as a pivot hub — avoids burning N-chain traces on a dust counterparty. |
 | `RECUPERO_MAX_CONTINUATION_SEEDS` | `25` | int | `>= 0` | v0.16.x | Cap on same-chain bridge / DEX continuation seeds per case. |
 | `RECUPERO_MAX_CROSS_CHAIN_SEEDS` | `10` | int | `>= 0` | v0.16.13 | Cap on cross-chain destination seeds across all chains. |
 | `RECUPERO_DISABLE_PASS2` | unset | bool | `=1` to disable | v0.20.x | Kill switch for the perpetrator-trace pass-2 stage. |
@@ -61,7 +69,9 @@ their own section.
 | **Cross-chain** | | | | | |
 | `RECUPERO_CROSS_CHAIN_CONTINUATION` | `1` (on) | bool | opt-out via `0/false/no/off` | v0.28.0 | Master switch for cross-chain BFS continuation. |
 | `RECUPERO_CROSSCHAIN_WINDOW_HOURS` | `24` | float | `[0, 720]`, finite | v0.31.0 | Time window past source-bridge tx to accept dst transfers; 0 disables filter. |
+| `RECUPERO_DEST_CONTINUATION_WAVES` | `2` | int | `>= 0` | v0.34 | Extra swap-decode waves run on a cross-chain DESTINATION adapter so a bridge→swap (e.g. 0x→DAI) composes instead of dead-ending at the settler. 0 disables; each wave follows the prior wave's resolved swap outputs one hop deeper. |
 | `RECUPERO_LOCKMINT_MATCH` | `0` (off) | bool | opt-in via `1/true/yes/on` | v0.32.1 | Opt-in lock-and-mint cross-chain matching: for bridge handoffs with no decoded destination (Celer/Orbiter/Multichain), correlate the perpetrator's inbound transfers on each candidate chain by amount+time and continue the trail. Inferential (correlation, never proof — medium/low confidence) and costs extra inbound fetches, hence default OFF. |
+| `RECUPERO_BRIDGE_CONFIRM` | `0` (off) | bool | opt-in via `1/true/yes/on` | v0.34 | Opt-in CRYPTOGRAPHIC bridge-destination confirmation: for each cross-chain handoff with a verified pairing spec (DLN/Across/Celer/Hop/Synapse/CCIP), ask the bridge-pairing oracle to confirm the destination by the protocol's own cross-chain id matched on BOTH chains (`high` — genuine proof, not correlation). A confirmed destination is preferred over the heuristic calldata decode, seeded for continuation, and recorded on `case.config_used["bridge_confirmations"]` for the brief + validator. Makes live destination-chain log queries, hence default OFF. See `docs/BRIDGE_PAIRING.md`. |
 | `RECUPERO_ENDPOINT_DIVERSITY_PROBE` | `0` (off) | bool | opt-in via `1/true/yes/on` | v0.32.1 | Opt-in behavioral recognition of UNLABELED exchange/service infrastructure: probes the broader in/out activity of the top unlabeled terminal endpoints and flags those with high counterparty diversity as likely infrastructure (a subpoena lead the label DB missed). Inferential (medium/low confidence, never proof); low/asymmetric diversity is left unclassified so a perpetrator's own consolidation hub is never mislabeled. Costs extra fetches, hence default OFF. |
 | **Dust / CEX-continuity heuristics** | | | | | |
 | `RECUPERO_DUST_ATTACK_FILTER` | unset (off) | bool | `1/true/yes/on` to enable | v0.31.2 | Strip dust-shower fan-out destinations from the brief. |
@@ -303,6 +313,28 @@ Setting to 0 disables the filter (legacy behavior).
   silently disabling the filter — fixed by the `isfinite` check.
 * **When to override:** raise to 168 (1 week) for slow consolidation
   paths; lower to 6 for fast-moving bridge sweeps.
+
+#### `RECUPERO_DEST_CONTINUATION_WAVES`
+
+How many ADDITIONAL swap-resolution waves to run on a cross-chain
+*destination* adapter after the shallow handoff hop
+(`src/recupero/trace/tracer.py`, `_continue_past_dex_and_bridges`). The
+cross-chain continuation lands the bridged funds on the destination
+chain in a single hop, but a 0x / Matcha settler pays the converted
+token (e.g. DAI) from its own balance — an outflow recoverable only
+from the *destination* tx's receipt logs. Without a destination-side
+swap pass the trace dead-ends at the settler (the Zigha gap: Arbitrum
+hub → DeBridge → Ethereum receiver → 0x swap → DAI). Each wave resolves
+swap outputs among the prior wave's transfers (via the destination
+adapter's receipt logs) and follows them one hop deeper. Default 2;
+`0` restores the pre-v0.34 single-hop-only behavior.
+
+* **Failure modes:** none — a non-int value falls back to 2; a wave
+  whose `_process_wave` raises is logged and breaks the loop. Bounded
+  to the one destination chain (no further cross-chain recursion) and
+  to the per-case transfer budget + `visited` set already in force.
+* **When to override:** raise for laundering paths with several
+  post-bridge swap hops; set `0` to reproduce pre-v0.34 traces exactly.
 
 ### Dust / CEX heuristics
 

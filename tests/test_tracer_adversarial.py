@@ -117,7 +117,10 @@ class FixedPriceClient:
     def __init__(self, price: Decimal = Decimal("3000")) -> None:
         self.price = price
 
-    def price_at(self, token: TokenRef, when: datetime) -> PriceResult:
+    def price_at(
+        self, token: TokenRef, when: datetime, **_kwargs: Any,
+    ) -> PriceResult:
+        # **_kwargs absorbs skip_contract_api (v0.34 value-trace fast path).
         return PriceResult(usd_value=self.price, source="fake:fixed", error=None)
 
     def close(self) -> None:
@@ -384,10 +387,554 @@ def test_mixed_case_address_does_not_re_visit(
     adapter = GraphAdapter(edges)
     _wire(monkeypatch, adapter, FixedPriceClient())
 
-    case = _run(config, env, tmp_path / "cases" / "CASE")
+    _run(config, env, tmp_path / "cases" / "CASE")
 
     # HOP_A must be fetched at most once regardless of case variants.
     a_fetches = [f for f in adapter.fetch_calls if f == HOP_A.lower()]
     assert len(a_fetches) <= 1, (
         f"mixed-case re-entry not deduped; fetches={adapter.fetch_calls}"
     )
+
+
+# ---------- Test 7: coverage capture spans the continuation pass ---------- #
+
+
+def test_continuation_pass_cap_truncation_lands_in_coverage(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 regression: a per-address fetch cap that fires DURING the
+    DEX/bridge continuation pass (NOT the primary BFS) MUST still land in
+    ``coverage.per_address_cap_truncations`` and flip ``coverage.complete``
+    to False.
+
+    The bug: the coverage block was computed BEFORE
+    ``_continue_past_dex_and_bridges`` ran, so it snapshotted
+    ``_COVERAGE_TRUNCATIONS`` too early. The deep, chatty aggregator/pool
+    addresses are typically only reached in the continuation pass, so that
+    is exactly where the per-address fetch cap usually fires — and those
+    truncations were silently dropped, leaving a CAPPED trace stamped
+    ``complete=True`` with ``per_address_cap_truncations=[]``. (Observed live:
+    a completed run logged 3 "capping outflows" events yet wrote
+    cap_truncations=0 / complete=True.)
+
+    This test drives the cap from inside the continuation hook and asserts it
+    survives to the final coverage dict. RED before the fix, GREEN after.
+    """
+    from recupero.trace import tracer as tracer_mod
+
+    config, env = cfg
+    config.trace.max_depth = 2  # >= 2 so the continuation pass is allowed
+
+    # One real transfer so the trace is genuinely "complete" with data
+    # (no_data=False) — isolating the cap truncation as the ONLY thing that
+    # should reduce coverage.
+    edges = {SEED: [_native_row("0xaa", SEED, HOP_A)]}
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    # Simulate the continuation pass reaching a chatty address that trips the
+    # per-address fetch cap, recording a truncation exactly as
+    # ``_trace_one_hop`` does at its cap site.
+    cont_addr = "0x00000000000000000000000000000000c0117a7e"
+
+    def _fake_continue(**_kwargs: Any) -> None:
+        tracer_mod._COVERAGE_TRUNCATIONS.append({
+            "address": cont_addr,
+            "kind": "per_address_fetch_cap",
+            "raw_outflows": 9200,
+            "kept": 2500,
+            "dropped": 6700,
+            "hop_depth": 2,
+        })
+
+    monkeypatch.setattr(
+        tracer_mod, "_continue_past_dex_and_bridges", _fake_continue,
+    )
+
+    case = _run(config, env, tmp_path / "cases" / "CONTCAP")
+
+    cov = case.config_used["coverage"]
+    addrs = [t["address"] for t in cov["per_address_cap_truncations"]]
+    assert cont_addr in addrs, (
+        "a per-address fetch cap recorded during the continuation pass was "
+        "dropped from coverage — the coverage block must be computed AFTER "
+        f"_continue_past_dex_and_bridges. got truncations={addrs!r}"
+    )
+    assert cov["complete"] is False, (
+        "a trace that capped an address (even in the continuation pass) must "
+        "NOT be stamped coverage.complete=True"
+    )
+    assert "recall-complete" in cov["recommendation"], (
+        "a reduced trace must carry the recall-complete recommendation"
+    )
+
+
+# ---------- Test 8: service-wallet outflow threshold env override ---------- #
+
+
+def _fanout_graph(n: int) -> tuple[dict[str, Any], list[str]]:
+    """Seed → n children, each child → 1 grandchild. Lets a test detect
+    whether the seed's children were TRAVERSED (fetched) or stopped at."""
+    children = [f"0x{i + 1:040x}" for i in range(n)]
+    edges: dict[str, Any] = {
+        SEED: [_native_row(f"0xfeed{i:02x}", SEED, c) for i, c in enumerate(children)]
+    }
+    for i, c in enumerate(children):
+        edges[c] = [_native_row(f"0xbeef{i:02x}", c, f"0x{i + 1000:040x}")]
+    return edges, children
+
+
+def test_service_wallet_threshold_stops_traversal_by_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A seed emitting more outflows than the service-wallet threshold is
+    treated as a distributor: its transfers are kept but its children are NOT
+    traversed."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3  # seed emits 5 > 3
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, children = _fanout_graph(5)
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    _run(config, env, tmp_path / "cases" / "SW1")
+
+    fetched = set(adapter.fetch_calls)
+    for c in children:
+        assert c.lower() not in fetched, (
+            f"service-wallet stop failed: child {c} was traversed"
+        )
+
+
+def test_service_wallet_threshold_env_override_allows_traversal(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34: RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD raises the gate so a
+    deep recall-complete run crosses a high-throughput aggregator/pool on the
+    laundering path instead of silently stopping at it."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3  # config still low
+    monkeypatch.setenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", "100")
+
+    edges, children = _fanout_graph(5)
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    _run(config, env, tmp_path / "cases" / "SW2")
+
+    fetched = set(adapter.fetch_calls)
+    traversed = [c for c in children if c.lower() in fetched]
+    assert traversed, (
+        "env override to 100 should make the 5-outflow seed NOT a service "
+        "wallet, so its children are traversed — none were"
+    )
+
+
+def test_service_wallet_threshold_env_bad_value_keeps_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-int / non-positive override is ignored (keeps the config
+    default) rather than crashing or disabling the gate."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3
+    for bad in ("abc", "0", "-5", "  "):
+        monkeypatch.setenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", bad)
+        edges, children = _fanout_graph(5)
+        adapter = GraphAdapter(edges)
+        _wire(monkeypatch, adapter, FixedPriceClient())
+        _run(config, env, tmp_path / "cases" / f"SW_{bad.strip() or 'blank'}")
+        fetched = set(adapter.fetch_calls)
+        for c in children:
+            assert c.lower() not in fetched, (
+                f"bad override {bad!r} should keep default(3); child {c} "
+                "must not be traversed"
+            )
+
+
+# ---------- Test 9: value-directed tracing through a service wallet -------- #
+
+
+def _aggregator_graph() -> tuple[dict[str, Any], str, list[str]]:
+    """SEED --50 ETH--> N (a 5-outflow service wallet). N forwards exactly
+    50 ETH to TARGET (the real onward hop) plus 4 decoy outflows of other
+    amounts. Returns (edges, TARGET, decoys)."""
+    target = HOP_B
+    decoys = [f"0x{0xc1 + i:040x}" for i in range(4)]
+    edges: dict[str, Any] = {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="50")],
+        HOP_A: [
+            _native_row("0xnmatch", HOP_A, target, eth_amount="50"),   # value match
+            _native_row("0xn1", HOP_A, decoys[0], eth_amount="10"),
+            _native_row("0xn2", HOP_A, decoys[1], eth_amount="20"),
+            _native_row("0xn3", HOP_A, decoys[2], eth_amount="30"),
+            _native_row("0xn4", HOP_A, decoys[3], eth_amount="40"),
+        ],
+        target: [_native_row("0xt1", target, decoys[0], eth_amount="5")],
+    }
+    return edges, target, decoys
+
+
+def test_value_trace_follows_amount_matched_hop_through_service_wallet(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RECUPERO_VALUE_TRACE=1: at a high-fan-out node the tracer follows ONLY
+    the outflow whose amount matches the inbound funds (50 ETH -> 50 ETH),
+    NOT the decoys — isolating the real onward hop and recording it as a
+    medium-confidence value match."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3  # N's 5 outflows trip it
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, target, decoys = _aggregator_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_ON")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() in fetched, (
+        "value-matched onward hop was not traversed through the service wallet"
+    )
+    for d in decoys:
+        assert d.lower() not in fetched, (
+            f"decoy {d} (amount mismatch) must NOT be followed"
+        )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    matched = [h for h in hops if h["matched_to"].lower() == target.lower()]
+    assert matched, f"no value-match provenance recorded; got {hops}"
+    assert matched[0]["kind"] == "same_asset_amount"
+    assert matched[0]["confidence"] == "medium"  # sole same-asset match
+    assert matched[0]["ambiguous"] is False
+
+
+def test_value_trace_off_by_default_stops_at_service_wallet(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default (RECUPERO_VALUE_TRACE unset): a service wallet is still a dead
+    end — no onward hop is followed and no value-match provenance is recorded.
+    This keeps existing behavior byte-identical."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3
+    monkeypatch.delenv("RECUPERO_VALUE_TRACE", raising=False)
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, target, decoys = _aggregator_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_OFF")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() not in fetched, (
+        "value-trace OFF must NOT follow past a service wallet"
+    )
+    assert case.config_used["coverage"]["value_matched_hops"] == []
+
+
+def test_value_trace_is_directed_at_normal_nodes_too(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 directed trace: with value-trace ON, even a NORMAL (non-service-
+    wallet, < threshold outflows) node follows ONLY the value-matched onward
+    hop — not all its outflows. This is what bounds the trace to the money path
+    and stops the uncapped fan-out from exploding the whole graph. The seed
+    (no inbound) still follows all of its outflows."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200  # M's 4 outflows < 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    target = HOP_B
+    decoys = [f"0x{0xd1 + i:040x}" for i in range(3)]
+    edges: dict[str, Any] = {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="50")],
+        HOP_A: [  # 4 outflows — NOT a service wallet
+            _native_row("0xmatch", HOP_A, target, eth_amount="50"),   # value match
+            _native_row("0xd1", HOP_A, decoys[0], eth_amount="10"),
+            _native_row("0xd2", HOP_A, decoys[1], eth_amount="20"),
+            _native_row("0xd3", HOP_A, decoys[2], eth_amount="30"),
+        ],
+        target: [_native_row("0xt1", target, decoys[0], eth_amount="5")],
+    }
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_DIRECTED")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() in fetched, (
+        "directed value-trace should follow the amount-matched hop at a normal node"
+    )
+    for d in decoys:
+        assert d.lower() not in fetched, (
+            f"decoy {d} (amount mismatch) must NOT be followed even at a normal node"
+        )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    assert any(h["matched_to"].lower() == target.lower() for h in hops)
+
+
+# ---------- v0.34 perf: prune-before-enrich (lightweight on high fan-out) ---------- #
+
+
+class _CountingAdapter(ChainAdapter):
+    """Adapter that returns a fixed outflow list and COUNTS the expensive
+    per-outflow RPCs (is_contract, evidence-receipt) so a test can prove the
+    lightweight (cheap-build) path engaged."""
+
+    chain = Chain.ethereum
+
+    def __init__(self, outflows: list[dict[str, Any]]) -> None:
+        self._outflows = outflows
+        self.is_contract_calls = 0
+        self.evidence_calls = 0
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 19000000
+
+    def is_contract(self, address: str) -> bool:
+        self.is_contract_calls += 1
+        return False
+
+    def fetch_native_outflows(
+        self, from_address: str, start_block: int, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        return list(self._outflows)
+
+    def fetch_erc20_outflows(
+        self, from_address: str, start_block: int, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
+        self.evidence_calls += 1
+        return EvidenceReceipt(
+            chain=Chain.ethereum, tx_hash=tx_hash, block_number=19000001,
+            block_time=datetime(2025, 1, 15, tzinfo=UTC),
+            raw_transaction={"hash": tx_hash}, raw_receipt={"status": "0x1"},
+            raw_block_header={"number": "0x1221b81"},
+            fetched_at=datetime.now(UTC), fetched_from="fake",
+            explorer_url=self.explorer_tx_url(tx_hash),
+        )
+
+    def explorer_tx_url(self, tx_hash: str) -> str:
+        return f"https://etherscan.io/tx/{tx_hash}"
+
+    def explorer_address_url(self, address: str) -> str:
+        return f"https://etherscan.io/address/{address}"
+
+
+class _RecordingPrice:
+    """Records the ``skip_contract_api`` flag of every price_at call."""
+
+    def __init__(self) -> None:
+        self.skip_flags: list[bool] = []
+
+    def price_at(
+        self, token: TokenRef, when: datetime, *, skip_contract_api: bool = False,
+    ) -> PriceResult:
+        self.skip_flags.append(skip_contract_api)
+        return PriceResult(usd_value=Decimal("3000"), source="fake", error=None)
+
+    def close(self) -> None:
+        pass
+
+
+def _hop_outflows(n: int) -> list[dict[str, Any]]:
+    return [
+        _native_row(f"0x{i:064x}", HOP_A, f"0x{(i + 1):040x}", eth_amount="1")
+        for i in range(n)
+    ]
+
+
+def test_value_trace_lightweight_engages_for_high_fanout_nonseed(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 perf: a NON-seed node with more outflows than
+    RECUPERO_VALUE_TRACE_ENRICH_CEILING is built CHEAPLY under value-trace even
+    when it is BELOW the service-wallet threshold — skipping the per-token
+    CoinGecko contract API, the per-dest is_contract RPC, and the per-tx evidence
+    fetch (the ~3-RPC-per-outflow wall that made a 10k-outflow node take hours).
+    The aggregation finalizes the expensive ops for only the value-matched hops."""
+    from recupero.trace import tracer as tracer_mod
+    from recupero.trace.policies import TracePolicy
+
+    config, _env = cfg
+    monkeypatch.setattr(tracer_mod, "lookup_pit_safe", lambda *a, **k: None)
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+
+    adapter = _CountingAdapter(_hop_outflows(60))   # 60 > 50 ceiling
+    price = _RecordingPrice()
+    policy = TracePolicy(max_depth=3, service_wallet_outflow_threshold=1000)  # 60 < 1000
+
+    transfers, is_service = tracer_mod._trace_one_hop(
+        adapter=adapter, label_store=object(), price_client=price, policy=policy,
+        from_address=HOP_A, incident_time=datetime(2025, 1, 15, tzinfo=UTC),
+        config=config, hop_depth=1, parent_transfer_id=None,
+        evidence_dir=tmp_path, value_trace=True,
+    )
+
+    assert is_service is False                      # below the service-wallet bar
+    assert len(transfers) == 60                     # lightweight skips dust filter
+    assert all(price.skip_flags)                    # every price call skipped the contract API
+    assert adapter.is_contract_calls == 0           # is_contract deferred to matched hops
+    assert adapter.evidence_calls == 0              # evidence deferred to matched hops
+
+
+def test_value_trace_full_path_when_below_enrich_ceiling(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A small non-seed node (<= ceiling, not a service wallet) keeps the full,
+    fully-evidenced path — the cheap path must not silently swallow normal nodes."""
+    from recupero.trace import tracer as tracer_mod
+    from recupero.trace.policies import TracePolicy
+
+    config, _env = cfg
+    monkeypatch.setattr(tracer_mod, "lookup_pit_safe", lambda *a, **k: None)
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+
+    adapter = _CountingAdapter(_hop_outflows(5))    # 5 <= 50 ceiling
+    price = _RecordingPrice()
+    policy = TracePolicy(max_depth=3, service_wallet_outflow_threshold=1000)
+
+    transfers, is_service = tracer_mod._trace_one_hop(
+        adapter=adapter, label_store=object(), price_client=price, policy=policy,
+        from_address=HOP_A, incident_time=datetime(2025, 1, 15, tzinfo=UTC),
+        config=config, hop_depth=1, parent_transfer_id=None,
+        evidence_dir=tmp_path, value_trace=True,
+    )
+
+    assert is_service is False
+    assert len(transfers) == 5
+    assert not any(price.skip_flags)                # full pricing (contract API allowed)
+    assert adapter.is_contract_calls == 5           # is_contract per destination
+    assert adapter.evidence_calls == 5              # evidence per kept transfer
+
+
+def test_value_trace_seed_never_lightweight_even_if_high_fanout(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The seed (hop_depth 0) is non-directed — every outflow is kept and must
+    stay fully evidenced — so the count-based cheap trigger must NOT fire on it."""
+    from recupero.trace import tracer as tracer_mod
+    from recupero.trace.policies import TracePolicy
+
+    config, _env = cfg
+    monkeypatch.setattr(tracer_mod, "lookup_pit_safe", lambda *a, **k: None)
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_ENRICH_CEILING", "50")
+
+    adapter = _CountingAdapter(_hop_outflows(60))   # 60 > 50, but at the SEED
+    price = _RecordingPrice()
+    policy = TracePolicy(max_depth=3, service_wallet_outflow_threshold=1000)
+
+    tracer_mod._trace_one_hop(
+        adapter=adapter, label_store=object(), price_client=price, policy=policy,
+        from_address=SEED, incident_time=datetime(2025, 1, 15, tzinfo=UTC),
+        config=config, hop_depth=0, parent_transfer_id=None,
+        evidence_dir=tmp_path, value_trace=True,
+    )
+
+    assert not any(price.skip_flags)                # seed fully priced
+    assert adapter.is_contract_calls == 60          # seed fully enriched
+
+
+def test_value_trace_matches_against_largest_inbound_not_first(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34 regression (live Zigha bug): a node funded by SEVERAL edges must
+    value-match against the LARGEST (our funds), not whichever edge was seen
+    first. Here the seed sends N a small 0.5 ETH leg FIRST, then a large 50 ETH
+    leg. N forwards 50 ETH to TARGET and 0.5 ETH to a decoy. The trace must
+    follow TARGET (matched to the 50 ETH inbound). Before the fix, only the
+    first edge (0.5 ETH) was recorded as N's inbound, so the matcher chased the
+    decoy and missed the real onward hop — exactly why the live trace stalled
+    one hop after the seed."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    target = HOP_B
+    decoy = "0x00000000000000000000000000000000d3c0y000"
+    edges: dict[str, Any] = {
+        SEED: [
+            _native_row("0xsmall", SEED, HOP_A, eth_amount="0.5"),  # small, FIRST
+            _native_row("0xbig", SEED, HOP_A, eth_amount="50"),     # large, SECOND
+        ],
+        HOP_A: [
+            _native_row("0xbigout", HOP_A, target, eth_amount="50"),    # == large in
+            _native_row("0xsmallout", HOP_A, decoy, eth_amount="0.5"),  # == small in
+        ],
+        target: [_native_row("0xt1", target, decoy, eth_amount="1")],
+    }
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "VT_MULTI_IN")
+
+    fetched = set(adapter.fetch_calls)
+    assert target.lower() in fetched, (
+        "must follow the hop matching the LARGEST inbound (50 ETH -> TARGET)"
+    )
+    assert decoy.lower() not in fetched, (
+        "must NOT chase the small-inbound (0.5 ETH) decoy hop"
+    )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    assert any(h["matched_to"].lower() == target.lower() for h in hops)
+
+
+# ---- v0.34 audit fix: dust-aware inbound selection (_select_traced_inbound) ----
+
+
+def test_select_traced_inbound_prefers_unpriced_real_over_priced_dust() -> None:
+    """A tiny PRICED dust inbound must NOT displace the large UNPRICED real
+    funds — otherwise the matcher chases the dust amount and misses the hop."""
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbound
+    dust = SimpleNamespace(usd_value_at_tx=Decimal("5"), amount_decimal=Decimal("5"))
+    real = SimpleNamespace(usd_value_at_tx=None, amount_decimal=Decimal("3000000"))
+    assert _select_traced_inbound([dust, real], Decimal("10")) is real
+
+
+def test_select_traced_inbound_meaningful_priced_wins() -> None:
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbound
+    big = SimpleNamespace(usd_value_at_tx=Decimal("3000000"), amount_decimal=Decimal("3000000"))
+    huge_unpriced = SimpleNamespace(usd_value_at_tx=None, amount_decimal=Decimal("9" * 18))
+    # a genuinely-large PRICED inbound is "our funds" — it wins over a larger
+    # raw-amount unpriced (likely a high-supply meme/poison) leg.
+    assert _select_traced_inbound([huge_unpriced, big], Decimal("10")) is big
+
+
+def test_select_traced_inbound_all_priced_dust_picks_largest() -> None:
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbound
+    a = SimpleNamespace(usd_value_at_tx=Decimal("3"), amount_decimal=Decimal("3"))
+    b = SimpleNamespace(usd_value_at_tx=Decimal("8"), amount_decimal=Decimal("8"))
+    assert _select_traced_inbound([a, b], Decimal("10")) is b
+
+
+def test_select_traced_inbound_empty_is_none() -> None:
+    from recupero.trace.tracer import _select_traced_inbound
+    assert _select_traced_inbound([], Decimal("10")) is None

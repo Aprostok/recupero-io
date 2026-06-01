@@ -130,6 +130,29 @@ class ChainAdapter(ABC):
         has no inbound support yet)."""
         return []
 
+    # --- event logs (v0.34 — bridge source↔destination pairing) ---
+
+    def fetch_logs(
+        self,
+        address: Address,
+        topic0: str,
+        *,
+        from_block: int,
+        to_block: int | str = "latest",
+        topics: list[str | None] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch event logs emitted by ``address`` with ``topic0`` (the event
+        signature) in ``[from_block, to_block]``, optionally further filtered by
+        indexed ``topics`` (topic1..topic3; ``None`` = wildcard).
+
+        Returns the raw log dicts (each with at least ``address``, ``topics``,
+        ``data``, ``transactionHash``, ``blockNumber``). Default: ``[]`` —
+        adapters that can't query logs (or non-EVM chains) simply yield nothing,
+        so the bridge-pairing confirmation degrades to "unconfirmed" rather than
+        raising. The EVM adapter overrides this via Etherscan ``eth_getLogs``.
+        """
+        return []
+
     # --- evidence ---
 
     @abstractmethod

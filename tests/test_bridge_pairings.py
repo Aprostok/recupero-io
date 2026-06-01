@@ -135,6 +135,8 @@ def test_registry_resolves_debridge_by_label_substring() -> None:
     assert get_pair_spec("Wormhole") is not None    # v0.34 verified-core addition
     assert get_pair_spec("Stargate") is not None    # v0.34.3 verified-core addition
     assert get_pair_spec("Stargate V2").protocol == "Stargate"
+    assert get_pair_spec("Axelar") is not None      # v0.34.3 verified-core addition
+    assert get_pair_spec("LayerZero OFT") is not None  # v0.34.3 verified-core addition
     assert get_pair_spec("Orbiter") is None         # not in verified core yet
     assert get_pair_spec(None) is None
 
@@ -1314,8 +1316,139 @@ def test_stargate_tampered_guid_returns_none() -> None:
 
 
 def test_stargate_non_pool_oft_not_mislabeled() -> None:
-    """OFTSent is the GENERIC LayerZero OFT event — any OFT token emits it. The
-    source is pinned to the verified Stargate pool set, so an OFTSent from a
-    NON-pool address must NOT be recognized as Stargate (no protocol mislabel)."""
+    """OFTSent is the GENERIC LayerZero OFT event — any OFT token emits it. A
+    NON-Stargate-pool emitter must NOT be labeled 'Stargate'; it is the generic
+    'LayerZero OFT' rail instead (registered after Stargate). No Stargate mislabel."""
     ident = identify_source(_sg_source_receipt(emitter=SG_NON_POOL))
-    assert ident is None
+    assert ident is not None
+    spec, _oid, _dchain = ident
+    assert spec.protocol == "LayerZero OFT"
+
+
+def test_stargate_pool_precedence_over_generic_oft() -> None:
+    """A Stargate POOL source matches both _STARGATE (pinned) and the generic
+    _LAYERZERO_OFT (topic0-only). Registry order makes the precise label win."""
+    ident = identify_source(_sg_source_receipt(emitter=SG_POOL_ETH))
+    assert ident is not None
+    assert ident[0].protocol == "Stargate"
+
+
+def test_layerzero_oft_generic_registry_and_confirm() -> None:
+    assert get_pair_spec("LayerZero OFT").protocol == "LayerZero OFT"
+    # generic OFT confirm works exactly like Stargate (same guid mechanism).
+    adapter = _FakeStargateAdapter([_sg_received_log()])
+    out = confirm_bridge_destination(
+        protocol="LayerZero OFT", destination_chain="base",
+        source_receipt=_sg_source_receipt(emitter=SG_NON_POOL), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=SG_GUID,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert (out.recipient or "").lower() == SG_RECIPIENT
+    assert out.raw_amount == SG_AMT
+
+
+# ================= Axelar GMP (payloadHash composite + txhash tiebreak) =======
+# Source ContractCall: payloadHash indexed topic2. Dest ContractCallApproved:
+# payloadHash indexed topic3 + sourceTxHash at data word2 (== source tx hash).
+# VERIFIED vs real ETH→ARB pair (payloadHash 0x5ed87ed8…, sourceTxHash 0x16410393…).
+AX_CC_T0 = "0x30ae6cc78c27e651745bf2ad08a11de83910ac1e347a52f7ac898c0fbef94dae"
+AX_CCA_T0 = "0x44e4f8f6bd682c5a3aeba93601ab07cb4d1f21b2aab1ae4880d9577919309aa4"
+AX_GW_SRC = "0x4f4495243837681061c4743b74b3eedf548d56a5"  # ethereum gateway (in set)
+AX_GW_DST = "0xe432150cce91c13a887f7d836923d5597add8e31"  # arbitrum gateway
+AX_PAYLOAD_HASH = "0x5ed87ed8b6ff5e606f9cf13e78c5b205b2c4203507b4b7247a5da9ae822d661a"
+AX_SRC_TX = "0x16410393f955900f31021eaa7d2fcb37e4f538a0b50a1c0ad10fa53853289754"
+
+
+def _ax_source_receipt(payload_hash: str = AX_PAYLOAD_HASH,
+                       src_tx: str = AX_SRC_TX) -> dict[str, Any]:
+    return {
+        "transactionHash": src_tx,
+        "logs": [{
+            "address": AX_GW_SRC,
+            # topic1=sender, topic2=payloadHash
+            "topics": [AX_CC_T0, _topic_addr("0x" + "55" * 20), payload_hash],
+            "data": "0x" + _word("0x80") + _word("0xc0"),  # dynamic-string offsets (unused)
+        }],
+    }
+
+
+def _ax_approved_log(payload_hash: str = AX_PAYLOAD_HASH, src_tx: str = AX_SRC_TX,
+                     tx: str = "0xapprove") -> dict[str, Any]:
+    # ContractCallApproved data: word0=offset(sourceChain), word1=offset(sourceAddr),
+    # word2=sourceTxHash, word3=sourceEventIndex.
+    data = "0x" + _word("0x80") + _word("0xc0") + _word(src_tx) + _word("0x0")
+    return {
+        "address": AX_GW_DST,
+        # topic1=commandId, topic2=contractAddress, topic3=payloadHash
+        "topics": [AX_CCA_T0, "0x" + "a1" * 32, _topic_addr("0x" + "77" * 20), payload_hash],
+        "data": data,
+        "transactionHash": tx,
+    }
+
+
+class _FakeAxelarAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if topic0.lower() == AX_CCA_T0:  # dest_wildcard → address-less
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": []})
+
+    def close(self) -> None:
+        pass
+
+
+def test_axelar_registry_and_identify_source() -> None:
+    assert get_pair_spec("Axelar").protocol == "Axelar"
+    ident = identify_source(_ax_source_receipt())
+    assert ident is not None
+    spec, oid, dchain = ident
+    assert spec.protocol == "Axelar"
+    assert oid.lower() == AX_PAYLOAD_HASH
+    assert dchain is None  # destinationChain is a STRING in the source event
+
+
+def test_axelar_confirm_payloadhash_plus_txhash_high() -> None:
+    adapter = _FakeAxelarAdapter([_ax_approved_log()])
+    out = confirm_bridge_destination(
+        protocol="Axelar", destination_chain="arbitrum",
+        source_receipt=_ax_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=AX_PAYLOAD_HASH,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.dst_tx == "0xapprove"
+
+
+def test_axelar_wrong_sourcetxhash_returns_none() -> None:
+    """Right payloadHash but the dest's sourceTxHash word != the source tx hash →
+    the tiebreak rejects it (defeats an identical-payload collision)."""
+    adapter = _FakeAxelarAdapter([_ax_approved_log(src_tx="0x" + "ee" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Axelar", destination_chain="arbitrum",
+        source_receipt=_ax_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=AX_PAYLOAD_HASH,
+    )
+    assert out is None
+
+
+def test_axelar_tampered_payloadhash_returns_none() -> None:
+    adapter = _FakeAxelarAdapter([_ax_approved_log(payload_hash="0x" + "bb" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Axelar", destination_chain="arbitrum",
+        source_receipt=_ax_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=AX_PAYLOAD_HASH,
+    )
+    assert out is None

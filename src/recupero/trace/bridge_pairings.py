@@ -150,6 +150,11 @@ class BridgePairSpec:
     # back to the ERC-20 scan when absent/zero — never fabricated.
     dest_recipient_topic: int | None = None
     dest_amount_word: int | None = None
+    # v0.34.3 Axelar — a SECOND cryptographic tiebreak on the dest fill: the data
+    # word at this index must equal the SOURCE tx hash (Axelar ContractCallApproved
+    # carries sourceTxHash at data word 2). Pairs with a payloadHash topic match so
+    # a colliding payloadHash (identical payloads) can never produce a false pair.
+    dest_source_txhash_word: int | None = None
     # v0.34 Phase 2 — conservation: True when the protocol delivers the SAME
     # asset on both chains (canonical/liquidity bridge), so the raw deposit and
     # fill amounts are directly comparable and must satisfy the fee bound
@@ -605,11 +610,81 @@ _STARGATE = BridgePairSpec(
           "verified vs real ETH→Base pair (guid 0xb7b985ee…).",
 )
 
+# Axelar GMP (the rail under Squid) — the source AxelarGateway emits ContractCall
+# with the payloadHash INDEXED (topic2); the destination AxelarGateway emits
+# ContractCallApproved with the SAME payloadHash INDEXED (topic3) AND the source
+# tx hash at data word2. We pair on payloadHash (efficient indexed filter) and
+# REQUIRE the dest's sourceTxHash word == the source tx hash — so even an
+# (astronomically unlikely) identical-payload collision can't make a false pair.
+# Destination chain is a STRING in the source event (not an int), so it isn't
+# auto-resolved here — the caller supplies destination_chain (calldata decode),
+# exactly like Wormhole. VERIFIED real pair: source Ethereum tx 0x16410393…
+# (ContractCall @gateway 0x4f449524…, payloadHash 0x5ed87ed8…) → dest Arbitrum tx
+# 0x2b70632b… (ContractCallApproved @gateway 0xe432150c…, same payloadHash topic3,
+# sourceTxHash word2 == 0x16410393…).
+_AXELAR_GATEWAYS = frozenset({
+    "0x4f4495243837681061c4743b74b3eedf548d56a5",  # ethereum
+    "0xe432150cce91c13a887f7d836923d5597add8e31",  # arbitrum / base / optimism (shared)
+    "0x6f015f16de9fc8791b234ef68d486d2bf203fba8",  # polygon
+    "0x5029c0eff6c34351a0cec334542cdb22c7928f78",  # avalanche
+    "0x304acf330bbe08d1e512eefaa92f6a57871fd895",  # bsc
+})
+_AXELAR = BridgePairSpec(
+    protocol="Axelar",
+    source_contracts=_AXELAR_GATEWAYS,
+    source_event_topic0=(  # ContractCall(address,string,string,bytes32,bytes)
+        "0x30ae6cc78c27e651745bf2ad08a11de83910ac1e347a52f7ac898c0fbef94dae"
+    ),
+    source_order_id_topic=2,            # payloadHash (indexed)
+    dest_wildcard=True,                 # dest gateway per chain; payloadHash filter
+    dest_event_topic0=(  # ContractCallApproved(bytes32,string,string,address,bytes32,bytes32,uint256)
+        "0x44e4f8f6bd682c5a3aeba93601ab07cb4d1f21b2aab1ae4880d9577919309aa4"
+    ),
+    dest_id_topic=3,                    # payloadHash (indexed) on the approval
+    dest_source_txhash_word=2,          # sourceTxHash — MUST equal the source tx hash
+    max_fee_pct=Decimal("1.0"),
+    same_asset=False,                   # GMP carries arbitrary calldata/asset
+    notes="Axelar GMP payloadHash(source topic2 == dest topic3) + dest sourceTxHash(word2) == "
+          "source tx hash; dest wildcard; verified vs real ETH→ARB pair (payloadHash 0x5ed87ed8…).",
+)
+
+# Generic LayerZero OFT — the OFT standard (OFTSent/OFTReceived) is used by MANY
+# bridges/omnichain tokens, not just Stargate. This spec catches ALL of them via
+# the same globally-unique LayerZero GUID (topic1 on both sides), recognized by
+# topic0 ALONE (source_match_topic0_only) since the emitter is unbounded (every
+# OFT). It is registered AFTER _STARGATE so a Stargate pool keeps the precise
+# "Stargate" label and every OTHER OFT gets the generic "LayerZero OFT" label.
+# Same verified mechanism as Stargate (the verified ETH→Base pair is an OFT pair).
+_LAYERZERO_OFT = BridgePairSpec(
+    protocol="LayerZero OFT",
+    source_contracts=frozenset(),
+    source_match_topic0_only=True,
+    source_event_topic0=(  # OFTSent(bytes32,uint32,address,uint256,uint256)
+        "0x85496b760a4b7f8d66384b9df21b381f5d1b1e79f229a47aaf4c232edc2fe59a"
+    ),
+    source_order_id_topic=1,            # guid (indexed)
+    source_dest_chain_word=0,           # dstEid (LayerZero eid)
+    chain_id_scheme="layerzero",
+    dest_wildcard=True,
+    dest_event_topic0=(  # OFTReceived(bytes32,uint32,address,uint256)
+        "0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c"
+    ),
+    dest_id_topic=1,                    # guid (indexed)
+    dest_recipient_topic=2,             # toAddress (indexed)
+    dest_amount_word=1,                 # amountReceivedLD
+    max_fee_pct=Decimal("1.0"),
+    same_asset=False,                   # LD decimals can differ per chain
+    notes="Generic LayerZero OFT guid(topic1) matched OFTSent↔OFTReceived; topic0-only source "
+          "recognition (unbounded OFT emitters); registered AFTER Stargate so pools stay 'Stargate'.",
+)
+
 _REGISTRY: tuple[BridgePairSpec, ...] = (
     # _SYNAPSE_RFQ MUST precede classic _SYNAPSE: get_pair_spec matches by
     # substring, so "Synapse RFQ" would otherwise resolve to classic "Synapse".
+    # _STARGATE MUST precede _LAYERZERO_OFT: a Stargate pool source matches both,
+    # and the more-specific (pinned) "Stargate" label must win over generic OFT.
     _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE_RFQ, _SYNAPSE, _CCIP, _CONNEXT,
-    _WORMHOLE, _STARGATE,
+    _WORMHOLE, _STARGATE, _LAYERZERO_OFT, _AXELAR,
 )
 
 
@@ -937,6 +1012,15 @@ def confirm_bridge_destination(
     if not oid or oid == "0x" + "0" * 64:
         return None
 
+    # The source tx hash — the second cryptographic tiebreak for protocols that
+    # echo it on the dest fill (Axelar ContractCallApproved.sourceTxHash).
+    want_src_txhash: str | None = None
+    if spec.dest_source_txhash_word is not None and isinstance(source_receipt, dict):
+        want_src_txhash = _norm_word(
+            source_receipt.get("transactionHash")
+            or source_receipt.get("transaction_hash")
+        )
+
     # Resolve the destination contract. dest_wildcard protocols (Hop) query
     # address-LESS (across all per-token emitters) since the id is globally
     # unique; others use the per-chain / deterministic contract.
@@ -1016,6 +1100,12 @@ def confirm_bridge_destination(
                     _norm_word(t) for t in (lg.get("topics") or [])
                 }
                 if oid not in words:
+                    continue
+            # second tiebreak: the dest fill must echo the SOURCE tx hash at the
+            # declared data word (Axelar). Rejects a colliding-payloadHash pair.
+            if want_src_txhash and spec.dest_source_txhash_word is not None:
+                got = _data_word(lg.get("data"), spec.dest_source_txhash_word)
+                if _norm_word(got) != want_src_txhash:
                     continue
             # success-state gate (CCIP: ExecutionStateChanged.state==2) so a
             # FAILED execution is never reported as a delivered destination.

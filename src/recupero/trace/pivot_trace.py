@@ -127,9 +127,17 @@ def identify_pivot_hub(
     """
     floor = min_usd if min_usd is not None else _resolve_min_usd()
     from recupero._common import canonical_address_key as _ck
+    from recupero.trace.value_matching import is_confusable_token_symbol
 
     seed = _ck(case.seed_address)
     inflow: dict[str, Decimal] = {}
+    # v0.34.2: the stolen funds frequently arrive at the hub as an UNPRICED
+    # exotic token (Zigha: 3.1M msyrupUSDp, a Midas position CoinGecko can't
+    # price), with only dust priced alongside. Tracking PRICED inflow alone left
+    # such a hub below the floor → the pivot never fired and the cross-chain
+    # branch was unreachable. Track the largest single UNPRICED, NON-poison
+    # inbound amount too, as a fallback hub signal.
+    unpriced_amt: dict[str, Decimal] = {}
     display: dict[str, Address] = {}
     chain_of: dict[str, Chain] = {}
     min_depth: dict[str, int] = {}
@@ -137,12 +145,20 @@ def identify_pivot_hub(
     is_service: dict[str, bool] = {}
 
     for t in case.transfers:
-        if t.usd_value_at_tx is None:
-            continue
         k = _ck(t.to_address)
         if k == seed:
             continue
-        inflow[k] = inflow.get(k, Decimal(0)) + t.usd_value_at_tx
+        tok = getattr(t, "token", None)
+        sym = getattr(tok, "symbol", None) if tok is not None else None
+        if t.usd_value_at_tx is not None:
+            inflow[k] = inflow.get(k, Decimal(0)) + t.usd_value_at_tx
+        elif not is_confusable_token_symbol(sym):
+            # real (non-homoglyph) but unpriced inbound — track its magnitude
+            amt = getattr(t, "amount_decimal", None) or Decimal(0)
+            if amt > unpriced_amt.get(k, Decimal(0)):
+                unpriced_amt[k] = amt
+        else:
+            continue  # homoglyph/poison inbound — ignore entirely
         display.setdefault(k, t.to_address)
         chain_of[k] = t.chain
         d = getattr(t, "hop_depth", 0)
@@ -160,7 +176,27 @@ def identify_pivot_hub(
         if v >= floor and not is_service.get(k, False)
     }
     if not qualified:
-        return None
+        # Fallback: no hub cleared the PRICED floor — pick the largest UNPRICED
+        # non-poison inbound recipient (the funds-arrived-as-exotic-token case).
+        unpriced_qualified = {
+            k: a for k, a in unpriced_amt.items()
+            if a > 0 and not is_service.get(k, False)
+        }
+        if not unpriced_qualified:
+            return None
+        def _rank_unpriced(k: str) -> tuple:
+            return (
+                0 if not is_contract.get(k, False) else 1,  # EOA first
+                min_depth.get(k, 99),                        # shallowest first
+                -float(unpriced_qualified[k]),               # largest amount first
+            )
+        best = min(unpriced_qualified, key=_rank_unpriced)
+        log.info(
+            "pivot hub identified via UNPRICED fallback: %s (largest unpriced "
+            "inbound %s units) — funds arrived as an unpriced/exotic token",
+            display[best], unpriced_qualified[best],
+        )
+        return display[best], chain_of[best]
 
     # Prefer EOAs (perp pass-through wallets). Sort key: EOA-first, then
     # shallowest hop, then largest USD. A vault/contract terminal position

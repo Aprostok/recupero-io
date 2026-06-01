@@ -380,6 +380,54 @@ def merge_perpetrator_findings(
     merged = pass1_case.model_copy(update={
         "transfers": merged_transfers,
     })
+
+    # v0.34.2: carry the pass-2 (pivot) cross-chain provenance into the merged
+    # case's config_used — the bridge_confirmations (cryptographic proof of the
+    # cross-chain hops the pivot followed), value_matched_hops, value_dead_ends,
+    # and coverage flags. Without this the Phase-2 self-audit + brief never see
+    # the 14 confirmed ARB→ETH DLN crossings that DROVE the deep-endpoint reach,
+    # and the merged case would falsely read complete=True if pass-1 was. Never
+    # fails the merge on config bookkeeping.
+    try:
+        cu = dict(pass1_case.config_used or {})
+        cov = dict(cu.get("coverage") or {})
+        confs = list(cu.get("bridge_confirmations") or [])
+        vmh = list(cov.get("value_matched_hops") or [])
+        vde = list(cov.get("value_dead_ends") or [])
+        complete = bool(cov.get("complete", True))
+        poison = bool(cov.get("poisoning_detected", False))
+        pivot_chains: list[str] = []
+        for p2 in pass2_cases:
+            p2cu = p2.config_used or {}
+            p2cov = p2cu.get("coverage") or {}
+            confs.extend(p2cu.get("bridge_confirmations") or [])
+            vmh.extend(p2cov.get("value_matched_hops") or [])
+            vde.extend(p2cov.get("value_dead_ends") or [])
+            complete = complete and bool(p2cov.get("complete", True))
+            poison = poison or bool(p2cov.get("poisoning_detected", False))
+            p2_chain = getattr(getattr(p2, "chain", None), "value", None)
+            if p2_chain:
+                pivot_chains.append(p2_chain)
+        seen_oid: set = set()
+        deduped: list = []
+        for c in confs:
+            oid = c.get("order_id") if isinstance(c, dict) else None
+            k = oid if oid else id(c)
+            if k in seen_oid:
+                continue
+            seen_oid.add(k)
+            deduped.append(c)
+        if deduped:
+            cu["bridge_confirmations"] = deduped
+        cov["value_matched_hops"] = vmh
+        cov["value_dead_ends"] = vde
+        cov["complete"] = complete
+        cov["poisoning_detected"] = poison
+        cu["coverage"] = cov
+        cu["pivot_chains_merged"] = pivot_chains
+        merged = merged.model_copy(update={"config_used": cu})
+    except Exception as exc:  # noqa: BLE001 — config bookkeeping never fails merge
+        log.debug("pass2 merge: config_used propagation skipped: %s", exc)
     return merged
 
 

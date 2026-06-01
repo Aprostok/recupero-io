@@ -210,6 +210,36 @@ def _contract_matches_canonical(
     return token_contract == canonical_contract
 
 
+# v0.34.2: reverse index — every legit stablecoin CONTRACT per chain, derived
+# from the canonical map. Lets us price a stablecoin by CONTRACT regardless of
+# the symbol label the block explorer attached. This fixes the L2 blindness that
+# stalled the Zigha Arbitrum trace: bridged USDC.e (a legit $1 token) is often
+# labeled "USDC", but the (chain,"USDC") canonical is the NATIVE USDC contract,
+# so the symbol-keyed check rejected USDC.e as a spoof and left it UNPRICED —
+# and an unpriced major blinds value-directed tracing on L2s. Contract
+# membership is the TRM-style identity check: a poison token's fake contract is
+# NOT in this set, so symbol-spoofs still never price at par.
+_LEGIT_STABLECOIN_CONTRACTS_BY_CHAIN: dict[Chain, frozenset[str]] = {}
+for (_sc_chain, _sc_sym), _sc_addr in _CANONICAL_STABLECOIN_CONTRACTS.items():
+    _norm = _sc_addr.lower() if _sc_chain in _CASE_INSENSITIVE_CHAINS else _sc_addr
+    _LEGIT_STABLECOIN_CONTRACTS_BY_CHAIN.setdefault(_sc_chain, set()).add(_norm)
+_LEGIT_STABLECOIN_CONTRACTS_BY_CHAIN = {
+    _k: frozenset(_v) for _k, _v in _LEGIT_STABLECOIN_CONTRACTS_BY_CHAIN.items()
+}
+
+
+def _legit_stablecoin_contract(chain: Chain, contract: str | None) -> bool:
+    """True if ``contract`` is a known legit stablecoin on ``chain`` — a
+    symbol-independent, spoof-resistant $1 identity check."""
+    if not contract:
+        return False
+    legit = _LEGIT_STABLECOIN_CONTRACTS_BY_CHAIN.get(chain)
+    if not legit:
+        return False
+    key = contract.lower() if chain in _CASE_INSENSITIVE_CHAINS else contract
+    return key in legit
+
+
 # Hard sanity ceiling on per-transfer USD. Any single transfer claiming more
 # than this is treated as a pricing error and excluded from totals.
 #
@@ -521,6 +551,17 @@ class CoinGeckoClient:
         # but both are legitimate $1.00 stablecoins. The (chain, symbol) key
         # handles this correctly.
         symbol_upper = token.symbol.upper()
+        # v0.34.2 — contract-first stablecoin identity: if the token's CONTRACT
+        # is a known legit stablecoin on its chain, it is $1 regardless of the
+        # symbol label (handles bridged USDC.e labeled "USDC", and any other
+        # explorer label drift). Spoof/poison contracts are not in the set, so
+        # this never prices a spoof at par.
+        if _legit_stablecoin_contract(token.chain, token.contract):
+            return PriceResult(
+                usd_value=Decimal("1.00"),
+                source="stablecoin_par",
+                error=None,
+            )
         if symbol_upper in _STABLECOIN_SYMBOLS:
             canonical = _CANONICAL_STABLECOIN_CONTRACTS.get((token.chain, symbol_upper))
             if canonical and _contract_matches_canonical(
@@ -782,6 +823,17 @@ class CoinGeckoClient:
         canonical check (v0.17.5) so base58 spoofs don't match.
         """
         symbol_upper = token.symbol.upper()
+        # v0.34.2 — contract-first stablecoin identity: if the token's CONTRACT
+        # is a known legit stablecoin on its chain, it is $1 regardless of the
+        # symbol label (handles bridged USDC.e labeled "USDC", and any other
+        # explorer label drift). Spoof/poison contracts are not in the set, so
+        # this never prices a spoof at par.
+        if _legit_stablecoin_contract(token.chain, token.contract):
+            return PriceResult(
+                usd_value=Decimal("1.00"),
+                source="stablecoin_par",
+                error=None,
+            )
         if symbol_upper in _STABLECOIN_SYMBOLS:
             canonical = _CANONICAL_STABLECOIN_CONTRACTS.get((token.chain, symbol_upper))
             if canonical and _contract_matches_canonical(

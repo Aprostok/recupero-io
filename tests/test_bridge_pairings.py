@@ -95,12 +95,49 @@ class _FakeDstAdapter:
 # ----------------------------- registry / extract ---------------------------
 
 
+def test_all_spec_event_topics_are_wellformed() -> None:
+    """Every spec's source + dest event topic0s must be 0x + 64 lowercase hex —
+    a cheap offline guard against a typo'd/truncated topic0 (which would silently
+    never match). Complements the live staleness monitor."""
+    import re as _re
+
+    from recupero.trace.bridge_pairings import _REGISTRY
+    pat = _re.compile(r"^0x[0-9a-f]{64}$")
+    for spec in _REGISTRY:
+        topics = (
+            spec.source_event_topic0,
+            *spec.source_event_topics,
+            spec.dest_event_topic0,
+            *spec.dest_event_topics,
+        )
+        for t in topics:
+            assert pat.match(t), f"{spec.protocol}: malformed event topic0 {t!r}"
+
+
+def test_dln_spec_carries_current_fill_events() -> None:
+    """v0.34.3 staleness fix lock: DLN's destination fill event changed at the
+    same contract after the Oct-2025 Zigha verification. The spec must carry the
+    CURRENT fill event topic0s (so fresh orders confirm) AND keep the historical
+    one (so Zigha-era cases still confirm)."""
+    spec = get_pair_spec("DeBridge")
+    all_dest = {spec.dest_event_topic0, *spec.dest_event_topics}
+    # historical (Zigha-era) FulfilledOrder
+    assert "0xd281ee92bab1446041582480d2c0a9dc91f855386bb27ea295faac1e992f7fe4" in all_dest
+    # current fill events (verified live vs Jun-2026 fresh orders, 3/3 confirmed)
+    assert "0xc164aca37b9805a1c9027b6f32260a069723a82926f6e9ece4926e4dd3ea8ecf" in all_dest
+    assert "0x37a01d7dc38e924008cf4f2fa3d2ec1f45e7ae3c8292eb3e7d9314b7ad10e2fc" in all_dest
+
+
 def test_registry_resolves_debridge_by_label_substring() -> None:
     assert get_pair_spec("deBridge DLN Source") is not None
     assert get_pair_spec("DeBridge") is not None
     assert get_pair_spec("Connext") is not None     # v0.34 verified-core addition
     assert get_pair_spec("Wormhole") is not None    # v0.34 verified-core addition
-    assert get_pair_spec("Stargate") is None        # not in verified core yet
+    assert get_pair_spec("Stargate") is not None    # v0.34.3 verified-core addition
+    assert get_pair_spec("Stargate V2").protocol == "Stargate"
+    assert get_pair_spec("Axelar") is not None      # v0.34.3 verified-core addition
+    assert get_pair_spec("LayerZero OFT") is not None  # v0.34.3 verified-core addition
+    assert get_pair_spec("Orbiter") is None         # not in verified core yet
     assert get_pair_spec(None) is None
 
 
@@ -1057,3 +1094,361 @@ def test_wormhole_identify_source() -> None:
     assert spec.protocol == "Wormhole"
     assert int(oid, 16) == WH_SEQ
     assert dest_chain is None  # WH dest chain is in the VAA payload, not a source topic
+
+
+# ============ Synapse RFQ / FastBridgeV2 (composite-key, NATIVE fill) =========
+# Synapse's CURRENT rail. transactionId (bytes32) is indexed topic1 on BOTH the
+# source BridgeRequested and the dest BridgeRelayed; recipient = `to` (topic3) and
+# delivered amount = destAmount (data word4) read straight off the fill (RFQ pays
+# NATIVE value → no ERC-20 Transfer to scan). VERIFIED vs a real OP→ETH pair:
+# source Optimism 0xdf6da3c0… (txid 0xf88b22a5…, destChainId=1) → dest Ethereum
+# 0x13b91389… (same txid, recipient 0x77bde4b2…, destAmount 951302461322824).
+RFQ_FASTBRIDGE = "0x5523d3c98809dddb82c686e152f5c58b1b0fb59e"
+RFQ_REQ_T0 = "0x120ea0364f36cdac7983bcfdd55270ca09d7f9b314a2ebc425a3b01ab1d6403a"
+RFQ_REL_T0 = "0xf8ae392d784b1ea5e8881bfa586d81abf07ef4f1e2fc75f7fe51c90f05199a5c"
+RFQ_TXID = "0xf88b22a5d700ba0b0a5214f96350f4971f84deffd12c5afcc71ccf74f36b11fb"
+RFQ_RECIPIENT = "0x77bde4b24ba28beb54a259729c3b978056adbfa9"
+RFQ_DEST_AMT = 951302461322824
+RFQ_ZERO = "0x" + "0" * 40  # native ETH (address(0)) origin/dest token
+
+
+def _rfq_source_receipt(txid: str = RFQ_TXID, dest_chain_id: int = 1) -> dict[str, Any]:
+    # BridgeRequested data: word0=offset(request), word1=destChainId, word2=originToken,
+    # word3=destToken, word4=originAmount, word5=destAmount, word6=sendChainGas.
+    data = "0x" + "".join([
+        _word("0x120"), _word(hex(dest_chain_id)), _word(RFQ_ZERO), _word(RFQ_ZERO),
+        _word(hex(1037653722759876)), _word(hex(RFQ_DEST_AMT)), _word("0x0"),
+    ])
+    return {"logs": [{
+        "address": RFQ_FASTBRIDGE,
+        "topics": [RFQ_REQ_T0, txid, _topic_addr("0x" + "11" * 20)],  # topic1=txid, topic2=sender
+        "data": data,
+    }]}
+
+
+def _rfq_relayed_log(
+    txid: str = RFQ_TXID, recipient: str = RFQ_RECIPIENT,
+    amt: int = RFQ_DEST_AMT, tx: str = "0xrel", origin_chain_id: int = 10,
+) -> dict[str, Any]:
+    # BridgeRelayed data: word0=originChainId, word1=originToken, word2=destToken,
+    # word3=originAmount, word4=destAmount, word5=chainGasAmount.
+    data = "0x" + "".join([
+        _word(hex(origin_chain_id)), _word(RFQ_ZERO), _word(RFQ_ZERO),
+        _word(hex(1037653722759876)), _word(hex(amt)), _word("0x0"),
+    ])
+    return {
+        "address": RFQ_FASTBRIDGE,
+        # topic1=txid, topic2=relayer, topic3=to(recipient)
+        "topics": [RFQ_REL_T0, txid, _topic_addr("0x" + "22" * 20), _topic_addr(recipient)],
+        "data": data,
+        "transactionHash": tx,
+    }
+
+
+class _FakeRfqAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if address.lower() == RFQ_FASTBRIDGE and topic0.lower() == RFQ_REL_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        # RFQ delivers NATIVE ETH — the fill tx has NO ERC-20 Transfer. If the
+        # confirm engine still returns the right recipient/amount, they MUST come
+        # from the event topics/words (the point of dest_recipient_topic).
+        return SimpleNamespace(raw_receipt={"logs": []})
+
+    def close(self) -> None:
+        pass
+
+
+def test_synapse_rfq_resolution_order_does_not_shadow_classic() -> None:
+    """get_pair_spec matches by substring; _SYNAPSE_RFQ must precede classic
+    _SYNAPSE so 'Synapse RFQ' resolves to RFQ while plain 'Synapse' / a
+    'Synapse: Bridge' label still resolve to the classic spec."""
+    assert get_pair_spec("Synapse RFQ").protocol == "Synapse RFQ"
+    assert get_pair_spec("Synapse").protocol == "Synapse"
+    assert get_pair_spec("Synapse: Bridge").protocol == "Synapse"
+
+
+def test_synapse_rfq_identify_source_reads_txid_and_dest_chain() -> None:
+    ident = identify_source(_rfq_source_receipt())
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Synapse RFQ"
+    assert oid.lower() == RFQ_TXID
+    assert dest_chain == "ethereum"  # destChainId=1, read from source data word1
+
+
+def test_synapse_rfq_confirm_native_fill_recipient_amount_from_event_high() -> None:
+    adapter = _FakeRfqAdapter([_rfq_relayed_log()])
+    out = confirm_bridge_destination(
+        protocol="Synapse RFQ", destination_chain="ethereum",
+        source_receipt=_rfq_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="optimism",
+        order_id=RFQ_TXID,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id.lower() == RFQ_TXID
+    assert out.dst_tx == "0xrel"
+    # recipient + amount came from the fill EVENT (the receipt has no transfers).
+    assert (out.recipient or "").lower() == RFQ_RECIPIENT
+    assert out.raw_amount == RFQ_DEST_AMT
+
+
+def test_synapse_rfq_tampered_txid_returns_none() -> None:
+    adapter = _FakeRfqAdapter([_rfq_relayed_log(txid="0x" + "ab" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Synapse RFQ", destination_chain="ethereum",
+        source_receipt=_rfq_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="optimism",
+        order_id=RFQ_TXID,
+    )
+    assert out is None
+
+
+# ========= Stargate V2 / LayerZero OFT (GUID composite, eid namespace) =======
+# Cross-chain id = LayerZero GUID (bytes32), indexed topic1 on BOTH OFTSent
+# (source) + OFTReceived (dest). dstEid/srcEid are LayerZero ENDPOINT ids, NOT
+# EVM chain ids. Source pinned to verified Stargate pools (OFTSent is generic);
+# dest queried address-LESS (guid globally unique). recipient = toAddress
+# (topic2), amount = amountReceivedLD (data word1). VERIFIED vs real ETH→Base
+# pair: source 0xff3ab5d7… (guid 0xb7b985ee…, dstEid 30184=base) → dest
+# 0xb0c2faf5… (same guid, recipient 0xbc9a201c…, amountReceivedLD 12097000000000000).
+SG_SENT_T0 = "0x85496b760a4b7f8d66384b9df21b381f5d1b1e79f229a47aaf4c232edc2fe59a"
+SG_RECV_T0 = "0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c"
+SG_POOL_ETH = "0xc026395860db2d07ee33e05fe50ed7bd583189c7"  # ETH USDC pool (in set)
+SG_GUID = "0xb7b985eee266496ac37846035bedacdd8aefacc0a19d773c9a2fe0098362a3a4"
+SG_RECIPIENT = "0xbc9a201cf79ccded23f888cc8375c6ab6e0fa9ef"
+SG_AMT = 12097000000000000
+SG_NON_POOL = "0x" + "99" * 20  # a NON-Stargate OFT token (must NOT be labeled Stargate)
+
+
+def _sg_source_receipt(emitter: str = SG_POOL_ETH, guid: str = SG_GUID,
+                       dst_eid: int = 30184) -> dict[str, Any]:
+    # OFTSent data: word0=dstEid, word1=amountSentLD, word2=amountReceivedLD.
+    data = "0x" + _word(hex(dst_eid)) + _word(hex(SG_AMT + 3000)) + _word(hex(SG_AMT))
+    return {"logs": [{
+        "address": emitter,
+        "topics": [SG_SENT_T0, guid, _topic_addr("0x" + "33" * 20)],  # topic2=fromAddress
+        "data": data,
+    }]}
+
+
+def _sg_received_log(guid: str = SG_GUID, recipient: str = SG_RECIPIENT,
+                     amt: int = SG_AMT, tx: str = "0xrecv") -> dict[str, Any]:
+    # OFTReceived data: word0=srcEid, word1=amountReceivedLD.
+    data = "0x" + _word(hex(30101)) + _word(hex(amt))  # srcEid=ethereum
+    return {
+        "address": "0xdc181bd607330aeebef6ea62e03e5e1fb4b6f7c7",  # base pool
+        "topics": [SG_RECV_T0, guid, _topic_addr(recipient)],  # topic2=toAddress
+        "data": data,
+        "transactionHash": tx,
+    }
+
+
+class _FakeStargateAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        # dest_wildcard → address is "" (address-LESS); match on topic0 alone.
+        if topic0.lower() == SG_RECV_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": []})  # native fill: no ERC-20
+
+    def close(self) -> None:
+        pass
+
+
+def test_stargate_registry_resolves() -> None:
+    assert get_pair_spec("Stargate").protocol == "Stargate"
+    assert get_pair_spec("Stargate V2").protocol == "Stargate"
+
+
+def test_stargate_identify_source_reads_guid_and_eid_dest_chain() -> None:
+    ident = identify_source(_sg_source_receipt())
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Stargate"
+    assert oid.lower() == SG_GUID
+    # dstEid 30184 resolves to base via the LayerZero eid namespace (NOT chain id).
+    assert dest_chain == "base"
+
+
+def test_stargate_confirm_wildcard_guid_match_high() -> None:
+    adapter = _FakeStargateAdapter([_sg_received_log()])
+    out = confirm_bridge_destination(
+        protocol="Stargate", destination_chain="base",
+        source_receipt=_sg_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=SG_GUID,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id.lower() == SG_GUID
+    assert out.dst_tx == "0xrecv"
+    assert (out.recipient or "").lower() == SG_RECIPIENT
+    assert out.raw_amount == SG_AMT
+
+
+def test_stargate_tampered_guid_returns_none() -> None:
+    adapter = _FakeStargateAdapter([_sg_received_log(guid="0x" + "cd" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Stargate", destination_chain="base",
+        source_receipt=_sg_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=SG_GUID,
+    )
+    assert out is None
+
+
+def test_stargate_non_pool_oft_not_mislabeled() -> None:
+    """OFTSent is the GENERIC LayerZero OFT event — any OFT token emits it. A
+    NON-Stargate-pool emitter must NOT be labeled 'Stargate'; it is the generic
+    'LayerZero OFT' rail instead (registered after Stargate). No Stargate mislabel."""
+    ident = identify_source(_sg_source_receipt(emitter=SG_NON_POOL))
+    assert ident is not None
+    spec, _oid, _dchain = ident
+    assert spec.protocol == "LayerZero OFT"
+
+
+def test_stargate_pool_precedence_over_generic_oft() -> None:
+    """A Stargate POOL source matches both _STARGATE (pinned) and the generic
+    _LAYERZERO_OFT (topic0-only). Registry order makes the precise label win."""
+    ident = identify_source(_sg_source_receipt(emitter=SG_POOL_ETH))
+    assert ident is not None
+    assert ident[0].protocol == "Stargate"
+
+
+def test_layerzero_oft_generic_registry_and_confirm() -> None:
+    assert get_pair_spec("LayerZero OFT").protocol == "LayerZero OFT"
+    # generic OFT confirm works exactly like Stargate (same guid mechanism).
+    adapter = _FakeStargateAdapter([_sg_received_log()])
+    out = confirm_bridge_destination(
+        protocol="LayerZero OFT", destination_chain="base",
+        source_receipt=_sg_source_receipt(emitter=SG_NON_POOL), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=SG_GUID,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert (out.recipient or "").lower() == SG_RECIPIENT
+    assert out.raw_amount == SG_AMT
+
+
+# ================= Axelar GMP (payloadHash composite + txhash tiebreak) =======
+# Source ContractCall: payloadHash indexed topic2. Dest ContractCallApproved:
+# payloadHash indexed topic3 + sourceTxHash at data word2 (== source tx hash).
+# VERIFIED vs real ETH→ARB pair (payloadHash 0x5ed87ed8…, sourceTxHash 0x16410393…).
+AX_CC_T0 = "0x30ae6cc78c27e651745bf2ad08a11de83910ac1e347a52f7ac898c0fbef94dae"
+AX_CCA_T0 = "0x44e4f8f6bd682c5a3aeba93601ab07cb4d1f21b2aab1ae4880d9577919309aa4"
+AX_GW_SRC = "0x4f4495243837681061c4743b74b3eedf548d56a5"  # ethereum gateway (in set)
+AX_GW_DST = "0xe432150cce91c13a887f7d836923d5597add8e31"  # arbitrum gateway
+AX_PAYLOAD_HASH = "0x5ed87ed8b6ff5e606f9cf13e78c5b205b2c4203507b4b7247a5da9ae822d661a"
+AX_SRC_TX = "0x16410393f955900f31021eaa7d2fcb37e4f538a0b50a1c0ad10fa53853289754"
+
+
+def _ax_source_receipt(payload_hash: str = AX_PAYLOAD_HASH,
+                       src_tx: str = AX_SRC_TX) -> dict[str, Any]:
+    return {
+        "transactionHash": src_tx,
+        "logs": [{
+            "address": AX_GW_SRC,
+            # topic1=sender, topic2=payloadHash
+            "topics": [AX_CC_T0, _topic_addr("0x" + "55" * 20), payload_hash],
+            "data": "0x" + _word("0x80") + _word("0xc0"),  # dynamic-string offsets (unused)
+        }],
+    }
+
+
+def _ax_approved_log(payload_hash: str = AX_PAYLOAD_HASH, src_tx: str = AX_SRC_TX,
+                     tx: str = "0xapprove") -> dict[str, Any]:
+    # ContractCallApproved data: word0=offset(sourceChain), word1=offset(sourceAddr),
+    # word2=sourceTxHash, word3=sourceEventIndex.
+    data = "0x" + _word("0x80") + _word("0xc0") + _word(src_tx) + _word("0x0")
+    return {
+        "address": AX_GW_DST,
+        # topic1=commandId, topic2=contractAddress, topic3=payloadHash
+        "topics": [AX_CCA_T0, "0x" + "a1" * 32, _topic_addr("0x" + "77" * 20), payload_hash],
+        "data": data,
+        "transactionHash": tx,
+    }
+
+
+class _FakeAxelarAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if topic0.lower() == AX_CCA_T0:  # dest_wildcard → address-less
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": []})
+
+    def close(self) -> None:
+        pass
+
+
+def test_axelar_registry_and_identify_source() -> None:
+    assert get_pair_spec("Axelar").protocol == "Axelar"
+    ident = identify_source(_ax_source_receipt())
+    assert ident is not None
+    spec, oid, dchain = ident
+    assert spec.protocol == "Axelar"
+    assert oid.lower() == AX_PAYLOAD_HASH
+    assert dchain is None  # destinationChain is a STRING in the source event
+
+
+def test_axelar_confirm_payloadhash_plus_txhash_high() -> None:
+    adapter = _FakeAxelarAdapter([_ax_approved_log()])
+    out = confirm_bridge_destination(
+        protocol="Axelar", destination_chain="arbitrum",
+        source_receipt=_ax_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=AX_PAYLOAD_HASH,
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.dst_tx == "0xapprove"
+
+
+def test_axelar_wrong_sourcetxhash_returns_none() -> None:
+    """Right payloadHash but the dest's sourceTxHash word != the source tx hash →
+    the tiebreak rejects it (defeats an identical-payload collision)."""
+    adapter = _FakeAxelarAdapter([_ax_approved_log(src_tx="0x" + "ee" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Axelar", destination_chain="arbitrum",
+        source_receipt=_ax_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=AX_PAYLOAD_HASH,
+    )
+    assert out is None
+
+
+def test_axelar_tampered_payloadhash_returns_none() -> None:
+    adapter = _FakeAxelarAdapter([_ax_approved_log(payload_hash="0x" + "bb" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Axelar", destination_chain="arbitrum",
+        source_receipt=_ax_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2026, 5, 1, tzinfo=UTC), source_chain="ethereum",
+        order_id=AX_PAYLOAD_HASH,
+    )
+    assert out is None

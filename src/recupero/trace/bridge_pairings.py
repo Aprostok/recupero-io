@@ -64,6 +64,20 @@ _WH_CHAIN_ID: dict[str, int] = {
     "base": 30,
 }
 
+#: chain value → LayerZero V2 ENDPOINT id (NOT the EVM chain id). Stargate (and
+#: every LayerZero OFT) stamps the destination as this eid in OFTSent.dstEid and
+#: the source as srcEid in OFTReceived. Source: LayerZero deployed-endpoints docs.
+_LZ_EID: dict[str, int] = {
+    "ethereum": 30101,
+    "bsc": 30102,
+    "avalanche": 30106,
+    "polygon": 30109,
+    "arbitrum": 30110,
+    "optimism": 30111,
+    "base": 30184,
+}
+_CHAIN_BY_LZ_EID: dict[int, str] = {v: k for k, v in _LZ_EID.items()}
+
 
 @dataclass(frozen=True)
 class BridgePairSpec:
@@ -127,6 +141,20 @@ class BridgePairSpec:
     # is never reported as a delivered destination.
     dest_state_word: int | None = None
     dest_state_ok: int | None = None
+    # v0.34.3 — read the recipient/amount straight off the MATCHED fill event
+    # rather than scanning the dest tx for ERC-20 Transfers. Needed for protocols
+    # that deliver NATIVE value (Synapse RFQ BridgeRelayed pays ETH to `to`, which
+    # emits no ERC-20 Transfer, so the generic scanner finds nothing). When
+    # ``dest_recipient_topic`` is set, recipient = the address in that fill topic;
+    # when ``dest_amount_word`` is set, raw_amount = that fill data word. Both fall
+    # back to the ERC-20 scan when absent/zero — never fabricated.
+    dest_recipient_topic: int | None = None
+    dest_amount_word: int | None = None
+    # v0.34.3 Axelar — a SECOND cryptographic tiebreak on the dest fill: the data
+    # word at this index must equal the SOURCE tx hash (Axelar ContractCallApproved
+    # carries sourceTxHash at data word 2). Pairs with a payloadHash topic match so
+    # a colliding payloadHash (identical payloads) can never produce a false pair.
+    dest_source_txhash_word: int | None = None
     # v0.34 Phase 2 — conservation: True when the protocol delivers the SAME
     # asset on both chains (canonical/liquidity bridge), so the raw deposit and
     # fill amounts are directly comparable and must satisfy the fee bound
@@ -199,12 +227,26 @@ _DLN = BridgePairSpec(
     dest_event_topic0=(
         "0xd281ee92bab1446041582480d2c0a9dc91f855386bb27ea295faac1e992f7fe4"
     ),
+    # v0.34.3 STALENESS FIX: the original FulfilledOrder topic0 (above, verified
+    # vs the Oct-2025 Zigha fill) is NO LONGER EMITTED — DLN changed its fill
+    # event signature at the SAME DlnDestination contract sometime after. The
+    # fresh-input generalization test (Jun-2026 DLN orders) confirmed 0/3 + zero
+    # FulfilledOrder events on-chain. The current fill events at 0xe7351fd7 are
+    # the two below (the order-id bytes32 sits in the event payload, which the
+    # 32-byte-shape engine scans). Keeping the old topic0 confirms historical
+    # (Zigha-era) cases; the new ones confirm current orders. This is exactly the
+    # spec-drift the staleness monitor (scripts/_v034_bridge_staleness.py) now
+    # guards against going forward.
+    dest_event_topics=(
+        "0xc164aca37b9805a1c9027b6f32260a069723a82926f6e9ece4926e4dd3ea8ecf",
+        "0x37a01d7dc38e924008cf4f2fa3d2ec1f45e7ae3c8292eb3e7d9314b7ad10e2fc",
+    ),
     # 32-byte id scanned in the fill payload (no composite key needed).
     max_fee_pct=Decimal("1.0"),
     # DLN give≠take asset (the maker quotes an arbitrary take token), so raw
     # deposit/fill amounts are NOT comparable — skip conservation.
     same_asset=False,
-    notes="deBridge DLN createSaltedOrder→FulfilledOrder; verified vs Zigha pair.",
+    notes="deBridge DLN createSaltedOrder→fill; verified vs Zigha (old event) + Jun-2026 fresh orders (new events).",
 )
 
 # Across V3 SpokePool — per-chain contracts; id is the small uint depositId in
@@ -349,7 +391,49 @@ _SYNAPSE = BridgePairSpec(
     max_fee_pct=Decimal("1.0"),
     # …AndSwap variants deliver a DIFFERENT token than deposited — not same-asset.
     same_asset=False,
-    notes="Synapse kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs.",
+    notes="Synapse (CLASSIC bridge) kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs. "
+          "v0.34.3: the CLASSIC TokenDeposit/TokenRedeem source events are SILENT on-chain now — Synapse's "
+          "current volume MOVED to the RFQ/FastBridge rail (see _SYNAPSE_RFQ below), which is covered "
+          "separately and verified vs a real Optimism→Ethereum pair. This classic spec is retained for "
+          "HISTORICAL Synapse cases (the dest TokenMint/TokenWithdraw contract is still live and confirms "
+          "them). Tracked by scripts/_v034_bridge_staleness.py (acknowledged: historical rail).",
+)
+
+# Synapse RFQ / FastBridgeV2 — Synapse's CURRENT (intent-based) rail, deployed at
+# the SAME deterministic CREATE2 address on every EVM chain. The cross-chain id is
+# the `transactionId` (bytes32), emitted INDEXED as topic1 on BOTH the source
+# `BridgeRequested` and the destination `BridgeRelayed` — a clean cryptographic
+# pairing (no derivation needed, unlike the classic kappa). Recipient is `to`
+# (BridgeRelayed topic3) and the delivered amount is destAmount (data word 4),
+# read straight off the matched fill event (RFQ delivers NATIVE value, no ERC-20
+# Transfer to scan). destChainId is a REAL chain id in BridgeRequested data word 1
+# (word 0 is the dynamic `request` offset). Event sigs from synapsecns/sanguine
+# IFastBridge.sol. VERIFIED vs a real pair: source Optimism tx 0xdf6da3c0… (txid
+# 0xf88b22a5…, destChainId=1) → dest Ethereum tx 0x13b91389… (same txid topic1,
+# recipient 0x77bde4b2…); source-committed destAmount == dest-delivered destAmount
+# (951302461322824), originAmount ≥ destAmount (relayer fee = the difference).
+_FASTBRIDGE_RFQ = "0x5523d3c98809dddb82c686e152f5c58b1b0fb59e"
+_SYNAPSE_RFQ = BridgePairSpec(
+    protocol="Synapse RFQ",
+    source_contracts=frozenset({_FASTBRIDGE_RFQ}),
+    source_event_topic0=(  # BridgeRequested(bytes32,address,bytes,uint32,address,address,uint256,uint256,bool)
+        "0x120ea0364f36cdac7983bcfdd55270ca09d7f9b314a2ebc425a3b01ab1d6403a"
+    ),
+    source_order_id_topic=1,            # transactionId (indexed)
+    source_dest_chain_word=1,           # destChainId (real id) — data word 1
+    dest_contract=_FASTBRIDGE_RFQ,
+    dest_event_topic0=(  # BridgeRelayed(bytes32,address,address,uint32,address,address,uint256,uint256,uint256)
+        "0xf8ae392d784b1ea5e8881bfa586d81abf07ef4f1e2fc75f7fe51c90f05199a5c"
+    ),
+    dest_id_topic=1,                    # transactionId (indexed) on the fill
+    dest_recipient_topic=3,             # `to` (indexed) on BridgeRelayed
+    dest_amount_word=4,                 # destAmount — data word 4
+    max_fee_pct=Decimal("1.0"),
+    # RFQ is intent-based: originToken may differ from destToken (a swap), so raw
+    # deposit/fill amounts are NOT comparable — skip same-asset conservation.
+    same_asset=False,
+    notes="Synapse RFQ/FastBridgeV2 transactionId(topic1) matched source BridgeRequested↔dest "
+          "BridgeRelayed; deterministic CREATE2 0x5523…; verified vs real OP→ETH pair (txid 0xf88b22a5…).",
 )
 
 # Chainlink CCIP — messageId is a globally-unique bytes32 in the OnRamp
@@ -412,7 +496,10 @@ _CONNEXT = BridgePairSpec(
     # Connext receiveLocal/swap can deliver a different (canonical vs nextAsset)
     # token + router fee — not reliably same-asset.
     same_asset=False,
-    notes="Connext Amarok XCalled.transferId(topic1)==Executed.transferId(topic1); verified OP→ARB pair.",
+    notes="Connext Amarok XCalled.transferId(topic1)==Executed.transferId(topic1); verified OP→ARB pair. "
+          "v0.34.3 DORMANT: Amarok is deprecated (migrated to Everclear) — XCalled/Executed are SILENT "
+          "and the diamonds emit nothing on-chain now. The spec stays correct for HISTORICAL Connext "
+          "cases; current volume is ~nil. Tracked by scripts/_v034_bridge_staleness.py (acknowledged).",
 )
 
 # Wormhole token bridge — the cross-chain id is the VAA identity
@@ -464,8 +551,140 @@ _WORMHOLE = BridgePairSpec(
     notes="Wormhole VAA (emitterChainId,emitterAddress,sequence): LogMessagePublished→TransferRedeemed; verified ARB→ETH pair.",
 )
 
+# Stargate V2 — Stargate's pools are LayerZero OFTs; the cross-chain id is the
+# LayerZero GUID (bytes32), emitted INDEXED as topic1 on BOTH the source OFTSent
+# and the destination OFTReceived. dstEid/srcEid are LayerZero ENDPOINT ids
+# (chain_id_scheme="layerzero", via _LZ_EID), NOT EVM chain ids. The source is
+# pinned to the VERIFIED Stargate pool set — OFTSent is the generic OFT standard
+# event, so matching topic0 alone would mislabel ANY OFT token as Stargate. The
+# dest is queried address-LESS (dest_wildcard) since the guid is globally unique
+# and the pools are per-token/per-chain. Recipient = toAddress (OFTReceived
+# topic2); delivered amount = amountReceivedLD (data word1). VERIFIED real pair:
+# source Ethereum StargatePoolNative 0x77b2…ce57931 tx 0xff3ab5d7… (guid
+# 0xb7b985ee…, dstEid 30184=base) → dest Base 0xdc181b… tx 0xb0c2faf5… (same guid
+# topic1, recipient 0xbc9a201c…, amountReceivedLD == source's, exactly).
+_STARGATE_POOLS = frozenset({
+    # ethereum: Native / USDC / USDT
+    "0x77b2043768d28e9c9ab44e1abfc95944bce57931",
+    "0xc026395860db2d07ee33e05fe50ed7bd583189c7",
+    "0x933597a323eb81cae705c5bc29985172fd5a3973",
+    # arbitrum (e8cd…/ce8c… are CREATE2-shared with optimism)
+    "0xa45b5130f36cdca45667738e2a258ab09f4a5f7f",
+    "0xe8cdf27acd73a434d661c84887215f7598e7d0d3",
+    "0xce8cca271ebc0533920c83d39f417ed6a0abb7d0",
+    # base
+    "0xdc181bd607330aeebef6ea62e03e5e1fb4b6f7c7",
+    "0x27a16dc786820b16e5c9028b75b99f6f604b5d26",
+    # optimism
+    "0x19cfce47ed54a88614648dc3f19a5980097007dd",
+    # polygon
+    "0x9aa02d4fae7f58b8e8f34c66e756cc734dac7fe4",
+    "0xd47b03ee6d86cf251ee7860fb2acf9f91b9fd4d7",
+    # bsc
+    "0x962bd449e630b0d928f308ce63f1a21f02576057",
+    "0x138eb30f73bc423c6455c53df6d89cb01d9ebc63",
+})
+_STARGATE = BridgePairSpec(
+    protocol="Stargate",
+    source_contracts=_STARGATE_POOLS,
+    source_event_topic0=(  # OFTSent(bytes32,uint32,address,uint256,uint256)
+        "0x85496b760a4b7f8d66384b9df21b381f5d1b1e79f229a47aaf4c232edc2fe59a"
+    ),
+    source_order_id_topic=1,            # guid (indexed)
+    source_dest_chain_word=0,           # dstEid (LayerZero eid) — data word 0
+    chain_id_scheme="layerzero",
+    dest_wildcard=True,                 # guid is globally unique; pools are many
+    dest_event_topic0=(  # OFTReceived(bytes32,uint32,address,uint256)
+        "0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c"
+    ),
+    dest_id_topic=1,                    # guid (indexed) on the fill
+    dest_recipient_topic=2,             # toAddress (indexed) on OFTReceived
+    dest_amount_word=1,                 # amountReceivedLD — data word 1
+    max_fee_pct=Decimal("1.0"),
+    # OFT delivers the SAME token 1:1, but LD = LOCAL decimals can differ per
+    # chain, so raw amounts aren't always comparable — skip same-asset
+    # conservation to avoid a false violation on a legit decimals mismatch.
+    same_asset=False,
+    notes="Stargate V2 / LayerZero OFT guid(topic1) matched source OFTSent↔dest OFTReceived; "
+          "dest wildcard (guid globally unique); source pinned to verified pools; eid namespace; "
+          "verified vs real ETH→Base pair (guid 0xb7b985ee…).",
+)
+
+# Axelar GMP (the rail under Squid) — the source AxelarGateway emits ContractCall
+# with the payloadHash INDEXED (topic2); the destination AxelarGateway emits
+# ContractCallApproved with the SAME payloadHash INDEXED (topic3) AND the source
+# tx hash at data word2. We pair on payloadHash (efficient indexed filter) and
+# REQUIRE the dest's sourceTxHash word == the source tx hash — so even an
+# (astronomically unlikely) identical-payload collision can't make a false pair.
+# Destination chain is a STRING in the source event (not an int), so it isn't
+# auto-resolved here — the caller supplies destination_chain (calldata decode),
+# exactly like Wormhole. VERIFIED real pair: source Ethereum tx 0x16410393…
+# (ContractCall @gateway 0x4f449524…, payloadHash 0x5ed87ed8…) → dest Arbitrum tx
+# 0x2b70632b… (ContractCallApproved @gateway 0xe432150c…, same payloadHash topic3,
+# sourceTxHash word2 == 0x16410393…).
+_AXELAR_GATEWAYS = frozenset({
+    "0x4f4495243837681061c4743b74b3eedf548d56a5",  # ethereum
+    "0xe432150cce91c13a887f7d836923d5597add8e31",  # arbitrum / base / optimism (shared)
+    "0x6f015f16de9fc8791b234ef68d486d2bf203fba8",  # polygon
+    "0x5029c0eff6c34351a0cec334542cdb22c7928f78",  # avalanche
+    "0x304acf330bbe08d1e512eefaa92f6a57871fd895",  # bsc
+})
+_AXELAR = BridgePairSpec(
+    protocol="Axelar",
+    source_contracts=_AXELAR_GATEWAYS,
+    source_event_topic0=(  # ContractCall(address,string,string,bytes32,bytes)
+        "0x30ae6cc78c27e651745bf2ad08a11de83910ac1e347a52f7ac898c0fbef94dae"
+    ),
+    source_order_id_topic=2,            # payloadHash (indexed)
+    dest_wildcard=True,                 # dest gateway per chain; payloadHash filter
+    dest_event_topic0=(  # ContractCallApproved(bytes32,string,string,address,bytes32,bytes32,uint256)
+        "0x44e4f8f6bd682c5a3aeba93601ab07cb4d1f21b2aab1ae4880d9577919309aa4"
+    ),
+    dest_id_topic=3,                    # payloadHash (indexed) on the approval
+    dest_source_txhash_word=2,          # sourceTxHash — MUST equal the source tx hash
+    max_fee_pct=Decimal("1.0"),
+    same_asset=False,                   # GMP carries arbitrary calldata/asset
+    notes="Axelar GMP payloadHash(source topic2 == dest topic3) + dest sourceTxHash(word2) == "
+          "source tx hash; dest wildcard; verified vs real ETH→ARB pair (payloadHash 0x5ed87ed8…).",
+)
+
+# Generic LayerZero OFT — the OFT standard (OFTSent/OFTReceived) is used by MANY
+# bridges/omnichain tokens, not just Stargate. This spec catches ALL of them via
+# the same globally-unique LayerZero GUID (topic1 on both sides), recognized by
+# topic0 ALONE (source_match_topic0_only) since the emitter is unbounded (every
+# OFT). It is registered AFTER _STARGATE so a Stargate pool keeps the precise
+# "Stargate" label and every OTHER OFT gets the generic "LayerZero OFT" label.
+# Same verified mechanism as Stargate (the verified ETH→Base pair is an OFT pair).
+_LAYERZERO_OFT = BridgePairSpec(
+    protocol="LayerZero OFT",
+    source_contracts=frozenset(),
+    source_match_topic0_only=True,
+    source_event_topic0=(  # OFTSent(bytes32,uint32,address,uint256,uint256)
+        "0x85496b760a4b7f8d66384b9df21b381f5d1b1e79f229a47aaf4c232edc2fe59a"
+    ),
+    source_order_id_topic=1,            # guid (indexed)
+    source_dest_chain_word=0,           # dstEid (LayerZero eid)
+    chain_id_scheme="layerzero",
+    dest_wildcard=True,
+    dest_event_topic0=(  # OFTReceived(bytes32,uint32,address,uint256)
+        "0xefed6d3500546b29533b128a29e3a94d70788727f0507505ac12eaf2e578fd9c"
+    ),
+    dest_id_topic=1,                    # guid (indexed)
+    dest_recipient_topic=2,             # toAddress (indexed)
+    dest_amount_word=1,                 # amountReceivedLD
+    max_fee_pct=Decimal("1.0"),
+    same_asset=False,                   # LD decimals can differ per chain
+    notes="Generic LayerZero OFT guid(topic1) matched OFTSent↔OFTReceived; topic0-only source "
+          "recognition (unbounded OFT emitters); registered AFTER Stargate so pools stay 'Stargate'.",
+)
+
 _REGISTRY: tuple[BridgePairSpec, ...] = (
-    _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE, _CCIP, _CONNEXT, _WORMHOLE,
+    # _SYNAPSE_RFQ MUST precede classic _SYNAPSE: get_pair_spec matches by
+    # substring, so "Synapse RFQ" would otherwise resolve to classic "Synapse".
+    # _STARGATE MUST precede _LAYERZERO_OFT: a Stargate pool source matches both,
+    # and the more-specific (pinned) "Stargate" label must win over generic OFT.
+    _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE_RFQ, _SYNAPSE, _CCIP, _CONNEXT,
+    _WORMHOLE, _STARGATE, _LAYERZERO_OFT, _AXELAR,
 )
 
 
@@ -659,8 +878,14 @@ def identify_source(
             elif spec.source_dest_chain_word is not None:
                 cid_word = _data_word(lg.get("data"), spec.source_dest_chain_word)
             if cid_word:
+                # The chain-id namespace depends on the protocol: a real EVM
+                # chain id (default) or a LayerZero endpoint id (Stargate/OFT).
+                cid_by = (
+                    _CHAIN_BY_LZ_EID if spec.chain_id_scheme == "layerzero"
+                    else _CHAIN_BY_REAL_ID
+                )
                 try:
-                    dest_chain = _CHAIN_BY_REAL_ID.get(int(cid_word, 16))
+                    dest_chain = cid_by.get(int(cid_word, 16))
                 except ValueError:
                     dest_chain = None
             return spec, oid, dest_chain
@@ -787,6 +1012,15 @@ def confirm_bridge_destination(
     if not oid or oid == "0x" + "0" * 64:
         return None
 
+    # The source tx hash — the second cryptographic tiebreak for protocols that
+    # echo it on the dest fill (Axelar ContractCallApproved.sourceTxHash).
+    want_src_txhash: str | None = None
+    if spec.dest_source_txhash_word is not None and isinstance(source_receipt, dict):
+        want_src_txhash = _norm_word(
+            source_receipt.get("transactionHash")
+            or source_receipt.get("transaction_hash")
+        )
+
     # Resolve the destination contract. dest_wildcard protocols (Hop) query
     # address-LESS (across all per-token emitters) since the id is globally
     # unique; others use the per-chain / deterministic contract.
@@ -867,6 +1101,12 @@ def confirm_bridge_destination(
                 }
                 if oid not in words:
                     continue
+            # second tiebreak: the dest fill must echo the SOURCE tx hash at the
+            # declared data word (Axelar). Rejects a colliding-payloadHash pair.
+            if want_src_txhash and spec.dest_source_txhash_word is not None:
+                got = _data_word(lg.get("data"), spec.dest_source_txhash_word)
+                if _norm_word(got) != want_src_txhash:
+                    continue
             # success-state gate (CCIP: ExecutionStateChanged.state==2) so a
             # FAILED execution is never reported as a delivered destination.
             if spec.dest_state_word is not None and spec.dest_state_ok is not None:
@@ -878,10 +1118,29 @@ def confirm_bridge_destination(
                     continue
             dst_tx = lg.get("transactionHash") or lg.get("transaction_hash") or ""
             emitter = (lg.get("address") or query_addr or "").lower()
-            recipient, raw_amount = _fill_recipient_amount(
-                dst_adapter, dst_tx,
-                infra={emitter, query_addr, *spec.source_contracts},
-            )
+            recipient = None
+            raw_amount = None
+            # Prefer the recipient/amount carried by the matched fill event itself
+            # (Synapse RFQ native-ETH fills emit no ERC-20 Transfer to scan).
+            if spec.dest_recipient_topic is not None:
+                rt = _topic(lg.get("topics"), spec.dest_recipient_topic)
+                if rt and rt != "0x" + "0" * 64:
+                    recipient = "0x" + rt[-40:]
+                if spec.dest_amount_word is not None:
+                    aw = _data_word(lg.get("data"), spec.dest_amount_word)
+                    try:
+                        raw_amount = int(aw, 16) if aw else None
+                    except ValueError:
+                        raw_amount = None
+            # Fall back to the ERC-20 payout scan when the event didn't yield a
+            # recipient (token fills, or a spec without the topic configured).
+            if recipient is None:
+                recipient, scanned_amt = _fill_recipient_amount(
+                    dst_adapter, dst_tx,
+                    infra={emitter, query_addr, *spec.source_contracts},
+                )
+                if raw_amount is None:
+                    raw_amount = scanned_amt
             # raw amount deposited into the source bridge (same-asset only) for
             # the Phase-2 conservation check; None for cross-asset / wildcard.
             src_raw = (

@@ -232,3 +232,63 @@ def test_skip_contract_api_off_does_resolve_via_api() -> None:
     )
     client.price_at(token, datetime(2024, 1, 1, tzinfo=UTC))  # no skip flag
     assert called["n"] == 1, "normal pass must attempt API contract resolution"
+
+
+# ---- v0.34.2: contract-first stablecoin pricing (L2 USDC.e fix) ----
+
+
+def _tok(chain, contract, symbol):
+    from recupero.models import TokenRef
+    return TokenRef(chain=chain, contract=contract, symbol=symbol,
+                    decimals=6, coingecko_id=None)
+
+
+def test_bridged_usdc_e_labeled_usdc_prices_at_par() -> None:
+    """The Zigha L2-blindness fix: bridged Arbitrum USDC.e is frequently labeled
+    "USDC" by explorers, but its contract != the (arbitrum,"USDC") canonical
+    (native USDC). The symbol-keyed check rejected it as a spoof → unpriced →
+    value-trace blind on L2. Contract-first identity prices it at $1."""
+    from datetime import UTC, datetime
+
+    from recupero.models import Chain
+    client = _build_client()
+    # USDC.e contract, mislabeled "USDC"
+    tok = _tok(Chain.arbitrum, "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8", "USDC")
+    r = client.price_at(tok, datetime(2025, 10, 9, tzinfo=UTC), skip_contract_api=True)
+    assert r.usd_value == Decimal("1.00")
+    assert r.source == "stablecoin_par"
+
+
+def test_canonical_usdc_still_prices_by_contract() -> None:
+    from datetime import UTC, datetime
+
+    from recupero.models import Chain
+    client = _build_client()
+    tok = _tok(Chain.arbitrum, "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "USDC")
+    r = client.price_at(tok, datetime(2025, 10, 9, tzinfo=UTC), skip_contract_api=True)
+    assert r.usd_value == Decimal("1.00")
+
+
+def test_poison_contract_labeled_usdc_not_priced_at_par() -> None:
+    """A poison/spoof token using a FAKE contract but labeled "USDC" must NEVER
+    price at par — contract membership is the identity, not the symbol."""
+    from datetime import UTC, datetime
+
+    from recupero.models import Chain
+    client = _build_client()
+    client._contract_id_cache = {}
+    client.cache = MagicMock()
+    client.cache.get.return_value = None
+    tok = _tok(Chain.arbitrum, "0xb4094bd2ba706361ee9064f97a3bfaaf9b2f7715", "USDC")
+    r = client.price_at(tok, datetime(2025, 10, 9, tzinfo=UTC), skip_contract_api=True)
+    assert r.usd_value is None  # not $1 — spoof contract not in legit set
+
+
+def test_legit_stablecoin_contract_helper() -> None:
+    from recupero.models import Chain
+    from recupero.pricing.coingecko import _legit_stablecoin_contract
+    # native + bridged USDC, mixed case, both legit:
+    assert _legit_stablecoin_contract(Chain.arbitrum, "0xAF88D065E77C8cc2239327C5EDb3A432268e5831")
+    assert _legit_stablecoin_contract(Chain.arbitrum, "0xff970a61a04b1ca14834a43f5de4533ebddb5cc8")
+    assert not _legit_stablecoin_contract(Chain.arbitrum, "0xb4094bd2ba706361ee9064f97a3bfaaf9b2f7715")
+    assert not _legit_stablecoin_contract(Chain.arbitrum, None)

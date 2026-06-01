@@ -938,3 +938,74 @@ def test_select_traced_inbound_all_priced_dust_picks_largest() -> None:
 def test_select_traced_inbound_empty_is_none() -> None:
     from recupero.trace.tracer import _select_traced_inbound
     assert _select_traced_inbound([], Decimal("10")) is None
+
+
+# ---- v0.34.1: follow the UNPRICED same-asset leg too (Zigha msyrupUSDp gap) ----
+
+
+def test_select_traced_inbounds_includes_unpriced_leg() -> None:
+    """The Zigha case: a hub receives a tiny PRICED ETH leg + a large UNPRICED
+    msyrupUSDp leg. The matcher must trace BOTH — the priced primary AND the
+    unpriced leg — so the exact same-asset onward hop (unpriced) is followed."""
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbounds
+    eth = SimpleNamespace(usd_value_at_tx=Decimal("2161"), amount_decimal=Decimal("0.477"))
+    msyrup = SimpleNamespace(usd_value_at_tx=None, amount_decimal=Decimal("3109861.72"))
+    out = _select_traced_inbounds([eth, msyrup], Decimal("10"))
+    assert eth in out and msyrup in out
+    assert out[0] is eth  # priced primary first
+    assert len(out) == 2
+
+
+def test_select_traced_inbounds_no_duplicate_when_primary_unpriced() -> None:
+    """When every priced leg is dust, the primary IS the largest unpriced leg —
+    it must not be added a second time."""
+    from types import SimpleNamespace
+
+    from recupero.trace.tracer import _select_traced_inbounds
+    dust = SimpleNamespace(usd_value_at_tx=Decimal("3"), amount_decimal=Decimal("3"))
+    real = SimpleNamespace(usd_value_at_tx=None, amount_decimal=Decimal("3000000"))
+    out = _select_traced_inbounds([dust, real], Decimal("10"))
+    assert out == [real]
+
+
+def test_select_traced_inbounds_empty() -> None:
+    from recupero.trace.tracer import _select_traced_inbounds
+    assert _select_traced_inbounds([], Decimal("10")) == []
+
+
+# ---- v0.34.1: dead-end detection (coverage honesty) ----
+
+
+def _tok(contract: str | None, symbol: str):
+    from types import SimpleNamespace
+    return SimpleNamespace(contract=contract, symbol=symbol)
+
+
+def _xfer(token):
+    from types import SimpleNamespace
+    return SimpleNamespace(token=token)
+
+
+def test_node_forwarded_inbound_asset_same_contract_true() -> None:
+    from recupero.trace.tracer import _node_forwarded_inbound_asset
+    inbound = _xfer(_tok("0x2fe058cc", "msyrupUSDp"))
+    outs = [_xfer(_tok("0xdead", "USDC")), _xfer(_tok("0x2FE058CC", "msyrupUSDp"))]
+    assert _node_forwarded_inbound_asset(inbound, outs) is True
+
+
+def test_node_forwarded_inbound_asset_different_asset_false() -> None:
+    """A resting terminal: the node received msyrupUSDp but only forwards OTHER
+    assets (its own unrelated activity) → NOT a dead-end."""
+    from recupero.trace.tracer import _node_forwarded_inbound_asset
+    inbound = _xfer(_tok("0x2fe058cc", "msyrupUSDp"))
+    outs = [_xfer(_tok("0xdead", "USDC")), _xfer(_tok("0xbeef", "PENDLE"))]
+    assert _node_forwarded_inbound_asset(inbound, outs) is False
+
+
+def test_node_forwarded_inbound_asset_native_symbol_match() -> None:
+    from recupero.trace.tracer import _node_forwarded_inbound_asset
+    inbound = _xfer(_tok(None, "ETH"))
+    assert _node_forwarded_inbound_asset(inbound, [_xfer(_tok(None, "ETH"))]) is True
+    assert _node_forwarded_inbound_asset(inbound, [_xfer(_tok("0xabc", "WETH"))]) is False

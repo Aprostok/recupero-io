@@ -475,6 +475,12 @@ def run_trace(
     )
     inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
+    # v0.34.1 coverage-honesty: directed (value-trace) nodes that MOVED funds
+    # onward (had outflows) but where we followed NOTHING — a potential
+    # incompleteness (an onward hop we couldn't match: below tolerance, an
+    # unpriced cross-asset conversion, etc.). Distinct from a true resting
+    # terminal (no outflows). Feeds coverage.complete=False + a recommendation.
+    _value_dead_ends: list[dict[str, Any]] = []
 
     # v0.34: the per-transfer enqueue decision, factored out so the normal
     # breadth-first path AND the value-matched service-wallet path share the
@@ -614,26 +620,64 @@ def run_trace(
             _inbounds = inbound_by_key.get(
                 _address_visited_key(chain, from_addr)
             ) or []
-            inbound_t = _select_traced_inbound(
+            # v0.34.1: trace the largest priced leg AND the largest UNPRICED leg
+            # (an exact same-asset match must be followed even when the asset has
+            # no price — e.g. the stolen funds arrived as unpriced msyrupUSDp).
+            _traced_inbounds = _select_traced_inbounds(
                 _inbounds, policy.dust_threshold_usd,
             )
             directed = (
                 _value_trace_enabled
-                and inbound_t is not None
+                and bool(_traced_inbounds)
                 and depth + 1 < policy.max_depth
             )
 
             if directed:
                 # Keep ONLY the matched money-path hop(s) on the case — not the
-                # node's full (possibly commingled) outflow set.
-                followed, matched_transfers = _value_match_and_enqueue(
-                    inbound_transfer=inbound_t,
-                    node_outflows=hop_transfers,
-                    parent_depth=depth,
-                    node_addr=from_addr,
-                    enqueue_fn=_consider_enqueue,
-                    provenance_sink=value_matched,
-                )
+                # node's full (possibly commingled) outflow set. Match each
+                # traced inbound leg; dedup the followed hops (the priced + the
+                # unpriced leg can land on the same outflow).
+                followed = 0
+                matched_transfers: list[Transfer] = []
+                _seen_hops: set[tuple[str, str]] = set()
+                for _inb in _traced_inbounds:
+                    _f, _matched = _value_match_and_enqueue(
+                        inbound_transfer=_inb,
+                        node_outflows=hop_transfers,
+                        parent_depth=depth,
+                        node_addr=from_addr,
+                        enqueue_fn=_consider_enqueue,
+                        provenance_sink=value_matched,
+                    )
+                    followed += _f
+                    for _mt in _matched:
+                        _hk = (_mt.tx_hash, (_mt.to_address or "").lower())
+                        if _hk in _seen_hops:
+                            continue
+                        _seen_hops.add(_hk)
+                        matched_transfers.append(_mt)
+                # Coverage honesty: this node FORWARDED THE SAME ASSET it
+                # received but we followed NOTHING — a real incompleteness (the
+                # asset moved onward and our matcher missed it: a split past
+                # tolerance, a conversion, a poison-obscured hop). A true resting
+                # terminal (no same-asset outflow) is NOT flagged — that's where
+                # the funds legitimately sit.
+                if followed == 0 and hop_transfers and _node_forwarded_inbound_asset(
+                    _traced_inbounds[0], hop_transfers
+                ):
+                    _ib0 = _traced_inbounds[0]
+                    _itok = getattr(_ib0, "token", None)
+                    _value_dead_ends.append({
+                        "address": from_addr,
+                        "depth": depth,
+                        "inbound_token": (
+                            (getattr(_itok, "symbol", None) or "").upper() or None
+                            if _itok else None
+                        ),
+                        "inbound_amount": str(_ib0.amount_decimal or ""),
+                        "inbound_unpriced": _ib0.usd_value_at_tx is None,
+                        "node_outflow_count": len(hop_transfers),
+                    })
                 all_transfers.extend(matched_transfers)
                 # Finalize: write evidence for the matched hop(s). (The
                 # service-wallet lightweight pass skipped per-outflow evidence;
@@ -887,7 +931,9 @@ def run_trace(
         ))
     except (TypeError, ValueError):
         _resolved_addr_cap = config.trace.max_transfers_per_address
-    _coverage_reduced = bool(_cap_truncations) or bool(_poison_events)
+    _coverage_reduced = (
+        bool(_cap_truncations) or bool(_poison_events) or bool(_value_dead_ends)
+    )
     # v0.34 (coverage-honesty hardening): a trace that fetched ZERO transfers
     # is NEVER "complete" — it is almost always an API key/access failure
     # (invalid or rate-limited key returning NOTOK), a wrong seed/incident
@@ -908,15 +954,28 @@ def run_trace(
             "on this case."
         )
     elif _coverage_reduced:
+        _dead_end_note = (
+            (f" Additionally, {len(_value_dead_ends)} node(s) FORWARDED the "
+             "traced asset onward but no onward hop could be matched (a split "
+             "past tolerance, an asset conversion, or a poison-obscured hop) — "
+             "the trail continues beyond what is recorded at: "
+             + ", ".join(
+                 f"{d['address']}"
+                 f"{' [' + d['inbound_token'] + ']' if d.get('inbound_token') else ''}"
+                 for d in _value_dead_ends[:5]
+             )
+             + ("…" if len(_value_dead_ends) > 5 else "") + ".")
+            if _value_dead_ends else ""
+        )
         _recommendation = (
-            "Coverage may be INCOMPLETE: address-poisoning and/or a "
-            "per-address fetch cap was in effect, so funds split below "
-            "the dust floor, sent beyond the fetch cap, or routed past "
-            "the depth limit can be missed. Before relying on "
-            "completeness for asset recovery, re-run recall-complete "
-            "(e.g. --max-depth 8 --dust-threshold-usd 50 with "
-            "RECUPERO_MAX_TRANSFERS_PER_ADDRESS=0), ideally on a paid "
-            "API tier."
+            "Coverage may be INCOMPLETE: address-poisoning, a per-address fetch "
+            "cap, and/or an unmatched onward hop was in effect, so funds split "
+            "below the dust floor, sent beyond the fetch cap, routed past the "
+            "depth limit, or moved through a conversion the matcher could not "
+            "follow can be missed. Before relying on completeness for asset "
+            "recovery, re-run recall-complete (e.g. --max-depth 8 "
+            "--dust-threshold-usd 50 with RECUPERO_MAX_TRANSFERS_PER_ADDRESS=0), "
+            "ideally on a paid API tier." + _dead_end_note
         )
     else:
         _recommendation = ""
@@ -943,6 +1002,10 @@ def run_trace(
             # (medium/low — never high) + the match basis, so the deliverable
             # can present them as INFERENCE leads, not asserted identity.
             "value_matched_hops": list(value_matched),
+            # v0.34.1: nodes that forwarded the traced asset onward but where no
+            # onward hop could be matched (a real incompleteness — the trail
+            # continues beyond what's recorded). Flips complete=False.
+            "value_dead_ends": list(_value_dead_ends),
             "reduced_parameters": {
                 "max_depth": int(cfg_max_depth),
                 "dust_threshold_usd": float(config.trace.dust_threshold_usd),
@@ -1862,6 +1925,63 @@ def _select_traced_inbound(
             t.usd_value_at_tx if t.usd_value_at_tx is not None else Decimal(0)
         ),
     )
+
+
+def _select_traced_inbounds(
+    inbounds: list[Transfer], dust_threshold_usd: Decimal
+) -> list[Transfer]:
+    """The inbound leg(s) to trace onward from a node (v0.34.1).
+
+    Returns the primary (``_select_traced_inbound``) AND, when distinct, the
+    largest UNPRICED inbound by token amount. Rationale: an EXACT same-asset
+    onward match is the strongest signal the matcher has and must be followed
+    even when the asset has no price — otherwise a hub that received the stolen
+    funds as an unpriced token (e.g. Midas msyrupUSDp) while also receiving a
+    tiny priced ETH-dust leg gets traced on the dust (priced legs win
+    ``_select_traced_inbound``), the unpriced same-asset forward is never
+    evaluated, and the trace dead-ends one hop short of the resting wallet.
+    Following BOTH legs is bounded: same-asset matching only fires on an exact
+    amount match, so this adds the real onward hop, not a fan-out.
+    """
+    if not inbounds:
+        return []
+    primary = _select_traced_inbound(inbounds, dust_threshold_usd)
+    out: list[Transfer] = [primary] if primary is not None else []
+    unpriced = [
+        t for t in inbounds
+        if t.usd_value_at_tx is None and (t.amount_decimal or Decimal(0)) > 0
+    ]
+    if unpriced:
+        big_unpriced = max(unpriced, key=lambda t: t.amount_decimal or Decimal(0))
+        if big_unpriced is not primary:
+            out.append(big_unpriced)
+    return out
+
+
+def _node_forwarded_inbound_asset(
+    inbound: Transfer, node_outflows: list[Transfer]
+) -> bool:
+    """True if the node emitted an outflow of the SAME on-chain asset it received
+    on ``inbound`` (matched by contract when known, else symbol). Used to tell a
+    real value-trace dead-end (the asset moved onward but no hop matched) from a
+    legitimate resting terminal (no same-asset outflow — the funds sit here)."""
+    itok = getattr(inbound, "token", None)
+    if itok is None:
+        return False
+    ic = (getattr(itok, "contract", None) or "").lower()
+    isym = (getattr(itok, "symbol", None) or "").upper()
+    for t in node_outflows:
+        tok = getattr(t, "token", None)
+        if tok is None:
+            continue
+        c = (getattr(tok, "contract", None) or "").lower()
+        s = (getattr(tok, "symbol", None) or "").upper()
+        if ic and c:
+            if c == ic:
+                return True
+        elif isym and s == isym:
+            return True
+    return False
 
 
 def _value_match_and_enqueue(

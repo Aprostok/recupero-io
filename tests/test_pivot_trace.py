@@ -108,6 +108,52 @@ def test_unpriced_transfers_ignored() -> None:
     assert pivot_trace.identify_pivot_hub(case) is None
 
 
+def _t_tok(to, amount, symbol, *, usd=None, depth=1, is_contract=False):
+    return SimpleNamespace(
+        to_address=to, from_address="0xseed",
+        usd_value_at_tx=None if usd is None else Decimal(str(usd)),
+        amount_decimal=Decimal(str(amount)),
+        token=SimpleNamespace(symbol=symbol, contract=None),
+        chain=Chain.ethereum, hop_depth=depth,
+        counterparty=SimpleNamespace(is_contract=is_contract, label=None),
+    )
+
+
+def test_unpriced_exotic_token_hub_via_fallback() -> None:
+    """v0.34.2 Zigha fix: the hub received 3.1M msyrupUSDp (UNPRICED Midas
+    token) + only dust priced — no hub clears the priced floor, so the unpriced
+    fallback identifies the hub by its large unpriced inbound. Without this the
+    pivot never fires and the cross-chain branch is unreachable."""
+    case = _case([
+        _t_tok("0xHUB0000000000000000000000000000000000aa", 3_109_861, "msyrupUSDp"),
+        _t("0xdust00000000000000000000000000000000bb22", 2_218),  # below floor
+    ])
+    hub = pivot_trace.identify_pivot_hub(case, min_usd=Decimal("50000"))
+    assert hub is not None
+    assert hub[0] == "0xHUB0000000000000000000000000000000000aa"
+
+
+def test_unpriced_homoglyph_poison_not_a_hub() -> None:
+    """A large UNPRICED homoglyph-poison inbound (Lisu "USDC") must NEVER be
+    chosen as the pivot hub — we must not pivot on address-poisoning spam."""
+    case = _case([
+        _t_tok("0xpoison0000000000000000000000000000000c1", 9_999_999, "ꓴꓢꓓС"),
+    ])
+    assert pivot_trace.identify_pivot_hub(case) is None
+
+
+def test_priced_hub_still_preferred_over_unpriced() -> None:
+    """When a priced hub clears the floor, it wins — the unpriced fallback only
+    engages when NO priced hub qualifies (behavior preserved)."""
+    case = _case([
+        _t("0xPRICED0000000000000000000000000000000d1", 5_000_000),
+        _t_tok("0xUNPRICED00000000000000000000000000000d2", 9_999_999, "msyrupUSDp"),
+    ])
+    hub = pivot_trace.identify_pivot_hub(case, min_usd=Decimal("50000"))
+    assert hub is not None
+    assert hub[0] == "0xPRICED0000000000000000000000000000000d1"
+
+
 # --------------------------- resolve_pivot_chains ---------------------------
 
 

@@ -314,3 +314,33 @@ def test_merge_appends_pass2_transfers() -> None:
     # hub was at depth 0 in pass-1; pass-2 transfer (depth 0)
     # becomes depth 0 + 0 + 1 = 1 in merged.
     assert pass2_xfer.hop_depth == 1
+
+
+def test_merge_propagates_pass2_bridge_confirmations_and_coverage() -> None:
+    """v0.34.2: the pivot sub-trace's cryptographic bridge confirmations + the
+    coverage flags must surface in the MERGED case's config_used — that proof
+    drove the cross-chain reach and the brief/validator need to see it (and a
+    pass-2 incompleteness must flip the merged coverage to incomplete)."""
+    seed = "0x" + "a" * 40
+    hub = "0x" + "b" * 40
+    pass1 = _case_one_hub(seed=seed, hub=hub, inflow_usd=Decimal("100"))
+    pass1.config_used = {"coverage": {"complete": True}}
+    pass2 = _mk_case(seed=hub, transfers=[
+        _mk_transfer(from_addr=hub, to_addr="0x" + "c" * 40,
+                     usd=Decimal("100000"), tx_suffix="9", block=2),
+    ])
+    pass2.config_used = {
+        "bridge_confirmations": [
+            {"protocol": "DeBridge", "order_id": "0xabc", "dst_chain": "ethereum"},
+        ],
+        "coverage": {"complete": False,
+                     "value_matched_hops": [{"kind": "same_asset_amount"}]},
+    }
+    merged = merge_perpetrator_findings(pass1, [pass2])
+    confs = merged.config_used.get("bridge_confirmations") or []
+    assert len(confs) == 1 and confs[0]["order_id"] == "0xabc"
+    cov = merged.config_used["coverage"]
+    assert cov["complete"] is False          # pass-2 incompleteness propagates
+    assert len(cov["value_matched_hops"]) == 1
+    assert "arbitrum" not in merged.config_used.get("pivot_chains_merged", []) or True
+    assert merged.config_used["pivot_chains_merged"] == ["ethereum"]

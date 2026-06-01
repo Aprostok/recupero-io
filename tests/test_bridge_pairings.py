@@ -98,7 +98,9 @@ class _FakeDstAdapter:
 def test_registry_resolves_debridge_by_label_substring() -> None:
     assert get_pair_spec("deBridge DLN Source") is not None
     assert get_pair_spec("DeBridge") is not None
-    assert get_pair_spec("Wormhole") is None        # not in verified core yet
+    assert get_pair_spec("Connext") is not None     # v0.34 verified-core addition
+    assert get_pair_spec("Wormhole") is not None    # v0.34 verified-core addition
+    assert get_pair_spec("Stargate") is None        # not in verified core yet
     assert get_pair_spec(None) is None
 
 
@@ -834,3 +836,224 @@ def test_confirm_bridge_handoffs_source_fetch_failure_skips(monkeypatch) -> None
         incident_time=datetime(2025, 10, 9, tzinfo=UTC),
     )
     assert out == []
+
+
+# ===================== Connext (indexed bytes32 transferId) =================
+# Verified real pair: Optimism XCalled 0x32771f01… → Arbitrum Executed
+# 0xdae39d21…, shared transferId 0x8956f897…dbbb7 (topic1 on both), confirmed
+# live on-chain.
+CX_XCALLED = "0xed8e6ba697dd65259e5ce532ac08ff06d1a3607bcec58f8f0937fe36a5666c54"
+CX_EXECUTED = "0x0b07a8b0b083f8976b3c832b720632f49cb8ba1e7a99e1b145f51a47d3391cb7"
+CX_OP = "0x8f7492de823025b4cfaab1d34c58963f2af5deda"
+CX_ARB = "0xee9dec2712cce65174b561151701bf54b99c24c8"
+CX_TID = "0x8956f897c7ca4e20e79bdb0669bacc7294efacd60333b5c887aa6af2a2edbbb7"
+CX_RECIPIENT = "0x" + "c4" * 20
+CX_ASSET = "0x" + "da" * 20
+CX_AMOUNT = 1_539_955_817_518_630_532_500
+
+
+def _cx_source_receipt(tid: str = CX_TID) -> dict[str, Any]:
+    # XCalled(bytes32 transferId, uint256 nonce, bytes32 messageHash, ...):
+    # transferId is indexed topic1.
+    return {"logs": [{
+        "address": CX_OP,
+        "topics": [CX_XCALLED, tid, _padint(7), "0x" + "ab" * 32],
+        "data": "0x",
+    }]}
+
+
+def _cx_executed_log(tid: str = CX_TID, tx: str = "0xcxfill") -> dict[str, Any]:
+    # Executed(bytes32 transferId, address to, address asset, ...).
+    return {
+        "address": CX_ARB,
+        "topics": [CX_EXECUTED, tid, _topic_addr(CX_RECIPIENT), _topic_addr(CX_ASSET)],
+        "data": "0x",
+        "transactionHash": tx,
+    }
+
+
+class _FakeConnextAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if address.lower() == CX_ARB and topic0.lower() == CX_EXECUTED:
+            want = topics[0].lower() if topics and topics[0] else None  # transferId@topic1
+            return [lg for lg in self._logs
+                    if want is None or lg["topics"][1].lower() == want]
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": [{
+            "address": CX_ASSET,
+            "topics": [ERC20_TRANSFER, _topic_addr(CX_ARB), _topic_addr(CX_RECIPIENT)],
+            "data": hex(CX_AMOUNT),
+        }]})
+
+
+def test_connext_registry_and_extract() -> None:
+    spec = get_pair_spec("Connext")
+    assert spec is not None
+    assert spec.dest_contract_for("arbitrum") == CX_ARB
+    assert extract_source_order_id(spec, _cx_source_receipt()) == CX_TID
+
+
+def test_connext_confirm_transferid_match_high() -> None:
+    adapter = _FakeConnextAdapter([_cx_executed_log()])
+    out = confirm_bridge_destination(
+        protocol="Connext", destination_chain="arbitrum",
+        source_receipt=_cx_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 6, 1, tzinfo=UTC), source_chain="optimism",
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id == CX_TID
+    assert out.dst_tx == "0xcxfill"
+    assert (out.recipient or "").lower() == CX_RECIPIENT
+
+
+def test_connext_tampered_transferid_returns_none() -> None:
+    adapter = _FakeConnextAdapter([_cx_executed_log(tid="0x" + "cd" * 32)])
+    out = confirm_bridge_destination(
+        protocol="Connext", destination_chain="arbitrum",
+        source_receipt=_cx_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 6, 1, tzinfo=UTC), source_chain="optimism",
+    )
+    assert out is None
+
+
+def test_connext_identify_source() -> None:
+    ident = identify_source(_cx_source_receipt())
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Connext"
+    assert oid == CX_TID
+    assert dest_chain is None  # Connext dest domain lives in params DATA, not a topic
+
+
+# ===================== Wormhole (VAA composite key) =========================
+# Verified real pair: Arbitrum LogMessagePublished 0xd60d0825… (emitter
+# 0x…0b2402144…, seq 328729) → Ethereum TransferRedeemed 0xb4cec59b… (chainId
+# 23, same emitter, seq 328729), confirmed live on-chain.
+WH_LMP = "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
+WH_TR = "0xcaf280c8cfeba144da67230d9b009c8f868a75bac9a528fa0474be1ba317c169"
+WH_ARB_CORE = "0xa5f208e072434bc67592e4c49c1b991ba79bca46"
+WH_ETH_TOKEN = "0x3ee18b2214aff97000d974cf647e7c347e8fa585"
+WH_EMITTER = "0x0b2402144bb366a632d14b83f244d2e0e21bd39c"  # arbitrum token bridge
+WH_SEQ = 328729
+WH_ARB_ID = 23  # Wormhole internal chain id for arbitrum
+WH_RECIPIENT = "0x" + "ee" * 20
+WH_AMOUNT = 4_434_939_804_320_000_000_000
+
+
+def _wh_source_receipt(seq: int = WH_SEQ, emitter: str = WH_EMITTER) -> dict[str, Any]:
+    # LogMessagePublished(address sender, uint64 sequence, ...): sender indexed
+    # topic1; sequence is data word 0.
+    return {"logs": [{
+        "address": WH_ARB_CORE,
+        "topics": [WH_LMP, _topic_addr(emitter)],
+        "data": _padint(seq),
+    }]}
+
+
+def _wh_redeemed_log(chain_id: int = WH_ARB_ID, emitter: str = WH_EMITTER,
+                     seq: int = WH_SEQ, tx: str = "0xwhfill") -> dict[str, Any]:
+    # TransferRedeemed(uint16 emitterChainId, bytes32 emitterAddress, uint64 sequence)
+    return {
+        "address": WH_ETH_TOKEN,
+        "topics": [WH_TR, _padint(chain_id), _topic_addr(emitter), _padint(seq)],
+        "data": "0x",
+        "transactionHash": tx,
+    }
+
+
+class _FakeWormholeAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if address.lower() == WH_ETH_TOKEN and topic0.lower() == WH_TR:
+            # server-side filter on sequence (dest_id_topic=3 → topics index 2)
+            want = topics[2].lower() if topics and len(topics) > 2 and topics[2] else None
+            return [lg for lg in self._logs
+                    if want is None or lg["topics"][3].lower() == want]
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": [{
+            "address": "0x" + "fe" * 20,
+            "topics": [ERC20_TRANSFER, _topic_addr(WH_ETH_TOKEN), _topic_addr(WH_RECIPIENT)],
+            "data": hex(WH_AMOUNT),
+        }]})
+
+
+def test_wormhole_registry_and_extract() -> None:
+    spec = get_pair_spec("Wormhole")
+    assert spec is not None
+    assert spec.dest_contract_for("ethereum") == WH_ETH_TOKEN
+    # source order-id = sequence (data word 0)
+    assert int(extract_source_order_id(spec, _wh_source_receipt()), 16) == WH_SEQ
+
+
+def test_wormhole_confirm_composite_match_high() -> None:
+    adapter = _FakeWormholeAdapter([_wh_redeemed_log()])
+    out = confirm_bridge_destination(
+        protocol="Wormhole", destination_chain="ethereum",
+        source_receipt=_wh_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 6, 1, tzinfo=UTC), source_chain="arbitrum",
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert int(out.order_id, 16) == WH_SEQ
+    assert out.dst_tx == "0xwhfill"
+    assert (out.recipient or "").lower() == WH_RECIPIENT
+
+
+def test_wormhole_wrong_emitter_returns_none() -> None:
+    """Same sequence + same emitterChainId but a DIFFERENT emitter → NOT our VAA.
+    This is the composite-key uniqueness guard: sequence alone is per-emitter, so
+    the emitterAddress must match the source emitter."""
+    adapter = _FakeWormholeAdapter([_wh_redeemed_log(emitter="0x" + "99" * 20)])
+    out = confirm_bridge_destination(
+        protocol="Wormhole", destination_chain="ethereum",
+        source_receipt=_wh_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 6, 1, tzinfo=UTC), source_chain="arbitrum",
+    )
+    assert out is None
+
+
+def test_wormhole_wrong_origin_chain_returns_none() -> None:
+    """Right emitter+sequence but the dest emitterChainId says a different source
+    chain → reject (the source chain must map to the redeem's emitterChainId)."""
+    adapter = _FakeWormholeAdapter([_wh_redeemed_log(chain_id=2)])  # ethereum, not arbitrum
+    out = confirm_bridge_destination(
+        protocol="Wormhole", destination_chain="ethereum",
+        source_receipt=_wh_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 6, 1, tzinfo=UTC), source_chain="arbitrum",
+    )
+    assert out is None
+
+
+def test_wormhole_tampered_sequence_returns_none() -> None:
+    adapter = _FakeWormholeAdapter([_wh_redeemed_log(seq=999_999)])
+    out = confirm_bridge_destination(
+        protocol="Wormhole", destination_chain="ethereum",
+        source_receipt=_wh_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 6, 1, tzinfo=UTC), source_chain="arbitrum",
+    )
+    assert out is None
+
+
+def test_wormhole_identify_source() -> None:
+    ident = identify_source(_wh_source_receipt())
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "Wormhole"
+    assert int(oid, 16) == WH_SEQ
+    assert dest_chain is None  # WH dest chain is in the VAA payload, not a source topic

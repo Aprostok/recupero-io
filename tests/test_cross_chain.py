@@ -89,7 +89,7 @@ def test_ingest_handles_flat_array_schema() -> None:
     # Wormhole, Stargate, Hop should all be present.
     addresses = {addr for (_chain, addr) in db.keys()}
     # Wormhole token bridge — lowercased
-    assert any("3ee18b2214aff97000d974cf647e54347ae7c7e4" in addr
+    assert any("3ee18b2214aff97000d974cf647e7c347e8fa585" in addr
                for addr in addresses)
 
 
@@ -165,7 +165,7 @@ def test_identify_detects_wormhole_handoff() -> None:
     """A transfer landing at the Wormhole Token Bridge gets
     surfaced as a CrossChainHandoff."""
     # Wormhole Token Bridge address from the seed file.
-    wormhole = "0x3ee18b2214aff97000d974cf647e54347ae7c7e4"
+    wormhole = "0x3ee18b2214aff97000d974cf647e7c347e8fa585"
     case = _mk_case([
         _mk_transfer(
             from_addr="0x" + "a" * 40, to_addr=wormhole,
@@ -187,7 +187,7 @@ def test_identify_dedups_multiple_transfers_to_same_bridge() -> None:
     """A single tx may emit multiple ERC-20 Transfer events to
     the same bridge — dedup on (tx, bridge) so the brief shows
     one handoff per transaction, not one per Transfer event."""
-    wormhole = "0x3ee18b2214aff97000d974cf647e54347ae7c7e4"
+    wormhole = "0x3ee18b2214aff97000d974cf647e7c347e8fa585"
     case = _mk_case([
         _mk_transfer(
             from_addr="0x" + "a" * 40, to_addr=wormhole,
@@ -210,7 +210,7 @@ def test_identify_dedups_multiple_transfers_to_same_bridge() -> None:
 def test_identify_sorts_by_amount_desc() -> None:
     """Largest handoff first — investigator workflow priority.
     Big amounts get attention before small ones."""
-    wormhole = "0x3ee18b2214aff97000d974cf647e54347ae7c7e4"
+    wormhole = "0x3ee18b2214aff97000d974cf647e7c347e8fa585"
     stargate = "0x8731d54e9d02c286767d56ac03e8037c07e01e98"
     case = _mk_case([
         _mk_transfer(
@@ -237,7 +237,7 @@ def test_identify_handles_null_usd_value() -> None:
     """Transfer with no usd_value_at_tx (pricing failed) still
     surfaces as a handoff — just sorts last. Failing-to-price
     a bridge transfer shouldn't make us miss the bridge."""
-    wormhole = "0x3ee18b2214aff97000d974cf647e54347ae7c7e4"
+    wormhole = "0x3ee18b2214aff97000d974cf647e7c347e8fa585"
     case = _mk_case([
         _mk_transfer(
             from_addr="0x" + "a" * 40, to_addr=wormhole, usd=None,
@@ -255,7 +255,7 @@ def test_brief_section_shape() -> None:
     """Locked: each handoff in the brief JSON has the keys
     downstream consumers (AI editorial prompt + brief template)
     bind to."""
-    wormhole = "0x3ee18b2214aff97000d974cf647e54347ae7c7e4"
+    wormhole = "0x3ee18b2214aff97000d974cf647e7c347e8fa585"
     case = _mk_case([
         _mk_transfer(
             from_addr="0x" + "a" * 40, to_addr=wormhole,
@@ -298,7 +298,7 @@ def test_investigator_note_includes_actionable_info() -> None:
     destination chain candidates, follow-up URL, block time
     range. Lock the content so a future 'let's reword' doesn't
     accidentally drop the actionable bits."""
-    wormhole = "0x3ee18b2214aff97000d974cf647e54347ae7c7e4"
+    wormhole = "0x3ee18b2214aff97000d974cf647e7c347e8fa585"
     case = _mk_case([
         _mk_transfer(
             from_addr="0x" + "a" * 40, to_addr=wormhole,

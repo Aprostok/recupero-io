@@ -59,7 +59,25 @@ confirmed against a **real on-chain source+destination pair** live in
   distinctive `CCIPSendRequested` topic0 alone; the destination chain comes from
   the Router `ccipSend` calldata (selector→chain via `_CCIP_CHAIN_SELECTORS`).
 
-All six are live-confirmed end-to-end via `confirm-bridge`.
+* **indexed bytes32 id, per-chain contract** — **Connext (Amarok)**
+  (`XCalled.transferId` (topic1) == `Executed.transferId` (topic1), both indexed
+  bytes32 — verified Optimism→Arbitrum, shared transferId `0x8956f897…`). One
+  diamond per chain; the destinationDomain is a Connext domain id (not an EVM
+  chain id) in the `params` DATA, so the dest chain is supplied by the caller /
+  calldata decode, not read from a source topic.
+* **VAA composite key** — **Wormhole** token bridge (the VAA identity
+  `(emitterChainId, emitterAddress, sequence)`: source `LogMessagePublished`
+  carries emitter=topic1 + sequence=data word 0; dest `TransferRedeemed` carries
+  emitterChainId=topic1, emitterAddress=topic2, sequence=topic3 — verified
+  Arbitrum→Ethereum, emitter `0x…0b2402144…` seq 328729 chainId 23). The sequence
+  is filtered server-side; emitterChainId (matched via the Wormhole-internal
+  chain-id map, NOT the EVM id) + emitterAddress are checked client-side so a
+  colliding sequence on a different emitter is rejected.
+
+All eight are live-confirmed end-to-end (DLN/Across/Celer/Hop/Synapse/CCIP via
+`confirm-bridge`; Connext + Wormhole via the engine on their verified real pairs —
+the `confirm-bridge` CLI needs the destination chain supplied for these two,
+since neither stamps an EVM dest chain-id on the source event).
 
 Protocol + order-id + destination chain are resolved from the source tx's EVENT
 LOGS (`identify_source`), not the tx `to` — robust to periphery/multicall
@@ -146,8 +164,9 @@ key.
 
 ## Candidate protocols to add next (each needs the recipe above)
 
-Stargate/LayerZero, Wormhole, Connext, Axelar, Squid, Symbiosis,
-Allbridge, Mayan, Orbiter — plus the
-canonical rollup bridges (Arbitrum/Optimism/Base/Polygon/zkSync), whose deposits
-are deterministic (L2 mint to the depositor) and confirmable by
-`(depositor, token, amount, window)`.
+Stargate/LayerZero (nonce + srcChainId + srcAddress composite — LayerZero
+`PacketReceived`; recipe-ready, not yet verified against a real pair this round),
+Axelar (command-id / `ContractCallApproved`; recipe-ready), Squid (routes through
+Axelar), Symbiosis, Allbridge, Mayan, Orbiter — plus the canonical rollup bridges
+(Arbitrum/Optimism/Base/Polygon/zkSync), whose deposits are deterministic (L2 mint
+to the depositor) and confirmable by `(depositor, token, amount, window)`.

@@ -28,15 +28,6 @@
     "chain": "ethereum"
   },
   {
-    "address": "0x3ee18B2214AFF97000D974cf647E54347AE7C7E4",
-    "name": "Wormhole: Token Bridge",
-    "category": "bridge",
-    "source": "wormhole_docs",
-    "confidence": "high",
-    "added_at": "2025-01-01T00:00:00Z",
-    "chain": "ethereum"
-  },
-  {
     "address": "0x98f3c9e6E3fAce36bAAd05FE09d375Ef1464288B",
     "name": "Wormhole: Core Bridge",
     "category": "bridge",

@@ -51,6 +51,19 @@ _REAL_CHAIN_ID: dict[str, int] = {
 }
 _CHAIN_BY_REAL_ID: dict[int, str] = {v: k for k, v in _REAL_CHAIN_ID.items()}
 
+#: chain value → Wormhole INTERNAL chain id (NOT the EVM chain id). Wormhole
+#: stamps the source chain as this id in the destination TransferRedeemed's
+#: emitterChainId topic. Source: https://wormhole.com/docs/products/reference/chain-ids/
+_WH_CHAIN_ID: dict[str, int] = {
+    "ethereum": 2,
+    "bsc": 4,
+    "polygon": 5,
+    "avalanche": 6,
+    "arbitrum": 23,
+    "optimism": 24,
+    "base": 30,
+}
+
 
 @dataclass(frozen=True)
 class BridgePairSpec:
@@ -122,6 +135,21 @@ class BridgePairSpec:
     # raw-amount conservation is then meaningless and is NOT checked (we never
     # fabricate a violation from an apples-to-oranges comparison).
     same_asset: bool = True
+    # v0.34 Wormhole composite shape — the cross-chain key is the VAA identity
+    # (emitterChainId, emitterAddress, sequence). ``source_order_id_word`` holds
+    # the sequence (source LogMessagePublished data word 0); ``dest_id_topic``
+    # holds the sequence on the dest fill; ``dest_origin_chain_topic`` holds the
+    # emitterChainId; and these two pin the emitter address:
+    #   * ``source_emitter_topic`` — topic index of the emitter on the SOURCE
+    #     event (Wormhole LogMessagePublished.sender = topic 1),
+    #   * ``dest_emitter_topic`` — topic index of emitterAddress on the dest fill
+    #     (Wormhole TransferRedeemed.emitterAddress = topic 2),
+    # matched so a colliding sequence on a different emitter is rejected.
+    source_emitter_topic: int | None = None
+    dest_emitter_topic: int | None = None
+    # which chain-id namespace the origin-chain match uses: "evm" (real chain id,
+    # Across) or "wormhole" (Wormhole internal chain id, via _WH_CHAIN_ID).
+    chain_id_scheme: str = "evm"
     notes: str = ""
 
     def dest_contract_for(self, chain: str | None) -> str | None:
@@ -355,7 +383,90 @@ _CCIP = BridgePairSpec(
     notes="Chainlink CCIP messageId: CCIPSendRequested data w13 == ExecutionStateChanged topic2 (state==2); verified Eth→BSC + Base→Polygon.",
 )
 
-_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS, _CELER, _HOP, _SYNAPSE, _CCIP)
+# Connext (Amarok) — the transferId is a globally-unique INDEXED bytes32 on both
+# the source `XCalled` (topic1) and the destination `Executed` (topic1). One
+# diamond per chain. VERIFIED real pair: Optimism XCalled
+# 0x32771f01… → Arbitrum Executed 0xdae39d21…, shared transferId
+# 0x8956f897…dbbb7 (both topic1) — confirmed live on-chain.
+_CONNEXT_DIAMONDS: dict[str, str] = {
+    "ethereum": "0x8898b472c54c31894e3b9bb83cea802a5d0e63c6",
+    "optimism": "0x8f7492de823025b4cfaab1d34c58963f2af5deda",
+    "arbitrum": "0xee9dec2712cce65174b561151701bf54b99c24c8",
+    "polygon": "0x11984dc4465481512eb5b777e44061c158cf2259",
+    "base": "0xb8448c6f7f7887d36dca487370778e419e9ebe3f",
+    "bsc": "0xcd401c10afa37d641d2f594852da94c700e4f2ce",
+}
+_CONNEXT = BridgePairSpec(
+    protocol="Connext",
+    source_contracts=frozenset(_CONNEXT_DIAMONDS.values()),
+    source_event_topic0=(  # XCalled(bytes32 transferId, uint256 nonce, bytes32 messageHash, ...)
+        "0xed8e6ba697dd65259e5ce532ac08ff06d1a3607bcec58f8f0937fe36a5666c54"
+    ),
+    source_order_id_topic=1,            # transferId (indexed)
+    dest_contracts=_CONNEXT_DIAMONDS,
+    dest_event_topic0=(  # Executed(bytes32 transferId, address to, address asset, ...)
+        "0x0b07a8b0b083f8976b3c832b720632f49cb8ba1e7a99e1b145f51a47d3391cb7"
+    ),
+    dest_id_topic=1,                    # transferId (indexed) — globally unique, no composite key
+    max_fee_pct=Decimal("1.0"),
+    # Connext receiveLocal/swap can deliver a different (canonical vs nextAsset)
+    # token + router fee — not reliably same-asset.
+    same_asset=False,
+    notes="Connext Amarok XCalled.transferId(topic1)==Executed.transferId(topic1); verified OP→ARB pair.",
+)
+
+# Wormhole token bridge — the cross-chain id is the VAA identity
+# (emitterChainId, emitterAddress, sequence). SOURCE `LogMessagePublished` (Core
+# Bridge) carries the emitter in topic1 (the Token Bridge `sender`) and the
+# sequence in data word 0; DESTINATION `TransferRedeemed` (Token Bridge) carries
+# emitterChainId(topic1), emitterAddress(topic2), sequence(topic3) — all indexed.
+# The sequence is matched server-side; emitterChainId (Wormhole-id of the source
+# chain) + emitterAddress (the source emitter) are checked client-side so a
+# colliding sequence on a different emitter is rejected. VERIFIED real pair:
+# Arbitrum LogMessagePublished 0xd60d0825… (emitter 0x…0b2402144…, seq 328729) →
+# Ethereum TransferRedeemed 0xb4cec59b… (chainId 23, same emitter, seq 328729).
+_WORMHOLE_CORE: dict[str, str] = {
+    "ethereum": "0x98f3c9e6e3face36baad05fe09d375ef1464288b",
+    "bsc": "0x98f3c9e6e3face36baad05fe09d375ef1464288b",
+    "polygon": "0x7a4b5a56256163f07b2c80a7ca55abe66c4ec4d7",
+    "arbitrum": "0xa5f208e072434bc67592e4c49c1b991ba79bca46",
+    "optimism": "0xee91c335eab126df5fdb3797ea9d6ad93aec9722",
+    "base": "0xbebdb6c8ddc678ffa9f8748f85c815c556dd8ac6",
+}
+_WORMHOLE_TOKEN: dict[str, str] = {
+    "ethereum": "0x3ee18b2214aff97000d974cf647e7c347e8fa585",
+    "bsc": "0xb6f6d86a8f9879a9c87f643768d9efc38c1da6e7",
+    "polygon": "0x5a58505a96d1dbf8df91cb21b54419fc36e93fde",
+    "arbitrum": "0x0b2402144bb366a632d14b83f244d2e0e21bd39c",
+    "optimism": "0x1d68124e65fafc907325e3edbf8c4d84499daa8b",
+    "base": "0x8d2de8d2f73f1f4cab472ac9a881c9b123c79627",
+}
+_WORMHOLE = BridgePairSpec(
+    protocol="Wormhole",
+    source_contracts=frozenset(_WORMHOLE_CORE.values()),
+    source_event_topic0=(  # LogMessagePublished(address sender, uint64 sequence, ...)
+        "0x6eb224fb001ed210e379b335e35efe88672a8ce935d981a6896b27ffdf52a3b2"
+    ),
+    source_order_id_word=0,             # sequence (data word 0)
+    source_emitter_topic=1,             # sender = the Token Bridge (VAA emitter)
+    dest_contracts=_WORMHOLE_TOKEN,
+    dest_event_topic0=(  # TransferRedeemed(uint16 emitterChainId, bytes32 emitterAddress, uint64 sequence)
+        "0xcaf280c8cfeba144da67230d9b009c8f868a75bac9a528fa0474be1ba317c169"
+    ),
+    dest_id_topic=3,                    # sequence (indexed) — filtered server-side
+    dest_origin_chain_topic=1,          # emitterChainId (Wormhole id), checked client-side
+    dest_emitter_topic=2,               # emitterAddress, checked == source emitter
+    chain_id_scheme="wormhole",
+    max_fee_pct=Decimal("1.0"),
+    # token bridge wraps/unwraps + normalizes to 8 decimals — amounts not
+    # directly comparable; not same-asset for conservation.
+    same_asset=False,
+    notes="Wormhole VAA (emitterChainId,emitterAddress,sequence): LogMessagePublished→TransferRedeemed; verified ARB→ETH pair.",
+)
+
+_REGISTRY: tuple[BridgePairSpec, ...] = (
+    _DLN, _ACROSS, _CELER, _HOP, _SYNAPSE, _CCIP, _CONNEXT, _WORMHOLE,
+)
 
 
 def get_pair_spec(protocol: str | None) -> BridgePairSpec | None:
@@ -485,6 +596,22 @@ def _has_source_event(spec: BridgePairSpec, raw_receipt: dict[str, Any]) -> bool
         ):
             return True
     return False
+
+
+def _source_event_topic(
+    spec: BridgePairSpec, raw_receipt: dict[str, Any] | None, topic_index: int
+) -> str | None:
+    """Read a topic value off this spec's SOURCE event in the receipt (e.g. the
+    Wormhole emitter on LogMessagePublished.topic1). None if not found."""
+    if not isinstance(raw_receipt, dict):
+        return None
+    for lg in raw_receipt.get("logs") or []:
+        if not isinstance(lg, dict):
+            continue
+        topics = lg.get("topics") or []
+        if _source_event_matches(spec, (lg.get("address") or "").lower(), _topic(topics, 0)):
+            return _topic(topics, topic_index)
+    return None
 
 
 def identify_source(
@@ -689,12 +816,23 @@ def confirm_bridge_destination(
         topics_filter = [None, None, None]
         topics_filter[spec.dest_id_topic - 1] = oid
 
-    # Expected origin-chain-id topic value for the composite shape.
+    # Expected origin-chain-id topic value for the composite shape. The chain-id
+    # namespace is EVM (Across) or Wormhole-internal (Wormhole), per the spec.
     want_origin = None
     if spec.dest_origin_chain_topic is not None and source_chain:
-        cid = _REAL_CHAIN_ID.get(source_chain.lower())
+        cid_map = _WH_CHAIN_ID if spec.chain_id_scheme == "wormhole" else _REAL_CHAIN_ID
+        cid = cid_map.get(source_chain.lower())
         if cid is not None:
             want_origin = "0x" + f"{cid:064x}"
+
+    # Expected emitter topic (Wormhole): the source event's emitter (the VAA
+    # emitterAddress) must equal the dest fill's emitterAddress topic — so a
+    # colliding sequence on a DIFFERENT emitter is rejected.
+    want_emitter = None
+    if spec.dest_emitter_topic is not None and spec.source_emitter_topic is not None:
+        want_emitter = _source_event_topic(
+            spec, source_receipt, spec.source_emitter_topic
+        )
 
     # A protocol may emit the fill under several event signatures (Synapse
     # TokenMint/TokenWithdraw/…). Query each; first id-match wins.
@@ -717,6 +855,10 @@ def confirm_bridge_destination(
                 if want_origin is not None and _topic(
                     lg.get("topics"), spec.dest_origin_chain_topic
                 ) != want_origin:
+                    continue
+                if want_emitter is not None and _topic(
+                    lg.get("topics"), spec.dest_emitter_topic
+                ) != want_emitter:
                     continue
             else:
                 # 32-byte shape: scan the payload (+ topics) for the exact id.

@@ -88,6 +88,9 @@ class _FakeDstAdapter:
     def fetch_evidence_receipt(self, tx_hash: str) -> Any:
         return SimpleNamespace(raw_receipt=_fill_receipt())
 
+    def close(self) -> None:
+        pass
+
 
 # ----------------------------- registry / extract ---------------------------
 
@@ -674,3 +677,118 @@ def test_ccip_identify_source_topic0_only() -> None:
     assert spec.protocol == "CCIP"
     assert oid == CCIP_MSGID
     assert dest_chain is None  # CCIP dest chain comes from the Router calldata
+
+
+# ===================== live-trace wiring (_confirm_bridge_handoffs) ==========
+# tracer._confirm_bridge_handoffs is the bridge between the heuristic cross-chain
+# continuation and the cryptographic oracle: for each handoff with a verified
+# pairing spec it confirms the destination on-chain and returns it for seeding +
+# the Phase-2 report. These lock in the contract the live wiring depends on.
+
+
+def _wiring_handoff(
+    protocol: str = "deBridge DLN Source",
+    dest_chain: str | None = "ethereum",
+) -> Any:
+    return SimpleNamespace(
+        bridge_protocol=protocol,
+        source_tx_hash="0xsrc",
+        source_chain=SimpleNamespace(value="arbitrum"),
+        block_time_iso="2025-10-09T00:00:00Z",
+        decoded_destination_chain=dest_chain,
+    )
+
+
+def _wiring_src_adapter(receipt: dict[str, Any]) -> Any:
+    return SimpleNamespace(
+        fetch_evidence_receipt=lambda tx: SimpleNamespace(
+            raw_receipt=receipt, block_time=datetime(2025, 10, 9, tzinfo=UTC),
+        ),
+    )
+
+
+def test_confirm_bridge_handoffs_records_confirmed_destination(monkeypatch) -> None:
+    """A handoff with a verified spec is cryptographically confirmed via the
+    oracle and returned with its ConfirmedDestination + parsed source time."""
+    from recupero.trace import tracer
+
+    fake_dst = _FakeDstAdapter([_fulfilled_log(ORDER_ID)])
+    monkeypatch.setattr(tracer.ChainAdapter, "for_chain", lambda *a, **k: fake_dst)
+
+    out = tracer._confirm_bridge_handoffs(
+        [_wiring_handoff()],
+        src_adapter=_wiring_src_adapter(_source_receipt(ORDER_ID)),
+        config=object(),
+        env=object(),
+        window_hours=24.0,
+        incident_time=datetime(2025, 10, 9, tzinfo=UTC),
+    )
+    assert len(out) == 1
+    _h, confirmed, sbt = out[0]
+    assert confirmed.order_id == ORDER_ID
+    assert (confirmed.recipient or "").lower() == RECEIVER
+    assert confirmed.dst_chain == "ethereum"
+    assert confirmed.confidence == "high"
+    assert sbt == datetime(2025, 10, 9, tzinfo=UTC)  # parsed from block_time_iso
+
+
+def test_confirm_bridge_handoffs_skips_unknown_protocol(monkeypatch) -> None:
+    """A handoff whose protocol has no verified pairing spec is skipped without
+    even instantiating a destination adapter — no fabricated confirmation."""
+    from recupero.trace import tracer
+
+    def _boom(*a, **k):
+        raise AssertionError("must not instantiate dst adapter for unknown bridge")
+
+    monkeypatch.setattr(tracer.ChainAdapter, "for_chain", _boom)
+    out = tracer._confirm_bridge_handoffs(
+        [_wiring_handoff(protocol="TotallyUnknownBridge")],
+        src_adapter=_wiring_src_adapter({"logs": []}),
+        config=object(),
+        env=object(),
+        window_hours=24.0,
+        incident_time=datetime(2025, 10, 9, tzinfo=UTC),
+    )
+    assert out == []
+
+
+def test_confirm_bridge_handoffs_tampered_dest_not_confirmed(monkeypatch) -> None:
+    """If the destination fill references a DIFFERENT order-id, the handoff is
+    NOT confirmed — the wiring never seeds a false-positive destination."""
+    from recupero.trace import tracer
+
+    fake_dst = _FakeDstAdapter([_fulfilled_log(OTHER_ID)])
+    monkeypatch.setattr(tracer.ChainAdapter, "for_chain", lambda *a, **k: fake_dst)
+    out = tracer._confirm_bridge_handoffs(
+        [_wiring_handoff(protocol="DeBridge")],
+        src_adapter=_wiring_src_adapter(_source_receipt(ORDER_ID)),
+        config=object(),
+        env=object(),
+        window_hours=24.0,
+        incident_time=datetime(2025, 10, 9, tzinfo=UTC),
+    )
+    assert out == []
+
+
+def test_confirm_bridge_handoffs_source_fetch_failure_skips(monkeypatch) -> None:
+    """A source-receipt fetch error degrades to skip (best-effort, never raises)."""
+    from recupero.trace import tracer
+
+    monkeypatch.setattr(
+        tracer.ChainAdapter, "for_chain",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("unreachable")),
+    )
+
+    def _raise(tx):
+        raise RuntimeError("rpc down")
+
+    src = SimpleNamespace(fetch_evidence_receipt=_raise)
+    out = tracer._confirm_bridge_handoffs(
+        [_wiring_handoff()],
+        src_adapter=src,
+        config=object(),
+        env=object(),
+        window_hours=24.0,
+        incident_time=datetime(2025, 10, 9, tzinfo=UTC),
+    )
+    assert out == []

@@ -1069,6 +1069,98 @@ def _collect_swap_output_seeds(
     return seeds
 
 
+def _confirm_bridge_handoffs(
+    handoffs: list[Any],
+    *,
+    src_adapter: ChainAdapter,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+    window_hours: float,
+    incident_time: datetime,
+) -> list[tuple[Any, Any, datetime]]:
+    """Cryptographically CONFIRM each cross-chain handoff's destination via the
+    bridge-pairing oracle — the protocol's own order/message id matched on BOTH
+    chains (``bridge_pairings.confirm_bridge_destination``). This is the only
+    cross-chain edge basis that is genuine proof (vs the heuristic calldata
+    decode / amount-time correlation). Best-effort; never raises.
+
+    Returns ``(handoff, ConfirmedDestination, src_block_time)`` per confirmed
+    handoff. Opt-in caller-gated (``RECUPERO_BRIDGE_CONFIRM``) — it fetches the
+    source receipt and queries the destination chain's logs.
+    """
+    from recupero.trace.bridge_pairings import (
+        confirm_bridge_destination,
+        get_pair_spec,
+        identify_source,
+    )
+
+    out: list[tuple[Any, Any, datetime]] = []
+    seen_order_ids: set[str] = set()
+    for h in handoffs:
+        protocol = getattr(h, "bridge_protocol", None)
+        if get_pair_spec(protocol) is None:
+            continue
+        try:
+            ev = src_adapter.fetch_evidence_receipt(h.source_tx_hash)
+            src_receipt = getattr(ev, "raw_receipt", None)
+            ev_block_time = getattr(ev, "block_time", None)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("bridge-confirm: source receipt fetch failed: %s", exc)
+            continue
+        # protocol id + destination chain from the source event (robust to
+        # periphery entrypoints); fall back to the calldata-decoded dest chain.
+        ident = identify_source(src_receipt)
+        order_id = ident[1] if ident else None
+        dest_chain_str = (
+            (ident[2] if ident else None)
+            or getattr(h, "decoded_destination_chain", None)
+        )
+        if not dest_chain_str:
+            continue
+        try:
+            dest_chain = Chain(dest_chain_str)
+        except (ValueError, KeyError):
+            continue
+        try:
+            src_iso = (h.block_time_iso or "").replace("Z", "+00:00")
+            sbt = datetime.fromisoformat(src_iso)
+            if sbt.tzinfo is None:
+                sbt = sbt.replace(tzinfo=UTC)
+        except (TypeError, ValueError, AttributeError):
+            sbt = ev_block_time or incident_time
+        try:
+            dst_adapter = ChainAdapter.for_chain(dest_chain, (config, env))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bridge-confirm: dst adapter for %s failed: %s", dest_chain_str, exc)
+            continue
+        src_chain_val = (
+            h.source_chain.value if getattr(h, "source_chain", None) else None
+        )
+        try:
+            confirmed = confirm_bridge_destination(
+                protocol=protocol,
+                destination_chain=dest_chain_str,
+                source_receipt=src_receipt,
+                dst_adapter=dst_adapter,
+                src_block_time=sbt,
+                source_chain=src_chain_val,
+                window_hours=window_hours or 24.0,
+                order_id=order_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bridge-confirm failed for %s: %s", protocol, exc)
+            confirmed = None
+        finally:
+            try:  # noqa: SIM105
+                dst_adapter.close()
+            except Exception:  # noqa: BLE001
+                pass
+        if confirmed and confirmed.order_id not in seen_order_ids:
+            seen_order_ids.add(confirmed.order_id)
+            out.append((h, confirmed, sbt))
+    return out
+
+
 def _continue_past_dex_and_bridges(
     *,
     case: Case,
@@ -1272,6 +1364,73 @@ def _continue_past_dex_and_bridges(
             except (TypeError, ValueError, AttributeError):
                 src_block_time = incident_time
             cross_chain_seeds.append((dest_chain, decoded_addr, 1, src_block_time))
+
+    # v0.34: CRYPTOGRAPHIC bridge-destination confirmation (opt-in).
+    # The handoff loop above seeds a destination only from the heuristic
+    # calldata decode (receiverDst). This pass instead asks the bridge-pairing
+    # ORACLE to confirm the destination by the protocol's own cross-chain id
+    # matched on BOTH chains — the only cross-chain basis that is genuine proof.
+    # A confirmed destination is PREFERRED (it carries the real fill recipient
+    # and is recorded for the Phase-2 validator + brief); it is added as a
+    # continuation seed (deduped against the heuristic seeds). Gated by
+    # RECUPERO_BRIDGE_CONFIRM (it makes live destination-chain log queries),
+    # default OFF — consistent with RECUPERO_LOCKMINT_MATCH, so prod traces are
+    # byte-for-byte unchanged unless an operator opts in.
+    _bridge_confirm_on = os.environ.get(
+        "RECUPERO_BRIDGE_CONFIRM", "",
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if _bridge_confirm_on and cross_chain_continue and handoffs:
+        try:
+            _confs = _confirm_bridge_handoffs(
+                handoffs,
+                src_adapter=adapter,
+                config=config,
+                env=env,
+                window_hours=xchain_window_h,
+                incident_time=incident_time,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("bridge-confirm pass failed: %s", exc)
+            _confs = []
+        _conf_records: list[dict[str, Any]] = []
+        for (h, c, sbt) in _confs:
+            _conf_records.append({
+                "protocol": c.protocol,
+                "order_id": c.order_id,
+                "source_chain": (
+                    h.source_chain.value if getattr(h, "source_chain", None) else None
+                ),
+                "source_tx": getattr(h, "source_tx_hash", None),
+                "dst_chain": c.dst_chain,
+                "dst_tx": c.dst_tx,
+                "recipient": c.recipient,
+                "raw_amount": str(c.raw_amount) if c.raw_amount is not None else None,
+                "confidence": c.confidence,
+                "basis": c.basis,
+            })
+            # Seed the cryptographically-confirmed recipient on the dest chain
+            # (deduped against the heuristic cross_chain_seeds via the same
+            # cross_chain_visited set). No recipient -> recorded but not seeded.
+            if not c.recipient:
+                continue
+            try:
+                _dchain = Chain(c.dst_chain)
+            except (ValueError, KeyError):
+                continue
+            _xkey = (_dchain.value, _address_visited_key(_dchain, c.recipient))
+            if _xkey in cross_chain_visited:
+                continue
+            cross_chain_visited.add(_xkey)
+            cross_chain_seeds.append((_dchain, c.recipient, 1, sbt))
+        if _conf_records:
+            case.config_used = {
+                **(case.config_used or {}),
+                "bridge_confirmations": _conf_records,
+            }
+            log.info(
+                "bridge-confirm: %d cryptographically-confirmed cross-chain "
+                "destination(s)", len(_conf_records),
+            )
 
     # v0.32.1 (trace-depth #1 wiring): lock-and-mint cross-chain matching.
     # OPT-IN via RECUPERO_LOCKMINT_MATCH because it is the more INFERENTIAL,

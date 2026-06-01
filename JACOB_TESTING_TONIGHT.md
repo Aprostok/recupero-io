@@ -1,130 +1,156 @@
-# Jacob — testing note for tonight (v0.34.3, 2026-06-01)
+# Recupero — Jacob testing runbook (v0.34.3, 2026-06-01)
 
-**TL;DR:** The cross-chain bridge oracle went from 8 → **12 cryptographically-verified
-protocols**, plus a durable staleness monitor that catches spec drift before prod.
-Everything is **merged to `main` and deployed** (Railway auto-deploys main; prod HEAD
-= `73c576b`). Full suite **5407 passed / 31 skipped / exit 0**, zero new ruff. Below
-is what changed, what I verified, and exactly how to re-run each check.
+Step-by-step for tonight. Each step has the **command**, the **expected result**, and
+a **PASS/FAIL bar**. Everything below is verified green on my box except where noted.
+Prod is already deployed (Railway auto-deploys `main`).
 
 ---
 
-## What shipped this round
+## 0. What changed this round (the thing to test)
+1. **Cross-chain bridge oracle: 8 → 12 cryptographically-verified protocols** + a
+   bridge-spec **staleness monitor**. A cross-chain hop is only ever `high` confidence
+   when the protocol's OWN id matches on BOTH chains — otherwise the engine returns
+   nothing (never a guess).
+   - New rails: **Synapse RFQ/FastBridgeV2**, **Stargate V2**, **generic LayerZero OFT**
+     (catches all OFT bridges), **Axelar/Squid GMP**. Refreshed: **deBridge DLN**.
+   - Each was verified end-to-end against a REAL on-chain pair.
+   - **CCTP intentionally NOT added** (v2 omits the on-chain source nonce → unpairable
+     without Circle's API; no half-working spec shipped).
+2. **Code flatten**: 36 behavior-preserving lint fixes across 28 files (gate-locked).
 
-A "bridge hop is CONFIRMED iff the protocol's OWN cross-chain id appears on BOTH
-chains" — cryptographic proof, no answer key. `high` cross-chain confidence is ONLY
-ever granted on such a match; otherwise the engine returns `None` (never a guess).
-
-**Oracle now covers 12 protocols** (each verified against a REAL on-chain pair and
-confirmed end-to-end through `identify_source` + `confirm_bridge_destination`):
-
-| Protocol | Cross-chain id | Notes |
-|---|---|---|
-| deBridge (DLN) | orderId | **refreshed** — fill event changed at same contract post-Zigha |
-| Across | depositId + originChain | composite key |
-| Celer cBridge | srcTransferId | |
-| Hop | transferId | dest wildcard |
-| Synapse (classic) | kappa (derived) | historical only — current volume moved to RFQ |
-| **Synapse RFQ** *(new)* | transactionId | FastBridgeV2 0x5523… |
-| Chainlink CCIP | messageId | success-state gated |
-| Connext | transferId | dormant (Amarok→Everclear) |
-| Wormhole | VAA (emitterChainId,addr,seq) | |
-| **Stargate V2** *(new)* | LayerZero GUID | eid namespace |
-| **LayerZero OFT (generic)** *(new)* | LayerZero GUID | catches ALL OFT bridges, not just Stargate |
-| **Axelar / Squid** *(new)* | payloadHash + sourceTxHash tiebreak | GMP rail |
-
-**Not added (deliberately): Circle CCTP.** Investigated and found NOT on-chain-pairable
-in 2026 — v1 EVM↔EVM volume migrated to v2, and CCTP v2's `DepositForBurn` omits the
-nonce (assigned later by Circle's off-chain attestation), so v2 can't be paired from
-source events without Circle's API. No half/wrong spec was shipped.
-
-**New durable guard:** `scripts/_v034_bridge_staleness.py` — audits all 12 specs over a
-wide on-chain window with a 3-way OK / STALE / DORMANT classification, and fails only on
-NEW (unacknowledged) drift. This is what caught the DLN event change. Run it whenever a
-bridge "stops confirming."
+Full protocol list: DLN, Across, Celer, Hop, Synapse (classic), Synapse RFQ, CCIP,
+Connext, Wormhole, Stargate, LayerZero OFT, Axelar.
 
 ---
 
-## How to re-run every check (the ones you asked about)
+## 1. Setup (once)
+```bash
+git checkout main && git pull origin main      # prod HEAD should be the v0.34.3 merge
+pip install -e .                                # or your usual env bootstrap
+```
+**System deps for PDFs + flow graphics** (only needed for steps 3/8's PDF rendering):
+- **graphviz** (`dot` on PATH) — for the fund-flow diagram. `dot -V` should print a version.
+- **WeasyPrint + GTK** — for HTML→PDF. On Linux this is `libpango/libgobject` via the
+  distro packages; on macOS `brew install weasyprint`. If absent, the pipeline **skips
+  PDFs and still writes the HTML** (set `RECUPERO_DISABLE_PDF_RENDER=1` to force-skip).
+- **.env**: `ETHERSCAN_API_KEY` (required for live trace + bridge spot-checks),
+  `HELIUS_API_KEY` (only for Solana). `.env` is gitignored — never commit it.
 
-> All commands from the repo root. Use `RECUPERO_RANDOMIZATION_SECRET=ci-smoke-secret`
-> for the gate. Non-ASCII output needs `PYTHONIOENCODING=utf-8` on Windows.
+> On every test command below: prefix `RECUPERO_RANDOMIZATION_SECRET=ci-smoke-secret`
+> and, on Windows, `PYTHONIOENCODING=utf-8` for non-ASCII output.
 
-### 1. Full test suite (the "does the code work" gate)
+---
+
+## 2. Full test suite  ← start here
 ```bash
 RECUPERO_RANDOMIZATION_SECRET=ci-smoke-secret python -m pytest -q -p no:cacheprovider
 ```
-**Verified:** `5407 passed, 31 skipped, 16 deselected, exit 0`.
+**Expected:** `5407 passed, 31 skipped, 16 deselected` (the 31 skips are live-API/Win32
+symlink tests — fine to skip).
+**PASS:** exit code 0, zero failures.
 
-### 2. End-to-end golden case (LE + freezes + brief + invariants + determinism, OFFLINE)
+## 3. Offline end-to-end golden case (LE + freezes + brief + invariants + determinism)
 ```bash
 RECUPERO_RUN_INTEGRATION=1 RECUPERO_RANDOMIZATION_SECRET=ci-smoke-secret \
 SOURCE_DATE_EPOCH=1747785600 \
 python -m pytest tests/integration/test_trace_to_brief.py -q -p no:cacheprovider
 ```
-**Verified:** `12 passed`. Covers the full pipeline (emit_brief + build_all_deliverables
-+ validate_case_output), multi-issuer freeze routing (Midas/Tether/Circle/Coinbase),
-mixer exposure, INVARIANTS A–E = 0 violations, and 3× byte-identical determinism.
+**Expected:** `12 passed`. This exercises the WHOLE pipeline offline — emit_brief +
+build_all_deliverables + validate_case_output, multi-issuer freeze routing
+(Midas/Tether/Circle/Coinbase), mixer exposure, **INVARIANTS A–E = 0 violations**, and
+**3× byte-identical determinism**.
+**PASS:** 12 passed, exit 0.
 
-### 3. Real deliverable generation (LE files, freeze letters, brief, graphics)
+## 4. Generate the real deliverables and eyeball them
 ```bash
 RECUPERO_RANDOMIZATION_SECRET=ci-smoke-secret python scripts/smoke_deliverables.py
-# output → scripts/_smoke_deliverables_out/ALEC-TEST-2026/briefs/
+# → scripts/_smoke_deliverables_out/ALEC-TEST-2026/briefs/
 ```
-**Verified:** 12 artifacts written (trace report, victim summary, engagement letter,
-per-issuer `freeze_request_*` + `le_handoff_*`, manifests, investigator findings) PLUS
-`flow_<hash>.svg`. All HTML scanned clean — no unrendered Jinja / Undefined / NaN / None.
-- **LE handoff**: correct issuer (Circle/USDC), FREEZABLE holdings, IC3 reference.
-- **Freeze routing is correct**: Circle + Tether (HIGH, 4 FREEZABLE holdings each) get
-  letters; **Lido stETH (LOW, 0 FREEZABLE-status holdings) correctly gets NO letter** —
-  the "no $0 freeze letter" guard works.
-- **Graphics**: `flow_*.svg` is a real graphviz fund-flow diagram (103 node groups, 60
-  edges, 88 labels). Needs the `dot` binary (graphviz) — present on the prod image.
+**Expected files:** trace report, victim summary, engagement letter, per-issuer
+`freeze_request_*.html` + `le_handoff_*.html`, manifests, `investigator_findings.{csv,json}`,
+and **`flow_<hash>.svg`** (the fund-flow graphic).
+**Eyeball checklist (PASS bar):**
+- **LE handoff** opens, shows victim/IC3/issuer, lists FREEZABLE holdings, no broken
+  template tokens (no `{{ }}`, `Undefined`, `NaN`, `>None<`).
+- **Freeze routing is correct**: a letter exists for each issuer that has a real
+  FREEZABLE holding (Circle, Tether), and **NO letter** for an issuer with `$0`/zero
+  FREEZABLE holdings (Lido) — the "no empty freeze letter" guard.
+- **Flow graphic** (`flow_*.svg`) opens in a browser and shows nodes/edges/labels.
+- (If WeasyPrint installed) matching `.pdf` files render with the graphic embedded.
 
-### 4. PDF rendering — environment note (NOT a code bug)
-On this Windows box WeasyPrint can't load GTK (`libgobject-2.0-0`), so the PDF stage is
-skipped and HTML is emitted instead. **On the Linux prod/Jacob image WeasyPrint + GTK +
-graphviz are present, so PDFs (with the embedded flow graphic) render.** To force-skip
-PDFs anywhere: `RECUPERO_DISABLE_PDF_RENDER=1`.
+## 5. Bridge staleness monitor (all 12 protocols)
+```bash
+PYTHONIOENCODING=utf-8 python scripts/_v034_bridge_staleness.py   # reads ETHERSCAN_API_KEY
+```
+**Expected:** `OK=9`; `STALE=['Synapse']` (acknowledged: classic rail, historical);
+`DORMANT=['Synapse RFQ','Connext']` (acknowledged: low/no current volume); **exit 0**.
+**PASS:** exit 0, and any STALE/DORMANT is in the acknowledged set (the script says so).
+If a NEW protocol shows STALE/DORMANT and exit != 0, that's real drift — tell me.
 
-### 5. Score test (ground-truth reach)
+## 6. Spot-check a bridge cryptographically (the headline feature)
+```bash
+RECUPERO_BRIDGE_CONFIRM=1 python -c "from recupero.cli import app; app()" \
+  confirm-bridge --chain <src_chain> --tx <source_bridge_tx_hash>
+```
+Pick any recent bridge tx for one of the 12 protocols (e.g. a Stargate, Axelar, or DLN
+source tx). **Expected:** it prints the confirmed destination (dest chain, dest tx,
+recipient, the matched protocol id) — or **nothing/none** if there is no cryptographic
+match (it never guesses). **PASS:** a real bridged tx confirms; a non-bridge tx returns
+nothing.
+
+## 7. Score test (ground-truth reach)
 ```bash
 PYTHONIOENCODING=utf-8 python scripts/_v034_score_zigha_reach.py <CASE_ID>
-# e.g. ZIGHA-VERIFY-VT5
 ```
-Scores addresses reached in `data/cases/<CASE_ID>/case.json` against the 4 expected
-endpoints in `tests/fixtures/zigha_ground_truth.json`. The **full depth-7 multichain
-case reaches 4/4** (incl. the Midas FREEZABLE endpoint); the small capped local
-fixtures (VT4/VT5, 8–9 transfers) reach 1–2/4 because they only contain a slice of the
-graph. Always prints; exit 0 (reports misses without failing).
+Scores addresses reached in `data/cases/<CASE_ID>/case.json` vs the 4 expected Zigha
+endpoints. Always exits 0 (reports misses without failing). See step 8 for what reach
+to expect.
 
-### 6. Spot-check ANY bridge tx (cryptographic confirmation, standalone)
+## 8. (Optional, ~10–40 min, API-heavy) Full live Zigha trace
 ```bash
-recupero confirm-bridge --chain <src> --tx <hash>     # gated behind RECUPERO_BRIDGE_CONFIRM
+RECUPERO_PIVOT_MULTICHAIN=1 RECUPERO_BRIDGE_CONFIRM=1 RECUPERO_VALUE_TRACE=1 \
+RECUPERO_CROSS_CHAIN_CONTINUATION=1 RECUPERO_MAX_TRANSFERS_PER_ADDRESS=50000 \
+python -c "from recupero.cli import app; app()" trace \
+  --chain ethereum --address 0x0cdC902f4448b51289398261DB41E8ADC99bE955 \
+  --incident-time 2025-10-09T00:00:00Z --case-id ZIGHA-TEST --max-depth 8
+# then: python scripts/_v034_score_zigha_reach.py ZIGHA-TEST
 ```
-Prints the confirmed destination (chain, tx, recipient, order-id) or nothing if there's
-no cryptographic match — never a guess.
-
-### 7. Bridge-spec staleness monitor (run if a bridge "stops confirming")
-```bash
-PYTHONIOENCODING=utf-8 python scripts/_v034_bridge_staleness.py   # reads ETHERSCAN_API_KEY from .env
-```
-**Verified:** `OK=9` (DeBridge, Across, Celer, Hop, CCIP, Wormhole, Stargate, LayerZero
-OFT, Axelar). STALE=Synapse (acknowledged: classic rail, historical). DORMANT=Synapse
-RFQ + Connext (acknowledged: low/no current volume). Exit 0.
+**What to expect (honest):** the primary Ethereum trace completes, then the multi-chain
+**pivot** identifies the Arbitrum consolidation hub `0xF4bE…` and re-traces it across
+chains. My run reached **2/4** ground-truth endpoints: the **hub** (~$18.1M consolidated,
+seen on 4 chains) and the **Midas FREEZABLE endpoint** (~$3.12M). The two **dormant DAI
+holders** (~$9.98M + $6.91M, **non-freezable**) were NOT walked this pass, and the tracer
+**honestly reports `coverage.complete=False`** rather than fabricate them. The
+value-directed trace follows the freezable/highest-signal branch first.
+**PASS:** trace completes (exit 0), reaches the hub + Midas, and is HONEST about
+incomplete coverage (no fabricated addresses, no `high` confidence without a cryptographic
+match). The worker path (with `ground_truth.json` in the case dir) additionally enforces
+**INVARIANT B** superset coverage — that's the gate for full 4/4 in production.
 
 ---
 
-## Known / acknowledged (not bugs)
-- **Synapse classic = STALE, Synapse RFQ + Connext = DORMANT** — all acknowledged in the
-  monitor + spec notes (volume moved/deprecated; specs stay correct for historical cases).
-- **CCTP intentionally absent** (see above — v2 omits the on-chain source nonce).
-- **Pre-existing src lints (~202, mostly SIM105/E402/N806)** are the deliberately-tolerated
-  style items from prior zero-tolerance sweeps; left untouched to avoid churning the green
-  suite. All files changed this round are ruff-clean; zero new lint introduced.
+## The money picture (Zigha case)
+- **~$18–20M total traced as lost.** The Arbitrum hub (~$18.13M) is the funds consolidated
+  *before* bridging; they land on Ethereum across the endpoints (~$20M). These are the
+  same money pre/post-bridge — do NOT sum to $38M.
+- **~$3.12M is FREEZABLE** (Midas mSyrupUSDp — Midas can freeze). The ~$16.9M in dormant
+  DAI holders has no freeze pathway (traced-but-unrecoverable).
 
-## What to hammer tonight
-1. Run #1 + #2 + #3 above — confirm green + eyeball a freeze letter and the LE handoff.
-2. If you have a fresh real bridge tx (any of the 12 protocols), try #6 `confirm-bridge`.
-3. If anything bridge-related looks off, run #7 — it'll tell you if a spec drifted.
+## Known / acknowledged (NOT bugs)
+- Synapse classic = STALE, Synapse RFQ + Connext = DORMANT — all acknowledged in the
+  monitor (volume moved/deprecated; specs still correct for historical cases).
+- CCTP intentionally absent (v2 design omits the on-chain source nonce).
+- ~166 pre-existing `src` style lints (E402/N806/SIM105/SIM108) deliberately left — they
+  were scoped out by prior zero-tolerance sweeps; touching them risks churn for no
+  behavior gain. All code changed this round is lint-clean.
+- PDF rendering needs WeasyPrint+GTK; if absent the pipeline emits HTML (not a defect).
 
-Prod HEAD: `73c576b` (main). Bridge oracle source: `src/recupero/trace/bridge_pairings.py`.
+## How to report back
+For each step: the command, exit code, and the headline line (e.g. "5407 passed",
+"OK=9 exit 0", "REACHED 2/4"). For step 4, attach or screenshot the LE handoff + a
+freeze letter + the flow SVG. Flag anything that prints a fabricated address, a `high`
+cross-chain edge without a matching dest tx, a NEW STALE/DORMANT bridge, or a broken
+template token.
+
+Prod HEAD: the v0.34.3 merge on `main`. Bridge oracle: `src/recupero/trace/bridge_pairings.py`.
+Monitor: `scripts/_v034_bridge_staleness.py`. Score: `scripts/_v034_score_zigha_reach.py`.

@@ -283,6 +283,48 @@ def test_across_confirm_composite_key_match_high() -> None:
     assert out.raw_amount == ACROSS_AMOUNT
 
 
+def test_across_confirm_populates_src_raw_amount_same_asset() -> None:
+    """Across is same-asset → confirm_bridge_destination extracts the raw amount
+    DEPOSITED into the source SpokePool (largest ERC-20 Transfer into it) so the
+    Phase-2 conservation check can compare it to the fill amount."""
+    deposit_amount = 1_000_500_000  # 0.05% more than the fill (fee) — conserves
+    src_receipt = {"logs": [
+        {  # the ERC-20 deposit INTO the source SpokePool
+            "address": USDC,
+            "topics": [
+                ERC20_TRANSFER, _topic_addr("0x" + "d0" * 20), _topic_addr(SPOKE_BASE),
+            ],
+            "data": hex(deposit_amount),
+        },
+        {  # the FundsDeposited event (recognized by identify/confirm)
+            "address": SPOKE_BASE,
+            "topics": [
+                ACROSS_DEPOSIT_T0, _padint(1), _padint(DEPOSIT_ID),
+                _topic_addr("0x" + "d0" * 20),
+            ],
+            "data": "0x" + _word("0x0"),
+        },
+    ]}
+    adapter = _FakeAcrossAdapter([_across_fill_log()])
+    out = confirm_bridge_destination(
+        protocol="Across", destination_chain="ethereum",
+        source_receipt=src_receipt, dst_adapter=adapter,
+        src_block_time=datetime(2025, 10, 9, tzinfo=UTC), source_chain="base",
+    )
+    assert out is not None
+    assert out.src_raw_amount == deposit_amount
+    assert out.same_asset is True
+    # and the produced record passes the conservation self-audit (dst < src).
+    from recupero.validators.cross_chain_integrity import validate_bridge_confirmations
+    rec = {
+        "protocol": "Across", "order_id": out.order_id, "dst_tx": out.dst_tx,
+        "source_chain": "base", "dst_chain": "ethereum",
+        "src_raw_amount": str(out.src_raw_amount), "raw_amount": str(out.raw_amount),
+        "same_asset": out.same_asset, "confidence": "high",
+    }
+    assert validate_bridge_confirmations([rec]) == []
+
+
 def test_across_wrong_origin_chain_returns_none() -> None:
     """The fill carries the right depositId but a DIFFERENT originChainId than
     the source chain → NOT our deposit (depositId is unique only per origin

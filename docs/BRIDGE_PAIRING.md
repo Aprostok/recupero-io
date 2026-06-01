@@ -111,6 +111,39 @@ ship a signature that hasn't matched a real tx. For each new protocol:
 * Live destination confirmation is opt-in inside a trace (it adds dest-chain API
   calls); the standalone `confirm-bridge` CLI runs it on demand.
 
+## Wiring into a live trace (opt-in)
+
+Set `RECUPERO_BRIDGE_CONFIRM=1` and the cross-chain continuation
+(`tracer._continue_past_dex_and_bridges`) runs `_confirm_bridge_handoffs` after
+the heuristic calldata decode: for each handoff with a verified spec it confirms
+the destination by the oracle, **prefers** the cryptographically-confirmed
+recipient as the continuation seed (over the decoded `receiverDst`), and records
+the confirmation on `case.config_used["bridge_confirmations"]`. Default OFF (it
+makes live destination-chain log queries); a source-fetch error / unknown
+protocol / tampered fill all degrade to "skip", never to a fabricated seed.
+
+## Phase 2 — answer-key-free self-audit
+
+`src/recupero/validators/cross_chain_integrity.py` lets a produced case check
+its own confirmed hops with no human ground truth:
+
+* **`cross_chain_edge_confirmed`** (`critical`): a cross-chain edge may be `high`
+  ONLY if it carries the proof — a matched `order_id` AND the destination tx. A
+  record claiming `high` without both is a fabricated destination.
+* **`cross_chain_value_conserved`** (`high`): for SAME-asset protocols (Across /
+  Celer / Hop — `BridgePairSpec.same_asset=True`), the destination amount must
+  satisfy `bridge_conservation_ok`: `dst ∈ [src·(1 − maxFeePct), src]` (a bridge
+  takes a fee, never adds value). Cross-asset protocols (DLN give≠take, CCIP
+  arbitrary payload, Synapse …AndSwap) are NOT checked — the amounts aren't
+  comparable, and a violation is never fabricated from an apples-to-oranges
+  compare. `confirm_bridge_destination` populates `src_raw_amount` (largest
+  ERC-20 Transfer into a source bridge contract) for same-asset specs.
+
+The trace logs any self-audit violation as it runs; `render_bridge_confirmation_
+report(confirmations)` emits the human-auditable per-case proof (protocol,
+order-id, src/dst tx, recipient, amounts) a reviewer reads instead of an answer
+key.
+
 ## Candidate protocols to add next (each needs the recipe above)
 
 Stargate/LayerZero, Wormhole, Connext, Axelar, Squid, Symbiosis,

@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -114,6 +114,14 @@ class BridgePairSpec:
     # is never reported as a delivered destination.
     dest_state_word: int | None = None
     dest_state_ok: int | None = None
+    # v0.34 Phase 2 — conservation: True when the protocol delivers the SAME
+    # asset on both chains (canonical/liquidity bridge), so the raw deposit and
+    # fill amounts are directly comparable and must satisfy the fee bound
+    # (dst ∈ [src·(1−maxFee), src]). False when the protocol can deliver a
+    # DIFFERENT asset (DLN give≠take; Synapse …AndSwap; CCIP arbitrary token) —
+    # raw-amount conservation is then meaningless and is NOT checked (we never
+    # fabricate a violation from an apples-to-oranges comparison).
+    same_asset: bool = True
     notes: str = ""
 
     def dest_contract_for(self, chain: str | None) -> str | None:
@@ -135,6 +143,11 @@ class ConfirmedDestination:
     raw_amount: int | None
     confidence: str  # always "high" — order-id matched on both chains
     basis: str
+    # v0.34 Phase 2 — the raw amount DEPOSITED into the source bridge contract
+    # (largest ERC-20 Transfer into a source emitter), for the conservation
+    # check on same-asset protocols. None when not determinable / not same-asset.
+    src_raw_amount: int | None = None
+    same_asset: bool = True
 
 
 # ── verified-core registry ──────────────────────────────────────────────────
@@ -160,6 +173,9 @@ _DLN = BridgePairSpec(
     ),
     # 32-byte id scanned in the fill payload (no composite key needed).
     max_fee_pct=Decimal("1.0"),
+    # DLN give≠take asset (the maker quotes an arbitrary take token), so raw
+    # deposit/fill amounts are NOT comparable — skip conservation.
+    same_asset=False,
     notes="deBridge DLN createSaltedOrder→FulfilledOrder; verified vs Zigha pair.",
 )
 
@@ -303,6 +319,8 @@ _SYNAPSE = BridgePairSpec(
     ),
     dest_id_topic=2,                    # kappa (indexed)
     max_fee_pct=Decimal("1.0"),
+    # …AndSwap variants deliver a DIFFERENT token than deposited — not same-asset.
+    same_asset=False,
     notes="Synapse kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs.",
 )
 
@@ -331,6 +349,9 @@ _CCIP = BridgePairSpec(
     dest_state_word=0,                  # ExecutionStateChanged.state
     dest_state_ok=2,                    # 2 == SUCCESS
     max_fee_pct=Decimal("1.0"),
+    # CCIP carries an arbitrary token+data payload; the dest amount isn't a
+    # comparable same-asset transfer — skip conservation.
+    same_asset=False,
     notes="Chainlink CCIP messageId: CCIPSendRequested data w13 == ExecutionStateChanged topic2 (state==2); verified Eth→BSC + Base→Polygon.",
 )
 
@@ -548,6 +569,67 @@ def _fill_recipient_amount(
     return best_to, (best_amt or None)
 
 
+def _deposit_amount(
+    source_receipt: dict[str, Any] | None, source_contracts: frozenset[str]
+) -> int | None:
+    """The raw amount DEPOSITED into the source bridge: the largest ERC-20
+    Transfer in the source tx whose recipient is a known source bridge contract.
+    Generic (no per-protocol offset to mis-verify) — and only meaningful for
+    same-asset protocols, where the caller compares it to the fill amount.
+    Returns None when no source contract is known (wildcard-source protocols) or
+    no such transfer exists."""
+    if not source_contracts or not source_receipt:
+        return None
+    from recupero.trace.swap_output import parse_erc20_transfers
+
+    sinks = {a.lower() for a in source_contracts}
+    best = 0
+    for t in parse_erc20_transfers(source_receipt):
+        if t.to in sinks and t.amount > best:
+            best = t.amount
+    return best or None
+
+
+def bridge_conservation_ok(
+    src_raw: int | None,
+    dst_raw: int | None,
+    max_fee_pct: Decimal,
+) -> tuple[bool, str]:
+    """Same-asset bridge value conservation: the destination amount must lie in
+    ``[src·(1 − maxFee), src]`` — a bridge takes a fee, it never adds value. Used
+    only for protocols that deliver the SAME asset on both chains; the caller
+    must not call this for cross-asset bridges (the comparison is meaningless).
+
+    Returns ``(ok, reason)``. When either amount is unknown / non-positive, or
+    ``max_fee_pct`` is out of range, returns ``(True, "unknown")`` — we never
+    fabricate a violation from missing or unusable data.
+    """
+    if src_raw is None or dst_raw is None or src_raw <= 0 or dst_raw <= 0:
+        return True, "unknown (missing/non-positive amount)"
+    try:
+        fee = Decimal(max_fee_pct)
+    except (InvalidOperation, TypeError, ValueError):
+        return True, "unknown (bad max_fee_pct)"
+    if not fee.is_finite() or fee < 0 or fee > 100:
+        return True, "unknown (max_fee_pct out of range)"
+    s = Decimal(src_raw)
+    d = Decimal(dst_raw)
+    floor = s * (Decimal(100) - fee) / Decimal(100)
+    if d > s:
+        return False, (
+            f"destination amount {dst_raw} exceeds source deposit {src_raw} "
+            f"— a bridge cannot pay out more than was deposited (possible "
+            f"mispairing or different asset)"
+        )
+    if d < floor:
+        return False, (
+            f"destination amount {dst_raw} is below the conservation floor "
+            f"{floor:.0f} = source {src_raw} × (1 − {fee}% max fee) — fee "
+            f"exceeds protocol maximum (possible mispairing or skimming)"
+        )
+    return True, "conserved"
+
+
 def confirm_bridge_destination(
     *,
     protocol: str | None,
@@ -658,6 +740,12 @@ def confirm_bridge_destination(
                 dst_adapter, dst_tx,
                 infra={emitter, query_addr, *spec.source_contracts},
             )
+            # raw amount deposited into the source bridge (same-asset only) for
+            # the Phase-2 conservation check; None for cross-asset / wildcard.
+            src_raw = (
+                _deposit_amount(source_receipt, spec.source_contracts)
+                if spec.same_asset else None
+            )
             log.info(
                 "bridge destination CONFIRMED (id match): protocol=%s id=%s "
                 "dst_chain=%s dst_tx=%s recipient=%s",
@@ -681,6 +769,8 @@ def confirm_bridge_destination(
                     )
                     + " — cryptographic match"
                 ),
+                src_raw_amount=src_raw,
+                same_asset=spec.same_asset,
             )
     return None
 
@@ -692,4 +782,5 @@ __all__ = (
     "extract_source_order_id",
     "identify_source",
     "confirm_bridge_destination",
+    "bridge_conservation_ok",
 )

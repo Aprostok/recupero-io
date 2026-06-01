@@ -1405,6 +1405,10 @@ def _continue_past_dex_and_bridges(
                 "dst_tx": c.dst_tx,
                 "recipient": c.recipient,
                 "raw_amount": str(c.raw_amount) if c.raw_amount is not None else None,
+                "src_raw_amount": (
+                    str(c.src_raw_amount) if c.src_raw_amount is not None else None
+                ),
+                "same_asset": c.same_asset,
                 "confidence": c.confidence,
                 "basis": c.basis,
             })
@@ -1431,6 +1435,20 @@ def _continue_past_dex_and_bridges(
                 "bridge-confirm: %d cryptographically-confirmed cross-chain "
                 "destination(s)", len(_conf_records),
             )
+            # Phase 2 self-audit: every confirmed edge must carry its proof and
+            # (same-asset only) conserve value. Log any violation — the trace
+            # never asserts a high cross-chain edge it can't back up.
+            try:
+                from recupero.validators.cross_chain_integrity import (
+                    validate_bridge_confirmations,
+                )
+                for _v in validate_bridge_confirmations(_conf_records):
+                    log.warning(
+                        "bridge-confirm self-audit [%s/%s]: %s",
+                        _v.check, _v.severity, _v.detail,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.debug("bridge-confirm self-audit skipped: %s", exc)
 
     # v0.32.1 (trace-depth #1 wiring): lock-and-mint cross-chain matching.
     # OPT-IN via RECUPERO_LOCKMINT_MATCH because it is the more INFERENTIAL,

@@ -171,8 +171,7 @@ class HackEvent(BaseModel):
         # so an attacker-controlled <script>...</script> in a tweet
         # body would otherwise execute.
         v = _SCRIPT_TAG_RE.sub("", v)
-        v = _HTML_TAG_RE.sub("", v)
-        return v
+        return _HTML_TAG_RE.sub("", v)
 
     @field_validator("observed_at", "incident_time", mode="before")
     @classmethod

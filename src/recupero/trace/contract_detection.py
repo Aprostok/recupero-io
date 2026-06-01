@@ -59,9 +59,7 @@ def _is_eoa_code(code: Any) -> bool:
         return len(code) == 0
     if isinstance(code, str):
         s = code.strip().lower()
-        if s in ("", "0x", "0x0", "0x00"):
-            return True
-        return False
+        return s in ("", "0x", "0x0", "0x00")
     return False
 
 

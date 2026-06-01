@@ -141,7 +141,7 @@ def _compute_next_transition(
     # Walk transitions in REVERSE (most-advanced first) so we pick the
     # highest stage whose threshold has elapsed AND is strictly after
     # the current stage.
-    for from_stage, to_stage, threshold, template in reversed(_STAGE_TRANSITIONS):
+    for _from_stage, to_stage, threshold, template in reversed(_STAGE_TRANSITIONS):
         if elapsed < threshold:
             continue
         to_idx = _STAGES_ORDERED.index(to_stage)

@@ -388,7 +388,7 @@ def build_or_update_cluster_for_case(
             prior_inv_ids_sorted = sorted(prior_investigations.keys(), key=str)
             if is_new and prior_inv_ids_sorted:
                 originator_inv = prior_inv_ids_sorted[0]
-                for idx, prior_inv in enumerate(prior_inv_ids_sorted):
+                for _idx, prior_inv in enumerate(prior_inv_ids_sorted):
                     prior_case_id = prior_investigations.get(prior_inv)
                     cur.execute(
                         """

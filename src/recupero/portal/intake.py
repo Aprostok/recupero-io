@@ -317,9 +317,7 @@ def _is_valid_iso_date(s: str) -> bool:
     # Reject future dates and anything older than 10 years.
     if parsed > today:
         return False
-    if parsed < today - timedelta(days=10 * 365):
-        return False
-    return True
+    return not parsed < today - timedelta(days=10 * 365)
 
 
 def create_case_from_intake(

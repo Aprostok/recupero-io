@@ -276,9 +276,7 @@ def run(*, bridges_path: Path | None = None, output_path: Path | None = None,
         "sources_used": result.sources_used,
         "sources_unavailable": result.sources_unavailable,
         "coverage_gaps": result.coverage_gaps,
-        "coverage_gap_summary": {
-            protocol: chains for protocol, chains in grouped.items()
-        },
+        "coverage_gap_summary": dict(grouped.items()),
         "stale_high_confidence": result.stale_high_confidence,
         "stale_high_confidence_count": len(result.stale_high_confidence),
     }

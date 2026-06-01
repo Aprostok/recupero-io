@@ -459,7 +459,7 @@ class BitcoinAdapter(ChainAdapter):
             return []
 
         input_set = set(input_addresses)
-        first_input_addr = input_addresses[0]  # retained for legacy callers
+        input_addresses[0]  # retained for legacy callers
 
         tx_id = tx.get("txid")
         if not isinstance(tx_id, str):

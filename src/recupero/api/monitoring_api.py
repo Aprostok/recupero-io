@@ -307,9 +307,7 @@ def _is_blocked_host(host: str) -> bool:
         return True
     if any(host.endswith(suf) for suf in _BLOCKED_HOSTNAME_SUFFIXES):
         return True
-    if _is_blocked_ip(host):
-        return True
-    return False
+    return bool(_is_blocked_ip(host))
 
 
 def _resolves_to_blocked_ip(host: str) -> bool:
@@ -326,7 +324,7 @@ def _resolves_to_blocked_ip(host: str) -> bool:
         addrs = socket.getaddrinfo(host, None)
     except (socket.gaierror, OSError):
         return False
-    for family, _kind, _proto, _name, sockaddr in addrs:
+    for _family, _kind, _proto, _name, sockaddr in addrs:
         ip = sockaddr[0]
         if _is_blocked_ip(ip):
             return True

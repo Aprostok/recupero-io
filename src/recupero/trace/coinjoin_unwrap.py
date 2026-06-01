@@ -484,9 +484,7 @@ def _is_wasabi2_wabisabi(
     # Exclude Wasabi 1.0 — if there's a large equal-output cluster,
     # this is the older protocol, not WabiSabi.
     is_w1, _amt, _cnt = _is_wasabi1_fixed_denom(inputs, outputs)
-    if is_w1:
-        return False
-    return True
+    return not is_w1
 
 
 def _is_p2tr_script(script_hex: str | None) -> bool:

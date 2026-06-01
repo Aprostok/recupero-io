@@ -620,8 +620,7 @@ class CosmosAdapter:
             return {"_error": "invalid tx_hash"}
         # LCD: /cosmos/tx/v1beta1/txs/{hash}
         url = f"{self.client._default_lcd.rstrip('/')}/cosmos/tx/v1beta1/txs/{tx_hash}"
-        body = self.client.get_json(url)
-        return body
+        return self.client.get_json(url)
 
     def explorer_tx_url(self, tx_hash: str, *, zone: str = "cosmos-hub") -> str:
         """Mintscan tx URL — works for the major zones we support."""

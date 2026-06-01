@@ -172,9 +172,7 @@ def _build_issuer_token_refs(chain: Chain) -> list[TokenRef]:
         log.warning("could not load issuer DB; freezable-token sweep disabled: %s", e)
         return []
 
-    decimals_by_symbol = {
-        sym: dec for sym, dec in _DEFAULT_FREEZABLE_TOKEN_DECIMALS.get(chain, [])
-    }
+    decimals_by_symbol = dict(_DEFAULT_FREEZABLE_TOKEN_DECIMALS.get(chain, []))
     refs: list[TokenRef] = []
     seen: set[str] = set()
     for (entry_chain, contract_lower), entry in db.items():

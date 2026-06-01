@@ -306,7 +306,7 @@ def build_observations(
     # (Historic comment said 'high_risk_destination'; the code has always
     # emitted 'exchange_deposit' — a freezable destination is NOT
     # perpetrator-controlled, so it must never bind a cross-case cluster.)
-    for addr in freeze_targets_by_addr.keys():
+    for addr in freeze_targets_by_addr:
         _emit(_ck(addr), "exchange_deposit")
 
     # 4. Drainer-attributed addresses we haven't already labeled get

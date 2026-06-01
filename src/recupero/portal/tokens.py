@@ -34,6 +34,7 @@ from typing import Any, NamedTuple
 from uuid import UUID
 
 import psycopg  # noqa: F401 — re-exported for the test-mock seam: the
+
 # token-verification tests patch ``recupero.portal.tokens.psycopg.connect``
 # to exercise the DB path without a live Postgres. verify_token() reaches
 # the DB via ``recupero._common.db_connect`` (which calls psycopg.connect),

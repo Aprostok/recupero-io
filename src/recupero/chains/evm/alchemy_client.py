@@ -183,8 +183,7 @@ class AlchemyClient:
         api_url = getattr(self, "api_url", None)
         if api_url:
             text = text.replace(api_url, "https://[REDACTED]/v2/[REDACTED]")
-        text = text.replace(api_key, "[REDACTED]")
-        return text
+        return text.replace(api_key, "[REDACTED]")
 
     # ---------- Low-level JSON-RPC ----------
 

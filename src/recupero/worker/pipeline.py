@@ -209,9 +209,7 @@ def _is_obvious_placeholder_address(addr: str) -> bool:
             "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
             "cafebabecafebabecafebabecafebabecafebabe",
         }
-        if body in _KNOWN_SENTINELS:
-            return True
-        return False
+        return body in _KNOWN_SENTINELS
 
     # Non-EVM detection (v0.17.4).
     # Solana addresses are 32-44 chars base58; Tron is 34 chars T-prefix
@@ -229,9 +227,7 @@ def _is_obvious_placeholder_address(addr: str) -> bool:
         return True
     # All-same-character placeholder (e.g., "AAAAA..." Solana vanity).
     # Bitcoin bech32 "bc1q" + all-q is impractical but check.
-    if len(addr) >= 25 and len(set(addr)) <= 2:
-        return True
-    return False
+    return bool(len(addr) >= 25 and len(set(addr)) <= 2)
 
 
 # ----- Public entry point ----- #

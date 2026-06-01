@@ -199,12 +199,26 @@ _DLN = BridgePairSpec(
     dest_event_topic0=(
         "0xd281ee92bab1446041582480d2c0a9dc91f855386bb27ea295faac1e992f7fe4"
     ),
+    # v0.34.3 STALENESS FIX: the original FulfilledOrder topic0 (above, verified
+    # vs the Oct-2025 Zigha fill) is NO LONGER EMITTED — DLN changed its fill
+    # event signature at the SAME DlnDestination contract sometime after. The
+    # fresh-input generalization test (Jun-2026 DLN orders) confirmed 0/3 + zero
+    # FulfilledOrder events on-chain. The current fill events at 0xe7351fd7 are
+    # the two below (the order-id bytes32 sits in the event payload, which the
+    # 32-byte-shape engine scans). Keeping the old topic0 confirms historical
+    # (Zigha-era) cases; the new ones confirm current orders. This is exactly the
+    # spec-drift the staleness monitor (scripts/_v034_bridge_staleness.py) now
+    # guards against going forward.
+    dest_event_topics=(
+        "0xc164aca37b9805a1c9027b6f32260a069723a82926f6e9ece4926e4dd3ea8ecf",
+        "0x37a01d7dc38e924008cf4f2fa3d2ec1f45e7ae3c8292eb3e7d9314b7ad10e2fc",
+    ),
     # 32-byte id scanned in the fill payload (no composite key needed).
     max_fee_pct=Decimal("1.0"),
     # DLN give≠take asset (the maker quotes an arbitrary take token), so raw
     # deposit/fill amounts are NOT comparable — skip conservation.
     same_asset=False,
-    notes="deBridge DLN createSaltedOrder→FulfilledOrder; verified vs Zigha pair.",
+    notes="deBridge DLN createSaltedOrder→fill; verified vs Zigha (old event) + Jun-2026 fresh orders (new events).",
 )
 
 # Across V3 SpokePool — per-chain contracts; id is the small uint depositId in
@@ -349,7 +363,11 @@ _SYNAPSE = BridgePairSpec(
     max_fee_pct=Decimal("1.0"),
     # …AndSwap variants deliver a DIFFERENT token than deposited — not same-asset.
     same_asset=False,
-    notes="Synapse kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs.",
+    notes="Synapse kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs. "
+          "v0.34.3 STALENESS: source TokenDeposit/TokenRedeem events are SILENT on-chain now "
+          "(Synapse volume collapsed / source event moved); the dest mint contract is still live, "
+          "so historical Synapse cases still confirm but CURRENT source detection is stale. Tracked "
+          "by scripts/_v034_bridge_staleness.py (acknowledged); refresh when a current deposit pair is found.",
 )
 
 # Chainlink CCIP — messageId is a globally-unique bytes32 in the OnRamp
@@ -412,7 +430,10 @@ _CONNEXT = BridgePairSpec(
     # Connext receiveLocal/swap can deliver a different (canonical vs nextAsset)
     # token + router fee — not reliably same-asset.
     same_asset=False,
-    notes="Connext Amarok XCalled.transferId(topic1)==Executed.transferId(topic1); verified OP→ARB pair.",
+    notes="Connext Amarok XCalled.transferId(topic1)==Executed.transferId(topic1); verified OP→ARB pair. "
+          "v0.34.3 DORMANT: Amarok is deprecated (migrated to Everclear) — XCalled/Executed are SILENT "
+          "and the diamonds emit nothing on-chain now. The spec stays correct for HISTORICAL Connext "
+          "cases; current volume is ~nil. Tracked by scripts/_v034_bridge_staleness.py (acknowledged).",
 )
 
 # Wormhole token bridge — the cross-chain id is the VAA identity

@@ -95,6 +95,39 @@ class _FakeDstAdapter:
 # ----------------------------- registry / extract ---------------------------
 
 
+def test_all_spec_event_topics_are_wellformed() -> None:
+    """Every spec's source + dest event topic0s must be 0x + 64 lowercase hex —
+    a cheap offline guard against a typo'd/truncated topic0 (which would silently
+    never match). Complements the live staleness monitor."""
+    import re as _re
+
+    from recupero.trace.bridge_pairings import _REGISTRY
+    pat = _re.compile(r"^0x[0-9a-f]{64}$")
+    for spec in _REGISTRY:
+        topics = (
+            spec.source_event_topic0,
+            *spec.source_event_topics,
+            spec.dest_event_topic0,
+            *spec.dest_event_topics,
+        )
+        for t in topics:
+            assert pat.match(t), f"{spec.protocol}: malformed event topic0 {t!r}"
+
+
+def test_dln_spec_carries_current_fill_events() -> None:
+    """v0.34.3 staleness fix lock: DLN's destination fill event changed at the
+    same contract after the Oct-2025 Zigha verification. The spec must carry the
+    CURRENT fill event topic0s (so fresh orders confirm) AND keep the historical
+    one (so Zigha-era cases still confirm)."""
+    spec = get_pair_spec("DeBridge")
+    all_dest = {spec.dest_event_topic0, *spec.dest_event_topics}
+    # historical (Zigha-era) FulfilledOrder
+    assert "0xd281ee92bab1446041582480d2c0a9dc91f855386bb27ea295faac1e992f7fe4" in all_dest
+    # current fill events (verified live vs Jun-2026 fresh orders, 3/3 confirmed)
+    assert "0xc164aca37b9805a1c9027b6f32260a069723a82926f6e9ece4926e4dd3ea8ecf" in all_dest
+    assert "0x37a01d7dc38e924008cf4f2fa3d2ec1f45e7ae3c8292eb3e7d9314b7ad10e2fc" in all_dest
+
+
 def test_registry_resolves_debridge_by_label_substring() -> None:
     assert get_pair_spec("deBridge DLN Source") is not None
     assert get_pair_spec("DeBridge") is not None

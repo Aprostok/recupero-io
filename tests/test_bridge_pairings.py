@@ -572,3 +572,105 @@ def test_synapse_identify_source_derives_and_reads_dest_chain_word() -> None:
     assert spec.protocol == "Synapse"
     assert oid == SYN_KAPPA
     assert dest_chain == "bsc"
+
+
+# ===================== CCIP (topic0-only source, success-gated dest) ========
+# Verified: Eth CCIPSendRequested (messageId data word 13) → BSC
+# ExecutionStateChanged (messageId topic2, state word0==2). msgId 0x602d8eaa….
+
+CCIP_SEND_T0 = "0xd0c3c799bf9e2639de44391e7f524d229b2b55f5b1ea94b2bf7da42f7243dddd"
+CCIP_EXEC_T0 = "0xd4f851956a5d67c3997d1c9205045fef79bae2947fdee7e9e2641abc7391ef65"
+CCIP_MSGID = "0x602d8eaa51ed66c06613521e0ddadfd29f56c94ad495b1e62d43f5cfa21b7088"
+CCIP_ONRAMP = "0x948306c220ac325fa9392a6e601042a3cd0b480d"  # per-lane; not in any set
+CCIP_OFFRAMP = "0xf616733641d420207b8f30db9c4ce39684768991"
+CCIP_RECIP = "0xf5c299316699131d29adcb7ef87af8e97bbc7ead"
+
+
+def _ccip_source_receipt(msgid: str = CCIP_MSGID) -> dict[str, Any]:
+    # CCIPSendRequested: 1 struct arg; word0=outer offset, …, word13=messageId.
+    data = "0x" + _word("0x20") + _word("0x0") * 12 + _word(msgid)
+    return {"logs": [{
+        "address": CCIP_ONRAMP, "topics": [CCIP_SEND_T0], "data": data,
+    }]}
+
+
+def _ccip_exec_log(msgid: str = CCIP_MSGID, state: int = 2, tx: str = "0xccipexec") -> dict[str, Any]:
+    # ExecutionStateChanged: topic1=seq, topic2=messageId; data word0=state.
+    return {
+        "address": CCIP_OFFRAMP,
+        "topics": [CCIP_EXEC_T0, _padint(21239), msgid],
+        "data": "0x" + _word(hex(state)) + _word("0x40"),
+        "transactionHash": tx,
+    }
+
+
+class _FakeCCIPAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if topic0.lower() == CCIP_EXEC_T0:  # address-less wildcard
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": [{
+            "address": USDC,
+            "topics": [ERC20_TRANSFER, _topic_addr(CCIP_OFFRAMP), _topic_addr(CCIP_RECIP)],
+            "data": hex(13326686183618000138270),
+        }]})
+
+
+def test_ccip_extract_messageid_from_data_word13() -> None:
+    spec = get_pair_spec("CCIP")
+    assert spec is not None and spec.source_match_topic0_only is True
+    # topic0-only recognition: the per-lane OnRamp is NOT in any address set.
+    assert extract_source_order_id(spec, _ccip_source_receipt()) == CCIP_MSGID
+
+
+def test_ccip_confirm_messageid_state_success_high() -> None:
+    adapter = _FakeCCIPAdapter([_ccip_exec_log(state=2)])
+    out = confirm_bridge_destination(
+        protocol="CCIP", destination_chain="bsc",
+        source_receipt=_ccip_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="ethereum",
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id == CCIP_MSGID
+    assert out.dst_tx == "0xccipexec"
+    assert (out.recipient or "").lower() == CCIP_RECIP
+
+
+def test_ccip_failed_execution_state_not_confirmed() -> None:
+    """A FAILED CCIP execution (state != 2) with the matching messageId must NOT
+    be reported as a delivered destination."""
+    adapter = _FakeCCIPAdapter([_ccip_exec_log(state=3)])  # 3 = FAILURE
+    out = confirm_bridge_destination(
+        protocol="CCIP", destination_chain="bsc",
+        source_receipt=_ccip_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="ethereum",
+    )
+    assert out is None
+
+
+def test_ccip_tampered_messageid_returns_none() -> None:
+    adapter = _FakeCCIPAdapter([_ccip_exec_log(msgid="0x" + "ab" * 32)])
+    out = confirm_bridge_destination(
+        protocol="CCIP", destination_chain="bsc",
+        source_receipt=_ccip_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 1, 1, tzinfo=UTC), source_chain="ethereum",
+    )
+    assert out is None
+
+
+def test_ccip_identify_source_topic0_only() -> None:
+    ident = identify_source(_ccip_source_receipt())
+    assert ident is not None
+    spec, oid, dest_chain = ident
+    assert spec.protocol == "CCIP"
+    assert oid == CCIP_MSGID
+    assert dest_chain is None  # CCIP dest chain comes from the Router calldata

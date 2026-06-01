@@ -51,7 +51,15 @@ confirmed against a **real on-chain source+destination pair** live in
   `TokenRedeem` event recognizes the tx (so we don't derive for non-Synapse
   txs); destination is matched across the 4 mint/withdraw event topic0s.
 
-All five are live-confirmed end-to-end via `confirm-bridge`.
+* **indexed unique id, success-gated (address-less)** — **Chainlink CCIP**
+  (messageId bytes32 in `CCIPSendRequested` data word 13 == `ExecutionStateChanged`
+  indexed topic2; the OffRamp `state` (data word 0) must be 2 = SUCCESS so a
+  FAILED execution isn't reported as delivered — verified Eth→BSC + Base→Polygon).
+  OnRamps are per-lane/unenumerable, so the source is recognized by the
+  distinctive `CCIPSendRequested` topic0 alone; the destination chain comes from
+  the Router `ccipSend` calldata (selector→chain via `_CCIP_CHAIN_SELECTORS`).
+
+All six are live-confirmed end-to-end via `confirm-bridge`.
 
 Protocol + order-id + destination chain are resolved from the source tx's EVENT
 LOGS (`identify_source`), not the tx `to` — robust to periphery/multicall
@@ -105,7 +113,7 @@ ship a signature that hasn't matched a real tx. For each new protocol:
 
 ## Candidate protocols to add next (each needs the recipe above)
 
-Stargate/LayerZero, Wormhole, CCIP, Connext, Axelar, Squid, Symbiosis,
+Stargate/LayerZero, Wormhole, Connext, Axelar, Squid, Symbiosis,
 Allbridge, Mayan, Orbiter — plus the
 canonical rollup bridges (Arbitrum/Optimism/Base/Polygon/zkSync), whose deposits
 are deterministic (L2 mint to the depositor) and confirmable by

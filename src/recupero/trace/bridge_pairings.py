@@ -105,6 +105,15 @@ class BridgePairSpec:
     source_dest_chain_word: int | None = None
     # extra destination fill topic0s (Synapse TokenMint/TokenWithdraw/…AndSwap).
     dest_event_topics: tuple[str, ...] = ()
+    # recognize the source event by topic0 ALONE (skip the emitter-membership
+    # check) — for protocols whose source emitter is per-lane and not
+    # enumerable (CCIP OnRamps). Safe only for a distinctive event signature.
+    source_match_topic0_only: bool = False
+    # require a destination data word to equal a value, e.g. CCIP
+    # ExecutionStateChanged.state (word 0) == 2 (SUCCESS) so a FAILED execution
+    # is never reported as a delivered destination.
+    dest_state_word: int | None = None
+    dest_state_ok: int | None = None
     notes: str = ""
 
     def dest_contract_for(self, chain: str | None) -> str | None:
@@ -297,7 +306,35 @@ _SYNAPSE = BridgePairSpec(
     notes="Synapse kappa=keccak256(ascii('0x'+srcTxHash))==dest mint topic2; verified vs 5 pairs.",
 )
 
-_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS, _CELER, _HOP, _SYNAPSE)
+# Chainlink CCIP — messageId is a globally-unique bytes32 in the OnRamp
+# `CCIPSendRequested` event DATA (word 13, the last static field of the
+# EVM2EVMMessage struct) and INDEXED as topic2 on the OffRamp
+# `ExecutionStateChanged`. OnRamps/OffRamps are per-lane (unenumerable), so the
+# source is recognized by the distinctive CCIPSendRequested topic0 alone and the
+# dest is queried address-less. The OffRamp's state (data word 0) must be 2
+# (SUCCESS). Destination chain comes from the Router ccipSend calldata
+# (decode_bridge_calldata, selector→chain via _CCIP_CHAIN_SELECTORS). VERIFIED:
+# Eth→BSC (messageId 0x602d8eaa…, state 2) + Base→Polygon.
+_CCIP = BridgePairSpec(
+    protocol="CCIP",
+    source_contracts=frozenset(),
+    source_match_topic0_only=True,
+    source_event_topic0=(
+        "0xd0c3c799bf9e2639de44391e7f524d229b2b55f5b1ea94b2bf7da42f7243dddd"
+    ),
+    source_order_id_word=13,            # messageId (last static struct field)
+    dest_wildcard=True,
+    dest_event_topic0=(
+        "0xd4f851956a5d67c3997d1c9205045fef79bae2947fdee7e9e2641abc7391ef65"
+    ),
+    dest_id_topic=2,                    # messageId (indexed)
+    dest_state_word=0,                  # ExecutionStateChanged.state
+    dest_state_ok=2,                    # 2 == SUCCESS
+    max_fee_pct=Decimal("1.0"),
+    notes="Chainlink CCIP messageId: CCIPSendRequested data w13 == ExecutionStateChanged topic2 (state==2); verified Eth→BSC + Base→Polygon.",
+)
+
+_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS, _CELER, _HOP, _SYNAPSE, _CCIP)
 
 
 def get_pair_spec(protocol: str | None) -> BridgePairSpec | None:
@@ -352,6 +389,17 @@ def _dest_topic0s(spec: BridgePairSpec) -> tuple[str, ...]:
     return (spec.dest_event_topic0, *spec.dest_event_topics)
 
 
+def _source_event_matches(spec: BridgePairSpec, emitter: str, topic0: str | None) -> bool:
+    """True if a log is this spec's source order event. Matches topic0 always;
+    the emitter must be in source_contracts UNLESS source_match_topic0_only (a
+    distinctive event whose emitter is per-lane / unenumerable, e.g. CCIP)."""
+    if topic0 not in _source_topic0s(spec):
+        return False
+    if spec.source_match_topic0_only:
+        return True
+    return (emitter or "").lower() in spec.source_contracts
+
+
 def _derive_keccak_ascii_txhash(raw_receipt: dict[str, Any] | None) -> str | None:
     """Synapse-style derived id: keccak256 of the lowercase ASCII STRING of the
     source tx hash (the form the Synapse validator uses for kappa). VERIFIED vs
@@ -384,14 +432,13 @@ def extract_source_order_id(
     logs = raw_source_receipt.get("logs")
     if not isinstance(logs, list):
         return None
-    src_t0s = _source_topic0s(spec)
     for lg in logs:
         if not isinstance(lg, dict):
             continue
-        if (lg.get("address") or "").lower() not in spec.source_contracts:
-            continue
         topics = lg.get("topics") or []
-        if _topic(topics, 0) not in src_t0s:
+        if not _source_event_matches(
+            spec, (lg.get("address") or "").lower(), _topic(topics, 0)
+        ):
             continue
         if spec.source_order_id_topic is not None:
             oid = _topic(topics, spec.source_order_id_topic)
@@ -408,12 +455,13 @@ def _has_source_event(spec: BridgePairSpec, raw_receipt: dict[str, Any]) -> bool
     logs = raw_receipt.get("logs")
     if not isinstance(logs, list):
         return False
-    src_t0s = _source_topic0s(spec)
     for lg in logs:
         if not isinstance(lg, dict):
             continue
-        if (lg.get("address") or "").lower() in spec.source_contracts and \
-                _topic(lg.get("topics") or [], 0) in src_t0s:
+        if _source_event_matches(
+            spec, (lg.get("address") or "").lower(),
+            _topic(lg.get("topics") or [], 0),
+        ):
             return True
     return False
 
@@ -444,7 +492,7 @@ def identify_source(
         topics = lg.get("topics") or []
         t0 = _topic(topics, 0)
         for spec in _REGISTRY:
-            if emitter not in spec.source_contracts or t0 not in _source_topic0s(spec):
+            if not _source_event_matches(spec, emitter, t0):
                 continue
             # order id: derived (Synapse) or read from the event topic/word.
             if spec.source_id_kind == "keccak_ascii_txhash":
@@ -594,6 +642,15 @@ def confirm_bridge_destination(
                     _norm_word(t) for t in (lg.get("topics") or [])
                 }
                 if oid not in words:
+                    continue
+            # success-state gate (CCIP: ExecutionStateChanged.state==2) so a
+            # FAILED execution is never reported as a delivered destination.
+            if spec.dest_state_word is not None and spec.dest_state_ok is not None:
+                sw = _data_word(lg.get("data"), spec.dest_state_word)
+                try:
+                    if sw is None or int(sw, 16) != spec.dest_state_ok:
+                        continue
+                except ValueError:
                     continue
             dst_tx = lg.get("transactionHash") or lg.get("transaction_hash") or ""
             emitter = (lg.get("address") or query_addr or "").lower()

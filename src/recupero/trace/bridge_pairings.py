@@ -9,22 +9,20 @@ cross-chain edge may be assigned ``high`` confidence (protocol identity, not
 amount/time inference). Everything else (the existing ``bridge_matching``
 amount+time correlation) stays capped at ``medium``/``low``.
 
-How it confirms (no answer key):
-  1. Read the SOURCE order-creation event from the source tx receipt and extract
-     the order-id at the protocol's verified data offset.
-  2. Query the DESTINATION chain's fill-event logs (filter by the fill event's
-     topic0 over a settlement-time block window) and find the one whose payload
-     contains the SAME order-id. A 32-byte order-id is effectively unforgeable,
-     so an exact match is proof — not correlation.
-  3. The matched fill tx's largest ERC-20 payout identifies the recipient +
-     amount on the destination chain. ``None`` is returned when nothing matches
-     (the engine NEVER guesses a destination).
+Two verified pairing SHAPES are supported:
+
+  * **32-byte data id** (deBridge DLN): the order-id is an unforgeable bytes32
+    in the source order event's data; the destination fill event carries the
+    same bytes32. Matched by scanning the fill event payload for the exact id —
+    a 32-byte collision is impossible, so the match alone is proof.
+  * **indexed composite key** (Across): the id is a small ``depositId`` in an
+    INDEXED topic, unique only PER origin chain, so it is paired together with
+    the ``originChainId`` topic. Matched by a server-side topic filter
+    (depositId) plus an origin-chain-id check — the pair is unique.
 
 Each ``BridgePairSpec`` MUST be verified against a REAL on-chain source+dest
-pair before it is trusted — see docs/BRIDGE_PAIRING.md and the
-``tests/fixtures/zigha_dln_*`` fixtures. Guessing an event signature is exactly
-the wrong-selector class of bug (cf. the v0.28 DeBridge ``createOrder`` selectors
-that never matched a real order) this module exists to prevent.
+pair before it is trusted (see docs/BRIDGE_PAIRING.md). Guessing an event
+signature is exactly the wrong-selector class of bug this module prevents.
 """
 
 from __future__ import annotations
@@ -39,34 +37,63 @@ log = logging.getLogger(__name__)
 
 _ZERO_ADDR = "0x0000000000000000000000000000000000000000"
 
+#: chain value → real EVM chain id (Across encodes origin/destination as the
+#: real chain id in indexed topics).
+_REAL_CHAIN_ID: dict[str, int] = {
+    "ethereum": 1,
+    "optimism": 10,
+    "polygon": 137,
+    "arbitrum": 42161,
+    "base": 8453,
+    "bsc": 56,
+    "avalanche": 43114,
+    "zksync": 324,
+}
+_CHAIN_BY_REAL_ID: dict[int, str] = {v: k for k, v in _REAL_CHAIN_ID.items()}
+
 
 @dataclass(frozen=True)
 class BridgePairSpec:
     """How to pair a bridge's source order with its destination fill, verified
     against real on-chain data. Addresses are lowercased.
 
-    For deterministic-deploy protocols (DLN, canonical rollup bridges) the
-    source/dest contracts are the SAME address on every chain, so a single
-    address suffices; ``source_contracts`` is the set of source emitters and
-    ``dest_contract`` the destination fill emitter.
+    Source id location: exactly one of ``source_order_id_word`` (a 32-byte data
+    word index) or ``source_order_id_topic`` (an indexed-topic index).
+
+    Destination match: when ``dest_id_topic`` is set, the id is matched as an
+    indexed topic (server-side filter) and — if ``dest_origin_chain_topic`` is
+    set — the origin-chain-id topic must equal the source chain's real chain id
+    (the Across composite-key shape). Otherwise the id is a 32-byte value scanned
+    for anywhere in the fill event payload (the DLN shape).
+
+    Destination contract: ``dest_contract`` (a single deterministic-deploy
+    address used on every chain) OR ``dest_contracts`` (a per-chain map).
     """
 
     protocol: str
-    #: lowercased source-side emitter address(es) of the order-creation event
     source_contracts: frozenset[str]
-    #: keccak topic0 of the source order-creation event
     source_event_topic0: str
-    #: data-word index (32-byte words, 0-based) of the order-id in the source event
-    source_order_id_word: int
-    #: lowercased destination-side fill emitter (deterministic across chains)
-    dest_contract: str
-    #: keccak topic0 of the destination fill event
     dest_event_topic0: str
-    #: max protocol fee as a percent — destination amount must be within
-    #: [src*(1-maxfee), src]; used by the Phase-2 conservation check.
     max_fee_pct: Decimal
-    #: human note / provenance
+    # source id location (exactly one)
+    source_order_id_word: int | None = None
+    source_order_id_topic: int | None = None
+    # destination contract (one of)
+    dest_contract: str | None = None
+    dest_contracts: dict[str, str] | None = None
+    # destination match shape
+    dest_id_topic: int | None = None            # topic index of id on the fill (composite shape)
+    dest_origin_chain_topic: int | None = None  # topic index of originChainId on the fill
+    # topic index of destinationChainId (real chain id) on the SOURCE event, when
+    # the destination chain can be read straight from the source event rather
+    # than decoded from calldata (robust to periphery/multicall entrypoints).
+    source_dest_chain_topic: int | None = None
     notes: str = ""
+
+    def dest_contract_for(self, chain: str | None) -> str | None:
+        if self.dest_contracts is not None:
+            return self.dest_contracts.get((chain or "").lower())
+        return self.dest_contract
 
 
 @dataclass(frozen=True)
@@ -94,28 +121,60 @@ _DLN = BridgePairSpec(
     source_contracts=frozenset({"0xef4fb24ad0916217251f553c0596f8edc630eb66"}),
     # CreatedOrder(Order order, bytes32 orderId, ...) — orderId at data word 1
     # (word 0 is the dynamic `order` tuple offset pointer). VERIFIED on Arbitrum
-    # tx 0xd4bf228f… (Zigha): word 1 == 0x57825e7d…1f9b.
+    # tx 0xd4bf228f… (Zigha): word 1 == 0x57825e7d…1f9b == the Ethereum
+    # FulfilledOrder's orderId.
     source_event_topic0=(
         "0xfc8703fd57380f9dd234a89dce51333782d49c5902f307b02f03e014d18fe471"
     ),
     source_order_id_word=1,
-    # DlnDestination — deterministic deploy across EVM chains. VERIFIED on
-    # Ethereum tx 0x221c6c62… emitting FulfilledOrder with the SAME orderId.
+    # DlnDestination — deterministic deploy across EVM chains.
     dest_contract="0xe7351fd770a37282b91d153ee690b63579d6dd7f",
     dest_event_topic0=(
         "0xd281ee92bab1446041582480d2c0a9dc91f855386bb27ea295faac1e992f7fe4"
     ),
+    # 32-byte id scanned in the fill payload (no composite key needed).
     max_fee_pct=Decimal("1.0"),
     notes="deBridge DLN createSaltedOrder→FulfilledOrder; verified vs Zigha pair.",
 )
 
-_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN,)
+# Across V3 SpokePool — per-chain contracts; id is the small uint depositId in
+# an indexed topic, paired with originChainId. VERIFIED real pair: Base deposit
+# 0x91f8874e… (FundsDeposited topic0 0x32ed1a40, destChainId=1, depositId=
+# 5729990) → Ethereum fill 0xdd8c3fd0… (FilledRelay topic0 0x44b559f1,
+# originChainId=8453, depositId=5729990).
+_ACROSS_SPOKEPOOLS: dict[str, str] = {
+    "ethereum": "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5",
+    "arbitrum": "0xe35e9842fceaca1f60ef4db1a48a9c12d9c2db5e",
+    "optimism": "0x6f26bf09b1c792e3228e5467807a900a503c0281",
+    "base": "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64",
+    "polygon": "0x9295ee1d8c5b022be115a2ad3c30c72e34e7f096",
+}
+_ACROSS = BridgePairSpec(
+    protocol="Across",
+    source_contracts=frozenset(_ACROSS_SPOKEPOOLS.values()),
+    # FundsDeposited: topic1=destinationChainId, topic2=depositId, topic3=depositor.
+    source_event_topic0=(
+        "0x32ed1a409ef04c7b0227189c3a103dc5ac10e775a15b785dcc510201f7c25ad3"
+    ),
+    source_order_id_topic=2,            # depositId
+    dest_contracts=_ACROSS_SPOKEPOOLS,
+    # FilledRelay: topic1=originChainId, topic2=depositId, topic3=relayer.
+    dest_event_topic0=(
+        "0x44b559f101f8fbcc8a0ea43fa91a05a729a5ea6e14a7c75aa750374690137208"
+    ),
+    dest_id_topic=2,                    # depositId (server-filtered)
+    dest_origin_chain_topic=1,          # originChainId must == source chain id
+    source_dest_chain_topic=1,          # destinationChainId on FundsDeposited
+    max_fee_pct=Decimal("1.0"),
+    notes="Across V3 FundsDeposited→FilledRelay; verified Base→Ethereum pair.",
+)
+
+_REGISTRY: tuple[BridgePairSpec, ...] = (_DLN, _ACROSS)
 
 
 def get_pair_spec(protocol: str | None) -> BridgePairSpec | None:
     """Resolve a ``BridgePairSpec`` by bridge protocol/label substring (the same
-    permissive matching the calldata-decoder dispatch uses, e.g. 'deBridge DLN
-    Source' → DeBridge)."""
+    permissive matching the calldata-decoder dispatch uses)."""
     if not protocol:
         return None
     p = protocol.lower()
@@ -126,7 +185,6 @@ def get_pair_spec(protocol: str | None) -> BridgePairSpec | None:
 
 
 def _norm_word(w: str | None) -> str:
-    """Normalize a 32-byte hex word to lowercase 0x-prefixed."""
     if not w:
         return ""
     w = w.strip().lower()
@@ -136,31 +194,35 @@ def _norm_word(w: str | None) -> str:
 
 
 def _data_word(data_hex: str | None, idx: int) -> str | None:
-    """Return the ``idx``-th 32-byte word of event ``data`` as 0x-hex, or None."""
     if not data_hex:
         return None
     d = data_hex[2:] if data_hex.startswith("0x") else data_hex
-    start = idx * 64
-    end = start + 64
+    start, end = idx * 64, idx * 64 + 64
     if end > len(d):
         return None
     return "0x" + d[start:end].lower()
 
 
 def _all_words(data_hex: str | None) -> set[str]:
-    """Every 32-byte word in event ``data`` (for scanning for an order-id)."""
     if not data_hex:
         return set()
     d = data_hex[2:] if data_hex.startswith("0x") else data_hex
     return {"0x" + d[i:i + 64].lower() for i in range(0, len(d) - len(d) % 64, 64)}
 
 
+def _topic(topics: list[str] | None, idx: int) -> str | None:
+    if not topics or idx >= len(topics):
+        return None
+    return _norm_word(topics[idx])
+
+
 def extract_source_order_id(
     spec: BridgePairSpec, raw_source_receipt: dict[str, Any] | None
 ) -> str | None:
     """Pull the cross-chain order-id out of the source tx receipt's
-    order-creation event, at the spec's verified data offset. Returns None if
-    the event isn't present (defensive — never raises)."""
+    order-creation event, from the spec's verified location (a topic for the
+    composite shape, a data word for the 32-byte shape). Defensive — never raises.
+    """
     if not isinstance(raw_source_receipt, dict):
         return None
     logs = raw_source_receipt.get("logs")
@@ -172,11 +234,60 @@ def extract_source_order_id(
         if (lg.get("address") or "").lower() not in spec.source_contracts:
             continue
         topics = lg.get("topics") or []
-        if not topics or _norm_word(topics[0]) != spec.source_event_topic0:
+        if _topic(topics, 0) != spec.source_event_topic0:
             continue
-        oid = _data_word(lg.get("data"), spec.source_order_id_word)
+        if spec.source_order_id_topic is not None:
+            oid = _topic(topics, spec.source_order_id_topic)
+        else:
+            oid = _data_word(lg.get("data"), spec.source_order_id_word or 0)
         if oid and oid != "0x" + "0" * 64:
             return oid
+    return None
+
+
+def identify_source(
+    raw_source_receipt: dict[str, Any] | None,
+) -> tuple[BridgePairSpec, str, str | None] | None:
+    """Resolve ``(spec, order_id, destination_chain)`` from a source tx receipt
+    by scanning its EVENT LOGS for a known source order event.
+
+    Robust to periphery / multicall entrypoints: the tx ``to`` is often a router
+    or periphery contract, but the bridge contract still emits its order event in
+    the receipt, so we identify the protocol from the emitted event — not the tx
+    target. ``destination_chain`` is read from the source event's
+    destinationChainId topic when the spec declares one (Across); otherwise None
+    (the caller decodes it from calldata, e.g. DLN's takeChainId). Returns None
+    when no known source order event is present.
+    """
+    if not isinstance(raw_source_receipt, dict):
+        return None
+    logs = raw_source_receipt.get("logs")
+    if not isinstance(logs, list):
+        return None
+    for lg in logs:
+        if not isinstance(lg, dict):
+            continue
+        emitter = (lg.get("address") or "").lower()
+        topics = lg.get("topics") or []
+        t0 = _topic(topics, 0)
+        for spec in _REGISTRY:
+            if emitter not in spec.source_contracts or t0 != spec.source_event_topic0:
+                continue
+            if spec.source_order_id_topic is not None:
+                oid = _topic(topics, spec.source_order_id_topic)
+            else:
+                oid = _data_word(lg.get("data"), spec.source_order_id_word or 0)
+            if not oid or oid == "0x" + "0" * 64:
+                continue
+            dest_chain: str | None = None
+            if spec.source_dest_chain_topic is not None:
+                cid_word = _topic(topics, spec.source_dest_chain_topic)
+                if cid_word:
+                    try:
+                        dest_chain = _CHAIN_BY_REAL_ID.get(int(cid_word, 16))
+                    except ValueError:
+                        dest_chain = None
+            return spec, oid, dest_chain
     return None
 
 
@@ -184,8 +295,9 @@ def _fill_recipient_amount(
     dst_adapter: Any, dst_tx: str, *, infra: set[str]
 ) -> tuple[str | None, int | None]:
     """From the destination fill tx, return (recipient, raw_amount) of the
-    largest ERC-20 payout to a non-infra recipient. Best-effort: the order-id
-    match is the proof; this enriches it with the on-chain landing spot."""
+    largest ERC-20 payout to a TERMINAL non-infra recipient (one that doesn't
+    itself re-send within the tx — so we land on the resting receiver, not a
+    solver's internal swap leg). Best-effort; the id match is the proof."""
     from recupero.trace.swap_output import parse_erc20_transfers
 
     try:
@@ -196,20 +308,11 @@ def _fill_recipient_amount(
         return None, None
     transfers = parse_erc20_transfers(raw)
     infra_lc = {a.lower() for a in infra} | {_ZERO_ADDR}
-    # A bridge fill tx often contains the solver's own sourcing legs (e.g. a 0x
-    # swap settler→proxy→…) before the final payout. Pick the largest transfer
-    # to a TERMINAL recipient — one that does NOT itself re-send within this tx
-    # — so we land on the resting receiver (the decoded receiverDst), not an
-    # internal pass-through hop. Same terminal rule as swap_output.resolve_swap_output.
     senders_in_tx = {t.frm for t in transfers}
     best_to: str | None = None
     best_amt = 0
     for t in transfers:
-        if (
-            t.to in infra_lc
-            or t.amount <= 0
-            or t.to in senders_in_tx  # not terminal — it forwards onward in-tx
-        ):
+        if t.to in infra_lc or t.amount <= 0 or t.to in senders_in_tx:
             continue
         if t.amount > best_amt:
             best_amt = t.amount
@@ -224,15 +327,18 @@ def confirm_bridge_destination(
     source_receipt: dict[str, Any] | None,
     dst_adapter: Any,
     src_block_time: datetime,
+    source_chain: str | None = None,
     window_hours: float = 24.0,
     order_id: str | None = None,
 ) -> ConfirmedDestination | None:
-    """Confirm a bridge handoff's destination by matching the protocol order-id
-    on the destination chain. Returns a ``high``-confidence ``ConfirmedDestination``
-    on an exact order-id match, or ``None`` (never a guess).
+    """Confirm a bridge handoff's destination by matching the protocol id on the
+    destination chain. Returns a ``high``-confidence ``ConfirmedDestination`` on
+    an exact match, or ``None`` (never a guess).
 
     ``dst_adapter`` is the adapter for ``destination_chain`` and must expose
     ``fetch_logs`` + ``block_at_or_before`` + ``fetch_evidence_receipt``.
+    ``source_chain`` is required for the composite-key (Across) shape so the
+    origin-chain-id topic can be checked.
     """
     spec = get_pair_spec(protocol)
     if spec is None:
@@ -244,8 +350,10 @@ def confirm_bridge_destination(
     if not oid or oid == "0x" + "0" * 64:
         return None
 
-    # Destination block window: [src_time, src_time + window]. Fills settle in
-    # seconds-to-minutes; the window just bounds the log scan.
+    dst_contract = spec.dest_contract_for(destination_chain)
+    if not dst_contract:
+        return None
+
     try:
         from_block = dst_adapter.block_at_or_before(src_block_time)
     except Exception as exc:  # noqa: BLE001
@@ -258,31 +366,56 @@ def confirm_bridge_destination(
     except Exception:  # noqa: BLE001
         to_block = "latest"
 
+    # Build the destination log query. Composite shape filters the id server-side
+    # at its topic; 32-byte shape scans the payload.
+    topics_filter: list[str | None] | None = None
+    if spec.dest_id_topic is not None:
+        topics_filter = [None, None, None]
+        if 1 <= spec.dest_id_topic <= 3:
+            topics_filter[spec.dest_id_topic - 1] = oid
+
     try:
         logs = dst_adapter.fetch_logs(
-            spec.dest_contract, spec.dest_event_topic0,
-            from_block=from_block, to_block=to_block,
+            dst_contract, spec.dest_event_topic0,
+            from_block=from_block, to_block=to_block, topics=topics_filter,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("confirm: dest fetch_logs failed: %s", exc)
         return None
 
+    # Expected origin-chain-id topic value for the composite shape.
+    want_origin = None
+    if spec.dest_origin_chain_topic is not None and source_chain:
+        cid = _REAL_CHAIN_ID.get(source_chain.lower())
+        if cid is not None:
+            want_origin = "0x" + f"{cid:064x}"
+
     for lg in logs or []:
         if not isinstance(lg, dict):
             continue
-        words = _all_words(lg.get("data")) | {
-            _norm_word(t) for t in (lg.get("topics") or [])
-        }
-        if oid not in words:
-            continue
+        if spec.dest_id_topic is not None:
+            # composite shape: confirm the id topic + (origin chain id topic)
+            if _topic(lg.get("topics"), spec.dest_id_topic) != oid:
+                continue
+            if want_origin is not None and _topic(
+                lg.get("topics"), spec.dest_origin_chain_topic
+            ) != want_origin:
+                continue
+        else:
+            # 32-byte shape: scan the payload (+ topics) for the exact id.
+            words = _all_words(lg.get("data")) | {
+                _norm_word(t) for t in (lg.get("topics") or [])
+            }
+            if oid not in words:
+                continue
         dst_tx = lg.get("transactionHash") or lg.get("transaction_hash") or ""
         recipient, raw_amount = _fill_recipient_amount(
             dst_adapter, dst_tx,
-            infra={spec.dest_contract, *spec.source_contracts},
+            infra={dst_contract, *spec.source_contracts},
         )
         log.info(
-            "bridge destination CONFIRMED (order-id match): protocol=%s "
-            "order_id=%s dst_chain=%s dst_tx=%s recipient=%s",
+            "bridge destination CONFIRMED (id match): protocol=%s id=%s "
+            "dst_chain=%s dst_tx=%s recipient=%s",
             spec.protocol, oid[:14] + "…", destination_chain, dst_tx, recipient,
         )
         return ConfirmedDestination(
@@ -290,14 +423,19 @@ def confirm_bridge_destination(
             order_id=oid,
             dst_chain=destination_chain or "",
             dst_tx=dst_tx,
-            dst_contract=spec.dest_contract,
+            dst_contract=dst_contract,
             recipient=recipient,
             raw_amount=raw_amount,
             confidence="high",
             basis=(
-                f"order-id {oid} emitted by {spec.protocol} on both the source "
-                f"order ({spec.source_event_topic0[:10]}…) and the destination "
-                f"fill ({spec.dest_event_topic0[:10]}…) — cryptographic match"
+                f"protocol id {oid} matched on both the {spec.protocol} source "
+                f"event ({spec.source_event_topic0[:10]}…) and the destination "
+                f"fill ({spec.dest_event_topic0[:10]}…)"
+                + (
+                    f" with origin-chain-id == {source_chain}"
+                    if spec.dest_origin_chain_topic is not None else ""
+                )
+                + " — cryptographic match"
             ),
         )
     return None
@@ -308,5 +446,6 @@ __all__ = (
     "ConfirmedDestination",
     "get_pair_spec",
     "extract_source_order_id",
+    "identify_source",
     "confirm_bridge_destination",
 )

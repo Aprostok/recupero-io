@@ -26,9 +26,20 @@ destination fill event over a settlement window, and returns a
 
 Only protocols whose source order-id offset AND destination fill event have been
 confirmed against a **real on-chain source+destination pair** live in
-`_REGISTRY`. Today: **deBridge DLN** (verified against the Zigha pair — Arbitrum
-`createSaltedOrder`→`CreatedOrder`, Ethereum `FulfilledOrder`, order-id
-`0x57825e7d…`, recipient `0xc1ee32fa…`, 2,919,869 DAI).
+`_REGISTRY`. Two pairing SHAPES are supported:
+
+* **32-byte data id** — **deBridge DLN** (verified vs the Zigha pair: Arbitrum
+  `createSaltedOrder`→`CreatedOrder`, Ethereum `FulfilledOrder`, order-id
+  `0x57825e7d…`, recipient `0xc1ee32fa…`, 2,919,869 DAI). The id is an
+  unforgeable bytes32 scanned for in the fill payload.
+* **indexed composite key** — **Across V3** (verified vs a real Base→Ethereum
+  pair: `FundsDeposited`→`FilledRelay`, paired on `(depositId, originChainId)`
+  in indexed topics, server-filtered; per-chain SpokePool addresses). depositId
+  is a small int unique only per origin chain, so it is paired with originChainId.
+
+Protocol + order-id + destination chain are resolved from the source tx's EVENT
+LOGS (`identify_source`), not the tx `to` — robust to periphery/multicall
+entrypoints (Across deposits route through a periphery contract).
 
 ## The recipe — adding a protocol WITHOUT re-introducing wrong-signature bugs
 
@@ -78,7 +89,7 @@ ship a signature that hasn't matched a real tx. For each new protocol:
 
 ## Candidate protocols to add next (each needs the recipe above)
 
-Across, Stargate/LayerZero, Wormhole, CCIP, Synapse, Hop, Celer cBridge,
+Stargate/LayerZero, Wormhole, CCIP, Synapse, Hop, Celer cBridge,
 Connext, Axelar, Squid, Symbiosis, Allbridge, Mayan, Orbiter — plus the
 canonical rollup bridges (Arbitrum/Optimism/Base/Polygon/zkSync), whose deposits
 are deterministic (L2 mint to the depositor) and confirmable by

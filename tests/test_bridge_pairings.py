@@ -186,3 +186,117 @@ def test_confirm_explicit_order_id_overrides_source_parse() -> None:
         order_id=ORDER_ID,
     )
     assert out is not None and out.order_id == ORDER_ID
+
+
+# ===================== Across (indexed composite-key shape) =================
+# Verified real pair: Base deposit 0x91f8874e (FundsDeposited 0x32ed1a40,
+# destChainId=1, depositId=5729990) → Ethereum fill 0xdd8c3fd0 (FilledRelay
+# 0x44b559f1, originChainId=8453, depositId=5729990).
+
+ACROSS_DEPOSIT_T0 = "0x32ed1a409ef04c7b0227189c3a103dc5ac10e775a15b785dcc510201f7c25ad3"
+ACROSS_FILL_T0 = "0x44b559f101f8fbcc8a0ea43fa91a05a729a5ea6e14a7c75aa750374690137208"
+SPOKE_BASE = "0x09aea4b2242abc8bb4bb78d537a67a245a7bec64"
+SPOKE_ETH = "0x5c7bcd6e7de5423a257d81b442095a1a6ced35c5"
+DEPOSIT_ID = 5729990
+USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+ACROSS_RECIPIENT = "0x" + "ce" * 20
+ACROSS_AMOUNT = 1_000_000_000
+
+
+def _padint(n: int) -> str:
+    return "0x" + f"{n:064x}"
+
+
+def _across_source_receipt(deposit_id: int = DEPOSIT_ID, dest_chain_id: int = 1) -> dict[str, Any]:
+    return {"logs": [{
+        "address": SPOKE_BASE,
+        "topics": [
+            ACROSS_DEPOSIT_T0, _padint(dest_chain_id), _padint(deposit_id),
+            _topic_addr("0x" + "d0" * 20),
+        ],
+        "data": "0x" + _word("0x0"),
+    }]}
+
+
+def _across_fill_log(deposit_id: int = DEPOSIT_ID, origin_chain_id: int = 8453,
+                     tx: str = "0xafill") -> dict[str, Any]:
+    return {
+        "address": SPOKE_ETH,
+        "topics": [
+            ACROSS_FILL_T0, _padint(origin_chain_id), _padint(deposit_id),
+            _topic_addr("0x" + "d0" * 20),
+        ],
+        "data": "0x",
+        "transactionHash": tx,
+    }
+
+
+class _FakeAcrossAdapter:
+    def __init__(self, logs: list[dict[str, Any]]) -> None:
+        self._logs = logs
+
+    def block_at_or_before(self, ts: datetime) -> int:
+        return 100
+
+    def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
+        if address.lower() == SPOKE_ETH and topic0.lower() == ACROSS_FILL_T0:
+            return list(self._logs)
+        return []
+
+    def fetch_evidence_receipt(self, tx_hash: str) -> Any:
+        return SimpleNamespace(raw_receipt={"logs": [{
+            "address": USDC,
+            "topics": [ERC20_TRANSFER, _topic_addr(SPOKE_ETH), _topic_addr(ACROSS_RECIPIENT)],
+            "data": hex(ACROSS_AMOUNT),
+        }]})
+
+
+def test_across_registry_and_per_chain_dest_contract() -> None:
+    spec = get_pair_spec("Across")
+    assert spec is not None
+    assert spec.dest_contract_for("ethereum") == SPOKE_ETH
+    assert spec.dest_contract_for("base") == SPOKE_BASE
+    assert spec.dest_contract_for("zzznotachain") is None
+
+
+def test_across_extract_depositid_from_indexed_topic() -> None:
+    spec = get_pair_spec("Across")
+    assert extract_source_order_id(spec, _across_source_receipt()) == _padint(DEPOSIT_ID)
+
+
+def test_across_confirm_composite_key_match_high() -> None:
+    adapter = _FakeAcrossAdapter([_across_fill_log()])
+    out = confirm_bridge_destination(
+        protocol="Across", destination_chain="ethereum",
+        source_receipt=_across_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 10, 9, tzinfo=UTC), source_chain="base",
+    )
+    assert out is not None
+    assert out.confidence == "high"
+    assert out.order_id == _padint(DEPOSIT_ID)
+    assert out.dst_tx == "0xafill"
+    assert (out.recipient or "").lower() == ACROSS_RECIPIENT
+    assert out.raw_amount == ACROSS_AMOUNT
+
+
+def test_across_wrong_origin_chain_returns_none() -> None:
+    """The fill carries the right depositId but a DIFFERENT originChainId than
+    the source chain → NOT our deposit (depositId is unique only per origin
+    chain). The composite-key check rejects it — no false positive."""
+    adapter = _FakeAcrossAdapter([_across_fill_log(origin_chain_id=42161)])  # arbitrum, not base
+    out = confirm_bridge_destination(
+        protocol="Across", destination_chain="ethereum",
+        source_receipt=_across_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 10, 9, tzinfo=UTC), source_chain="base",
+    )
+    assert out is None
+
+
+def test_across_wrong_depositid_returns_none() -> None:
+    adapter = _FakeAcrossAdapter([_across_fill_log(deposit_id=999999)])
+    out = confirm_bridge_destination(
+        protocol="Across", destination_chain="ethereum",
+        source_receipt=_across_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 10, 9, tzinfo=UTC), source_chain="base",
+    )
+    assert out is None

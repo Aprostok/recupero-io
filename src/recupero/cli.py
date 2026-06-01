@@ -337,9 +337,8 @@ def confirm_bridge_cmd(
     from recupero.trace.bridge_calldata import decode_bridge_calldata
     from recupero.trace.bridge_pairings import (
         confirm_bridge_destination,
-        get_pair_spec,
+        identify_source,
     )
-    from recupero.trace.cross_chain import ingest_bridge_seeds
 
     adapter = ChainAdapter.for_chain(src_chain, (cfg, env))
     try:
@@ -349,37 +348,38 @@ def confirm_bridge_cmd(
         adapter.close()
         raise typer.Exit(code=3) from None
 
-    to_addr = (ev.raw_transaction or {}).get("to") or ""
     input_data = (ev.raw_transaction or {}).get("input") or "0x"
 
-    # Identify the bridge protocol from the destination contract's label, then
-    # decode the source calldata to learn the destination chain.
-    from recupero._common import canonical_address_key as _ck
-    bridge_db = ingest_bridge_seeds()
-    info = bridge_db.get((src_chain, _ck(to_addr)))
-    protocol = info.protocol if info else None
-    if get_pair_spec(protocol) is None:
+    # Identify the protocol + order-id from the receipt's EVENT LOGS (robust to
+    # periphery / multicall entrypoints where the tx `to` isn't the bridge).
+    identified = identify_source(ev.raw_receipt)
+    if identified is None:
         console.print(
-            f"[yellow]No verified bridge-pairing spec for protocol="
-            f"{protocol!r} (contract {to_addr}).[/] "
-            "Supported core: deBridge DLN. See docs/BRIDGE_PAIRING.md to add one."
+            f"[yellow]No verified bridge-pairing source event found in {tx}.[/] "
+            "Supported core: deBridge DLN, Across. See docs/BRIDGE_PAIRING.md."
         )
         adapter.close()
         raise typer.Exit(code=0)
+    spec, order_id, dst_chain_str = identified
+    protocol = spec.protocol
 
-    decoded = decode_bridge_calldata(bridge_protocol=protocol, input_data=input_data)
-    dst_chain_str = decoded.destination_chain if decoded else None
+    # Destination chain: from the source event when available (Across), else
+    # decode it from the source calldata (DLN takeChainId).
+    if not dst_chain_str:
+        decoded = decode_bridge_calldata(bridge_protocol=protocol, input_data=input_data)
+        dst_chain_str = decoded.destination_chain if decoded else None
     if not dst_chain_str:
         console.print(
-            f"[yellow]Recognized {protocol} but could not decode the destination "
-            "chain from the source calldata — cannot target a destination chain.[/]"
+            f"[yellow]Recognized {protocol} (order-id {order_id[:14]}…) but could "
+            "not determine the destination chain.[/]"
         )
         adapter.close()
         raise typer.Exit(code=0)
 
     console.print(
         f"[bold]Source:[/] {protocol} on {src_chain.value}  tx={tx}\n"
-        f"[bold]Decoded destination chain:[/] {dst_chain_str}  "
+        f"[bold]Order id:[/] {order_id}\n"
+        f"[bold]Destination chain:[/] {dst_chain_str}  "
         f"(scanning ±{window_hours:.0f}h for the matching fill)"
     )
     try:
@@ -397,7 +397,9 @@ def confirm_bridge_cmd(
             source_receipt=ev.raw_receipt,
             dst_adapter=dst_adapter,
             src_block_time=ev.block_time,
+            source_chain=src_chain.value,
             window_hours=window_hours,
+            order_id=order_id,
         )
     finally:
         dst_adapter.close()

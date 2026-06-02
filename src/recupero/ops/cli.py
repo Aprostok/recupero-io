@@ -285,6 +285,25 @@ def cli() -> None:
              "(default: attribution_feed).",
     )
 
+    # ----- benchmark (v0.35.12 / J1) ----- #
+    p_bench = sub.add_parser(
+        "benchmark",
+        help="Score a finished trace against an independently-verified "
+             "ground-truth endpoint set: recall (did we reach the known "
+             "endpoints?), endpoint precision, F1, and the missed/spurious "
+             "lists. Ground truth is supplied as JSON.",
+    )
+    p_bench.add_argument(
+        "--case", dest="benchmark_case", required=True,
+        help="Path to the case directory (containing case.json + "
+             "freeze_brief.json).",
+    )
+    p_bench.add_argument(
+        "--truth", dest="benchmark_truth", required=True,
+        help="Path to the ground-truth JSON "
+             "({case_id, endpoints[], by_category{}, notes}).",
+    )
+
     # ----- bridge-sync (v0.29.1 Recommendation #5) ----- #
     p_bridge_sync = sub.add_parser(
         "bridge-sync",
@@ -954,6 +973,28 @@ def cli() -> None:
         )
         if result.skipped_reasons:
             print(f"  skipped breakdown: {result.skipped_reasons}")
+        sys.exit(0)
+
+    if args.command == "benchmark":
+        import json as _json
+        from pathlib import Path as _Path
+
+        from recupero.trace.benchmark import load_ground_truth, score_case_dir
+        case_dir = _Path(args.benchmark_case)
+        truth_path = _Path(args.benchmark_truth)
+        if not case_dir.exists():
+            print(f"ERROR: case dir not found: {case_dir}", file=sys.stderr)
+            sys.exit(2)
+        if not truth_path.exists():
+            print(f"ERROR: ground-truth not found: {truth_path}", file=sys.stderr)
+            sys.exit(2)
+        try:
+            truth = load_ground_truth(truth_path)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        score = score_case_dir(case_dir, truth)
+        print(_json.dumps(score.to_dict(), indent=2))
         sys.exit(0)
 
     if args.command == "bridge-sync":

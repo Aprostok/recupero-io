@@ -403,6 +403,47 @@ def cli() -> None:
              "missing). Default: ./law-firm-dashboards/",
     )
 
+    # ----- watchlist-dashboard (v0.35.0) ----- #
+    p_watch_dash = sub.add_parser(
+        "watchlist-dashboard",
+        help="Render the Watchlist / Watcher dashboard — every address "
+             "under monitoring, where it sits, and whether it has MOVED "
+             "since the last re-check. Run watchlist-run first to refresh "
+             "the on-chain snapshots.",
+    )
+    p_watch_dash.add_argument(
+        "--output-dir", type=str, default="watchlist-dashboard",
+        help="Directory to write the rendered HTML (created if missing). "
+             "Default: ./watchlist-dashboard/",
+    )
+    p_watch_dash.add_argument(
+        "--investigation-id", dest="investigation_id", default=None,
+        help="Scope to one investigation UUID. Omit for the global view.",
+    )
+    p_watch_dash.add_argument(
+        "--stale-after-hours", dest="stale_after_hours", type=int, default=24,
+        help="Flag a watched address as DUE for re-check when its last "
+             "snapshot is older than this. Default: 24 (daily). Use 720 "
+             "for a monthly cadence.",
+    )
+
+    # ----- watchlist-run (v0.35.0) ----- #
+    p_watch_run = sub.add_parser(
+        "watchlist-run",
+        help="Trigger a watchlist re-check tick: snapshot the on-chain "
+             "balance / tx-count of every eligible watched address and "
+             "record movement. The daily/monthly job; safe to run on "
+             "demand (per-row cooldowns prevent redundant work).",
+    )
+    p_watch_run.add_argument(
+        "--parallelism", type=int, default=None,
+        help="Concurrent snapshot workers (default: env / 4).",
+    )
+    p_watch_run.add_argument(
+        "--limit", type=int, default=None,
+        help="Max rows to snapshot this tick (default: all eligible).",
+    )
+
     # ----- validate-output (v0.28.0 / JACOB-3) ----- #
     p_val = sub.add_parser(
         "validate-output",
@@ -994,6 +1035,46 @@ def cli() -> None:
             )
             sys.exit(2)
         print(f"Rendered law-firm dashboard to {out_path}")
+        sys.exit(0)
+
+    if args.command == "watchlist-dashboard":
+        from pathlib import Path as _Path
+
+        from recupero.reports.watchlist_dashboard import (
+            render_watchlist_dashboard,
+        )
+        out_path = render_watchlist_dashboard(
+            output_dir=_Path(args.output_dir),
+            dsn=_require_dsn(),
+            investigation_id=args.investigation_id,
+            stale_after_hours=args.stale_after_hours,
+        )
+        if out_path is None:
+            print(
+                "ERROR: watchlist dashboard render failed — DB unreachable.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(f"Rendered watchlist dashboard to {out_path}")
+        sys.exit(0)
+
+    if args.command == "watchlist-run":
+        from recupero.config import load_config
+        from recupero.worker.watch_tick import run_watch_tick
+        cfg, env = load_config()
+        report = run_watch_tick(
+            dsn=_require_dsn(), config=cfg, env=env,
+            parallelism=args.parallelism, limit=args.limit,
+        )
+        print(
+            f"watchlist-run: snapshotted {report.snapshotted}/"
+            f"{report.candidates} eligible · "
+            f"{len(report.material_changes)} moved · "
+            f"{report.skipped_cooldown} on cooldown · "
+            f"{len(report.errors)} errors"
+        )
+        for mc in report.material_changes:
+            print(f"  MOVED: {mc}")
         sys.exit(0)
 
     if args.command == "validate-output":

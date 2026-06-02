@@ -37,6 +37,8 @@
   #graph-wrap { position:relative; }
   svg#map { width:100vw; height:calc(100vh - 210px); display:block; background:#0f1014; cursor:grab; touch-action:none; }
   svg#map:active { cursor:grabbing; }
+  canvas#cmap { position:absolute; top:0; left:0; display:none; background:#0f1014; cursor:grab; touch-action:none; }
+  canvas#cmap:active { cursor:grabbing; }
   .edge { fill:none; } .edge.cross { stroke-dasharray:5 4; } .edge.dim { opacity:.10; }
   .edge.hot { stroke:#7fe7a8 !important; } .edge.path { stroke:#93c5fd !important; stroke-opacity:1; } .edge.hidden { display:none; }
   .node { cursor:pointer; } .node circle { stroke-width:2.5; }
@@ -98,6 +100,7 @@
     <button type="button" class="btn" id="btn-csv">CSV</button>
     <select id="snap-list" title="Saved views"><option value="">Saved views…</option></select>
     <button type="button" class="btn" id="btn-save-view">Save view</button>
+    <button type="button" class="btn" id="btn-canvas" title="Canvas renderer — scales to large graphs">Canvas</button>
   </div>
   <div class="bar filters">
     <label>Min value <input type="range" id="f-min" min="0" max="100" value="0"><span id="f-min-lab" style="min-width:70px;">$0</span></label>
@@ -112,6 +115,7 @@
   <p class="note" id="path-hint" hidden>Path mode: click start point, then end point.</p>
   <div id="graph-wrap">
     <svg id="map" role="img" aria-label="Operator fund-flow graph"></svg>
+    <canvas id="cmap" aria-hidden="true"></canvas>
     <svg id="mini" aria-hidden="true"></svg>
     <div id="tip"></div>
     <div id="panel" aria-live="polite"></div>
@@ -175,7 +179,7 @@ function initGraph(DATA, viewId) {
   let minUsd = 0, asset = "", timeCutoff = null, layout = "force", colorBy = "recoverability";
   let pathMode = false, pickA = null;
   const pathNodes = new Set(), pathEdges = new Set();
-  let selected = null, isolated = null;
+  let selected = null, isolated = null, isoKeep = null;
   const expandedHops = new Set();   // "address|direction" already pulled in
   let annotations = {};             // node_id -> note (server-backed)
   const adminKey = () => sessionStorage.getItem("recupero.adminkey") || "";
@@ -263,7 +267,61 @@ function initGraph(DATA, viewId) {
   function recolor(){ for (const g of nodeEls){ const ci=g.querySelector("circle"); if(ci) ci.setAttribute("fill", nodeFill(g.__n)); } buildLegend(); }
   let miniTick=0;
   function paint(){ const sankey=(layout==="value"); for (const ln of edgeEls){ const e=ln.__e,a=pos.get(e.source),b=pos.get(e.target); if(!a||!b)continue; if(sankey){ const dx=(b.x-a.x)*0.5; ln.setAttribute("d",`M${a.x},${a.y} C${a.x+dx},${a.y} ${b.x-dx},${b.y} ${b.x},${b.y}`); } else { ln.setAttribute("d",`M${a.x},${a.y} L${b.x},${b.y}`); } } for (const g of nodeEls){ const p=pos.get(g.__n.id); g.setAttribute("transform",`translate(${p.x},${p.y})`);} if((miniTick=(miniTick+1)%12)===0) drawMini(); }
-  function loop(){ step(); paint(); requestAnimationFrame(loop); }
+  // ---- canvas renderer (4.11) — scales past what SVG handles ----
+  const canvas = document.getElementById("cmap");
+  const ctx = canvas.getContext("2d");
+  const DPR = window.devicePixelRatio || 1;
+  let useCanvas = false;
+  function sizeCanvas(){ canvas.width = W * DPR; canvas.height = H * DPR; canvas.style.width = W + "px"; canvas.style.height = H + "px"; }
+  function paintCanvas(){
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0); ctx.clearRect(0, 0, W, H);
+    ctx.save(); ctx.translate(tx, ty); ctx.scale(scale, scale);
+    const sankey = (layout === "value");
+    for (const e of view.edges){
+      if (!edgeVisible(e)) continue;
+      const a = pos.get(e.source), b = pos.get(e.target); if (!a || !b) continue;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y);
+      if (sankey){ const dx = (b.x - a.x) * 0.5; ctx.bezierCurveTo(a.x + dx, a.y, b.x - dx, b.y, b.x, b.y); } else { ctx.lineTo(b.x, b.y); }
+      const onPath = pathEdges.has(e.id);
+      ctx.globalAlpha = (isoKeep && !(e.source === isolated || e.target === isolated)) ? 0.1 : 0.85;
+      ctx.strokeStyle = onPath ? "#93c5fd" : (e.cross ? EDGE_CROSS : EDGE_COL);
+      ctx.lineWidth = Math.max(1, Math.min(7, Math.log10((e.usd || 0) + 1) * 0.9));
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    const showLabels = scale > 0.55;
+    for (const n of view.nodes){
+      const p = pos.get(n.id), r = radius(n);
+      const sel = (selected && selected.kind === "node" && selected.n.id === n.id) || pathNodes.has(n.id);
+      ctx.globalAlpha = (isoKeep && !isoKeep.has(n.id)) ? 0.16 : 1;
+      ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 2 * Math.PI);
+      ctx.fillStyle = nodeFill(n); ctx.fill();
+      ctx.lineWidth = sel ? 4 : 2.5;
+      ctx.strokeStyle = sel ? "#93c5fd" : (n.kind === "cluster" ? "#fff" : (n.chainColor || "#94A3B8"));
+      ctx.stroke();
+      if (n.kind === "cluster"){ ctx.fillStyle = "#fff"; ctx.font = "bold 10px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(String(n.size), p.x, p.y); }
+      if (showLabels || r > 16){ ctx.fillStyle = "#e6e7eb"; ctx.font = "11px sans-serif"; ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillText((n.label || n.short || "").slice(0, 24), p.x, p.y + r + 2); }
+    }
+    ctx.restore(); ctx.globalAlpha = 1;
+  }
+  function canvasNodeAt(ev){
+    const wx = (ev.offsetX - tx) / scale, wy = (ev.offsetY - ty) / scale;
+    let best = null, bd = 1e9;
+    for (const n of view.nodes){ const p = pos.get(n.id); if (!p) continue; const r = radius(n); const d = Math.hypot(p.x - wx, p.y - wy); if (d <= r && d < bd){ bd = d; best = n; } }
+    return best;
+  }
+  // canvas pan/zoom + node hit-testing (node drag is SVG-only; canvas is the scale view)
+  let cPan = null, cMoved = false;
+  canvas.addEventListener("wheel", ev => { ev.preventDefault(); const r = canvas.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top; const f = ev.deltaY < 0 ? 1.12 : 1 / 1.12, ns = Math.max(.2, Math.min(5, scale * f)); tx = mx - (mx - tx) * (ns / scale); ty = my - (my - ty) * (ns / scale); scale = ns; }, { passive: false });
+  canvas.addEventListener("pointerdown", ev => { cPan = { x: ev.clientX, y: ev.clientY, tx, ty }; cMoved = false; });
+  window.addEventListener("pointermove", ev => { if (!cPan) return; if (Math.abs(ev.clientX - cPan.x) + Math.abs(ev.clientY - cPan.y) > 4) cMoved = true; tx = cPan.tx + (ev.clientX - cPan.x); ty = cPan.ty + (ev.clientY - cPan.y); });
+  window.addEventListener("pointerup", () => { cPan = null; });
+  canvas.addEventListener("click", ev => { if (cMoved) return; const n = canvasNodeAt(ev); if (n) onClick(n); else clearSelection(); });
+  canvas.addEventListener("mousemove", ev => { if (cPan) { hideTip(); return; } const n = canvasNodeAt(ev); if (n) nodeTip(ev, n); else hideTip(); });
+  canvas.addEventListener("mouseleave", hideTip);
+  function setRenderer(on){ useCanvas = on; sizeCanvas(); svg.style.display = on ? "none" : "block"; canvas.style.display = on ? "block" : "none"; document.getElementById("btn-canvas").classList.toggle("on", on); }
+
+  function loop(){ step(); if (useCanvas) { paintCanvas(); if((miniTick=(miniTick+1)%12)===0) drawMini(); } else { paint(); } requestAnimationFrame(loop); }
   function rebuild(reheat){ view=buildView(); seedPositions(view); computeRadial(view); computeValueRanks(view); render(); if(reheat)alpha=.9; saveState(); }
 
   function edgeVisible(e){ if(e.usd<minUsd)return false; if(asset&&!(e.assets&&e.assets.has(asset)))return false; if(timeCutoff&&e.first&&e.first>timeCutoff)return false; return true; }
@@ -287,8 +345,8 @@ function initGraph(DATA, viewId) {
   function selectEdge(e){ selected={kind:"edge",e}; clearIsolate(); markSelected(); for (const ln of edgeEls) ln.classList.toggle("hot",ln.__e===e); showEdgePanel(e); }
   function clearSelection(){ selected=null; clearIsolate(); markSelected(); panel.classList.remove("show"); }
   function markSelected(){ for (const g of nodeEls) g.classList.toggle("sel", selected&&selected.kind==="node"&&g.__n.id===selected.n.id); }
-  function isolate(id){ isolated=id; const keep=new Set([id]); for (const e of view.edges){ if(e.source===id)keep.add(e.target); if(e.target===id)keep.add(e.source);} for (const g of nodeEls) g.classList.toggle("dim",!keep.has(g.__n.id)); for (const ln of edgeEls){ const on=ln.__e.source===id||ln.__e.target===id; ln.classList.toggle("dim",!on); ln.classList.toggle("hot",on);} }
-  function clearIsolate(){ isolated=null; for (const g of nodeEls) g.classList.remove("dim"); for (const ln of edgeEls) ln.classList.remove("dim","hot"); }
+  function isolate(id){ isolated=id; const keep=new Set([id]); for (const e of view.edges){ if(e.source===id)keep.add(e.target); if(e.target===id)keep.add(e.source);} isoKeep=keep; for (const g of nodeEls) g.classList.toggle("dim",!keep.has(g.__n.id)); for (const ln of edgeEls){ const on=ln.__e.source===id||ln.__e.target===id; ln.classList.toggle("dim",!on); ln.classList.toggle("hot",on);} }
+  function clearIsolate(){ isolated=null; isoKeep=null; for (const g of nodeEls) g.classList.remove("dim"); for (const ln of edgeEls) ln.classList.remove("dim","hot"); }
   function reapplyHighlights(){ if(selected&&selected.kind==="node"){isolate(selected.n.id);markSelected();} if(pathNodes.size)paintPath(); }
 
   function row(p,k,v){ const r=document.createElement("div");r.className="p-row";const a=document.createElement("span");a.className="k";a.textContent=k;const b=document.createElement("span");b.className="v";b.textContent=v;r.appendChild(a);r.appendChild(b);p.appendChild(r); }
@@ -431,6 +489,7 @@ function initGraph(DATA, viewId) {
   document.getElementById("btn-fit").onclick=fit;
   document.getElementById("btn-png").onclick=exportPNG;
   document.getElementById("btn-csv").onclick=exportCSV;
+  document.getElementById("btn-canvas").onclick=()=>setRenderer(!useCanvas);
 
   const fmin=document.getElementById("f-min"),fminLab=document.getElementById("f-min-lab");
   fmin.value=String(Math.round((minUsd/maxEdgeUsd)*100));
@@ -446,7 +505,7 @@ function initGraph(DATA, viewId) {
   if(trng&&trng.min&&trng.max&&trng.min!==trng.max){ const scrub=document.getElementById("scrubber");scrub.hidden=false; const d0=new Date(trng.min+"T00:00:00Z").getTime(),d1=new Date(trng.max+"T00:00:00Z").getTime(); document.getElementById("tl-from").textContent=trng.min; const slider=document.getElementById("tl-range"),toLab=document.getElementById("tl-to");toLab.textContent=trng.max; const setFrom=()=>{const f=slider.value/100;const iso=new Date(d0+f*(d1-d0)).toISOString().slice(0,10);timeCutoff=(+slider.value>=100)?null:iso;toLab.textContent=iso;applyFilters();}; slider.addEventListener("input",setFrom); let playing=null;const pb=document.getElementById("tl-play"); pb.onclick=()=>{if(playing){clearInterval(playing);playing=null;pb.textContent="▶ Play";return;}if(+slider.value>=100)slider.value=0;pb.textContent="❚❚ Pause";playing=setInterval(()=>{slider.value=Math.min(100,+slider.value+2);setFrom();if(+slider.value>=100){clearInterval(playing);playing=null;pb.textContent="▶ Play";}},120);}; }
 
   function fit(){ if(!view.nodes.length)return; let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity; for(const n of view.nodes){const p=pos.get(n.id);a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y);} const bw=(c-a)||1,bh=(d-b)||1,pad=70; scale=Math.max(.2,Math.min(2,Math.min((W-pad)/bw,(H-pad)/bh))); tx=W/2-((a+c)/2)*scale; ty=H/2-((b+d)/2)*scale; applyT(); }
-  window.addEventListener("resize",()=>{W=svg.clientWidth||W;H=svg.clientHeight||H;computeRadial(view);});
+  window.addEventListener("resize",()=>{W=svg.clientWidth||W;H=svg.clientHeight||H;computeRadial(view);if(useCanvas)sizeCanvas();});
 
   // ---- server-backed annotations + saved views (Phase 3.9) ----
   const API = "/v1/operator/graph/" + encodeURIComponent(viewId || "");

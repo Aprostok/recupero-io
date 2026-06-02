@@ -211,6 +211,10 @@ class WatchTickReport:
     skipped_unsupported_chain: int
     errors: list[str] = field(default_factory=list)
     material_changes: list[MaterialChange] = field(default_factory=list)
+    # v0.35.13 (D6): prioritized recovery alerts derived from the material
+    # changes (freezable/tracked funds moving, dormant reactivation). Populated
+    # at the end of run_watch_tick; consumed by the digest / notification path.
+    alerts: list[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -340,13 +344,21 @@ def run_watch_tick(
                 delta_usd_threshold=delta_usd_threshold, report=report,
             )
 
+    # v0.35.13 (D6): derive prioritized recovery alerts from the material
+    # changes computed above. Pure + additive — never raises into the tick.
+    try:
+        from recupero.monitoring.recovery_alerts import evaluate_recovery_alerts
+        report.alerts = evaluate_recovery_alerts(report.material_changes)
+    except Exception as _exc:  # noqa: BLE001 — alerting must never break the tick
+        log.warning("watch-tick: recovery-alert evaluation failed (%s)", _exc)
+
     report.finished_at = datetime.now(UTC)
     log.info(
         "watch-tick done: candidates=%d snapshotted=%d cooldown=%d "
-        "unsupported_chain=%d material_changes=%d errors=%d",
+        "unsupported_chain=%d material_changes=%d alerts=%d errors=%d",
         report.candidates, report.snapshotted, report.skipped_cooldown,
         report.skipped_unsupported_chain, len(report.material_changes),
-        len(report.errors),
+        len(report.alerts), len(report.errors),
     )
     return report
 

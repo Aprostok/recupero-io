@@ -485,28 +485,81 @@ def _fanout_graph(n: int) -> tuple[dict[str, Any], list[str]]:
     return edges, children
 
 
-def test_service_wallet_threshold_stops_traversal_by_default(
+def _valued_fanout(amounts: list[str]) -> tuple[dict[str, Any], list[str]]:
+    """Seed → len(amounts) children with the given ETH amounts (so top-N-by-value
+    is well-defined); each child → 1 grandchild (lets us see which were traversed)."""
+    children = [f"0x{i + 1:040x}" for i in range(len(amounts))]
+    edges: dict[str, Any] = {
+        SEED: [
+            _native_row(f"0xfeed{i:02x}", SEED, c, eth_amount=amt)
+            for i, (c, amt) in enumerate(zip(children, amounts, strict=True))
+        ]
+    }
+    for i, c in enumerate(children):
+        edges[c] = [_native_row(f"0xbeef{i:02x}", c, f"0x{i + 1000:040x}")]
+    return edges, children
+
+
+def test_service_wallet_seed_follows_top_n_by_value(
     cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A seed emitting more outflows than the service-wallet threshold is
-    treated as a distributor: its transfers are kept but its children are NOT
-    traversed."""
+    """v0.34.5 (Lazarus/Ronin generalization fix): a high-fan-out SEED is the
+    investigation subject — its every outflow is theft dispersal — so it must
+    NEVER be skipped. Instead it FOLLOWS the top-N outflows BY VALUE (bounded so
+    BFS stays finite). Here the seed emits 5 > threshold 3 → service wallet; with
+    follow-top-N=2 the two HIGHEST-VALUE children are traversed and the three
+    lowest are not. Top-N follow is gated on value-trace ("follow the money"):
+    the enqueued children become value-directed, so the recursion stays bounded
+    while never skipping the highest-value laundering legs."""
     config, env = cfg
     config.trace.max_depth = 3
-    config.trace.service_wallet_outflow_threshold = 3  # seed emits 5 > 3
+    config.trace.service_wallet_outflow_threshold = 3
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
     monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+    monkeypatch.setenv("RECUPERO_SEED_FOLLOW_TOPN", "2")
 
-    edges, children = _fanout_graph(5)
+    # child i value = (i+1)*10 ETH → top-2 by value are children[4] (50) + [3] (40)
+    edges, children = _valued_fanout(["10", "20", "30", "40", "50"])
     adapter = GraphAdapter(edges)
     _wire(monkeypatch, adapter, FixedPriceClient())
 
     _run(config, env, tmp_path / "cases" / "SW1")
 
     fetched = set(adapter.fetch_calls)
+    assert children[4].lower() in fetched, "top-value child (50 ETH) not followed"
+    assert children[3].lower() in fetched, "2nd-value child (40 ETH) not followed"
+    for c in children[:3]:
+        assert c.lower() not in fetched, (
+            f"only the top-2 by value should be followed; {c} (lower value) was"
+        )
+
+
+def test_service_wallet_seed_follow_topn_zero_restores_legacy_skip(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RECUPERO_SEED_FOLLOW_TOPN=0 restores the legacy behavior: a high-fan-out
+    seed keeps its transfers but traverses NO children. Value-trace is ON here so
+    this exercises the explicit follow_n<=0 skip branch (not the value-trace-off
+    skip)."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+    monkeypatch.setenv("RECUPERO_SEED_FOLLOW_TOPN", "0")
+
+    edges, children = _fanout_graph(5)
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    _run(config, env, tmp_path / "cases" / "SW1z")
+
+    fetched = set(adapter.fetch_calls)
     for c in children:
         assert c.lower() not in fetched, (
-            f"service-wallet stop failed: child {c} was traversed"
+            f"follow-topn=0 should skip; child {c} was traversed"
         )
 
 
@@ -545,6 +598,9 @@ def test_service_wallet_threshold_env_bad_value_keeps_default(
     config, env = cfg
     config.trace.max_depth = 3
     config.trace.service_wallet_outflow_threshold = 3
+    # This test isolates THRESHOLD parsing. Value-trace is OFF (default), so a
+    # high-fan-out seed stays a dead end (the v0.34.5 top-N follow is gated on
+    # value-trace) — "children not traversed" is the correct observable.
     for bad in ("abc", "0", "-5", "  "):
         monkeypatch.setenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", bad)
         edges, children = _fanout_graph(5)

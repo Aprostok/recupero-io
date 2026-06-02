@@ -372,6 +372,28 @@ def run_trace(
                     policy.service_wallet_outflow_threshold,
                 )
 
+    # v0.34.5 — "never fully skip the money path." A high-fan-out node used to be
+    # SKIPPED entirely (no recursion) to avoid BFS explosion — but that dead-ends
+    # the trace at the SEED itself when the seed is a perpetrator splitter (the
+    # Lazarus/Ronin generalization case: 8827 outflows > threshold → depth-0
+    # dead-end, never reaching the laundering downstream). Fix: follow the TOP-N
+    # outflows BY VALUE instead of skipping. The seed (the investigation subject —
+    # every outflow is theft dispersal) gets a generous N; deeper high-fan-out
+    # nodes get a tighter N so branching stays finite (visited-set +
+    # stop_at_exchange + max_depth + per-case budget bound the rest). Children
+    # gain an inbound reference via _consider_enqueue, so they trace
+    # value-DIRECTED from there. Set either to 0 to restore the legacy skip.
+    def _topn_env(name: str, default: int) -> int:
+        v = os.environ.get(name)
+        if v is not None and v.strip():
+            try:
+                return max(0, int(v))
+            except (TypeError, ValueError):
+                log.warning("%s=%r is not an int; keeping %d", name, v, default)
+        return default
+    _seed_follow_topn = _topn_env("RECUPERO_SEED_FOLLOW_TOPN", 50)
+    _sw_follow_topn = _topn_env("RECUPERO_SERVICE_WALLET_FOLLOW_TOPN", 8)
+
     started = utcnow()
     log.info(
         "trace start case=%s chain=%s seed=%s incident=%s max_depth=%d",
@@ -716,13 +738,53 @@ def run_trace(
             if depth + 1 >= policy.max_depth:
                 continue
 
-            # Service-wallet node with value-trace OFF (or no inbound): keep its
-            # transfers but do NOT queue downstream, else a single high-fan-out
-            # node explodes BFS at the next depth.
+            # High-fan-out ("service-wallet") node. We must NOT queue ALL its
+            # outflows (a genuine exchange has 100k+ to unrelated users → BFS
+            # explosion) — but we must NEVER fully skip it either: the SEED is the
+            # investigation subject (its every outflow is theft dispersal) and a
+            # mid-route splitter is the laundering path. v0.34.5: FOLLOW THE MONEY
+            # — enqueue the top-N outflows by value (USD desc, then raw amount).
+            # Bounded N keeps branching finite; children become value-DIRECTED via
+            # _consider_enqueue's inbound_by_key recording, so the deep recursion
+            # then runs through the directed (value-matched) branch above. N=0
+            # restores the legacy skip.
+            #
+            # GATED ON value-trace: this top-N follow is only sound under
+            # "follow the money" mode, where the enqueued children become
+            # value-directed (bounded). Under value-trace OFF (legacy
+            # breadth-first), the children would themselves be non-directed and
+            # fan out combinatorially — so a service wallet stays a dead end,
+            # byte-identical to pre-v0.34.5 behavior (the seed, with no inbound,
+            # is non-directed under value-trace too — which is exactly the
+            # Lazarus/Ronin dead-end this fix targets).
             if is_service_wallet:
+                follow_n = (
+                    (_seed_follow_topn if depth == 0 else _sw_follow_topn)
+                    if _value_trace_enabled else 0
+                )
+                if follow_n <= 0:
+                    log.info(
+                        "service-wallet skip (follow_topn=0): not queueing %d "
+                        "destinations from %s", len(hop_transfers), from_addr,
+                    )
+                    continue
+                ranked = sorted(
+                    hop_transfers,
+                    key=lambda t: (
+                        float(t.usd_value_at_tx) if t.usd_value_at_tx is not None
+                        else 0.0,
+                        float(t.amount_decimal or 0),
+                    ),
+                    reverse=True,
+                )
+                enq = sum(
+                    1 for transfer in ranked[:follow_n]
+                    if _consider_enqueue(transfer, depth)
+                )
                 log.info(
-                    "service-wallet skip: not queueing %d destinations from %s",
-                    len(hop_transfers), from_addr,
+                    "service-wallet %s (depth=%d): high fan-out (%d outflows) — "
+                    "following top-%d by value (%d queued for deeper trace)",
+                    from_addr, depth, len(hop_transfers), follow_n, enq,
                 )
                 continue
 

@@ -59,6 +59,7 @@ their own section.
 | `RECUPERO_MAX_CROSS_CHAIN_SEEDS` | `10` | int | `>= 0` | v0.16.13 | Cap on cross-chain destination seeds across all chains. |
 | `RECUPERO_DISABLE_PASS2` | unset | bool | `=1` to disable | v0.20.x | Kill switch for the perpetrator-trace pass-2 stage. |
 | `RECUPERO_PASS2_RATIO_THRESHOLD` | `100` | float | `> 0` | v0.20.x | Outflow/inflow ratio threshold for pass-2 candidate identification. |
+| `RECUPERO_GRAPH_EVENTS_BRIDGE` | unset (off) | bool | `{1,true,True}` to enable | v0.35 | Operator graph real-time (Phase 4.13). When enabled, the API starts a Postgres `LISTEN graph_events` bridge (daemon thread) on the first SSE connection, so the worker's watch-tick `NOTIFY`s reach operators streaming `/v1/operator/graph/{id}/stream`. Off by default so tests / non-streaming deploys don't open a DB listener. Requires `SUPABASE_DB_URL`. |
 | `RECUPERO_PASS2_BALANCE_THRESHOLD_USD` | `5000` | Decimal | `>= 0` | v0.20.x | Min current-balance USD for a pass-2 candidate. |
 | `RECUPERO_PASS2_MAX_TRACES` | `3` | int | `>= 0` | v0.20.x | Max pass-2 traces per investigation. |
 | `RECUPERO_INDIRECT_DECAY` | `0.5` | float | `(0, 1]` | v0.31.0 | Per-hop decay factor for indirect-exposure scoring (MVP). |

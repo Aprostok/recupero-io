@@ -168,7 +168,9 @@ def run_listen_bridge(
     while True:
         try:
             with _open(dsn) as conn:
-                conn.execute("LISTEN " + PG_CHANNEL)  # channel is a fixed constant
+                # Channel names can't be bound parameters in Postgres; this is
+                # a hardcoded literal (matches PG_CHANNEL), never user input.
+                conn.execute("LISTEN graph_events")
                 backoff = 1.0
                 while True:
                     for note in conn.notifies(timeout=poll_timeout):

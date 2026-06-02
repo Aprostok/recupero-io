@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Label Freshness</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .alarm { border-radius: 10px; padding: .7rem 1rem; margin-bottom: 1rem; font-size: .9rem; font-weight: 600; border: 1px solid #e3e3e3; background: #fff; }
+  .alarm.critical { background: #fdf3f2; border-color: #f5c6c0; color: #a93226; }
+  .alarm.stale { background: #fdf6ec; border-color: #f3dca6; color: #9c6a13; }
+  .alarm.fresh { background: #e3f3e8; border-color: #bfe3cb; color: #1e8449; }
+  .alarm.unknown { background: #eef0f2; border-color: #dfe2e6; color: #555; }
+  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
+  .card .v { font-size: 1.3rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+  .card.alert .v { color: #c0392b; } .card.ok .v { color: #1e8449; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  tr.critical td { background: #fdf3f2; } tr.stale td { background: #fdf6ec; }
+  tr.unknown td { background: #f4f5f6; } tr.fresh td { background: #fff; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
+  .badge { display:inline-block; padding:.08rem .4rem; border-radius:6px; font-size:.7rem; font-weight:600; }
+  .badge.critical { background:#f9e0dd; color:#a93226; } .badge.stale { background:#f7e7c6; color:#9c6a13; }
+  .badge.unknown { background:#eef0f2; color:#555; } .badge.fresh { background:#e3f3e8; color:#1e8449; }
+  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+</style>
+</head>
+<body>
+  <h1>🕒 Label Freshness</h1>
+  <div class="sub">Per-source label freshness vs SLA, with the OFAC feed as the headline alarm. Paste your
+    operator key to load; data is fetched directly from the admin-gated API (the key stays in a request
+    header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div id="alarm"></div>
+  <div class="cards" id="cards"></div>
+  <div id="tablewrap"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+
+  function render(rep) {
+    var sum = rep.summary || {};
+    // OFAC feed-age headline alarm — red when critical/stale.
+    var ofacStatus = sum.ofac_status || "unknown";
+    var ofacAge = (sum.ofac_age_days == null) ? "unknown" : (sum.ofac_age_days + "d");
+    var alarmCls = (ofacStatus === "critical" || ofacStatus === "stale") ? ofacStatus
+                 : (ofacStatus === "fresh" ? "fresh" : "unknown");
+    $("alarm").innerHTML = '<div class="alarm ' + esc(alarmCls) + '">OFAC feed: ' +
+      esc(ofacStatus.toUpperCase()) + ' — age ' + esc(ofacAge) + '</div>';
+
+    $("cards").innerHTML =
+      card(sum.total, "Sources") +
+      card(sum.critical, "Critical", sum.critical ? "alert" : "") +
+      card(sum.stale, "Stale", sum.stale ? "alert" : "") +
+      card(sum.unknown, "Unknown", sum.unknown ? "alert" : "") +
+      card(sum.fresh, "Fresh", "ok");
+
+    var rows = rep.sources || [];
+    if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">No label sources reported.</p>'; return; }
+    var h = '<table><thead><tr><th>Source</th><th>Class</th><th>Status</th>' +
+            '<th class="right">Age (days)</th><th class="right">SLA (days)</th><th>Message</th>' +
+            '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var st = r.status || "unknown";
+      h += '<tr class="' + esc(st) + '">' +
+        '<td class="mono">' + esc(r.name) + '</td>' +
+        '<td>' + esc(r.source_class) + '</td>' +
+        '<td><span class="badge ' + esc(st) + '">' + esc(st) + '</span></td>' +
+        '<td class="right">' + esc(r.age_days == null ? "—" : r.age_days) + '</td>' +
+        '<td class="right">' + esc(r.sla_days) + '</td>' +
+        '<td>' + esc(r.message) + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    $("tablewrap").innerHTML = h;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading…");
+    fetch("/v1/freshness", { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("API not configured (admin key).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  if (key()) { load(); }
+})();
+</script>
+</body>
+</html>

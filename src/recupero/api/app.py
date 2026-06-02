@@ -154,6 +154,21 @@ except Exception as _exc:  # noqa: BLE001
         "operator console not registered (import failed): %s", _exc,
     )
 
+# v0.35.20 (UI batch-1): per-phase operator console views — label-candidate
+# review, cron/job health, and label-freshness — each an isolated console that
+# the hub (/v1/console) links. Registered independently so one failing import
+# never takes down the others.
+for _mod, _attr in (
+    ("recupero.api.label_review_console", "router"),
+    ("recupero.api.cron_console", "router"),
+    ("recupero.api.freshness_api", "router"),
+):
+    try:
+        _m = __import__(_mod, fromlist=[_attr])
+        app.include_router(getattr(_m, _attr))
+    except Exception as _exc:  # noqa: BLE001
+        log.warning("phase console %s not registered (import failed): %s", _mod, _exc)
+
 
 # ---- Request body-size cap (intake DoS guard) ---- #
 

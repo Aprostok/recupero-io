@@ -51,6 +51,16 @@ _NAV: list[dict[str, Any]] = [
     {"group": "Screening", "label": "Address Profile", "emoji": "🔎",
      "path": "/v1/address/console", "live": True,
      "desc": "Screen any address: risk verdict, labels, sighting history."},
+    # v0.35.20 UI batch-1 phase consoles.
+    {"group": "Labels", "label": "Label Review", "emoji": "🏷️",
+     "path": "/v1/label-review/console", "live": True,
+     "desc": "Review auto-ingested label candidates (promote/reject via API)."},
+    {"group": "Ops", "label": "Cron Health", "emoji": "⚙️",
+     "path": "/v1/ops/cron-console", "live": True,
+     "desc": "Scheduled-job health + last-error for each background job."},
+    {"group": "Data health", "label": "Label Freshness", "emoji": "🕒",
+     "path": "/v1/freshness/console", "live": True,
+     "desc": "Per-source label freshness vs SLA; OFAC feed-age alarm."},
 ]
 
 

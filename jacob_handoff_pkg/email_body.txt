@@ -1,0 +1,36 @@
+To: jacob.h.lurie@gmail.com
+Subject: Recupero v0.34.4 handoff — 12-protocol bridge oracle, dormant-fund fix, TRACKED/watch (4/4 verified)
+
+Jacob,
+
+Recupero v0.34.4 is shipped + deployed (prod HEAD 2e9fa96 on main). Handoff cert and
+the step-by-step test runbook are attached.
+
+Headline:
+- Cross-chain bridge oracle expanded 8 -> 12 cryptographically-verified protocols
+  (added Synapse RFQ, Stargate V2, generic LayerZero OFT, Axelar/Squid; refreshed DLN),
+  plus a staleness monitor. `high` confidence only on a both-chains id match.
+- P0 recovery fix: a 24h cross-chain window was silently dropping dormant laundering
+  destinations (~$16.9M of traced DAI on the Zigha case). Fixed -> the full Zigha trace
+  now reaches 4/4 ground-truth endpoints.
+- New TRACKED/watchable category: identified funds not freezable today (dormant DAI,
+  bridge-landed) are surfaced + auto-enrolled in movement monitoring, recoverable later.
+  UNRECOVERABLE is now reserved for genuinely-gone funds (mixers/burns).
+
+Trust evidence:
+- Full suite 5409 passed, offline E2E golden case 12 passed, bridge monitor OK=9.
+- The 4/4 is triple-checked: three independent fresh-case-dir traces all scored 4/4,
+  each dir with ZERO ground-truth files. The trace reads no answer key (the scorer
+  compares post-hoc); the log shows the cryptographic DLN decode -> intermediary ->
+  the real $16.9M of DAI sends. You can re-verify with a fresh --case-id (runbook step 8).
+
+Zigha money picture: ~$18-20M traced (4/4), ~$3.12M FREEZABLE (Midas),
+~$16.9M TRACKED + watched (dormant DAI).
+
+To test tonight: follow JACOB_TESTING_TONIGHT.md (9 numbered steps, each with command +
+expected output + PASS bar). Flag anything fabricated, any `high` cross-chain edge
+without a matching dest tx, a new STALE/DORMANT bridge, or a fresh-dir trace that does
+not score 4/4.
+
+Thanks,
+Alec

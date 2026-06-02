@@ -61,6 +61,14 @@ _NAV: list[dict[str, Any]] = [
     {"group": "Data health", "label": "Label Freshness", "emoji": "🕒",
      "path": "/v1/freshness/console", "live": True,
      "desc": "Per-source label freshness vs SLA; OFAC feed-age alarm."},
+    # v0.35.21 UI batch-2 phase consoles.
+    {"group": "Casework", "label": "Graph Analysis", "emoji": "🕸️",
+     "path": "/v1/graph-analysis/console", "live": True,
+     "desc": "Consolidation hubs (where split funds re-merge) + value cycles "
+             "for a case."},
+    {"group": "Casework", "label": "Case Index", "emoji": "📁",
+     "path": "/v1/cases/console", "live": True,
+     "desc": "All traced cases + which deliverables each has."},
 ]
 
 

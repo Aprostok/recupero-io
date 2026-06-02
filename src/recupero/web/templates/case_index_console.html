@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Case Index</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
+  .card .v { font-size: 1.3rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
+  .mono a { color: #2563eb; text-decoration: none; }
+  .mono a:hover { text-decoration: underline; }
+  .badge { display:inline-block; padding:.08rem .45rem; border-radius:6px; font-size:.7rem; font-weight:600; margin-right:.25rem; }
+  .badge.on { background:#e3f3e8; color:#1e8449; } .badge.off { background:#eef0f2; color:#9aa0a6; }
+  #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+</style>
+</head>
+<body>
+  <h1>📁 Case Index</h1>
+  <div class="sub">Every locally-traced case and which deliverables it has on disk. Click a case_id to open the
+    Graph Analysis console, then paste the id into its input box. Paste your operator key to load; data is
+    fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div class="cards" id="cards"></div>
+  <div id="tablewrap"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function card(v, l) { return '<div class="card"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+
+  function badge(on, label) {
+    return '<span class="badge ' + (on ? "on" : "off") + '">' + esc(label) + '</span>';
+  }
+
+  function render(rep) {
+    var rows = rep.cases || [];
+    $("cards").innerHTML = card(rep.count == null ? rows.length : rep.count, "Cases");
+
+    if (rep.error) { setMsg("Scan error: " + rep.error, "err"); }
+
+    if (!rows.length) {
+      $("tablewrap").innerHTML = '<p class="sub">No traced cases found.</p>';
+      return;
+    }
+    var h = '<table><thead><tr><th>Case ID</th><th>Deliverables</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var cid = esc(r.case_id);
+      // case_id links to the Graph Analysis console (which takes the id via its
+      // own input box); the visible mono text is the id to copy.
+      h += '<tr>' +
+        '<td class="mono"><a href="/v1/graph-analysis/console" title="Open Graph Analysis console, then paste this id">' + cid + '</a></td>' +
+        '<td>' +
+          badge(r.has_brief, "brief") +
+          badge(r.has_ai_triage, "triage") +
+          badge(r.has_exhibit_pack, "exhibit") +
+          badge(r.has_graph, "graph") +
+        '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    $("tablewrap").innerHTML = h;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading…");
+    fetch("/v1/cases", { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("API not configured (admin key).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rep) { render(rep); if (!rep.error) setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  if (key()) { load(); }
+})();
+</script>
+</body>
+</html>

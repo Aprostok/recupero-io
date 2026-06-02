@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Graph Analysis</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  h2 { font-size: 1rem; margin: 1.4rem 0 .5rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
+  .card .v { font-size: 1.3rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+  .card.alert .v { color: #c0392b; } .card.ok .v { color: #1e8449; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
+  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+  .cycles { list-style: none; padding: 0; margin: 0; }
+  .cycles li { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .55rem .8rem; margin-bottom: .4rem; font-size: .8rem; }
+  .cycles .size { font-weight: 700; color: #9c6a13; margin-right: .5rem; }
+  .explain { background: #eef2fb; border: 1px solid #d6e0f5; color: #2c3e50; border-radius: 10px; padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
+  .empty { color: #888; font-size: .8rem; }
+</style>
+</head>
+<body>
+  <h1>🕸️ Graph Analysis</h1>
+  <div class="sub">Structural fund-flow graph analysis for a single case. Paste your operator key and a case id
+    to load; data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
+
+  <div class="explain">Consolidation hubs = where split funds re-merge (the actor's hub); value cycles = wash/loop obfuscation.</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div class="cards" id="cards"></div>
+
+  <div id="hubswrap"></div>
+  <div id="cycleswrap"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+
+  function clear() { $("cards").innerHTML = ""; $("hubswrap").innerHTML = ""; $("cycleswrap").innerHTML = ""; }
+
+  function render(rep) {
+    var sum = rep.summary || {};
+    $("cards").innerHTML =
+      card(rep.node_count, "Nodes") +
+      card(rep.edge_count, "Edges") +
+      card(rep.max_depth_from_seed == null ? "—" : rep.max_depth_from_seed, "Max Depth") +
+      card(sum.n_consolidation_hubs, "Consolidation Hubs", sum.n_consolidation_hubs ? "alert" : "") +
+      card(sum.n_value_cycles, "Value Cycles", sum.n_value_cycles ? "alert" : "");
+
+    // Consolidation hubs — where split funds re-merge (the actor's hub).
+    var hubs = rep.consolidation_hubs || [];
+    var hh = '<h2>Consolidation hubs</h2>';
+    if (!hubs.length) {
+      hh += '<p class="empty">No consolidation hubs detected.</p>';
+    } else {
+      hh += '<table><thead><tr><th>Address</th><th class="right">Distinct sources</th><th class="right">Inbound USD</th></tr></thead><tbody>';
+      hubs.forEach(function (h) {
+        hh += '<tr>' +
+          '<td class="mono">' + esc(h.address) + '</td>' +
+          '<td class="right">' + esc(h.distinct_sources) + '</td>' +
+          '<td class="right">' + esc(h.inbound_usd) + '</td>' +
+          '</tr>';
+      });
+      hh += '</tbody></table>';
+    }
+    $("hubswrap").innerHTML = hh;
+
+    // Value cycles — wash / loop obfuscation.
+    var cycles = rep.value_cycles || [];
+    var ch = '<h2>Value cycles</h2>';
+    if (!cycles.length) {
+      ch += '<p class="empty">No value cycles detected.</p>';
+    } else {
+      ch += '<ul class="cycles">';
+      cycles.forEach(function (c) {
+        var members = (c.members || []).map(function (m) { return esc(m); }).join(" → ");
+        ch += '<li><span class="size">size ' + esc(c.size) + '</span><span class="mono">' + members + '</span></li>';
+      });
+      ch += '</ul>';
+    }
+    $("cycleswrap").innerHTML = ch;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+  function caseId() { return ($("case").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    var cid = caseId();
+    if (!cid) { setMsg("Enter a case id.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading…");
+    clear();
+    fetch("/v1/graph-analysis?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 404) throw new Error("Case not found.");
+        if (res.status === 503) throw new Error("API not configured, or analysis unavailable.");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
+})();
+</script>
+</body>
+</html>

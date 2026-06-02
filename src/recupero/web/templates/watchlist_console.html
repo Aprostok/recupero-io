@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Watchlist Console</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 130px; }
+  .card .v { font-size: 1.3rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+  .card.alert .v { color: #c0392b; } .card.ok .v { color: #1e8449; }
+  .chips span { display:inline-block; background:#fff; border:1px solid #e3e3e3; border-radius:999px; padding:.12rem .55rem; margin:0 .25rem .25rem 0; font-size:.78rem; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  tr.moved td { background: #fdf3f2; } td.age.stale { color: #c0392b; font-weight: 600; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
+  .badge { display:inline-block; padding:.08rem .4rem; border-radius:6px; font-size:.7rem; font-weight:600; }
+  .badge.moved { background:#f9e0dd; color:#a93226; } .badge.ok { background:#e3f3e8; color:#1e8449; } .badge.new { background:#eef0f2; color:#555; }
+  a { color: #2563eb; text-decoration: none; } a:hover { text-decoration: underline; }
+  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+  .right { text-align: right; }
+</style>
+</head>
+<body>
+  <h1>🛰️ Watchlist Console</h1>
+  <div class="sub">Live view of everything under monitoring. Paste your operator key to load;
+    data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <input id="inv" type="text" placeholder="investigation id (optional)" size="22" autocomplete="off">
+    <button id="load">Load</button>
+    <button id="run" class="secondary">Run check now</button>
+    <label class="sub"><input type="checkbox" id="auto"> auto-refresh 60s</label>
+    <span id="msg"></span>
+  </div>
+
+  <div class="cards" id="cards"></div>
+  <div class="chips" id="chips"></div>
+  <div id="tablewrap"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+
+  function render(ov) {
+    $("cards").innerHTML =
+      card(ov.n_items, "Addresses watched") +
+      card(ov.total_watched_usd_human, "Total under watch") +
+      card(ov.n_moved, "Moved since last check", ov.n_moved ? "alert" : "") +
+      card(ov.total_still_present_usd_human, "Still present", "ok") +
+      card(ov.n_stale, "Due for re-check", ov.n_stale ? "alert" : "") +
+      card(ov.n_never_checked, "Never checked");
+    var chips = "<b>By status:</b> ";
+    (ov.by_status || []).forEach(function (s) { chips += '<span>' + esc(s.emoji + " " + s.status + " · " + s.n) + '</span>'; });
+    chips += ' &nbsp; <b>By chain:</b> ';
+    (ov.by_chain || []).forEach(function (c) { chips += '<span>' + esc(c.chain + " · " + c.n + " · " + c.usd_human) + '</span>'; });
+    $("chips").innerHTML = chips;
+
+    var rows = ov.rows || [];
+    if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">Nothing under watch yet.</p>'; return; }
+    var h = '<table><thead><tr><th>Status</th><th>Address</th><th>Chain</th><th>Asset</th>' +
+            '<th class="right">Balance USD</th><th>Movement</th><th>Δ prior</th><th>Last checked</th>' +
+            '<th class="right">Days</th><th>Issuer / label</th></tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var addr = r.explorer_url
+        ? '<a href="' + esc(r.explorer_url) + '" target="_blank" rel="noopener">' + esc(r.address) + '</a>'
+        : esc(r.address);
+      h += '<tr class="' + (r.movement === "moved" ? "moved" : "") + '">' +
+        '<td class="mono">' + esc(r.status_emoji + " " + r.status_label) + '</td>' +
+        '<td class="mono">' + addr + '</td>' +
+        '<td>' + esc(r.chain) + '</td><td>' + esc(r.asset_symbol) + '</td>' +
+        '<td class="right">' + esc(r.balance_usd_human) + '</td>' +
+        '<td><span class="badge ' + esc(r.movement_class) + '">' + esc(r.movement_badge) + '</span></td>' +
+        '<td class="right">' + esc(r.last_delta_usd_human) + '</td>' +
+        '<td class="age ' + (r.stale ? "stale" : "") + '" title="' + esc(r.last_checked_human) + '">' + esc(r.age_human) + '</td>' +
+        '<td class="right">' + esc(r.days_watched) + '</td>' +
+        '<td>' + esc(r.issuer) + (r.label_name && r.label_name !== "—" ? " · " + esc(r.label_name) : "") + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    $("tablewrap").innerHTML = h;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading…");
+    var inv = ($("inv").value || "").trim();
+    var url = "/v1/watchlist" + (inv ? "?investigation_id=" + encodeURIComponent(inv) : "");
+    fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("API not configured (admin key / DB).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (ov) { render(ov); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  function runCheck() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    $("run").disabled = true; setMsg("Running re-check…");
+    fetch("/v1/watchlist/run", { method: "POST", headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
+      .then(function (r) {
+        setMsg("Re-check: " + r.snapshotted + "/" + r.candidates + " snapshotted, " + r.moved + " moved.", "ok");
+        load();
+      })
+      .catch(function (e) { setMsg(e.message, "err"); })
+      .finally(function () { $("run").disabled = false; });
+  }
+
+  var timer = null;
+  $("load").addEventListener("click", load);
+  $("run").addEventListener("click", runCheck);
+  $("auto").addEventListener("change", function () {
+    if (timer) { clearInterval(timer); timer = null; }
+    if (this.checked) { timer = setInterval(load, 60000); }
+  });
+  if (key()) { load(); }
+})();
+</script>
+</body>
+</html>

@@ -308,6 +308,71 @@ def test_graph_node_to_dict_shape() -> None:
     assert d["explorerUrl"] == "https://etherscan.io/address/0xabc"
 
 
+# ---- v0.35.8 (F1) interactive filtering / multi-chain ---- #
+
+
+def test_node_carries_numeric_usd_fields() -> None:
+    """F1: nodes carry numeric USD fields so the client-side min-USD filter
+    compares against an honest value instead of regex-parsing the formatted
+    string."""
+    transfers = [_transfer(from_addr=VICTIM, to_addr=PERP, usd=Decimal("4200"))]
+    data = build_graph_data(_case(transfers))
+    perp = next(n for n in data["nodes"] if n["id"] == PERP)
+    assert "inboundUsdNumeric" in perp
+    assert "outboundUsdNumeric" in perp
+    assert "flowUsdNumeric" in perp
+    # PERP received $4,200 → inbound numeric reflects it, flow = in + out.
+    assert perp["inboundUsdNumeric"] == 4200.0
+    assert perp["flowUsdNumeric"] == (
+        perp["inboundUsdNumeric"] + perp["outboundUsdNumeric"]
+    )
+
+
+def test_meta_carries_chains_and_categories_multichain() -> None:
+    """F1: meta.chains + meta.categories drive the filter chips, built from
+    the actual graph (multi-chain aware)."""
+    transfers = [
+        _transfer(from_addr=VICTIM, to_addr=PERP, usd=Decimal("5000")),
+        _transfer(from_addr=PERP, to_addr=EXCH, usd=Decimal("4800"),
+                  tx_hash="0x" + "2" * 64, chain=Chain.arbitrum,
+                  counterparty_label=_label(
+                      EXCH, category=LabelCategory.exchange_deposit,
+                      name="Binance")),
+    ]
+    data = build_graph_data(_case(transfers))
+    meta = data["meta"]
+    assert isinstance(meta["chains"], list)
+    assert meta["chains"] == sorted(meta["chains"])      # deterministic order
+    assert "ethereum" in meta["chains"]
+    assert "arbitrum" in meta["chains"]                  # multi-chain present
+    assert isinstance(meta["categories"], list)
+    assert "victim" in meta["categories"]                # seed node
+
+
+def test_render_html_includes_filter_controls() -> None:
+    """F1: the rendered HTML carries the filter panel + focus controls so the
+    investigator can declutter + expand. Pins the control element IDs the JS
+    wires to (regression guard against a template refactor dropping them)."""
+    transfers = [_transfer(from_addr=VICTIM, to_addr=PERP, usd=Decimal("1000"))]
+    graph_data = build_graph_data(_case(transfers))
+    with TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "graph.html"
+        render_graph_html(graph_data, out_path)
+        html = out_path.read_text(encoding="utf-8")
+        for needle in (
+            'id="min-usd"',
+            'id="chain-filter"',
+            'id="category-filter"',
+            'id="cross-chain-only"',
+            'id="btn-clear-filters"',
+            'id="focus-banner"',
+            'id="focus-depth"',
+            "function applyFilters",
+            "function enterFocus",
+        ):
+            assert needle in html, f"missing F1 control/logic: {needle}"
+
+
 def test_graph_edge_to_dict_shape() -> None:
     e = GraphEdge(
         source="0xabc", target="0xdef",

@@ -485,28 +485,81 @@ def _fanout_graph(n: int) -> tuple[dict[str, Any], list[str]]:
     return edges, children
 
 
-def test_service_wallet_threshold_stops_traversal_by_default(
+def _valued_fanout(amounts: list[str]) -> tuple[dict[str, Any], list[str]]:
+    """Seed → len(amounts) children with the given ETH amounts (so top-N-by-value
+    is well-defined); each child → 1 grandchild (lets us see which were traversed)."""
+    children = [f"0x{i + 1:040x}" for i in range(len(amounts))]
+    edges: dict[str, Any] = {
+        SEED: [
+            _native_row(f"0xfeed{i:02x}", SEED, c, eth_amount=amt)
+            for i, (c, amt) in enumerate(zip(children, amounts, strict=True))
+        ]
+    }
+    for i, c in enumerate(children):
+        edges[c] = [_native_row(f"0xbeef{i:02x}", c, f"0x{i + 1000:040x}")]
+    return edges, children
+
+
+def test_service_wallet_seed_follows_top_n_by_value(
     cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A seed emitting more outflows than the service-wallet threshold is
-    treated as a distributor: its transfers are kept but its children are NOT
-    traversed."""
+    """v0.34.5 (Lazarus/Ronin generalization fix): a high-fan-out SEED is the
+    investigation subject — its every outflow is theft dispersal — so it must
+    NEVER be skipped. Instead it FOLLOWS the top-N outflows BY VALUE (bounded so
+    BFS stays finite). Here the seed emits 5 > threshold 3 → service wallet; with
+    follow-top-N=2 the two HIGHEST-VALUE children are traversed and the three
+    lowest are not. Top-N follow is gated on value-trace ("follow the money"):
+    the enqueued children become value-directed, so the recursion stays bounded
+    while never skipping the highest-value laundering legs."""
     config, env = cfg
     config.trace.max_depth = 3
-    config.trace.service_wallet_outflow_threshold = 3  # seed emits 5 > 3
+    config.trace.service_wallet_outflow_threshold = 3
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
     monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+    monkeypatch.setenv("RECUPERO_SEED_FOLLOW_TOPN", "2")
 
-    edges, children = _fanout_graph(5)
+    # child i value = (i+1)*10 ETH → top-2 by value are children[4] (50) + [3] (40)
+    edges, children = _valued_fanout(["10", "20", "30", "40", "50"])
     adapter = GraphAdapter(edges)
     _wire(monkeypatch, adapter, FixedPriceClient())
 
     _run(config, env, tmp_path / "cases" / "SW1")
 
     fetched = set(adapter.fetch_calls)
+    assert children[4].lower() in fetched, "top-value child (50 ETH) not followed"
+    assert children[3].lower() in fetched, "2nd-value child (40 ETH) not followed"
+    for c in children[:3]:
+        assert c.lower() not in fetched, (
+            f"only the top-2 by value should be followed; {c} (lower value) was"
+        )
+
+
+def test_service_wallet_seed_follow_topn_zero_restores_legacy_skip(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """RECUPERO_SEED_FOLLOW_TOPN=0 restores the legacy behavior: a high-fan-out
+    seed keeps its transfers but traverses NO children. Value-trace is ON here so
+    this exercises the explicit follow_n<=0 skip branch (not the value-trace-off
+    skip)."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 3
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+    monkeypatch.setenv("RECUPERO_SEED_FOLLOW_TOPN", "0")
+
+    edges, children = _fanout_graph(5)
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    _run(config, env, tmp_path / "cases" / "SW1z")
+
+    fetched = set(adapter.fetch_calls)
     for c in children:
         assert c.lower() not in fetched, (
-            f"service-wallet stop failed: child {c} was traversed"
+            f"follow-topn=0 should skip; child {c} was traversed"
         )
 
 
@@ -545,6 +598,9 @@ def test_service_wallet_threshold_env_bad_value_keeps_default(
     config, env = cfg
     config.trace.max_depth = 3
     config.trace.service_wallet_outflow_threshold = 3
+    # This test isolates THRESHOLD parsing. Value-trace is OFF (default), so a
+    # high-fan-out seed stays a dead end (the v0.34.5 top-N follow is gated on
+    # value-trace) — "children not traversed" is the correct observable.
     for bad in ("abc", "0", "-5", "  "):
         monkeypatch.setenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", bad)
         edges, children = _fanout_graph(5)
@@ -686,6 +742,224 @@ def test_value_trace_is_directed_at_normal_nodes_too(
         )
     hops = case.config_used["coverage"]["value_matched_hops"]
     assert any(h["matched_to"].lower() == target.lower() for h in hops)
+
+
+# ---------- v0.34.6: 1:N same-asset split / peel follow (opt-in) ---------- #
+
+
+def _split_graph() -> tuple[dict[str, Any], list[str]]:
+    """SEED --1000 ETH--> HOP_A, which PEELS it into 3 same-asset sends
+    (400 + 350 + 260 = 1010 ETH, Δ1%) to X1/X2/X3 — no single outflow matches
+    the 1000 ETH inbound, so the 1:1 matcher dead-ends here. Returns
+    (edges, [X1, X2, X3])."""
+    peels = [
+        "0x00000000000000000000000000000000000000a1",
+        "0x00000000000000000000000000000000000000a2",
+        "0x00000000000000000000000000000000000000a3",
+    ]
+    edges: dict[str, Any] = {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="1000")],
+        HOP_A: [
+            _native_row("0xp1", HOP_A, peels[0], eth_amount="400"),
+            _native_row("0xp2", HOP_A, peels[1], eth_amount="350"),
+            _native_row("0xp3", HOP_A, peels[2], eth_amount="260"),
+        ],
+    }
+    return edges, peels
+
+
+def test_value_trace_follows_same_asset_split_when_enabled(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34.6: RECUPERO_VALUE_TRACE_FOLLOW_SPLITS=1 recovers a 1:N same-asset
+    PEEL the 1:1 matcher misses — HOP_A split 1000 ETH into 400+350+260, and all
+    three legs are followed (low confidence, kind=same_asset_split). This is what
+    carries the Lazarus/Ronin trace past consolidation wallets that peel into
+    mixer-denomination chunks instead of forwarding a single matching amount."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200  # HOP_A's 3 < 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, peels = _split_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "SPLIT_ON")
+
+    fetched = set(adapter.fetch_calls)
+    for p in peels:
+        assert p.lower() in fetched, f"split-peel leg {p} was not followed"
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    split_hops = [h for h in hops if h["kind"] == "same_asset_split"]
+    assert len(split_hops) == 3, f"expected 3 split hops, got {hops}"
+    assert all(h["confidence"] == "low" for h in split_hops)  # never medium/high
+
+
+def test_value_trace_split_not_followed_by_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default (FOLLOW_SPLITS unset): a peel is NOT followed — the node is an
+    honest value-dead-end, byte-identical to pre-v0.34.6 behavior. This keeps
+    the opt-in opt-in (and Zigha 4/4 untouched)."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", raising=False)
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, peels = _split_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "SPLIT_OFF")
+
+    fetched = set(adapter.fetch_calls)
+    for p in peels:
+        assert p.lower() not in fetched, (
+            f"split leg {p} must NOT be followed when FOLLOW_SPLITS is off"
+        )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    assert [h for h in hops if h["kind"] == "same_asset_split"] == []
+    # HOP_A forwarded same-asset but nothing matched -> honest dead-end recorded.
+    dead = case.config_used["coverage"]["value_dead_ends"]
+    assert any(d["address"].lower() == HOP_A.lower() for d in dead)
+
+
+# ---------- v0.34.7: label-aware terminal (stop-and-flag at a mixer) ---------- #
+
+# Real Tornado Cash pool address from the shipped mixer seed list
+# (src/recupero/labels/seeds/mixers.json) — LabelStore.load tags it
+# category=mixer, so an outflow to it carries a mixer counterparty label.
+TORNADO = "0x47CE0C6eD5B0Ce3d3A51fdb1C52DC66a7c3c2936"
+
+
+def _mixer_peel_graph() -> dict[str, Any]:
+    """SEED --100 ETH--> HOP_A, which PEELS into Tornado Cash as 30+30+40 ETH
+    (no single outflow matches the 100 ETH inbound, so the 1:1 matcher
+    dead-ends — the Ronin pattern in miniature)."""
+    return {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="100")],
+        HOP_A: [
+            _native_row("0xm1", HOP_A, TORNADO, eth_amount="30"),
+            _native_row("0xm2", HOP_A, TORNADO, eth_amount="30"),
+            _native_row("0xm3", HOP_A, TORNADO, eth_amount="40"),
+        ],
+    }
+
+
+def test_labeled_terminal_mixer_recorded_when_enabled(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34.7: RECUPERO_VALUE_TRACE_LABELED_TERMINALS=1 — at a directed node
+    that peels its same-asset funds into a LABELED mixer (Tornado), the engine
+    STOPS-AND-FLAGS: it records the mixer terminal (UNRECOVERABLE, aggregate
+    100 ETH across 3 tx) and KEEPS the real deposit transfers on the case (so
+    the brief classifies → Tornado → UNRECOVERABLE), instead of a generic
+    dead-end. Mirrors TRM/Chainalysis mixer handling."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_LABELED_TERMINALS", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "TERM_ON")
+
+    terms = case.config_used["coverage"]["labeled_terminals"]
+    mix = [t for t in terms if t["terminal_address"].lower() == TORNADO.lower()]
+    assert len(mix) == 1, f"expected one Tornado terminal record, got {terms}"
+    assert mix[0]["status"] == "UNRECOVERABLE"
+    assert mix[0]["label_category"] == "mixer"
+    assert mix[0]["tx_count"] == 3
+    assert mix[0]["agg_amount"] == "100"
+    # the real deposit transfers are KEPT on the case (so the brief sees them)
+    to_tornado = [t for t in case.transfers if t.to_address.lower() == TORNADO.lower()]
+    assert len(to_tornado) == 3
+    # ...and the node is NOT double-flagged as a generic dead-end
+    dead = case.config_used["coverage"]["value_dead_ends"]
+    assert not any(d["address"].lower() == HOP_A.lower() for d in dead)
+
+
+def test_labeled_terminal_off_by_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default (LABELED_TERMINALS unset): the mixer peel is NOT recorded — the
+    node is a generic value-dead-end and the deposit transfers are dropped
+    (directed path keeps only matched hops). Preserves pre-v0.34.7 behavior /
+    Zigha 4/4 byte-identically."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_VALUE_TRACE_LABELED_TERMINALS", raising=False)
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "TERM_OFF")
+
+    assert case.config_used["coverage"]["labeled_terminals"] == []
+    to_tornado = [t for t in case.transfers if t.to_address.lower() == TORNADO.lower()]
+    assert to_tornado == []
+    dead = case.config_used["coverage"]["value_dead_ends"]
+    assert any(d["address"].lower() == HOP_A.lower() for d in dead)
+
+
+def test_deep_reach_master_enables_recipe(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.35.4: RECUPERO_DEEP_REACH=1 alone (no individual knobs set) turns on
+    the whole recipe — value-trace + split-follow + labeled-terminals + dormancy
+    window — so the mixer peel is recorded as a labeled terminal."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "1")
+    for k in ("RECUPERO_VALUE_TRACE", "RECUPERO_VALUE_TRACE_FOLLOW_SPLITS",
+              "RECUPERO_VALUE_TRACE_LABELED_TERMINALS",
+              "RECUPERO_VALUE_TRACE_WINDOW_HOURS",
+              "RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD"):
+        monkeypatch.delenv(k, raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "DEEP_ON")
+
+    terms = case.config_used["coverage"]["labeled_terminals"]
+    assert any(t["terminal_address"].lower() == TORNADO.lower() for t in terms), (
+        "RECUPERO_DEEP_REACH should enable value-trace + labeled-terminals"
+    )
+
+
+def test_deep_reach_individual_override_wins(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit per-knob env var beats the master switch: DEEP_REACH=1 but
+    LABELED_TERMINALS=0 → no terminal recorded (value-trace still on)."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "1")
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_LABELED_TERMINALS", "0")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "DEEP_OVERRIDE")
+
+    assert case.config_used["coverage"]["labeled_terminals"] == []
 
 
 # ---------- v0.34 perf: prune-before-enrich (lightweight on high fan-out) ---------- #

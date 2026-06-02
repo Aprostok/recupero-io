@@ -24,6 +24,7 @@ from decimal import Decimal
 
 from recupero.trace.value_matching import (
     Leg,
+    detect_same_asset_split,
     leg_from_transfer,
     match_onward_transfers,
 )
@@ -338,3 +339,166 @@ def test_real_usdc_leg_still_built() -> None:
         "block_time": datetime(2025, 10, 9, 12, 0, tzinfo=UTC),
     })
     assert leg is not None and leg.token_symbol == "USDC"
+
+
+# ----------------------- 1:N split / peel (v0.34.6) -------------------------
+#
+# A consolidation wallet receives the loot and forwards it onward as MANY
+# smaller same-asset sends (a peel) — the pattern that dead-ended the
+# Lazarus/Ronin trace one hop short. The 1:1 matcher finds nothing; the split
+# detector recovers the peel, conservatively, at LOW confidence.
+
+
+def _split_to(amount, to, tx, mins, symbol="DAI"):
+    return _leg(amount, symbol=symbol, to=to, tx=tx, mins=mins)
+
+
+def test_split_peel_found_low_confidence_all_legs() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI", usd=1000)
+    # 1:1 matcher sees nothing (no single ~1000 outflow). 400+350+260 = 1010
+    # (Δ1% ≤ 3%); the tiny 5 DAI leg is left out (greedy reaches the sum first).
+    cands = [
+        _split_to(400, "0xa", "0xo1", 10),
+        _split_to(350, "0xb", "0xo2", 12),
+        _split_to(260, "0xc", "0xo3", 15),
+        _split_to(5,   "0xd", "0xo4", 20),
+    ]
+    assert match_onward_transfers(inbound, cands) == []  # 1:1 truly misses it
+    legs = detect_same_asset_split(inbound, cands)
+    assert {m.to_address for m in legs} == {"0xa", "0xb", "0xc"}
+    assert all(m.kind == "same_asset_split" for m in legs)
+    assert all(m.confidence == "low" for m in legs)        # never medium/high
+    assert all(m.ambiguous for m in legs)                  # the 5 DAI leg remains
+
+
+def test_split_overshoot_returns_empty() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # 700 + 600 = 1300 > 1030 (the second leg blows past the band) -> no peel.
+    cands = [_split_to(700, "0xa", "0xo1", 10), _split_to(600, "0xb", "0xo2", 12)]
+    assert detect_same_asset_split(inbound, cands) == []
+
+
+def test_split_undershoot_returns_empty() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # 300 + 200 + 150 = 650 < 970 -> never reaches the inbound sum.
+    cands = [
+        _split_to(300, "0xa", "0xo1", 10),
+        _split_to(200, "0xb", "0xo2", 12),
+        _split_to(150, "0xc", "0xo3", 14),
+    ]
+    assert detect_same_asset_split(inbound, cands) == []
+
+
+def test_split_excludes_single_overlarge_leg() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # 5000 alone is > inbound×(1+tol) so it can't be a peel leg and is excluded;
+    # 600 + 420 = 1020 (Δ2%) is the recovered peel.
+    cands = [
+        _split_to(5000, "0xbig", "0xo0", 8),
+        _split_to(600, "0xa", "0xo1", 10),
+        _split_to(420, "0xb", "0xo2", 12),
+        _split_to(10, "0xc", "0xo3", 14),
+    ]
+    legs = detect_same_asset_split(inbound, cands)
+    assert {m.to_address for m in legs} == {"0xa", "0xb"}
+    assert "0xbig" not in {m.to_address for m in legs}
+
+
+def test_split_requires_at_least_two_legs() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # A single ~inbound leg is a 1:1 case, not a split.
+    assert detect_same_asset_split(inbound, [_split_to(990, "0xa", "0xo1", 10)]) == []
+
+
+def test_split_too_many_legs_bails() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # 40 legs of 30 each would be needed to reach 1000 — exceeds the 25-leg cap.
+    cands = [_split_to(30, f"0x{i:02x}", f"0xo{i}", 10 + i) for i in range(40)]
+    assert detect_same_asset_split(inbound, cands) == []
+
+
+def test_split_wrong_token_not_summed() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI", usd=1000)
+    # Same USD ballpark but a DIFFERENT symbol — never summed as same-asset.
+    cands = [
+        _split_to(500, "0xa", "0xo1", 10, symbol="USDC"),
+        _split_to(520, "0xb", "0xo2", 12, symbol="USDC"),
+    ]
+    assert detect_same_asset_split(inbound, cands) == []
+
+
+def test_split_spoof_contract_not_summed() -> None:
+    # Same SYMBOL ("DAI") but a different on-chain contract = a spoof token.
+    inbound = Leg(
+        to_address="0xnode", tx_hash="0xin", token_symbol="DAI",
+        amount=Decimal("1000"), usd_value=Decimal("1000"), when=T0,
+        token_contract="0x6b175474e89094c44da98b954eedeac495271d0f",  # real DAI
+    )
+    spoof = [
+        Leg(to_address="0xa", tx_hash="0xo1", token_symbol="DAI",
+            amount=Decimal("600"), usd_value=None, when=T0 + timedelta(minutes=10),
+            token_contract="0xdeadbeef"),
+        Leg(to_address="0xb", tx_hash="0xo2", token_symbol="DAI",
+            amount=Decimal("420"), usd_value=None, when=T0 + timedelta(minutes=12),
+            token_contract="0xdeadbeef"),
+    ]
+    assert detect_same_asset_split(inbound, spoof) == []
+
+
+def test_split_respects_time_window() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # Both legs sum to 1010 but one is outside the 72h window -> not a peel.
+    cands = [
+        _split_to(600, "0xa", "0xo1", mins=10),
+        _leg(410, symbol="DAI", to="0xb", tx="0xo2",
+             when=T0 + timedelta(hours=80)),
+    ]
+    assert detect_same_asset_split(inbound, cands) == []
+
+
+def test_split_ignores_pre_inbound_outflow() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # An outflow BEFORE the inbound can't be the onward peel.
+    cands = [
+        _leg(600, symbol="DAI", to="0xa", tx="0xo1", when=T0 - timedelta(minutes=5)),
+        _split_to(420, "0xb", "0xo2", mins=10),
+    ]
+    assert detect_same_asset_split(inbound, cands) == []
+
+
+# ----------------------- dormancy-aware window (v0.35.2) -------------------- #
+#
+# Laundering parks funds and moves them weeks/months later. The default 72h
+# window drops that dormant onward hop; time_window_hours=0 (lower-bound-only)
+# recovers it. The same knob governs the 1:1 matcher AND the split detector.
+
+
+def test_1to1_dormant_hop_excluded_by_default_window() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI", usd=1000)
+    # Exact same-asset forward, but 80h later (> the 72h default).
+    cands = [_leg(1000, symbol="DAI", to="0xreal", tx="0xo1",
+                  when=T0 + timedelta(hours=80))]
+    assert match_onward_transfers(inbound, cands) == []
+
+
+def test_1to1_dormant_hop_matched_with_unbounded_window() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI", usd=1000)
+    cands = [_leg(1000, symbol="DAI", to="0xreal", tx="0xo1",
+                  when=T0 + timedelta(hours=80))]
+    matches = match_onward_transfers(inbound, cands, time_window_hours=0)
+    assert len(matches) == 1
+    assert matches[0].to_address == "0xreal"
+    assert matches[0].confidence == "medium"  # sole same-asset match
+
+
+def test_split_dormant_peel_excluded_by_default_but_found_unbounded() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # 600 + 420 = 1020 (Δ2%), but 80h later — beyond the default window.
+    cands = [
+        _leg(600, symbol="DAI", to="0xa", tx="0xo1", when=T0 + timedelta(hours=80)),
+        _leg(420, symbol="DAI", to="0xb", tx="0xo2", when=T0 + timedelta(hours=81)),
+    ]
+    assert detect_same_asset_split(inbound, cands) == []  # default 72h drops it
+    legs = detect_same_asset_split(inbound, cands, time_window_hours=0)
+    assert {m.to_address for m in legs} == {"0xa", "0xb"}
+    assert all(m.confidence == "low" for m in legs)

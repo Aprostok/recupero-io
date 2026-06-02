@@ -253,6 +253,57 @@ def cli() -> None:
              "risk-scoring. Recommended cadence: weekly via cron.",
     )
 
+    # ----- import-sanctions (v0.35.6 / E5) ----- #
+    p_intl = sub.add_parser(
+        "import-sanctions",
+        help="Import multi-regime sanctioned crypto wallets (EU / UK "
+             "HMT-OFSI / UN / Israel / Japan / …) from an OpenSanctions "
+             "CryptoWallet bulk file (FtM JSON/NDJSON) into the local "
+             "intl-sanctions CSV used by risk-scoring, alongside OFAC.",
+    )
+    p_intl.add_argument(
+        "--file", dest="sanctions_file", required=True,
+        help="Path to the OpenSanctions crypto bulk export "
+             "(entities .json array or .ndjson).",
+    )
+
+    # ----- import-attribution (v0.35.9 / B1-B2) ----- #
+    p_attr = sub.add_parser(
+        "import-attribution",
+        help="Harvest a free open-source attribution feed (CSV or "
+             "JSON/NDJSON of address/chain/category/name) into the label "
+             "candidate review queue. Bridge + exchange categories only; "
+             "rows land pending_review (NOT auto-promoted).",
+    )
+    p_attr.add_argument(
+        "--file", dest="attribution_file", required=True,
+        help="Path to the attribution feed (.csv, .json array, or .ndjson).",
+    )
+    p_attr.add_argument(
+        "--source", dest="attribution_source", default="attribution_feed",
+        help="Default source identifier for rows that don't carry one "
+             "(default: attribution_feed).",
+    )
+
+    # ----- benchmark (v0.35.12 / J1) ----- #
+    p_bench = sub.add_parser(
+        "benchmark",
+        help="Score a finished trace against an independently-verified "
+             "ground-truth endpoint set: recall (did we reach the known "
+             "endpoints?), endpoint precision, F1, and the missed/spurious "
+             "lists. Ground truth is supplied as JSON.",
+    )
+    p_bench.add_argument(
+        "--case", dest="benchmark_case", required=True,
+        help="Path to the case directory (containing case.json + "
+             "freeze_brief.json).",
+    )
+    p_bench.add_argument(
+        "--truth", dest="benchmark_truth", required=True,
+        help="Path to the ground-truth JSON "
+             "({case_id, endpoints[], by_category{}, notes}).",
+    )
+
     # ----- bridge-sync (v0.29.1 Recommendation #5) ----- #
     p_bridge_sync = sub.add_parser(
         "bridge-sync",
@@ -401,6 +452,47 @@ def cli() -> None:
         "--output-dir", type=str, default="law-firm-dashboards",
         help="Directory to write the rendered HTML (created if "
              "missing). Default: ./law-firm-dashboards/",
+    )
+
+    # ----- watchlist-dashboard (v0.35.0) ----- #
+    p_watch_dash = sub.add_parser(
+        "watchlist-dashboard",
+        help="Render the Watchlist / Watcher dashboard — every address "
+             "under monitoring, where it sits, and whether it has MOVED "
+             "since the last re-check. Run watchlist-run first to refresh "
+             "the on-chain snapshots.",
+    )
+    p_watch_dash.add_argument(
+        "--output-dir", type=str, default="watchlist-dashboard",
+        help="Directory to write the rendered HTML (created if missing). "
+             "Default: ./watchlist-dashboard/",
+    )
+    p_watch_dash.add_argument(
+        "--investigation-id", dest="investigation_id", default=None,
+        help="Scope to one investigation UUID. Omit for the global view.",
+    )
+    p_watch_dash.add_argument(
+        "--stale-after-hours", dest="stale_after_hours", type=int, default=24,
+        help="Flag a watched address as DUE for re-check when its last "
+             "snapshot is older than this. Default: 24 (daily). Use 720 "
+             "for a monthly cadence.",
+    )
+
+    # ----- watchlist-run (v0.35.0) ----- #
+    p_watch_run = sub.add_parser(
+        "watchlist-run",
+        help="Trigger a watchlist re-check tick: snapshot the on-chain "
+             "balance / tx-count of every eligible watched address and "
+             "record movement. The daily/monthly job; safe to run on "
+             "demand (per-row cooldowns prevent redundant work).",
+    )
+    p_watch_run.add_argument(
+        "--parallelism", type=int, default=None,
+        help="Concurrent snapshot workers (default: env / 4).",
+    )
+    p_watch_run.add_argument(
+        "--limit", type=int, default=None,
+        help="Max rows to snapshot this tick (default: all eligible).",
     )
 
     # ----- validate-output (v0.28.0 / JACOB-3) ----- #
@@ -851,6 +943,60 @@ def cli() -> None:
         from recupero.ops.commands import ofac_sync_cmd as cmd
         sys.exit(cmd.run())
 
+    if args.command == "import-sanctions":
+        from pathlib import Path as _Path
+
+        from recupero.labels.sanctions_intl import import_opensanctions_file
+        src = _Path(args.sanctions_file)
+        if not src.exists():
+            print(f"ERROR: file not found: {src}", file=sys.stderr)
+            sys.exit(2)
+        n = import_opensanctions_file(src)
+        print(f"Imported {n} intl-sanctioned crypto wallet(s) → risk-scoring CSV.")
+        sys.exit(0)
+
+    if args.command == "import-attribution":
+        from pathlib import Path as _Path
+
+        from recupero.labels.attribution_feed import import_attribution_file
+        src = _Path(args.attribution_file)
+        if not src.exists():
+            print(f"ERROR: file not found: {src}", file=sys.stderr)
+            sys.exit(2)
+        result = import_attribution_file(
+            src, default_source=args.attribution_source,
+        )
+        print(
+            f"Attribution feed: parsed {result.parsed}, skipped "
+            f"{result.skipped}, persisted {result.persisted} candidate(s) "
+            "→ pending_review. Promote via the labels API after review."
+        )
+        if result.skipped_reasons:
+            print(f"  skipped breakdown: {result.skipped_reasons}")
+        sys.exit(0)
+
+    if args.command == "benchmark":
+        import json as _json
+        from pathlib import Path as _Path
+
+        from recupero.trace.benchmark import load_ground_truth, score_case_dir
+        case_dir = _Path(args.benchmark_case)
+        truth_path = _Path(args.benchmark_truth)
+        if not case_dir.exists():
+            print(f"ERROR: case dir not found: {case_dir}", file=sys.stderr)
+            sys.exit(2)
+        if not truth_path.exists():
+            print(f"ERROR: ground-truth not found: {truth_path}", file=sys.stderr)
+            sys.exit(2)
+        try:
+            truth = load_ground_truth(truth_path)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        score = score_case_dir(case_dir, truth)
+        print(_json.dumps(score.to_dict(), indent=2))
+        sys.exit(0)
+
     if args.command == "bridge-sync":
         from pathlib import Path as _Path
 
@@ -994,6 +1140,46 @@ def cli() -> None:
             )
             sys.exit(2)
         print(f"Rendered law-firm dashboard to {out_path}")
+        sys.exit(0)
+
+    if args.command == "watchlist-dashboard":
+        from pathlib import Path as _Path
+
+        from recupero.reports.watchlist_dashboard import (
+            render_watchlist_dashboard,
+        )
+        out_path = render_watchlist_dashboard(
+            output_dir=_Path(args.output_dir),
+            dsn=_require_dsn(),
+            investigation_id=args.investigation_id,
+            stale_after_hours=args.stale_after_hours,
+        )
+        if out_path is None:
+            print(
+                "ERROR: watchlist dashboard render failed — DB unreachable.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print(f"Rendered watchlist dashboard to {out_path}")
+        sys.exit(0)
+
+    if args.command == "watchlist-run":
+        from recupero.config import load_config
+        from recupero.worker.watch_tick import run_watch_tick
+        cfg, env = load_config()
+        report = run_watch_tick(
+            dsn=_require_dsn(), config=cfg, env=env,
+            parallelism=args.parallelism, limit=args.limit,
+        )
+        print(
+            f"watchlist-run: snapshotted {report.snapshotted}/"
+            f"{report.candidates} eligible · "
+            f"{len(report.material_changes)} moved · "
+            f"{report.skipped_cooldown} on cooldown · "
+            f"{len(report.errors)} errors"
+        )
+        for mc in report.material_changes:
+            print(f"  MOVED: {mc}")
         sys.exit(0)
 
     if args.command == "validate-output":

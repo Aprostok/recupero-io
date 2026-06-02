@@ -349,6 +349,24 @@ class KavaParams(BaseModel):
     coingecko_native_id: str = "kava"
 
 
+class OpbnbParams(BaseModel):
+    """opBNB (BNB Chain L2) — Etherscan V2 unified API, chain_id=204.
+    Native gas token is BNB. Verified present in the live Etherscan V2
+    chainlist (api.etherscan.io/v2/chainlist) 2026-06-02 — promoted from
+    LABEL-only to full BFS adapter coverage. (Polygon zkEVM / Manta are
+    NOT on Etherscan V2 and remain label-only pending a non-Etherscan
+    backend.)"""
+    api_base: str = "https://api.etherscan.io/v2/api"
+    chain_id: int = 204
+    requests_per_second: float = 2.5
+    block_range_chunk: int = 10_000
+    native_symbol: str = "BNB"
+    native_decimals: int = 18
+    explorer_base: str = "https://opbnb.bscscan.com"
+    coingecko_platform: str = "opbnb"
+    coingecko_native_id: str = "binancecoin"
+
+
 class PricingParams(BaseModel):
     provider: str = "coingecko"
     requests_per_second: float = 0.5
@@ -391,6 +409,8 @@ class RecuperoConfig(BaseModel):
     moonbeam: MoonbeamParams = Field(default_factory=MoonbeamParams)
     metis: MetisParams = Field(default_factory=MetisParams)
     kava: KavaParams = Field(default_factory=KavaParams)
+    # v0.35.3 — opBNB (chain_id 204), verified on Etherscan V2 chainlist.
+    opbnb: OpbnbParams = Field(default_factory=OpbnbParams)
     pricing: PricingParams = Field(default_factory=PricingParams)
     storage: StorageParams = Field(default_factory=StorageParams)
     logging: LoggingParams = Field(default_factory=LoggingParams)

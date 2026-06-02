@@ -33,6 +33,7 @@ from recupero.reports.aggregate import (
     write_aggregate_json,
 )
 from recupero.reports.ai_editorial import run_ai_editorial
+from recupero.reports.ai_triage import run_ai_triage
 from recupero.reports.brief import MIDAS_ISSUER, InvestigatorInfo, IssuerInfo, generate_briefs
 from recupero.reports.emit_brief import run_emit_brief, write_editorial_template
 from recupero.reports.victim import VictimInfo, load_victim, write_victim
@@ -1366,6 +1367,85 @@ def ai_editorial_cmd(
     console.print("[dim]The emit-brief command will refuse to run while REVIEW_REQUIRED is true.[/]")
 
 
+@app.command("ai-triage")
+def ai_triage_cmd(
+    case_id: str = typer.Argument(..., help="Case ID to triage (must be traced first)."),
+    narrative: str = typer.Option(
+        None, "--narrative", "-n",
+        help="Optional victim-supplied narrative to ground the triage.",
+    ),
+    narrative_file: str = typer.Option(
+        None, "--narrative-file",
+        help="Read victim narrative from a file (alternative to --narrative).",
+    ),
+    api_key: str = typer.Option(
+        None, "--api-key",
+        help="Override the ANTHROPIC_API_KEY env var with an explicit key.",
+    ),
+) -> None:
+    """Plain-English AI triage of a finished trace (internal investigator aid).
+
+    Reads case.json (+ optional victim.json / freeze_asks.json), calls Claude to
+    produce a short non-expert summary, an ordered recommended-next-steps list,
+    and an honest "what's still missing" note, and writes ai_triage.json into
+    the case directory.
+
+    This is parity with Chainalysis "Rapid" / TRM auto-narrative: a 30-second
+    read for an LE officer, paralegal, or compliance analyst. It is NOT the
+    customer-facing $99 brief (that is `ai-editorial`, which gates on human
+    review). The output is marked AI_GENERATED + REVIEW_REQUIRED and carries a
+    probabilistic-leads-not-proof disclaimer — verify every lead before acting.
+
+    Typical flow:
+      1. recupero trace ... --case-id MYCASE
+      2. recupero ai-triage MYCASE --narrative "victim's words..."
+      3. open data/cases/MYCASE/ai_triage.json
+    """
+    cfg, _ = load_config()
+    setup_logging(cfg.logging.level)
+    store = CaseStore(cfg)
+
+    victim_narrative = narrative
+    if narrative_file:
+        nf = Path(narrative_file)
+        if not nf.exists():
+            console.print(f"[bold red]Narrative file not found:[/] {nf}")
+            raise typer.Exit(code=2)
+        victim_narrative = nf.read_text(encoding="utf-8").strip()
+
+    console.print(f"[cyan]Generating AI triage for {case_id}...[/]")
+    try:
+        out_path, triage, usage = run_ai_triage(
+            case_id=case_id,
+            case_store=store,
+            victim_narrative=victim_narrative,
+            api_key=api_key,
+        )
+    except RuntimeError as e:
+        console.print(f"[bold red]AI triage failed:[/] {e}")
+        raise typer.Exit(code=2) from None
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Required file missing:[/] {e}")
+        console.print("[dim]Did you run `recupero trace` first?[/]")
+        raise typer.Exit(code=2) from None
+
+    console.print()
+    console.print(f"[bold green]Wrote AI triage to[/] {out_path}")
+    console.print(
+        f"  [dim]Tokens:[/] {usage['input_tokens']:,} in / {usage['output_tokens']:,} out  "
+        f"[dim]Cost:[/] ${usage['usd_cost']}"
+    )
+    console.print()
+    console.print(f"[bold]Summary:[/] {triage.get('case_summary_plain', '')}")
+    steps = triage.get("recommended_next_steps") or []
+    if steps:
+        console.print("[bold]Recommended next steps:[/]")
+        for i, step in enumerate(steps, 1):
+            console.print(f"  {i}. {step}")
+    console.print()
+    console.print("[dim]AI-generated triage — probabilistic leads, NOT proof. Verify before acting.[/]")
+
+
 @app.command("screen")
 def screen_cmd(
     address: str = typer.Argument(..., help="Address to screen."),
@@ -1540,6 +1620,88 @@ def legal_requests_cmd(
         "  • 314(b) requests must come from a 314(b)-registered institution.\n"
         "  • Grand jury subpoenas must be issued under AUSA letterhead.\n"
         "Always review every line before transmission."
+    )
+
+
+@app.command("sar-filing")
+def sar_filing_cmd(
+    case_id: str = typer.Argument(..., help="Case ID (folder name under cases/)."),
+    jurisdiction: str = typer.Option(
+        "us", "--jurisdiction", "-j",
+        help="Filing regime: us (FinCEN SAR / Form 111) | uk (NCA SAR / POCA) "
+             "| eu (AMLD STR / goAML).",
+    ),
+) -> None:
+    """Render a SAR / STR DRAFT package from an existing freeze_brief.json.
+
+    DRAFT ONLY — Recupero is an investigation service, NOT a financial
+    institution, and has no SAR/STR filing obligation or credentials. The
+    obligated institution (or POCA reporter) completes the institution
+    identifiers + officer attestation and files via the named portal. Every
+    subject / amount / date is derived from the traced case.
+
+    Output: cases/<case_id>/regulatory_filing/<jurisdiction>_sar.html
+    """
+    from recupero.reports.regulatory_filing import render_case_sar
+
+    cfg, _env = load_config()
+    store = CaseStore(cfg)
+    case_dir = store.case_dir(case_id)
+
+    try:
+        render = render_case_sar(case_dir, jurisdiction=jurisdiction)
+    except FileNotFoundError as e:
+        console.print(f"[bold red]{e}[/]")
+        raise typer.Exit(code=2) from None
+    except ValueError as e:
+        console.print(f"[bold red]{e}[/]")
+        raise typer.Exit(code=2) from None
+
+    console.print()
+    console.print(
+        f"[bold green]Wrote {render.report_acronym} draft "
+        f"({render.jurisdiction}, {render.subject_count} subject(s)) to[/] "
+        f"[cyan]{render.output_path}[/]"
+    )
+    console.print()
+    console.print(
+        "[bold yellow]⚠ DRAFT — NOT FILED:[/] Recupero is not a financial "
+        "institution and has no SAR/STR filing obligation. The obligated "
+        "institution must complete the filing fields, verify every line, "
+        "and submit via its FIU portal."
+    )
+
+
+@app.command("exhibit-pack")
+def exhibit_pack_cmd(
+    case_id: str = typer.Argument(..., help="Case ID (folder name under cases/)."),
+) -> None:
+    """Build a court-admissible exhibit pack from a case directory.
+
+    Produces an exhibit index (every artifact SHA-256-hashed), a Daubert
+    methodology appendix documenting the tracing pipeline, and a 28 U.S.C.
+    § 1746 declaration template for the testifying analyst. The hashes +
+    artifact list are real; the declaration is a template to complete + sign.
+
+    Output: cases/<case_id>/exhibit_pack/exhibit_pack.html
+    """
+    from recupero.reports.exhibit_pack import render_exhibit_pack
+
+    cfg, _env = load_config()
+    store = CaseStore(cfg)
+    case_dir = store.case_dir(case_id)
+    if not case_dir.exists():
+        console.print(f"[bold red]Case directory not found:[/] {case_dir}")
+        raise typer.Exit(code=2)
+
+    out_path = render_exhibit_pack(case_dir)
+    console.print()
+    console.print(f"[bold green]Wrote exhibit pack to[/] [cyan]{out_path}[/]")
+    console.print()
+    console.print(
+        "[bold yellow]⚠ Review before use:[/] recompute every exhibit hash, "
+        "complete the § 1746 declaration, and confirm the methodology appendix "
+        "before introducing any exhibit into evidence."
     )
 
 

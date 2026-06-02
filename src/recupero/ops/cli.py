@@ -267,6 +267,24 @@ def cli() -> None:
              "(entities .json array or .ndjson).",
     )
 
+    # ----- import-attribution (v0.35.9 / B1-B2) ----- #
+    p_attr = sub.add_parser(
+        "import-attribution",
+        help="Harvest a free open-source attribution feed (CSV or "
+             "JSON/NDJSON of address/chain/category/name) into the label "
+             "candidate review queue. Bridge + exchange categories only; "
+             "rows land pending_review (NOT auto-promoted).",
+    )
+    p_attr.add_argument(
+        "--file", dest="attribution_file", required=True,
+        help="Path to the attribution feed (.csv, .json array, or .ndjson).",
+    )
+    p_attr.add_argument(
+        "--source", dest="attribution_source", default="attribution_feed",
+        help="Default source identifier for rows that don't carry one "
+             "(default: attribution_feed).",
+    )
+
     # ----- bridge-sync (v0.29.1 Recommendation #5) ----- #
     p_bridge_sync = sub.add_parser(
         "bridge-sync",
@@ -916,6 +934,26 @@ def cli() -> None:
             sys.exit(2)
         n = import_opensanctions_file(src)
         print(f"Imported {n} intl-sanctioned crypto wallet(s) → risk-scoring CSV.")
+        sys.exit(0)
+
+    if args.command == "import-attribution":
+        from pathlib import Path as _Path
+
+        from recupero.labels.attribution_feed import import_attribution_file
+        src = _Path(args.attribution_file)
+        if not src.exists():
+            print(f"ERROR: file not found: {src}", file=sys.stderr)
+            sys.exit(2)
+        result = import_attribution_file(
+            src, default_source=args.attribution_source,
+        )
+        print(
+            f"Attribution feed: parsed {result.parsed}, skipped "
+            f"{result.skipped}, persisted {result.persisted} candidate(s) "
+            "→ pending_review. Promote via the labels API after review."
+        )
+        if result.skipped_reasons:
+            print(f"  skipped breakdown: {result.skipped_reasons}")
         sys.exit(0)
 
     if args.command == "bridge-sync":

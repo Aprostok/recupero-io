@@ -2146,7 +2146,20 @@ async def operator_graph_stream(
     inv = _valid_inv(investigation_id)
 
     import asyncio
+    import os
     from recupero.reports.graph_events import subscribe, unsubscribe, sse_frame
+
+    # Lazily start the cross-process LISTEN bridge (Phase 4.13) on the first
+    # stream connection — opt-in via RECUPERO_GRAPH_EVENTS_BRIDGE so it never
+    # spins up a DB thread in tests / non-streaming deploys. Idempotent.
+    if os.environ.get("RECUPERO_GRAPH_EVENTS_BRIDGE", "").strip() in ("1", "true", "True"):
+        _bridge_dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+        if _bridge_dsn:
+            try:
+                from recupero.reports.graph_events import start_listen_bridge
+                start_listen_bridge(_bridge_dsn, asyncio.get_running_loop())
+            except Exception as exc:  # noqa: BLE001
+                log.warning("graph-events bridge start skipped: %s", exc)
 
     async def _gen():
         q = subscribe(inv)

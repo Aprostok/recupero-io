@@ -439,7 +439,8 @@ def _fetch_eligible(
          WHERE w.id = c.id
         RETURNING w.id, w.address, w.chain, w.role, w.label_category,
                   w.label_name, w.is_freezeable, w.issuer, w.asset_symbol,
-                  w.asset_contract, w.last_snapshot_at, w.priority
+                  w.asset_contract, w.last_snapshot_at, w.priority,
+                  w.investigation_id
     """
     claim_sql_legacy = """
         UPDATE public.watchlist w
@@ -457,7 +458,7 @@ def _fetch_eligible(
          WHERE w.id = c.id
         RETURNING w.id, w.address, w.chain, w.role, w.label_category,
                   w.label_name, w.is_freezeable, w.issuer, w.asset_symbol,
-                  w.asset_contract, w.last_snapshot_at
+                  w.asset_contract, w.last_snapshot_at, w.investigation_id
     """
 
     pri_params: tuple[Any, ...] = (hot_interval_sec, min_interval_sec, use_limit)
@@ -647,6 +648,28 @@ def _run_solana_chain(
         client.close()
 
 
+def _emit_graph_event(dsn: str, row: dict[str, Any], change: MaterialChange) -> None:
+    """Best-effort: NOTIFY the operator graph that a watched address moved
+    (Phase 4.13). Routed by the watchlist row's investigation_id so only
+    operators streaming that case receive it. Never raises — a monitoring
+    nicety must not affect the tick."""
+    inv = row.get("investigation_id")
+    if not inv:
+        return
+    try:
+        from recupero.reports.graph_events import build_delta_event, notify_pg
+        node = {
+            "id": change.address,
+            "status": "intermediary",
+            "reason": change.reason,
+            "newUsd": (str(change.new_usd) if change.new_usd is not None else None),
+            "deltaUsd": (str(change.delta_usd) if change.delta_usd is not None else None),
+        }
+        notify_pg(dsn, str(inv), build_delta_event(reason="watch", nodes=[node], edges=[]))
+    except Exception as exc:  # noqa: BLE001
+        log.debug("watch-tick: graph event emit skipped: %s", exc)
+
+
 def _run_chain_pool(
     *,
     rows: list[dict[str, Any]],
@@ -680,6 +703,7 @@ def _run_chain_pool(
                 report.snapshotted += 1
                 if change is not None:
                     report.material_changes.append(change)
+                    _emit_graph_event(dsn, row, change)  # best-effort live push
             except Exception as exc:  # noqa: BLE001
                 msg = f"persist failed for {row['address']} on {row['chain']}: {exc}"
                 log.warning(msg)

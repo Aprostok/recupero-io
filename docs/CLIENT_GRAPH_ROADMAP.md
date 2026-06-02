@@ -203,11 +203,19 @@ TRM/Chainalysis explore-grow-annotate-save loop. Remaining, in value order:
      opens an `EventSource` and live-merges incoming nodes/edges. So **same-API
      events already stream** (e.g. one operator's expand appears on another's
      open graph).
-   - ⬜ **Remaining:** a startup **LISTEN bridge** task in the API that pumps
-     `NOTIFY graph_events` → `publish()` (so the worker's `watch_tick` hits
-     reach open graphs cross-process), plus **live end-to-end verification**
-     (needs a running ASGI + Postgres — this sandbox has neither). Optional
-     further step: progress events inside the forensic-critical tracer.
+   - ✅ **Cross-process bridge (SHIPPED v0.35):** `run_listen_bridge` /
+     `start_listen_bridge` — a daemon-thread Postgres `LISTEN graph_events`
+     loop (sync psycopg, reconnect-with-backoff) that pumps `NOTIFY` →
+     `publish()`. Started lazily + idempotently on the first SSE connection,
+     opt-in via `RECUPERO_GRAPH_EVENTS_BRIDGE=1`. The worker's `watch_tick`
+     now `notify_pg`s a delta when a watched address moves
+     (`_emit_graph_event`, best-effort, routed by the row's investigation_id).
+     Bridge loop + parse + producer wiring unit-tested via injected fakes.
+   - ⬜ **Remaining:** **live end-to-end verification** (needs a running ASGI
+     + Postgres — this sandbox has neither) and richer UI handling of "update
+     existing node" deltas (today new nodes append; existing-node updates just
+     flag "(live)"). Optional further step: progress events inside the
+     forensic-critical tracer.
 
 ### Known tech-debt
 

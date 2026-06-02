@@ -105,3 +105,68 @@ def test_stream_requires_admin_key() -> None:
 def test_stream_rejects_bad_uuid() -> None:
     r = _client().get("/v1/operator/graph/not-a-uuid/stream?key=testkey123")
     assert r.status_code == 400
+
+
+# ---- LISTEN bridge (cross-process) ---- #
+
+
+def test_parse_notify_payload_roundtrip() -> None:
+    import json
+    raw = json.dumps({"investigation_id": INV, "event": {"type": "delta", "reason": "watch"}})
+    assert ge.parse_notify_payload(raw) == (INV, {"type": "delta", "reason": "watch"})
+    assert ge.parse_notify_payload("not json") is None
+    assert ge.parse_notify_payload(json.dumps({"investigation_id": INV})) is None  # no event
+    assert ge.parse_notify_payload(json.dumps(["a"])) is None
+
+
+def test_run_listen_bridge_routes_to_schedule() -> None:
+    import json
+
+    class _Note:
+        def __init__(self, payload): self.payload = payload
+
+    class _FakeConn:
+        def __init__(self, notes): self._notes = notes
+        def execute(self, sql): assert "LISTEN" in sql
+        def notifies(self, timeout=None): return iter(self._notes)
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    notes = [
+        _Note(json.dumps({"investigation_id": INV, "event": {"type": "delta", "reason": "watch"}})),
+        _Note("garbage"),  # must be skipped without raising
+    ]
+    seen = []
+    ge.run_listen_bridge(
+        "dsn", lambda inv, ev: seen.append((inv, ev)),
+        _connect=lambda d: _FakeConn(notes), max_events=2,
+    )
+    assert seen == [(INV, {"type": "delta", "reason": "watch"})]
+
+
+def test_watch_tick_emit_graph_event_notifies() -> None:
+    from recupero.worker import watch_tick
+    from recupero.worker.watch_tick import MaterialChange
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from uuid import uuid4
+    change = MaterialChange(
+        watchlist_id=uuid4(), address="0x" + "a" * 40, chain="ethereum", role="manual",
+        label_name=None, is_freezeable=False, issuer=None, asset_symbol=None,
+        prior_taken_at=None, prior_usd=None, prior_tx_count=None,
+        new_taken_at=datetime(2026, 6, 1, tzinfo=UTC), new_usd=Decimal("1000"), new_tx_count=5,
+        delta_usd=Decimal("1000"), tx_count_delta=5, reason="balance jumped",
+    )
+    calls = {}
+    with patch("recupero.reports.graph_events.notify_pg",
+               side_effect=lambda dsn, inv, ev: calls.update(dsn=dsn, inv=inv, ev=ev)):
+        watch_tick._emit_graph_event("dsn", {"investigation_id": INV}, change)
+    assert calls["inv"] == INV
+    assert calls["ev"]["reason"] == "watch"
+    assert calls["ev"]["nodes"][0]["id"] == change.address
+    # No investigation_id on the row → no notify.
+    calls.clear()
+    with patch("recupero.reports.graph_events.notify_pg",
+               side_effect=lambda *a, **k: calls.update(called=True)):
+        watch_tick._emit_graph_event("dsn", {}, change)
+    assert calls == {}

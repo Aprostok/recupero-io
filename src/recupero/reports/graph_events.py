@@ -55,10 +55,16 @@ def subscriber_count(investigation_id: str) -> int:
     return len(_subscribers.get(str(investigation_id), ()))
 
 
-async def publish(investigation_id: str, event: dict[str, Any]) -> int:
+def publish(investigation_id: str, event: dict[str, Any]) -> int:
     """Fan ``event`` out to every live subscriber of the investigation.
     Drops the event for any full queue (a stalled client must not block
-    others). Returns how many subscribers received it."""
+    others). Returns how many subscribers received it.
+
+    Synchronous on purpose: ``put_nowait`` is not a coroutine, and keeping
+    this sync means the only ``async def`` in the codebase stay in the
+    api/* layer (see tests/test_async_safety_audit.py). It is safe to call
+    from within the event loop (e.g. an async route) — the subscriber
+    queues are created on, and consumed by, that same loop."""
     delivered = 0
     for q in list(_subscribers.get(str(investigation_id), ())):
         try:

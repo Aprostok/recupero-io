@@ -18,25 +18,23 @@ from recupero.reports import graph_events as ge
 INV = "22222222-2222-2222-2222-222222222222"
 
 
-@pytest.mark.asyncio
-async def test_publish_reaches_subscribers_and_unsubscribe() -> None:
+def test_publish_reaches_subscribers_and_unsubscribe() -> None:
     q = ge.subscribe(INV)
     assert ge.subscriber_count(INV) == 1
-    n = await ge.publish(INV, {"type": "delta", "reason": "test", "nodes": [], "edges": []})
+    n = ge.publish(INV, {"type": "delta", "reason": "test", "nodes": [], "edges": []})
     assert n == 1
     ev = q.get_nowait()
     assert ev["reason"] == "test"
     ge.unsubscribe(INV, q)
     assert ge.subscriber_count(INV) == 0
     # No subscribers → publish delivers to nobody, doesn't raise.
-    assert await ge.publish(INV, {"type": "delta"}) == 0
+    assert ge.publish(INV, {"type": "delta"}) == 0
 
 
-@pytest.mark.asyncio
-async def test_publish_isolated_per_investigation() -> None:
+def test_publish_isolated_per_investigation() -> None:
     qa = ge.subscribe("inv-a")
     qb = ge.subscribe("inv-b")
-    await ge.publish("inv-a", {"type": "delta", "reason": "a"})
+    ge.publish("inv-a", {"type": "delta", "reason": "a"})
     assert qa.qsize() == 1 and qb.qsize() == 0
     ge.unsubscribe("inv-a", qa)
     ge.unsubscribe("inv-b", qb)

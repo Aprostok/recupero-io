@@ -1965,7 +1965,7 @@ async def operator_expand(
     if inv_id:
         try:
             from recupero.reports.graph_events import build_delta_event, publish
-            await publish(inv_id, build_delta_event(
+            publish(inv_id, build_delta_event(
                 reason="expand", nodes=data.get("nodes", []), edges=data.get("edges", []),
             ))
         except Exception as exc:  # noqa: BLE001

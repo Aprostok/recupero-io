@@ -97,8 +97,16 @@ class GraphNode:
     is_victim: bool
     issuer: str | None
     explorer_url: str | None
+    # v0.35.8 (F1): numeric USD fields for client-side filtering. Pre-F1 the
+    # template re-parsed the formatted "$1,234.00" strings with a regex to get
+    # a number for the min-USD filter + node radius; carrying clean numerics
+    # (already NaN/Inf-guarded by _safe_usd_float) removes that fragile parse
+    # and lets the filter threshold compare against an honest value.
+    inbound_usd_numeric: float = 0.0
+    outbound_usd_numeric: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
+        flow = self.inbound_usd_numeric + self.outbound_usd_numeric
         return {
             "id": self.id,
             "label": self.label,
@@ -109,6 +117,9 @@ class GraphNode:
             "identity": self.identity,
             "inboundUsd": self.inbound_usd,
             "outboundUsd": self.outbound_usd,
+            "inboundUsdNumeric": self.inbound_usd_numeric,
+            "outboundUsdNumeric": self.outbound_usd_numeric,
+            "flowUsdNumeric": flow,
             "isVictim": self.is_victim,
             "issuer": self.issuer,
             "explorerUrl": self.explorer_url,
@@ -245,6 +256,8 @@ def build_graph_data(case: Case) -> dict[str, Any]:
             identity=identity,
             inbound_usd=f"${safe_inbound:,.2f}",
             outbound_usd=f"${safe_outbound:,.2f}",
+            inbound_usd_numeric=_safe_usd_float(attrs.inbound_usd),
+            outbound_usd_numeric=_safe_usd_float(attrs.outbound_usd),
             is_victim=is_victim,
             issuer=attrs.issuer,
             explorer_url=_explorer_url(chain, addr),
@@ -282,6 +295,15 @@ def build_graph_data(case: Case) -> dict[str, Any]:
         )
         json_edges.append(edge.to_dict())
 
+    # v0.35.8 (F1): the distinct chains + categories present in this case so
+    # the interactive UI can build its multi-chain + category filter controls
+    # from data (no hardcoded chip list that drifts from the actual graph).
+    # Sorted for deterministic output (test-stable + reproducible HTML).
+    chains_present = sorted({str(n["chain"]) for n in json_nodes if n.get("chain")})
+    categories_present = sorted(
+        {str(n["category"]) for n in json_nodes if n.get("category")}
+    )
+
     return {
         "nodes": json_nodes,
         "edges": json_edges,
@@ -292,6 +314,8 @@ def build_graph_data(case: Case) -> dict[str, Any]:
             "edge_count": len(json_edges),
             "total_usd_traced": f"${_safe_usd_decimal(total_usd):,.2f}",
             "chain": case.chain.value,
+            "chains": chains_present,
+            "categories": categories_present,
         },
     }
 

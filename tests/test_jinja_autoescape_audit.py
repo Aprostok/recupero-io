@@ -187,7 +187,11 @@ def test_only_known_safe_filters_used():
         rather than escaped angle brackets. Safe.
     """
     KNOWN_SAFE: dict[str, set[int]] = {
-        "src/recupero/reports/templates/interactive_graph.html.j2": {233},
+        # v0.35.8 (F1): line shifted 233 → 342 when the filter/focus control
+        # row + its CSS/JS were added above this embed. Same JSON-in-
+        # application/json boundary with the same data-layer </script> /
+        # <!-- / --> escaping in graph_ui.py — re-pinned, not newly trusted.
+        "src/recupero/reports/templates/interactive_graph.html.j2": {342},
         "src/recupero/reports/templates/engagement_letter.html.j2": {185},
     }
 

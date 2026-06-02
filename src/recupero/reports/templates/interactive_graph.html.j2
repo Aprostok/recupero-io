@@ -89,7 +89,7 @@
   }
   #graph {
     width: 100vw;
-    height: calc(100vh - 110px);
+    height: calc(100vh - 152px);
     cursor: grab;
   }
   #graph:active { cursor: grabbing; }
@@ -171,6 +171,90 @@
     background: rgba(255,255,255,0.08);
     margin-left: 4px;
   }
+  /* v0.35.8 (F1): filter + focus controls. */
+  #filters {
+    padding: 7px 24px;
+    border-bottom: 1px solid #1f2127;
+    display: flex;
+    gap: 18px;
+    align-items: center;
+    font-size: 12px;
+    color: #8a8f9a;
+    flex-wrap: wrap;
+  }
+  #filters .filter-group {
+    display: flex;
+    gap: 7px;
+    align-items: center;
+  }
+  #filters .filter-group > .grp-label {
+    color: #6a6f7a;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 10px;
+  }
+  #filters input[type=number] {
+    background: #1a1c22;
+    color: #e6e7eb;
+    border: 1px solid #2a2d36;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    width: 90px;
+    font-family: ui-monospace, "JetBrains Mono", monospace;
+  }
+  .chip {
+    display: inline-flex;
+    gap: 5px;
+    align-items: center;
+    padding: 3px 9px;
+    border-radius: 12px;
+    border: 1px solid #2a2d36;
+    background: #1a1c22;
+    color: #b8bcc4;
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    transition: opacity 0.12s ease;
+  }
+  .chip .chip-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    border: 2px solid;
+  }
+  .chip.off {
+    opacity: 0.4;
+    text-decoration: line-through;
+  }
+  #filters label.toggle {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    cursor: pointer;
+    color: #b8bcc4;
+  }
+  #filters button {
+    background: #1a1c22;
+    color: #e6e7eb;
+    border: 1px solid #2a2d36;
+    padding: 5px 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  #filters button:hover { background: #24272f; }
+  .node.filtered-out, .edge.filtered-out, .edge-label.filtered-out {
+    display: none;
+  }
+  #focus-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    color: #ffcf6b;
+  }
+  #focus-banner.active { display: inline-flex; }
+  #focus-banner b { color: #fff; }
 </style>
 </head>
 <body>
@@ -179,8 +263,8 @@
   <h1>Fund-flow graph</h1>
   <div class="case-meta">{{ meta.case_id }}</div>
   <div class="stats">
-    <span><b>{{ meta.node_count }}</b> nodes</span>
-    <span><b>{{ meta.edge_count }}</b> edges</span>
+    <span><b id="stat-nodes">{{ meta.node_count }}</b> / {{ meta.node_count }} nodes</span>
+    <span><b id="stat-edges">{{ meta.edge_count }}</b> / {{ meta.edge_count }} edges</span>
     <span>Traced: <b>{{ meta.total_usd_traced }}</b></span>
     <span>Chain: <b>{{ meta.chain }}</b></span>
   </div>
@@ -214,6 +298,31 @@
   </div>
 </div>
 
+<div id="filters">
+  <div class="filter-group">
+    <span class="grp-label">Min&nbsp;USD</span>
+    <input type="number" id="min-usd" min="0" step="100" value="0" placeholder="0" />
+  </div>
+  <div class="filter-group" id="chain-filter">
+    <span class="grp-label">Chains</span>
+    {# chain chips injected by JS from graphData.meta.chains #}
+  </div>
+  <div class="filter-group" id="category-filter">
+    <span class="grp-label">Types</span>
+    {# category chips injected by JS from graphData.meta.categories #}
+  </div>
+  <label class="toggle">
+    <input type="checkbox" id="cross-chain-only" /> Cross-chain only
+  </label>
+  <button id="btn-clear-filters">Clear filters</button>
+  <div id="focus-banner">
+    <span>Focused on <b id="focus-label"></b> · depth</span>
+    <input type="number" id="focus-depth" min="1" max="6" step="1" value="1"
+           style="width:56px" />
+    <button id="btn-exit-focus">Show all</button>
+  </div>
+</div>
+
 <svg id="graph"></svg>
 <div id="tooltip"></div>
 
@@ -241,7 +350,7 @@ const svg = d3.select("#graph");
 const tooltip = d3.select("#tooltip");
 
 let width = window.innerWidth;
-let height = window.innerHeight - 110;
+let height = window.innerHeight - 152;
 
 svg.attr("width", width).attr("height", height);
 
@@ -585,10 +694,171 @@ function hideTooltip() {
   tooltip.style("opacity", 0);
 }
 
+// ---------------------------------------------------------------------------
+// v0.35.8 (F1): filtering + expand/focus — the interactive-investigation
+// capability TRM Reactor / Chainalysis Investigator ship. All client-side; no
+// network. Declutter by min-USD, by chain (multi-chain), by entity type, or
+// cross-chain-only; double-click any node to "focus" its k-hop neighborhood
+// and expand outward by depth. Chip labels are set via textContent (never
+// innerHTML) so vendor-controlled chain/category strings can't inject markup.
+// ---------------------------------------------------------------------------
+const fMeta = graphData.meta || {};
+const nodeById = new Map(graphData.nodes.map(n => [n.id, n]));
+const activeChains = new Set(fMeta.chains || []);
+const activeCategories = new Set(fMeta.categories || []);
+let minUsd = 0;
+let crossChainOnly = false;
+let focusSet = null;        // Set<id> when focused; null = whole graph
+let focusRootId = null;
+
+// Disable D3's default double-click-to-zoom so node double-click can drive
+// focus mode instead.
+svg.on("dblclick.zoom", null);
+
+// Representative chain color (first node of each chain) for the chain chips.
+const chainColorByName = new Map();
+graphData.nodes.forEach(n => {
+  if (!chainColorByName.has(n.chain)) chainColorByName.set(n.chain, n.chainColor);
+});
+
+function edgeEndpoints(e) {
+  return [
+    typeof e.source === "object" ? e.source.id : e.source,
+    typeof e.target === "object" ? e.target.id : e.target,
+  ];
+}
+function passAttrNode(n) {
+  let ok = activeChains.has(n.chain) && activeCategories.has(n.category);
+  if (ok && focusSet) ok = focusSet.has(n.id);
+  return ok;
+}
+function isEdgeVisible(e) {
+  const [s, t] = edgeEndpoints(e);
+  const ns = nodeById.get(s), nt = nodeById.get(t);
+  if (!ns || !nt) return false;
+  if (!passAttrNode(ns) || !passAttrNode(nt)) return false;
+  if ((e.totalUsdNumeric || 0) < minUsd) return false;
+  if (crossChainOnly && !e.isCrossChain) return false;
+  return true;
+}
+function applyFilters() {
+  minUsd = parseFloat(document.getElementById("min-usd").value) || 0;
+  const connected = new Set();
+  graphData.edges.forEach(e => {
+    if (isEdgeVisible(e)) {
+      const [s, t] = edgeEndpoints(e);
+      connected.add(s); connected.add(t);
+    }
+  });
+  const noEdges = graphData.edges.length === 0;
+  function nodeVis(n) {
+    if (!passAttrNode(n)) return false;
+    // Keep a node only if it still has a visible edge — OR it's the victim /
+    // the focus root / the graph has no edges at all (so a single-node case
+    // still renders).
+    return noEdges || connected.has(n.id) || n.isVictim ||
+           (focusSet && focusSet.has(n.id));
+  }
+  let visNodes = 0, visEdges = 0;
+  nodeSel.classed("filtered-out", n => { const v = nodeVis(n); if (v) visNodes++; return !v; });
+  edgeSel.classed("filtered-out", e => { const v = isEdgeVisible(e); if (v) visEdges++; return !v; });
+  edgeLabelSel.classed("filtered-out", e => !isEdgeVisible(e));
+  document.getElementById("stat-nodes").textContent = visNodes;
+  document.getElementById("stat-edges").textContent = visEdges;
+  simulation.alpha(0.12).restart();
+}
+
+function buildChips(containerId, values, activeSet, colorFor) {
+  const c = document.getElementById(containerId);
+  (values || []).forEach(val => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    if (colorFor) {
+      const dot = document.createElement("span");
+      dot.className = "chip-dot";
+      dot.style.borderColor = colorFor(val);
+      chip.appendChild(dot);
+    }
+    const txt = document.createElement("span");
+    txt.textContent = val;   // XSS-safe: never innerHTML
+    chip.appendChild(txt);
+    chip.addEventListener("click", () => {
+      if (activeSet.has(val)) { activeSet.delete(val); chip.classList.add("off"); }
+      else { activeSet.add(val); chip.classList.remove("off"); }
+      applyFilters();
+    });
+    c.appendChild(chip);
+  });
+}
+
+// Focus / expand: BFS k hops out from a root using the neighbor index.
+function computeFocusSet(rootId, depth) {
+  const seen = new Set([rootId]);
+  let frontier = [rootId];
+  for (let d = 0; d < depth; d++) {
+    const next = [];
+    frontier.forEach(id => {
+      (neighborIndex.get(id) || new Set()).forEach(nb => {
+        if (!seen.has(nb)) { seen.add(nb); next.push(nb); }
+      });
+    });
+    frontier = next;
+    if (!frontier.length) break;
+  }
+  return seen;
+}
+function enterFocus(rootId) {
+  focusRootId = rootId;
+  const depth = parseInt(document.getElementById("focus-depth").value, 10) || 1;
+  focusSet = computeFocusSet(rootId, depth);
+  const banner = document.getElementById("focus-banner");
+  banner.classList.add("active");
+  const root = nodeById.get(rootId);
+  document.getElementById("focus-label").textContent =
+    (root && (root.label || root.short)) || rootId;
+  applyFilters();
+}
+function exitFocus() {
+  focusRootId = null;
+  focusSet = null;
+  document.getElementById("focus-banner").classList.remove("active");
+}
+
+// Wire controls.
+buildChips("chain-filter", fMeta.chains, activeChains,
+           c => chainColorByName.get(c) || "#9E9E9E");
+buildChips("category-filter", fMeta.categories, activeCategories, null);
+document.getElementById("min-usd").addEventListener("input", applyFilters);
+document.getElementById("cross-chain-only").addEventListener("change", (e) => {
+  crossChainOnly = e.target.checked;
+  applyFilters();
+});
+document.getElementById("btn-clear-filters").addEventListener("click", () => {
+  activeChains.clear(); (fMeta.chains || []).forEach(c => activeChains.add(c));
+  activeCategories.clear(); (fMeta.categories || []).forEach(c => activeCategories.add(c));
+  minUsd = 0; document.getElementById("min-usd").value = 0;
+  crossChainOnly = false; document.getElementById("cross-chain-only").checked = false;
+  document.querySelectorAll("#chain-filter .chip, #category-filter .chip")
+    .forEach(ch => ch.classList.remove("off"));
+  exitFocus();
+  applyFilters();
+});
+document.getElementById("btn-exit-focus").addEventListener("click", () => {
+  exitFocus(); applyFilters();
+});
+document.getElementById("focus-depth").addEventListener("input", () => {
+  if (focusRootId) enterFocus(focusRootId);
+});
+// Double-click a node → focus its neighborhood.
+nodeSel.on("dblclick", (event, d) => {
+  event.stopPropagation();
+  enterFocus(d.id);
+});
+
 // Resize handler — keep the SVG full-bleed.
 window.addEventListener("resize", () => {
   width = window.innerWidth;
-  height = window.innerHeight - 110;
+  height = window.innerHeight - 152;
   svg.attr("width", width).attr("height", height);
   simulation.force("center", d3.forceCenter(width / 2, height / 2));
   simulation.alpha(0.3).restart();

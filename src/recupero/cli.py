@@ -1664,6 +1664,39 @@ def sar_filing_cmd(
     )
 
 
+@app.command("exhibit-pack")
+def exhibit_pack_cmd(
+    case_id: str = typer.Argument(..., help="Case ID (folder name under cases/)."),
+) -> None:
+    """Build a court-admissible exhibit pack from a case directory.
+
+    Produces an exhibit index (every artifact SHA-256-hashed), a Daubert
+    methodology appendix documenting the tracing pipeline, and a 28 U.S.C.
+    § 1746 declaration template for the testifying analyst. The hashes +
+    artifact list are real; the declaration is a template to complete + sign.
+
+    Output: cases/<case_id>/exhibit_pack/exhibit_pack.html
+    """
+    from recupero.reports.exhibit_pack import render_exhibit_pack
+
+    cfg, _env = load_config()
+    store = CaseStore(cfg)
+    case_dir = store.case_dir(case_id)
+    if not case_dir.exists():
+        console.print(f"[bold red]Case directory not found:[/] {case_dir}")
+        raise typer.Exit(code=2)
+
+    out_path = render_exhibit_pack(case_dir)
+    console.print()
+    console.print(f"[bold green]Wrote exhibit pack to[/] [cyan]{out_path}[/]")
+    console.print()
+    console.print(
+        "[bold yellow]⚠ Review before use:[/] recompute every exhibit hash, "
+        "complete the § 1746 declaration, and confirm the methodology appendix "
+        "before introducing any exhibit into evidence."
+    )
+
+
 @app.command("token-risk")
 def token_risk_cmd(
     contract: str = typer.Argument(..., help="Token contract address."),

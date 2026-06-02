@@ -464,3 +464,41 @@ def test_split_ignores_pre_inbound_outflow() -> None:
         _split_to(420, "0xb", "0xo2", mins=10),
     ]
     assert detect_same_asset_split(inbound, cands) == []
+
+
+# ----------------------- dormancy-aware window (v0.35.2) -------------------- #
+#
+# Laundering parks funds and moves them weeks/months later. The default 72h
+# window drops that dormant onward hop; time_window_hours=0 (lower-bound-only)
+# recovers it. The same knob governs the 1:1 matcher AND the split detector.
+
+
+def test_1to1_dormant_hop_excluded_by_default_window() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI", usd=1000)
+    # Exact same-asset forward, but 80h later (> the 72h default).
+    cands = [_leg(1000, symbol="DAI", to="0xreal", tx="0xo1",
+                  when=T0 + timedelta(hours=80))]
+    assert match_onward_transfers(inbound, cands) == []
+
+
+def test_1to1_dormant_hop_matched_with_unbounded_window() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI", usd=1000)
+    cands = [_leg(1000, symbol="DAI", to="0xreal", tx="0xo1",
+                  when=T0 + timedelta(hours=80))]
+    matches = match_onward_transfers(inbound, cands, time_window_hours=0)
+    assert len(matches) == 1
+    assert matches[0].to_address == "0xreal"
+    assert matches[0].confidence == "medium"  # sole same-asset match
+
+
+def test_split_dormant_peel_excluded_by_default_but_found_unbounded() -> None:
+    inbound = _inbound(amount=1000, symbol="DAI")
+    # 600 + 420 = 1020 (Δ2%), but 80h later — beyond the default window.
+    cands = [
+        _leg(600, symbol="DAI", to="0xa", tx="0xo1", when=T0 + timedelta(hours=80)),
+        _leg(420, symbol="DAI", to="0xb", tx="0xo2", when=T0 + timedelta(hours=81)),
+    ]
+    assert detect_same_asset_split(inbound, cands) == []  # default 72h drops it
+    legs = detect_same_asset_split(inbound, cands, time_window_hours=0)
+    assert {m.to_address for m in legs} == {"0xa", "0xb"}
+    assert all(m.confidence == "low" for m in legs)

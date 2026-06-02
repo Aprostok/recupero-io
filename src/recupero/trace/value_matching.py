@@ -228,15 +228,25 @@ def match_onward_transfers(
         # Nothing to match against (zero / unknown inbound value).
         return []
 
-    window = timedelta(hours=time_window_hours)
+    # v0.35.2: dormancy-aware window. ``time_window_hours <= 0`` means
+    # LOWER-BOUND-ONLY (a hop must be AFTER the inbound; no upper cap) — the
+    # same dormancy principle as the v0.34.4 cross-chain window: laundering
+    # parks funds and moves them weeks/months later, so a fixed upper cap drops
+    # the real onward hop. Default stays 72h (conservative); deep cold-case
+    # tracing sets RECUPERO_VALUE_TRACE_WINDOW_HOURS=0.
+    _unbounded = time_window_hours <= 0
+    window = timedelta(hours=time_window_hours) if not _unbounded else None
     amount_matches: list[OnwardMatch] = []
     usd_matches: list[OnwardMatch] = []
 
     for c in candidates:
         if c.tx_hash == inbound.tx_hash:
             continue
-        # Onward hop must come AFTER the inbound, within the window.
-        if c.when < inbound.when or (c.when - inbound.when) > window:
+        # Onward hop must come AFTER the inbound; within the window unless
+        # the window is unbounded (dormancy-aware).
+        if c.when < inbound.when:
+            continue
+        if window is not None and (c.when - inbound.when) > window:
             continue
 
         matched_amount = False
@@ -374,7 +384,9 @@ def detect_same_asset_split(
     if max_split_legs < 2:
         return []  # a "split" is by definition ≥ 2 legs
 
-    window = timedelta(hours=time_window_hours)
+    # Dormancy-aware window (see match_onward_transfers): <=0 ⇒ lower-bound-only.
+    _unbounded = time_window_hours <= 0
+    window = timedelta(hours=time_window_hours) if not _unbounded else None
     lo = inbound.amount * (Decimal(100) - split_tol_pct) / Decimal(100)
     hi = inbound.amount * (Decimal(100) + split_tol_pct) / Decimal(100)
 
@@ -382,7 +394,9 @@ def detect_same_asset_split(
     for c in candidates:
         if c.tx_hash == inbound.tx_hash:
             continue
-        if c.when < inbound.when or (c.when - inbound.when) > window:
+        if c.when < inbound.when:
+            continue
+        if window is not None and (c.when - inbound.when) > window:
             continue
         if c.amount <= 0:
             continue

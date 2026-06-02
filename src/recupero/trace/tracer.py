@@ -512,6 +512,12 @@ def run_trace(
     _label_terminals_enabled = os.environ.get(
         "RECUPERO_VALUE_TRACE_LABELED_TERMINALS", "0",
     ).strip().lower() in ("1", "true", "yes", "on")
+    # v0.35.2: dormancy-aware value-match window. Default 72h (conservative —
+    # preserves Zigha 4/4 + every existing trace). Set 0 for lower-bound-only
+    # (a hop must be AFTER the inbound; no upper cap) so a dormant onward hop
+    # moved weeks/months later is still matched — the remaining limiter on deep
+    # cold-case reach (e.g. Ronin consolidation wallets forwarding past 72h).
+    _value_window_hours = _topn_env("RECUPERO_VALUE_TRACE_WINDOW_HOURS", 72)
     inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
     # v0.34.7: labeled terminals recorded at directed dead-ends (mixer/exchange/
@@ -691,6 +697,7 @@ def run_trace(
                         enqueue_fn=_consider_enqueue,
                         provenance_sink=value_matched,
                         follow_splits=_follow_splits,
+                        window_hours=_value_window_hours,
                     )
                     followed += _f
                     for _mt in _matched:
@@ -2258,6 +2265,7 @@ def _value_match_and_enqueue(
     enqueue_fn: Any,
     provenance_sink: list[dict[str, Any]],
     follow_splits: bool = False,
+    window_hours: int = 72,
 ) -> tuple[int, list[Transfer]]:
     """At a high-fan-out node, follow ONLY the outflow(s) whose value matches
     the inbound funds (v0.34 value-directed tracing).
@@ -2294,7 +2302,9 @@ def _value_match_and_enqueue(
         by_key[(leg.tx_hash, leg.to_address.lower())] = t
         cand_legs.append(leg)
 
-    matches = match_onward_transfers(inbound_leg, cand_legs)
+    matches = match_onward_transfers(
+        inbound_leg, cand_legs, time_window_hours=window_hours,
+    )
     # v0.34.6: when no 1:1 hop matched, optionally recover a 1:N same-asset
     # SPLIT/peel (the node forwarded the inbound funds as many smaller same-asset
     # sends summing to ~the inbound). Opt-in (RECUPERO_VALUE_TRACE_FOLLOW_SPLITS)
@@ -2304,7 +2314,9 @@ def _value_match_and_enqueue(
     # trace past the consolidation wallets that peel into mixer-denomination
     # chunks instead of forwarding a single matching amount.
     if not matches and follow_splits:
-        matches = detect_same_asset_split(inbound_leg, cand_legs)
+        matches = detect_same_asset_split(
+            inbound_leg, cand_legs, time_window_hours=window_hours,
+        )
     followed = 0
     matched_transfers: list[Transfer] = []
     for m in matches:

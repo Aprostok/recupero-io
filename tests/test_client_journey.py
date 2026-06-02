@@ -312,6 +312,37 @@ def test_node_exposure_breakdown_by_neighbor_category() -> None:
     assert perp["outByCategory"]["unrecoverable"] == 4000.0
 
 
+def test_checksummed_addresses_still_produce_edges() -> None:
+    """Regression: edges are keyed canonical but carry the RAW (checksummed)
+    address. The kept-ids filter must canonicalize, or every mixed-case
+    address edge is dropped (nodes show balances, graph has 0 edges)."""
+    v = "0x" + "A" * 40        # uppercase hex — canonicalizes to lowercase
+    p = "0x" + "B" * 40
+    ex = "0x" + "C" * 40
+    case = Case(
+        case_id="V-CHK", seed_address=v, chain=Chain.ethereum,
+        incident_time=datetime(2026, 1, 1, tzinfo=UTC),
+        transfers=[
+            _transfer(from_addr=v, to_addr=p, usd=Decimal("50000")),
+            _transfer(from_addr=p, to_addr=ex, usd=Decimal("45000"),
+                      tx_hash="0x" + "2" * 64,
+                      counterparty_label=_label(ex, category=LabelCategory.exchange_deposit, name="Binance")),
+        ],
+        trace_started_at=datetime(2026, 1, 1, tzinfo=UTC),
+        software_version="t", config_used={},
+    )
+    j = build_journey_data(case)
+    assert len(j["edges"]) == 2, "checksummed-address edges were dropped"
+    assert any(e["totalUsdNumeric"] > 0 for e in j["edges"])
+    # edge endpoints must be canonical so they match node ids
+    node_ids = {n["id"] for n in j["nodes"]}
+    for e in j["edges"]:
+        assert e["source"] in node_ids and e["target"] in node_ids
+    # exposure must populate too (it shares the same canonicalization)
+    perp = next(n for n in j["nodes"] if n["id"] == p.lower())
+    assert perp["inByCategory"] and perp["outByCategory"]
+
+
 def test_journey_json_serializable_allow_nan_false() -> None:
     """The whole projection must serialize with allow_nan=False so the
     embedded <script type=application/json> block is JSON.parse-safe."""

@@ -349,13 +349,17 @@ def build_journey_data(
         su = _safe_usd_decimal(e.total_usd)
         if su <= 0:
             continue
-        src_status = work[e.src].status if e.src in work else "intermediary"
-        dst_status = work[e.dst].status if e.dst in work else "intermediary"
-        if e.dst in work:
-            slot = in_by.setdefault(e.dst, {})
+        # _aggregate keys nodes by canonical_address_key but stores the
+        # RAW (possibly checksummed) address on the edge — canonicalize so
+        # endpoints line up with the node keys in `work`.
+        esrc, edst = _key(e.src), _key(e.dst)
+        src_status = work[esrc].status if esrc in work else "intermediary"
+        dst_status = work[edst].status if edst in work else "intermediary"
+        if edst in work:
+            slot = in_by.setdefault(edst, {})
             slot[src_status] = slot.get(src_status, Decimal(0)) + su
-        if e.src in work:
-            slot = out_by.setdefault(e.src, {})
+        if esrc in work:
+            slot = out_by.setdefault(esrc, {})
             slot[dst_status] = slot.get(dst_status, Decimal(0)) + su
 
     # ---- Per-edge transactions for the drill-down panel ----
@@ -430,7 +434,11 @@ def build_journey_data(
     time_min: datetime | None = None
     time_max: datetime | None = None
     for e in edges_list:
-        if e.src not in kept_ids or e.dst not in kept_ids:
+        # Canonicalize endpoints (edge stores raw addresses; node keys +
+        # tx_by_edge are canonical). Without this, every checksummed-address
+        # edge is dropped — nodes show balances but the graph has 0 edges.
+        esrc, edst = _key(e.src), _key(e.dst)
+        if esrc not in kept_ids or edst not in kept_ids:
             continue
         safe_total = _safe_usd_decimal(e.total_usd)
         total_usd += safe_total
@@ -442,8 +450,8 @@ def build_journey_data(
             time_min = t if time_min is None or t < time_min else time_min
             time_max = t if time_max is None or t > time_max else time_max
         json_edges.append({
-            "source": e.src,
-            "target": e.dst,
+            "source": esrc,
+            "target": edst,
             "totalUsd": f"${safe_total:,.2f}",
             "totalUsdNumeric": _safe_usd_float(e.total_usd),
             "transferCount": e.transfer_count,
@@ -451,7 +459,7 @@ def build_journey_data(
             "isCrossChain": (e.src_chain != e.dst_chain),
             "firstTime": _iso_date(e.first_time),
             "lastTime": _iso_date(e.last_time),
-            **_edge_tx_payload(tx_by_edge.get((e.src, e.dst), [])),
+            **_edge_tx_payload(tx_by_edge.get((esrc, edst), [])),
         })
 
     # ---- Hop depth from the origin (drives the directional "flow"

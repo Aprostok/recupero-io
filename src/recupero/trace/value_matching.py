@@ -228,15 +228,25 @@ def match_onward_transfers(
         # Nothing to match against (zero / unknown inbound value).
         return []
 
-    window = timedelta(hours=time_window_hours)
+    # v0.35.2: dormancy-aware window. ``time_window_hours <= 0`` means
+    # LOWER-BOUND-ONLY (a hop must be AFTER the inbound; no upper cap) — the
+    # same dormancy principle as the v0.34.4 cross-chain window: laundering
+    # parks funds and moves them weeks/months later, so a fixed upper cap drops
+    # the real onward hop. Default stays 72h (conservative); deep cold-case
+    # tracing sets RECUPERO_VALUE_TRACE_WINDOW_HOURS=0.
+    _unbounded = time_window_hours <= 0
+    window = timedelta(hours=time_window_hours) if not _unbounded else None
     amount_matches: list[OnwardMatch] = []
     usd_matches: list[OnwardMatch] = []
 
     for c in candidates:
         if c.tx_hash == inbound.tx_hash:
             continue
-        # Onward hop must come AFTER the inbound, within the window.
-        if c.when < inbound.when or (c.when - inbound.when) > window:
+        # Onward hop must come AFTER the inbound; within the window unless
+        # the window is unbounded (dormancy-aware).
+        if c.when < inbound.when:
+            continue
+        if window is not None and (c.when - inbound.when) > window:
             continue
 
         matched_amount = False
@@ -316,3 +326,131 @@ def match_onward_transfers(
 
     finalized.sort(key=lambda x: x.score, reverse=True)
     return finalized[:max_matches]
+
+
+# --- 1:N split / peel detection (v0.34.6) ------------------------------------
+# A laundering "peel" forwards the received funds onward as MANY smaller
+# same-asset transfers whose SUM ≈ the inbound. The 1:1 matcher above misses
+# this entirely (no single outflow is within tolerance of the inbound), so the
+# trace dead-ends one hop short of the next layer — exactly the Lazarus/Ronin
+# case, where each ~$30M-$99M consolidation wallet peeled its balance into many
+# smaller ETH sends. detect_same_asset_split recovers the peel CONSERVATIVELY:
+# same on-chain token only, greedy largest-first, the subset must reach the
+# inbound sum within tolerance using a bounded number of legs — else it returns
+# [] (an honest dead-end, never a guess). Following a split is a SET inference
+# (which specific recipients are the laundered funds vs. the node's own change
+# is not provable on-chain), so every leg is confidence="low" and flagged
+# ambiguous whenever the node had same-asset outflows OUTSIDE the matched subset
+# (commingling). It is NEVER "high"/"medium" — the same forensic doctrine as the
+# rest of this module.
+DEFAULT_SPLIT_TOL_PCT = Decimal("3.0")   # subset-sum vs inbound slack (looser
+#                                          than the 1:1 2% — many legs accrue
+#                                          per-tx gas/rounding)
+DEFAULT_MAX_SPLIT_LEGS = 25              # more legs than this is not a clean
+#                                          peel — bail rather than chase dust
+
+
+def detect_same_asset_split(
+    inbound: Leg,
+    candidates: list[Leg],
+    *,
+    split_tol_pct: Decimal = DEFAULT_SPLIT_TOL_PCT,
+    max_split_legs: int = DEFAULT_MAX_SPLIT_LEGS,
+    time_window_hours: int = DEFAULT_TIME_WINDOW_HOURS,
+) -> list[OnwardMatch]:
+    """Detect a 1:N same-asset SPLIT/peel and return one ``OnwardMatch`` per
+    subset leg (confidence ``low``, kind ``same_asset_split``).
+
+    Intended to be called ONLY when ``match_onward_transfers`` returned nothing
+    (no 1:1 hop) — it recovers the peel a 1:1 matcher cannot see. Returns ``[]``
+    when no clean peel exists; it never guesses.
+
+    Conservatism / forensic posture:
+      * SAME on-chain token only (canonical contract identity, not symbol) — a
+        spoof token with a colliding symbol is never summed.
+      * Only outflows AFTER ``inbound.when`` within ``time_window_hours``.
+      * A single leg larger than ``inbound × (1+tol)`` cannot be a peel leg and
+        is excluded.
+      * Greedy largest-first accumulation; the running sum must land in
+        ``[inbound × (1-tol), inbound × (1+tol)]`` using ≥ 2 and
+        ≤ ``max_split_legs`` legs. Undershoot (ran out of legs) or overshoot
+        (last leg blew past the band) ⇒ ``[]``.
+      * ``ambiguous=True`` when the node had same-asset outflows outside the
+        matched subset (commingling) — surfaced, never silently resolved.
+    """
+    if inbound.amount <= 0:
+        # Split-follow is same-asset only; needs a positive inbound amount.
+        return []
+    if max_split_legs < 2:
+        return []  # a "split" is by definition ≥ 2 legs
+
+    # Dormancy-aware window (see match_onward_transfers): <=0 ⇒ lower-bound-only.
+    _unbounded = time_window_hours <= 0
+    window = timedelta(hours=time_window_hours) if not _unbounded else None
+    lo = inbound.amount * (Decimal(100) - split_tol_pct) / Decimal(100)
+    hi = inbound.amount * (Decimal(100) + split_tol_pct) / Decimal(100)
+
+    pool: list[Leg] = []
+    for c in candidates:
+        if c.tx_hash == inbound.tx_hash:
+            continue
+        if c.when < inbound.when:
+            continue
+        if window is not None and (c.when - inbound.when) > window:
+            continue
+        if c.amount <= 0:
+            continue
+        if not (
+            c.token_symbol
+            and c.token_symbol == inbound.token_symbol
+            and _same_token(inbound.token_contract, c.token_contract)
+        ):
+            continue
+        if c.amount > hi:
+            continue  # a single over-large leg cannot be part of the peel
+        pool.append(c)
+
+    if len(pool) < 2:
+        return []
+
+    pool.sort(key=lambda leg: leg.amount, reverse=True)
+    subset: list[Leg] = []
+    running = Decimal(0)
+    for c in pool:
+        if len(subset) >= max_split_legs:
+            return []  # needs too many legs to reach the sum — not a clean peel
+        subset.append(c)
+        running += c.amount
+        if running >= lo:
+            break
+
+    if not (lo <= running <= hi) or len(subset) < 2:
+        # Undershoot or overshoot — no clean peel; honest dead-end.
+        return []
+
+    ambiguous = len(pool) > len(subset)
+    delta_pct = (running - inbound.amount).copy_abs() / inbound.amount * Decimal(100)
+    n = len(subset)
+    matches = [
+        OnwardMatch(
+            to_address=c.to_address,
+            tx_hash=c.tx_hash,
+            token_symbol=c.token_symbol,
+            amount=c.amount,
+            usd_value=c.usd_value,
+            kind="same_asset_split",
+            basis=(
+                f"same-asset split/peel: {n} legs of {c.token_symbol} "
+                f"summing to {running} vs in={inbound.amount} "
+                f"(Δ{delta_pct:.2f}% ≤ {split_tol_pct}%)"
+                + ("; node also sent same-asset outflows outside this subset"
+                   if ambiguous else "")
+            ),
+            confidence="low",  # SET inference — never medium/high
+            score=float(c.amount),  # larger legs ranked first
+            ambiguous=ambiguous,
+        )
+        for c in subset
+    ]
+    matches.sort(key=lambda x: x.score, reverse=True)
+    return matches

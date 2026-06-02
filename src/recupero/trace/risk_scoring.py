@@ -152,6 +152,7 @@ def load_high_risk_db(
     mixers_path: Path | None = None,
     ransomware_path: Path | None = None,
     ofac_csv_path: Path | None = None,
+    intl_sanctions_csv_path: Path | None = None,
 ) -> dict[str, HighRiskEntry]:
     """Load high-risk address labels from THREE seed files.
 
@@ -287,6 +288,35 @@ def load_high_risk_db(
             )
     except Exception as exc:  # noqa: BLE001
         log.debug("ofac live-sync data unavailable: %s", exc)
+
+    # v0.35.6 (E5) — multi-regime international sanctions (EU / UK HMT-OFSI / UN
+    # / Israel NBCTF / Japan MoF / France / …), imported from OpenSanctions via
+    # `recupero-ops import-sanctions`. Severity 4 (SANCTIONED-class), but a
+    # DISTINCT category `intl_sanctioned` — NOT `ofac_sanctioned` — so it flags
+    # the exposure without mis-routing an OFAC freeze letter (the regime is in
+    # the notes for correct legal routing). OFAC + curated entries win on dupes
+    # (loaded first), so an address that is both OFAC- and EU-listed stays OFAC.
+    try:
+        from recupero.labels.sanctions_intl import load_intl_sanctions_csv
+        for ie in load_intl_sanctions_csv(intl_sanctions_csv_path):
+            if ie.removed_at_utc or ie.address in out:
+                continue
+            out[ie.address] = HighRiskEntry(
+                address=ie.address,
+                name=ie.entity_name or "(intl-sanctioned wallet)",
+                risk_category="intl_sanctioned",
+                severity=4,
+                notes=(
+                    f"Sanctioned by {ie.regime or 'a non-OFAC authority'} "
+                    f"(source: {ie.source_dataset or 'OpenSanctions'}). "
+                    "NON-OFAC regime — route via the matching authority, not an "
+                    "OFAC SDN letter. Imported via `recupero-ops import-sanctions`."
+                ),
+                confidence="high",
+                ofac_listing_date=ie.listing_date or None,
+            )
+    except Exception as exc:  # noqa: BLE001
+        log.debug("intl sanctions data unavailable: %s", exc)
 
     # mixers.json — legacy schema. Promote to mixer_sanctioned (sev 4)
     # only when notes assert a CURRENT OFAC designation; a delisted/

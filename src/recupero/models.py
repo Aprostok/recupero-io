@@ -92,10 +92,12 @@ class Chain(str, Enum):
     # BFS continuation in tracer.py would fail to instantiate the
     # destination adapter and silently produce no continuation.
     #
-    # NB: polygon_zkevm, opbnb, manta are LABEL-only destinations for
-    # now (no full adapter via watch_tick). The Chain enum entry is
-    # what bridges.json needs to be loaded WITHOUT being silently
-    # dropped by the validator.
+    # NB: polygon_zkevm + manta are LABEL-only destinations (NOT on the
+    # Etherscan V2 chainlist — verified 2026-06-02 — so the shared EvmAdapter
+    # can't reach them; full coverage needs a non-Etherscan backend). The Chain
+    # enum entry is what bridges.json needs to load WITHOUT being silently
+    # dropped by the validator. opBNB (chain_id 204) WAS label-only but is on
+    # Etherscan V2 — v0.35.3 promoted it to full BFS/watch_tick adapter coverage.
     polygon_zkevm = "polygon_zkevm"
     opbnb = "opbnb"
     manta = "manta"

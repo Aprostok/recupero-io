@@ -150,6 +150,8 @@ def _profile_for(chain: Chain, cfg: RecuperoConfig) -> EvmChainProfile:
         Chain.moonbeam:  "moonbeam",
         Chain.metis:     "metis",
         Chain.kava:      "kava",
+        # v0.35.3 — opBNB (chain_id 204), verified on Etherscan V2 chainlist.
+        Chain.opbnb:     "opbnb",
     }
     if chain in _EXTENDED_EVM_CHAINS:
         attr = _EXTENDED_EVM_CHAINS[chain]

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watchlist — Monitored Funds</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.5rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.5rem; margin: 1.25rem 0 0.25rem; }
+  .sub { color: #666; font-size: 0.85rem; margin-bottom: 1.25rem; }
+  .cards { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.5rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px;
+          padding: 0.85rem 1.1rem; min-width: 150px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .card .v { font-size: 1.45rem; font-weight: 700; }
+  .card .l { font-size: 0.72rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+  .card.alert .v { color: #c0392b; }
+  .card.ok .v { color: #1e8449; }
+  .breakdowns { display: flex; flex-wrap: wrap; gap: 2rem; margin-bottom: 1.25rem; font-size: 0.85rem; }
+  .breakdowns h3 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: .04em; color: #888; margin: 0 0 .4rem; }
+  .chip { display: inline-block; background: #fff; border: 1px solid #e3e3e3; border-radius: 999px;
+          padding: .15rem .6rem; margin: 0 .3rem .3rem 0; font-size: .8rem; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: 0.82rem;
+          border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .5rem .65rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  th { background: #f5f5f5; font-size: .7rem; text-transform: uppercase; letter-spacing: .03em; color: #777; }
+  tr.moved td { background: #fdf3f2; }
+  tr.stale td.age { color: #c0392b; font-weight: 600; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; }
+  .badge { display: inline-block; padding: .1rem .45rem; border-radius: 6px; font-size: .72rem; font-weight: 600; white-space: nowrap; }
+  .badge.moved { background: #f9e0dd; color: #a93226; }
+  .badge.ok { background: #e3f3e8; color: #1e8449; }
+  .badge.new { background: #eef0f2; color: #555; }
+  a { color: #2563eb; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .right { text-align: right; }
+  footer { margin-top: 1.5rem; color: #999; font-size: 0.72rem; }
+  .empty { padding: 2rem; text-align: center; color: #888; background: #fff; border: 1px dashed #ddd; border-radius: 10px; }
+</style>
+</head>
+<body>
+  <h1>🛰️ Watchlist — Monitored Funds</h1>
+  <div class="sub">
+    Everything currently under monitoring, where it sits, and whether it has moved
+    since the last re-check. Run <span class="mono">recupero-ops watchlist-run</span>
+    to refresh on-chain snapshots, then reload. Generated {{ generated_at }} · v{{ software_version }}.
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="v">{{ ov.n_items }}</div><div class="l">Addresses watched</div></div>
+    <div class="card"><div class="v">{{ ov.total_watched_usd_human }}</div><div class="l">Total under watch</div></div>
+    <div class="card {% if ov.n_moved %}alert{% endif %}"><div class="v">{{ ov.n_moved }}</div><div class="l">Moved since last check</div></div>
+    <div class="card ok"><div class="v">{{ ov.total_still_present_usd_human }}</div><div class="l">Still present (USD)</div></div>
+    <div class="card {% if ov.n_stale %}alert{% endif %}"><div class="v">{{ ov.n_stale }}</div><div class="l">Due for re-check (&gt;{{ ov.stale_after_hours }}h)</div></div>
+    <div class="card"><div class="v">{{ ov.n_never_checked }}</div><div class="l">Never checked</div></div>
+  </div>
+
+  <div class="breakdowns">
+    <div>
+      <h3>By status</h3>
+      {% for s in ov.by_status %}
+        <span class="chip">{{ s.emoji }} {{ s.status }} · {{ s.n }}</span>
+      {% endfor %}
+    </div>
+    <div>
+      <h3>Where it is (by chain)</h3>
+      {% for c in ov.by_chain %}
+        <span class="chip">{{ c.chain }} · {{ c.n }} · {{ c.usd_human }}</span>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if ov.rows %}
+  <table>
+    <thead>
+      <tr>
+        <th>Status</th><th>Address</th><th>Chain</th><th>Asset</th>
+        <th class="right">Balance (USD)</th><th>Movement</th><th>Δ since prior</th>
+        <th class="age">Last checked</th><th class="right">Days watched</th>
+        <th>Issuer / label</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for it in ov.rows %}
+      <tr class="{% if it.movement == 'moved' %}moved{% endif %}{% if it.stale %} stale{% endif %}">
+        <td><span class="mono">{{ it.status_emoji }} {{ it.status_label }}</span></td>
+        <td class="mono">
+          {% if it.explorer_url %}<a href="{{ it.explorer_url|safe_url }}" target="_blank" rel="noopener">{{ it.address }}</a>{% else %}{{ it.address }}{% endif %}
+          {% if it.priority == 'hot' %} 🔥{% elif it.priority == 'paused' %} ⏸{% endif %}
+        </td>
+        <td>{{ it.chain }}</td>
+        <td>{{ it.asset_symbol }}</td>
+        <td class="right">{{ it.balance_usd_human }}</td>
+        <td><span class="badge {{ it.movement_class }}">{{ it.movement_badge }}</span></td>
+        <td class="right">{{ it.last_delta_usd_human }}</td>
+        <td class="age" title="{{ it.last_checked_human }}">{{ it.age_human }}</td>
+        <td class="right">{{ it.days_watched }}</td>
+        <td>{{ it.issuer }}{% if it.label_name and it.label_name != '—' %} · {{ it.label_name }}{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">Nothing under watch yet. Watched addresses are auto-enrolled from
+  case briefs (TRACKED holdings + flagged wallets). Run a trace, then re-open this page.</div>
+  {% endif %}
+
+  <footer>
+    Recupero watchlist · movement verdicts are derived from real on-chain snapshots
+    (<span class="mono">watchlist_snapshots</span>); a "moved" flag means a recorded balance
+    delta or a new outbound transaction since the prior snapshot — never an inference.
+  </footer>
+</body>
+</html>

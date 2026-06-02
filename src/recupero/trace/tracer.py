@@ -372,6 +372,28 @@ def run_trace(
                     policy.service_wallet_outflow_threshold,
                 )
 
+    # v0.34.5 — "never fully skip the money path." A high-fan-out node used to be
+    # SKIPPED entirely (no recursion) to avoid BFS explosion — but that dead-ends
+    # the trace at the SEED itself when the seed is a perpetrator splitter (the
+    # Lazarus/Ronin generalization case: 8827 outflows > threshold → depth-0
+    # dead-end, never reaching the laundering downstream). Fix: follow the TOP-N
+    # outflows BY VALUE instead of skipping. The seed (the investigation subject —
+    # every outflow is theft dispersal) gets a generous N; deeper high-fan-out
+    # nodes get a tighter N so branching stays finite (visited-set +
+    # stop_at_exchange + max_depth + per-case budget bound the rest). Children
+    # gain an inbound reference via _consider_enqueue, so they trace
+    # value-DIRECTED from there. Set either to 0 to restore the legacy skip.
+    def _topn_env(name: str, default: int) -> int:
+        v = os.environ.get(name)
+        if v is not None and v.strip():
+            try:
+                return max(0, int(v))
+            except (TypeError, ValueError):
+                log.warning("%s=%r is not an int; keeping %d", name, v, default)
+        return default
+    _seed_follow_topn = _topn_env("RECUPERO_SEED_FOLLOW_TOPN", 50)
+    _sw_follow_topn = _topn_env("RECUPERO_SERVICE_WALLET_FOLLOW_TOPN", 8)
+
     started = utcnow()
     log.info(
         "trace start case=%s chain=%s seed=%s incident=%s max_depth=%d",
@@ -465,16 +487,50 @@ def run_trace(
     # leg), and value-matching must reference the LARGEST (our actual funds),
     # not whichever edge happened to be seen first. ``value_matched``
     # accumulates the per-hop provenance (confidence calibrated — never "high").
+    # v0.35.4 — RECUPERO_DEEP_REACH master switch. One knob to turn on the whole
+    # deep-reach recipe (value-trace + split-follow + labeled-terminals +
+    # dormancy-aware window) for cold-case "go as deep as possible" tracing,
+    # instead of remembering 4 separate env vars. It only fills in knobs that are
+    # NOT individually set — an explicit per-knob env var (or the value_trace
+    # arg) always wins, so you can deep-reach but pin one knob off. Default OFF
+    # ⇒ every existing trace (incl. Zigha 4/4) is byte-identical.
+    def _truthy(name: str) -> bool:
+        return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
+
+    _deep_reach = _truthy("RECUPERO_DEEP_REACH")
+
     # Explicit ``value_trace`` arg wins (used by the multi-chain perpetrator
-    # pivot to force directed tracing on a re-trace); otherwise read the env.
+    # pivot to force directed tracing on a re-trace); else the env var if set;
+    # else the deep-reach default.
     _value_trace_enabled = (
         value_trace if value_trace is not None
-        else os.environ.get(
-            "RECUPERO_VALUE_TRACE", "0",
-        ).strip().lower() in ("1", "true", "yes", "on")
+        else (_truthy("RECUPERO_VALUE_TRACE")
+              if "RECUPERO_VALUE_TRACE" in os.environ else _deep_reach)
     )
+    # v0.34.6: recover a 1:N same-asset SPLIT/peel when no 1:1 hop matched (low
+    # confidence). Individually opt-in; also on under deep-reach.
+    _follow_splits = (
+        _truthy("RECUPERO_VALUE_TRACE_FOLLOW_SPLITS")
+        if "RECUPERO_VALUE_TRACE_FOLLOW_SPLITS" in os.environ else _deep_reach
+    )
+    # v0.34.7: STOP-AND-FLAG at a labeled mixer/exchange/bridge terminal (record,
+    # don't chase) — TRM/Chainalysis mixer handling. Opt-in; on under deep-reach.
+    _label_terminals_enabled = (
+        _truthy("RECUPERO_VALUE_TRACE_LABELED_TERMINALS")
+        if "RECUPERO_VALUE_TRACE_LABELED_TERMINALS" in os.environ else _deep_reach
+    )
+    # v0.35.2: dormancy-aware value-match window. Default 72h (conservative);
+    # deep-reach defaults it to 0 (lower-bound-only — match a dormant onward hop
+    # moved weeks/months later). An explicit env value always wins.
+    if "RECUPERO_VALUE_TRACE_WINDOW_HOURS" in os.environ:
+        _value_window_hours = _topn_env("RECUPERO_VALUE_TRACE_WINDOW_HOURS", 72)
+    else:
+        _value_window_hours = 0 if _deep_reach else 72
     inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
+    # v0.34.7: labeled terminals recorded at directed dead-ends (mixer/exchange/
+    # bridge endpoints the traced funds reached). Audit-trail provenance.
+    value_labeled_terminals: list[dict[str, Any]] = []
     # v0.34.1 coverage-honesty: directed (value-trace) nodes that MOVED funds
     # onward (had outflows) but where we followed NOTHING — a potential
     # incompleteness (an onward hop we couldn't match: below tolerance, an
@@ -648,6 +704,8 @@ def run_trace(
                         node_addr=from_addr,
                         enqueue_fn=_consider_enqueue,
                         provenance_sink=value_matched,
+                        follow_splits=_follow_splits,
+                        window_hours=_value_window_hours,
                     )
                     followed += _f
                     for _mt in _matched:
@@ -656,14 +714,55 @@ def run_trace(
                             continue
                         _seen_hops.add(_hk)
                         matched_transfers.append(_mt)
+                # v0.34.7 (opt-in): STOP-AND-FLAG at a labeled terminal. Same-
+                # asset outflows landing at a labeled mixer/exchange/bridge are
+                # the traced money's end state — KEEP them (real, label-enriched
+                # → the brief classifies UNRECOVERABLE/EXCHANGE/etc. with no extra
+                # work) but do NOT traverse (a mixer is the end; an exchange is a
+                # subpoena target; a bridge is a separate cross-chain handoff).
+                # This is what carries the Ronin trace to "→ Tornado Cash →
+                # UNRECOVERABLE" instead of chasing ~216 identical pool deposits.
+                _term_records: list[dict[str, Any]] = []
+                _term_kept: list[Transfer] = []
+                if _label_terminals_enabled:
+                    _term_records, _term_tx = _detect_labeled_terminals(
+                        inbound=_traced_inbounds[0],
+                        node_outflows=hop_transfers,
+                        node_addr=from_addr,
+                        depth=depth,
+                    )
+                    if _term_records:
+                        value_labeled_terminals.extend(_term_records)
+                        _matched_ids = {mt.transfer_id for mt in matched_transfers}
+                        for _tt in _term_tx:
+                            if (
+                                _tt.transfer_id not in _matched_ids
+                                and policy.should_include(_tt)
+                            ):
+                                _term_kept.append(_tt)
+                                _matched_ids.add(_tt.transfer_id)
+                        log.info(
+                            "labeled-terminal: node %s (depth=%d) → %d terminal(s): %s",
+                            from_addr, depth, len(_term_records),
+                            ", ".join(
+                                f"{r['label_name']} [{r['status']}] "
+                                f"{r['tx_count']}tx {r['agg_amount']} {r['token'] or ''}"
+                                for r in _term_records
+                            ),
+                        )
                 # Coverage honesty: this node FORWARDED THE SAME ASSET it
                 # received but we followed NOTHING — a real incompleteness (the
                 # asset moved onward and our matcher missed it: a split past
                 # tolerance, a conversion, a poison-obscured hop). A true resting
                 # terminal (no same-asset outflow) is NOT flagged — that's where
-                # the funds legitimately sit.
-                if followed == 0 and hop_transfers and _node_forwarded_inbound_asset(
-                    _traced_inbounds[0], hop_transfers
+                # the funds legitimately sit. A node whose same-asset outflow went
+                # to a LABELED terminal is NOT a dead-end — we resolved its end
+                # state (recorded above), so don't double-flag it.
+                if (
+                    followed == 0
+                    and not _term_records
+                    and hop_transfers
+                    and _node_forwarded_inbound_asset(_traced_inbounds[0], hop_transfers)
                 ):
                     _ib0 = _traced_inbounds[0]
                     _itok = getattr(_ib0, "token", None)
@@ -679,6 +778,7 @@ def run_trace(
                         "node_outflow_count": len(hop_transfers),
                     })
                 all_transfers.extend(matched_transfers)
+                all_transfers.extend(_term_kept)
                 # Finalize: write evidence for the matched hop(s). (The
                 # service-wallet lightweight pass skipped per-outflow evidence;
                 # the full path already wrote it — re-writing is an idempotent
@@ -716,13 +816,53 @@ def run_trace(
             if depth + 1 >= policy.max_depth:
                 continue
 
-            # Service-wallet node with value-trace OFF (or no inbound): keep its
-            # transfers but do NOT queue downstream, else a single high-fan-out
-            # node explodes BFS at the next depth.
+            # High-fan-out ("service-wallet") node. We must NOT queue ALL its
+            # outflows (a genuine exchange has 100k+ to unrelated users → BFS
+            # explosion) — but we must NEVER fully skip it either: the SEED is the
+            # investigation subject (its every outflow is theft dispersal) and a
+            # mid-route splitter is the laundering path. v0.34.5: FOLLOW THE MONEY
+            # — enqueue the top-N outflows by value (USD desc, then raw amount).
+            # Bounded N keeps branching finite; children become value-DIRECTED via
+            # _consider_enqueue's inbound_by_key recording, so the deep recursion
+            # then runs through the directed (value-matched) branch above. N=0
+            # restores the legacy skip.
+            #
+            # GATED ON value-trace: this top-N follow is only sound under
+            # "follow the money" mode, where the enqueued children become
+            # value-directed (bounded). Under value-trace OFF (legacy
+            # breadth-first), the children would themselves be non-directed and
+            # fan out combinatorially — so a service wallet stays a dead end,
+            # byte-identical to pre-v0.34.5 behavior (the seed, with no inbound,
+            # is non-directed under value-trace too — which is exactly the
+            # Lazarus/Ronin dead-end this fix targets).
             if is_service_wallet:
+                follow_n = (
+                    (_seed_follow_topn if depth == 0 else _sw_follow_topn)
+                    if _value_trace_enabled else 0
+                )
+                if follow_n <= 0:
+                    log.info(
+                        "service-wallet skip (follow_topn=0): not queueing %d "
+                        "destinations from %s", len(hop_transfers), from_addr,
+                    )
+                    continue
+                ranked = sorted(
+                    hop_transfers,
+                    key=lambda t: (
+                        float(t.usd_value_at_tx) if t.usd_value_at_tx is not None
+                        else 0.0,
+                        float(t.amount_decimal or 0),
+                    ),
+                    reverse=True,
+                )
+                enq = sum(
+                    1 for transfer in ranked[:follow_n]
+                    if _consider_enqueue(transfer, depth)
+                )
                 log.info(
-                    "service-wallet skip: not queueing %d destinations from %s",
-                    len(hop_transfers), from_addr,
+                    "service-wallet %s (depth=%d): high fan-out (%d outflows) — "
+                    "following top-%d by value (%d queued for deeper trace)",
+                    from_addr, depth, len(hop_transfers), follow_n, enq,
                 )
                 continue
 
@@ -1006,6 +1146,10 @@ def run_trace(
             # onward hop could be matched (a real incompleteness — the trail
             # continues beyond what's recorded). Flips complete=False.
             "value_dead_ends": list(_value_dead_ends),
+            # v0.34.7: labeled terminals the traced funds reached (mixer/
+            # exchange/bridge) — the money's resolved end state, stop-and-
+            # flagged (recorded) rather than chased deposit-by-deposit.
+            "labeled_terminals": list(value_labeled_terminals),
             "reduced_parameters": {
                 "max_depth": int(cfg_max_depth),
                 "dust_threshold_usd": float(config.trace.dust_threshold_usd),
@@ -2016,6 +2160,110 @@ def _node_forwarded_inbound_asset(
     return False
 
 
+# v0.34.7 — label-aware terminals. At a directed node, a same-asset outflow that
+# lands at a LABELED mixer/exchange/bridge is the traced money's END STATE. We
+# record it and stop — exactly how TRM/Chainalysis stop-and-flag at a mixer
+# rather than chasing every pool deposit. Bounded + truthful: never fabricates
+# (only real, already-label-enriched outflows), never traverses the terminal.
+_TERMINAL_CATEGORIES = (
+    LabelCategory.mixer,
+    LabelCategory.exchange_deposit,
+    LabelCategory.exchange_hot_wallet,
+    LabelCategory.bridge,
+)
+
+
+def _terminal_status_for_category(category: LabelCategory) -> str:
+    """Map a terminal label category to the holding status the brief uses."""
+    if category == LabelCategory.mixer:
+        return "UNRECOVERABLE"   # mixed → not traceable further (Tornado etc.)
+    if category in (LabelCategory.exchange_deposit, LabelCategory.exchange_hot_wallet):
+        return "EXCHANGE"        # subpoena to exchange compliance, not a freeze
+    if category == LabelCategory.bridge:
+        return "BRIDGE"          # cross-chain handoff (separate continuation)
+    return "TRANSIT"
+
+
+def _same_onchain_asset(a: Any, b: Any) -> bool:
+    """Same on-chain asset? Contract identity when known; else native matched by
+    symbol. Mirrors value_matching._same_token — a spoof token with a colliding
+    symbol but a different contract is NOT treated as the same asset."""
+    if b is None:
+        return False
+    ac = (getattr(a, "contract", None) or "").lower()
+    bc = (getattr(b, "contract", None) or "").lower()
+    if ac or bc:
+        return bool(ac) and bool(bc) and ac == bc
+    asym = (getattr(a, "symbol", None) or "").upper()
+    bsym = (getattr(b, "symbol", None) or "").upper()
+    return bool(asym) and asym == bsym
+
+
+def _detect_labeled_terminals(
+    *,
+    inbound: Transfer,
+    node_outflows: list[Transfer],
+    node_addr: Address,
+    depth: int,
+) -> tuple[list[dict[str, Any]], list[Transfer]]:
+    """Surface the node's SAME-ASSET outflows that land at a LABELED terminal
+    (mixer / exchange / bridge). Returns ``(records, kept_transfers)``.
+
+    ``kept_transfers`` are REAL, already-label-enriched outflows — re-recording
+    them on the case lets the brief classify the destination
+    (mixer→UNRECOVERABLE, exchange→EXCHANGE) from the existing label with no
+    extra work. ``records`` is per-terminal audit provenance (node, terminal,
+    label, status, aggregate amount/USD, tx count, sample tx hashes).
+
+    Same-asset = same on-chain token as the inbound (contract identity), which
+    ties the terminal to the funds being traced and defeats symbol-spoofing.
+    The terminal is recorded, NEVER enqueued/traversed."""
+    itok = getattr(inbound, "token", None)
+    if itok is None:
+        return [], []
+    by_dest: dict[str, list[Transfer]] = {}
+    for t in node_outflows:
+        cp = getattr(t, "counterparty", None)
+        label = getattr(cp, "label", None) if cp is not None else None
+        if label is None or label.category not in _TERMINAL_CATEGORIES:
+            continue
+        if not _same_onchain_asset(itok, getattr(t, "token", None)):
+            continue
+        dest = (t.to_address or "").lower()
+        if not dest:
+            continue
+        by_dest.setdefault(dest, []).append(t)
+
+    records: list[dict[str, Any]] = []
+    kept: list[Transfer] = []
+    for _dest, txs in sorted(by_dest.items()):
+        label = txs[0].counterparty.label
+        agg_amt = sum(
+            (Decimal(str(t.amount_decimal)) for t in txs if t.amount_decimal is not None),
+            Decimal(0),
+        )
+        usd_vals = [
+            Decimal(str(t.usd_value_at_tx))
+            for t in txs if t.usd_value_at_tx is not None
+        ]
+        agg_usd = sum(usd_vals, Decimal(0)) if usd_vals else None
+        records.append({
+            "node": node_addr,
+            "terminal_address": txs[0].to_address,
+            "label_name": label.name,
+            "label_category": label.category.value,
+            "status": _terminal_status_for_category(label.category),
+            "token": (getattr(itok, "symbol", None) or "").upper() or None,
+            "tx_count": len(txs),
+            "agg_amount": str(agg_amt),
+            "agg_usd": float(agg_usd) if agg_usd is not None else None,
+            "depth": depth,
+            "sample_tx_hashes": [t.tx_hash for t in txs[:5]],
+        })
+        kept.extend(txs)
+    return records, kept
+
+
 def _value_match_and_enqueue(
     *,
     inbound_transfer: Any,
@@ -2024,6 +2272,8 @@ def _value_match_and_enqueue(
     node_addr: Address,
     enqueue_fn: Any,
     provenance_sink: list[dict[str, Any]],
+    follow_splits: bool = False,
+    window_hours: int = 72,
 ) -> tuple[int, list[Transfer]]:
     """At a high-fan-out node, follow ONLY the outflow(s) whose value matches
     the inbound funds (v0.34 value-directed tracing).
@@ -2042,6 +2292,7 @@ def _value_match_and_enqueue(
     per-case transfer budget nor pollute the deliverable.
     """
     from recupero.trace.value_matching import (
+        detect_same_asset_split,
         leg_from_transfer,
         match_onward_transfers,
     )
@@ -2059,7 +2310,21 @@ def _value_match_and_enqueue(
         by_key[(leg.tx_hash, leg.to_address.lower())] = t
         cand_legs.append(leg)
 
-    matches = match_onward_transfers(inbound_leg, cand_legs)
+    matches = match_onward_transfers(
+        inbound_leg, cand_legs, time_window_hours=window_hours,
+    )
+    # v0.34.6: when no 1:1 hop matched, optionally recover a 1:N same-asset
+    # SPLIT/peel (the node forwarded the inbound funds as many smaller same-asset
+    # sends summing to ~the inbound). Opt-in (RECUPERO_VALUE_TRACE_FOLLOW_SPLITS)
+    # because it follows MULTIPLE onward edges from one node — bounded by the
+    # detector's leg cap + the BFS visited/depth/budget gates. All split legs are
+    # confidence="low" (a set inference). This is what carries the Lazarus/Ronin
+    # trace past the consolidation wallets that peel into mixer-denomination
+    # chunks instead of forwarding a single matching amount.
+    if not matches and follow_splits:
+        matches = detect_same_asset_split(
+            inbound_leg, cand_legs, time_window_hours=window_hours,
+        )
     followed = 0
     matched_transfers: list[Transfer] = []
     for m in matches:

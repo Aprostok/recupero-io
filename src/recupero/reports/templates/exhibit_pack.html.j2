@@ -1,0 +1,172 @@
+{# Court-admissible exhibit pack (v0.35.11, roadmap H1).
+
+   Exhibit index (SHA-256 per artifact) + Daubert methodology appendix +
+   28 U.S.C. § 1746 declaration template. Hashes + artifact list are real;
+   the declaration is a template the testifying expert completes and signs.
+
+   Context: manifest{case_id, software_version, config_summary, exhibit_count,
+   entries[]{exhibit_label, filename, sha256, size_human, purpose}}; generated_at.
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Exhibit Pack — Case {{ manifest.case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Exhibit Pack · Chain-of-Custody</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">On-chain Forensic Analysis — Evidentiary Exhibit Pack</div>
+    <h1>Exhibit Index &amp;<br/>Methodology — Case {{ manifest.case_id }}</h1>
+    <p class="cover-subtitle">
+      This pack indexes {{ manifest.exhibit_count }} case artifact(s) by SHA-256
+      cryptographic hash, documents the tracing methodology for reliability
+      review, and provides a declaration template for the testifying analyst.
+    </p>
+  </div>
+</section>
+
+<section class="content">
+
+<p style="border:2px solid #555; padding:10px 14px; border-radius:6px;
+          background:#f7f7f7; color:#333;">
+  <strong>Use:</strong> The exhibit hashes and the methodology below are factual
+  records produced from the case data. The declaration in §3 is a
+  <strong>template</strong> to be completed and signed by the testifying analyst
+  on personal knowledge. Recupero LLC does not itself attest to the truth of the
+  matters asserted; the declarant does, under their own signature.
+</p>
+
+<h2>1. Exhibit Index</h2>
+<p>
+Each artifact below is identified by a SHA-256 hash computed over the exact
+bytes of the file produced for this case. A reviewer can recompute the hash of
+any exhibit introduced into evidence and confirm it is byte-identical to the
+file produced here. Hashing algorithm: SHA-256 (FIPS 180-4).
+</p>
+<table>
+  <thead>
+    <tr><th>Exhibit</th><th>File</th><th>Purpose</th><th>Size</th><th>SHA-256</th></tr>
+  </thead>
+  <tbody>
+  {% for e in manifest.entries %}
+    <tr>
+      <td><strong>{{ e.exhibit_label }}</strong></td>
+      <td class="mono">{{ e.filename }}</td>
+      <td>{{ e.purpose }}</td>
+      <td>{{ e.size_human }}</td>
+      <td class="mono" style="word-break:break-all; font-size:10px;">{{ e.sha256 }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="5"><em>No evidentiary artifacts found in the case directory.</em></td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+<h2>2. Methodology Appendix</h2>
+<p>
+The findings in the indexed exhibits were produced by Recupero's deterministic
+on-chain tracing pipeline. The methodology is described below so that its
+reliability may be evaluated and its results independently reproduced.
+</p>
+
+<h3>2.1 Data sources</h3>
+<p>
+Transaction data is read from public-blockchain explorers / archival APIs for
+each chain in scope. Every fetched transaction is independently verifiable on
+the public ledger by its transaction hash. No data is synthesized; addresses,
+amounts, and timestamps are taken verbatim from on-chain records.
+</p>
+
+<h3>2.2 Fund-flow tracing</h3>
+<p>
+Funds are followed forward from the seed (victim/subject) address using a
+value-directed breadth-first traversal. At each node the outflows are matched to
+the inbound value (same-asset and USD-equivalent matching, including 1-to-many
+peel/split detection) so the trace follows the stolen value rather than
+unrelated activity. High-fan-out service wallets are followed by top value.
+Dust and unrelated commingled flows are pruned before enrichment.
+</p>
+
+<h3>2.3 Cross-chain confirmation</h3>
+<p>
+Where funds cross between chains via a bridge, the source→destination pairing is
+confirmed by the bridge protocol's own cross-chain identifier (order id /
+message hash / deposit id) observed on both chains. A cross-chain edge is
+treated as high-confidence only when this protocol-native identifier matches on
+both sides; otherwise it is reported at lower confidence or as a heuristic lead.
+No cross-chain destination is fabricated — absent a confirmable match, the trace
+reports the hop as unresolved.
+</p>
+
+<h3>2.4 Attribution &amp; confidence</h3>
+<p>
+Address labels (exchanges, bridges, mixers, sanctioned entities) carry an
+explicit source and a confidence tier. High confidence is reserved for a direct
+authoritative label-database hit (e.g. an OFAC-listed address) or a
+cryptographic identity match; behavioral inferences (clustering, mixer
+demixing) are reported at low/medium confidence as investigative leads, never as
+proof. Each labeled address records the basis for its label (glass-box
+provenance).
+</p>
+
+<h3>2.5 Chain of custody &amp; reproducibility</h3>
+<p>
+Each fetched transaction carries an evidence receipt (the upstream response and
+the time of retrieval). The analysis is deterministic: the same inputs and
+configuration reproduce the same output. This pack was produced with software
+version <strong class="mono">{{ manifest.software_version }}</strong>.
+Configuration of record: <span class="mono">{{ manifest.config_summary }}</span>.
+</p>
+
+<h2>3. Declaration of the Analyst (Template)</h2>
+<p><em>To be completed and signed by the testifying analyst. Bracketed fields
+are placeholders.</em></p>
+<div style="border:1px solid #ccc; padding:14px 16px; border-radius:6px;">
+<p>I, <strong>[DECLARANT FULL NAME]</strong>, declare as follows:</p>
+<ol>
+  <li>I am [TITLE] at [ORGANIZATION]. I am over 18 and competent to testify to
+      the matters herein, which are based on my personal knowledge.</li>
+  <li>My qualifications in blockchain forensic analysis are: [QUALIFICATIONS /
+      CV ATTACHED AS EXHIBIT ___].</li>
+  <li>I conducted, or supervised, the on-chain analysis of Case
+      {{ manifest.case_id }} using the methodology described in Section 2 of this
+      document, which I incorporate by reference.</li>
+  <li>The exhibits indexed in Section 1 are true and accurate copies of the
+      records I produced or relied upon. I have confirmed each exhibit's SHA-256
+      hash matches the value stated in the index.</li>
+  <li>The opinions stated are held to a reasonable degree of professional
+      certainty and are reproducible from the indexed source data.</li>
+</ol>
+<p>
+I declare under penalty of perjury under the laws of the United States of
+America that the foregoing is true and correct. (28 U.S.C. § 1746.)
+</p>
+<p>
+Executed on [DATE], at [CITY, STATE/COUNTRY].<br/><br/>
+______________________________<br/>
+[DECLARANT FULL NAME]
+</p>
+</div>
+
+<p style="margin-top:24px; color:#555;">
+Generated by Recupero Investigation Services. Case reference:
+{{ manifest.case_id }}. This pack is a starting point for the testifying
+analyst and counsel; review every exhibit and recompute every hash before
+introduction into evidence.
+</p>
+
+</section>
+</body>
+</html>

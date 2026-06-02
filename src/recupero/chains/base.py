@@ -48,6 +48,10 @@ class ChainAdapter(ABC):
             Chain.zksync, Chain.scroll, Chain.mantle,
             Chain.fantom, Chain.celo, Chain.gnosis, Chain.moonbeam,
             Chain.metis, Chain.kava,
+            # v0.35.3 — opBNB (chain_id 204), verified on the live Etherscan
+            # V2 chainlist. Was label-only → BFS dead-ended on a bridge
+            # handoff into it; now routes through the shared EvmAdapter.
+            Chain.opbnb,
         ):
             # Etherscan V2 unified API covers every EVM-compatible chain
             # via the chainid parameter — same client class, different

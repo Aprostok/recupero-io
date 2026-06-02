@@ -1,0 +1,155 @@
+{# SAR / STR draft package (v0.35.10, roadmap E3).
+
+   DRAFT ONLY — Recupero is not a filer. The obligated financial institution
+   (or POCA reporter) completes the institution identifiers + officer
+   attestation and submits via the named portal. Every subject / amount / date
+   below is derived from the traced case; nothing is fabricated.
+
+   Required Jinja context (build_sar_context):
+     case_id, generated_at, incident_date, incident_type, total_loss_usd
+     victim{name, jurisdiction}; investigator{name, organization, email}
+     labels{report_acronym, report_name, regulator, form_reference, statute,
+            filing_portal, characterization}
+     subjects[]{address, chain, role, venue, amount_usd}
+     activity{amount_usd, date_from, date_to, characterization}
+     sar_narrative; tx_evidence[]{tx_hash, block_time, amount_usd, explorer_url}
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ labels.report_acronym }} Draft — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">{{ labels.statute }}</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">{{ labels.regulator }} — {{ labels.form_reference }}</div>
+    <h1>{{ labels.report_name }}<br/>Draft Package</h1>
+    <p class="cover-subtitle">
+      Draft {{ labels.report_acronym }} prepared for review and filing by the
+      obligated financial institution pursuant to {{ labels.statute }}.
+      Submit via {{ labels.filing_portal }}.
+    </p>
+  </div>
+</section>
+
+<section class="content">
+
+<p style="border:2px solid #b00; padding:10px 14px; border-radius:6px;
+          background:#fff5f5; color:#7a0000;">
+  <strong>DRAFT — NOT YET FILED.</strong> Recupero LLC is an investigation
+  service, not a financial institution, and has no {{ labels.report_acronym }}
+  filing obligation or filing credentials. This package compiles the on-chain
+  facts to accelerate filing by the obligated institution. The filing
+  institution must supply its own identifiers, verify every field, complete the
+  officer attestation, and submit via {{ labels.filing_portal }}. Recupero makes
+  no representation that a {{ labels.report_acronym }} is required in any
+  particular case — that determination rests with the filer.
+</p>
+
+<h2>1. Filing Institution</h2>
+<p>
+[TODO — completed by the filing institution]<br/>
+Institution name, registration / EIN, primary federal regulator, filing
+contact, and the responsible officer's attestation are supplied by the
+obligated institution at the time of filing.
+</p>
+
+<h2>2. Subject(s) of the Report</h2>
+<p>
+The following on-chain addresses received or currently hold the suspected
+proceeds. They are identified by wallet address (no natural-person identity is
+asserted by Recupero); the filing institution attaches any KYC-resolved
+identity it holds for an address under its control.
+</p>
+{% if subjects %}
+<table>
+  <thead>
+    <tr><th>#</th><th>Address</th><th>Chain</th><th>Role</th><th>Venue</th><th>USD</th></tr>
+  </thead>
+  <tbody>
+  {% for s in subjects %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td class="mono">{{ s.address }}</td>
+      <td>{{ s.chain }}</td>
+      <td>{{ s.role }}</td>
+      <td>{{ s.venue }}</td>
+      <td>{{ s.amount_usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No identified destination addresses in the trace. The filing
+institution should confirm subject identification before filing.</em></p>
+{% endif %}
+
+<h2>3. Suspicious Activity</h2>
+<table>
+  <tbody>
+    <tr><th>Aggregate amount (USD-equiv.)</th><td>{{ activity.amount_usd }}</td></tr>
+    <tr><th>Activity date range</th><td>{{ activity.date_from or "[date]" }} — {{ activity.date_to or "[date]" }}</td></tr>
+    <tr><th>Characterization</th><td>{{ activity.characterization }}</td></tr>
+    <tr><th>Underlying incident</th><td>{{ incident_type }}</td></tr>
+  </tbody>
+</table>
+
+<h2>4. Narrative</h2>
+<p>{{ sar_narrative }}</p>
+<p>
+Methodology: the funds flow was reconstructed from public-blockchain data using
+deterministic on-chain tracing with chain-of-custody-preserved evidence
+receipts. Cross-chain hops, where present, were confirmed by the bridge
+protocols' own cross-chain identifiers. Confidence and provenance for each
+labeled address are recorded in the underlying case file and are reproducible.
+</p>
+
+<h2>5. Supporting Transaction Evidence</h2>
+{% if tx_evidence %}
+<table>
+  <thead>
+    <tr><th>Tx Hash</th><th>Block Time (UTC)</th><th>USD Amount</th></tr>
+  </thead>
+  <tbody>
+  {% for tx in tx_evidence %}
+    <tr>
+      <td class="mono">{{ tx.tx_hash }}</td>
+      <td>{{ tx.block_time }}</td>
+      <td>{{ tx.amount_usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p><em>No itemized transaction evidence in the brief; see the full case file.</em></p>
+{% endif %}
+
+<h2>6. Filing Instructions</h2>
+<ol>
+  <li>Review every field; the filing institution is responsible for accuracy.</li>
+  <li>Complete Section 1 (filing institution + officer attestation).</li>
+  <li>Confirm subject identification against the institution's own KYC records.</li>
+  <li>File via {{ labels.filing_portal }} within the statutory deadline.</li>
+  <li>Retain this package and the underlying case file as supporting documentation.</li>
+</ol>
+
+<p style="margin-top:24px; color:#555;">
+Prepared by {{ investigator.organization }} — contact {{ investigator.name }},
+{{ investigator.email }}. Case reference: {{ case_id }}.
+</p>
+
+</section>
+</body>
+</html>

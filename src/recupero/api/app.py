@@ -142,6 +142,18 @@ except Exception as _exc:  # noqa: BLE001
         "address profile API not registered (import failed): %s", _exc,
     )
 
+# v0.35.19 (UI initiative): the unified operator console hub —
+# GET /v1/console (unauth shell + nav grid + admin-gated quick-stats) that
+# links every per-phase console. New phase views register a nav entry in
+# operator_console._NAV during integration so the hub fills in over time.
+try:
+    from recupero.api.operator_console import router as _operator_router
+    app.include_router(_operator_router)
+except Exception as _exc:  # noqa: BLE001
+    log.warning(
+        "operator console not registered (import failed): %s", _exc,
+    )
+
 
 # ---- Request body-size cap (intake DoS guard) ---- #
 

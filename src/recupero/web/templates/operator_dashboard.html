@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Operator Console</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.5rem 3rem; color: #1a1a1a; background: #f7f8fa; }
+  header { padding: 1.2rem 0 .4rem; }
+  h1 { font-size: 1.5rem; margin: 0; }
+  .sub { color: #666; font-size: 0.85rem; margin: .25rem 0 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1.2rem; }
+  input[type=password] { padding: .45rem .7rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; width: 320px;
+         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  button { padding: .45rem .9rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button:hover { background: #1d4ed8; } #msg { font-size: .8rem; margin-left: .5rem; } .err { color: #c0392b; } .ok { color: #1e8449; }
+  .cards { display: flex; flex-wrap: wrap; gap: .7rem; margin-bottom: 1.6rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 12px; padding: .8rem 1.1rem; min-width: 150px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+  .card .v { font-size: 1.5rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: #888; }
+  .card.alert .v { color: #c0392b; }
+  .group { margin: 1.3rem 0 .5rem; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: #999; font-weight: 700; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .8rem; }
+  a.tile { display: block; text-decoration: none; color: inherit; background: #fff; border: 1px solid #e3e3e3; border-radius: 12px;
+           padding: 1rem 1.1rem; transition: border-color .12s, box-shadow .12s; }
+  a.tile:hover { border-color: #2563eb; box-shadow: 0 3px 12px rgba(37,99,235,.12); }
+  a.tile .t { font-size: 1.05rem; font-weight: 600; } a.tile .d { color: #666; font-size: .82rem; margin-top: .3rem; line-height: 1.35; }
+  a.tile .emoji { font-size: 1.2rem; margin-right: .4rem; }
+  .soon { opacity: .55; } .soon .badge { background:#eef0f2; color:#777; border-radius:6px; font-size:.62rem; padding:.05rem .4rem; margin-left:.4rem; vertical-align:middle; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🛡️ Recupero Operator Console</h1>
+    <div class="sub">One place to run every phase of the investigation pipeline. Paste your operator key once —
+      it is held in this tab only (sessionStorage) and travels in a request header, never the URL; the linked
+      consoles pick it up automatically.</div>
+  </header>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" autocomplete="off">
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div class="cards" id="cards"></div>
+  <div id="nav"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+  function key() { return ($("key").value || "").trim(); }
+
+  function fmt(v) { return (v === null || v === undefined) ? "—" : esc(v); }
+
+  function renderStats(s) {
+    s = s || {};
+    $("cards").innerHTML =
+      card(fmt(s.pending_reviews), "Pending reviews", s.pending_reviews) +
+      card(fmt(s.watchlist_items), "Watched addresses") +
+      card(fmt(s.watchlist_moved), "Moved since last check", s.watchlist_moved) +
+      card(fmt(s.label_candidates_pending), "Label candidates");
+  }
+  function card(v, l, alertN) {
+    var cls = (alertN && alertN > 0) ? "card alert" : "card";
+    return '<div class="' + cls + '"><div class="v">' + v + '</div><div class="l">' + esc(l) + '</div></div>';
+  }
+
+  function renderNav(consoles) {
+    var groups = {};
+    (consoles || []).forEach(function (c) { (groups[c.group] = groups[c.group] || []).push(c); });
+    var h = "";
+    Object.keys(groups).forEach(function (g) {
+      h += '<div class="group">' + esc(g) + '</div><div class="grid">';
+      groups[g].forEach(function (c) {
+        var live = c.live !== false;
+        var inner = '<div class="t"><span class="emoji">' + esc(c.emoji || "•") + '</span>' + esc(c.label) +
+                    (live ? "" : '<span class="badge">soon</span>') + '</div>' +
+                    '<div class="d">' + esc(c.desc || "") + '</div>';
+        if (live) {
+          h += '<a class="tile" href="' + esc(c.path) + '">' + inner + '</a>';
+        } else {
+          h += '<div class="tile soon">' + inner + '</div>';
+        }
+      });
+      h += '</div>';
+    });
+    $("nav").innerHTML = h;
+  }
+
+  function loadNav() {
+    // Public metadata — no key needed.
+    fetch("/v1/console/nav").then(function (r) { return r.json(); })
+      .then(function (d) { renderNav(d.consoles); })
+      .catch(function () { $("nav").innerHTML = '<p class="err">Could not load navigation.</p>'; });
+  }
+
+  function loadStats() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key to load live stats.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading…");
+    fetch("/v1/console/stats", { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("Console disabled (set RECUPERO_ADMIN_KEY).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (s) { renderStats(s); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", loadStats);
+  loadNav();
+  if (key()) { loadStats(); }
+})();
+</script>
+</body>
+</html>

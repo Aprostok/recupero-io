@@ -487,37 +487,45 @@ def run_trace(
     # leg), and value-matching must reference the LARGEST (our actual funds),
     # not whichever edge happened to be seen first. ``value_matched``
     # accumulates the per-hop provenance (confidence calibrated — never "high").
+    # v0.35.4 — RECUPERO_DEEP_REACH master switch. One knob to turn on the whole
+    # deep-reach recipe (value-trace + split-follow + labeled-terminals +
+    # dormancy-aware window) for cold-case "go as deep as possible" tracing,
+    # instead of remembering 4 separate env vars. It only fills in knobs that are
+    # NOT individually set — an explicit per-knob env var (or the value_trace
+    # arg) always wins, so you can deep-reach but pin one knob off. Default OFF
+    # ⇒ every existing trace (incl. Zigha 4/4) is byte-identical.
+    def _truthy(name: str) -> bool:
+        return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
+
+    _deep_reach = _truthy("RECUPERO_DEEP_REACH")
+
     # Explicit ``value_trace`` arg wins (used by the multi-chain perpetrator
-    # pivot to force directed tracing on a re-trace); otherwise read the env.
+    # pivot to force directed tracing on a re-trace); else the env var if set;
+    # else the deep-reach default.
     _value_trace_enabled = (
         value_trace if value_trace is not None
-        else os.environ.get(
-            "RECUPERO_VALUE_TRACE", "0",
-        ).strip().lower() in ("1", "true", "yes", "on")
+        else (_truthy("RECUPERO_VALUE_TRACE")
+              if "RECUPERO_VALUE_TRACE" in os.environ else _deep_reach)
     )
-    # v0.34.6 opt-in: when a directed node has no 1:1 onward match, try to
-    # recover a 1:N same-asset SPLIT/peel and follow all its legs (low
-    # confidence). Default OFF — preserves every existing trace (incl. Zigha
-    # 4/4) byte-identically; turn on for deep peel-chain reach (Lazarus/Ronin).
-    _follow_splits = os.environ.get(
-        "RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", "0",
-    ).strip().lower() in ("1", "true", "yes", "on")
-    # v0.34.7 opt-in: STOP-AND-FLAG at a labeled terminal. At a directed node,
-    # same-asset outflows that land at a labeled mixer/exchange/bridge are the
-    # traced money's end state — record them (the brief then classifies
-    # UNRECOVERABLE / EXCHANGE / etc. from the existing label) but do NOT
-    # traverse. Mirrors TRM/Chainalysis: at a mixer you stop-and-flag the
-    # deposit, you don't chase 200+ identical pool deposits. Default OFF —
-    # preserves every existing trace (incl. Zigha 4/4) byte-identically.
-    _label_terminals_enabled = os.environ.get(
-        "RECUPERO_VALUE_TRACE_LABELED_TERMINALS", "0",
-    ).strip().lower() in ("1", "true", "yes", "on")
-    # v0.35.2: dormancy-aware value-match window. Default 72h (conservative —
-    # preserves Zigha 4/4 + every existing trace). Set 0 for lower-bound-only
-    # (a hop must be AFTER the inbound; no upper cap) so a dormant onward hop
-    # moved weeks/months later is still matched — the remaining limiter on deep
-    # cold-case reach (e.g. Ronin consolidation wallets forwarding past 72h).
-    _value_window_hours = _topn_env("RECUPERO_VALUE_TRACE_WINDOW_HOURS", 72)
+    # v0.34.6: recover a 1:N same-asset SPLIT/peel when no 1:1 hop matched (low
+    # confidence). Individually opt-in; also on under deep-reach.
+    _follow_splits = (
+        _truthy("RECUPERO_VALUE_TRACE_FOLLOW_SPLITS")
+        if "RECUPERO_VALUE_TRACE_FOLLOW_SPLITS" in os.environ else _deep_reach
+    )
+    # v0.34.7: STOP-AND-FLAG at a labeled mixer/exchange/bridge terminal (record,
+    # don't chase) — TRM/Chainalysis mixer handling. Opt-in; on under deep-reach.
+    _label_terminals_enabled = (
+        _truthy("RECUPERO_VALUE_TRACE_LABELED_TERMINALS")
+        if "RECUPERO_VALUE_TRACE_LABELED_TERMINALS" in os.environ else _deep_reach
+    )
+    # v0.35.2: dormancy-aware value-match window. Default 72h (conservative);
+    # deep-reach defaults it to 0 (lower-bound-only — match a dormant onward hop
+    # moved weeks/months later). An explicit env value always wins.
+    if "RECUPERO_VALUE_TRACE_WINDOW_HOURS" in os.environ:
+        _value_window_hours = _topn_env("RECUPERO_VALUE_TRACE_WINDOW_HOURS", 72)
+    else:
+        _value_window_hours = 0 if _deep_reach else 72
     inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
     # v0.34.7: labeled terminals recorded at directed dead-ends (mixer/exchange/

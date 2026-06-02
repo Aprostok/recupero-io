@@ -915,6 +915,53 @@ def test_labeled_terminal_off_by_default(
     assert any(d["address"].lower() == HOP_A.lower() for d in dead)
 
 
+def test_deep_reach_master_enables_recipe(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.35.4: RECUPERO_DEEP_REACH=1 alone (no individual knobs set) turns on
+    the whole recipe — value-trace + split-follow + labeled-terminals + dormancy
+    window — so the mixer peel is recorded as a labeled terminal."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "1")
+    for k in ("RECUPERO_VALUE_TRACE", "RECUPERO_VALUE_TRACE_FOLLOW_SPLITS",
+              "RECUPERO_VALUE_TRACE_LABELED_TERMINALS",
+              "RECUPERO_VALUE_TRACE_WINDOW_HOURS",
+              "RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD"):
+        monkeypatch.delenv(k, raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "DEEP_ON")
+
+    terms = case.config_used["coverage"]["labeled_terminals"]
+    assert any(t["terminal_address"].lower() == TORNADO.lower() for t in terms), (
+        "RECUPERO_DEEP_REACH should enable value-trace + labeled-terminals"
+    )
+
+
+def test_deep_reach_individual_override_wins(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit per-knob env var beats the master switch: DEEP_REACH=1 but
+    LABELED_TERMINALS=0 → no terminal recorded (value-trace still on)."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "1")
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_LABELED_TERMINALS", "0")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "DEEP_OVERRIDE")
+
+    assert case.config_used["coverage"]["labeled_terminals"] == []
+
+
 # ---------- v0.34 perf: prune-before-enrich (lightweight on high fan-out) ---------- #
 
 

@@ -971,6 +971,78 @@ def _build_summary(
     return out
 
 
+# ----- Raw case.json fetch (portal graph) ----- #
+
+
+# Hard ceiling on case.json bytes pulled into the portal process for
+# graph rendering. The bucket-write store caps case.json at 256 MB,
+# but the portal is a lightweight HTTP handler on the worker's health
+# server — a multi-hundred-MB pull per /graph hit would be a trivial
+# memory-amplification DoS. 32 MB is ~200x a typical case.json (~150 KB)
+# and still bounds the blast radius.
+_PORTAL_CASE_JSON_MAX_BYTES = 32 * 1024 * 1024
+
+
+def fetch_case_json(
+    *,
+    supabase_url: str,
+    service_role_key: str,
+    investigation_id: str,
+    max_bytes: int = _PORTAL_CASE_JSON_MAX_BYTES,
+) -> dict[str, Any] | None:
+    """GET ``investigations/<id>/case.json`` and return the parsed dict.
+
+    Returns ``None`` (never raises) if the object is missing, oversized,
+    or unparseable — the portal treats any of these as "no map yet".
+
+    Mirrors the fetch pattern in :func:`_build_summary` but is a named,
+    reusable entry point: the portal builds a *sanitized* client journey
+    from the result, so unlike the operator artifacts this never hands
+    raw case.json to the browser.
+    """
+    try:
+        # Reject traversal-unsafe ids before touching the network so a
+        # poisoned id can never fetch a sibling investigation's case.
+        _assert_safe_investigation_id(investigation_id)
+        url = (
+            f"{supabase_url.rstrip('/')}/storage/v1/object/{_BUCKET}/"
+            f"investigations/{investigation_id}/case.json"
+        )
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {service_role_key}",
+                "apikey": service_role_key,
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            # Read one byte past the cap so we can distinguish "exactly
+            # at cap" from "over cap" and reject the latter.
+            raw = resp.read(max_bytes + 1)
+        if len(raw) > max_bytes:
+            log.warning(
+                "portal: case.json for inv=%s exceeds %d-byte cap — skipping graph",
+                investigation_id, max_bytes,
+            )
+            return None
+        if raw[:3] == b"\xef\xbb\xbf":  # strip UTF-8 BOM
+            raw = raw[3:]
+        data = json.loads(raw.decode("utf-8"))
+        return data if isinstance(data, dict) else None
+    except urllib.error.HTTPError as exc:
+        # 404 = no case.json yet (normal pre-diagnostic). Log others at
+        # debug; never echo the body (may contain echoed auth header).
+        if exc.code != 404:
+            log.debug(
+                "portal: case.json fetch for inv=%s failed: status=%s",
+                investigation_id, exc.code,
+            )
+        return None
+    except Exception as exc:  # noqa: BLE001
+        log.debug("portal: case.json fetch for inv=%s skipped: %s", investigation_id, exc)
+        return None
+
+
 # ----- DSN pooler ----- #
 #
 # v0.19.0: single source moved to recupero._common.pooled_dsn (pre-v0.19.0

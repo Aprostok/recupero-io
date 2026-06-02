@@ -1615,6 +1615,55 @@ def legal_requests_cmd(
     )
 
 
+@app.command("sar-filing")
+def sar_filing_cmd(
+    case_id: str = typer.Argument(..., help="Case ID (folder name under cases/)."),
+    jurisdiction: str = typer.Option(
+        "us", "--jurisdiction", "-j",
+        help="Filing regime: us (FinCEN SAR / Form 111) | uk (NCA SAR / POCA) "
+             "| eu (AMLD STR / goAML).",
+    ),
+) -> None:
+    """Render a SAR / STR DRAFT package from an existing freeze_brief.json.
+
+    DRAFT ONLY — Recupero is an investigation service, NOT a financial
+    institution, and has no SAR/STR filing obligation or credentials. The
+    obligated institution (or POCA reporter) completes the institution
+    identifiers + officer attestation and files via the named portal. Every
+    subject / amount / date is derived from the traced case.
+
+    Output: cases/<case_id>/regulatory_filing/<jurisdiction>_sar.html
+    """
+    from recupero.reports.regulatory_filing import render_case_sar
+
+    cfg, _env = load_config()
+    store = CaseStore(cfg)
+    case_dir = store.case_dir(case_id)
+
+    try:
+        render = render_case_sar(case_dir, jurisdiction=jurisdiction)
+    except FileNotFoundError as e:
+        console.print(f"[bold red]{e}[/]")
+        raise typer.Exit(code=2) from None
+    except ValueError as e:
+        console.print(f"[bold red]{e}[/]")
+        raise typer.Exit(code=2) from None
+
+    console.print()
+    console.print(
+        f"[bold green]Wrote {render.report_acronym} draft "
+        f"({render.jurisdiction}, {render.subject_count} subject(s)) to[/] "
+        f"[cyan]{render.output_path}[/]"
+    )
+    console.print()
+    console.print(
+        "[bold yellow]⚠ DRAFT — NOT FILED:[/] Recupero is not a financial "
+        "institution and has no SAR/STR filing obligation. The obligated "
+        "institution must complete the filing fields, verify every line, "
+        "and submit via its FIU portal."
+    )
+
+
 @app.command("token-risk")
 def token_risk_cmd(
     contract: str = typer.Argument(..., help="Token contract address."),

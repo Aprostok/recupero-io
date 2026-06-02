@@ -502,8 +502,21 @@ def run_trace(
     _follow_splits = os.environ.get(
         "RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", "0",
     ).strip().lower() in ("1", "true", "yes", "on")
+    # v0.34.7 opt-in: STOP-AND-FLAG at a labeled terminal. At a directed node,
+    # same-asset outflows that land at a labeled mixer/exchange/bridge are the
+    # traced money's end state — record them (the brief then classifies
+    # UNRECOVERABLE / EXCHANGE / etc. from the existing label) but do NOT
+    # traverse. Mirrors TRM/Chainalysis: at a mixer you stop-and-flag the
+    # deposit, you don't chase 200+ identical pool deposits. Default OFF —
+    # preserves every existing trace (incl. Zigha 4/4) byte-identically.
+    _label_terminals_enabled = os.environ.get(
+        "RECUPERO_VALUE_TRACE_LABELED_TERMINALS", "0",
+    ).strip().lower() in ("1", "true", "yes", "on")
     inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
+    # v0.34.7: labeled terminals recorded at directed dead-ends (mixer/exchange/
+    # bridge endpoints the traced funds reached). Audit-trail provenance.
+    value_labeled_terminals: list[dict[str, Any]] = []
     # v0.34.1 coverage-honesty: directed (value-trace) nodes that MOVED funds
     # onward (had outflows) but where we followed NOTHING — a potential
     # incompleteness (an onward hop we couldn't match: below tolerance, an
@@ -686,14 +699,55 @@ def run_trace(
                             continue
                         _seen_hops.add(_hk)
                         matched_transfers.append(_mt)
+                # v0.34.7 (opt-in): STOP-AND-FLAG at a labeled terminal. Same-
+                # asset outflows landing at a labeled mixer/exchange/bridge are
+                # the traced money's end state — KEEP them (real, label-enriched
+                # → the brief classifies UNRECOVERABLE/EXCHANGE/etc. with no extra
+                # work) but do NOT traverse (a mixer is the end; an exchange is a
+                # subpoena target; a bridge is a separate cross-chain handoff).
+                # This is what carries the Ronin trace to "→ Tornado Cash →
+                # UNRECOVERABLE" instead of chasing ~216 identical pool deposits.
+                _term_records: list[dict[str, Any]] = []
+                _term_kept: list[Transfer] = []
+                if _label_terminals_enabled:
+                    _term_records, _term_tx = _detect_labeled_terminals(
+                        inbound=_traced_inbounds[0],
+                        node_outflows=hop_transfers,
+                        node_addr=from_addr,
+                        depth=depth,
+                    )
+                    if _term_records:
+                        value_labeled_terminals.extend(_term_records)
+                        _matched_ids = {mt.transfer_id for mt in matched_transfers}
+                        for _tt in _term_tx:
+                            if (
+                                _tt.transfer_id not in _matched_ids
+                                and policy.should_include(_tt)
+                            ):
+                                _term_kept.append(_tt)
+                                _matched_ids.add(_tt.transfer_id)
+                        log.info(
+                            "labeled-terminal: node %s (depth=%d) → %d terminal(s): %s",
+                            from_addr, depth, len(_term_records),
+                            ", ".join(
+                                f"{r['label_name']} [{r['status']}] "
+                                f"{r['tx_count']}tx {r['agg_amount']} {r['token'] or ''}"
+                                for r in _term_records
+                            ),
+                        )
                 # Coverage honesty: this node FORWARDED THE SAME ASSET it
                 # received but we followed NOTHING — a real incompleteness (the
                 # asset moved onward and our matcher missed it: a split past
                 # tolerance, a conversion, a poison-obscured hop). A true resting
                 # terminal (no same-asset outflow) is NOT flagged — that's where
-                # the funds legitimately sit.
-                if followed == 0 and hop_transfers and _node_forwarded_inbound_asset(
-                    _traced_inbounds[0], hop_transfers
+                # the funds legitimately sit. A node whose same-asset outflow went
+                # to a LABELED terminal is NOT a dead-end — we resolved its end
+                # state (recorded above), so don't double-flag it.
+                if (
+                    followed == 0
+                    and not _term_records
+                    and hop_transfers
+                    and _node_forwarded_inbound_asset(_traced_inbounds[0], hop_transfers)
                 ):
                     _ib0 = _traced_inbounds[0]
                     _itok = getattr(_ib0, "token", None)
@@ -709,6 +763,7 @@ def run_trace(
                         "node_outflow_count": len(hop_transfers),
                     })
                 all_transfers.extend(matched_transfers)
+                all_transfers.extend(_term_kept)
                 # Finalize: write evidence for the matched hop(s). (The
                 # service-wallet lightweight pass skipped per-outflow evidence;
                 # the full path already wrote it — re-writing is an idempotent
@@ -1076,6 +1131,10 @@ def run_trace(
             # onward hop could be matched (a real incompleteness — the trail
             # continues beyond what's recorded). Flips complete=False.
             "value_dead_ends": list(_value_dead_ends),
+            # v0.34.7: labeled terminals the traced funds reached (mixer/
+            # exchange/bridge) — the money's resolved end state, stop-and-
+            # flagged (recorded) rather than chased deposit-by-deposit.
+            "labeled_terminals": list(value_labeled_terminals),
             "reduced_parameters": {
                 "max_depth": int(cfg_max_depth),
                 "dust_threshold_usd": float(config.trace.dust_threshold_usd),
@@ -2084,6 +2143,110 @@ def _node_forwarded_inbound_asset(
         elif isym and s == isym:
             return True
     return False
+
+
+# v0.34.7 — label-aware terminals. At a directed node, a same-asset outflow that
+# lands at a LABELED mixer/exchange/bridge is the traced money's END STATE. We
+# record it and stop — exactly how TRM/Chainalysis stop-and-flag at a mixer
+# rather than chasing every pool deposit. Bounded + truthful: never fabricates
+# (only real, already-label-enriched outflows), never traverses the terminal.
+_TERMINAL_CATEGORIES = (
+    LabelCategory.mixer,
+    LabelCategory.exchange_deposit,
+    LabelCategory.exchange_hot_wallet,
+    LabelCategory.bridge,
+)
+
+
+def _terminal_status_for_category(category: LabelCategory) -> str:
+    """Map a terminal label category to the holding status the brief uses."""
+    if category == LabelCategory.mixer:
+        return "UNRECOVERABLE"   # mixed → not traceable further (Tornado etc.)
+    if category in (LabelCategory.exchange_deposit, LabelCategory.exchange_hot_wallet):
+        return "EXCHANGE"        # subpoena to exchange compliance, not a freeze
+    if category == LabelCategory.bridge:
+        return "BRIDGE"          # cross-chain handoff (separate continuation)
+    return "TRANSIT"
+
+
+def _same_onchain_asset(a: Any, b: Any) -> bool:
+    """Same on-chain asset? Contract identity when known; else native matched by
+    symbol. Mirrors value_matching._same_token — a spoof token with a colliding
+    symbol but a different contract is NOT treated as the same asset."""
+    if b is None:
+        return False
+    ac = (getattr(a, "contract", None) or "").lower()
+    bc = (getattr(b, "contract", None) or "").lower()
+    if ac or bc:
+        return bool(ac) and bool(bc) and ac == bc
+    asym = (getattr(a, "symbol", None) or "").upper()
+    bsym = (getattr(b, "symbol", None) or "").upper()
+    return bool(asym) and asym == bsym
+
+
+def _detect_labeled_terminals(
+    *,
+    inbound: Transfer,
+    node_outflows: list[Transfer],
+    node_addr: Address,
+    depth: int,
+) -> tuple[list[dict[str, Any]], list[Transfer]]:
+    """Surface the node's SAME-ASSET outflows that land at a LABELED terminal
+    (mixer / exchange / bridge). Returns ``(records, kept_transfers)``.
+
+    ``kept_transfers`` are REAL, already-label-enriched outflows — re-recording
+    them on the case lets the brief classify the destination
+    (mixer→UNRECOVERABLE, exchange→EXCHANGE) from the existing label with no
+    extra work. ``records`` is per-terminal audit provenance (node, terminal,
+    label, status, aggregate amount/USD, tx count, sample tx hashes).
+
+    Same-asset = same on-chain token as the inbound (contract identity), which
+    ties the terminal to the funds being traced and defeats symbol-spoofing.
+    The terminal is recorded, NEVER enqueued/traversed."""
+    itok = getattr(inbound, "token", None)
+    if itok is None:
+        return [], []
+    by_dest: dict[str, list[Transfer]] = {}
+    for t in node_outflows:
+        cp = getattr(t, "counterparty", None)
+        label = getattr(cp, "label", None) if cp is not None else None
+        if label is None or label.category not in _TERMINAL_CATEGORIES:
+            continue
+        if not _same_onchain_asset(itok, getattr(t, "token", None)):
+            continue
+        dest = (t.to_address or "").lower()
+        if not dest:
+            continue
+        by_dest.setdefault(dest, []).append(t)
+
+    records: list[dict[str, Any]] = []
+    kept: list[Transfer] = []
+    for _dest, txs in sorted(by_dest.items()):
+        label = txs[0].counterparty.label
+        agg_amt = sum(
+            (Decimal(str(t.amount_decimal)) for t in txs if t.amount_decimal is not None),
+            Decimal(0),
+        )
+        usd_vals = [
+            Decimal(str(t.usd_value_at_tx))
+            for t in txs if t.usd_value_at_tx is not None
+        ]
+        agg_usd = sum(usd_vals, Decimal(0)) if usd_vals else None
+        records.append({
+            "node": node_addr,
+            "terminal_address": txs[0].to_address,
+            "label_name": label.name,
+            "label_category": label.category.value,
+            "status": _terminal_status_for_category(label.category),
+            "token": (getattr(itok, "symbol", None) or "").upper() or None,
+            "tx_count": len(txs),
+            "agg_amount": str(agg_amt),
+            "agg_usd": float(agg_usd) if agg_usd is not None else None,
+            "depth": depth,
+            "sample_tx_hashes": [t.tx_hash for t in txs[:5]],
+        })
+        kept.extend(txs)
+    return records, kept
 
 
 def _value_match_and_enqueue(

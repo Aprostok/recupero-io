@@ -831,6 +831,90 @@ def test_value_trace_split_not_followed_by_default(
     assert any(d["address"].lower() == HOP_A.lower() for d in dead)
 
 
+# ---------- v0.34.7: label-aware terminal (stop-and-flag at a mixer) ---------- #
+
+# Real Tornado Cash pool address from the shipped mixer seed list
+# (src/recupero/labels/seeds/mixers.json) — LabelStore.load tags it
+# category=mixer, so an outflow to it carries a mixer counterparty label.
+TORNADO = "0x47CE0C6eD5B0Ce3d3A51fdb1C52DC66a7c3c2936"
+
+
+def _mixer_peel_graph() -> dict[str, Any]:
+    """SEED --100 ETH--> HOP_A, which PEELS into Tornado Cash as 30+30+40 ETH
+    (no single outflow matches the 100 ETH inbound, so the 1:1 matcher
+    dead-ends — the Ronin pattern in miniature)."""
+    return {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="100")],
+        HOP_A: [
+            _native_row("0xm1", HOP_A, TORNADO, eth_amount="30"),
+            _native_row("0xm2", HOP_A, TORNADO, eth_amount="30"),
+            _native_row("0xm3", HOP_A, TORNADO, eth_amount="40"),
+        ],
+    }
+
+
+def test_labeled_terminal_mixer_recorded_when_enabled(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34.7: RECUPERO_VALUE_TRACE_LABELED_TERMINALS=1 — at a directed node
+    that peels its same-asset funds into a LABELED mixer (Tornado), the engine
+    STOPS-AND-FLAGS: it records the mixer terminal (UNRECOVERABLE, aggregate
+    100 ETH across 3 tx) and KEEPS the real deposit transfers on the case (so
+    the brief classifies → Tornado → UNRECOVERABLE), instead of a generic
+    dead-end. Mirrors TRM/Chainalysis mixer handling."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_LABELED_TERMINALS", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "TERM_ON")
+
+    terms = case.config_used["coverage"]["labeled_terminals"]
+    mix = [t for t in terms if t["terminal_address"].lower() == TORNADO.lower()]
+    assert len(mix) == 1, f"expected one Tornado terminal record, got {terms}"
+    assert mix[0]["status"] == "UNRECOVERABLE"
+    assert mix[0]["label_category"] == "mixer"
+    assert mix[0]["tx_count"] == 3
+    assert mix[0]["agg_amount"] == "100"
+    # the real deposit transfers are KEPT on the case (so the brief sees them)
+    to_tornado = [t for t in case.transfers if t.to_address.lower() == TORNADO.lower()]
+    assert len(to_tornado) == 3
+    # ...and the node is NOT double-flagged as a generic dead-end
+    dead = case.config_used["coverage"]["value_dead_ends"]
+    assert not any(d["address"].lower() == HOP_A.lower() for d in dead)
+
+
+def test_labeled_terminal_off_by_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default (LABELED_TERMINALS unset): the mixer peel is NOT recorded — the
+    node is a generic value-dead-end and the deposit transfers are dropped
+    (directed path keeps only matched hops). Preserves pre-v0.34.7 behavior /
+    Zigha 4/4 byte-identically."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_VALUE_TRACE_LABELED_TERMINALS", raising=False)
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    adapter = GraphAdapter(_mixer_peel_graph())
+    _wire(monkeypatch, adapter, FixedPriceClient())
+    case = _run(config, env, tmp_path / "cases" / "TERM_OFF")
+
+    assert case.config_used["coverage"]["labeled_terminals"] == []
+    to_tornado = [t for t in case.transfers if t.to_address.lower() == TORNADO.lower()]
+    assert to_tornado == []
+    dead = case.config_used["coverage"]["value_dead_ends"]
+    assert any(d["address"].lower() == HOP_A.lower() for d in dead)
+
+
 # ---------- v0.34 perf: prune-before-enrich (lightweight on high fan-out) ---------- #
 
 

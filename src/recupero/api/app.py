@@ -1951,7 +1951,7 @@ async def operator_expand(
     try:
         data = expand_address(
             chain=ch, address=address, direction=direction,
-            max_counterparties=limit,
+            max_counterparties=limit, with_pricing=True,
         )
     except Exception as exc:  # noqa: BLE001
         log.warning("operator expand failed chain=%s dir=%s: %s", chain, direction, exc)

@@ -84,17 +84,53 @@ def clear_expansion_cache() -> None:
     _expansion_cache.clear()
 
 
+def _amount_decimal(token: Any, amount_raw: Any) -> Decimal | None:
+    """``amount_raw / 10**decimals`` as a Decimal, or None if unusable."""
+    decimals = getattr(token, "decimals", None)
+    if decimals is None:
+        return None
+    try:
+        return Decimal(int(amount_raw)) / (Decimal(10) ** int(decimals))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
 def _stable_usd(token: Any, amount_raw: Any) -> Decimal:
     """Face-value USD for a stablecoin transfer; Decimal(0) otherwise."""
     sym = (getattr(token, "symbol", "") or "").lower()
     if sym not in _STABLES:
         return Decimal(0)
-    decimals = getattr(token, "decimals", None)
-    if decimals is None:
+    amt = _amount_decimal(token, amount_raw)
+    return amt if amt is not None else Decimal(0)
+
+
+def _row_usd(
+    token: Any, amount_raw: Any, price_fn: Any, memo: dict[Any, Any]
+) -> Decimal:
+    """USD for one transfer: stablecoin face-value fast path, else (if a
+    ``price_fn`` is supplied) ``amount × spot price``. ``price_fn`` failures
+    or missing prices fall through to Decimal(0) — never an overstatement."""
+    stable = _stable_usd(token, amount_raw)
+    if stable > 0:
+        return stable
+    if price_fn is None:
+        return Decimal(0)
+    amt = _amount_decimal(token, amount_raw)
+    if amt is None:
+        return Decimal(0)
+    key = (getattr(token, "contract", None) or getattr(token, "symbol", None))
+    if key in memo:
+        price = memo[key]
+    else:
+        try:
+            price = price_fn(token)
+        except Exception:  # noqa: BLE001
+            price = None
+        memo[key] = price
+    if price is None:
         return Decimal(0)
     try:
-        raw = Decimal(int(amount_raw))
-        return raw / (Decimal(10) ** int(decimals))
+        return amt * Decimal(str(price))
     except (InvalidOperation, ValueError, TypeError):
         return Decimal(0)
 
@@ -115,15 +151,21 @@ def aggregate_expansion(
     direction: str,
     chain: str,
     max_counterparties: int = _DEFAULT_MAX_CP,
+    price_fn: Any = None,
 ) -> dict[str, Any]:
     """Group ``rows`` (adapter-normalized transfer dicts) by counterparty
     and emit journey-shaped ``{nodes, edges, meta}`` for the operator graph
     to merge. ``direction`` is ``"out"`` (counterparty = the ``to`` side)
-    or ``"in"`` (counterparty = the ``from`` side)."""
+    or ``"in"`` (counterparty = the ``from`` side).
+
+    ``price_fn(token) -> price|None`` (optional) supplies a spot USD price
+    for non-stablecoin tokens; without it, only stablecoin face-value is
+    counted (everything else $0 — a deliberate underestimate)."""
     cap = max(1, min(int(max_counterparties or _DEFAULT_MAX_CP), _HARD_MAX_CP))
     out_dir = direction != "in"
     root = _key(root_address)
     chain_color = _CHAIN_COLOR.get((chain or "").lower(), "#94A3B8")
+    price_memo: dict[Any, Any] = {}
 
     agg: dict[str, dict[str, Any]] = {}
     for r in rows:
@@ -132,7 +174,7 @@ def aggregate_expansion(
         if not cp or cp == root:
             continue
         token = r.get("token")
-        usd = _stable_usd(token, r.get("amount_raw"))
+        usd = _row_usd(token, r.get("amount_raw"), price_fn, price_memo)
         sym = getattr(token, "symbol", None)
         date = _iso_date(r.get("block_time"))
         slot = agg.setdefault(cp, {
@@ -213,9 +255,32 @@ def aggregate_expansion(
             "direction": "out" if out_dir else "in",
             "counterpartyCount": len(nodes),
             "truncated": truncated,
-            "usdEstimate": "stablecoin face-value only",
+            "usdEstimate": (
+                "spot price + stablecoin face-value" if price_fn
+                else "stablecoin face-value only"
+            ),
         },
     }
+
+
+def _build_price_fn() -> Any | None:
+    """Best-effort spot-price callable backed by CoinGecko. Returns None if
+    the client can't be constructed (no config / offline) so callers
+    degrade to stablecoin-only USD."""
+    try:
+        from recupero.config import load_config
+        from recupero.pricing.coingecko import CoinGeckoClient
+        config, env = load_config()
+        client = CoinGeckoClient(config, env)
+
+        def _fn(token: Any) -> Any:
+            res = client.price_now(token)
+            return getattr(res, "usd_value", None)
+
+        return _fn
+    except Exception as exc:  # noqa: BLE001
+        log.info("expansion pricing unavailable: %s", exc)
+        return None
 
 
 def expand_address(
@@ -228,6 +293,8 @@ def expand_address(
     max_counterparties: int = _DEFAULT_MAX_CP,
     start_block: int = 0,
     use_cache: bool = True,
+    with_pricing: bool = False,
+    price_fn: Any = None,
     _clock: Any = time.monotonic,
 ) -> dict[str, Any]:
     """Fetch ``address``'s next-hop counterparties on ``chain`` and return
@@ -241,7 +308,11 @@ def expand_address(
     """
     direction = "in" if direction == "in" else "out"
     chain_str = getattr(chain, "value", str(chain))
-    cache_key = (chain_str, str(address).lower(), direction, int(max_counterparties))
+    # Build a spot-price callable on the constructed path if requested.
+    if price_fn is None and with_pricing and adapter is None:
+        price_fn = _build_price_fn()
+    priced = price_fn is not None
+    cache_key = (chain_str, str(address).lower(), direction, int(max_counterparties), priced)
     if adapter is None and use_cache:
         cached = _cache_get(cache_key, now=_clock())
         if cached is not None:
@@ -273,6 +344,7 @@ def expand_address(
     data = aggregate_expansion(
         rows, root_address=address, direction=direction,
         chain=chain_str, max_counterparties=max_counterparties,
+        price_fn=price_fn,
     )
     if own_adapter and use_cache:
         _cache_put(cache_key, data, now=_clock())

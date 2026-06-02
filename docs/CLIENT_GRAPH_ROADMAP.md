@@ -177,9 +177,11 @@ Shipped: Phase 2 (client), the Phase 3 operator anchor + risk/exposure,
 saved/shareable views (3.9)**. The operator graph now matches the core
 TRM/Chainalysis explore-grow-annotate-save loop. Remaining, in value order:
 
-1. **Non-stablecoin USD on expanded edges** — wire the price oracle
-   (`pricing/coingecko.price_now`) into `graph_expand` so expanded ETH/token
-   flows carry a real $ figure, not 0. Needs network + rate-limit handling.
+1. ✅ **Non-stablecoin USD on expanded edges (SHIPPED v0.35)** — `graph_expand`
+   takes an optional `price_fn`; `expand_address(with_pricing=True)` builds it
+   best-effort from `pricing/coingecko.price_now` (per-token memoized, degrades
+   to stablecoin-only on any failure — never overstated). The expand endpoint
+   requests it.
 2. **3.10 Address watch** and **4.13 real-time** — both ride the worker
    scheduler / a streaming channel.
 3. **4.11 WebGL** and **4.12 ribbon-Sankey** — polish, once graphs routinely

@@ -64,6 +64,28 @@ def test_non_stablecoin_usd_is_zero_not_overstated() -> None:
     assert out["edges"][0]["transferCount"] == 1
 
 
+def test_price_fn_values_non_stablecoin_edges() -> None:
+    # ETH priced via injected price_fn → edge carries real USD, not 0.
+    rows = [_row(ROOT, CP1, _ETH, 2 * 10**18, 1)]
+    out = aggregate_expansion(
+        rows, root_address=ROOT, direction="out", chain="ethereum",
+        price_fn=lambda token: 3000 if token.symbol == "ETH" else None,
+    )
+    assert out["edges"][0]["totalUsdNumeric"] == 6000.0   # 2 ETH × $3000
+    assert out["meta"]["usdEstimate"].startswith("spot price")
+
+
+def test_price_fn_failure_falls_back_to_zero() -> None:
+    rows = [_row(ROOT, CP1, _ETH, 1 * 10**18, 1)]
+
+    def _boom(_token):
+        raise RuntimeError("coingecko down")
+
+    out = aggregate_expansion(rows, root_address=ROOT, direction="out",
+                              chain="ethereum", price_fn=_boom)
+    assert out["edges"][0]["totalUsdNumeric"] == 0.0   # degrades, never raises
+
+
 def test_counterparty_cap_truncates_and_reports() -> None:
     rows = [_row(ROOT, "0x" + f"{i:040x}", _USDC, (i + 1) * 1_000000, 1) for i in range(60)]
     out = aggregate_expansion(rows, root_address=ROOT, direction="out", chain="ethereum",

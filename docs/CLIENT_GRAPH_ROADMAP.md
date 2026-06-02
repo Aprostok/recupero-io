@@ -182,9 +182,14 @@ TRM/Chainalysis explore-grow-annotate-save loop. Remaining, in value order:
    best-effort from `pricing/coingecko.price_now` (per-token memoized, degrades
    to stablecoin-only on any failure — never overstated). The expand endpoint
    requests it.
-2. **3.10 Address watch** and **4.13 real-time** — both ride the worker
-   scheduler / a streaming channel.
-3. **4.11 WebGL** and **4.12 ribbon-Sankey** — polish, once graphs routinely
+2. ✅ **3.10 Address watch (SHIPPED v0.35)** — a "👁 Watch" action in the
+   operator node panel inserts a `role='manual'`, `priority='hot'` row into
+   the **existing** `public.watchlist` (`worker.watchlist.add_manual_watch` +
+   `POST /v1/operator/graph/{id}/watch`), so the existing nightly
+   `run_watch_tick` snapshots + delta-detects it. No parallel watch system.
+3. **4.13 real-time** — push new hops/labels as a trace runs; needs a
+   streaming channel (SSE/websocket).
+4. **4.11 WebGL** and **4.12 ribbon-Sankey** — polish, once graphs routinely
    exceed a few hundred nodes (expansion makes that reachable).
 
 ### Known tech-debt

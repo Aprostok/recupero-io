@@ -312,7 +312,10 @@ function initGraph(DATA, viewId) {
       const lab = document.createElement("div"); lab.className = "donut-cap"; lab.style.textAlign = "left"; lab.textContent = "Expand counterparties"; ex.appendChild(lab);
       const bOut = document.createElement("button"); bOut.className = "btn"; bOut.style.marginTop = "4px"; bOut.textContent = "Funds out ▸"; bOut.onclick = () => expandNode(n, "out", bOut);
       const bIn = document.createElement("button"); bIn.className = "btn"; bIn.style.marginLeft = "6px"; bIn.textContent = "◂ Funds in"; bIn.onclick = () => expandNode(n, "in", bIn);
-      ex.appendChild(bOut); ex.appendChild(bIn); box.appendChild(ex);
+      ex.appendChild(bOut); ex.appendChild(bIn);
+      const bW = document.createElement("button"); bW.className = "btn"; bW.style.marginLeft = "6px"; bW.textContent = "👁 Watch"; bW.title = "Add to the monitoring watchlist"; bW.onclick = () => watchNode(n, bW);
+      ex.appendChild(bW);
+      box.appendChild(ex);
     }
     // operator annotation — saved server-side (shared across operators
     // with the admin key); falls back to device-local if the store is down.
@@ -354,6 +357,16 @@ function initGraph(DATA, viewId) {
       mergeExpansion(n, data);
       if (btn) btn.textContent = "+" + (data.meta.counterpartyCount||0) + (data.meta.truncated? " (capped)" : "");
     } catch (e) { if(btn){ btn.textContent = "error"; btn.disabled = false; } }
+  }
+  async function watchNode(n, btn){
+    const orig = btn ? btn.textContent : "";
+    if (btn) { btn.textContent = "…"; btn.disabled = true; }
+    try {
+      const r = await fetch(API + "/watch", { method: "POST",
+        headers: { "X-Recupero-Admin-Key": adminKey(), "Content-Type": "application/json" },
+        body: JSON.stringify({ address: n.id, chain: n.chain || "", note: (annotations[n.id] || null) }) });
+      if (btn) { btn.textContent = r.ok ? "👁 Watching" : ("failed " + r.status); btn.disabled = !r.ok ? false : true; }
+    } catch (e) { if (btn) { btn.textContent = "error"; btn.disabled = false; } }
   }
   function mergeExpansion(parent, data){
     const pdepth = (nodeById.get(parent.id) || {}).depth || 0;

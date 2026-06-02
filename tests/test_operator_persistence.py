@@ -137,6 +137,34 @@ def test_bad_investigation_id_400() -> None:
     assert _client().get("/v1/operator/graph/not-a-uuid/annotations", headers=_H).status_code == 400
 
 
+# ---- watch (integrates with existing public.watchlist) ---- #
+
+
+def test_add_manual_watch_inserts_manual_hot_row() -> None:
+    cm, cur = _fake_db([])
+    with patch("recupero.worker.watchlist.db_connect", cm):
+        from recupero.worker.watchlist import add_manual_watch
+        ok = add_manual_watch(dsn="dsn", address=NODE, chain="ethereum", investigation_id=INV, note="suspect")
+    assert ok is True
+    sql, params = cur.calls[-1]
+    assert "INSERT INTO public.watchlist" in sql and "'manual'" in sql and "'hot'" in sql
+    assert params["chain"] == "ethereum" and params["investigation_id"] == INV
+
+
+def test_watch_endpoint_auth_and_validation() -> None:
+    c = _client()
+    assert c.post(f"/v1/operator/graph/{INV}/watch", json={"address": NODE, "chain": "ethereum"}).status_code == 401
+    assert c.post(f"/v1/operator/graph/{INV}/watch", json={"address": NODE, "chain": "nope"}, headers=_H).status_code == 400
+
+
+def test_watch_endpoint_happy_and_failure() -> None:
+    c = _client()
+    with patch("recupero.worker.watchlist.add_manual_watch", return_value=True):
+        assert c.post(f"/v1/operator/graph/{INV}/watch", json={"address": NODE, "chain": "ethereum"}, headers=_H).status_code == 200
+    with patch("recupero.worker.watchlist.add_manual_watch", side_effect=RuntimeError("db down")):
+        assert c.post(f"/v1/operator/graph/{INV}/watch", json={"address": NODE, "chain": "ethereum"}, headers=_H).status_code == 503
+
+
 # ---- expansion cache ---- #
 
 

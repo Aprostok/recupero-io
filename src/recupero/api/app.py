@@ -2081,6 +2081,44 @@ async def operator_snapshot_load(
     return JSONResponse(content={"name": name, "state": state})
 
 
+class _WatchIn(BaseModel):
+    address: str = Field(..., min_length=1, max_length=120)
+    chain: str = Field(..., min_length=1, max_length=40)
+    note: str | None = Field(None, max_length=500)
+
+
+@app.post("/v1/operator/graph/{investigation_id}/watch", tags=["ops"])
+async def operator_watch_address(
+    investigation_id: str,
+    body: _WatchIn,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    """Flag a graph node's address for monitoring — inserts a manual,
+    hot-priority row into the existing ``public.watchlist`` so the nightly
+    watch-tick monitors it (no parallel watch system)."""
+    from recupero.dispatcher.review_api import _require_admin_auth, _dsn
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+
+    from recupero.models import Chain
+    try:
+        Chain(body.chain)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="unknown chain")
+    addr = body.address.strip()
+    if not addr or any(c.isspace() for c in addr):
+        raise HTTPException(status_code=400, detail="invalid address")
+
+    from recupero.worker.watchlist import add_manual_watch
+    try:
+        add_manual_watch(dsn=_dsn(), address=addr, chain=body.chain,
+                         investigation_id=inv, note=body.note)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("operator watch add failed inv=%s: %s", inv, exc)
+        raise HTTPException(status_code=503, detail="watchlist unavailable")
+    return JSONResponse(content={"ok": True})
+
+
 # ---- Uvicorn entry point ---- #
 
 

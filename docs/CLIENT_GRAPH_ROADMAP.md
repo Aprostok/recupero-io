@@ -11,11 +11,10 @@ shareable graphs (3.9), watch (3.10), WebGL (4.11), ribbon-Sankey (4.12),
 real-time (4.13), non-stablecoin USD pricing on expansion ·
 **annotations + saved/shareable graphs (3.9)** · expansion cache.
 
-**Genuinely remaining:** address watch (3.10), WebGL renderer (4.11),
-ribbon-Sankey (4.12), real-time streaming (4.13), non-stablecoin USD on
-expanded edges. Each needs the worker scheduler, a streaming channel, a
-canvas-renderer rewrite, or the live price oracle — infrastructure best
-verified against a running deploy, not added blind.
+**Genuinely remaining:** WebGL renderer (4.11) and real-time streaming
+(4.13). Both are best built + verified against a running deploy (a
+canvas-renderer rewrite; tracer progress events + an SSE/websocket
+channel), not added blind. Everything else in Phases 2–4 is shipped.
 
 This document tracks the client-facing interactive graph in the portal
 (`/portal/<token>/graph`) and the work remaining to bring it as close as
@@ -187,10 +186,14 @@ TRM/Chainalysis explore-grow-annotate-save loop. Remaining, in value order:
    the **existing** `public.watchlist` (`worker.watchlist.add_manual_watch` +
    `POST /v1/operator/graph/{id}/watch`), so the existing nightly
    `run_watch_tick` snapshots + delta-detects it. No parallel watch system.
-3. **4.13 real-time** — push new hops/labels as a trace runs; needs a
-   streaming channel (SSE/websocket).
-4. **4.11 WebGL** and **4.12 ribbon-Sankey** — polish, once graphs routinely
-   exceed a few hundred nodes (expansion makes that reachable).
+3. ✅ **4.12 ribbon-Sankey (SHIPPED v0.35)** — operator edges render as
+   `<path>`; in the **Value-flow** layout they curve into Sankey-style
+   ribbons (width ∝ value, depth columns). Straight in other layouts.
+4. **4.11 WebGL** — only needed once expansion grows graphs past a few
+   hundred nodes; a canvas/WebGL renderer rewrite, best done + verified
+   against a running deploy rather than added blind.
+5. **4.13 real-time** — push new hops/labels as a trace runs; needs a
+   streaming channel (SSE/websocket) and tracer progress events.
 
 ### Known tech-debt
 

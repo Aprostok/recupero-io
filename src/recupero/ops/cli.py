@@ -304,6 +304,22 @@ def cli() -> None:
              "({case_id, endpoints[], by_category{}, notes}).",
     )
 
+    # ----- graph-analyze (v0.35.16 / C6) ----- #
+    p_graph = sub.add_parser(
+        "graph-analyze",
+        help="Structural analysis of a traced case's fund-flow graph: "
+             "consolidation hubs (where split funds re-merge — the actor's "
+             "hub) + value cycles (wash/loop obfuscation) + depth/metrics.",
+    )
+    p_graph.add_argument(
+        "--case", dest="graph_case", required=True,
+        help="Path to the case directory (containing case.json).",
+    )
+    p_graph.add_argument(
+        "--min-sources", dest="graph_min_sources", type=int, default=3,
+        help="Min distinct upstream sources for a consolidation hub (default 3).",
+    )
+
     # ----- label-freshness (v0.35.15 / J3) ----- #
     sub.add_parser(
         "label-freshness",
@@ -1004,6 +1020,27 @@ def cli() -> None:
             sys.exit(2)
         score = score_case_dir(case_dir, truth)
         print(_json.dumps(score.to_dict(), indent=2))
+        sys.exit(0)
+
+    if args.command == "graph-analyze":
+        import json as _json
+        from pathlib import Path as _Path
+
+        from recupero.trace.graph_analysis import analyze_case_graph
+        case_dir = _Path(args.graph_case)
+        case_json = case_dir / "case.json"
+        if not case_json.exists():
+            print(f"ERROR: case.json not found in {case_dir}", file=sys.stderr)
+            sys.exit(2)
+        try:
+            data = _json.loads(case_json.read_text(encoding="utf-8-sig"))
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: case.json unreadable: {exc}", file=sys.stderr)
+            sys.exit(2)
+        analysis = analyze_case_graph(
+            data, min_distinct_sources=max(2, int(args.graph_min_sources or 3)),
+        )
+        print(_json.dumps(analysis.to_dict(), indent=2))
         sys.exit(0)
 
     if args.command == "label-freshness":

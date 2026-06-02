@@ -130,6 +130,14 @@ def _overview_to_template_dict(ov: WatchlistOverview) -> dict[str, Any]:
     }
 
 
+def overview_to_dict(overview: WatchlistOverview) -> dict[str, Any]:
+    """Public JSON-serializable view of an overview — same shape the template
+    consumes (cards, by-status, by-chain, rows). Used by the live
+    ``GET /v1/watchlist`` API so the in-browser console renders identically to
+    the rendered-HTML dashboard."""
+    return _overview_to_template_dict(overview)
+
+
 def render_watchlist_dashboard(
     *,
     output_dir: Path,
@@ -195,4 +203,4 @@ def render_watchlist_dashboard(
     return out_path
 
 
-__all__ = ("render_watchlist_dashboard",)
+__all__ = ("render_watchlist_dashboard", "overview_to_dict")

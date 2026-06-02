@@ -117,6 +117,18 @@ except Exception as _exc:  # noqa: BLE001
         "cron admin API not registered (import failed): %s", _exc,
     )
 
+# v0.35.1 — live Watchlist / Watcher console. Admin-gated JSON
+# (/v1/watchlist) + re-check trigger (/v1/watchlist/run) + an
+# unauthenticated HTML shell (/v1/watchlist/console) that fetches the
+# JSON client-side with the operator's X-Recupero-Admin-Key.
+try:
+    from recupero.api.watchlist_api import router as _watchlist_router
+    app.include_router(_watchlist_router)
+except Exception as _exc:  # noqa: BLE001
+    log.warning(
+        "watchlist API not registered (import failed): %s", _exc,
+    )
+
 
 # ---- Request body-size cap (intake DoS guard) ---- #
 

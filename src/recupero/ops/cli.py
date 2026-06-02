@@ -253,6 +253,20 @@ def cli() -> None:
              "risk-scoring. Recommended cadence: weekly via cron.",
     )
 
+    # ----- import-sanctions (v0.35.6 / E5) ----- #
+    p_intl = sub.add_parser(
+        "import-sanctions",
+        help="Import multi-regime sanctioned crypto wallets (EU / UK "
+             "HMT-OFSI / UN / Israel / Japan / …) from an OpenSanctions "
+             "CryptoWallet bulk file (FtM JSON/NDJSON) into the local "
+             "intl-sanctions CSV used by risk-scoring, alongside OFAC.",
+    )
+    p_intl.add_argument(
+        "--file", dest="sanctions_file", required=True,
+        help="Path to the OpenSanctions crypto bulk export "
+             "(entities .json array or .ndjson).",
+    )
+
     # ----- bridge-sync (v0.29.1 Recommendation #5) ----- #
     p_bridge_sync = sub.add_parser(
         "bridge-sync",
@@ -891,6 +905,18 @@ def cli() -> None:
     if args.command == "ofac-sync":
         from recupero.ops.commands import ofac_sync_cmd as cmd
         sys.exit(cmd.run())
+
+    if args.command == "import-sanctions":
+        from pathlib import Path as _Path
+
+        from recupero.labels.sanctions_intl import import_opensanctions_file
+        src = _Path(args.sanctions_file)
+        if not src.exists():
+            print(f"ERROR: file not found: {src}", file=sys.stderr)
+            sys.exit(2)
+        n = import_opensanctions_file(src)
+        print(f"Imported {n} intl-sanctioned crypto wallet(s) → risk-scoring CSV.")
+        sys.exit(0)
 
     if args.command == "bridge-sync":
         from pathlib import Path as _Path

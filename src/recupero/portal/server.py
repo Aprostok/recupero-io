@@ -41,10 +41,12 @@ swap in Starlette/uvicorn as part of a separate-deploy refactor.
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 import math
 import os
 import re
+import secrets
 import urllib.parse
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -429,6 +431,8 @@ def handle_portal(
     # response building so the dispatcher stays a pure router.
     if sub_path == "" and method == "GET":
         return _route_status(token=token, verified=verified, dsn=dsn)
+    if sub_path == "graph" and method == "GET":
+        return _route_journey(token=token, verified=verified, dsn=dsn)
     if sub_path == "sign" and method == "GET":
         return _route_sign_form(token=token, verified=verified)
     if sub_path == "sign" and method == "POST":
@@ -468,6 +472,171 @@ def _route_status(
         expires_at=_fmt_dt(verified.expires_at) if verified.expires_at else None,
     )
     return _ok_html(html)
+
+
+def _route_journey(
+    *, token: str, verified: VerifiedToken, dsn: str
+) -> tuple[int, bytes, dict[str, str]]:
+    """Embedded, client-safe interactive fund-flow map.
+
+    Unlike the operator graph (``reports.graph_ui``), this builds a
+    *sanitized* journey projection server-side and hands only that to
+    the browser — raw ``case.json`` never leaves the portal process.
+
+    The page runs inline JavaScript (a self-contained vanilla force
+    graph — no third-party JS, no CDN). The portal's global CSP is
+    ``script-src 'none'``, so this route returns a per-response,
+    nonce-scoped CSP that permits ONLY this page's own inline script.
+    """
+    journey = _load_journey(verified)
+    activity = _fetch_run_activity(case_id=verified.case_id, dsn=dsn)
+    nonce = _csp_nonce()
+    journey_json = _safe_journey_json(journey) if journey is not None else "null"
+
+    html = _get_jinja_env().get_template("journey.html.j2").render(
+        token=token,
+        case=_case_dict(verified),
+        journey=journey,
+        journey_json=journey_json,
+        activity=activity,
+        nonce=nonce,
+        expires_at=_fmt_dt(verified.expires_at) if verified.expires_at else None,
+    )
+    # Per-response CSP: relax script-src to this page's nonce only (the
+    # global policy is script-src 'none'). Everything else stays as
+    # locked as the global policy — connect-src 'none' guarantees the
+    # inline graph cannot exfiltrate, even if it were somehow subverted.
+    csp = (
+        "default-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        f"script-src 'nonce-{nonce}'; "
+        "connect-src 'none'; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
+    return 200, html.encode("utf-8"), _with_security_headers({
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": csp,
+    })
+
+
+def _csp_nonce() -> str:
+    """A fresh base64url CSP nonce per response (no padding, browser-safe)."""
+    return secrets.token_urlsafe(16)
+
+
+def _load_journey(verified: VerifiedToken) -> dict[str, Any] | None:
+    """Fetch case.json from storage and build the sanitized journey.
+
+    Returns ``None`` (rendered as a friendly empty state) when there's
+    no investigation yet, storage isn't configured, the case isn't in
+    the bucket, or anything in the build trips — the map is a nicety,
+    never a hard dependency of the portal.
+    """
+    if not verified.investigation_id:
+        return None
+    sb_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        return None
+    try:
+        from recupero.worker.investigations_api import fetch_case_json
+        raw = fetch_case_json(
+            supabase_url=sb_url, service_role_key=sb_key,
+            investigation_id=str(verified.investigation_id),
+        )
+        if not raw:
+            return None
+        from recupero.models import Case
+        from recupero.reports.client_journey import build_journey_data
+        case = Case.model_validate(raw)
+        journey = build_journey_data(case)
+        # An empty graph (no nodes) is the same as "no map yet" for the UI.
+        if not journey.get("nodes"):
+            return None
+        return journey
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "portal: journey build failed for inv=%s: %s",
+            verified.investigation_id, exc,
+        )
+        return None
+
+
+def _safe_journey_json(journey: dict[str, Any]) -> str:
+    """Serialize the journey for safe embedding in a
+    ``<script type="application/json">`` block.
+
+    Mirrors ``reports.graph_ui`` hardening: ``allow_nan=False`` (reject
+    NaN/Inf rather than emit JS literals JSON.parse rejects) plus
+    escaping of ``</``, ``<!--`` and ``-->`` so no node label can break
+    out of the script-data context even under a lenient HTML parser.
+    """
+    try:
+        blob = json.dumps(journey, separators=(",", ":"), allow_nan=False)
+    except ValueError:
+        # Defense-in-depth: scrub any non-finite float a future caller
+        # might thread in, then re-serialize.
+        def _walk(o: Any) -> Any:
+            if isinstance(o, float) and not math.isfinite(o):
+                return 0
+            if isinstance(o, dict):
+                return {k: _walk(v) for k, v in o.items()}
+            if isinstance(o, (list, tuple)):
+                return [_walk(v) for v in o]
+            return o
+        blob = json.dumps(_walk(journey), separators=(",", ":"), allow_nan=False)
+    return (
+        blob.replace("</", "<\\/")
+        .replace("<!--", "\\u003c!--")
+        .replace("-->", "--\\u003e")
+    )
+
+
+def _fetch_run_activity(
+    *, case_id: UUID | None, dsn: str
+) -> list[dict[str, str]]:
+    """Build a client-friendly timeline of investigation runs for the
+    case (most recent first). Best-effort: returns ``[]`` on any error
+    or when no DSN is configured.
+
+    No schema change — reads the existing ``investigations`` lifecycle
+    timestamps (triggered_at / started_at / completed_at).
+    """
+    if not case_id or not dsn:
+        return []
+    rows: list[dict[str, Any]] = []
+    try:
+        with psycopg.connect(dsn, row_factory=dict_row, connect_timeout=10) as conn, \
+                conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT triggered_at, started_at, completed_at
+                  FROM public.investigations
+                 WHERE case_id = %s
+                 ORDER BY triggered_at DESC NULLS LAST
+                 LIMIT 6
+                """,
+                (str(case_id),),
+            )
+            rows = cur.fetchall() or []
+    except Exception as exc:  # noqa: BLE001
+        log.debug("portal: run-activity query failed for case=%s: %s", case_id, exc)
+        return []
+
+    out: list[dict[str, str]] = []
+    for i, r in enumerate(rows):
+        completed = _coerce_utc(r.get("completed_at"))
+        triggered = _coerce_utc(r.get("triggered_at"))
+        if completed is not None:
+            label = "Latest analysis completed" if i == 0 else "Analysis completed"
+            out.append({"when": _fmt_dt(completed), "label": label})
+        elif triggered is not None:
+            label = "Analysis in progress" if i == 0 else "Analysis run"
+            out.append({"when": _fmt_dt(triggered), "label": label})
+    return out
 
 
 def _route_sign_form(

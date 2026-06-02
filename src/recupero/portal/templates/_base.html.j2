@@ -35,6 +35,9 @@
             margin: 0 auto;
             padding: 32px 24px 64px;
         }
+        /* Wide variant — used by the fund-flow map page where the
+           graph canvas needs the full viewport width. */
+        .container.wide { max-width: 1100px; }
         .brand {
             font-weight: 700;
             font-size: 18px;
@@ -169,9 +172,10 @@
             font-size: 14px;
         }
     </style>
+    {% block head_extra %}{% endblock %}
 </head>
 <body>
-<div class="container">
+<div class="container {% block container_extra %}{% endblock %}">
     <div class="brand">Recupero</div>
     {% block content %}{% endblock %}
     <div class="footer">

@@ -101,8 +101,19 @@ def test_async_count_matches_baseline(parsed):
     # (await receive/send, byte counting); zero blocking I/O. Covered by
     # test_no_blocking_io_inside_async_def, which scans every async def
     # in api/app.py for sync-I/O calls and passed on these three.)
-    assert total == 17, (
-        f"async def count drifted to {total} (was 17). Update baseline and "
+    #
+    # (v0.35 operator graph: +11 in api/app.py — operator_graph_ui,
+    # operator_graph_data, operator_expand, operator_annotations_get/put,
+    # operator_snapshots_list/save/load, operator_watch_address,
+    # operator_graph_stream and its nested async generator `_gen`. These are
+    # route handlers; like the existing routes they call SYNC helpers
+    # (db_connect, fetch_case_json, build_*). test_no_blocking_io_inside_async_def
+    # passes on all of them — none make the banned direct calls. The SSE
+    # `_gen` awaits asyncio.wait_for(queue.get()) + a heartbeat (no I/O).
+    # graph_events.publish() is deliberately SYNC (put_nowait) so the async
+    # surface stays inside api/*.)
+    assert total == 28, (
+        f"async def count drifted to {total} (was 28). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

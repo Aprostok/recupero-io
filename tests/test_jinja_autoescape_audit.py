@@ -185,6 +185,13 @@ def test_only_known_safe_filters_used():
         is attacker- or user-influenced, so the embedded `<strong>`
         markup is trusted and `|safe` is required to render it as bold
         rather than escaped angle brackets. Safe.
+      * portal/journey.html.j2 — `journey_json` embedded in
+        `<script type="application/json">` exactly like
+        interactive_graph.html.j2. The producer
+        (portal.server._safe_journey_json) does `json.dumps(..., allow_nan=False)`
+        then escapes `</` / `<!--` / `-->` so the block can't break out of
+        the script-data context; the browser does NOT execute it
+        (application/json) — it JSON.parse's the textContent. Safe.
     """
     KNOWN_SAFE: dict[str, set[int]] = {
         # v0.35.8 (F1): line shifted 233 → 342 when the filter/focus control
@@ -193,6 +200,7 @@ def test_only_known_safe_filters_used():
         # <!-- / --> escaping in graph_ui.py — re-pinned, not newly trusted.
         "src/recupero/reports/templates/interactive_graph.html.j2": {342},
         "src/recupero/reports/templates/engagement_letter.html.j2": {185},
+        "src/recupero/portal/templates/journey.html.j2": {208},
     }
 
     # Word-boundary match: `|safe` and `| safe` (raw safe filter)

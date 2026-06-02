@@ -107,6 +107,10 @@ dependencies = [
     # 3.11+ support; <1.0 to avoid pre-1.0 API churn.
     "fastapi>=0.110,<1.0",
     "uvicorn[standard]>=0.27,<1.0",
+    # Required by FastAPI for the intake form route (Form(...) parsing).
+    # FastAPI raises at import time if it's missing, so it must be an
+    # explicit dependency — not relied on transitively.
+    "python-multipart>=0.0.9,<1.0",
 ]
 
 [project.optional-dependencies]

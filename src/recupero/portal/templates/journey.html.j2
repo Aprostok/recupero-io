@@ -1,0 +1,643 @@
+{% extends "_base.html.j2" %}
+{% block title %}Fund-flow map · {{ case.case_number }}{% endblock %}
+{% block container_extra %}wide{% endblock %}
+{% block head_extra %}
+<style>
+  .map-head { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; }
+  .map-head .back { font-size:13px; }
+  .summary-line { font-size:15px; margin:6px 0 0; }
+  .breakdown { list-style:none; padding:0; margin:6px 0 0; }
+  .breakdown li { padding:9px 0; border-bottom:1px solid var(--border); }
+  .breakdown li:last-child { border-bottom:0; }
+  .bd-top { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+  .bd-name { display:flex; align-items:center; gap:8px; font-weight:600; font-size:14px; }
+  .bd-dot { width:11px; height:11px; border-radius:50%; flex:0 0 auto; }
+  .bd-usd { font-variant-numeric:tabular-nums; font-weight:600; font-size:14px; }
+  .bd-bar { height:6px; border-radius:3px; margin-top:6px; background:#eee; overflow:hidden; }
+  .bd-bar > span { display:block; height:100%; border-radius:3px; }
+  .bd-blurb { color:var(--fg-muted); font-size:12.5px; margin-top:5px; }
+  .timeline { list-style:none; padding:0; margin:0; }
+  .timeline li { display:flex; gap:10px; padding:6px 0; font-size:13.5px; }
+  .timeline .tl-when { color:var(--fg-muted); min-width:130px; font-variant-numeric:tabular-nums; }
+  .graph-card { padding:0; overflow:hidden; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:10px 14px; border-bottom:1px solid var(--border); }
+  .bar.filters { background:#faf9f4; }
+  .bar label { font-size:12px; color:var(--fg-muted); display:flex; gap:6px; align-items:center; }
+  .bar input[type=text] { flex:1 1 180px; min-width:150px; padding:8px 10px; border:1px solid var(--border); border-radius:5px; font-size:13px; }
+  .bar select { padding:6px 8px; border:1px solid var(--border); border-radius:5px; font-size:13px; background:#fff; }
+  .btn-sm { background:#fff; border:1px solid var(--border); border-radius:5px; padding:7px 11px; font-size:13px; cursor:pointer; color:var(--fg); }
+  .btn-sm:hover { background:#f1efe7; }
+  .btn-sm.on { background:var(--accent); color:#fff; border-color:var(--accent); }
+  .seg { display:inline-flex; border:1px solid var(--border); border-radius:5px; overflow:hidden; }
+  .seg button { border:0; background:#fff; padding:7px 11px; font-size:13px; cursor:pointer; color:var(--fg); }
+  .seg button.on { background:var(--accent); color:#fff; }
+  .spacer { margin-left:auto; }
+  #legend { display:flex; gap:8px; flex-wrap:wrap; padding:9px 14px; border-bottom:1px solid var(--border); }
+  #legend .lg { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--fg); cursor:pointer; border:1px solid transparent; border-radius:999px; padding:2px 8px; user-select:none; }
+  #legend .lg:hover { background:#f1efe7; }
+  #legend .lg.off { opacity:.4; text-decoration:line-through; }
+  #legend .lg-dot { width:11px; height:11px; border-radius:50%; }
+  #scrubber { display:flex; gap:10px; align-items:center; padding:9px 14px; border-bottom:1px solid var(--border); font-size:12px; color:var(--fg-muted); }
+  #scrubber input[type=range] { flex:1; }
+  #graph-wrap { position:relative; }
+  svg#map { width:100%; height:600px; display:block; background:#fbfbf9; cursor:grab; touch-action:none; }
+  svg#map:active { cursor:grabbing; }
+  .edge { fill:none; }
+  .edge.cross { stroke-dasharray:5 4; }
+  .edge.dim { opacity:.10; }
+  .edge.hot { stroke:#2a5e3e !important; }
+  .edge.path { stroke:#1D4ED8 !important; stroke-opacity:1; }
+  .edge.hidden { display:none; }
+  .node { cursor:pointer; }
+  .node circle { stroke-width:2.5; }
+  .node.dim { opacity:.16; }
+  .node.faded { opacity:.30; }
+  .node.sel circle, .node.path circle { stroke:#1D4ED8; stroke-width:4; }
+  .node.pick circle { stroke:#9a5c00; stroke-width:4; }
+  .node text { font-size:11px; fill:var(--fg); pointer-events:none; }
+  .node .count { font-size:10px; font-weight:700; fill:#fff; pointer-events:none; }
+  .node.origin circle { stroke-width:3.5; }
+  #tip { position:absolute; pointer-events:none; opacity:0; transition:opacity .1s; background:#1f2430; color:#f3f4f6; border-radius:7px; padding:9px 11px; font-size:12px; line-height:1.4; max-width:280px; box-shadow:0 6px 22px rgba(0,0,0,.3); z-index:60; }
+  #tip .tt-title { font-weight:700; margin-bottom:3px; }
+  #tip .tt-sub { color:#aab2c0; font-size:11px; margin-bottom:5px; }
+  #tip .tt-row { display:flex; justify-content:space-between; gap:14px; }
+  #panel { position:absolute; top:10px; right:10px; width:288px; max-height:calc(100% - 20px); overflow:auto; background:#fff; border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 28px rgba(0,0,0,.12); padding:14px 15px; font-size:13px; display:none; z-index:50; }
+  #panel.show { display:block; }
+  #panel .p-close { float:right; cursor:pointer; color:var(--fg-muted); font-size:16px; line-height:1; border:0; background:none; }
+  #panel .p-chip { display:inline-block; color:#fff; font-size:11px; font-weight:600; padding:2px 9px; border-radius:999px; margin:2px 0 8px; }
+  #panel h3 { margin:0 6px 2px 0; font-size:15px; }
+  #panel .p-addr { font-family:ui-monospace,monospace; font-size:11px; color:var(--fg-muted); word-break:break-all; margin-bottom:8px; }
+  #panel .p-row { display:flex; justify-content:space-between; gap:12px; padding:4px 0; border-bottom:1px solid var(--border); }
+  #panel .p-row:last-of-type { border-bottom:0; }
+  #panel .p-row .k { color:var(--fg-muted); } #panel .p-row .v { font-weight:600; font-variant-numeric:tabular-nums; }
+  #panel .donuts { display:flex; gap:6px; justify-content:space-around; margin:8px 0 4px; }
+  #panel .donut-wrap { text-align:center; } #panel .donut-cap { font-size:11px; color:var(--fg-muted); margin-top:2px; }
+  #panel .p-act { margin-top:10px; }
+  #panel .p-members, #panel .p-tx { margin:8px 0 0; padding:0; list-style:none; max-height:170px; overflow:auto; }
+  #panel .p-members li { font-family:ui-monospace,monospace; font-size:11px; padding:3px 0; border-bottom:1px dashed var(--border); }
+  #panel .p-tx li { display:flex; justify-content:space-between; gap:8px; font-size:12px; padding:4px 0; border-bottom:1px dashed var(--border); }
+  #panel .p-tx .tx-d { color:var(--fg-muted); font-variant-numeric:tabular-nums; }
+  #panel a { color:var(--accent); }
+  #mini { position:absolute; bottom:10px; left:10px; width:168px; height:108px; background:rgba(255,255,255,.92); border:1px solid var(--border); border-radius:6px; z-index:40; cursor:pointer; }
+  #mini .mini-vp { fill:rgba(42,94,62,.12); stroke:var(--accent); stroke-width:1; }
+  .map-note { font-size:12px; color:var(--fg-muted); margin-top:10px; }
+  .hint { font-size:12px; color:var(--fg-muted); padding:0 14px 10px; }
+  @media print {
+    .bar, #scrubber, #legend, #tip, #panel, #mini, .hint, .map-head .back, .footer { display:none !important; }
+    svg#map { height:520px; }
+  }
+</style>
+{% endblock %}
+{% block content %}
+
+<div class="card">
+  <div class="map-head">
+    <h1>Your fund-flow map</h1>
+    <span class="case-meta">Case <code>{{ case.case_number }}</code></span>
+    <a class="back" href="/portal/{{ token }}">← Back to case</a>
+  </div>
+  {% if journey and journey.meta.summaryLine %}
+    <p class="summary-line">{{ journey.meta.summaryLine }}</p>
+  {% endif %}
+  <p class="case-meta" style="margin-top:6px;">
+    A simplified view of where your funds travelled, built from the same
+    analysis behind your diagnostic. Open groups, switch layouts, filter
+    by time or value, and click any point to see its details.
+  </p>
+</div>
+
+{% if not journey %}
+  <div class="card">
+    <p class="empty">Your fund-flow map will appear here once your
+    diagnostic finishes processing — usually within a few hours of
+    intake. If it's been longer, reply to your intake email and we'll
+    take a look.</p>
+  </div>
+{% else %}
+
+  {% if journey.statusTotals %}
+  <h2>Where your funds are</h2>
+  <div class="card">
+    <ul class="breakdown">
+      {% set maxusd = journey.statusTotals|map(attribute='usd')|max %}
+      {% for s in journey.statusTotals %}
+        <li>
+          <div class="bd-top">
+            <span class="bd-name">
+              <span class="bd-dot" style="background:{{ s.color }};"></span>
+              {{ s.label }}
+              <span class="case-meta">· {{ s.count }} endpoint{{ '' if s.count == 1 else 's' }}</span>
+            </span>
+            <span class="bd-usd">{{ s.usdLabel }}</span>
+          </div>
+          <div class="bd-bar">
+            <span style="background:{{ s.color }}; width:{{ (100.0 * s.usd / maxusd)|round(1) if maxusd and maxusd > 0 else 0 }}%;"></span>
+          </div>
+          <div class="bd-blurb">{{ s.blurb }}</div>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if activity %}
+  <h2>Case activity</h2>
+  <div class="card">
+    <ul class="timeline">
+      {% for a in activity %}
+        <li><span class="tl-when">{{ a.when }}</span><span>{{ a.label }}</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <h2>Interactive map</h2>
+  <div class="card graph-card">
+    <div class="bar">
+      <input type="text" id="search" placeholder="Search a point or label…" autocomplete="off">
+      <span class="seg" role="group" aria-label="Layout">
+        <button type="button" id="lay-force" class="on">Force</button>
+        <button type="button" id="lay-flow">Flow</button>
+        <button type="button" id="lay-radial">Radial</button>
+      </span>
+      <button type="button" class="btn-sm" id="btn-path">Find path</button>
+      <button type="button" class="btn-sm" id="btn-expand">Open all groups</button>
+      <button type="button" class="btn-sm" id="btn-collapse">Close all groups</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn-sm" id="btn-fit">Fit</button>
+      <button type="button" class="btn-sm" id="btn-reset">Reset</button>
+      <button type="button" class="btn-sm" id="btn-png">PNG</button>
+      <button type="button" class="btn-sm" id="btn-csv">CSV</button>
+      <button type="button" class="btn-sm" id="btn-print">Print / PDF</button>
+    </div>
+    <div class="bar filters">
+      <label>Min value
+        <input type="range" id="f-min" min="0" max="100" value="0">
+        <span id="f-min-lab" style="min-width:70px;">$0</span>
+      </label>
+      <label>Asset
+        <select id="f-asset"><option value="">All assets</option></select>
+      </label>
+    </div>
+    <div id="scrubber" hidden>
+      <button type="button" class="btn-sm" id="tl-play">▶ Play</button>
+      <span id="tl-from"></span>
+      <input type="range" id="tl-range" min="0" max="100" value="100">
+      <span id="tl-to"></span>
+    </div>
+    <div id="legend"></div>
+    <p class="hint" id="path-hint" hidden>Path mode: click your start point, then your end point.</p>
+    <div id="graph-wrap">
+      <svg id="map" role="img" aria-label="Interactive fund-flow map" data-viewkey="{{ case.case_number }}"></svg>
+      <svg id="mini" aria-hidden="true"></svg>
+      <div id="tip"></div>
+      <div id="panel" aria-live="polite"></div>
+    </div>
+  </div>
+  <p class="map-note">
+    Addresses and labels shown here are derived from public blockchain
+    data and our analysis. This map is a guide to your case, not a legal
+    determination of recoverability.
+    {% if journey.meta.truncated %}
+      For clarity, {{ journey.meta.hiddenNodeCount }} lower-value
+      pass-through wallet{{ '' if journey.meta.hiddenNodeCount == 1 else 's' }}
+      {{ 'is' if journey.meta.hiddenNodeCount == 1 else 'are' }} not shown.
+    {% endif %}
+  </p>
+
+  <script id="journey-data" type="application/json">{{ journey_json|safe }}</script>
+  <script nonce="{{ nonce }}">
+  "use strict";
+  (function () {
+    const DATA = JSON.parse(document.getElementById("journey-data").textContent);
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.getElementById("map");
+    const mini = document.getElementById("mini");
+    const tip = document.getElementById("tip");
+    const panel = document.getElementById("panel");
+
+    const nodeById = new Map(DATA.nodes.map(n => [n.id, n]));
+    const clusterById = new Map((DATA.clusters || []).map(c => [c.id, c]));
+    const usdNum = s => parseFloat(String(s || "0").replace(/[$,]/g, "")) || 0;
+    const fmtUsd = v => "$" + Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 });
+    const EDGE_COL = "#c4c0b4", EDGE_CROSS = "#C2410C";
+
+    // status -> {label,color}
+    const STATUS = {};
+    for (const n of DATA.nodes) STATUS[n.status] = { label: n.statusLabel, color: n.statusColor };
+    for (const c of (DATA.clusters || [])) STATUS[c.status] = { label: c.statusLabel, color: c.statusColor };
+    const statusColor = st => (STATUS[st] && STATUS[st].color) || "#94A3B8";
+    const statusLabel = st => (STATUS[st] && STATUS[st].label) || st;
+
+    // ---- persisted state ----
+    const VK = "recupero.map." + (svg.dataset.viewkey || "case");
+    const expanded = new Set(), statusOff = new Set();
+    let minUsd = 0, asset = "", timeCutoff = null;
+    let layout = "force";            // force | flow | radial
+    let pathMode = false, pickA = null;
+    const pathNodes = new Set(), pathEdges = new Set();
+    let selected = null, isolated = null;
+    (function loadState() {
+      try {
+        const s = JSON.parse(localStorage.getItem(VK) || "null"); if (!s) return;
+        if (["force", "flow", "radial"].includes(s.layout)) layout = s.layout;
+        (s.expanded || []).forEach(c => expanded.add(c));
+        (s.statusOff || []).forEach(x => statusOff.add(x));
+        minUsd = +s.minUsd || 0; asset = s.asset || "";
+      } catch (e) { /* ignore */ }
+    })();
+    function saveState() {
+      try { localStorage.setItem(VK, JSON.stringify({ layout, expanded: [...expanded], statusOff: [...statusOff], minUsd, asset })); } catch (e) { /* ignore */ }
+    }
+
+    const maxEdgeUsd = Math.max(1, ...DATA.edges.map(e => e.totalUsdNumeric || 0));
+    const maxDepth = (DATA.meta && DATA.meta.maxDepth) || 1;
+
+    // ---- view build (collapse + status filter) ----
+    function buildView() {
+      const idOf = new Map(), vnodes = [], seen = new Set();
+      for (const n of DATA.nodes) {
+        const cid = n.clusterId;
+        if (cid && clusterById.has(cid) && !expanded.has(cid)) {
+          const c = clusterById.get(cid);
+          if (statusOff.has(c.status)) { idOf.set(n.id, null); continue; }
+          idOf.set(n.id, cid);
+          if (!seen.has(cid)) {
+            seen.add(cid);
+            vnodes.push({ id: cid, kind: "cluster", label: c.label, status: c.status, statusLabel: c.statusLabel,
+              color: c.statusColor, size: c.size, memberIds: c.memberIds || [], depth: clusterDepth(c),
+              inboundUsd: c.inboundUsd, outboundUsd: c.outboundUsd, total: usdNum(c.inboundUsd) + usdNum(c.outboundUsd),
+              inByCategory: aggCat(c.memberIds, "inByCategory"), outByCategory: aggCat(c.memberIds, "outByCategory") });
+          }
+        } else {
+          if (statusOff.has(n.status)) { idOf.set(n.id, null); continue; }
+          idOf.set(n.id, n.id);
+          vnodes.push({ id: n.id, kind: "node", label: n.label, short: n.short, status: n.status, statusLabel: n.statusLabel,
+            color: n.statusColor, chain: n.chain, chainColor: n.chainColor, inboundUsd: n.inboundUsd, outboundUsd: n.outboundUsd,
+            explorerUrl: n.explorerUrl, clusterId: n.clusterId, depth: n.depth || 0, total: usdNum(n.inboundUsd) + usdNum(n.outboundUsd),
+            inByCategory: n.inByCategory || {}, outByCategory: n.outByCategory || {} });
+        }
+      }
+      const agg = new Map();
+      for (const e of DATA.edges) {
+        const s = idOf.get(e.source), t = idOf.get(e.target);
+        if (!s || !t || s === t) continue;
+        const k = s + "␟" + t;
+        let a = agg.get(k);
+        if (!a) { a = { id: k, source: s, target: t, usd: 0, count: 0, cross: false, assets: new Set(), first: null, last: null, transfers: [], txMore: 0 }; agg.set(k, a); }
+        a.usd += e.totalUsdNumeric || 0; a.count += e.transferCount || 0; a.cross = a.cross || !!e.isCrossChain;
+        if (e.dominantSymbol) a.assets.add(e.dominantSymbol);
+        if (e.firstTime && (!a.first || e.firstTime < a.first)) a.first = e.firstTime;
+        if (e.lastTime && (!a.last || e.lastTime > a.last)) a.last = e.lastTime;
+        for (const tx of (e.transfers || [])) a.transfers.push(tx);
+        a.txMore += e.txMore || 0;
+      }
+      for (const a of agg.values()) { a.transfers.sort((x, y) => (y.usd || 0) - (x.usd || 0)); if (a.transfers.length > 14) { a.txMore += a.transfers.length - 14; a.transfers = a.transfers.slice(0, 14); } }
+      return { nodes: vnodes, edges: [...agg.values()] };
+    }
+    function clusterDepth(c) { let d = Infinity; for (const m of (c.memberIds || [])) { const n = nodeById.get(m); if (n && (n.depth || 0) < d) d = n.depth || 0; } return d === Infinity ? 0 : d; }
+    function aggCat(ids, field) { const out = {}; for (const m of (ids || [])) { const n = nodeById.get(m); if (!n) continue; for (const [k, v] of Object.entries(n[field] || {})) out[k] = (out[k] || 0) + v; } return out; }
+
+    // ---- positions + layout ----
+    const pos = new Map();
+    let W = svg.clientWidth || 900, H = 600;
+    const radialTarget = new Map();
+    function computeRadial(view) {
+      radialTarget.clear();
+      const byD = new Map();
+      for (const n of view.nodes) { if (!byD.has(n.depth)) byD.set(n.depth, []); byD.get(n.depth).push(n); }
+      const cx = W / 2, cy = H / 2;
+      for (const [d, arr] of byD) {
+        const r = d === 0 ? 0 : 90 + d * 110;
+        arr.forEach((n, i) => { const ang = (i / arr.length) * 2 * Math.PI - Math.PI / 2; radialTarget.set(n.id, { x: cx + r * Math.cos(ang), y: cy + r * Math.sin(ang) }); });
+      }
+    }
+    function seedPositions(view) {
+      const cx = W / 2, cy = H / 2;
+      for (const n of view.nodes) {
+        if (pos.has(n.id)) continue;
+        let sx = cx + (Math.random() - .5) * W * .6, sy = cy + (Math.random() - .5) * H * .6;
+        if (n.kind === "node" && n.clusterId && pos.has(n.clusterId)) { const p = pos.get(n.clusterId); sx = p.x + (Math.random() - .5) * 40; sy = p.y + (Math.random() - .5) * 40; }
+        if (n.status === "origin") { sx = layout === "flow" ? 80 : cx; sy = cy; }
+        pos.set(n.id, { x: sx, y: sy, vx: 0, vy: 0 });
+      }
+    }
+    let view = buildView(), alpha = 1;
+    const radius = n => Math.max(9, Math.min(30, 9 + Math.log10(n.total + 1) * 2.4)) + (n.kind === "cluster" ? 4 : 0);
+
+    function step() {
+      const N = view.nodes, E = view.edges, damp = .9;
+      for (let i = 0; i < N.length; i++) {
+        const a = pos.get(N[i].id);
+        for (let j = i + 1; j < N.length; j++) {
+          const b = pos.get(N[j].id);
+          let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
+          if (d2 < 1) { d2 = 1; dx = Math.random(); dy = Math.random(); }
+          const rep = 5200 / d2 * alpha, d = Math.sqrt(d2), ux = dx / d, uy = dy / d;
+          a.vx += ux * rep; a.vy += uy * rep; b.vx -= ux * rep; b.vy -= uy * rep;
+        }
+      }
+      for (const e of E) {
+        const a = pos.get(e.source), b = pos.get(e.target); if (!a || !b) continue;
+        let dx = b.x - a.x, dy = b.y - a.y; const d = Math.sqrt(dx * dx + dy * dy) || 1;
+        const tgt = 90 + Math.log10((e.usd || 0) + 1) * 9, f = (d - tgt) * .02 * alpha, ux = dx / d, uy = dy / d;
+        a.vx += ux * f; a.vy += uy * f; b.vx -= ux * f; b.vy -= uy * f;
+      }
+      const cx = W / 2, cy = H / 2, colW = (W - 140) / Math.max(1, maxDepth);
+      for (const n of N) {
+        const p = pos.get(n.id);
+        if (layout === "flow") { const tx = 80 + (n.depth || 0) * colW; p.vx += (tx - p.x) * .12 * Math.max(alpha, .25); p.vy += (cy - p.y) * .01 * alpha; }
+        else if (layout === "radial") { const t = radialTarget.get(n.id); if (t) { p.vx += (t.x - p.x) * .10 * Math.max(alpha, .25); p.vy += (t.y - p.y) * .10 * Math.max(alpha, .25); } }
+        else { p.vx += (cx - p.x) * .006 * alpha; p.vy += (cy - p.y) * .006 * alpha; }
+        if (p.fx != null) { p.x = p.fx; p.y = p.fy; p.vx = 0; p.vy = 0; continue; }
+        p.vx *= damp; p.vy *= damp; p.x += Math.max(-30, Math.min(30, p.vx)); p.y += Math.max(-30, Math.min(30, p.vy));
+      }
+      alpha *= .985; if (alpha < .02) alpha = .02;
+    }
+
+    // ---- DOM ----
+    const root = document.createElementNS(NS, "g"); svg.appendChild(root);
+    const gE = document.createElementNS(NS, "g"); root.appendChild(gE);
+    const gN = document.createElementNS(NS, "g"); root.appendChild(gN);
+    let edgeEls = [], nodeEls = [];
+
+    function render() {
+      gE.replaceChildren(); gN.replaceChildren(); edgeEls = []; nodeEls = [];
+      for (const e of view.edges) {
+        const ln = document.createElementNS(NS, "line");
+        ln.setAttribute("class", "edge" + (e.cross ? " cross" : ""));
+        ln.setAttribute("stroke", e.cross ? EDGE_CROSS : EDGE_COL);
+        ln.setAttribute("stroke-width", String(Math.max(1, Math.min(7, Math.log10((e.usd || 0) + 1) * .9))));
+        ln.__e = e;
+        ln.addEventListener("mouseenter", ev => edgeTip(ev, e));
+        ln.addEventListener("mouseleave", hideTip);
+        ln.addEventListener("click", ev => { ev.stopPropagation(); selectEdge(e); });
+        gE.appendChild(ln); edgeEls.push(ln);
+      }
+      for (const n of view.nodes) {
+        const g = document.createElementNS(NS, "g");
+        g.setAttribute("class", "node " + n.status);
+        const c = document.createElementNS(NS, "circle");
+        const r = radius(n); c.setAttribute("r", String(r)); c.setAttribute("fill", n.color);
+        c.setAttribute("stroke", n.kind === "cluster" ? "#fff" : (n.chainColor || "#94A3B8"));
+        g.appendChild(c);
+        if (n.kind === "cluster") { const t = document.createElementNS(NS, "text"); t.setAttribute("class", "count"); t.setAttribute("text-anchor", "middle"); t.setAttribute("dy", "3.5"); t.setAttribute("fill", "#fff"); t.textContent = String(n.size); g.appendChild(t); }
+        const lbl = document.createElementNS(NS, "text"); lbl.setAttribute("text-anchor", "middle"); lbl.setAttribute("dy", String(r + 13)); lbl.setAttribute("fill", "#1a1a1a"); lbl.textContent = (n.label || n.short || "").slice(0, 26); g.appendChild(lbl);
+        g.__n = n;
+        g.addEventListener("mouseenter", ev => nodeTip(ev, n));
+        g.addEventListener("mouseleave", hideTip);
+        g.addEventListener("dblclick", ev => { ev.stopPropagation(); onDbl(n); });
+        attachDrag(g, n);
+        gN.appendChild(g); nodeEls.push(g);
+      }
+      applyFilters(); buildLegend(); reapplyHighlights();
+    }
+    let miniTick = 0;
+    function paint() {
+      for (const ln of edgeEls) { const e = ln.__e, a = pos.get(e.source), b = pos.get(e.target); if (!a || !b) continue; ln.setAttribute("x1", a.x); ln.setAttribute("y1", a.y); ln.setAttribute("x2", b.x); ln.setAttribute("y2", b.y); }
+      for (const g of nodeEls) { const p = pos.get(g.__n.id); g.setAttribute("transform", `translate(${p.x},${p.y})`); }
+      if ((miniTick = (miniTick + 1) % 12) === 0) drawMini();
+    }
+    function loop() { step(); paint(); requestAnimationFrame(loop); }
+    function rebuild(reheat) { view = buildView(); seedPositions(view); computeRadial(view); render(); if (reheat) alpha = .9; saveState(); }
+
+    // ---- continuous filters ----
+    function edgeVisible(e) { if (e.usd < minUsd) return false; if (asset && !(e.assets && e.assets.has(asset))) return false; if (timeCutoff && e.first && e.first > timeCutoff) return false; return true; }
+    function applyFilters() {
+      const live = new Set();
+      for (const ln of edgeEls) { const ok = edgeVisible(ln.__e); ln.classList.toggle("hidden", !ok); if (ok) { live.add(ln.__e.source); live.add(ln.__e.target); } }
+      for (const g of nodeEls) { const n = g.__n; const orphan = !live.has(n.id) && n.status !== "origin" && view.edges.some(e => e.source === n.id || e.target === n.id); g.classList.toggle("faded", orphan); }
+    }
+
+    // ---- transform ----
+    let tx = 0, ty = 0, scale = 1;
+    const applyT = () => { root.setAttribute("transform", `translate(${tx},${ty}) scale(${scale})`); drawMini(); };
+    svg.addEventListener("wheel", ev => { ev.preventDefault(); const r = svg.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top; const f = ev.deltaY < 0 ? 1.12 : 1 / 1.12, ns = Math.max(.2, Math.min(5, scale * f)); tx = mx - (mx - tx) * (ns / scale); ty = my - (my - ty) * (ns / scale); scale = ns; applyT(); }, { passive: false });
+    let panning = null;
+    svg.addEventListener("pointerdown", ev => { if (ev.target.closest(".node")) return; panning = { x: ev.clientX, y: ev.clientY, tx, ty }; });
+    window.addEventListener("pointermove", ev => { if (!panning) return; tx = panning.tx + (ev.clientX - panning.x); ty = panning.ty + (ev.clientY - panning.y); applyT(); });
+    window.addEventListener("pointerup", () => { panning = null; });
+    svg.addEventListener("click", ev => { if (!ev.target.closest(".node") && !ev.target.closest(".edge")) clearSelection(); });
+    const svgPt = ev => { const r = svg.getBoundingClientRect(); return { x: (ev.clientX - r.left - tx) / scale, y: (ev.clientY - r.top - ty) / scale }; };
+
+    // ---- drag + click ----
+    function attachDrag(g, n) {
+      let drag = null, moved = false;
+      g.addEventListener("pointerdown", ev => { ev.stopPropagation(); g.setPointerCapture(ev.pointerId); const p = pos.get(n.id); drag = { px: ev.clientX, py: ev.clientY }; moved = false; p.fx = p.x; p.fy = p.y; alpha = Math.max(alpha, .5); });
+      g.addEventListener("pointermove", ev => { if (!drag) return; const sp = svgPt(ev), p = pos.get(n.id); p.fx = sp.x; p.fy = sp.y; if (Math.abs(ev.clientX - drag.px) + Math.abs(ev.clientY - drag.py) > 4) moved = true; });
+      g.addEventListener("pointerup", () => { if (!drag) return; const p = pos.get(n.id); p.fx = null; p.fy = null; drag = null; if (!moved) onClick(n); });
+    }
+    function onClick(n) { if (pathMode) { onPathPick(n); return; } if (n.kind === "cluster") { expanded.add(n.id); rebuild(true); selectNode(n.id); return; } selectNode(n.id); }
+    function onDbl(n) { if (n.kind === "node" && n.clusterId && clusterById.has(n.clusterId)) { expanded.delete(n.clusterId); rebuild(true); } }
+
+    // ---- selection + isolate + panel ----
+    function selectNode(id) { const n = view.nodes.find(x => x.id === id); if (!n) return; selected = { kind: "node", n }; isolate(id); showNodePanel(n); markSelected(); }
+    function selectEdge(e) { selected = { kind: "edge", e }; clearIsolate(); markSelected(); for (const ln of edgeEls) ln.classList.toggle("hot", ln.__e === e); showEdgePanel(e); }
+    function clearSelection() { selected = null; clearIsolate(); markSelected(); panel.classList.remove("show"); }
+    function markSelected() { for (const g of nodeEls) g.classList.toggle("sel", selected && selected.kind === "node" && g.__n.id === selected.n.id); }
+    function isolate(id) { isolated = id; const keep = new Set([id]); for (const e of view.edges) { if (e.source === id) keep.add(e.target); if (e.target === id) keep.add(e.source); } for (const g of nodeEls) g.classList.toggle("dim", !keep.has(g.__n.id)); for (const ln of edgeEls) { const on = ln.__e.source === id || ln.__e.target === id; ln.classList.toggle("dim", !on); ln.classList.toggle("hot", on); } }
+    function clearIsolate() { isolated = null; for (const g of nodeEls) g.classList.remove("dim"); for (const ln of edgeEls) ln.classList.remove("dim", "hot"); }
+    function reapplyHighlights() { if (selected && selected.kind === "node") { isolate(selected.n.id); markSelected(); } if (pathNodes.size) paintPath(); }
+
+    function row(parent, k, v) { const r = document.createElement("div"); r.className = "p-row"; const a = document.createElement("span"); a.className = "k"; a.textContent = k; const b = document.createElement("span"); b.className = "v"; b.textContent = v; r.appendChild(a); r.appendChild(b); parent.appendChild(r); }
+    function head(box, title, color, chip) { const c = document.createElement("button"); c.className = "p-close"; c.textContent = "×"; c.onclick = clearSelection; box.appendChild(c); const h = document.createElement("h3"); h.textContent = title; box.appendChild(h); const ch = document.createElement("span"); ch.className = "p-chip"; ch.style.background = color; ch.textContent = chip; box.appendChild(ch); }
+
+    // exposure donut
+    function arcPath(cx, cy, r0, r1, a0, a1) { const P = (r, a) => [cx + r * Math.cos(a), cy + r * Math.sin(a)]; const large = (a1 - a0) > Math.PI ? 1 : 0; const [x0, y0] = P(r1, a0), [x1, y1] = P(r1, a1), [x2, y2] = P(r0, a1), [x3, y3] = P(r0, a0); return `M${x0},${y0} A${r1},${r1} 0 ${large} 1 ${x1},${y1} L${x2},${y2} A${r0},${r0} 0 ${large} 0 ${x3},${y3} Z`; }
+    function donut(cap, obj) {
+      const wrap = document.createElement("div"); wrap.className = "donut-wrap";
+      const entries = Object.entries(obj || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+      const total = entries.reduce((s, [, v]) => s + v, 0);
+      const s = document.createElementNS(NS, "svg"); s.setAttribute("width", "84"); s.setAttribute("height", "84"); s.setAttribute("viewBox", "0 0 84 84");
+      if (total <= 0) { const t = document.createElementNS(NS, "circle"); t.setAttribute("cx", "42"); t.setAttribute("cy", "42"); t.setAttribute("r", "32"); t.setAttribute("fill", "#eee"); s.appendChild(t); }
+      else { let a = -Math.PI / 2; for (const [st, v] of entries) { const a1 = a + (v / total) * 2 * Math.PI; const p = document.createElementNS(NS, "path"); p.setAttribute("d", arcPath(42, 42, 19, 38, a, a1 - 0.01)); p.setAttribute("fill", statusColor(st)); const ttl = document.createElementNS(NS, "title"); ttl.textContent = statusLabel(st) + " " + fmtUsd(v); p.appendChild(ttl); s.appendChild(p); a = a1; } }
+      wrap.appendChild(s); const c = document.createElement("div"); c.className = "donut-cap"; c.textContent = cap; wrap.appendChild(c); return wrap;
+    }
+    function showNodePanel(n) {
+      const box = document.createElement("div");
+      head(box, n.label || n.short || "Point", n.color, n.statusLabel);
+      if (n.kind === "node") { const a = document.createElement("div"); a.className = "p-addr"; a.textContent = n.id; box.appendChild(a); }
+      const d = document.createElement("div"); d.className = "donuts"; d.appendChild(donut("Received " + n.inboundUsd, n.inByCategory)); d.appendChild(donut("Sent " + n.outboundUsd, n.outByCategory)); box.appendChild(d);
+      row(box, "Distance", (n.depth || 0) + " hop" + ((n.depth || 0) === 1 ? "" : "s") + " from you");
+      row(box, "Connections", String(view.edges.filter(e => e.source === n.id || e.target === n.id).length));
+      if (n.kind === "cluster") {
+        row(box, "Addresses", String(n.size));
+        const btn = document.createElement("button"); btn.className = "btn-sm p-act"; btn.textContent = expanded.has(n.id) ? "Close group" : "Open group";
+        btn.onclick = () => { if (expanded.has(n.id)) expanded.delete(n.id); else expanded.add(n.id); rebuild(true); clearSelection(); }; box.appendChild(btn);
+        const ul = document.createElement("ul"); ul.className = "p-members"; for (const m of (n.memberIds || []).slice(0, 50)) { const li = document.createElement("li"); li.textContent = m; ul.appendChild(li); } box.appendChild(ul);
+      } else if (n.explorerUrl && /^https?:\/\//i.test(n.explorerUrl)) {
+        const w = document.createElement("div"); w.className = "p-act"; const a = document.createElement("a"); a.setAttribute("href", n.explorerUrl); a.setAttribute("target", "_blank"); a.setAttribute("rel", "noopener noreferrer"); a.textContent = "View on blockchain explorer →"; w.appendChild(a); box.appendChild(w);
+      }
+      panel.replaceChildren(...box.childNodes); panel.classList.add("show");
+    }
+    function showEdgePanel(e) {
+      const box = document.createElement("div");
+      head(box, fmtUsd(e.usd), e.cross ? EDGE_CROSS : "#64748B", e.cross ? "cross-chain transfer" : "transfer");
+      const a = document.createElement("div"); a.className = "p-addr"; a.textContent = nodeName(e.source) + "  →  " + nodeName(e.target); box.appendChild(a);
+      row(box, "Transfers", String(e.count));
+      if (e.assets && e.assets.size) row(box, "Assets", [...e.assets].join(", "));
+      if (e.first) row(box, "First", e.first);
+      if (e.last) row(box, "Last", e.last);
+      if (e.transfers && e.transfers.length) {
+        const ul = document.createElement("ul"); ul.className = "p-tx";
+        for (const t of e.transfers) {
+          const li = document.createElement("li");
+          const left = document.createElement("span"); left.className = "tx-d"; left.textContent = (t.date || "") + (t.token ? " · " + t.token : "");
+          const right = document.createElement("span");
+          if (t.txUrl && /^https?:\/\//i.test(t.txUrl)) { const lnk = document.createElement("a"); lnk.setAttribute("href", t.txUrl); lnk.setAttribute("target", "_blank"); lnk.setAttribute("rel", "noopener noreferrer"); lnk.textContent = t.usdLabel || fmtUsd(t.usd); right.appendChild(lnk); }
+          else right.textContent = t.usdLabel || fmtUsd(t.usd);
+          li.appendChild(left); li.appendChild(right); ul.appendChild(li);
+        }
+        box.appendChild(ul);
+        if (e.txMore > 0) { const m = document.createElement("div"); m.className = "donut-cap"; m.style.marginTop = "6px"; m.textContent = "+ " + e.txMore + " more transfer" + (e.txMore === 1 ? "" : "s"); box.appendChild(m); }
+      }
+      panel.replaceChildren(...box.childNodes); panel.classList.add("show");
+    }
+    function nodeName(id) { const n = view.nodes.find(x => x.id === id); return n ? (n.label || n.short || id) : id; }
+
+    // ---- pathfinding ----
+    function onPathPick(n) { if (!pickA) { pickA = n.id; markPick(); return; } if (n.id === pickA) { pickA = null; markPick(); return; } const p = findPath(pickA, n.id); pathNodes.clear(); pathEdges.clear(); if (p) { for (const id of p.nodes) pathNodes.add(id); for (const k of p.edges) pathEdges.add(k); } pickA = null; markPick(); paintPath(); showPathPanel(p); }
+    function markPick() { for (const g of nodeEls) g.classList.toggle("pick", g.__n.id === pickA); }
+    function findPath(a, b) {
+      const adj = new Map(), ek = new Map();
+      for (const e of view.edges) { if (!edgeVisible(e)) continue; if (!adj.has(e.source)) adj.set(e.source, []); if (!adj.has(e.target)) adj.set(e.target, []); adj.get(e.source).push(e.target); adj.get(e.target).push(e.source); ek.set(e.source + ">" + e.target, e.id); ek.set(e.target + ">" + e.source, e.id); }
+      const prev = new Map([[a, null]]), q = [a];
+      while (q.length) { const u = q.shift(); if (u === b) break; for (const v of (adj.get(u) || [])) if (!prev.has(v)) { prev.set(v, u); q.push(v); } }
+      if (!prev.has(b)) return null;
+      const nodes = [], edges = []; let cur = b; while (cur != null) { nodes.unshift(cur); const p = prev.get(cur); if (p != null) edges.push(ek.get(p + ">" + cur)); cur = p; } return { nodes, edges };
+    }
+    function paintPath() { for (const g of nodeEls) g.classList.toggle("path", pathNodes.has(g.__n.id)); for (const ln of edgeEls) ln.classList.toggle("path", pathEdges.has(ln.__e.id)); }
+    function clearPath() { pathNodes.clear(); pathEdges.clear(); pickA = null; for (const g of nodeEls) g.classList.remove("path", "pick"); for (const ln of edgeEls) ln.classList.remove("path"); }
+    function showPathPanel(p) {
+      const box = document.createElement("div");
+      if (!p) { head(box, "No path found", "#9a2a2a", "pathfinding"); const d = document.createElement("div"); d.textContent = "No connecting path between those two points in the current view."; box.appendChild(d); }
+      else { head(box, "Path", "#1D4ED8", (p.nodes.length - 1) + " hop" + (p.nodes.length - 1 === 1 ? "" : "s")); for (let i = 0; i < p.nodes.length; i++) { const r = document.createElement("div"); r.className = "p-row"; const s = document.createElement("span"); s.textContent = (i + 1) + ". " + nodeName(p.nodes[i]); r.appendChild(s); box.appendChild(r); } }
+      panel.replaceChildren(...box.childNodes); panel.classList.add("show");
+    }
+
+    // ---- tooltips ----
+    function ttRow(p, k, v) { const r = document.createElement("div"); r.className = "tt-row"; const a = document.createElement("span"); a.textContent = k; const b = document.createElement("span"); b.textContent = v; r.appendChild(a); r.appendChild(b); p.appendChild(r); }
+    function place(ev) { const r = svg.getBoundingClientRect(); tip.style.left = (ev.clientX - r.left + 14) + "px"; tip.style.top = (ev.clientY - r.top + 14) + "px"; tip.style.opacity = "1"; }
+    function nodeTip(ev, n) { const box = document.createElement("div"); const t = document.createElement("div"); t.className = "tt-title"; t.textContent = n.label || n.short || ""; box.appendChild(t); const s = document.createElement("div"); s.className = "tt-sub"; s.textContent = n.kind === "cluster" ? (n.statusLabel + " · " + n.size + " addresses · click to open") : (n.statusLabel + (n.chain ? " · " + n.chain : "")); box.appendChild(s); ttRow(box, "Received", n.inboundUsd); ttRow(box, "Sent on", n.outboundUsd); tip.replaceChildren(...box.childNodes); place(ev); }
+    function edgeTip(ev, e) { const box = document.createElement("div"); const t = document.createElement("div"); t.className = "tt-title"; t.textContent = fmtUsd(e.usd); box.appendChild(t); if (e.cross) { const s = document.createElement("div"); s.className = "tt-sub"; s.textContent = "cross-chain"; box.appendChild(s); } ttRow(box, "Transfers", String(e.count)); tip.replaceChildren(...box.childNodes); place(ev); }
+    function hideTip() { tip.style.opacity = "0"; }
+
+    // ---- legend ----
+    function buildLegend() {
+      const el = document.getElementById("legend"); el.replaceChildren();
+      const present = new Set(DATA.nodes.map(n => n.status));
+      for (const st of Object.keys(STATUS)) {
+        if (!present.has(st)) continue;
+        const item = document.createElement("div"); item.className = "lg" + (statusOff.has(st) ? " off" : ""); item.title = "Click to show / hide";
+        const d = document.createElement("span"); d.className = "lg-dot"; d.style.background = statusColor(st);
+        const x = document.createElement("span"); x.textContent = statusLabel(st);
+        item.appendChild(d); item.appendChild(x);
+        item.onclick = () => { if (statusOff.has(st)) statusOff.delete(st); else statusOff.add(st); rebuild(false); };
+        el.appendChild(item);
+      }
+    }
+
+    // ---- mini-map ----
+    function drawMini() {
+      if (!view.nodes.length) { mini.replaceChildren(); return; }
+      const mw = 168, mh = 108;
+      let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+      for (const n of view.nodes) { const p = pos.get(n.id); a = Math.min(a, p.x); b = Math.min(b, p.y); c = Math.max(c, p.x); d = Math.max(d, p.y); }
+      const bw = (c - a) || 1, bh = (d - b) || 1, pad = 8, s = Math.min((mw - 2 * pad) / bw, (mh - 2 * pad) / bh);
+      const ox = pad - a * s + (mw - 2 * pad - bw * s) / 2, oy = pad - b * s + (mh - 2 * pad - bh * s) / 2;
+      mini.__t = { s, ox, oy };
+      const frag = document.createDocumentFragment();
+      for (const n of view.nodes) { const p = pos.get(n.id); const dot = document.createElementNS(NS, "circle"); dot.setAttribute("cx", p.x * s + ox); dot.setAttribute("cy", p.y * s + oy); dot.setAttribute("r", "1.7"); dot.setAttribute("fill", n.color); frag.appendChild(dot); }
+      // viewport rect (main-view world coords visible: x in [-tx/scale, (W-tx)/scale])
+      const vx0 = -tx / scale, vy0 = -ty / scale, vx1 = (W - tx) / scale, vy1 = (H - ty) / scale;
+      const rect = document.createElementNS(NS, "rect"); rect.setAttribute("class", "mini-vp");
+      rect.setAttribute("x", vx0 * s + ox); rect.setAttribute("y", vy0 * s + oy);
+      rect.setAttribute("width", Math.max(2, (vx1 - vx0) * s)); rect.setAttribute("height", Math.max(2, (vy1 - vy0) * s));
+      frag.appendChild(rect); mini.replaceChildren(frag);
+    }
+    mini.addEventListener("click", ev => { const t = mini.__t; if (!t) return; const r = mini.getBoundingClientRect(); const wx = (ev.clientX - r.left - t.ox) / t.s, wy = (ev.clientY - r.top - t.oy) / t.s; tx = W / 2 - wx * scale; ty = H / 2 - wy * scale; applyT(); });
+
+    // ---- export ----
+    function download(href, name) { const a = document.createElement("a"); a.href = href; a.download = name; document.body.appendChild(a); a.click(); a.remove(); }
+    function exportPNG() {
+      try {
+        const clone = svg.cloneNode(true); clone.setAttribute("xmlns", NS); clone.setAttribute("width", W); clone.setAttribute("height", H);
+        const st = document.createElementNS(NS, "style"); st.textContent = ".edge{fill:none}.edge.cross{stroke-dasharray:5 4}.node text{font-size:11px}.node .count{font-weight:700}"; clone.insertBefore(st, clone.firstChild);
+        const bg = document.createElementNS(NS, "rect"); bg.setAttribute("width", "100%"); bg.setAttribute("height", "100%"); bg.setAttribute("fill", "#fbfbf9"); clone.insertBefore(bg, clone.firstChild);
+        const xml = new XMLSerializer().serializeToString(clone);
+        const img = new Image();
+        img.onload = () => { const cv = document.createElement("canvas"); cv.width = W * 2; cv.height = H * 2; const cx = cv.getContext("2d"); cx.scale(2, 2); cx.drawImage(img, 0, 0); download(cv.toDataURL("image/png"), "fund-flow-map.png"); };
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(xml);
+      } catch (e) { /* export best-effort */ }
+    }
+    function exportCSV() {
+      const esc = v => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+      const rows = [["From", "To", "USD", "Transfers", "Assets", "First", "Last", "Cross-chain"]];
+      for (const e of DATA.edges) { rows.push([nodeLabelById(e.source), nodeLabelById(e.target), e.totalUsdNumeric || 0, e.transferCount || 0, e.dominantSymbol || "", e.firstTime || "", e.lastTime || "", e.isCrossChain ? "yes" : "no"]); }
+      const csv = rows.map(r => r.map(esc).join(",")).join("\r\n");
+      download("data:text/csv;charset=utf-8," + encodeURIComponent(csv), "fund-flow.csv");
+    }
+    function nodeLabelById(id) { const n = nodeById.get(id); return n ? (n.label || n.short || id) : id; }
+
+    // ---- controls ----
+    document.getElementById("search").addEventListener("input", ev => {
+      const q = ev.target.value.trim().toLowerCase();
+      if (!q) { clearIsolate(); return; }
+      let hit = null;
+      for (const g of nodeEls) { const n = g.__n; const m = (n.label || "").toLowerCase().includes(q) || (n.id || "").toLowerCase().includes(q) || (n.short || "").toLowerCase().includes(q); g.classList.toggle("dim", !m); if (m && !hit) hit = n; }
+      for (const ln of edgeEls) ln.classList.add("dim");
+      if (hit) { const p = pos.get(hit.id); tx = W / 2 - p.x * scale; ty = H / 2 - p.y * scale; applyT(); }
+    });
+    function setLayout(l) { layout = l; for (const [id, key] of [["lay-force", "force"], ["lay-flow", "flow"], ["lay-radial", "radial"]]) document.getElementById(id).classList.toggle("on", key === l); computeRadial(view); alpha = .9; saveState(); setTimeout(fit, 700); }
+    document.getElementById("lay-force").onclick = () => setLayout("force");
+    document.getElementById("lay-flow").onclick = () => setLayout("flow");
+    document.getElementById("lay-radial").onclick = () => setLayout("radial");
+    document.getElementById("btn-path").onclick = function () { pathMode = !pathMode; this.classList.toggle("on", pathMode); document.getElementById("path-hint").hidden = !pathMode; if (!pathMode) clearPath(); };
+    document.getElementById("btn-expand").onclick = () => { for (const c of clusterById.keys()) expanded.add(c); rebuild(true); };
+    document.getElementById("btn-collapse").onclick = () => { expanded.clear(); rebuild(true); };
+    document.getElementById("btn-reset").onclick = () => { tx = 0; ty = 0; scale = 1; applyT(); clearSelection(); clearPath(); };
+    document.getElementById("btn-fit").onclick = fit;
+    document.getElementById("btn-png").onclick = exportPNG;
+    document.getElementById("btn-csv").onclick = exportCSV;
+    document.getElementById("btn-print").onclick = () => window.print();
+
+    const fmin = document.getElementById("f-min"), fminLab = document.getElementById("f-min-lab");
+    fmin.value = String(Math.round((minUsd / maxEdgeUsd) * 100));
+    const setMin = () => { minUsd = (fmin.value / 100) * maxEdgeUsd; fminLab.textContent = fmtUsd(minUsd); applyFilters(); saveState(); };
+    fmin.addEventListener("input", setMin); fminLab.textContent = fmtUsd(minUsd);
+    const fasset = document.getElementById("f-asset");
+    for (const a of (DATA.meta.assets || [])) { const o = document.createElement("option"); o.value = a; o.textContent = a; fasset.appendChild(o); }
+    if (!(DATA.meta.assets || []).length) fasset.parentElement.style.display = "none";
+    if (asset) fasset.value = asset;
+    fasset.addEventListener("change", () => { asset = fasset.value; applyFilters(); saveState(); });
+
+    const trng = DATA.meta.timeRange;
+    if (trng && trng.min && trng.max && trng.min !== trng.max) {
+      const scrub = document.getElementById("scrubber"); scrub.hidden = false;
+      const d0 = new Date(trng.min + "T00:00:00Z").getTime(), d1 = new Date(trng.max + "T00:00:00Z").getTime();
+      document.getElementById("tl-from").textContent = trng.min;
+      const slider = document.getElementById("tl-range"), toLab = document.getElementById("tl-to"); toLab.textContent = trng.max;
+      const setFrom = () => { const f = slider.value / 100; const iso = new Date(d0 + f * (d1 - d0)).toISOString().slice(0, 10); timeCutoff = (+slider.value >= 100) ? null : iso; toLab.textContent = iso; applyFilters(); };
+      slider.addEventListener("input", setFrom);
+      let playing = null; const pb = document.getElementById("tl-play");
+      pb.onclick = () => { if (playing) { clearInterval(playing); playing = null; pb.textContent = "▶ Play"; return; } if (+slider.value >= 100) slider.value = 0; pb.textContent = "❚❚ Pause"; playing = setInterval(() => { slider.value = Math.min(100, +slider.value + 2); setFrom(); if (+slider.value >= 100) { clearInterval(playing); playing = null; pb.textContent = "▶ Play"; } }, 120); };
+    }
+
+    function fit() {
+      if (!view.nodes.length) return;
+      let a = Infinity, b = Infinity, c = -Infinity, d = -Infinity;
+      for (const n of view.nodes) { const p = pos.get(n.id); a = Math.min(a, p.x); b = Math.min(b, p.y); c = Math.max(c, p.x); d = Math.max(d, p.y); }
+      const bw = (c - a) || 1, bh = (d - b) || 1, pad = 70;
+      scale = Math.max(.2, Math.min(2, Math.min((W - pad) / bw, (H - pad) / bh)));
+      tx = W / 2 - ((a + c) / 2) * scale; ty = H / 2 - ((b + d) / 2) * scale; applyT();
+    }
+    window.addEventListener("resize", () => { W = svg.clientWidth || W; computeRadial(view); });
+
+    // boot — reflect restored layout on the segmented control
+    for (const [id, key] of [["lay-force", "force"], ["lay-flow", "flow"], ["lay-radial", "radial"]]) document.getElementById(id).classList.toggle("on", key === layout);
+    rebuild(false); loop(); setTimeout(fit, 1400);
+  })();
+  </script>
+
+{% endif %}
+{% endblock %}

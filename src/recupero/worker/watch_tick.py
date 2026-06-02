@@ -86,6 +86,8 @@ _CHAIN_ID_BY_NAME: dict[str, int] = {
     "moonbeam":  1284,
     "metis":     1088,
     "kava":      2222,
+    # v0.35.3 — opBNB, verified present on the live Etherscan V2 chainlist.
+    "opbnb":     204,
 }
 
 # Chains that need a non-EVM snapshot path. The watch_tick loop

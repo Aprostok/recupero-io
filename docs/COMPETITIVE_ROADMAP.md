@@ -21,7 +21,7 @@ parity polish · **P3** moonshot/long-tail. Effort: S<1wk · M 1–4wk · L 1–
 
 | # | Capability | Incumbent | Us today | Build | Data / vendor + cost | Eff | Pri |
 |---|---|---|---|---|---|---|---|
-| A1 | Wire the 3 label-only EVM chains into BFS (Polygon zkEVM, opBNB, Manta — adapters exist as enums, not instantiated → cross-chain trace silently dead-ends) | all | gap (documented v0.31.2) | instantiate in `ChainAdapter.for_chain` | Etherscan V2 (already paid) | S | **P0** |
+| A1 | Wire the 3 label-only EVM chains into BFS (Polygon zkEVM, opBNB, Manta — were enum-only → cross-chain trace silently dead-ended) | all | **opBNB DONE (v0.35.3)** — verified on the live Etherscan V2 chainlist + wired (factory/profile/watch_tick/explorer/tests). **Polygon zkEVM (1101) + Manta (169) are NOT on Etherscan V2** (verified 2026-06-02) → remain label-only; need a non-Etherscan backend (Alchemy / native explorer) | per-chain backend adapter (Alchemy ~$ / native RPC free) | S→M | **P0** (opBNB ✓; zkEVM/Manta pending backend) |
 | A2 | TON (Telegram) — major USDT-jetton laundering rail | TRM, Chainalysis | none | new adapter | Toncenter / TONAPI (~$0–2k) | M | **P1** |
 | A3 | Sui + Aptos (Move chains) | TRM, Chainalysis | none | 2 adapters | native RPC + indexers (free–$5k) | M | P1 |
 | A4 | XRPL + XRPL-EVM, Stellar | TRM | none | adapter | public RPC / Ripple Data (free) | M | P1 |

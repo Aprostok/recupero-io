@@ -175,3 +175,36 @@ def test_base_profile_loaded_from_config() -> None:
     cfg, _env = _bundle()
     assert hasattr(cfg, "base")
     assert cfg.base.chain_id == 8453
+
+
+# ---- v0.35.3: opBNB promoted from label-only to full adapter ---- #
+
+
+def test_profile_for_opbnb() -> None:
+    """opBNB (chain_id 204) — verified present on the live Etherscan V2
+    chainlist. Native gas is BNB. Was LABEL-only (BFS dead-ended on a
+    bridge handoff into it); now routes through the shared EvmAdapter."""
+    cfg, _env = _bundle()
+    p = _profile_for(Chain.opbnb, cfg)
+    assert p.chain_id == 204
+    assert p.native_symbol == "BNB"
+    assert "opbnb.bscscan.com" in p.explorer_base
+    assert p.coingecko_native_id == "binancecoin"
+    assert p.coingecko_platform == "opbnb"
+
+
+def test_for_chain_opbnb_routes_to_evm_adapter() -> None:
+    """Regression guard: a bridge handoff into opBNB must NOT raise
+    NotImplementedError (the old label-only behavior that silently
+    dead-ended the BFS) — it routes to EvmAdapter at chain_id 204."""
+    bundle = _bundle()
+    adapter = ChainAdapter.for_chain(Chain.opbnb, bundle)
+    assert isinstance(adapter, EvmAdapter)
+    assert adapter.chain == Chain.opbnb
+    assert adapter.profile.chain_id == 204
+
+
+def test_opbnb_profile_loaded_from_config() -> None:
+    cfg, _env = _bundle()
+    assert hasattr(cfg, "opbnb")
+    assert cfg.opbnb.chain_id == 204

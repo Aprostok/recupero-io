@@ -119,6 +119,7 @@ ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "moonbeam":    "https://moonscan.io/address/",
     "metis":       "https://andromeda-explorer.metis.io/address/",
     "kava":        "https://kavascan.com/address/",
+    "opbnb":       "https://opbnb.bscscan.com/address/",
 }
 
 
@@ -153,6 +154,7 @@ EXPLORER_NAME_BY_CHAIN: dict[str, str] = {
     "moonbeam":    "Moonscan",
     "metis":       "Metis Andromeda Explorer",
     "kava":        "KavaScan",
+    "opbnb":       "opBNBScan",
 }
 
 

@@ -304,6 +304,15 @@ def cli() -> None:
              "({case_id, endpoints[], by_category{}, notes}).",
     )
 
+    # ----- label-freshness (v0.35.15 / J3) ----- #
+    sub.add_parser(
+        "label-freshness",
+        help="Report the freshness of every label source (OFAC feed, "
+             "intl-sanctions, bridges, CEX deposits, mixers, …) against its "
+             "per-class SLA. Flags stale/critical sources; OFAC feed age is "
+             "the headline alarm. Recommended cadence: daily via cron.",
+    )
+
     # ----- bridge-sync (v0.29.1 Recommendation #5) ----- #
     p_bridge_sync = sub.add_parser(
         "bridge-sync",
@@ -996,6 +1005,17 @@ def cli() -> None:
         score = score_case_dir(case_dir, truth)
         print(_json.dumps(score.to_dict(), indent=2))
         sys.exit(0)
+
+    if args.command == "label-freshness":
+        import json as _json
+        from datetime import UTC as _UTC
+        from datetime import datetime as _dt
+
+        from recupero.labels.freshness import build_freshness_report
+        report = build_freshness_report(now=_dt.now(_UTC))
+        print(_json.dumps(report, indent=2))
+        # Non-zero exit when OFAC is critical, so a cron wrapper can alert.
+        sys.exit(1 if report["summary"]["ofac_status"] == "critical" else 0)
 
     if args.command == "bridge-sync":
         from pathlib import Path as _Path

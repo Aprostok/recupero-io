@@ -189,11 +189,25 @@ TRM/Chainalysis explore-grow-annotate-save loop. Remaining, in value order:
 3. ✅ **4.12 ribbon-Sankey (SHIPPED v0.35)** — operator edges render as
    `<path>`; in the **Value-flow** layout they curve into Sankey-style
    ribbons (width ∝ value, depth columns). Straight in other layouts.
-4. **4.11 WebGL** — only needed once expansion grows graphs past a few
-   hundred nodes; a canvas/WebGL renderer rewrite, best done + verified
-   against a running deploy rather than added blind.
-5. **4.13 real-time** — push new hops/labels as a trace runs; needs a
-   streaming channel (SSE/websocket) and tracer progress events.
+4. ✅ **4.11 scalable renderer (SHIPPED v0.35)** — a **2D-canvas** renderer
+   toggle on the operator graph (nodes/edges/Sankey curves/labels/cluster
+   badges + pan/zoom + node hit-testing), for graphs that outgrow SVG after
+   expansion. SVG stays default (full edge interactivity + drag). Browser-
+   verified at 60 nodes. True WebGL shaders deferred — only needed at ~10k+.
+5. 🟡 **4.13 real-time (CORE SHIPPED v0.35; one bridge + live-verify remain)**
+   - ✅ `reports/graph_events.py` — in-process async pub/sub, `build_delta_event`,
+     `sse_frame`, and the cross-process `notify_pg` (`pg_notify('graph_events',…)`).
+   - ✅ Admin-gated SSE endpoint `GET /v1/operator/graph/{id}/stream` (key via
+     query param since `EventSource` can't set headers) with heartbeats.
+   - ✅ The expand route publishes its delta (`&inv=`), and the operator graph
+     opens an `EventSource` and live-merges incoming nodes/edges. So **same-API
+     events already stream** (e.g. one operator's expand appears on another's
+     open graph).
+   - ⬜ **Remaining:** a startup **LISTEN bridge** task in the API that pumps
+     `NOTIFY graph_events` → `publish()` (so the worker's `watch_tick` hits
+     reach open graphs cross-process), plus **live end-to-end verification**
+     (needs a running ASGI + Postgres — this sandbox has neither). Optional
+     further step: progress events inside the forensic-critical tracer.
 
 ### Known tech-debt
 

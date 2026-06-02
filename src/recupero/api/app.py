@@ -1927,6 +1927,7 @@ async def operator_expand(
     address: str,
     direction: str = "out",
     limit: int = 40,
+    inv: str | None = None,
     x_recupero_admin_key: str | None = Header(default=None),
 ) -> JSONResponse:
     """Live counterparty expansion — the TRM/Chainalysis "click a node to
@@ -1959,6 +1960,16 @@ async def operator_expand(
             status_code=503,
             detail="expansion unavailable (chain access not configured or upstream error)",
         )
+    # Live-broadcast the delta to any operator streaming this investigation.
+    inv_id = (inv or "").strip()
+    if inv_id:
+        try:
+            from recupero.reports.graph_events import build_delta_event, publish
+            await publish(inv_id, build_delta_event(
+                reason="expand", nodes=data.get("nodes", []), edges=data.get("edges", []),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("operator expand: live publish skipped: %s", exc)
     return JSONResponse(content=data)
 
 
@@ -2117,6 +2128,44 @@ async def operator_watch_address(
         log.warning("operator watch add failed inv=%s: %s", inv, exc)
         raise HTTPException(status_code=503, detail="watchlist unavailable")
     return JSONResponse(content={"ok": True})
+
+
+@app.get("/v1/operator/graph/{investigation_id}/stream", tags=["ops"])
+async def operator_graph_stream(
+    investigation_id: str,
+    key: str | None = None,
+    x_recupero_admin_key: str | None = Header(default=None),
+):
+    """Server-Sent-Events stream of live graph deltas for an investigation
+    (Phase 4.13). A browser ``EventSource`` cannot set custom headers, so the
+    admin key is accepted as the ``key`` query param (over HTTPS, operator-
+    internal) as well as the header for curl."""
+    from fastapi.responses import StreamingResponse
+    from recupero.dispatcher.review_api import _require_admin_auth
+    _require_admin_auth(x_recupero_admin_key or key)
+    inv = _valid_inv(investigation_id)
+
+    import asyncio
+    from recupero.reports.graph_events import subscribe, unsubscribe, sse_frame
+
+    async def _gen():
+        q = subscribe(inv)
+        try:
+            yield ": connected\n\n"
+            while True:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=20.0)
+                    yield sse_frame(ev)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # heartbeat keeps proxies from closing
+        finally:
+            unsubscribe(inv, q)
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---- Uvicorn entry point ---- #

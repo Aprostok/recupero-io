@@ -407,7 +407,8 @@ function initGraph(DATA, viewId) {
     if (btn) { btn.textContent = "…"; btn.disabled = true; }
     try {
       const url = "/v1/operator/expand?chain=" + encodeURIComponent(n.chain || "") +
-        "&address=" + encodeURIComponent(n.id) + "&direction=" + direction + "&limit=40";
+        "&address=" + encodeURIComponent(n.id) + "&direction=" + direction + "&limit=40" +
+        "&inv=" + encodeURIComponent(viewId || "");
       const resp = await fetch(url, { headers: { "X-Recupero-Admin-Key": key } });
       if (!resp.ok) { if(btn){ btn.textContent = (resp.status===503? "unavailable" : "failed "+resp.status); btn.disabled=false; } return; }
       const data = await resp.json();
@@ -541,9 +542,27 @@ function initGraph(DATA, viewId) {
     try{ const r=await fetch(API+"/snapshots/"+encodeURIComponent(name),{headers:{"X-Recupero-Admin-Key":adminKey()}}); if(r.ok){ const d=await r.json(); applyState(d.state); } }catch(e){}
   };
 
+  // ---- live updates (4.13): subscribe to the investigation's SSE stream ----
+  function mergeLiveDelta(data){
+    let added=0;
+    for(const nn of (data.nodes||[])){ if(!nodeById.has(nn.id)){ if(nn.depth==null)nn.depth=1; DATA.nodes.push(nn); nodeById.set(nn.id,nn); added++; } }
+    const ek=e=>e.source+">"+e.target; const ex=new Map(DATA.edges.map(e=>[ek(e),e]));
+    let edgeAdds=0;
+    for(const ne of (data.edges||[])){ const k=ek(ne); const e=ex.get(k); if(e){ e.totalUsdNumeric=(e.totalUsdNumeric||0)+(ne.totalUsdNumeric||0); e.transferCount=(e.transferCount||0)+(ne.transferCount||0); } else { DATA.edges.push(ne); ex.set(k,ne); edgeAdds++; } }
+    if(added||edgeAdds){ document.getElementById("meta-stat").textContent = DATA.nodes.length+" nodes · "+DATA.edges.length+" edges (live)"; rebuild(true); }
+  }
+  function connectLiveStream(){
+    if(typeof EventSource==="undefined")return;
+    try{
+      const es=new EventSource(API+"/stream?key="+encodeURIComponent(adminKey()));
+      es.onmessage=(e)=>{ try{ const ev=JSON.parse(e.data); if(ev&&ev.type==="delta") mergeLiveDelta(ev); }catch(_){} };
+      es.onerror=()=>{ /* EventSource auto-reconnects; nothing to do */ };
+    }catch(e){}
+  }
+
   document.getElementById("color-by").value=colorBy;
   for(const [id,key] of [["lay-force","force"],["lay-flow","flow"],["lay-value","value"],["lay-radial","radial"]])document.getElementById(id).classList.toggle("on",key===layout);
-  loadAnnotations(); refreshSnapshots();
+  loadAnnotations(); refreshSnapshots(); connectLiveStream();
   rebuild(false); loop(); setTimeout(fit,1400);
 }
 </script>

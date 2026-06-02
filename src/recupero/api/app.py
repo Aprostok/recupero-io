@@ -129,6 +129,19 @@ except Exception as _exc:  # noqa: BLE001
         "watchlist API not registered (import failed): %s", _exc,
     )
 
+# v0.35.14 (F3): address/entity profile — admin-gated JSON
+# (/v1/address/profile) + an unauthenticated console shell
+# (/v1/address/console) that fetches it client-side with the operator's
+# X-Recupero-Admin-Key. Type any address -> instant risk/labels/exposure/
+# sighting-history view over the existing local-seed screener.
+try:
+    from recupero.api.address_profile import router as _address_router
+    app.include_router(_address_router)
+except Exception as _exc:  # noqa: BLE001
+    log.warning(
+        "address profile API not registered (import failed): %s", _exc,
+    )
+
 
 # ---- Request body-size cap (intake DoS guard) ---- #
 

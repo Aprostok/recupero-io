@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Address Profile</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  select { padding: .4rem .5rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  #msg { font-size: .8rem; margin-left: .5rem; } .err { color: #c0392b; } .ok { color: #1e8449; }
+  .verdict { display:inline-block; padding:.25rem .7rem; border-radius:8px; font-weight:700; font-size:1rem; }
+  .v-sanctioned, .v-high { background:#f9e0dd; color:#a93226; }
+  .v-medium { background:#fdf1d9; color:#9c6a13; }
+  .v-low, .v-clean { background:#e3f3e8; color:#1e8449; }
+  .panel { background:#fff; border:1px solid #e3e3e3; border-radius:10px; padding:.8rem 1rem; margin-bottom:1rem; }
+  .tags span { display:inline-block; background:#f9e0dd; color:#a93226; border-radius:999px; padding:.15rem .6rem; margin:0 .3rem .3rem 0; font-size:.78rem; font-weight:600; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
+  .conf-high { color:#a93226; font-weight:600; } .conf-medium { color:#9c6a13; } .conf-low { color:#777; }
+  .note { font-size:.8rem; color:#555; }
+</style>
+</head>
+<body>
+  <h1>🔎 Address Profile</h1>
+  <div class="sub">Type any address to screen it against OFAC + mixer + ransomware + drainer seeds and the
+    cross-case index. Paste your operator key; data is fetched from the admin-gated API (the key stays in a
+    request header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="30" autocomplete="off">
+    <input id="addr" type="text" placeholder="address (0x… / T… / base58)" size="44" autocomplete="off">
+    <select id="chain">
+      <option>ethereum</option><option>arbitrum</option><option>base</option><option>optimism</option>
+      <option>bsc</option><option>polygon</option><option>avalanche</option><option>tron</option>
+      <option>solana</option><option>bitcoin</option>
+    </select>
+    <button id="go">Screen</button>
+    <span id="msg"></span>
+  </div>
+
+  <div id="out"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+  function key() { return ($("key").value || "").trim(); }
+
+  function render(p) {
+    var band = String(p.verdict || "clean");
+    var h = '<div class="panel">';
+    h += '<span class="verdict v-' + esc(band) + '">' + esc(p.risk_band) + '</span> ';
+    h += '<span class="sub">risk score ' + esc(p.risk_score) + '/10 · ' + esc(p.chain) + '</span>';
+    h += '<div class="mono" style="margin-top:.5rem">' + esc(p.address) + '</div>';
+    if ((p.exposure_tags || []).length) {
+      h += '<div class="tags" style="margin-top:.5rem">';
+      p.exposure_tags.forEach(function (t) { h += '<span>' + esc(t) + '</span>'; });
+      h += '</div>';
+    }
+    if (p.note) { h += '<div class="note" style="margin-top:.5rem">' + esc(p.note) + '</div>'; }
+    h += '</div>';
+
+    var labels = p.labels || [];
+    if (labels.length) {
+      h += '<div class="panel"><b>Label hits (' + esc(p.label_count) + ')</b><table style="margin-top:.5rem">' +
+           '<thead><tr><th>Name</th><th>Category</th><th>Sev</th><th>Confidence</th><th>Source</th></tr></thead><tbody>';
+      labels.forEach(function (l) {
+        h += '<tr><td>' + esc(l.name) + '</td><td class="mono">' + esc(l.category) + '</td>' +
+             '<td>' + esc(l.severity) + '</td>' +
+             '<td class="conf-' + esc(l.confidence) + '">' + esc(l.confidence) + '</td>' +
+             '<td>' + esc(l.source) + '</td></tr>';
+      });
+      h += '</tbody></table></div>';
+    }
+
+    var c = p.sighting_history || {};
+    h += '<div class="panel"><b>Cross-case sighting history</b><div class="sub" style="margin-top:.4rem">' +
+         'Prior cases: ' + esc(c.prior_case_count || 0) +
+         ' · OFAC-exposed: ' + esc(c.prior_ofac_exposed_count || 0) +
+         ' · mixer-exposed: ' + esc(c.prior_mixer_exposed_count || 0) +
+         ' · drainer-attributed: ' + esc(c.prior_drainer_attributed_count || 0) +
+         ' · total USD seen: ' + esc(c.prior_total_usd_flowed || "0") + '</div></div>';
+
+    if (p.investigator_note) {
+      h += '<div class="panel"><b>Investigator note</b><div class="note" style="margin-top:.4rem">' +
+           esc(p.investigator_note) + '</div></div>';
+    }
+    h += '<div class="sub">Sources: ' + esc((p.data_sources_used || []).join(", ")) + '</div>';
+    $("out").innerHTML = h;
+  }
+
+  function go() {
+    var k = key(); if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    var a = ($("addr").value || "").trim(); if (!a) { setMsg("Enter an address.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Screening…"); $("go").disabled = true;
+    var url = "/v1/address/profile?address=" + encodeURIComponent(a) + "&chain=" + encodeURIComponent($("chain").value);
+    fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("API not configured (set RECUPERO_ADMIN_KEY).");
+        if (res.status === 400) throw new Error("Bad address.");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (p) { render(p); setMsg("Screened " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); })
+      .finally(function () { $("go").disabled = false; });
+  }
+
+  $("go").addEventListener("click", go);
+  $("addr").addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+})();
+</script>
+</body>
+</html>

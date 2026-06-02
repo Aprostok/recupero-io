@@ -744,6 +744,93 @@ def test_value_trace_is_directed_at_normal_nodes_too(
     assert any(h["matched_to"].lower() == target.lower() for h in hops)
 
 
+# ---------- v0.34.6: 1:N same-asset split / peel follow (opt-in) ---------- #
+
+
+def _split_graph() -> tuple[dict[str, Any], list[str]]:
+    """SEED --1000 ETH--> HOP_A, which PEELS it into 3 same-asset sends
+    (400 + 350 + 260 = 1010 ETH, Δ1%) to X1/X2/X3 — no single outflow matches
+    the 1000 ETH inbound, so the 1:1 matcher dead-ends here. Returns
+    (edges, [X1, X2, X3])."""
+    peels = [
+        "0x00000000000000000000000000000000000000a1",
+        "0x00000000000000000000000000000000000000a2",
+        "0x00000000000000000000000000000000000000a3",
+    ]
+    edges: dict[str, Any] = {
+        SEED: [_native_row("0xseed1", SEED, HOP_A, eth_amount="1000")],
+        HOP_A: [
+            _native_row("0xp1", HOP_A, peels[0], eth_amount="400"),
+            _native_row("0xp2", HOP_A, peels[1], eth_amount="350"),
+            _native_row("0xp3", HOP_A, peels[2], eth_amount="260"),
+        ],
+    }
+    return edges, peels
+
+
+def test_value_trace_follows_same_asset_split_when_enabled(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """v0.34.6: RECUPERO_VALUE_TRACE_FOLLOW_SPLITS=1 recovers a 1:N same-asset
+    PEEL the 1:1 matcher misses — HOP_A split 1000 ETH into 400+350+260, and all
+    three legs are followed (low confidence, kind=same_asset_split). This is what
+    carries the Lazarus/Ronin trace past consolidation wallets that peel into
+    mixer-denomination chunks instead of forwarding a single matching amount."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200  # HOP_A's 3 < 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", "1")
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, peels = _split_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "SPLIT_ON")
+
+    fetched = set(adapter.fetch_calls)
+    for p in peels:
+        assert p.lower() in fetched, f"split-peel leg {p} was not followed"
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    split_hops = [h for h in hops if h["kind"] == "same_asset_split"]
+    assert len(split_hops) == 3, f"expected 3 split hops, got {hops}"
+    assert all(h["confidence"] == "low" for h in split_hops)  # never medium/high
+
+
+def test_value_trace_split_not_followed_by_default(
+    cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default (FOLLOW_SPLITS unset): a peel is NOT followed — the node is an
+    honest value-dead-end, byte-identical to pre-v0.34.6 behavior. This keeps
+    the opt-in opt-in (and Zigha 4/4 untouched)."""
+    config, env = cfg
+    config.trace.max_depth = 3
+    config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
+    monkeypatch.delenv("RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", raising=False)
+    monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
+
+    edges, peels = _split_graph()
+    adapter = GraphAdapter(edges)
+    _wire(monkeypatch, adapter, FixedPriceClient())
+
+    case = _run(config, env, tmp_path / "cases" / "SPLIT_OFF")
+
+    fetched = set(adapter.fetch_calls)
+    for p in peels:
+        assert p.lower() not in fetched, (
+            f"split leg {p} must NOT be followed when FOLLOW_SPLITS is off"
+        )
+    hops = case.config_used["coverage"]["value_matched_hops"]
+    assert [h for h in hops if h["kind"] == "same_asset_split"] == []
+    # HOP_A forwarded same-asset but nothing matched -> honest dead-end recorded.
+    dead = case.config_used["coverage"]["value_dead_ends"]
+    assert any(d["address"].lower() == HOP_A.lower() for d in dead)
+
+
 # ---------- v0.34 perf: prune-before-enrich (lightweight on high fan-out) ---------- #
 
 

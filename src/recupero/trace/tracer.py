@@ -495,6 +495,13 @@ def run_trace(
             "RECUPERO_VALUE_TRACE", "0",
         ).strip().lower() in ("1", "true", "yes", "on")
     )
+    # v0.34.6 opt-in: when a directed node has no 1:1 onward match, try to
+    # recover a 1:N same-asset SPLIT/peel and follow all its legs (low
+    # confidence). Default OFF — preserves every existing trace (incl. Zigha
+    # 4/4) byte-identically; turn on for deep peel-chain reach (Lazarus/Ronin).
+    _follow_splits = os.environ.get(
+        "RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", "0",
+    ).strip().lower() in ("1", "true", "yes", "on")
     inbound_by_key: dict[str, list[Transfer]] = {}
     value_matched: list[dict[str, Any]] = []
     # v0.34.1 coverage-honesty: directed (value-trace) nodes that MOVED funds
@@ -670,6 +677,7 @@ def run_trace(
                         node_addr=from_addr,
                         enqueue_fn=_consider_enqueue,
                         provenance_sink=value_matched,
+                        follow_splits=_follow_splits,
                     )
                     followed += _f
                     for _mt in _matched:
@@ -2086,6 +2094,7 @@ def _value_match_and_enqueue(
     node_addr: Address,
     enqueue_fn: Any,
     provenance_sink: list[dict[str, Any]],
+    follow_splits: bool = False,
 ) -> tuple[int, list[Transfer]]:
     """At a high-fan-out node, follow ONLY the outflow(s) whose value matches
     the inbound funds (v0.34 value-directed tracing).
@@ -2104,6 +2113,7 @@ def _value_match_and_enqueue(
     per-case transfer budget nor pollute the deliverable.
     """
     from recupero.trace.value_matching import (
+        detect_same_asset_split,
         leg_from_transfer,
         match_onward_transfers,
     )
@@ -2122,6 +2132,16 @@ def _value_match_and_enqueue(
         cand_legs.append(leg)
 
     matches = match_onward_transfers(inbound_leg, cand_legs)
+    # v0.34.6: when no 1:1 hop matched, optionally recover a 1:N same-asset
+    # SPLIT/peel (the node forwarded the inbound funds as many smaller same-asset
+    # sends summing to ~the inbound). Opt-in (RECUPERO_VALUE_TRACE_FOLLOW_SPLITS)
+    # because it follows MULTIPLE onward edges from one node — bounded by the
+    # detector's leg cap + the BFS visited/depth/budget gates. All split legs are
+    # confidence="low" (a set inference). This is what carries the Lazarus/Ronin
+    # trace past the consolidation wallets that peel into mixer-denomination
+    # chunks instead of forwarding a single matching amount.
+    if not matches and follow_splits:
+        matches = detect_same_asset_split(inbound_leg, cand_legs)
     followed = 0
     matched_transfers: list[Transfer] = []
     for m in matches:

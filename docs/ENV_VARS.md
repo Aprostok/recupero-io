@@ -98,7 +98,8 @@ their own section.
 | `RECUPERO_INVESTIGATOR_WEB` | `recupero.io` | str | URL host | v0.20.0 | Operator website rendered in deliverables. |
 | `RECUPERO_INVESTIGATOR_PHONE` | unset | str | phone | v0.20.0 | Optional operator phone number. |
 | `RECUPERO_DESTINATION_DUST_USD` | `1000.00` | Decimal | `>= 0`, finite | v0.20.x | See "dust / CEX-continuity". |
-| `RECUPERO_AI_MAX_USD_PER_CALL` | `2.00` | Decimal | `> 0` | v0.17.8 | Per-call USD ceiling on AI editorial calls; `0` disables (logged WARN). |
+| `RECUPERO_AI_MAX_USD_PER_CALL` | `2.00` | Decimal | `> 0` | v0.17.8 | Per-call USD ceiling on AI editorial + AI triage calls; `0` disables (logged WARN). |
+| `RECUPERO_AI_TRIAGE` | unset (off) | bool | `1`/`true`/`yes`/`on` | v0.35.7 | Enables *automatic* (worker-driven) AI case triage. The `recupero ai-triage` CLI command always runs regardless (operator opt-in). |
 | `RECUPERO_API_BUDGET_USD_PER_CASE` | `0` (disabled) | Decimal | `[0.01, 1_000_000.0]`, finite | v0.32 | Per-case API spend cap across all providers. v0.32.1+ industry-best mode: default DISABLED so the tracker can reach deep destinations without an artificial dollar gate. Operators on shared free-tier API keys opt in with a positive USD value. |
 | `RECUPERO_P_ANY_CALIBRATION_JSON` | unset | JSON | object | v0.21.x | Override default p_any calibration constants (recovery scorer). |
 | `RECUPERO_PRICING_FALLBACK` | `defillama` | str | `defillama` / `none` | v0.31.5 | Secondary historical-price provider. `none` disables the fallback chain (CoinGecko only). |
@@ -437,8 +438,21 @@ picks up new values without a worker restart.
 
 #### `RECUPERO_AI_MAX_USD_PER_CALL`
 
-Per-call USD ceiling on AI editorial calls. Default $2.00. Set to 0
-to disable (logged as WARN — runaway retries will burn real budget).
+Per-call USD ceiling on AI editorial **and AI triage** calls. Default
+$2.00. Set to 0 to disable (logged as WARN — runaway retries will burn
+real budget). Read by both `reports/ai_editorial.py` and
+`reports/ai_triage.py` via the shared `_resolve_max_usd_per_call`.
+
+#### `RECUPERO_AI_TRIAGE`
+
+v0.35.7 (roadmap G1). Gates *automatic* AI case triage — the
+plain-English summary + recommended-next-steps + completeness-gaps
+briefing produced by `reports/ai_triage.py` (parity with Chainalysis
+"Rapid" / TRM auto-narrative). **Default OFF**: AI triage costs an
+Anthropic API call, so worker-driven invocation must be opted into
+explicitly. The interactive `recupero ai-triage <case>` command always
+runs (the operator invoking it IS the opt-in) and is unaffected by this
+flag. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive).
 
 #### `RECUPERO_API_BUDGET_USD_PER_CASE`
 

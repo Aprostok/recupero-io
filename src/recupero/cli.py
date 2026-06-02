@@ -33,6 +33,7 @@ from recupero.reports.aggregate import (
     write_aggregate_json,
 )
 from recupero.reports.ai_editorial import run_ai_editorial
+from recupero.reports.ai_triage import run_ai_triage
 from recupero.reports.brief import MIDAS_ISSUER, InvestigatorInfo, IssuerInfo, generate_briefs
 from recupero.reports.emit_brief import run_emit_brief, write_editorial_template
 from recupero.reports.victim import VictimInfo, load_victim, write_victim
@@ -1356,6 +1357,85 @@ def ai_editorial_cmd(
     console.print(f"  [bold]recupero emit-brief {case_id}[/]")
     console.print()
     console.print("[dim]The emit-brief command will refuse to run while REVIEW_REQUIRED is true.[/]")
+
+
+@app.command("ai-triage")
+def ai_triage_cmd(
+    case_id: str = typer.Argument(..., help="Case ID to triage (must be traced first)."),
+    narrative: str = typer.Option(
+        None, "--narrative", "-n",
+        help="Optional victim-supplied narrative to ground the triage.",
+    ),
+    narrative_file: str = typer.Option(
+        None, "--narrative-file",
+        help="Read victim narrative from a file (alternative to --narrative).",
+    ),
+    api_key: str = typer.Option(
+        None, "--api-key",
+        help="Override the ANTHROPIC_API_KEY env var with an explicit key.",
+    ),
+) -> None:
+    """Plain-English AI triage of a finished trace (internal investigator aid).
+
+    Reads case.json (+ optional victim.json / freeze_asks.json), calls Claude to
+    produce a short non-expert summary, an ordered recommended-next-steps list,
+    and an honest "what's still missing" note, and writes ai_triage.json into
+    the case directory.
+
+    This is parity with Chainalysis "Rapid" / TRM auto-narrative: a 30-second
+    read for an LE officer, paralegal, or compliance analyst. It is NOT the
+    customer-facing $99 brief (that is `ai-editorial`, which gates on human
+    review). The output is marked AI_GENERATED + REVIEW_REQUIRED and carries a
+    probabilistic-leads-not-proof disclaimer — verify every lead before acting.
+
+    Typical flow:
+      1. recupero trace ... --case-id MYCASE
+      2. recupero ai-triage MYCASE --narrative "victim's words..."
+      3. open data/cases/MYCASE/ai_triage.json
+    """
+    cfg, _ = load_config()
+    setup_logging(cfg.logging.level)
+    store = CaseStore(cfg)
+
+    victim_narrative = narrative
+    if narrative_file:
+        nf = Path(narrative_file)
+        if not nf.exists():
+            console.print(f"[bold red]Narrative file not found:[/] {nf}")
+            raise typer.Exit(code=2)
+        victim_narrative = nf.read_text(encoding="utf-8").strip()
+
+    console.print(f"[cyan]Generating AI triage for {case_id}...[/]")
+    try:
+        out_path, triage, usage = run_ai_triage(
+            case_id=case_id,
+            case_store=store,
+            victim_narrative=victim_narrative,
+            api_key=api_key,
+        )
+    except RuntimeError as e:
+        console.print(f"[bold red]AI triage failed:[/] {e}")
+        raise typer.Exit(code=2) from None
+    except FileNotFoundError as e:
+        console.print(f"[bold red]Required file missing:[/] {e}")
+        console.print("[dim]Did you run `recupero trace` first?[/]")
+        raise typer.Exit(code=2) from None
+
+    console.print()
+    console.print(f"[bold green]Wrote AI triage to[/] {out_path}")
+    console.print(
+        f"  [dim]Tokens:[/] {usage['input_tokens']:,} in / {usage['output_tokens']:,} out  "
+        f"[dim]Cost:[/] ${usage['usd_cost']}"
+    )
+    console.print()
+    console.print(f"[bold]Summary:[/] {triage.get('case_summary_plain', '')}")
+    steps = triage.get("recommended_next_steps") or []
+    if steps:
+        console.print("[bold]Recommended next steps:[/]")
+        for i, step in enumerate(steps, 1):
+            console.print(f"  {i}. {step}")
+    console.print()
+    console.print("[dim]AI-generated triage — probabilistic leads, NOT proof. Verify before acting.[/]")
 
 
 @app.command("screen")

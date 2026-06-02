@@ -71,6 +71,11 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("api/auth.py", "_buckets"):
         "lock-guarded by _buckets_lock",
 
+    # v0.35.17 screen/screen_cache.py: the high-throughput screening result
+    # LRU. Every read/move-to-end/insert/evict is under `_lock`.
+    ("screen/screen_cache.py", "_results"):
+        "lock-guarded by _lock (screening result LRU; E2)",
+
     # v0.32 monitoring/recovery_rate.py: 60-second cache of the
     # RecoveryStats computation. Read-modify-write is fine
     # best-effort — a race produces at most one extra DB query

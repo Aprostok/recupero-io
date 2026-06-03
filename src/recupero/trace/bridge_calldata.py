@@ -256,6 +256,37 @@ _CELER_METHODS = {
     "0xe957bf91": ("Celer", "sendNative"),
 }
 
+# v0.37.3 (deep-reach #4): THORChain Router. The cross-chain destination —
+# crucially including NATIVE BITCOIN — is encoded in the swap MEMO (a string
+# arg), not a chain-id slot. Selectors computed via keccak of the documented
+# Router ABI (THORChain docs / thorchain.org): depositWithExpiry is 0x44bc937b,
+# deposit is 0x1fece7b4. The memo for both is arg index 3 (the 4th arg):
+#   depositWithExpiry(address vault, address asset, uint256 amount,
+#                     string memo, uint256 expiry)
+#   deposit(address vault, address asset, uint256 amount, string memo)
+# Memo grammar (THORChain): "<fn>:<CHAIN.ASSET>:<destination_addr>:<limits>:..."
+# e.g. "=:BTC.BTC:bc1q...:0/1/0" bridges to the bitcoin address bc1q…
+#
+# CONFIDENCE is capped at 'medium' in _decode_thorchain: the memo address is
+# on-chain + unambiguous, but the Router address in bridges.json + the realized
+# EVM→BTC delivery are NOT yet verified against an authoritative on-chain
+# fixture, so the handoff + decoded BTC destination are SURFACED (trace report /
+# candidates) without the BFS auto-crossing (which requires 'high'). Promote to
+# 'high' — and the existing v0.37.1 continuation follows it onto Bitcoin — once a
+# real THORChain EVM→BTC swap fixture lands. See docs/chain-coverage-status.md.
+_THORCHAIN_METHODS = {
+    "0x44bc937b": ("THORChain", "depositWithExpiry"),
+    "0x1fece7b4": ("THORChain", "deposit"),
+}
+
+# THORChain memo asset prefix (the CHAIN in "CHAIN.ASSET") → canonical chain
+# we have an adapter for. Other prefixes (DOGE/LTC/BCH/…) surface raw so the
+# brief's candidates list still names the destination chain for follow-up.
+_THORCHAIN_CHAIN_PREFIX = {
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+}
+
 # v0.31.2 — Synapse Protocol. SynapseBridge's `bridge` /
 # `swapAndRedeem` methods put recipient + EVM chainId in the first
 # two static slots. Source: https://docs.synapseprotocol.com
@@ -553,6 +584,12 @@ def decode_bridge_calldata(
     # (routes through MetaRouter on every supported chain).
     if "symbiosis" in bridge_protocol.lower():
         return _decode_symbiosis(method_id, args_blob, data)
+    # v0.37.3 (deep-reach #4): THORChain Router — memo-encoded destination,
+    # including native Bitcoin. Match "thorchain" specifically; do NOT match
+    # "maya"/"mayan" (Mayan Finance in bridges.json is a Wormhole-based bridge,
+    # unrelated to THORChain / Maya Protocol — matching it here would mis-decode).
+    if "thorchain" in bridge_protocol.lower():
+        return _decode_thorchain(method_id, args_blob, data)
     # v0.31.4 — six remaining bridges with seed entries but no
     # destination extraction pre-v0.31.4. LayerZero / Stargate v2 share
     # selector namespaces with Stargate v1 but use different chain-id
@@ -1399,6 +1436,66 @@ def _decode_axelar(
             bridge_method=method_name, confidence="low",
             raw_calldata_excerpt=full_data[:400],
         )
+
+
+def _decode_thorchain(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode THORChain Router depositWithExpiry / deposit calldata.
+
+    The cross-chain destination (incl. native Bitcoin) is in the swap MEMO —
+    the 4th arg (index 3), a solidity string:
+        "<fn>:<CHAIN.ASSET>:<destination_addr>:<limits>:<affiliate>:<fee>"
+    e.g. "=:BTC.BTC:bc1qxy...:0/1/0" → bridge to the bitcoin address bc1qxy…
+
+    Confidence is capped at 'medium' (see _THORCHAIN_METHODS): the memo address
+    is on-chain + deterministic to extract, but the Router seed address + the
+    realized EVM→BTC delivery await an authoritative on-chain fixture, so this
+    SURFACES the BTC destination as a handoff candidate without the BFS auto-
+    crossing (which requires 'high'). v0.37.3.
+    """
+    entry = _THORCHAIN_METHODS.get(method_id)
+    if entry is None:
+        return None
+    _, method_name = entry
+    try:
+        memo = _read_solidity_string(args_blob, 3 * 64)  # arg index 3 (4th)
+    except (ValueError, IndexError) as exc:
+        log.debug("thorchain decode failed: %s", exc)
+        memo = None
+    if not isinstance(memo, str) or ":" not in memo:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    parts = memo.split(":")
+    asset = parts[1].strip() if len(parts) > 1 else ""
+    dest_raw = parts[2].strip() if len(parts) > 2 else ""
+    chain_prefix = asset.split(".")[0].strip().upper() if asset else ""
+    dest_chain: str | None = _THORCHAIN_CHAIN_PREFIX.get(chain_prefix)
+    if dest_chain is None and chain_prefix:
+        # Surface the raw THORChain chain code (DOGE/LTC/BCH/…) for the
+        # candidates list even though we have no adapter to continue on it.
+        dest_chain = chain_prefix.lower()
+    # Validate the memo destination looks like an address (bech32 / base58 /
+    # 0x-hex), not free text or a THORName (THORNames are allowed but short;
+    # we keep alphanumerics + the bech32/base58 set and bound the length).
+    dest_address: str | None = None
+    if dest_raw and 8 < len(dest_raw) < 100 and (
+        dest_raw.replace("_", "").replace("-", "").isalnum()
+    ):
+        dest_address = dest_raw
+    confidence = "medium" if (dest_chain and dest_address) else "low"
+    return BridgeDecodeResult(
+        destination_chain=dest_chain,
+        destination_address=dest_address,
+        bridge_method=method_name,
+        confidence=confidence,
+        raw_calldata_excerpt=full_data[:400],
+    )
 
 
 def _decode_lifi(

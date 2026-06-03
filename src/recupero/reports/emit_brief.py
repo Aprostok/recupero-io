@@ -2157,6 +2157,28 @@ def emit_brief(
     except Exception as _exc:  # noqa: BLE001 — never break the brief
         log.warning("exposure-summary build failed (non-fatal): %s", _exc)
 
+    # --- Attribution coverage + labeling targets (v0.38, #1) ---
+    # How much of the traced value lands at an ATTRIBUTED address vs unlabeled,
+    # plus the highest-value unlabeled counterparties ranked as labeling targets
+    # — the systematic loop for closing the attribution-data gap. Best-effort:
+    # never breaks the brief; returns None on a valueless case.
+    attribution_coverage = None
+    try:
+        from recupero.trace.attribution_coverage import compute_attribution_coverage
+        _cov_label_store = None
+        try:
+            from recupero.config import load_config
+            from recupero.labels.store import LabelStore
+            _cfg, _ = load_config()
+            _cov_label_store = LabelStore.load(_cfg)
+        except Exception as _exc:  # noqa: BLE001
+            log.debug("attribution-coverage: label store load failed: %s", _exc)
+        attribution_coverage = compute_attribution_coverage(
+            case, _cov_label_store, high_risk_db=high_risk_db,
+        )
+    except Exception as _exc:  # noqa: BLE001 — never break the brief
+        log.warning("attribution-coverage build failed (non-fatal): %s", _exc)
+
     # --- Drainer / incident classification (v0.10.1) --- v0.20.0 Phase C
     # Returns the brief-section view + the raw drainer_findings (the
     # downstream correlation pass consumes the raw findings, not the
@@ -2268,6 +2290,7 @@ def emit_brief(
         # each entry.
         "INDIRECT_EXPOSURE": indirect_exposure,
         "EXPOSURE_SUMMARY": exposure_summary,
+        "ATTRIBUTION_COVERAGE": attribution_coverage,
         # v0.31.0: MVP 4-hop weight-decayed exposure scoring. Flat
         # {address: score} ranking that surfaces previously-invisible
         # 2/3-hop-removed mixer / OFAC / ransomware / darknet_market

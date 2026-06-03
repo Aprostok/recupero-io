@@ -143,6 +143,11 @@ where = ["src"]
 "recupero.reports.templates" = ["*.j2", "*.html.j2"]
 # Customer-portal templates loaded by portal/server.py via FileSystemLoader.
 "recupero.portal.templates" = ["*.j2", "*.html.j2"]
+# Operator-console HTML loaded by api/operator_console.py + the per-phase
+# console routers via Path(__file__).read_text(). Without this they are
+# missing from a non-editable `pip install .` (the Docker image) and every
+# /v1/console* route 503s with "Template could not be read".
+"recupero.web.templates" = ["*.html", "*.j2"]
 
 [tool.ruff]
 line-length = 100

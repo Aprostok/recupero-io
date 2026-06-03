@@ -169,6 +169,9 @@ for _mod, _attr in (
     ("recupero.api.exhibit_pack_api", "router"),
     ("recupero.api.sar_filing_api", "router"),
     ("recupero.api.screening_api", "router"),
+    # v0.35.23 (UI batch-4): AI-triage (read-stored) + cooperation intelligence.
+    ("recupero.api.ai_triage_api", "router"),
+    ("recupero.api.cooperation_api", "router"),
 ):
     try:
         _m = __import__(_mod, fromlist=[_attr])

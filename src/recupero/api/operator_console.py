@@ -82,6 +82,17 @@ _NAV: list[dict[str, Any]] = [
      "path": "/v1/screening/console", "live": True,
      "desc": "Paste many addresses; bulk sanctions/mixer/drainer risk screen "
              "via the high-throughput offline cache."},
+    # v0.35.23 UI batch-4 phase consoles.
+    {"group": "Casework", "label": "AI Triage", "emoji": "🧠",
+     "path": "/v1/ai-triage/console", "live": True,
+     "desc": "Plain-English AI triage (summary, next steps, completeness gaps) "
+             "— read-only view of the stored ai_triage.json; never calls the "
+             "model."},
+    {"group": "Intelligence", "label": "Cooperation", "emoji": "🤝",
+     "path": "/v1/cooperation/console", "live": True,
+     "desc": "Per-issuer cooperation profiles: freeze-letter response/freeze "
+             "rates, response times, recommended legal instrument, black-hole "
+             "flags."},
 ]
 
 

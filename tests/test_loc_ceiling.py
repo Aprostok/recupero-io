@@ -62,7 +62,13 @@ ALLOWLIST: dict[str, int] = {
     # validators/output_integrity/<invariant-group>.py modules behind the
     # existing validate_case_output() facade. Pinned at the current size;
     # the BUFFER lets small edits land, and any real growth re-trips this.
-    "src/recupero/validators/output_integrity.py": 5145,
+    # v0.36.0 (Jacob V-CFI02): +INVARIANT A2
+    # (investigate_not_billed_as_freeze_target) + the
+    # _investigate_tagged_addresses extractor that fixes the silently-
+    # no-op'ing INVARIANT A. Re-pinned; the split into
+    # output_integrity/<invariant-group>.py modules remains the queued
+    # refactor that retires this allowlist entry.
+    "src/recupero/validators/output_integrity.py": 5442,
     # Add entries here only when a file legitimately must exceed the
     # cap AND a refactor is queued.
 }

@@ -746,6 +746,17 @@ def validate_case_output(case_output_dir: Path) -> ValidationResult:
          lambda: _check_freeze_ask_targets_not_investigate_tagged(
              briefs_dir, freeze_brief,
          )),
+        # v0.36.0 (Jacob V-CFI02): INVARIANT A2 — build-failing rule that
+        # no INVESTIGATE-tagged address is billed as a freeze target in
+        # freeze_asks.json, the FREEZABLE letter-driver list, or the LE
+        # parallel-preservation block. INVARIANT A only scanned rendered
+        # FREEZABLE rows AND silently no-op'd because it sourced its
+        # INVESTIGATE set from the absent freeze_brief.DESTINATION_NOTES;
+        # A2 closes both gaps at the data layer.
+        ("investigate_not_billed_as_freeze_target",
+         lambda: _check_investigate_not_billed_as_freeze_target(
+             briefs_dir, freeze_asks, freeze_brief,
+         )),
         # v0.27.2 (Jacob 0x52Aa bleed fix, proposal b): hard rule that
         # every shipped issuer freeze letter + LE handoff must back the
         # ask with at least one CONFIRMED FREEZABLE row. Pre-fix
@@ -3021,6 +3032,72 @@ _FREEZABLE_ROW_RE = re.compile(
 _INVESTIGATE_NOTE_RE = re.compile(r"\U0001F7E7|🟧")  # orange square emoji
 
 
+def _investigate_tagged_addresses(freeze_brief: dict | None) -> set[str]:
+    """Collect the canonical-key set of every address the brief classes
+    as 🟧 INVESTIGATE, from EVERY authoritative surface the brief carries.
+
+    v0.36.0 (Jacob V-CFI02): the original INVARIANT A sourced this ONLY
+    from ``freeze_brief["DESTINATION_NOTES"]`` — but emit_brief never
+    writes DESTINATION_NOTES into freeze_brief.json (it lives in
+    brief_editorial.json). So the set was ALWAYS empty and INVARIANT A
+    silently no-op'd on every real case — which is why the 0x52Aa bleed
+    sailed past it on V-CFI02. We now read the status fields the brief
+    DOES carry:
+
+      * DESTINATIONS[].status == "INVESTIGATE"
+      * ALL_ISSUER_HOLDINGS[].holdings[].status == "INVESTIGATE"
+      * FREEZABLE[].holdings[].status == "INVESTIGATE" (defensive — a
+        correct brief never carries one here post-fix, but if a
+        regression reintroduces it we still want the address in the set)
+      * DESTINATION_NOTES emoji/ASCII tags, IF present (forward-compat).
+
+    Returns canonical keys (case-normalized) for direct membership tests
+    against the on-chain display addresses rendered in the artifacts.
+    """
+    if not isinstance(freeze_brief, dict):
+        return set()
+    try:
+        from recupero._common import canonical_address_key as _ck
+    except Exception:  # noqa: BLE001
+        def _ck(a: str) -> str:  # type: ignore[misc]
+            return (a or "").strip().lower()
+    out: set[str] = set()
+
+    def _maybe_add(addr: object, status: object) -> None:
+        if not isinstance(addr, str) or not isinstance(status, str):
+            return
+        if status.strip().upper() != "INVESTIGATE":
+            return
+        ck = _ck(addr)
+        if ck:
+            out.add(ck)
+
+    for d in freeze_brief.get("DESTINATIONS") or []:
+        if isinstance(d, dict):
+            _maybe_add(d.get("address"), d.get("status"))
+    for bucket_key in ("ALL_ISSUER_HOLDINGS", "FREEZABLE"):
+        for entry in freeze_brief.get(bucket_key) or []:
+            if not isinstance(entry, dict):
+                continue
+            for h in entry.get("holdings") or []:
+                if isinstance(h, dict):
+                    _maybe_add(h.get("address"), h.get("status"))
+    # DESTINATION_NOTES is usually absent from freeze_brief.json, but if
+    # a future emit writes it, honor its tags too.
+    dest_notes = freeze_brief.get("DESTINATION_NOTES")
+    if isinstance(dest_notes, dict):
+        for addr, note in dest_notes.items():
+            if (
+                isinstance(addr, str)
+                and isinstance(note, str)
+                and _INVESTIGATE_NOTE_RE.search(note)
+            ):
+                ck = _ck(addr)
+                if ck:
+                    out.add(ck)
+    return out
+
+
 def _check_freeze_ask_targets_not_investigate_tagged(
     briefs_dir: Path, freeze_brief: dict | None,
 ) -> list[Violation]:
@@ -3053,25 +3130,16 @@ def _check_freeze_ask_targets_not_investigate_tagged(
         return []
     if not briefs_dir.is_dir():
         return []
-    # Build the INVESTIGATE-tagged canonical-address set from the
-    # brief's DESTINATION_NOTES. Operator notes may carry mixed-case
-    # addresses; canonicalize so the lookup matches the
-    # freeze-letter HTML (which renders the on-chain display form).
+    # v0.36.0 (Jacob V-CFI02): source the INVESTIGATE set from EVERY
+    # status surface the brief carries — not just DESTINATION_NOTES,
+    # which emit_brief never writes into freeze_brief.json (so the
+    # pre-v0.36.0 lookup was always empty and this invariant silently
+    # passed everything). See _investigate_tagged_addresses.
     try:
         from recupero._common import canonical_address_key as _ck
     except Exception:  # noqa: BLE001
         return []
-    dest_notes = freeze_brief.get("DESTINATION_NOTES") or {}
-    if not isinstance(dest_notes, dict):
-        return []
-    investigate_canon: set[str] = set()
-    for addr, note in dest_notes.items():
-        if not isinstance(addr, str) or not isinstance(note, str):
-            continue
-        if _INVESTIGATE_NOTE_RE.search(note):
-            ck = _ck(addr)
-            if ck:
-                investigate_canon.add(ck)
+    investigate_canon = _investigate_tagged_addresses(freeze_brief)
     if not investigate_canon:
         return []
     # Scan every per-issuer freeze letter + LE handoff.
@@ -3103,6 +3171,142 @@ def _check_freeze_ask_targets_not_investigate_tagged(
                         "review, issue 1 (0x52Aa bleed)."
                     ),
                 ))
+    return violations
+
+
+_ZERO_FREEZABLE_SECONDARY_RE = re.compile(
+    r'\$0(?:\.00)?\s+FREEZABLE', re.IGNORECASE,
+)
+
+
+def _check_investigate_not_billed_as_freeze_target(
+    briefs_dir: Path,
+    freeze_asks: dict | None,
+    freeze_brief: dict | None,
+) -> list[Violation]:
+    """INVARIANT A2 (Jacob V-CFI02, build-failing): no address tagged
+    🟧 INVESTIGATE may be billed as a freeze target anywhere in the
+    bundle. Covers the three surfaces Jacob's V-CFI02 review named, at
+    the data layer (deterministic, no HTML-region parsing for the
+    first three):
+
+      1. freeze_asks.json ``by_issuer`` — must NOT list an INVESTIGATE
+         address as a per-issuer freeze ask (it belongs in
+         ``excluded_investigate``). Pre-v0.36.0 the 0x52Aa pool
+         contract appeared under Tether/BitGo/Circle/Threshold here.
+
+      2. freeze_brief ``FREEZABLE`` (the list that drives every
+         issuer freeze letter) — must NOT contain an INVESTIGATE-status
+         holding. The letters render from this list, so an INVESTIGATE
+         holding here surfaces as a freeze-target row.
+
+      3. freeze_brief ``FREEZABLE`` per-issuer ``total_suspected_usd``
+         — must be $0. A non-zero value renders the issuer letter's
+         "$X including positions still under investigation" clause,
+         billing the bleed as part of the theft.
+
+      4. le_handoff_*.html "Parallel preservation requests" block —
+         must NOT recommend a zero-FREEZABLE issuer. Detected via the
+         literal "$0 FREEZABLE" the secondary-preservation row renders
+         (BitGo showed "$0 FREEZABLE + $35.6M INVESTIGATE").
+
+    Severity: critical. This is the "first sendable iteration" gate —
+    a bundle that violates any clause is not shippable.
+    """
+    violations: list[Violation] = []
+    investigate_canon = _investigate_tagged_addresses(freeze_brief)
+
+    try:
+        from recupero._common import canonical_address_key as _ck
+    except Exception:  # noqa: BLE001
+        def _ck(a: str) -> str:  # type: ignore[misc]
+            return (a or "").strip().lower()
+
+    # ── Surface 1: freeze_asks.json by_issuer ──
+    if isinstance(freeze_asks, dict) and investigate_canon:
+        by_issuer = freeze_asks.get("by_issuer") or {}
+        if isinstance(by_issuer, dict):
+            for issuer, asks in by_issuer.items():
+                if not isinstance(asks, list):
+                    continue
+                for ask in asks:
+                    if not isinstance(ask, dict):
+                        continue
+                    addr = ask.get("address")
+                    if isinstance(addr, str) and _ck(addr) in investigate_canon:
+                        violations.append(Violation(
+                            check="investigate_not_billed_as_freeze_target",
+                            severity="critical",
+                            file="freeze_asks.json",
+                            detail=(
+                                f"freeze_asks.json by_issuer[{issuer!r}] lists "
+                                f"{addr} as a freeze target, but that address "
+                                "is 🟧 INVESTIGATE in the brief. It belongs in "
+                                "excluded_investigate, not by_issuer (Jacob "
+                                "V-CFI02 / 0x52Aa bleed)."
+                            ),
+                        ))
+
+    # ── Surfaces 2 + 3: freeze_brief FREEZABLE (letter driver) ──
+    if isinstance(freeze_brief, dict):
+        for entry in freeze_brief.get("FREEZABLE") or []:
+            if not isinstance(entry, dict):
+                continue
+            issuer = entry.get("issuer", "(unknown)")
+            for h in entry.get("holdings") or []:
+                if isinstance(h, dict) and (
+                    (h.get("status") or "").strip().upper() == "INVESTIGATE"
+                ):
+                    violations.append(Violation(
+                        check="investigate_not_billed_as_freeze_target",
+                        severity="critical",
+                        file="freeze_brief.json",
+                        detail=(
+                            f"freeze_brief FREEZABLE[{issuer!r}] holding "
+                            f"{h.get('address')} is INVESTIGATE-status. The "
+                            "issuer freeze letter renders from FREEZABLE, so "
+                            "this surfaces as a freeze-target row. INVESTIGATE "
+                            "holdings must be excluded from the letter-facing "
+                            "FREEZABLE list (Jacob V-CFI02)."
+                        ),
+                    ))
+            suspected = (entry.get("total_suspected_usd") or "$0").strip()
+            if suspected not in ("$0", "$0.00", "0", "$0.0", ""):
+                violations.append(Violation(
+                    check="investigate_not_billed_as_freeze_target",
+                    severity="critical",
+                    file="freeze_brief.json",
+                    detail=(
+                        f"freeze_brief FREEZABLE[{issuer!r}] carries "
+                        f"total_suspected_usd={suspected} (≠ $0). This renders "
+                        "the issuer letter's '$X including positions still "
+                        "under investigation' clause, billing INVESTIGATE "
+                        "leads as part of the theft (Jacob V-CFI02)."
+                    ),
+                ))
+
+    # ── Surface 4: le_handoff parallel-preservation block ──
+    if briefs_dir.is_dir():
+        for path in sorted(briefs_dir.glob("le_handoff_*.html")):
+            try:
+                html = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            if _ZERO_FREEZABLE_SECONDARY_RE.search(html):
+                violations.append(Violation(
+                    check="investigate_not_billed_as_freeze_target",
+                    severity="critical",
+                    file=path.name,
+                    detail=(
+                        f"{path.name}: the 'parallel preservation requests' "
+                        "block recommends an issuer rendered as '$0 FREEZABLE' "
+                        "— a zero-FREEZABLE (INVESTIGATE-only) issuer must not "
+                        "be recommended to LE, same $0-freezable guard that "
+                        "suppresses its standalone letter (Jacob V-CFI02, "
+                        "fix 2)."
+                    ),
+                ))
+
     return violations
 
 

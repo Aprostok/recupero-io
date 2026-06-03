@@ -806,6 +806,28 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
             if status == "UNKNOWN" and capability_is_freezable(ask_capability):
                 status = "FREEZABLE"
 
+            # v0.36.0 (Jacob V-CFI02, 0x52Aa bleed — freeze-ask path):
+            # an INVESTIGATE-tagged holding is NOT a freeze target. It's
+            # a lead requiring operator review — a smart-contract bleed
+            # (pooled protocol liquidity, e.g. the 0x52Aa 200x–546x
+            # balance-to-inflow contract), or a KYC-pending address.
+            # The letter-facing FREEZABLE list (keep_all=False) MUST NOT
+            # carry it: pre-v0.36.0 it flowed through to the issuer
+            # letter's "$X including positions still under investigation"
+            # total and the LE handoff's "N wallets pending KYC" prose,
+            # billing $88.8M of contract liquidity as part of a $3.1M
+            # theft — the same document then contradicted itself
+            # (section 1 "$3.5M perpetrator-controlled" vs section 3
+            # "freeze $88.8M at this one contract"). This mirrors the
+            # trace-headline fix (`_compute_perpetrator_holdings` already
+            # excludes INVESTIGATE). The complete-inventory view
+            # (keep_all=True → ALL_ISSUER_HOLDINGS, LE Section 4.2) STILL
+            # keeps the holding, labeled INVESTIGATE, for full disclosure
+            # to law enforcement — it's surfaced there as an identified
+            # address pending review, never as a freeze target.
+            if status == "INVESTIGATE" and not keep_all:
+                continue
+
             if status == "FREEZABLE":
                 total_usd += holding_usd
             elif status == "INVESTIGATE":
@@ -942,11 +964,20 @@ def _extract_freezable(freeze_asks: dict[str, Any], issuer_metadata: dict[str, d
     filtered: list[dict[str, Any]] = []
     for entry in freezable:
         total_freezable_d = _parse_usd_string(entry.get("total_usd", "0"))
-        total_suspected_d = _parse_usd_string(entry.get("total_suspected_usd", "0"))
-        # Keep the entry if EITHER there's confirmed freezable value OR
-        # there's investigative value (INVESTIGATE tier still warrants
-        # an outreach letter).
-        if total_freezable_d > 0 or total_suspected_d > 0:
+        # Keep the entry only if there's CONFIRMED freezable value.
+        # v0.36.0 (Jacob V-CFI02): the prior code also kept entries with
+        # total_suspected_usd > 0 — i.e. INVESTIGATE-only issuers still
+        # got an outreach letter. That is exactly the bug: BitGo
+        # ($0 FREEZABLE + $35.6M INVESTIGATE) and Threshold ($0 + $151K)
+        # have no confirmed freeze target, so they must NOT receive a
+        # freeze letter or appear in the LE recommended-action block.
+        # INVESTIGATE holdings are now excluded from this list entirely
+        # (see the `status == "INVESTIGATE" and not keep_all` skip
+        # above), so total_suspected_usd is always $0 here anyway — but
+        # we drop the suspected-value keep-branch explicitly so the
+        # intent is unambiguous and a future change to the skip can't
+        # silently resurrect empty-ask letters.
+        if total_freezable_d > 0:
             filtered.append(entry)
             continue
         # Last-resort: count actually-FREEZABLE-status holdings. If even
@@ -2445,6 +2476,106 @@ def emit_brief(
     return brief
 
 
+def _fold_excluded_investigate(freeze_asks: dict[str, Any]) -> dict[str, Any]:
+    """Idempotency helper for the v0.36.0 freeze-ask partition.
+
+    Re-merge any prior ``excluded_investigate`` entries back into
+    ``by_issuer`` so ``emit_brief`` always reasons over the COMPLETE
+    freeze-ask set — whether this is a first emit or a re-emit of an
+    already-partitioned ``freeze_asks.json``. Without this, a second
+    ``emit-brief`` run would read a freeze_asks.json whose INVESTIGATE
+    asks had already been moved out of by_issuer, and the LE Section
+    4.2 complete-inventory disclosure would silently lose those rows.
+
+    Returns a NEW dict; never mutates the input.
+    """
+    if not isinstance(freeze_asks, dict):
+        return {}
+    excluded = freeze_asks.get("excluded_investigate") or []
+    if not excluded:
+        return freeze_asks
+    merged = dict(freeze_asks)
+    by_issuer: dict[str, list] = {
+        k: list(v) for k, v in (merged.get("by_issuer") or {}).items()
+    }
+    for item in excluded:
+        if not isinstance(item, dict):
+            continue
+        issuer = item.get("issuer")
+        ask = {
+            k: v for k, v in item.items()
+            if k not in ("issuer", "excluded_reason")
+        }
+        if not issuer or not ask.get("address"):
+            continue
+        by_issuer.setdefault(issuer, []).append(ask)
+    merged["by_issuer"] = by_issuer
+    merged.pop("excluded_investigate", None)
+    merged.pop("excluded_investigate_count", None)
+    merged["total_asks"] = sum(len(v) for v in by_issuer.values())
+    return merged
+
+
+def _partition_investigate_asks(
+    freeze_asks: dict[str, Any], editorial_notes: dict[str, str],
+) -> dict[str, Any]:
+    """v0.36.0 (Jacob V-CFI02, fix 1): move every freeze-ask whose
+    destination is tagged 🟧 INVESTIGATE in the editorial
+    DESTINATION_NOTES out of ``by_issuer`` and into a top-level
+    ``excluded_investigate`` list.
+
+    The freeze_asks.json artifact must never list a contract-bleed /
+    lead address (e.g. the 0x52Aa 200x–546x balance-to-inflow pool
+    contract) as a per-issuer freeze target. Classification uses the
+    SAME ``_classify_address_status`` the brief uses, keyed canonically,
+    so the artifact and the brief never disagree about what is a freeze
+    target. Idempotent when paired with ``_fold_excluded_investigate``.
+
+    Returns a NEW dict; never mutates the input.
+    """
+    if not isinstance(freeze_asks, dict):
+        return freeze_asks
+    by_issuer = freeze_asks.get("by_issuer") or {}
+    notes_by_canon: dict[str, str] = {
+        _ck(k): v for k, v in (editorial_notes or {}).items() if _ck(k)
+    }
+    cleaned: dict[str, list] = {}
+    excluded: list[dict[str, Any]] = []
+    for issuer, asks in by_issuer.items():
+        kept: list = []
+        for ask in asks:
+            if not isinstance(ask, dict):
+                kept.append(ask)
+                continue
+            status = _classify_address_status(
+                _ck(ask.get("address", "")), notes_by_canon,
+            )
+            if status == "INVESTIGATE":
+                excluded.append({
+                    **ask,
+                    "issuer": issuer,
+                    "excluded_reason": (
+                        "Tagged INVESTIGATE in DESTINATION_NOTES — lead / "
+                        "contract-bleed pending operator review; not a "
+                        "confirmed freeze target (Jacob V-CFI02 / 0x52Aa)."
+                    ),
+                })
+            else:
+                kept.append(ask)
+        if kept:
+            cleaned[issuer] = kept
+    out = dict(freeze_asks)
+    out["by_issuer"] = cleaned
+    out["total_asks"] = sum(len(v) for v in cleaned.values())
+    if excluded:
+        out["excluded_investigate"] = excluded
+        out["excluded_investigate_count"] = len(excluded)
+    else:
+        out.pop("excluded_investigate", None)
+        out.pop("excluded_investigate_count", None)
+    return out
+
+
 def run_emit_brief(
     case_id: str,
     case_store: CaseStore,
@@ -2496,6 +2627,13 @@ def run_emit_brief(
             )
             freeze_asks = {}
 
+    # 3b. v0.36.0 (Jacob V-CFI02): if a prior emit already partitioned
+    # INVESTIGATE asks out of by_issuer, fold them back so the assembly
+    # below reasons over the complete freeze-ask set (the LE Section 4.2
+    # complete-inventory disclosure depends on seeing them). The
+    # partition is re-applied to the on-disk artifact at step 6b.
+    freeze_asks = _fold_excluded_investigate(freeze_asks)
+
     # 4. Load editorial (or write template and stop)
     editorial_path = case_dir / "brief_editorial.json"
     if not editorial_path.exists():
@@ -2520,6 +2658,37 @@ def run_emit_brief(
     # Atomic write so a concurrent reader (bucket uploader, portal) can't
     # pick up a half-written JSON.
     atomic_write_text(out_path, json.dumps(brief, indent=2, allow_nan=False, ensure_ascii=False))
+
+    # 6b. v0.36.0 (Jacob V-CFI02, fix 1): re-write freeze_asks.json with
+    # every INVESTIGATE-tagged destination moved out of `by_issuer` into
+    # `excluded_investigate`. The freeze_asks.json artifact must never
+    # list a contract-bleed / lead address as a freeze target — pre-fix
+    # the 0x52Aa pool contract appeared under four issuers (Tether $38.9M,
+    # BitGo $35.6M, Circle $14.3M, Threshold $151K). Best-effort: a write
+    # failure here must not lose the freeze_brief just emitted.
+    if freeze_asks_path.exists():
+        try:
+            # Placeholder note keys (and any non-address key) are dropped
+            # inside _partition_investigate_asks by its `if _ck(k)` guard,
+            # so no key-prefix filtering is needed here.
+            editorial_notes = editorial.get("DESTINATION_NOTES", {}) or {}
+            partitioned = _partition_investigate_asks(freeze_asks, editorial_notes)
+            if partitioned.get("excluded_investigate"):
+                atomic_write_text(
+                    freeze_asks_path,
+                    json.dumps(partitioned, indent=2, allow_nan=False, ensure_ascii=False),
+                )
+                log.info(
+                    "emit_brief: partitioned %d INVESTIGATE-tagged ask(s) out "
+                    "of freeze_asks.json by_issuer into excluded_investigate "
+                    "(case=%s)",
+                    partitioned.get("excluded_investigate_count", 0), case_id,
+                )
+        except Exception as _exc:  # noqa: BLE001 — non-fatal
+            log.warning(
+                "emit_brief: freeze_asks.json INVESTIGATE-partition step "
+                "failed (non-fatal): %s", _exc,
+            )
 
     # 7. v0.21.0: auto-subscribe perp wallets to live monitoring.
     # Best-effort — a Supabase outage here must not break the brief

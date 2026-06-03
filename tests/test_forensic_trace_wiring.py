@@ -24,7 +24,11 @@ from __future__ import annotations
 
 import pytest
 
-from recupero.trace.tracer import _bridge_confirm_enabled, _deep_reach_enabled
+from recupero.trace.tracer import (
+    _bridge_confirm_enabled,
+    _crosschain_max_bridge_hops,
+    _deep_reach_enabled,
+)
 
 _BC = "RECUPERO_BRIDGE_CONFIRM"
 _DR = "RECUPERO_DEEP_REACH"
@@ -93,3 +97,42 @@ def test_explicit_bridge_confirm_on_overrides_deep_reach_off(
     monkeypatch.setenv(_DR, "0")
     monkeypatch.setenv(_BC, "1")
     assert _bridge_confirm_enabled() is True
+
+
+# ── multi-bridge recursion hop cap (deep cross-chain #2) ───────────────
+
+_MBH = "RECUPERO_CROSSCHAIN_MAX_BRIDGE_HOPS"
+
+
+def test_bridge_hops_default_deep(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(_MBH, raising=False)
+    # deep-reach default ON ⇒ follow up to 4 consecutive bridge crossings.
+    assert _crosschain_max_bridge_hops() == 4
+
+
+def test_bridge_hops_single_when_deep_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(_MBH, raising=False)
+    monkeypatch.setenv(_DR, "0")
+    # deep-reach opted out ⇒ legacy single crossing.
+    assert _crosschain_max_bridge_hops() == 1
+
+
+def test_bridge_hops_explicit_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(_DR, "0")
+    monkeypatch.setenv(_MBH, "6")
+    assert _crosschain_max_bridge_hops() == 6
+
+
+def test_bridge_hops_clamped_to_at_least_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_MBH, "0")
+    assert _crosschain_max_bridge_hops() == 1
+
+
+def test_bridge_hops_bad_value_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_MBH, "abc")  # bad → deep-reach-derived default
+    monkeypatch.delenv(_DR, raising=False)
+    assert _crosschain_max_bridge_hops() == 4

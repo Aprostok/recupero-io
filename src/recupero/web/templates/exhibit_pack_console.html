@@ -115,6 +115,20 @@
 
   $("load").addEventListener("click", load);
   $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
+
+  // Deep-link support: prefill + auto-load from ?case_id= (e.g. from Case Overview).
+  (function () {
+    try {
+      var _qs = new URLSearchParams(window.location.search);
+      var _cid = _qs.get("case_id");
+      if (_cid) { $("case").value = _cid; }
+      var _jur = _qs.get("jurisdiction");
+      if (_jur && $("jur")) { $("jur").value = _jur; }   // sar_filing only; no-op elsewhere
+      // Auto-trigger only when we have both a case_id AND a key already present
+      // (single sign-in via sessionStorage) — otherwise just prefill and wait.
+      if (_cid && $("key") && $("key").value) { load(); }
+    } catch (e) {}
+  })();
 })();
 </script>
 </body>

@@ -121,6 +121,11 @@ _NAV: list[dict[str, Any]] = [
      "desc": "Score a case's trace against an independently-verified "
              "ground-truth endpoint list — recall / precision / F1, plus missed "
              "and spurious endpoints."},
+    # v0.35.30: D6 proactive recovery alerts (persisted freeze-NOW queue).
+    {"group": "Monitoring", "label": "Recovery Alerts", "emoji": "🚨",
+     "path": "/v1/recovery-alerts/console", "live": True,
+     "desc": "Live act-now / freeze-NOW queue — prioritized D6 recovery alerts "
+             "(critical/high) persisted from each watch tick, newest first."},
 ]
 
 

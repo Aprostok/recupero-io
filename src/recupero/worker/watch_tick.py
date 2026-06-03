@@ -352,6 +352,18 @@ def run_watch_tick(
     except Exception as _exc:  # noqa: BLE001 — alerting must never break the tick
         log.warning("watch-tick: recovery-alert evaluation failed (%s)", _exc)
 
+    # v0.35.30 (D6 persistence): store the alerts so the operator console
+    # (/v1/recovery-alerts) can surface the freeze-NOW queue between ticks.
+    # Additive + guarded — a missing table (migration 033 not yet applied) or
+    # any DB error is logged, NEVER raised into the tick.
+    try:
+        if report.alerts:
+            from recupero.monitoring.recovery_alerts_store import persist_alerts
+            n = persist_alerts(dsn, report.alerts, tick_started_at=started_at)
+            log.info("watch-tick: persisted %d new recovery alert(s)", n)
+    except Exception as _exc:  # noqa: BLE001 — persistence must never break the tick
+        log.warning("watch-tick: recovery-alert persist failed (%s)", _exc)
+
     report.finished_at = datetime.now(UTC)
     log.info(
         "watch-tick done: candidates=%d snapshotted=%d cooldown=%d "

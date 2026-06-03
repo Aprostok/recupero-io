@@ -179,6 +179,8 @@ for _mod, _attr in (
     ("recupero.api.case_overview_api", "router"),
     # v0.35.29 (UI batch-10): J1 trace-accuracy benchmark.
     ("recupero.api.benchmark_api", "router"),
+    # v0.35.30: D6 proactive recovery alerts (persisted; live freeze-NOW queue).
+    ("recupero.api.recovery_alerts_api", "router"),
 ):
     try:
         _m = __import__(_mod, fromlist=[_attr])

@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Recovery Alerts</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  select { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; background: #fff; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .summary { font-size: .85rem; margin-bottom: 1rem; color: #444; }
+  .summary .crit { color: #c0392b; font-weight: 700; }
+  .summary .hi { color: #b9770e; font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  tr.sev-critical td { background: #fdf3f2; }
+  tr.sev-high td { background: #fdf8ee; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
+  .badge { display:inline-block; padding:.08rem .4rem; border-radius:6px; font-size:.7rem; font-weight:600; text-transform: uppercase; }
+  .badge.critical { background:#f9e0dd; color:#a93226; }
+  .badge.high { background:#fbeccd; color:#b9770e; }
+  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+  .action { color: #555; font-size: .72rem; max-width: 24rem; }
+  .msgcell { max-width: 22rem; }
+</style>
+</head>
+<body>
+  <h1>🚨 Recovery Alerts</h1>
+  <div class="sub">The live "act-now / freeze-NOW" queue. D6 derives a prioritized recovery alert per material
+    on-chain movement from each watch tick (freezable outflows/inflows, tracked outflows, dormant reactivations).
+    Deployment-wide, sourced from the DB. Paste your operator key to load; data is fetched directly from the
+    admin-gated API (the key stays in a request header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <select id="sev">
+      <option value="">All severities</option>
+      <option value="critical">critical</option>
+      <option value="high">high</option>
+    </select>
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div id="tablewrap"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function render(rep) {
+    var rows = rep.alerts || [];
+    var configured = !!rep.db_configured;
+    var sum = rep.summary || {};
+    var nCrit = sum.critical || 0, nHigh = sum.high || 0;
+
+    $("summary").innerHTML =
+      '<span class="crit">' + esc(nCrit) + ' critical</span> / ' +
+      '<span class="hi">' + esc(nHigh) + ' high</span>';
+
+    // Empty state — handles BOTH db_configured=false AND an empty list.
+    if (!configured || !rows.length) {
+      $("tablewrap").innerHTML =
+        '<p class="sub">No recovery alerts (no DB configured, or none fired yet).</p>';
+      return;
+    }
+
+    var h = '<table><thead><tr>' +
+      '<th>Severity</th>' +
+      '<th>Kind</th>' +
+      '<th>Address</th>' +
+      '<th>Chain</th>' +
+      '<th class="right">Delta USD</th>' +
+      '<th class="right">Dormant days</th>' +
+      '<th>Role</th>' +
+      '<th>Label</th>' +
+      '<th>Message</th>' +
+      '<th>Recommended action</th>' +
+      '<th>Created</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var sev = (r.severity == null ? "" : String(r.severity));
+      var sevCls = (sev === "critical" || sev === "high") ? sev : "";
+      h += '<tr class="sev-' + esc(sevCls) + '">' +
+        '<td><span class="badge ' + esc(sevCls) + '">' + esc(sev) + '</span></td>' +
+        '<td>' + esc(r.kind) + '</td>' +
+        '<td class="mono">' + esc(r.address) + '</td>' +
+        '<td>' + esc(r.chain) + '</td>' +
+        '<td class="right mono">' + esc(r.delta_usd == null ? "—" : r.delta_usd) + '</td>' +
+        '<td class="right">' + esc(r.dormant_days == null ? "—" : r.dormant_days) + '</td>' +
+        '<td>' + esc(r.role == null ? "—" : r.role) + '</td>' +
+        '<td>' + esc(r.label_name == null ? "—" : r.label_name) + '</td>' +
+        '<td class="msgcell">' + esc(r.message) + '</td>' +
+        '<td class="action">' + esc(r.recommended_action) + '</td>' +
+        '<td class="mono">' + esc(r.created_at) + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    $("tablewrap").innerHTML = h;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    var sev = ($("sev").value || "").trim();
+    setMsg("Loading…");
+    fetch("/v1/recovery-alerts" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
+          { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("API not configured (admin key).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  $("sev").addEventListener("change", function () { if (key()) { load(); } });
+  if (key()) { load(); }
+})();
+</script>
+</body>
+</html>

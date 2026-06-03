@@ -78,6 +78,36 @@ Optional tunables (defaults are sensible):
 | `RECUPERO_DORMANT_CONCURRENCY`    | 5       | Threads used by the dormant detector to parallelize per-address balance sweeps. Etherscan/CoinGecko rate limiters cap global throughput regardless. Set to 1 to disable parallelism (e.g., for debugging). Higher values give diminishing returns once the rate limit caps actual throughput. |
 | `RECUPERO_TRACE_CONCURRENCY`      | 5       | Threads used by the trace BFS to parallelize per-address outflow fetching within a single depth wave. Same rate-limiter ceiling as dormant. Set to 1 to force serial BFS (e.g., for deterministic test runs). |
 | `RECUPERO_CROSS_CHAIN_CONTINUATION` | **`on` (v0.28.0+)** | When ON the trace follows a bridge handoff onto the destination chain (depth-1 BFS) using the freshly-instantiated destination adapter. Pre-v0.28 default was OFF for cost reasons — flipped to ON in v0.28.0 because the Zigha case (1 of 7 known destinations found) made the trace-coverage gap visible in shipping artifacts and the v0.17.4 dedup + cost caps bound the expansion. Set to `0` / `false` / `no` / `off` to opt OUT (e.g. for R&D / fixture-build runs that intentionally stop at the source chain). |
+| `RECUPERO_DEEP_REACH`               | OFF (set **`1`** in prod) | **Forensic-depth master switch — recommended ON for the production worker.** One knob turns on the full deep-reach recipe: value-directed tracing through aggregators/service wallets, 1:N peel/split following, dormancy-aware time window (funds parked then moved weeks later), stop-and-flag at mixer/exchange/bridge terminals, AND (v0.36.0) the cryptographic cross-chain **bridge-pairing oracle** (`RECUPERO_BRIDGE_CONFIRM` inherits this). Without it, a bridge case detects the handoff but does not cross it — freeze letters land at the first hop, not where the money rests. Costs more API/time per case (live destination-chain log queries + value-matching), which is why it is opt-in. Default OFF keeps every existing fixture byte-identical. See `docs/ENV_VARS.md` for the per-knob breakdown and `docs/BRIDGE_PAIRING.md` for the oracle. |
+
+#### Recommended production trace profile (real bridge / multi-hop cases)
+
+Set these on the **`recupero-worker`** service (and `recupero-cron`, which
+re-traces) so the initial trace follows funds to their resting place:
+
+```
+RECUPERO_DEEP_REACH=1          # full forensic depth incl. cross-chain oracle
+RECUPERO_TRACE_TIMEOUT_SEC=1800  # deep multi-chain traces need >9min (default 540)
+# RECUPERO_CROSS_CHAIN_CONTINUATION is already ON by default (v0.28.0+)
+```
+
+Deep-reach is **API-heavy** (cross-chain log queries + value-matching + peel
+following), so it pairs with a paid Etherscan/explorer rate (see the per-chain
+`requests_per_second` config and `RECUPERO_ETHERSCAN_RPS`) and the raised
+`RECUPERO_TRACE_TIMEOUT_SEC` above — without the higher timeout a deep
+multi-chain trace can hit the 540s ceiling and stamp itself incomplete (which
+re-introduces the very under-coverage deep-reach is meant to fix).
+
+To run the cheaper *bridge-follow-only* profile (cross the bridges + prove
+them, but skip the peel/split/dormancy value-tracing), set
+`RECUPERO_BRIDGE_CONFIRM=1` instead of `RECUPERO_DEEP_REACH=1`. To deep-reach
+on a same-chain case while skipping the live cross-chain oracle queries, set
+both `RECUPERO_DEEP_REACH=1` and `RECUPERO_BRIDGE_CONFIRM=0` (explicit wins).
+
+Coverage regressions are caught by `INVARIANT B`
+(`destinations_superset_of_ground_truth`): drop a `ground_truth.json` with the
+known resting addresses into a case dir and the validator fails the build if
+the trace's found-set isn't a superset.
 
 Investigator identity (optional; appears on every freeze brief + LE handoff):
 

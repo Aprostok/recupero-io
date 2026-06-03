@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Recovery Snapshot</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  h2 { font-size: 1rem; margin: 1.4rem 0 .5rem; text-transform: capitalize; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button:disabled { opacity: .5; cursor: default; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
+  .label { font-weight: 700; white-space: nowrap; }
+  #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+  .explain { background: #eef2fb; border: 1px solid #d6e0f5; color: #2c3e50; border-radius: 10px; padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
+  .empty { color: #888; font-size: .8rem; }
+  .banner { background: #fff4e5; border: 2px solid #e67e22; color: #8a4b00; border-radius: 10px; padding: .7rem 1rem; font-size: .9rem; font-weight: 700; margin-bottom: 1rem; }
+  .banner .note { display: block; font-weight: 400; font-size: .78rem; margin-top: .3rem; color: #a05a00; }
+  .section { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .2rem 1rem 1rem; margin-bottom: 1rem; }
+  .section p { white-space: pre-wrap; font-size: .85rem; line-height: 1.45; }
+  .section ul { margin: .3rem 0 .3rem 1.1rem; padding: 0; font-size: .85rem; line-height: 1.5; }
+  .section li { margin: .2rem 0; }
+  .headline { display: flex; flex-wrap: wrap; gap: .8rem; margin-bottom: 1rem; }
+  .kpi { flex: 1 1 14rem; background: #fff; border: 1px solid #e3e3e3; border-left: 4px solid #2563eb; border-radius: 10px; padding: .7rem 1rem; }
+  .kpi .k-label { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; color: #777; margin-bottom: .25rem; }
+  .kpi .k-amount { font-size: 1.5rem; font-weight: 700; color: #1a1a1a; line-height: 1.1; }
+  .kpi .k-sub { font-size: .74rem; color: #666; margin-top: .25rem; }
+  .rec { display: inline-block; padding: .2rem .6rem; border-radius: 12px; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
+  .rec.recommend  { background: #DCFCE7; color: #14532D; }
+  .rec.caveat     { background: #FEF3C7; color: #5C2D0F; }
+  .rec.discourage { background: #FED7AA; color: #5C1F09; }
+  .rec.reject     { background: #FECACA; color: #7F1D1D; }
+</style>
+</head>
+<body>
+  <h1>💰 Recovery Snapshot</h1>
+  <div class="sub">Pre-engagement recovery estimate for a single case. Paste your operator key and a case id
+    to load; data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
+
+  <div class="explain">Read-only view of the STORED <span class="mono">RECOVERY_ESTIMATE</span> inside the case's
+    <span class="mono">freeze_brief.json</span> (run <span class="mono">emit-brief</span> first). This console never recomputes
+    the estimate, never calls the trace/estimator, and never fabricates numbers — it displays only what is stored.</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div id="out"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+  function clear() { $("out").innerHTML = ""; }
+
+  // Keys surfaced in the prominent headline / per-issuer / drivers blocks below;
+  // everything else is rendered generically so the console is robust to the
+  // exact RECOVERY_ESTIMATE shape varying.
+  var HEADLINE_KEYS = {
+    "recommendation": 1,
+    "expected_net_to_victim_usd": 1, "expected_net_low_usd": 1, "expected_net_high_usd": 1,
+    "probability_any_recovery_90d": 1, "headline_summary": 1,
+    "per_issuer": 1, "drivers": 1
+  };
+  var TITLES = {
+    "total_recoverable_usd": "Total Recoverable",
+    "expected_recovered_usd": "Expected Recovered",
+    "confidence_note": "Confidence Note",
+    "_meta": "Metadata"
+  };
+  function titleFor(k) { return TITLES[k] || k.replace(/^_+/, "").replace(/_/g, " "); }
+
+  function renderList(arr) {
+    if (!arr.length) return '<p class="empty">None.</p>';
+    var h = "<ul>";
+    arr.forEach(function (v) {
+      if (v && typeof v === "object") { h += "<li>" + renderValue(v) + "</li>"; }
+      else { h += "<li>" + esc(v) + "</li>"; }
+    });
+    return h + "</ul>";
+  }
+
+  function renderDict(obj) {
+    var keys = Object.keys(obj);
+    if (!keys.length) return '<p class="empty">None.</p>';
+    var h = "<table><tbody>";
+    keys.forEach(function (k) {
+      h += '<tr><td class="label">' + esc(k) + "</td><td>" + renderValue(obj[k]) + "</td></tr>";
+    });
+    return h + "</tbody></table>";
+  }
+
+  function renderValue(v) {
+    if (v == null) return '<span class="empty">—</span>';
+    if (Array.isArray(v)) return renderList(v);
+    if (typeof v === "object") return renderDict(v);
+    return "<p>" + esc(v) + "</p>";
+  }
+
+  // Render an array of objects as a table whose columns are the union of keys —
+  // used for per_issuer / drivers when they arrive as a list of dicts. Falls
+  // back to the generic list renderer for anything else.
+  function renderRows(arr) {
+    if (!Array.isArray(arr) || !arr.length) return '<p class="empty">None.</p>';
+    var allObjects = arr.every(function (r) { return r && typeof r === "object" && !Array.isArray(r); });
+    if (!allObjects) return renderList(arr);
+    var cols = [];
+    arr.forEach(function (r) { Object.keys(r).forEach(function (k) { if (cols.indexOf(k) < 0) cols.push(k); }); });
+    var h = "<table><thead><tr>";
+    cols.forEach(function (c) { h += "<th>" + esc(titleFor(c)) + "</th>"; });
+    h += "</tr></thead><tbody>";
+    arr.forEach(function (r) {
+      h += "<tr>";
+      cols.forEach(function (c) {
+        var cell = r[c];
+        if (cell != null && typeof cell === "object") { h += "<td>" + renderValue(cell) + "</td>"; }
+        else { h += "<td>" + (cell == null ? '<span class="empty">—</span>' : esc(cell)) + "</td>"; }
+      });
+      h += "</tr>";
+    });
+    return h + "</tbody></table>";
+  }
+
+  var REC_LABELS = {
+    "recommend": "Recommended for engagement",
+    "caveat": "Engage with caveat",
+    "discourage": "Engagement discouraged",
+    "reject": "Recovery not advised"
+  };
+
+  function fmtProb(p) {
+    if (typeof p !== "number" || !isFinite(p)) return null;
+    return Math.round(p * 100) + "%";
+  }
+
+  function render(payload) {
+    clear();
+    var est = payload && payload.recovery_estimate;
+    if (!est || typeof est !== "object") {
+      $("out").innerHTML = '<p class="empty">No recovery estimate in this case.</p>';
+      return;
+    }
+    var html = "";
+
+    // Pre-engagement disclaimer — this is an ESTIMATE, not a guarantee.
+    html += '<div class="banner">⚠ PRE-ENGAGEMENT ESTIMATE — NOT A GUARANTEE' +
+      '<span class="note">Probability-weighted figures derived from per-issuer freeze-outcome history. ' +
+      'Actual recovery depends on issuer responsiveness, jurisdiction, and the perpetrator’s actions. ' +
+      'Not legal advice; not the full case record.</span></div>';
+
+    // Headline KPIs — surface the recovery numbers prominently if present.
+    var kpis = "";
+    var rec = est.recommendation;
+    if (rec) {
+      var recCls = ({recommend:1, caveat:1, discourage:1, reject:1})[rec] ? rec : "caveat";
+      kpis += '<div class="kpi"><div class="k-label">Recommendation</div>' +
+        '<div><span class="rec ' + recCls + '">' + esc(REC_LABELS[rec] || rec) + '</span></div></div>';
+    }
+    var net = est.expected_net_to_victim_usd;
+    if (net != null && net !== "") {
+      var negative = String(net).indexOf("$-") === 0;
+      var lbl = negative ? "Estimated net cost if engaged" : "Projected net recovery to victim";
+      var lo = est.expected_net_low_usd, hi = est.expected_net_high_usd;
+      var rangeStr = (lo != null && lo !== "") || (hi != null && hi !== "")
+        ? "90% range: " + esc(lo == null ? "—" : lo) + " – " + esc(hi == null ? "—" : hi) : "";
+      kpis += '<div class="kpi"><div class="k-label">' + esc(lbl) + '</div>' +
+        '<div class="k-amount"' + (negative ? ' style="color:#7f1d1d"' : '') + '>' + esc(net) + '</div>' +
+        (rangeStr ? '<div class="k-sub">' + rangeStr + '</div>' : '') + '</div>';
+    }
+    var prob = fmtProb(est.probability_any_recovery_90d);
+    if (prob) {
+      kpis += '<div class="kpi"><div class="k-label">Probability of any recovery (90d)</div>' +
+        '<div class="k-amount">' + esc(prob) + '</div></div>';
+    }
+    if (kpis) { html += '<div class="headline">' + kpis + "</div>"; }
+
+    if (est.headline_summary) {
+      html += '<div class="section"><h2>Summary</h2><p>' + esc(est.headline_summary) + "</p></div>";
+    }
+
+    // Per-issuer breakdown.
+    if (est.per_issuer && est.per_issuer.length) {
+      html += '<div class="section"><h2>Per-issuer breakdown</h2>' + renderRows(est.per_issuer) + "</div>";
+    }
+
+    // Drivers — what's helping / hurting.
+    if (est.drivers && est.drivers.length) {
+      html += '<div class="section"><h2>Drivers (what’s helping / hurting)</h2>' + renderRows(est.drivers) + "</div>";
+    }
+
+    // Any remaining fields rendered generically and robustly via esc().
+    var keys = Object.keys(est);
+    var extra = "";
+    keys.forEach(function (k) {
+      if (HEADLINE_KEYS[k]) return;
+      extra += '<div class="section"><h2>' + esc(titleFor(k)) + "</h2>" + renderValue(est[k]) + "</div>";
+    });
+    html += extra;
+
+    $("out").innerHTML = html;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+  function caseId() { return ($("case").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    var cid = caseId();
+    if (!cid) { setMsg("Enter a case id.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading…");
+    clear();
+    fetch("/v1/recovery-snapshot?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 404) throw new Error("No RECOVERY_ESTIMATE — run emit-brief first, or case not found.");
+        if (res.status === 503) throw new Error("API not configured (admin key).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (payload) { render(payload); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
+})();
+</script>
+</body>
+</html>

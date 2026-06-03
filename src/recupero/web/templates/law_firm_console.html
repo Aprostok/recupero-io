@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Law Firm Dashboard</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
+  .card .v { font-size: 1.3rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+  .card.alert .v { color: #c0392b; } .card.ok .v { color: #1e8449; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  tr.inactive td { background: #fdf6ec; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
+  .badge { display:inline-block; padding:.08rem .4rem; border-radius:6px; font-size:.7rem; font-weight:600; }
+  .badge.active { background:#e3f3e8; color:#1e8449; }
+  .badge.inactive { background:#f8ecd8; color:#9c6a1a; }
+  .badge.lowsample { background:#eef0f2; color:#33414f; }
+  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+  .issuers { color: #555; font-size: .72rem; max-width: 26rem; }
+  .issuers .iss { display:block; }
+  .firmname { font-weight: 600; }
+</style>
+</head>
+<body>
+  <h1>⚖️ Law Firm Dashboard</h1>
+  <div class="sub">Per-law-firm portfolio rollups across every referred case: volume (cases referred,
+    traces completed, cases in queue, cases with letters sent), money (total loss, total frozen, total
+    returned to victims), throughput medians (intake&nbsp;&rarr;&nbsp;first letter, letter&nbsp;&rarr;&nbsp;first
+    freeze), and the top issuers seen across the firm's caseload. Deployment-wide, sourced from the DB.
+    Paste your operator key to load; data is fetched directly from the admin-gated API (the key stays in a
+    request header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div class="cards" id="cards"></div>
+  <div id="tablewrap"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+
+  function hours(x) { return (x == null) ? "—" : (Math.round(x * 10) / 10) + "h"; }
+
+  function issuersCell(list) {
+    if (!list || !list.length) { return '—'; }
+    var out = '';
+    list.forEach(function (it) {
+      var resp = (it.cross_firm_response_rate_pct == null) ? "" :
+                 ' · resp ' + esc(it.cross_firm_response_rate_pct);
+      out += '<span class="iss"><span class="mono">' + esc(it.issuer) + '</span> — ' +
+             esc(it.n_letters_sent == null ? 0 : it.n_letters_sent) + ' letters · ' +
+             esc(it.n_freezes_observed == null ? 0 : it.n_freezes_observed) + ' freezes · ' +
+             esc(it.total_frozen_usd_human) + resp + '</span>';
+    });
+    return out;
+  }
+
+  function render(rep) {
+    var rows = rep.firms || [];
+    var configured = !!rep.db_configured;
+
+    // Summary cards (always shown).
+    var nFirms = rows.length;
+    var nCases = 0, nCompleted = 0;
+    rows.forEach(function (r) {
+      nCases += (r.n_referred_cases || 0);
+      nCompleted += (r.n_completed_traces || 0);
+    });
+    $("cards").innerHTML =
+      card(nFirms, "Firms") +
+      card(nCases, "Referred cases") +
+      card(nCompleted, "Completed traces", nCompleted ? "ok" : "");
+
+    // Empty state — handles BOTH db_configured=false AND an empty list.
+    if (!configured || !rows.length) {
+      $("tablewrap").innerHTML =
+        '<p class="sub">No law-firm data (no DB configured, or no firms on file yet).</p>';
+      return;
+    }
+
+    var h = '<table><thead><tr>' +
+      '<th>Firm</th>' +
+      '<th class="right">Referred</th>' +
+      '<th class="right">Completed</th>' +
+      '<th class="right">In queue</th>' +
+      '<th class="right">Letters sent</th>' +
+      '<th class="right">Total loss</th>' +
+      '<th class="right">Frozen</th>' +
+      '<th class="right">Returned</th>' +
+      '<th class="right">Intake&rarr;letter</th>' +
+      '<th class="right">Letter&rarr;freeze</th>' +
+      '<th>Top issuers</th>' +
+      '</tr></thead><tbody>';
+    rows.forEach(function (r) {
+      var active = (r.firm_status === "active");
+      var statusBadge = active
+        ? '<span class="badge active">active</span>'
+        : '<span class="badge inactive">' + esc(r.firm_status || "inactive") + '</span>';
+      var throughputFlag = r.has_confident_throughput
+        ? ''
+        : ' <span class="badge lowsample">low sample</span>';
+      h += '<tr class="' + (active ? "" : "inactive") + '">' +
+        '<td><span class="firmname">' + esc(r.firm_name) + '</span><br>' +
+          '<span class="mono">' + esc(r.firm_slug) + '</span> ' + statusBadge + throughputFlag + '</td>' +
+        '<td class="right">' + esc(r.n_referred_cases == null ? "—" : r.n_referred_cases) + '</td>' +
+        '<td class="right">' + esc(r.n_completed_traces == null ? "—" : r.n_completed_traces) + '</td>' +
+        '<td class="right">' + esc(r.n_in_queue == null ? "—" : r.n_in_queue) + '</td>' +
+        '<td class="right">' + esc(r.n_with_letters_sent == null ? "—" : r.n_with_letters_sent) + '</td>' +
+        '<td class="right">' + esc(r.total_loss_usd_human) + '</td>' +
+        '<td class="right">' + esc(r.total_frozen_usd_human) + '</td>' +
+        '<td class="right">' + esc(r.total_returned_to_victim_usd_human) + '</td>' +
+        '<td class="right">' + esc(hours(r.median_hours_intake_to_first_letter)) + '</td>' +
+        '<td class="right">' + esc(hours(r.median_hours_letter_to_first_freeze)) + '</td>' +
+        '<td class="issuers">' + issuersCell(r.top_issuers) + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    $("tablewrap").innerHTML = h;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading…");
+    fetch("/v1/law-firm", { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("API not configured (admin key).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  if (key()) { load(); }
+})();
+</script>
+</body>
+</html>

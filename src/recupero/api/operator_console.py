@@ -93,6 +93,15 @@ _NAV: list[dict[str, Any]] = [
      "desc": "Per-issuer cooperation profiles: freeze-letter response/freeze "
              "rates, response times, recommended legal instrument, black-hole "
              "flags."},
+    # v0.35.24 UI batch-5 phase consoles.
+    {"group": "Intelligence", "label": "Law Firm Dashboard", "emoji": "⚖️",
+     "path": "/v1/law-firm/console", "live": True,
+     "desc": "Per-law-firm portfolio rollups: cases referred/completed/in-queue, "
+             "money frozen & returned, throughput medians, top issuers."},
+    {"group": "Casework", "label": "Recovery Snapshot", "emoji": "💰",
+     "path": "/v1/recovery-snapshot/console", "live": True,
+     "desc": "Pre-engagement recovery estimate for a case — expected "
+             "net-to-victim, per-issuer breakdown, drivers/ROI (read-only)."},
 ]
 
 

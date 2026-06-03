@@ -172,6 +172,9 @@ for _mod, _attr in (
     # v0.35.23 (UI batch-4): AI-triage (read-stored) + cooperation intelligence.
     ("recupero.api.ai_triage_api", "router"),
     ("recupero.api.cooperation_api", "router"),
+    # v0.35.24 (UI batch-5): law-firm portfolio dashboard + recovery snapshot.
+    ("recupero.api.law_firm_api", "router"),
+    ("recupero.api.recovery_snapshot_api", "router"),
 ):
     try:
         _m = __import__(_mod, fromlist=[_attr])

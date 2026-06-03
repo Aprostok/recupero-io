@@ -183,6 +183,30 @@ class TonAdapter(ChainAdapter):
                 out.append(norm)
         return out
 
+    def _resolve_jetton_meta(
+        self, master: str | None,
+    ) -> tuple[str, int | None, str | None]:
+        """Resolve (symbol, decimals, coingecko_id) for a Jetton master.
+
+        Pinned canonical stables (``_JETTON_META``: USDT-TON → tether/6) are
+        returned verbatim for certainty. For any OTHER jetton we fetch
+        AUTHORITATIVE decimals from TON Center (``client.jetton_decimals``,
+        cached) and leave ``coingecko_id=None`` so the pricing layer resolves
+        USD by the master CONTRACT on platform ``the-open-network`` — no guessed
+        decimals, no fabricated price. Returns decimals=None when unresolvable
+        (caller must skip the transfer)."""
+        if not master:
+            return "JETTON", None, None
+        pinned = _JETTON_META.get(master)
+        if pinned is not None:
+            return pinned
+        decimals: int | None = None
+        try:
+            decimals = self.client.jetton_decimals(master)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("ton: jetton_decimals(%s) failed: %s", master, exc)
+        return "JETTON", decimals, None
+
     def _normalize_jetton(
         self, tr: Any, canonical_from: str, start_block: int,
     ) -> dict[str, Any] | None:
@@ -210,13 +234,11 @@ class TonAdapter(ChainAdapter):
             master = normalize_ton_address(master_raw) if master_raw else None
         except ValueError:
             master = None
-        meta = _JETTON_META.get(master or "")
-        if meta is None:
-            # Unknown jetton: we can't trust decimals → don't fabricate a USD-
-            # bearing transfer. Skip (mirrors the EVM "refuse to guess decimals"
-            # posture). Extending _JETTON_META is a one-line addition.
+        symbol, decimals, cg_id = self._resolve_jetton_meta(master)
+        if decimals is None:
+            # Decimals unresolvable (unknown master, API miss) → refuse to guess
+            # (mirrors the EVM "refuse to guess decimals" posture). Skip.
             return None
-        symbol, decimals, cg_id = meta
         try:
             amount_raw = int(tr.get("amount") or 0)
         except (TypeError, ValueError):

@@ -26,15 +26,19 @@ LATER = 1_780_000_000  # > START
 
 
 class _FakeClient:
-    def __init__(self, txs=None, jettons=None) -> None:
+    def __init__(self, txs=None, jettons=None, decimals_by_master=None) -> None:
         self._txs = txs or []
         self._jettons = jettons or {"jetton_transfers": []}
+        self._decimals = decimals_by_master or {}
 
     def get_transactions(self, address, *, limit=100, to_lt=None):  # noqa: ANN001
         return self._txs
 
     def get_jetton_transfers(self, *, owner_address, limit=100, offset=0):  # noqa: ANN001
         return self._jettons
+
+    def jetton_decimals(self, master):  # noqa: ANN001
+        return self._decimals.get(master)
 
     def close(self) -> None:
         pass
@@ -51,8 +55,10 @@ def _native_tx(*, source_eq, dest_eq, value, utime=LATER, txhash="aGFzaA=="):
     }
 
 
-def _adapter(txs=None, jettons=None) -> TonAdapter:
-    return TonAdapter(client=_FakeClient(txs=txs, jettons=jettons))
+def _adapter(txs=None, jettons=None, decimals_by_master=None) -> TonAdapter:
+    return TonAdapter(client=_FakeClient(
+        txs=txs, jettons=jettons, decimals_by_master=decimals_by_master,
+    ))
 
 
 # ---- native TON ---- #
@@ -128,14 +134,32 @@ def test_jetton_inbound_skipped() -> None:
     assert a.fetch_erc20_outflows(A_EQ, START) == []
 
 
-def test_jetton_unknown_master_skipped() -> None:
-    # Unknown jetton → decimals untrusted → skipped (no fabricated USD value).
+def test_jetton_unknown_master_skipped_when_decimals_unresolvable() -> None:
+    # Unknown jetton + no API decimals → untrusted → skipped (no fabricated USD).
     body = {"jetton_transfers": [
         _jetton_transfer(source=A_RAW, destination=B_RAW, amount=500,
                          master="0:" + "ff" * 32),
     ]}
-    a = _adapter(jettons=body)
+    a = _adapter(jettons=body)  # _FakeClient.jetton_decimals → None
     assert a.fetch_erc20_outflows(A_EQ, START) == []
+
+
+def test_jetton_non_pinned_priced_via_authoritative_decimals() -> None:
+    """A non-pinned jetton whose decimals TON Center resolves is emitted with
+    those decimals + coingecko_id=None (pricing resolves by master contract)."""
+    other = "0:" + "ab" * 32
+    body = {"jetton_transfers": [
+        _jetton_transfer(source=A_RAW, destination=B_RAW, amount=12_000_000_000,
+                         master=other),
+    ]}
+    a = _adapter(jettons=body, decimals_by_master={other: 9})
+    rows = a.fetch_erc20_outflows(A_EQ, START)
+    assert len(rows) == 1
+    tok = rows[0]["token"]
+    assert tok.contract == other
+    assert tok.decimals == 9
+    assert tok.coingecko_id is None  # CoinGecko resolves by contract on TON
+    assert rows[0]["amount_raw"] == 12_000_000_000
 
 
 def test_jetton_filters_before_start_block() -> None:

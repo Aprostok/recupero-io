@@ -106,6 +106,10 @@ _BITCOIN_CHAIN = "bitcoin"
 # them to the watchlist; pre-this every ``tron`` row was skipped_unsupported —
 # a holder we could REACH we could not MONITOR (same gap closed for BTC).
 _TRON_CHAIN = "tron"
+# TON: native TON + Jetton (USDT-TON) balances via TON Center. The TON adapter
+# (Gap#3) reaches TON resting places; this closes the reach↔monitor loop so a
+# TON holder we can REACH we can also MONITOR (same gap closed for BTC/Tron).
+_TON_CHAIN = "ton"
 
 
 # Defaults for the materiality bar. All three are env-overridable —
@@ -318,7 +322,8 @@ def run_watch_tick(
                 and chain != _SOLANA_CHAIN
                 and chain != _HYPERLIQUID_CHAIN
                 and chain != _BITCOIN_CHAIN
-                and chain != _TRON_CHAIN):
+                and chain != _TRON_CHAIN
+                and chain != _TON_CHAIN):
             report.skipped_unsupported_chain += 1
             continue
         by_chain.setdefault(chain, []).append(r)
@@ -360,6 +365,12 @@ def run_watch_tick(
             )
         elif chain == _TRON_CHAIN:
             _run_tron_chain(
+                rows=chain_rows, dsn=dsn,
+                price_client=cg, parallelism=parallelism,
+                delta_usd_threshold=delta_usd_threshold, report=report,
+            )
+        elif chain == _TON_CHAIN:
+            _run_ton_chain(
                 rows=chain_rows, dsn=dsn,
                 price_client=cg, parallelism=parallelism,
                 delta_usd_threshold=delta_usd_threshold, report=report,
@@ -866,6 +877,118 @@ def _snapshot_tron_one(
     return snap
 
 
+def _run_ton_chain(
+    *,
+    rows: list[dict[str, Any]],
+    dsn: str,
+    price_client: Any,
+    parallelism: int,
+    delta_usd_threshold: Decimal,
+    report: WatchTickReport,
+) -> None:
+    """Snapshot TON wallets via TON Center (native TON + priceable Jettons).
+
+    Closes the reach↔monitor loop for TON: the TON adapter (Gap#3) reaches TON
+    resting places (USDT-TON is the dominant stablecoin off-ramp) and auto-
+    subscription watchlists them, but pre-this every ``ton`` row was skipped.
+    Optional TONCENTER_API_KEY lifts the free-tier rate.
+    """
+    from recupero.chains.ton.client import TonCenterClient
+    api_key = os.environ.get("TONCENTER_API_KEY", "").strip() or None
+    client = TonCenterClient(api_key=api_key)
+    try:
+        _run_chain_pool(
+            rows=rows, dsn=dsn,
+            snapshot_fn=lambda row: _snapshot_ton_one(row, client, price_client),
+            parallelism=parallelism,
+            delta_usd_threshold=delta_usd_threshold,
+            report=report,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            client.close()
+
+
+def _snapshot_ton_one(
+    row: dict[str, Any], client: Any, price_client: Any,
+) -> _Snapshot:
+    """TON Center snapshot: confirmed native-TON balance (nanoton, 9-dec) +
+    priceable Jetton balances. Pinned stables (USDT-TON) value with certainty;
+    other jettons use AUTHORITATIVE decimals from TON Center + CoinGecko
+    contract-resolution (coingecko_id=None). Unresolvable jettons are skipped —
+    never guess decimals."""
+    from recupero.chains.ton.adapter import _JETTON_META
+
+    addr = row["address"]
+    snap = _Snapshot(
+        native_balance_raw=None, tx_count=None, total_usd=None, source="toncenter",
+    )
+    try:
+        ton_nano, jettons = client.account_balances(addr)
+    except Exception as exc:  # noqa: BLE001
+        snap.error = f"ton balance: {exc}"
+        return snap
+    snap.native_balance_raw = int(ton_nano)
+
+    # Native TON → USD (9-dec nanoton).
+    native_usd = Decimal(0)
+    if snap.native_balance_raw and snap.native_balance_raw > 0:
+        ton_decimal = Decimal(snap.native_balance_raw) / Decimal(10 ** 9)
+        ton_token = _native_token_for("ton")
+        if ton_token is not None:
+            try:
+                price = price_client.price_now(ton_token)
+                if price.usd_value is not None:
+                    native_usd = price.usd_value * ton_decimal
+            except Exception as exc:  # noqa: BLE001
+                log.debug("TON price fetch failed for %s: %s", addr, exc)
+
+    # Priceable Jetton balances.
+    for master, raw_amount in (jettons or {}).items():
+        if not raw_amount or raw_amount <= 0:
+            continue
+        pinned = _JETTON_META.get(master)
+        if pinned is not None:
+            symbol, decimals, cg_id = pinned
+        else:
+            try:
+                decimals = client.jetton_decimals(master)
+            except Exception:  # noqa: BLE001
+                decimals = None
+            if decimals is None:
+                continue  # unresolvable decimals → skip (no guess)
+            symbol, cg_id = "JETTON", None  # CoinGecko resolves by contract
+        decimal_amount = Decimal(int(raw_amount)) / Decimal(10 ** decimals)
+        token_ref = TokenRef(
+            chain=Chain.ton, contract=master, symbol=symbol,
+            decimals=decimals, coingecko_id=cg_id,
+        )
+        try:
+            price = price_client.price_now(token_ref)
+            token_usd = (
+                price.usd_value * decimal_amount
+                if price.usd_value is not None else None
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("TON jetton price fetch failed for %s/%s: %s", addr, master, exc)
+            token_usd = None
+        snap.token_balances.append({
+            "symbol": symbol,
+            "contract": master,
+            "raw_amount": str(int(raw_amount)),
+            "decimal_amount": str(decimal_amount),
+            "usd_value": (str(token_usd) if token_usd is not None else None),
+        })
+
+    total = native_usd
+    for tb in snap.token_balances:
+        if tb.get("usd_value"):
+            with contextlib.suppress(ValueError, TypeError):
+                total += Decimal(tb["usd_value"])
+    snap.total_usd = total
+    return snap
+
+
 def _emit_graph_event(dsn: str, row: dict[str, Any], change: MaterialChange) -> None:
     """Best-effort: NOTIFY the operator graph that a watched address moved
     (Phase 4.13). Routed by the watchlist row's investigation_id so only
@@ -1171,6 +1294,8 @@ def _native_token_for(chain_name: str) -> TokenRef | None:
         "bitcoin":  ("BTC",  "bitcoin",        8),
         # Tron: TRX has 6 decimals (SUN; 1 TRX = 1e6 SUN).
         "tron":     ("TRX",  "tron",           6),
+        # TON: native TON has 9 decimals (nanoton).
+        "ton":      ("TON",  "the-open-network", 9),
     }
     entry = mapping.get(chain_name)
     if not entry:

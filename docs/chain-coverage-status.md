@@ -78,11 +78,12 @@ and recommends additions for the next phase of chain work.
 ### TON (The Open Network)
 
 * **Adapter:** `chains/ton/adapter.py` (TON Center backend). v0.38.0 (Gap#3). Major DPRK/scam off-ramp; USDT-TON (a Jetton) is the dominant stablecoin-laundering rail, mirroring USDT-TRC20 on Tron. `block_at_or_before` returns a unix-ts cutoff (TON has no ts→block index at the free tier); fetches window on `utime`/`transaction_now`.
-* **Operations:** Native TON outflows via v2 `getTransactions` (an outflow = an `out_msg` with positive `value`, nanoton/9-dec). Jetton outflows via v3 `jetton/transfers` (already-decoded source/destination/amount — no cell parsing). `is_contract` returns False (TON wallets are contracts but behave as accounts; protocol classification is label-driven).
+* **Operations:** Native TON outflows via v2 `getTransactions` (an outflow = an `out_msg` with positive `value`, nanoton/9-dec). Jetton outflows via v3 `jetton/transfers` (already-decoded source/destination/amount — no cell parsing). Jetton decimals: pinned canonical stables (USDT-TON → 6/tether) for certainty, else AUTHORITATIVE decimals from v3 `jetton/masters` (`jetton_content.decimals`, cached) + CoinGecko contract-resolution — never guessed; unresolvable → skipped. `is_contract` returns False (TON wallets are contracts but behave as accounts; protocol classification is label-driven).
+* **Monitoring:** watch_tick supported — `_run_ton_chain` / `_snapshot_ton_one` value a watched TON wallet's native balance (v2 `getAddressInformation`) + Jetton balances (v3 `jetton/wallets`), pinned + authoritative-decimals jettons priced via CoinGecko. Optional `TONCENTER_API_KEY` lifts the rate.
 * **Address codec:** `chains/ton/address.py` — raw `0:hex` ↔ user-friendly base64url (workchain tag + CRC16-CCITT). Everything canonicalizes to raw lower-cased form so v2 (friendly) and v3 (raw) match. Verified against live raw↔friendly vectors.
 * **Pricing:** `Chain.ton` → `"the-open-network"` (native TON coingecko id + Jetton contract→id resolution). USDT-TON jetton master `0:b113a9…3621dfe` → tether (6-dec) in `_JETTON_META`.
-* **Labels:** Zero TON entries yet (adapter-only; counterparties surface unlabeled). USDT-TON master is the one priceable jetton wired.
-* **Known gaps:** watch_tick monitoring not yet wired (like the BTC gap before v0.37.5). Only USDT-TON jetton is priced (other jettons skipped rather than guess decimals). Evidence receipt is explorer-anchored (no by-(lt,hash) raw receipt).
+* **Labels:** 1 issuer entry (USDT-TON → Tether, master verified live; freeze pathway). No CEX-deposit / hot-wallet entries yet — counterparties otherwise surface unlabeled.
+* **Known gaps:** No TON CEX-deposit / hot-wallet labels seeded yet. Evidence receipt is explorer-anchored (no by-(lt,hash) raw receipt). Native-TON pagination is single-page (limit 100) — very high-volume addresses may truncate.
 * **Tests:** `tests/test_ton_address.py` (codec vs live vectors), `tests/test_ton_adapter.py` (native + Jetton normalization, injected-client + respx transport).
 * **Freeze-pathway:** USDT-TON is Tether-issued → same issuer-freeze pathway as USDT on other chains (subject to issuer contact coverage).
 
@@ -199,7 +200,7 @@ and recommends additions for the next phase of chain work.
 | solana       | SolanaAdapter  | yes        | yes              | 2                 | 2              | yes   |
 | tron         | TronAdapter    | yes        | yes              | 3                 | 3              | yes   |
 | bitcoin      | BitcoinAdapter | yes        | n/a              | n/a               | **0**          | yes   |
-| ton          | TonAdapter     | no         | yes              | 1 (USDT)          | **0**          | yes   |
+| ton          | TonAdapter     | yes        | yes              | 1 (USDT)          | 1 (USDT issuer)| yes   |
 | hyperliquid  | Scraper        | yes        | inline ($1)      | n/a               | 0              | yes (client helpers only) |
 | optimism     | EvmAdapter     | yes        | **NO**           | **0**             | **0**          | **no**|
 | avalanche    | EvmAdapter     | yes        | **NO**           | **0**             | **0**          | **no**|

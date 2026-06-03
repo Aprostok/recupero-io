@@ -41,6 +41,8 @@ _SEEDS_DIR = Path(__file__).resolve().parents[1] / "src" / "recupero" / "labels"
 _BASE58_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 _EVM_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _TRON_RE = re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$")
+# TON raw form: <workchain>:<64 hex> (e.g. 0:b113a9… for the USDT-TON master).
+_TON_RE = re.compile(r"^-?\d+:[0-9a-fA-F]{64}$")
 
 # Bidi / zero-width / BOM controls that don't belong in human-readable labels.
 _UNICODE_FORBIDDEN_CODEPOINTS = frozenset({
@@ -125,6 +127,10 @@ def test_no_malformed_evm_addresses_in_seeds() -> None:
             elif addr.startswith("T"):
                 if not _TRON_RE.match(addr):
                     bad.append(f"{path.name}[{i}] address={addr!r} (bad Tron form)")
+            elif _TON_RE.match(addr) or (":" in addr and addr.split(":", 1)[0].lstrip("-").isdigit()):
+                # TON raw form <workchain>:<64 hex>.
+                if not _TON_RE.match(addr):
+                    bad.append(f"{path.name}[{i}] address={addr!r} (bad TON raw form)")
             else:
                 # Solana base58 (or other non-EVM): just sanity-check length + alphabet.
                 if not _BASE58_RE.match(addr):

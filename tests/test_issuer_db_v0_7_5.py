@@ -278,7 +278,8 @@ def test_total_v0_7_5_count() -> None:
     # USDD, BSC USDT/USDC/BUSD, Polygon USDT/USDC; Arbitrum USDT collided
     # with a pre-existing delegates_to alias and was deduplicated by the
     # loader's chain+contract key).
-    expected = 26 + 8
+    # v0.38 Gap#3 follow-on: +1 USDT-TON issuer (Tether; TON Jetton master).
+    expected = 26 + 8 + 1
     assert len(db) == expected, (
         f"expected {expected} issuer entries, got {len(db)}. "
         "If you added an entry, bump this assertion."

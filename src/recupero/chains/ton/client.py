@@ -70,6 +70,8 @@ class TonCenterClient:
                                   write=timeout_seconds, pool=timeout_seconds)
         )
         self._owns_client = http_client is None
+        # Per-instance authoritative-decimals cache (jetton master → int|None).
+        self._jetton_decimals_cache: dict[str, int | None] = {}
 
     def close(self) -> None:
         if self._owns_client:
@@ -111,6 +113,63 @@ class TonCenterClient:
         the raw v3 body (``jetton_transfers`` list + ``address_book``)."""
         params = {"owner_address": owner_address, "limit": limit, "offset": offset}
         return self._get("/api/v3/jetton/transfers", params)
+
+    def get_jetton_wallets(
+        self, *, owner_address: str, limit: int = 200, offset: int = 0,
+    ) -> dict[str, Any]:
+        """Jetton-wallet balances owned by ``owner_address``. Each entry carries
+        ``balance`` (raw) + ``jetton`` (master). Used for balance monitoring."""
+        params = {"owner_address": owner_address, "limit": limit, "offset": offset}
+        return self._get("/api/v3/jetton/wallets", params)
+
+    def jetton_decimals(self, jetton_master: str) -> int | None:
+        """Authoritative decimals for a Jetton master from v3 ``jetton/masters``
+        (``jetton_content.decimals``). Cached per-instance; returns None when the
+        master is unknown / decimals absent (caller must NOT guess)."""
+        if jetton_master in self._jetton_decimals_cache:
+            return self._jetton_decimals_cache[jetton_master]
+        decimals: int | None = None
+        try:
+            body = self._get("/api/v3/jetton/masters", {"address": jetton_master})
+            masters = body.get("jetton_masters") or []
+            if masters and isinstance(masters[0], dict):
+                content = masters[0].get("jetton_content") or {}
+                raw = content.get("decimals")
+                if raw is not None:
+                    decimals = int(raw)
+        except (TonCenterError, TypeError, ValueError) as exc:
+            log.debug("ton: jetton_decimals(%s) failed: %s", jetton_master, exc)
+            decimals = None
+        self._jetton_decimals_cache[jetton_master] = decimals
+        return decimals
+
+    def account_balances(self, owner_address: str) -> tuple[int, dict[str, int]]:
+        """(native_TON_nanoton, {jetton_master_raw: balance_raw}) for an owner.
+        Best-effort: a failing sub-call degrades that component to 0/empty."""
+        from recupero.chains.ton.address import normalize_ton_address
+
+        ton_nano = 0
+        try:
+            ton_nano = int(self.get_address_information(owner_address).get("balance") or 0)
+        except (TonCenterError, TypeError, ValueError):
+            ton_nano = 0
+        jettons: dict[str, int] = {}
+        try:
+            body = self.get_jetton_wallets(owner_address=owner_address)
+            for w in body.get("jetton_wallets") or []:
+                if not isinstance(w, dict):
+                    continue
+                master = w.get("jetton")
+                if not master:
+                    continue
+                try:
+                    mraw = normalize_ton_address(master)
+                    jettons[mraw] = jettons.get(mraw, 0) + int(w.get("balance") or 0)
+                except (ValueError, TypeError):
+                    continue
+        except TonCenterError:
+            pass
+        return ton_nano, jettons
 
     # ----- transport ----- #
 

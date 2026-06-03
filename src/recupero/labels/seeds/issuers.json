@@ -360,6 +360,19 @@
       "jurisdiction": "British Virgin Islands"
     },
     {
+      "chain": "ton",
+      "contract": "0:b113a994b5024a16719f69139328eb759596c38a25f59028b146fecdc3621dfe",
+      "symbol": "USDT",
+      "issuer": "Tether",
+      "legal_name": "Tether Operations Limited",
+      "corporate_jurisdiction": "British Virgin Islands",
+      "freeze_capability": "yes",
+      "freeze_notes": "USDT-TON (Jetton master, raw 0:b113a9…3621dfe; user-friendly EQCxE6mU…2Id_sDs). Same Tether compliance team and freeze posture as USDT on Ethereum/Tron — historically responsive to LE requests with court-order backing. TON is a growing DPRK/scam off-ramp; USDT-TON is its dominant stablecoin rail. Master contract verified live against TON Center (jetton_content.decimals=6) in v0.38.",
+      "primary_contact": "compliance@tether.to",
+      "secondary_contact": "https://tether.to/en/contact",
+      "jurisdiction": "British Virgin Islands"
+    },
+    {
       "chain": "tron",
       "contract": "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8",
       "symbol": "USDC",

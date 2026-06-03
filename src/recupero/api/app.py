@@ -285,6 +285,44 @@ class _BodySizeLimitMiddleware:
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
 
 
+def _install_optional_middleware(app_: FastAPI) -> None:
+    """Add prod-hardening middleware, each gated by an env var so the default
+    (unset) preserves current behavior (serve any Host, no CORS) — zero change
+    for existing deployments / tests.
+
+      * ``RECUPERO_API_ALLOWED_HOSTS`` — comma-separated Host allow-list. When
+        set, installs Starlette ``TrustedHostMiddleware`` (rejects spoofed Host
+        headers — relevant once the API is exposed on a public domain).
+      * ``RECUPERO_API_CORS_ORIGINS`` — comma-separated allowed origins. When
+        set, installs ``CORSMiddleware`` for cross-origin API clients. The
+        operator console is same-origin and needs none.
+    """
+    import os
+    hosts_raw = (os.environ.get("RECUPERO_API_ALLOWED_HOSTS", "") or "").strip()
+    if hosts_raw:
+        from starlette.middleware.trustedhost import TrustedHostMiddleware
+        allowed = [h.strip() for h in hosts_raw.split(",") if h.strip()]
+        if allowed:
+            app_.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed)
+    origins_raw = (os.environ.get("RECUPERO_API_CORS_ORIGINS", "") or "").strip()
+    if origins_raw:
+        from fastapi.middleware.cors import CORSMiddleware
+        origins = [o.strip() for o in origins_raw.split(",") if o.strip()]
+        if origins:
+            # No allow_credentials: the API authenticates via the
+            # X-Recupero-Admin-Key / API-key headers, not cookies — and
+            # credentials + a wildcard origin is a browser-rejected footgun.
+            app_.add_middleware(
+                CORSMiddleware,
+                allow_origins=origins,
+                allow_methods=["*"],
+                allow_headers=["*"],
+            )
+
+
+_install_optional_middleware(app)
+
+
 # ---- Request / response models ---- #
 
 # v0.19.2 (round-13 type-HIGH-3): supported-chain enum for API request
@@ -2299,6 +2337,20 @@ def main() -> None:  # pragma: no cover
     if port < 1 or port > 65535:
         port = 8000
     log_level = os.environ.get("RECUPERO_LOG_LEVEL", "info").lower()
+    # Observability parity with the worker (worker/main.py): structured
+    # logging + Sentry error reporting. Pre-this the API process ran with
+    # default logging and zero error reporting. Both best-effort — a missing
+    # optional dep or DSN must never block API bootstrap.
+    try:
+        from recupero.logging_setup import setup_logging
+        setup_logging(log_level.upper())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("API setup_logging failed (non-fatal): %s", exc)
+    try:
+        from recupero.observability import init_sentry
+        init_sentry()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("API Sentry init failed (non-fatal): %s", exc)
     uvicorn.run(
         "recupero.api.app:app",
         host=host, port=port, log_level=log_level,

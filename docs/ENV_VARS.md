@@ -172,6 +172,8 @@ their own section.
 | `RECUPERO_PORTAL_PUBLIC_ORIGIN` | unset | str | URL origin | v0.18.x | Public origin allowed for portal CSRF. |
 | `RECUPERO_TOKEN_PEPPER` | unset | bytes | 64-char hex / 44-char b64url | v0.20.2 | HMAC pepper for portal-token hashing; unset triggers legacy raw-token comparison. |
 | `RECUPERO_WEBHOOK_ALLOWLIST_HOSTS` | unset | str | comma-sep hosts | v0.27.x | SSRF allow-list for outbound monitoring webhooks (empty = no host bypasses deny list). |
+| `RECUPERO_API_ALLOWED_HOSTS` | unset | str | comma-sep hosts | v0.35.x | When set, the API installs TrustedHostMiddleware with this Host allow-list (rejects spoofed Host headers). Unset = serve any Host (current behavior). |
+| `RECUPERO_API_CORS_ORIGINS` | unset | str | comma-sep origins | v0.35.x | When set, the API installs CORSMiddleware for these origins. Unset = no CORS (the operator console is same-origin). |
 | **Custody / chain-of-custody** | | | | | |
 | `RECUPERO_CUSTODY_KEY_PATH` | `~/.recupero/custody_key` | str | file path | v0.17.x | Override path to the Ed25519 private key used for custody attestation. |
 | `RECUPERO_AUTO_LITIGATION_ARTIFACTS` | unset (off) | bool | `=1` to enable | v0.35.x | At deliverables build, also emit the court exhibit pack and (when a custody key is configured) a signed Ed25519 chain-of-custody over every artifact. Default off — existing pipelines unchanged. |

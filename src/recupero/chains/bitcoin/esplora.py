@@ -263,6 +263,29 @@ class EsploraClient:
             return resp.text.strip()
 
 
+    # ---------- Balance ---------- #
+
+    def address_balance_sats(self, address: str) -> int:
+        """Confirmed balance of ``address`` in satoshis.
+
+        v0.37.5: needed by the watch-tick monitor so a dormant Bitcoin
+        resting place (reached via a THORChain EVM→BTC bridge handoff) is
+        re-checked for movement like any EVM/Solana watch target. Esplora's
+        ``GET /address/<addr>`` returns a ``chain_stats`` object; the confirmed
+        balance is ``funded_txo_sum - spent_txo_sum`` (both in sats). Mempool
+        (unconfirmed) is intentionally excluded — the monitor reports settled
+        state. Returns 0 on a missing/uninitialized address or parse error.
+        """
+        data = self._get(f"/address/{address}")
+        if not isinstance(data, dict):
+            return 0
+        cs = data.get("chain_stats") or {}
+        try:
+            return int(cs.get("funded_txo_sum", 0)) - int(cs.get("spent_txo_sum", 0))
+        except (TypeError, ValueError):
+            return 0
+
+
 __all__ = (
     "EsploraError",
     "EsploraRateLimitError",

@@ -407,13 +407,24 @@ def run_trace(
     # past the worker's stale-claim threshold (5 min) and letting
     # the reaper kill us mid-stage.
     #
-    # Default 540s (9 min) — comfortably under the 600s reaper window
-    # so the worker has time to write the partial case + emit the
-    # brief before any reaper-induced state churn.
-    try:
-        trace_deadline_sec = int(os.environ.get("RECUPERO_TRACE_TIMEOUT_SEC", "540"))
-    except (TypeError, ValueError):
-        trace_deadline_sec = 540
+    # Self-imposed deadline so the worker writes a partial case + emits the
+    # brief gracefully rather than running unbounded. The worker's background
+    # heartbeat thread keeps the claimed row fresh throughout the trace (the
+    # legacy 540s default already exceeds the 300s stale window and relies on
+    # that heartbeat), so a longer deadline is safe.
+    # v0.37.5 (deep-reach cleanup, Tier 1): the default is now deep-reach-aware
+    # — 1800s (30 min) under the deep-reach default, 540s (9 min) on the legacy
+    # shallow path. Deep + cross-chain + multi-bridge tracing legitimately needs
+    # more wall-clock; without the higher ceiling a deep multi-chain trace would
+    # stamp itself incomplete (the very under-coverage deep-reach fixes). An
+    # explicit RECUPERO_TRACE_TIMEOUT_SEC always wins.
+    if "RECUPERO_TRACE_TIMEOUT_SEC" in os.environ:
+        try:
+            trace_deadline_sec = int(os.environ["RECUPERO_TRACE_TIMEOUT_SEC"])
+        except (TypeError, ValueError):
+            trace_deadline_sec = 540
+    else:
+        trace_deadline_sec = 1800 if _deep_reach_enabled() else 540
     trace_deadline = started + timedelta(seconds=trace_deadline_sec)
     timeout_hit = False
 

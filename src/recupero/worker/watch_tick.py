@@ -99,6 +99,7 @@ _CHAIN_ID_BY_NAME: dict[str, int] = {
 # clearinghouseState info endpoints).
 _SOLANA_CHAIN = "solana"
 _HYPERLIQUID_CHAIN = "hyperliquid"
+_BITCOIN_CHAIN = "bitcoin"
 
 
 # Defaults for the materiality bar. All three are env-overridable —
@@ -309,7 +310,8 @@ def run_watch_tick(
         chain = r["chain"]
         if (chain not in _CHAIN_ID_BY_NAME
                 and chain != _SOLANA_CHAIN
-                and chain != _HYPERLIQUID_CHAIN):
+                and chain != _HYPERLIQUID_CHAIN
+                and chain != _BITCOIN_CHAIN):
             report.skipped_unsupported_chain += 1
             continue
         by_chain.setdefault(chain, []).append(r)
@@ -339,6 +341,12 @@ def run_watch_tick(
             )
         elif chain == _HYPERLIQUID_CHAIN:
             _run_hyperliquid_chain(
+                rows=chain_rows, dsn=dsn,
+                price_client=cg, parallelism=parallelism,
+                delta_usd_threshold=delta_usd_threshold, report=report,
+            )
+        elif chain == _BITCOIN_CHAIN:
+            _run_bitcoin_chain(
                 rows=chain_rows, dsn=dsn,
                 price_client=cg, parallelism=parallelism,
                 delta_usd_threshold=delta_usd_threshold, report=report,
@@ -674,6 +682,74 @@ def _run_solana_chain(
         client.close()
 
 
+def _run_bitcoin_chain(
+    *,
+    rows: list[dict[str, Any]],
+    dsn: str,
+    price_client: Any,
+    parallelism: int,
+    delta_usd_threshold: Decimal,
+    report: WatchTickReport,
+) -> None:
+    """Snapshot Bitcoin wallets via Esplora (mempool.space / blockstream).
+
+    v0.37.5 (deep-reach cleanup, Tier 2): closes the #4↔#5 loop. The
+    THORChain decoder (v0.37.4) now reaches native-Bitcoin resting places, and
+    auto-subscription adds them to the watchlist — but pre-v0.37.5 watch-tick
+    skipped every ``bitcoin`` row (``skipped_unsupported_chain``), so a dormant
+    BTC holder we could REACH we could not MONITOR. No API key needed (Esplora
+    free tier). BTC has no token standard, so the snapshot is native-only.
+    """
+    from recupero.chains.bitcoin.esplora import EsploraClient
+    client = EsploraClient()
+    try:
+        _run_chain_pool(
+            rows=rows, dsn=dsn,
+            snapshot_fn=lambda row: _snapshot_bitcoin_one(row, client, price_client),
+            parallelism=parallelism,
+            delta_usd_threshold=delta_usd_threshold,
+            report=report,
+        )
+    finally:
+        try:
+            client.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _snapshot_bitcoin_one(
+    row: dict[str, Any], client: Any, price_client: Any,
+) -> _Snapshot:
+    """Esplora-based snapshot for a Bitcoin address: confirmed native balance
+    (sats) priced via CoinGecko ``bitcoin``. No tokens on Bitcoin, so
+    token_balances stays empty and tx_count is left None (the trace stage
+    counts movement; the monitor only needs the balance delta)."""
+    addr = row["address"]
+    snap = _Snapshot(
+        native_balance_raw=None, tx_count=None, total_usd=None,
+        source="esplora",
+    )
+    try:
+        snap.native_balance_raw = int(client.address_balance_sats(addr))
+    except Exception as exc:  # noqa: BLE001
+        snap.error = f"btc balance: {exc}"
+        return snap
+
+    total = Decimal(0)
+    if snap.native_balance_raw and snap.native_balance_raw > 0:
+        btc_decimal = Decimal(snap.native_balance_raw) / Decimal(10 ** 8)
+        btc_token = _native_token_for("bitcoin")
+        if btc_token is not None:
+            try:
+                price = price_client.price_now(btc_token)
+                if price.usd_value is not None:
+                    total = price.usd_value * btc_decimal
+            except Exception as exc:  # noqa: BLE001
+                log.debug("BTC price fetch failed for %s: %s", addr, exc)
+    snap.total_usd = total
+    return snap
+
+
 def _emit_graph_event(dsn: str, row: dict[str, Any], change: MaterialChange) -> None:
     """Best-effort: NOTIFY the operator graph that a watched address moved
     (Phase 4.13). Routed by the watchlist row's investigation_id so only
@@ -975,6 +1051,8 @@ def _native_token_for(chain_name: str) -> TokenRef | None:
         "bsc":      ("BNB",  "binancecoin",   18),
         # Solana: SOL has 9 decimals (lamports), not 18 like EVM gas.
         "solana":   ("SOL",  "solana",         9),
+        # Bitcoin: BTC has 8 decimals (satoshis). v0.37.5.
+        "bitcoin":  ("BTC",  "bitcoin",        8),
     }
     entry = mapping.get(chain_name)
     if not entry:

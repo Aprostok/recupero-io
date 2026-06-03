@@ -1,0 +1,25 @@
+{
+  "_README": "User-maintained VERIFIED exchange FREEZE contacts. This file is the OVERRIDE layer: entries here win over the unverified pattern-style starter contacts in reports/legal_requests.py (_EXCHANGE_COMPLIANCE_CONTACTS). Add an entry once you have CONFIRMED the exchange's law-enforcement freeze channel, then set verified=true and record a source. NEVER set verified=true without a real channel (compliance_email or le_portal_url) AND a source — the loader will downgrade it to unverified and warn, and tests will fail on the committed file. Keys are exchange display names; matching is case- and space-insensitive against the names the tracer emits (e.g. \"Binance\", \"Crypto.com\", \"OKX\").",
+  "_schema": {
+    "<Exchange Display Name>": {
+      "legal_name": "string — registered legal entity to address the request to",
+      "compliance_email": "string|null — verified LE/compliance email",
+      "le_portal_url": "string|null — verified law-enforcement request portal (preferred for most major CEXes)",
+      "freeze_capability": "yes | limited | no | unknown",
+      "freeze_request_channel": "portal | email | both | null",
+      "verified": "boolean — true ONLY when you have confirmed the channel",
+      "source": "string|null — where/when you verified it (e.g. 'Binance LE Request Guide, 2026-06')",
+      "notes": "string|null — e.g. 'portal requires a .gov/agency email domain'"
+    }
+  },
+  "_example": {
+    "legal_name": "Example Exchange Ltd.",
+    "compliance_email": "le@example-exchange.com",
+    "le_portal_url": "https://le.example-exchange.com",
+    "freeze_capability": "yes",
+    "freeze_request_channel": "portal",
+    "verified": false,
+    "source": "confirmed via the exchange's published LE guide YYYY-MM-DD",
+    "notes": "Portal requires an agency email domain; freezes typically hold 30 days pending legal process."
+  }
+}

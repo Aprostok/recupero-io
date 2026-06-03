@@ -27,8 +27,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Header, HTTPException, Query, status
+from fastapi.responses import HTMLResponse, Response
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +118,182 @@ def get_cases(
     except Exception as exc:  # noqa: BLE001 — never 500 the operator console
         log.warning("get_cases: scan failed: %s", exc)
         return {"cases": [], "count": 0, "error": str(exc)}
+
+
+# ----- Per-case artifact browser (v0.35: "click a case → view its files") ----- #
+
+_MAX_ARTIFACT_BYTES = 25 * 1024 * 1024  # 25 MiB inline/serve cap
+_MAX_ARTIFACT_ENTRIES = 2000
+
+# Display order for the per-case file browser. Each file is bucketed by its
+# subdir / filename prefix so the operator sees deliverables grouped, not a
+# flat dump.
+_CATEGORY_ORDER = (
+    "Law Enforcement",
+    "Freeze",
+    "Regulatory",
+    "Victim / Engagement",
+    "Forensics",
+    "Exhibit & Custody",
+    "Manifests",
+    "Other",
+)
+
+_VIEW_BY_EXT = {
+    ".html": "html", ".svg": "html",
+    ".json": "text", ".jsonl": "text", ".csv": "text", ".txt": "text", ".md": "text",
+}
+
+_MEDIA_BY_EXT = {
+    ".html": "text/html; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".json": "application/json",
+    ".jsonl": "application/json",
+    ".csv": "text/csv; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".md": "text/plain; charset=utf-8",
+    ".pdf": "application/pdf",
+}
+
+
+def _classify_artifact(rel_posix: str) -> str:
+    """Bucket a case-relative artifact path into a display category."""
+    low = rel_posix.lower()
+    name = low.rsplit("/", 1)[-1]
+    if low.startswith("legal_requests/") or name.startswith(
+        ("le_handoff", "subpoena", "mlat", "fincen_314")
+    ):
+        return "Law Enforcement"
+    if name.startswith(("freeze_request", "exchange_freeze", "issuer_freeze")):
+        return "Freeze"
+    if low.startswith("regulatory_filing/") or "_sar" in name or name.startswith("sar"):
+        return "Regulatory"
+    if name.startswith(("victim_summary", "recovery_snapshot", "engagement_letter")):
+        return "Victim / Engagement"
+    if low.startswith(("exhibit_pack/", "custody/")):
+        return "Exhibit & Custody"
+    if name.startswith(("trace_report", "flow_", "investigator_findings")) or name in {
+        "transfers.csv", "freeze_brief.json", "ai_triage.json", "graph_ui.html",
+    }:
+        return "Forensics"
+    if name.startswith("manifest") or name == "case.json":
+        return "Manifests"
+    return "Other"
+
+
+def _resolve_case_dir(case_id: str) -> Path:
+    """Validate ``case_id`` and return its on-disk dir (no mkdir). 400 on a bad
+    id, 404 when the case dir doesn't exist."""
+    from recupero.config import load_config
+    from recupero.storage.case_store import CaseStore, _validate_case_id
+
+    try:
+        _validate_case_id(case_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"invalid case_id: {exc}",
+        ) from exc
+    cfg, _ = load_config()
+    # NOTE: cases_root / case_id directly — NEVER store.case_dir() (it mkdirs).
+    case_dir = CaseStore(cfg).cases_root / case_id
+    if not case_dir.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="case not found"
+        )
+    return case_dir
+
+
+@router.get(
+    "/{case_id}/artifacts",
+    summary=(
+        "Admin-gated: every deliverable file for one case, grouped by category "
+        "(LE handoff, freeze, regulatory, forensics, exhibit/custody, …)."
+    ),
+)
+def list_case_artifacts(
+    case_id: str,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_admin_auth(x_recupero_admin_key)
+    case_dir = _resolve_case_dir(case_id)
+    root = case_dir.resolve()
+    items: list[dict[str, Any]] = []
+    for p in sorted(case_dir.rglob("*")):
+        if len(items) >= _MAX_ARTIFACT_ENTRIES:
+            break
+        try:
+            if p.is_symlink() or not p.is_file():
+                continue
+            # Defense-in-depth: a resolved path must stay inside the case dir
+            # (catches symlinked files pointing elsewhere).
+            rel = p.resolve().relative_to(root)
+            size = p.stat().st_size
+        except (OSError, ValueError):
+            continue
+        rel_posix = rel.as_posix()
+        ext = p.suffix.lower()
+        items.append({
+            "name": p.name,
+            "path": rel_posix,
+            "category": _classify_artifact(rel_posix),
+            "ext": ext,
+            "size_bytes": size,
+            "view": _VIEW_BY_EXT.get(ext, "download"),
+        })
+    order = {c: i for i, c in enumerate(_CATEGORY_ORDER)}
+    items.sort(key=lambda d: (order.get(d["category"], 99), d["path"]))
+    return {"case_id": case_id, "artifacts": items, "count": len(items)}
+
+
+@router.get(
+    "/{case_id}/artifact",
+    summary=(
+        "Admin-gated: serve ONE case artifact's content for inline viewing / "
+        "download. Path-traversal-guarded + size-capped."
+    ),
+)
+def get_case_artifact(
+    case_id: str,
+    path: str = Query(..., max_length=400, description="case-relative file path"),
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> Response:
+    _require_admin_auth(x_recupero_admin_key)
+    case_dir = _resolve_case_dir(case_id)
+    root = case_dir.resolve()
+    # Reject absolute paths + any traversal segment before touching the FS.
+    norm = path.replace("\\", "/")
+    if not path or norm.startswith("/") or ".." in norm.split("/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="invalid artifact path"
+        )
+    target = (case_dir / norm).resolve()
+    if not target.is_relative_to(root):  # symlink/.. escape → blocked
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="artifact path escapes the case directory",
+        )
+    if not target.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="artifact not found"
+        )
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="artifact not found"
+        ) from exc
+    if size > _MAX_ARTIFACT_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"artifact too large to serve ({size} bytes)",
+        )
+    ext = target.suffix.lower()
+    media = _MEDIA_BY_EXT.get(ext, "application/octet-stream")
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if media == "application/octet-stream":
+        headers["Content-Disposition"] = f'attachment; filename="{target.name}"'
+    return Response(content=target.read_bytes(), media_type=media, headers=headers)
 
 
 @router.get(

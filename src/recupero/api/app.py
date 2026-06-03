@@ -11,6 +11,7 @@ Run via ``recupero-api`` (console script) or directly with
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from typing import Any
@@ -360,6 +361,21 @@ class ScreenRequest(BaseModel):
             "If False, the screen runs against local seed files only."
         ),
     )
+    include_exposure: bool = Field(
+        False,
+        description=(
+            "If True, also runs a BOUNDED on-chain 1-hop probe for DIRECT "
+            "exposure to high-risk counterparties (OFAC / mixer / ransomware / "
+            "drainer / darknet) — the instant-KYT signal the offline screen "
+            "cannot see. Adds seconds of latency (network RPC) vs the <50ms "
+            "offline path, so it is opt-in. Multi-hop / USD-weighted exposure "
+            "still requires a full trace."
+        ),
+    )
+    exposure_lookback_days: int = Field(
+        90, ge=1, le=365,
+        description="Lookback window (days) for the on-chain exposure probe.",
+    )
 
 
 class TokenRiskRequest(BaseModel):
@@ -450,6 +466,33 @@ async def healthz() -> HealthResponse:
     return await health()
 
 
+def _run_exposure_probe(
+    address: str, chain_str: str, lookback_days: int,
+) -> dict[str, Any] | None:
+    """Synchronous bounded on-chain exposure probe (run off the event loop
+    via ``asyncio.to_thread``). Builds the chain adapter, loads the high-risk
+    db, runs the 1-hop counterparty probe, and always releases the adapter's
+    HTTP client. Returns the probe result or ``None`` (no exposure)."""
+    from recupero.chains.base import ChainAdapter
+    from recupero.config import load_config
+    from recupero.models import Chain
+    from recupero.screen.exposure_probe import probe_counterparty_exposure
+    from recupero.trace.risk_scoring import load_high_risk_db
+
+    cfg, env = load_config()
+    chain = Chain(chain_str)
+    adapter = ChainAdapter.for_chain(chain, (cfg, env))
+    try:
+        return probe_counterparty_exposure(
+            address, chain=chain, adapter=adapter,
+            high_risk_db=load_high_risk_db(),
+            lookback_days=lookback_days,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            adapter.close()
+
+
 @app.post(
     "/v1/screen",
     tags=["screening"],
@@ -459,13 +502,17 @@ async def screen_address_endpoint(
     req: ScreenRequest,
     api_key_name: str = Depends(require_api_key),
 ) -> dict[str, Any]:
-    """Wallet-screening lookup. Uses ONLY local seed data + correlation
-    DB; no on-chain RPC calls. Latency < 50ms with DB lookup.
+    """Wallet-screening lookup. The default path uses ONLY local seed data +
+    correlation DB; no on-chain RPC calls; latency < 50ms.
+
+    With ``include_exposure=true`` it additionally runs a bounded on-chain
+    1-hop probe (``exposure`` block) for DIRECT high-risk counterparty
+    exposure — the instant-KYT signal the offline screen cannot see.
 
     Returns:
       ``{ address, chain, risk_verdict, risk_score, is_ofac_sanctioned,
           is_mixer, is_ransomware, is_drainer, labels, correlation,
-          investigator_note, data_sources_used }``.
+          investigator_note, data_sources_used[, exposure] }``.
     """
     try:
         from recupero.screen.screener import screen_address
@@ -487,9 +534,28 @@ async def screen_address_endpoint(
             detail=str(e),
         ) from e
 
-    log.info("/v1/screen api_key=%s address=%s verdict=%s",
-             api_key_name, req.address, result.risk_verdict)
-    return result.to_json_safe()
+    payload = result.to_json_safe()
+
+    # Opt-in on-chain exposure enrichment. Best-effort: a probe failure must
+    # never fail the (already-computed) offline screen — it degrades to a null
+    # exposure block with an error note.
+    if req.include_exposure:
+        import asyncio
+        try:
+            payload["exposure"] = await asyncio.to_thread(
+                _run_exposure_probe,
+                req.address, req.chain, req.exposure_lookback_days,
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("/v1/screen exposure probe failed for %s: %s",
+                        req.address, exc)
+            payload["exposure"] = None
+            payload["exposure_error"] = "exposure probe unavailable"
+
+    log.info("/v1/screen api_key=%s address=%s verdict=%s exposure=%s",
+             api_key_name, req.address, result.risk_verdict,
+             req.include_exposure)
+    return payload
 
 
 @app.post(

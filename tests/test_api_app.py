@@ -176,6 +176,101 @@ def test_screen_works_with_auth_bypass(
     assert r.status_code == 200, r.text
 
 
+# ---- /v1/screen include_exposure (#5 instant-KYT on-chain probe) ---- #
+
+
+def test_screen_default_omits_exposure_block(
+    client: TestClient, auth_env: None
+) -> None:
+    """Without include_exposure the fast offline path runs — no exposure key,
+    no on-chain probe (preserves <50ms latency)."""
+    r = client.post(
+        "/v1/screen",
+        json={
+            "address": "0x0000000000000000000000000000000000000001",
+            "chain": "ethereum", "use_correlation_db": False,
+        },
+        headers={"X-Recupero-API-Key": "s3cret"},
+    )
+    assert r.status_code == 200, r.text
+    assert "exposure" not in r.json()
+
+
+def test_screen_include_exposure_attaches_probe_result(
+    client: TestClient, auth_env: None, monkeypatch
+) -> None:
+    """include_exposure=true attaches the probe's result under `exposure`."""
+    import recupero.api.app as app_mod
+
+    fake = {
+        "address": "0xabc", "chain": "ethereum", "lookback_days": 90,
+        "headline": "Direct exposure: ...",
+        "by_category": [{"category": "mixer_high_risk"}],
+        "direct_high_risk_counterparties": [{"counterparty": "0xmixer"}],
+        "note": "...",
+    }
+    monkeypatch.setattr(
+        app_mod, "_run_exposure_probe",
+        lambda address, chain_str, lookback_days: fake,
+    )
+    r = client.post(
+        "/v1/screen",
+        json={
+            "address": "0x0000000000000000000000000000000000000001",
+            "chain": "ethereum", "use_correlation_db": False,
+            "include_exposure": True,
+        },
+        headers={"X-Recupero-API-Key": "s3cret"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["exposure"] == fake
+    assert "risk_verdict" in body  # offline screen still present
+
+
+def test_screen_include_exposure_probe_failure_is_graceful(
+    client: TestClient, auth_env: None, monkeypatch
+) -> None:
+    """A probe failure must NOT fail the (already-computed) offline screen —
+    it degrades to exposure: null + an error note."""
+    import recupero.api.app as app_mod
+
+    def _boom(address, chain_str, lookback_days):
+        raise RuntimeError("rpc unreachable")
+
+    monkeypatch.setattr(app_mod, "_run_exposure_probe", _boom)
+    r = client.post(
+        "/v1/screen",
+        json={
+            "address": "0x0000000000000000000000000000000000000001",
+            "chain": "ethereum", "use_correlation_db": False,
+            "include_exposure": True,
+        },
+        headers={"X-Recupero-API-Key": "s3cret"},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["exposure"] is None
+    assert body["exposure_error"] == "exposure probe unavailable"
+    assert "risk_verdict" in body
+
+
+def test_screen_exposure_lookback_days_validated(
+    client: TestClient, auth_env: None
+) -> None:
+    """exposure_lookback_days is bounded 1..365 → out-of-range is a 422."""
+    r = client.post(
+        "/v1/screen",
+        json={
+            "address": "0x0000000000000000000000000000000000000001",
+            "chain": "ethereum", "include_exposure": True,
+            "exposure_lookback_days": 999,
+        },
+        headers={"X-Recupero-API-Key": "s3cret"},
+    )
+    assert r.status_code == 422, r.text
+
+
 # ---- Rate limiting ---- #
 
 

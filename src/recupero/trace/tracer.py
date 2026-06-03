@@ -1382,6 +1382,28 @@ def _confirm_bridge_handoffs(
     return out
 
 
+def _bridge_confirm_enabled() -> bool:
+    """Resolve whether the cryptographic cross-chain bridge-pairing oracle
+    runs for this trace.
+
+    v0.36.0 (forensic-trace wiring): the oracle is part of the deep-reach
+    recipe. ``RECUPERO_BRIDGE_CONFIRM`` is honored when explicitly set
+    (an explicit value — including ``0`` — always wins, so an operator can
+    deep-reach with the oracle pinned off for a cheaper same-chain-only
+    pass). When it is NOT set, it inherits ``RECUPERO_DEEP_REACH`` so the
+    recommended production ``RECUPERO_DEEP_REACH=1`` turns the oracle on as
+    part of the full forensic depth. Neither set ⇒ OFF ⇒ existing traces
+    are byte-identical.
+    """
+    def _on(name: str) -> bool:
+        return os.environ.get(name, "0").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+    if "RECUPERO_BRIDGE_CONFIRM" in os.environ:
+        return _on("RECUPERO_BRIDGE_CONFIRM")
+    return _on("RECUPERO_DEEP_REACH")
+
+
 def _continue_past_dex_and_bridges(
     *,
     case: Case,
@@ -1602,9 +1624,12 @@ def _continue_past_dex_and_bridges(
     # RECUPERO_BRIDGE_CONFIRM (it makes live destination-chain log queries),
     # default OFF — consistent with RECUPERO_LOCKMINT_MATCH, so prod traces are
     # byte-for-byte unchanged unless an operator opts in.
-    _bridge_confirm_on = os.environ.get(
-        "RECUPERO_BRIDGE_CONFIRM", "",
-    ).strip().lower() in ("1", "true", "yes", "on")
+    # v0.36.0 (forensic-trace wiring): bridge-confirm is part of the
+    # deep-reach recipe — see _bridge_confirm_enabled(). RECUPERO_DEEP_REACH=1
+    # is the single knob that turns on the full forensic depth and now also
+    # enables the cryptographic cross-chain oracle here; an explicit
+    # RECUPERO_BRIDGE_CONFIRM always wins. Neither set ⇒ OFF ⇒ byte-identical.
+    _bridge_confirm_on = _bridge_confirm_enabled()
     if _bridge_confirm_on and cross_chain_continue and handoffs:
         try:
             _confs = _confirm_bridge_handoffs(

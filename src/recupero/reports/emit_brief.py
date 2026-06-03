@@ -2142,6 +2142,20 @@ def emit_brief(
         case, high_risk_db,
     )
 
+    # --- Fund-flow exposure summary (v0.38.0, TRM/Chainalysis-style) ---
+    # First-class "X% of traced value reached <illicit category>" headline,
+    # rolled up from the same high_risk_db. Direct-only (the defensible
+    # structural number); the multi-hop story lives in INDIRECT_EXPOSURE
+    # above. Returns None on a benign case → brief stays clean.
+    exposure_summary = None
+    try:
+        from recupero.trace.exposure_summary import compute_exposure_summary
+        exposure_summary = compute_exposure_summary(
+            case, high_risk_db, total_traced_usd=_compute_total_drained(case),
+        )
+    except Exception as _exc:  # noqa: BLE001 — never break the brief
+        log.warning("exposure-summary build failed (non-fatal): %s", _exc)
+
     # --- Drainer / incident classification (v0.10.1) --- v0.20.0 Phase C
     # Returns the brief-section view + the raw drainer_findings (the
     # downstream correlation pass consumes the raw findings, not the
@@ -2252,6 +2266,7 @@ def emit_brief(
         # shape as RISK_ASSESSMENT but with hop_count + path on
         # each entry.
         "INDIRECT_EXPOSURE": indirect_exposure,
+        "EXPOSURE_SUMMARY": exposure_summary,
         # v0.31.0: MVP 4-hop weight-decayed exposure scoring. Flat
         # {address: score} ranking that surfaces previously-invisible
         # 2/3-hop-removed mixer / OFAC / ransomware / darknet_market

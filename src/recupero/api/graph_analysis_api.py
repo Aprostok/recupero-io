@@ -101,7 +101,7 @@ def get_graph_analysis(
     store = CaseStore(cfg)
     try:
         case = store.read_case(case_id)
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",

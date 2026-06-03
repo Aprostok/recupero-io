@@ -62,7 +62,7 @@
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
-  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
   // Persist the key for the session only (not localStorage) — clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
@@ -77,8 +77,15 @@
             '<th>Address</th><th>Chain</th><th>Category</th><th>Proposed name</th>' +
             '<th>Confidence</th><th>Source</th><th>Status</th></tr></thead><tbody>';
     rows.forEach(function (r) {
-      var src = r.source_url
-        ? '<a href="' + esc(r.source_url) + '" target="_blank" rel="noopener">' + esc(r.source) + '</a>'
+      // source_url comes from the auto-ingested label-candidate queue
+      // (third-party attribution feeds), so it is attacker-influenceable.
+      // Whitelist the scheme to http(s) ONLY — never render a javascript:/
+      // data: URL into an href (that would run in the operator's admin
+      // session and could read the key from sessionStorage). encodeURI +
+      // the quote-hardened esc() also prevent any attribute breakout.
+      var safeUrl = /^https?:\/\//i.test(r.source_url || "") ? r.source_url : null;
+      var src = safeUrl
+        ? '<a href="' + esc(encodeURI(safeUrl)) + '" target="_blank" rel="noopener noreferrer">' + esc(r.source) + '</a>'
         : esc(r.source);
       h += '<tr>' +
         '<td class="mono">' + esc(r.address) + '</td>' +

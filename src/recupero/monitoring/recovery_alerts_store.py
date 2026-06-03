@@ -58,12 +58,19 @@ def persist_alerts(
     )
     inserted = 0
     with db_connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
-        for alert in alerts:
+        for idx, alert in enumerate(alerts):
             d = _alert_to_row(alert)
             address = str(d.get("address") or "")
             chain = str(d.get("chain") or "")
             kind = str(d.get("kind") or "")
-            dedup_key = f"{address}|{chain}|{kind}|{tick_iso}"
+            # Include the per-tick ORDINAL (idx) in the dedup key. evaluate_
+            # recovery_alerts is deterministic (severity-then-|Δ| sorted), so a
+            # genuine replay of the same tick reproduces the same order → same
+            # idx → still idempotent. But two DISTINCT alerts that share
+            # (address, chain, kind) within one tick — e.g. the same wallet
+            # watched under two investigations — get different idx, so neither
+            # is silently dropped by ON CONFLICT (the bug the ordinal fixes).
+            dedup_key = f"{address}|{chain}|{kind}|{tick_iso}|{idx}"
             cur.execute(
                 """
                 INSERT INTO public.recovery_alerts

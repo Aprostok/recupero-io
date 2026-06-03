@@ -105,7 +105,7 @@ def get_exhibit_pack(
     # directory as a side effect, so it cannot be used to test existence).
     try:
         store.read_case(case_id)
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",
@@ -115,7 +115,7 @@ def get_exhibit_pack(
 
     try:
         manifest = build_exhibit_manifest(case_dir)
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",

@@ -130,7 +130,7 @@ def get_sar_filing(
     # and /v1/graph-analysis exactly.
     try:
         store.read_case(case_id)
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",

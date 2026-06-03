@@ -114,7 +114,7 @@ def get_recovery_snapshot(
     # directory as a side effect, so it cannot be used to test existence).
     try:
         store.read_case(case_id)
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",

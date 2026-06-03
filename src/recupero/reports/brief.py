@@ -1969,11 +1969,22 @@ def _build_secondary_preservation_targets(
         name = raw.get("issuer", "")
         if not name or name == primary_issuer_name:
             continue
-        # Skip pure-UNRECOVERABLE: no preservation pathway, doesn't
-        # belong in a "send a preservation request" list.
+        # v0.36.0 (Jacob V-CFI02, fix 2): a secondary preservation
+        # target must have CONFIRMED freezable value. Pre-v0.36.0 this
+        # kept any issuer with total_usd > $0 OR total_suspected_usd > $0
+        # — so BitGo ($0 FREEZABLE + $35.6M INVESTIGATE 0x52Aa bleed) and
+        # Threshold ($0 + $151K INVESTIGATE) were recommended to LE in the
+        # "parallel preservation requests" block even though their
+        # standalone letters were correctly suppressed for having $0
+        # confirmed FREEZABLE. Same $0-freezable guard that suppresses
+        # the standalone letter must apply here. INVESTIGATE-only /
+        # pure-UNRECOVERABLE issuers have no preservation pathway and do
+        # not belong in a "send a preservation request" recommendation —
+        # they remain in the Section 4.2 complete inventory for
+        # disclosure, just not in the recommended-action block.
         total_usd = raw.get("total_usd") or "$0"
         suspected = raw.get("total_suspected_usd") or "$0"
-        if total_usd in ("$0", "0", "$0.00") and suspected in ("$0", "0", "$0.00"):
+        if total_usd in ("$0", "0", "$0.00"):
             continue
         secondaries.append({
             "issuer_name": name,

@@ -387,3 +387,66 @@ def test_graph_edge_to_dict_shape() -> None:
     assert d["totalUsd"] == "$1,234.56"
     assert d["totalUsdNumeric"] == 1234.56
     assert d["isCrossChain"] is False
+
+
+# ---- #6 (Reactor-grade): high-risk node overlay ---- #
+
+from recupero.trace.risk_scoring import HighRiskEntry  # noqa: E402
+
+
+def _risk_db() -> dict[str, HighRiskEntry]:
+    return {
+        PERP.lower(): HighRiskEntry(
+            address=PERP.lower(), name="Lazarus Group",
+            risk_category="ofac_sanctioned", severity=4),
+        EXCH.lower(): HighRiskEntry(
+            address=EXCH.lower(), name="Tornado Cash",
+            risk_category="mixer_high_risk", severity=3),
+    }
+
+
+def test_high_risk_node_gets_risk_overlay() -> None:
+    transfers = [
+        _transfer(from_addr=VICTIM, to_addr=PERP, usd=Decimal("50000")),
+        _transfer(from_addr=PERP, to_addr=EXCH, usd=Decimal("45000"),
+                  tx_hash="0x" + "2" * 64),
+    ]
+    data = build_graph_data(_case(transfers), high_risk_db=_risk_db())
+    perp = next(n for n in data["nodes"] if n["id"] == PERP)
+    assert perp["risk"] == "sanctioned"
+    assert perp["riskCategory"] == "ofac_sanctioned"
+    assert perp["riskName"] == "Lazarus Group"
+    assert perp["riskColor"] == "#C62828"
+    exch = next(n for n in data["nodes"] if n["id"] == EXCH)
+    assert exch["risk"] == "elevated"
+    assert exch["riskCategory"] == "mixer_high_risk"
+    assert exch["riskColor"] == "#F9A825"
+
+
+def test_clean_node_has_no_risk_overlay() -> None:
+    transfers = [_transfer(from_addr=VICTIM, to_addr=PERP)]
+    # VICTIM is not in the db → risk none.
+    data = build_graph_data(_case(transfers), high_risk_db=_risk_db())
+    victim = next(n for n in data["nodes"] if n["id"] == VICTIM)
+    assert victim["risk"] == "none"
+    assert victim["riskCategory"] is None
+    assert victim["riskColor"] is None
+
+
+def test_meta_risk_rollup() -> None:
+    transfers = [
+        _transfer(from_addr=VICTIM, to_addr=PERP, usd=Decimal("50000")),
+        _transfer(from_addr=PERP, to_addr=EXCH, usd=Decimal("45000"),
+                  tx_hash="0x" + "2" * 64),
+    ]
+    data = build_graph_data(_case(transfers), high_risk_db=_risk_db())
+    assert data["meta"]["risk_node_count"] == 2
+    assert data["meta"]["risk_categories"] == ["mixer_high_risk", "ofac_sanctioned"]
+
+
+def test_empty_db_yields_no_overlay() -> None:
+    transfers = [_transfer(from_addr=VICTIM, to_addr=PERP)]
+    data = build_graph_data(_case(transfers), high_risk_db={})
+    assert all(n["risk"] == "none" for n in data["nodes"])
+    assert data["meta"]["risk_node_count"] == 0
+    assert data["meta"]["risk_categories"] == []

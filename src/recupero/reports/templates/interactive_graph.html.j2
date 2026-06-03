@@ -255,6 +255,12 @@
   }
   #focus-banner.active { display: inline-flex; }
   #focus-banner b { color: #fff; }
+  .risk-badge {
+    background:#3a1212; color:#ff8a80; border:1px solid #C62828;
+    border-radius:10px; padding:1px 8px;
+  }
+  .risk-badge b { color:#ff5252; }
+  #btn-color-mode.risk { background:#3a1212; border-color:#C62828; color:#ff8a80; }
 </style>
 </head>
 <body>
@@ -267,6 +273,9 @@
     <span><b id="stat-edges">{{ meta.edge_count }}</b> / {{ meta.edge_count }} edges</span>
     <span>Traced: <b>{{ meta.total_usd_traced }}</b></span>
     <span>Chain: <b>{{ meta.chain }}</b></span>
+    {% if meta.risk_node_count %}
+    <span class="risk-badge" title="Nodes that are known high-risk addresses (OFAC / mixer / ransomware / drainer / darknet)">⚠ <b>{{ meta.risk_node_count }}</b> high-risk</span>
+    {% endif %}
   </div>
 </header>
 
@@ -274,7 +283,26 @@
   <input type="text" id="search" placeholder="Search address (full or partial)…" />
   <button id="btn-reset">Reset view</button>
   <button id="btn-fit">Fit to screen</button>
-  <div class="legend">
+  <button id="btn-color-mode" title="Toggle node stroke colouring between chain and risk">Color: Chain</button>
+  <div class="legend" id="risk-legend" style="display:none">
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#C62828"></div>
+      Sanctioned
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#EF6C00"></div>
+      High risk
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#F9A825"></div>
+      Elevated
+    </div>
+    <div class="legend-item">
+      <div class="legend-swatch" style="border-color:#3a3d44"></div>
+      No flag
+    </div>
+  </div>
+  <div class="legend" id="chain-legend">
     <div class="legend-item">
       <div class="legend-swatch" style="border-color:#5B6CFF"></div>
       Ethereum
@@ -460,9 +488,21 @@ const nodeSel = root.append("g")
   .on("mouseover", (event, d) => showNodeTooltip(event, d))
   .on("mouseout", hideTooltip);
 
+// #6 (Reactor-grade): node stroke colouring. In 'chain' mode the stroke is the
+// chain colour, BUT a known high-risk node always shows its risk colour so risk
+// never hides. In 'risk' mode only risky nodes are coloured (the rest dim out),
+// isolating the illicit structure. Toggled via #btn-color-mode.
+let COLOR_MODE = "chain";
+function isRisky(d) { return !!(d.risk && d.risk !== "none" && d.riskColor); }
+function strokeFor(d) {
+  if (COLOR_MODE === "risk") return isRisky(d) ? d.riskColor : "#3a3d44";
+  return isRisky(d) ? d.riskColor : d.chainColor;
+}
+
 nodeSel.append("circle")
   .attr("r", nodeRadius)
-  .attr("stroke", d => d.chainColor)
+  .attr("stroke", d => strokeFor(d))
+  .attr("stroke-width", d => isRisky(d) ? 4 : 1.5)
   .attr("fill", d => d.isVictim ? "#003c22" : "#1a1c22");
 
 nodeSel.append("text")
@@ -524,6 +564,19 @@ svg.on("click", () => {
 });
 
 // Search box — substring-match address. Match → pulse + center.
+// #6 (Reactor-grade): toggle node stroke colouring between chain and risk.
+document.getElementById("btn-color-mode").addEventListener("click", () => {
+  COLOR_MODE = (COLOR_MODE === "chain") ? "risk" : "chain";
+  const btn = document.getElementById("btn-color-mode");
+  btn.textContent = "Color: " + (COLOR_MODE === "chain" ? "Chain" : "Risk");
+  btn.classList.toggle("risk", COLOR_MODE === "risk");
+  document.getElementById("risk-legend").style.display =
+    COLOR_MODE === "risk" ? "flex" : "none";
+  document.getElementById("chain-legend").style.display =
+    COLOR_MODE === "risk" ? "none" : "flex";
+  nodeSel.select("circle").attr("stroke", d => strokeFor(d));
+});
+
 document.getElementById("search").addEventListener("input", (e) => {
   const q = e.target.value.trim().toLowerCase();
   if (!q) {
@@ -589,6 +642,7 @@ function _ttText(html, tag, text, opts) {
     el.textContent = (text === null || text === undefined) ? "" : String(text);
   }
   html.appendChild(el);
+  return el;
 }
 
 function _safeExplorerUrl(raw) {
@@ -622,6 +676,15 @@ function showNodeTooltip(event, d) {
   }
   if (d.identity) {
     _ttText(root, "div", d.identity, {className: "tt-row", label: "Identity:"});
+  }
+  // #6 (Reactor-grade): high-risk overlay — flagged in red with the labeled
+  // entity name (e.g. "ofac_sanctioned — Lazarus Group").
+  if (d.risk && d.risk !== "none") {
+    const riskText = d.riskName
+      ? (d.riskCategory || d.risk) + " — " + d.riskName
+      : (d.riskCategory || d.risk);
+    const row = _ttText(root, "div", riskText, {className: "tt-row", label: "⚠ Risk:"});
+    if (row && d.riskColor) row.style.color = d.riskColor;
   }
   _ttText(root, "div", d.inboundUsd, {className: "tt-row", label: "Inbound:"});
   _ttText(root, "div", d.outboundUsd, {className: "tt-row", label: "Outbound:"});

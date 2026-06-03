@@ -82,6 +82,40 @@ _CHAIN_COLOR: dict[str, str] = {
 }
 
 
+# v0.38.0 (#6, Reactor-grade): risk_category → (risk level, node fill color).
+# The level is the coarse band the UI legend + "color by risk" toggle use; the
+# color is a severity ramp (red = sanctioned → amber = elevated). Keys are the
+# risk_category values from risk_scoring.load_high_risk_db.
+_RISK_BAND: dict[str, tuple[str, str]] = {
+    "ofac_sanctioned":  ("sanctioned", "#C62828"),  # red
+    "mixer_sanctioned": ("sanctioned", "#C62828"),
+    "intl_sanctioned":  ("sanctioned", "#D84315"),  # deep orange-red
+    "ransomware":       ("high",       "#E64A19"),  # orange-red
+    "darknet_market":   ("high",       "#EF6C00"),  # orange
+    "scam_drainer":     ("high",       "#F57C00"),  # amber-orange
+    "mixer_high_risk":  ("elevated",   "#F9A825"),  # amber
+}
+# Fallback for an unknown-but-present risk_category (still flag it as risky).
+_RISK_BAND_DEFAULT = ("elevated", "#F9A825")
+
+
+def _risk_for_address(
+    address: str, high_risk_db: dict[str, Any] | None,
+) -> tuple[str, str | None, str | None, str | None]:
+    """Resolve (risk_level, risk_category, risk_name, risk_color) for an
+    address. Returns ('none', None, None, None) when the address is not a
+    known high-risk address or the db is unavailable."""
+    if not high_risk_db or not address:
+        return "none", None, None, None
+    from recupero._common import canonical_address_key as _ck
+    entry = high_risk_db.get(_ck(address))
+    if entry is None:
+        return "none", None, None, None
+    cat = (getattr(entry, "risk_category", "") or "").lower()
+    level, color = _RISK_BAND.get(cat, _RISK_BAND_DEFAULT)
+    return level, cat or None, getattr(entry, "name", None), color
+
+
 @dataclass
 class GraphNode:
     """One node in the interactive graph. JSON-serializable."""
@@ -104,6 +138,13 @@ class GraphNode:
     # and lets the filter threshold compare against an honest value.
     inbound_usd_numeric: float = 0.0
     outbound_usd_numeric: float = 0.0
+    # v0.38.0 (#6, Reactor-grade): authoritative high-risk overlay. risk_level
+    # is the legend band ('sanctioned'/'high'/'elevated'/'none'); risk_color is
+    # the severity-ramp fill the "color by risk" toggle uses.
+    risk_level: str = "none"
+    risk_category: str | None = None
+    risk_name: str | None = None
+    risk_color: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         flow = self.inbound_usd_numeric + self.outbound_usd_numeric
@@ -123,6 +164,10 @@ class GraphNode:
             "isVictim": self.is_victim,
             "issuer": self.issuer,
             "explorerUrl": self.explorer_url,
+            "risk": self.risk_level,
+            "riskCategory": self.risk_category,
+            "riskName": self.risk_name,
+            "riskColor": self.risk_color,
         }
 
 
@@ -204,9 +249,17 @@ def _explorer_url(chain: str, address: str) -> str:
     return f"{prefix}{address}" if prefix else ""
 
 
-def build_graph_data(case: Case) -> dict[str, Any]:
+def build_graph_data(
+    case: Case, *, high_risk_db: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Walk the case via the same aggregation pass the Graphviz
     renderer uses, then return a JSON-serializable graph dict.
+
+    v0.38.0 (#6): each node carries an authoritative high-risk overlay
+    (``risk``/``riskCategory``/``riskName``/``riskColor``) resolved from
+    ``high_risk_db`` (``risk_scoring.load_high_risk_db``). When not supplied,
+    it is loaded lazily best-effort — a load failure degrades to no risk
+    overlay (every node ``risk='none'``) rather than failing the render.
 
     Returns:
       {
@@ -227,6 +280,17 @@ def build_graph_data(case: Case) -> dict[str, Any]:
     from recupero.worker._flow_diagram import _aggregate
     nodes_map, edges_list = _aggregate(case)
 
+    # Best-effort high-risk db load for the node risk overlay. A failure here
+    # (seed files unreadable, etc.) must not fail the graph — degrade to no
+    # overlay (every node risk='none').
+    if high_risk_db is None:
+        try:
+            from recupero.trace.risk_scoring import load_high_risk_db
+            high_risk_db = load_high_risk_db()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("graph_ui: high-risk db load failed (%s); no risk overlay", exc)
+            high_risk_db = {}
+
     seed_lower = (case.seed_address or "").lower()
     json_nodes: list[dict[str, Any]] = []
     for addr, attrs in nodes_map.items():
@@ -246,6 +310,9 @@ def build_graph_data(case: Case) -> dict[str, Any]:
         # AND the embedded JSON blob is JSON.parse-safe.
         safe_inbound = _safe_usd_decimal(attrs.inbound_usd)
         safe_outbound = _safe_usd_decimal(attrs.outbound_usd)
+        risk_level, risk_cat, risk_name, risk_color = _risk_for_address(
+            addr, high_risk_db,
+        )
         node = GraphNode(
             id=addr,
             label=label,
@@ -261,6 +328,10 @@ def build_graph_data(case: Case) -> dict[str, Any]:
             is_victim=is_victim,
             issuer=attrs.issuer,
             explorer_url=_explorer_url(chain, addr),
+            risk_level=risk_level,
+            risk_category=risk_cat,
+            risk_name=risk_name,
+            risk_color=risk_color,
         )
         json_nodes.append(node.to_dict())
 
@@ -303,6 +374,12 @@ def build_graph_data(case: Case) -> dict[str, Any]:
     categories_present = sorted(
         {str(n["category"]) for n in json_nodes if n.get("category")}
     )
+    # v0.38.0 (#6): risk overlay rollup so the UI can build a risk legend +
+    # "color by risk" toggle from data and badge the high-risk count.
+    risk_nodes = [n for n in json_nodes if n.get("risk") and n["risk"] != "none"]
+    risk_categories_present = sorted(
+        {str(n["riskCategory"]) for n in risk_nodes if n.get("riskCategory")}
+    )
 
     return {
         "nodes": json_nodes,
@@ -316,6 +393,8 @@ def build_graph_data(case: Case) -> dict[str, Any]:
             "chain": case.chain.value,
             "chains": chains_present,
             "categories": categories_present,
+            "risk_node_count": len(risk_nodes),
+            "risk_categories": risk_categories_present,
         },
     }
 

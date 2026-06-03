@@ -102,6 +102,11 @@ _NAV: list[dict[str, Any]] = [
      "path": "/v1/recovery-snapshot/console", "live": True,
      "desc": "Pre-engagement recovery estimate for a case — expected "
              "net-to-victim, per-issuer breakdown, drivers/ROI (read-only)."},
+    # v0.35.26 UI batch-7: per-case launcher.
+    {"group": "Casework", "label": "Case Overview", "emoji": "📋",
+     "path": "/v1/case-overview/console", "live": True,
+     "desc": "Per-case launcher — which deliverables a case has produced, with "
+             "a deep link into each console."},
 ]
 
 

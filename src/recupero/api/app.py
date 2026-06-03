@@ -175,6 +175,8 @@ for _mod, _attr in (
     # v0.35.24 (UI batch-5): law-firm portfolio dashboard + recovery snapshot.
     ("recupero.api.law_firm_api", "router"),
     ("recupero.api.recovery_snapshot_api", "router"),
+    # v0.35.26 (UI batch-7): per-case overview / launcher.
+    ("recupero.api.case_overview_api", "router"),
 ):
     try:
         _m = __import__(_mod, fromlist=[_attr])

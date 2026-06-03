@@ -85,11 +85,13 @@ def test_invalid_request_type_raises() -> None:
 
 
 @pytest.mark.parametrize("rtype", [
-    # exchange-subpoena reads from freeze_asks::onward_cex_flows (v0.14.11),
-    # not from brief.EXCHANGES — it has its own dedicated test suite at
-    # tests/test_exchange_subpoena.py. Filter it out of this parametrize
-    # so the minimal-brief fixture doesn't need to fake onward_cex_flows.
-    t for t in LEGAL_REQUEST_TYPES if t != "exchange-subpoena"
+    # exchange-subpoena AND exchange-freeze read from
+    # freeze_asks::onward_cex_flows (v0.14.11 / v0.35), not from
+    # brief.EXCHANGES — each has its own dedicated test suite
+    # (tests/test_exchange_subpoena.py, tests/test_exchange_freeze_letter.py).
+    # Filter both out of this parametrize so the minimal-brief fixture
+    # doesn't need to fake onward_cex_flows (they return [] without it).
+    t for t in LEGAL_REQUEST_TYPES if t not in ("exchange-subpoena", "exchange-freeze")
 ])
 def test_each_template_renders(rtype: str) -> None:
     """Each of the three templates must render without exception

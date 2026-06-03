@@ -56,7 +56,7 @@ log = logging.getLogger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
-LEGAL_REQUEST_TYPES = ("mlat", "314b", "subpoena", "exchange-subpoena")
+LEGAL_REQUEST_TYPES = ("mlat", "314b", "subpoena", "exchange-subpoena", "exchange-freeze")
 
 
 def _safe_filename_segment(name: str | None, *, fallback: str = "unknown") -> str:
@@ -186,6 +186,14 @@ def render_legal_request(
     # path entirely.
     if request_type == "exchange-subpoena":
         return _render_exchange_subpoena_requests(
+            brief, output_dir=output_dir, exchange_filter=exchange_filter,
+        )
+
+    # v0.35: time-critical asset-FREEZE request (vs the records subpoena above).
+    # Same onward_cex_flows evidence, but addressed via the VERIFIED-aware
+    # exchange-freeze contact resolver and framed as an immediate-hold ask.
+    if request_type == "exchange-freeze":
+        return _render_exchange_freeze_requests(
             brief, output_dir=output_dir, exchange_filter=exchange_filter,
         )
 
@@ -603,10 +611,7 @@ def _render_exchange_subpoena_requests(
     freeze_asks = brief.get("_freeze_asks")
     if freeze_asks is None:
         case_dir = brief.get("_case_dir")
-        if case_dir is not None:
-            freeze_asks = load_freeze_asks(Path(case_dir))
-        else:
-            freeze_asks = {}
+        freeze_asks = load_freeze_asks(Path(case_dir)) if case_dir is not None else {}
 
     flows = freeze_asks.get("onward_cex_flows", []) or []
     if exchange_filter:
@@ -697,6 +702,129 @@ def _render_exchange_subpoena_requests(
         atomic_write_text(out_path, html)
         renders.append(LegalRequestRender(
             request_type="exchange-subpoena",
+            exchange_name=exchange_name,
+            output_path=out_path,
+            html_size_bytes=out_path.stat().st_size,
+        ))
+    return renders
+
+
+def _render_exchange_freeze_requests(
+    brief: dict[str, Any],
+    *,
+    output_dir: Path,
+    exchange_filter: str | None = None,
+) -> list[LegalRequestRender]:
+    """Render one TIME-CRITICAL asset-freeze request per CEX that received
+    funds from a freeze-target address. Same onward_cex_flows evidence as the
+    subpoena, but addressed via the VERIFIED-aware exchange-freeze contact
+    resolver (LE portal / freeze capability / verified flag) and framed as an
+    immediate-hold ask. An unverified/unknown contact still renders, with a
+    prominent "confirm channel before sending" banner."""
+    import math
+
+    freeze_asks = brief.get("_freeze_asks")
+    if freeze_asks is None:
+        case_dir = brief.get("_case_dir")
+        freeze_asks = load_freeze_asks(Path(case_dir)) if case_dir is not None else {}
+
+    flows = freeze_asks.get("onward_cex_flows", []) or []
+    if exchange_filter:
+        flows = [
+            f for f in flows
+            if exchange_filter.lower() in (f.get("exchange") or "").lower()
+        ]
+    if not flows:
+        return []
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    by_exchange: dict[str, list[dict]] = {}
+    for f in flows:
+        ex = f.get("exchange") or "(unknown exchange)"
+        by_exchange.setdefault(ex, []).append(f)
+
+    env = Environment(
+        loader=FileSystemLoader(_TEMPLATES_DIR),
+        autoescape=select_autoescape(["html", "j2"]),
+    )
+    from recupero.reports._jinja_filters import register_safe_filters
+    register_safe_filters(env)
+    template = env.get_template("exchange_freeze_request.html.j2")
+
+    # Lazy import avoids any reports<->freeze import cycle.
+    from recupero.freeze.exchange_contacts import resolve_exchange_freeze_contact
+
+    base_ctx = _build_base_context(brief)
+    renders: list[LegalRequestRender] = []
+
+    for exchange_name, exchange_flows in by_exchange.items():
+        # Sanitize flow_usd_value (Inf/NaN/negative) so the legal document
+        # body can't typeset "$inf"/"$nan" — mirrors the subpoena renderer.
+        sanitized: list[dict] = []
+        for f in exchange_flows:
+            row = dict(f)
+            raw = row.get("flow_usd_value", "0")
+            try:
+                cleaned = str(raw).replace("$", "").replace(",", "").strip()
+                v = float(cleaned) if cleaned else 0.0
+                if math.isnan(v) or math.isinf(v) or v < 0:
+                    row["flow_usd_value"] = "$0.00"
+                elif not str(raw).startswith("$"):
+                    row["flow_usd_value"] = f"${v:,.2f}"
+            except (TypeError, ValueError):
+                row["flow_usd_value"] = "$0.00"
+            sanitized.append(row)
+        exchange_flows = sanitized
+
+        total_usd = _safe_total_usd(
+            [f.get("flow_usd_value", "0") for f in exchange_flows]
+        )
+        symbols = sorted({f.get("token_symbol", "") for f in exchange_flows if f.get("token_symbol")})
+        if not symbols:
+            token_summary = "the relevant token"
+        elif len(symbols) == 1:
+            token_summary = symbols[0]
+        else:
+            token_summary = ", ".join(symbols[:-1]) + " and " + symbols[-1]
+
+        contact = resolve_exchange_freeze_contact(exchange_name)
+        if contact is not None:
+            exchange_ctx = {
+                "name": contact.name,
+                "legal_name": contact.legal_name,
+                "compliance_email": contact.compliance_email,
+                "le_portal_url": contact.le_portal_url,
+                "freeze_capability": contact.freeze_capability,
+                "freeze_request_channel": contact.freeze_request_channel,
+                "verified": contact.verified,
+                "source": contact.source,
+            }
+        else:
+            # Unknown exchange — render with a clearly-unverified placeholder.
+            exchange_ctx = {
+                "name": exchange_name, "legal_name": exchange_name,
+                "compliance_email": None, "le_portal_url": None,
+                "freeze_capability": "unknown", "freeze_request_channel": None,
+                "verified": False, "source": None,
+            }
+
+        ctx = {
+            **base_ctx,
+            "exchange": exchange_ctx,
+            "flows": exchange_flows,
+            "total_flow_usd": f"${total_usd:,.2f}",
+            "token_summary": token_summary,
+            "le_engaged": bool(base_ctx.get("ic3_case_id")),
+            "le_reference": base_ctx.get("ic3_case_id"),
+        }
+
+        html = template.render(**ctx)
+        safe_exchange = _safe_filename_segment(exchange_name)
+        out_path = output_dir / f"exchange_freeze_{safe_exchange}.html"
+        atomic_write_text(out_path, html)
+        renders.append(LegalRequestRender(
+            request_type="exchange-freeze",
             exchange_name=exchange_name,
             output_path=out_path,
             html_size_bytes=out_path.stat().st_size,

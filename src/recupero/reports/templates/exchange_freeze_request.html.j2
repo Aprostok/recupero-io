@@ -1,0 +1,220 @@
+{# Exchange ASSET-FREEZE request (v0.35).
+
+   A TIME-CRITICAL request asking a centralized exchange to place an
+   immediate administrative hold / freeze on identified deposit
+   address(es) that received the documented stolen-fund flow, pending
+   formal legal process (subpoena / court order / MLAT). Distinct from
+   exchange_subpoena_request.html.j2 (a records request) — major CEXes
+   freeze deposits on a documented theft trail within hours, so this
+   asset-preservation ask is the time-sensitive sibling.
+
+   Uses the VERIFIED-aware contact resolver: when the channel is
+   unverified, a prominent banner tells the operator to confirm the
+   exchange's current LE freeze channel before sending. Recupero never
+   represents an unverified address as the official channel.
+
+   Required Jinja context:
+     - case_id, generated_at, incident_date, total_loss_usd
+     - victim: {name, jurisdiction}; investigator: {name, organization, email}
+     - exchange: {name, legal_name, compliance_email, le_portal_url,
+       freeze_capability (yes|limited|no|unknown), freeze_request_channel,
+       verified (bool), source}
+     - flows: list of OnwardCEXFlow-shaped dicts (as in the subpoena template)
+     - total_flow_usd, token_summary, le_engaged, le_reference
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Exchange Freeze Request — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Strictly Private &amp; Confidential</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  {% if not exchange.verified %}
+  <div style="background:#7c2d12;color:#fff;padding:.75rem 1rem;border-radius:6px;margin:0 0 1rem;font-weight:600;line-height:1.4">
+    ⚠ UNVERIFIED CONTACT CHANNEL — the freeze / law-enforcement channel shown
+    for {{ exchange.name }} has NOT been independently verified by Recupero.
+    Confirm {{ exchange.name }}'s current law-enforcement freeze-request channel
+    before sending, and do not represent the address below as the official
+    channel.
+  </div>
+  {% endif %}
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Exchange Asset-Freeze Request — TIME-CRITICAL</div>
+    <h1>{{ exchange.name }}<br/>Asset-Freeze Request</h1>
+    <p class="cover-subtitle">
+      On-chain tracing establishes that funds stolen from {{ victim.name }}
+      were forwarded to {{ flows|length }} deposit address(es) under
+      {{ exchange.name }}'s custody. Because misappropriated funds can be
+      withdrawn within minutes, we respectfully request an <strong>immediate
+      precautionary hold</strong> on the identified deposit address(es) and
+      associated account balances, pending the formal legal process described
+      below.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Addressed To</dt>
+      <dd>{{ exchange.legal_name or exchange.name }}<span class="secondary">Law-Enforcement / Compliance Team<br/>{{ exchange.le_portal_url or exchange.compliance_email or "[confirm LE channel before sending]" }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Freeze Capability (on file)</dt>
+      <dd>{{ exchange.freeze_capability | default("unknown") }}<span class="secondary">{% if exchange.verified %}channel verified{% if exchange.source %} — {{ exchange.source }}{% endif %}{% else %}channel UNVERIFIED — confirm before sending{% endif %}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Prepared By</dt>
+      <dd>{{ investigator.name }}<span class="secondary">{{ investigator.organization }}<br/>on behalf of {{ victim.name }}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Case Number</dt>
+      <dd>{{ case_id }}</dd>
+    </div>
+    {% if le_reference %}
+    <div class="cover-meta-item">
+      <dt>LE Reference</dt>
+      <dd class="mono">{{ le_reference }}</dd>
+    </div>
+    {% endif %}
+    <div class="cover-meta-item">
+      <dt>Total Flow Value</dt>
+      <dd>{{ total_flow_usd }}<span class="secondary">across {{ flows|length }} flow(s)</span></dd>
+    </div>
+  </dl>
+</section>
+
+<section class="content">
+
+<h2>1. Nature of the Underlying Matter</h2>
+<p>
+On {{ incident_date }}, {{ victim.name }} ({{ victim.jurisdiction }}) reported
+the unauthorized appropriation of digital assets with a reported loss of
+approximately {{ total_loss_usd }}.
+{% if le_engaged %}
+Law enforcement has been engaged in this matter
+{% if le_reference %}under reference {{ le_reference }}.{% else %}and is actively investigating.{% endif %}
+{% else %}
+Engagement with law enforcement is in progress; this request is made to
+preserve assets pending that process.
+{% endif %}
+</p>
+
+<h2>2. On-Chain Evidence of {{ exchange.name }} Receipt</h2>
+<p>
+Independent on-chain analysis established that the upstream addresses below —
+themselves identified as recipients of the misappropriated assets — forwarded
+{{ token_summary }} to deposit addresses under {{ exchange.name }}'s custody.
+Each transaction is independently verifiable on the public blockchain.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Upstream (sender)</th>
+      <th>{{ exchange.name }} deposit (receiver)</th>
+      <th>Token</th>
+      <th class="amount">Total USD</th>
+      <th>Transfers</th>
+      <th>Period</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for flow in flows %}
+    <tr>
+      <td class="mono">{% if flow.upstream_explorer_url %}<a href="{{ flow.upstream_explorer_url|safe_url }}">{{ flow.upstream_address | short_address(prefix=10, suffix=6) }}</a>{% else %}<span>{{ flow.upstream_address | short_address(prefix=10, suffix=6) }}</span>{% endif %}</td>
+      <td class="mono">{% if flow.cex_explorer_url %}<a href="{{ flow.cex_explorer_url|safe_url }}">{{ flow.cex_address | short_address(prefix=10, suffix=6) }}</a>{% else %}<span>{{ flow.cex_address | short_address(prefix=10, suffix=6) }}</span>{% endif %}</td>
+      <td>{{ flow.token_symbol }}</td>
+      <td class="amount mono">{{ flow.flow_usd_value }}</td>
+      <td class="amount mono">{{ flow.transfer_count }}</td>
+      <td>
+        {% if flow.first_flow_at %}
+          {{ flow.first_flow_at[:10] }}
+          {% if flow.last_flow_at and flow.last_flow_at[:10] != flow.first_flow_at[:10] %} – {{ flow.last_flow_at[:10] }}{% endif %}
+        {% else %}—{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>3. Transaction Hashes (for Verification)</h2>
+<ul style="font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 0.85em;">
+{% for flow in flows %}
+{% for tx in flow.tx_hashes %}
+  <li>{{ tx }}<span class="secondary"> · {{ flow.upstream_address | short_address(prefix=10, suffix=6) }} → {{ flow.cex_address | short_address(prefix=10, suffix=6) }} · {{ flow.token_symbol }}</span></li>
+{% endfor %}
+{% endfor %}
+</ul>
+
+<h2>4. Action Requested — Immediate Precautionary Hold</h2>
+<p>
+For each {{ exchange.name }}-controlled deposit address in section 2, we
+respectfully request that your team:
+</p>
+<ol>
+  <li>
+    <strong>Place an immediate administrative hold</strong> on the identified
+    deposit address(es) and any associated customer account balance, to the
+    extent your platform permits asset preservation pending legal process.
+  </li>
+  <li>
+    <strong>Preserve</strong> all KYC, deposit, conversion, and withdrawal
+    records associated with the address(es) and account(s), against the formal
+    production request to follow.
+  </li>
+  <li>
+    <strong>Confirm</strong> receipt and the hold status to the contact in
+    section 6, including any internal process reference.
+  </li>
+</ol>
+<p class="secondary">
+This is a request for voluntary asset preservation, not a court order. Recupero
+is an investigation firm, not counsel, and this document is not legal advice.
+Formal compelled disclosure / freeze (subpoena, seizure warrant, court order,
+or MLAT) will follow through the engaged law-enforcement channel; please advise
+the contact below of your jurisdiction's process requirements.
+</p>
+
+<h2>5. Use and Confidentiality</h2>
+<p>
+Any information produced will be used exclusively to investigate and remediate
+the underlying theft, shared only with Recupero's investigative counsel and
+engaged law enforcement.
+</p>
+
+<h2>6. Point of Contact</h2>
+<p>
+<strong>Investigative counsel:</strong><br/>
+{{ investigator.name }}<br/>
+{{ investigator.organization }}<br/>
+{{ investigator.email }}
+</p>
+{% if le_engaged and le_reference %}
+<p><strong>Engaged law enforcement:</strong><br/>Reference {{ le_reference }} (point of contact available via the investigative counsel above)</p>
+{% endif %}
+
+<h2>7. Response Window</h2>
+<p>
+Given the time-critical nature of asset preservation, we respectfully request
+acknowledgement of receipt and confirmation of any hold placed within
+<strong>twenty-four (24) hours</strong> where your process permits, with the
+formal legal process to follow promptly.
+</p>
+
+</section>
+</body>
+</html>

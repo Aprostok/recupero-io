@@ -1,32 +1,30 @@
-"""v0.36.0 — forensic-trace wiring: RECUPERO_DEEP_REACH enables the
-cryptographic cross-chain bridge-pairing oracle.
+"""v0.36.0 + v0.37.0 — forensic-trace wiring + deep-reach-is-default.
 
-Context (Jacob V-CFI02 follow-up, "what needs to be added to the initial
-trace"): the engine already has everything a real bridge case needs —
-240 bridge seeds, an 8-protocol cryptographic pairing oracle
+Recupero goes DEEP on every trace. The engine already had the full forensic
+recipe — 240 bridge seeds, an 8-protocol cryptographic pairing oracle
 (DLN/Across/Celer/Hop/Synapse/CCIP/Connext/Wormhole, "verified vs Zigha"),
-cross-chain BFS continuation (default ON), and value-directed deep-reach.
-The only reason a default run under-traces a bridge case is that the
-forensic-depth gates are OFF by default for byte-identical fixture
-stability.
+cross-chain BFS continuation, value-directed deep-reach (peel/split follow,
+dormancy window, labeled mixer/exchange/bridge terminals). It used to be
+gated OFF by default; v0.37.0 makes deep-reach the DEFAULT so a standard
+trace follows funds to where they rest (across bridges, through aggregators,
+past peels) instead of stopping at the first hop.
 
-v0.36.0 folds the bridge-pairing oracle into the deep-reach master switch
-so a single knob (`RECUPERO_DEEP_REACH=1`, the recommended production
-setting) turns on the FULL forensic recipe, while keeping the default OFF
-(byte-identical). This pins the resolution contract so it can't silently
-regress.
+This pins the two resolution contracts so they can't silently regress:
 
-Contract (`_bridge_confirm_enabled`):
-  * neither env var set                         -> OFF  (byte-identical)
-  * RECUPERO_DEEP_REACH=1 (BRIDGE_CONFIRM unset)-> ON   (inherits deep-reach)
-  * explicit RECUPERO_BRIDGE_CONFIRM always wins (even =0 under deep-reach)
+  _deep_reach_enabled():
+    * nothing set                 -> ON   (the new default — go deep)
+    * RECUPERO_DEEP_REACH=0        -> OFF  (opt-out: legacy/cheap pass)
+
+  _bridge_confirm_enabled() (the cross-chain oracle):
+    * inherits deep-reach when RECUPERO_BRIDGE_CONFIRM is unset
+    * explicit RECUPERO_BRIDGE_CONFIRM always wins (even =0 under deep-reach)
 """
 
 from __future__ import annotations
 
 import pytest
 
-from recupero.trace.tracer import _bridge_confirm_enabled
+from recupero.trace.tracer import _bridge_confirm_enabled, _deep_reach_enabled
 
 _BC = "RECUPERO_BRIDGE_CONFIRM"
 _DR = "RECUPERO_DEEP_REACH"
@@ -38,19 +36,40 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(_DR, raising=False)
 
 
-def test_default_off_byte_identical() -> None:
-    # Neither set — the standard trace must NOT run the oracle (preserves
-    # every existing fixture, incl. Zigha 4/4, byte-identically).
-    assert _bridge_confirm_enabled() is False
+# ── deep-reach default ────────────────────────────────────────────────
+
+def test_deep_reach_is_on_by_default() -> None:
+    # v0.37.0: nothing set ⇒ deep. This is the headline behavior change.
+    assert _deep_reach_enabled() is True
 
 
-def test_deep_reach_enables_oracle(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The recommended production setting: one knob turns on the oracle.
-    monkeypatch.setenv(_DR, "1")
+@pytest.mark.parametrize("val", ["0", "false", "no", "off", "OFF", "False"])
+def test_deep_reach_opt_out(monkeypatch: pytest.MonkeyPatch, val: str) -> None:
+    monkeypatch.setenv(_DR, val)
+    assert _deep_reach_enabled() is False
+
+
+@pytest.mark.parametrize("val", ["1", "true", "yes", "on", "TRUE"])
+def test_deep_reach_explicit_on(monkeypatch: pytest.MonkeyPatch, val: str) -> None:
+    monkeypatch.setenv(_DR, val)
+    assert _deep_reach_enabled() is True
+
+
+# ── cross-chain oracle inherits deep-reach ─────────────────────────────
+
+def test_oracle_on_by_default() -> None:
+    # Nothing set ⇒ deep ⇒ the cryptographic cross-chain oracle runs.
     assert _bridge_confirm_enabled() is True
 
 
-@pytest.mark.parametrize("val", ["1", "true", "yes", "on", "TRUE", "On"])
+def test_oracle_off_when_deep_reach_opted_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(_DR, "0")
+    assert _bridge_confirm_enabled() is False
+
+
+@pytest.mark.parametrize("val", ["1", "true", "yes", "on"])
 def test_explicit_bridge_confirm_on(
     monkeypatch: pytest.MonkeyPatch, val: str,
 ) -> None:
@@ -61,23 +80,16 @@ def test_explicit_bridge_confirm_on(
 def test_explicit_bridge_confirm_off_wins_over_deep_reach(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Operator wants a cheaper same-chain-only deep pass: deep-reach on,
-    # oracle explicitly pinned off. The explicit value must win.
+    # Cheaper same-chain-only deep pass: deep on, oracle explicitly pinned off.
     monkeypatch.setenv(_DR, "1")
     monkeypatch.setenv(_BC, "0")
     assert _bridge_confirm_enabled() is False
 
 
-def test_deep_reach_off_keeps_oracle_off(
+def test_explicit_bridge_confirm_on_overrides_deep_reach_off(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Bridge-follow-only on an otherwise-shallow pass.
     monkeypatch.setenv(_DR, "0")
-    assert _bridge_confirm_enabled() is False
-
-
-def test_explicit_bridge_confirm_on_without_deep_reach(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Bridge-follow-only profile: oracle on, deep-reach untouched.
     monkeypatch.setenv(_BC, "1")
     assert _bridge_confirm_enabled() is True

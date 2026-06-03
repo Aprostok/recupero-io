@@ -497,7 +497,10 @@ def run_trace(
     def _truthy(name: str) -> bool:
         return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
 
-    _deep_reach = _truthy("RECUPERO_DEEP_REACH")
+    # v0.37.0: deep-reach is the DEFAULT (resolved by the module-level
+    # _deep_reach_enabled so run_trace + the bridge oracle agree). Opt out
+    # with RECUPERO_DEEP_REACH=0. Per-knob env vars below still win when set.
+    _deep_reach = _deep_reach_enabled()
 
     # Explicit ``value_trace`` arg wins (used by the multi-chain perpetrator
     # pivot to force directed tracing on a re-trace); else the env var if set;
@@ -1382,26 +1385,42 @@ def _confirm_bridge_handoffs(
     return out
 
 
+def _deep_reach_enabled() -> bool:
+    """v0.37.0: DEEP REACH IS THE DEFAULT.
+
+    Recupero goes deep on every trace — value-directed tracing through
+    aggregators/service wallets, 1:N split/peel following, dormancy-aware
+    (no-upper-cap) value window, stop-and-flag at labeled mixer/exchange/
+    bridge terminals, and cryptographic cross-chain bridge confirmation.
+    "Halfway" tracing (dead-ending at the first service wallet, never
+    crossing a bridge) aimed freeze letters at the first hop instead of
+    where the money rests. Opt OUT with ``RECUPERO_DEEP_REACH=0`` (e.g.
+    fixture-build / deterministic R&D runs), or pin an individual knob.
+
+    Centralized here so ``run_trace`` and ``_bridge_confirm_enabled``
+    resolve the default identically.
+    """
+    return os.environ.get("RECUPERO_DEEP_REACH", "1").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _bridge_confirm_enabled() -> bool:
     """Resolve whether the cryptographic cross-chain bridge-pairing oracle
     runs for this trace.
 
-    v0.36.0 (forensic-trace wiring): the oracle is part of the deep-reach
-    recipe. ``RECUPERO_BRIDGE_CONFIRM`` is honored when explicitly set
-    (an explicit value — including ``0`` — always wins, so an operator can
-    deep-reach with the oracle pinned off for a cheaper same-chain-only
-    pass). When it is NOT set, it inherits ``RECUPERO_DEEP_REACH`` so the
-    recommended production ``RECUPERO_DEEP_REACH=1`` turns the oracle on as
-    part of the full forensic depth. Neither set ⇒ OFF ⇒ existing traces
-    are byte-identical.
+    The oracle is part of the deep-reach recipe. ``RECUPERO_BRIDGE_CONFIRM``
+    is honored when explicitly set (an explicit value — including ``0`` —
+    always wins, so an operator can deep-reach with the oracle pinned off
+    for a cheaper same-chain-only pass). When it is NOT set, it inherits the
+    deep-reach default (v0.37.0: ON), so the standard production trace
+    confirms + follows cross-chain destinations cryptographically.
     """
-    def _on(name: str) -> bool:
-        return os.environ.get(name, "0").strip().lower() in (
+    if "RECUPERO_BRIDGE_CONFIRM" in os.environ:
+        return os.environ.get("RECUPERO_BRIDGE_CONFIRM", "0").strip().lower() in (
             "1", "true", "yes", "on",
         )
-    if "RECUPERO_BRIDGE_CONFIRM" in os.environ:
-        return _on("RECUPERO_BRIDGE_CONFIRM")
-    return _on("RECUPERO_DEEP_REACH")
+    return _deep_reach_enabled()
 
 
 def _continue_past_dex_and_bridges(
@@ -1712,9 +1731,21 @@ def _continue_past_dex_and_bridges(
     # continuation seed so the BFS follows the trail onto the destination
     # chain. Default OFF so existing prod traces are byte-for-byte unchanged
     # unless an operator opts into the deeper matching for a specific case.
-    _lockmint_on = os.environ.get(
-        "RECUPERO_LOCKMINT_MATCH", "",
-    ).strip().lower() in ("1", "true", "yes", "on")
+    # v0.37.0: lock-and-mint matching is part of the deep-reach recipe so
+    # "go deep" also covers POOL bridges (Celer/Orbiter/THORChain/Allbridge)
+    # whose recipient is NOT in the source calldata and which the
+    # cryptographic order-id oracle therefore cannot pair. Inherits the
+    # deep-reach default unless RECUPERO_LOCKMINT_MATCH is explicitly set
+    # (explicit value — incl. 0 — always wins). The matches are confidence-
+    # calibrated medium/low (a cross-chain correlation, never proof) and the
+    # brief classifies them as INVESTIGATE leads, never freeze targets — so
+    # this widens coverage without ever billing an inferred edge as freezable.
+    if "RECUPERO_LOCKMINT_MATCH" in os.environ:
+        _lockmint_on = os.environ.get(
+            "RECUPERO_LOCKMINT_MATCH", "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+    else:
+        _lockmint_on = _deep_reach_enabled()
     if _lockmint_on and cross_chain_continue and handoffs:
         from recupero.trace.cross_chain import (
             bridge_address_on_chain,

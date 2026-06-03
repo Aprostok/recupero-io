@@ -1477,7 +1477,8 @@ def _build_wallet_clusters_section(case: Case) -> dict[str, Any]:
         try:
             from recupero.config import load_config
             from recupero.labels.store import LabelStore
-            label_store = LabelStore.load(load_config())
+            cfg, _ = load_config()
+            label_store = LabelStore.load(cfg)
         except Exception as exc:  # noqa: BLE001
             log.debug(
                 "emit_brief: label store load failed for wallet clustering "
@@ -1822,7 +1823,7 @@ def _build_cex_continuity_section(
         from recupero.chains.base import ChainAdapter
         from recupero.config import load_config
         from recupero.labels.store import LabelStore
-        cfg = load_config()
+        cfg, env = load_config()
         label_store: LabelStore | None
         try:
             label_store = LabelStore.load(cfg)
@@ -1833,7 +1834,7 @@ def _build_cex_continuity_section(
             )
             return []
         try:
-            adapter = ChainAdapter.for_chain(case.chain, cfg)
+            adapter = ChainAdapter.for_chain(case.chain, (cfg, env))
         except Exception as exc:  # noqa: BLE001
             log.warning(
                 "cex_continuity: adapter for chain %s unavailable: "

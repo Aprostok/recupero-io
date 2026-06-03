@@ -1004,7 +1004,83 @@ def compute_clusters_with_metadata(
         })
 
     out.sort(key=lambda c: (-c["size"], c["cluster_id"]))
+    if label_store is not None:
+        _name_clusters_by_counterparty(out, case, label_store)
     return out
+
+
+def _name_clusters_by_counterparty(
+    clusters: list[dict[str, Any]],
+    case: Case,
+    label_store: LabelStore,
+) -> None:
+    """v0.38.0 (#2, TRM/Chainalysis-style NAMED entities): attach an
+    ``entity_hint`` to each cluster derived from the dominant LABELED
+    counterparty its members share.
+
+    Cluster members are perpetrator-controlled wallets (labeled service
+    addresses like exchange deposits are EXCLUDED from membership), but those
+    members transact WITH labeled services — e.g. all funded from / withdrawing
+    to the same exchange. The dominant such counterparty names the cluster
+    ("associated with Binance"). This is an ASSOCIATION, never an identity
+    claim: confidence is calibrated medium (a shared exchange counterparty) /
+    low (anything else), never high — consistent with the engine's
+    no-fabrication posture. Mutates each cluster dict in place; sets
+    ``entity_hint`` to ``None`` when no labeled counterparty is shared.
+    """
+    from recupero._common import canonical_address_key as _ck
+
+    _CAT_RANK = {
+        "exchange_deposit": 3,
+        "exchange_hot_wallet": 3,
+        "bridge": 1,
+        "defi_protocol": 1,
+    }
+    for cluster in clusters:
+        members = {_ck(a) for a in cluster.get("addresses", []) if a}
+        # (name, category) -> count of member↔labeled-counterparty transfers.
+        counts: dict[tuple[str, str], int] = defaultdict(int)
+        for t in case.transfers:
+            f = _ck(t.from_address)
+            to = _ck(t.to_address)
+            f_in, to_in = f in members, to in members
+            # We want the counterparty that is NOT a cluster member.
+            if f_in and not to_in:
+                cp_addr, cp_chain = t.to_address, t.chain
+            elif to_in and not f_in:
+                cp_addr, cp_chain = t.from_address, t.chain
+            else:
+                continue
+            try:
+                lbl = label_store.lookup(cp_addr, chain=cp_chain)
+            except Exception:  # noqa: BLE001
+                lbl = None
+            if lbl is None or not getattr(lbl, "name", None):
+                continue
+            cat = getattr(lbl.category, "value", None) or str(lbl.category)
+            counts[(lbl.name, cat)] += 1
+        if not counts:
+            cluster["entity_hint"] = None
+            continue
+        (best_name, best_cat), best_n = max(
+            counts.items(),
+            key=lambda kv: (_CAT_RANK.get(kv[0][1], 0), kv[1]),
+        )
+        conf = "medium" if best_cat in (
+            "exchange_deposit", "exchange_hot_wallet",
+        ) else "low"
+        cluster["entity_hint"] = {
+            "name": best_name,
+            "category": best_cat,
+            "relationship": "shared_counterparty",
+            "shared_counterparty_transfers": best_n,
+            "confidence": conf,
+            "note": (
+                f"Cluster ASSOCIATED with {best_name} via {best_n} shared-"
+                "counterparty transfer(s) (funding/withdrawal). An association, "
+                "not an identity claim."
+            ),
+        }
 
 
 __all__ = (

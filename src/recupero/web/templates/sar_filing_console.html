@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — SAR / STR Filing (DRAFT)</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  h2 { font-size: 1rem; margin: 1.4rem 0 .5rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text], select { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; background: #fff; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .draft-banner { border-radius: 10px; padding: .7rem 1rem; margin-bottom: 1rem; font-size: .9rem; font-weight: 700;
+                  background: #fdf6ec; border: 1px solid #f3dca6; color: #9c6a13; }
+  .draft-banner .small { display: block; font-weight: 400; font-size: .78rem; margin-top: .25rem; color: #8a6310; }
+  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
+  .card .v { font-size: 1.05rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
+  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
+  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+  .panel { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .8rem 1rem; margin-bottom: 1rem; font-size: .82rem; }
+  .panel .row { margin-bottom: .25rem; }
+  .panel .k { color: #888; display: inline-block; min-width: 9rem; }
+  .narrative { white-space: pre-wrap; line-height: 1.45; }
+  .empty { color: #888; font-size: .8rem; }
+</style>
+</head>
+<body>
+  <h1>🏛️ SAR / STR Filing (DRAFT)</h1>
+  <div class="sub">Suspicious-activity-report DRAFT context assembled from a single case's freeze brief. Paste your
+    operator key and a case id, pick a jurisdiction, then generate. Data is fetched directly from the admin-gated
+    API (the key stays in a request header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
+    <select id="jur" title="Filing regime">
+      <option value="us">us — FinCEN SAR (Form 111)</option>
+      <option value="uk">uk — NCA SAR (POCA 2002)</option>
+      <option value="eu">eu — AMLD STR (goAML)</option>
+    </select>
+    <button id="load">Generate Draft</button>
+    <span id="msg"></span>
+  </div>
+
+  <div id="out"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+  function clear() { $("out").innerHTML = ""; }
+
+  function card(v, l) { return '<div class="card"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+  function row(k, v) { return '<div class="row"><span class="k">' + esc(k) + '</span>' + esc(v) + '</div>'; }
+
+  function render(ctx) {
+    ctx = ctx || {};
+    var labels = ctx.labels || {};
+    var activity = ctx.activity || {};
+    var victim = ctx.victim || {};
+
+    var html = '';
+
+    // Prominent DRAFT banner — Recupero is not the filer.
+    html += '<div class="draft-banner">DRAFT — Recupero is NOT the filer.' +
+      '<span class="small">A ' + esc(labels.report_acronym || "SAR/STR") +
+      ' is filed by an obligated financial institution (or, in the UK, a POCA-2002 reporter). ' +
+      'This draft compresses the analyst\'s work into a reviewable package; the obligated institution ' +
+      'completes its identifiers + officer attestation and submits via the named portal.</span></div>';
+
+    // Jurisdiction / form labels.
+    html += '<h2>Filing regime</h2><div class="panel">' +
+      row("Report", (labels.report_acronym || "") + " — " + (labels.report_name || "")) +
+      row("Regulator", labels.regulator) +
+      row("Form reference", labels.form_reference) +
+      row("Statute", labels.statute) +
+      row("Filing portal", labels.filing_portal) +
+      row("Jurisdiction key", ctx.jurisdiction_key) +
+      '</div>';
+
+    // Key amounts / activity.
+    html += '<h2>Activity summary</h2><div class="cards">' +
+      card(activity.amount_usd || ctx.total_loss_usd || "$0.00", "Amount (USD)") +
+      card((ctx.subjects || []).length, "Subjects") +
+      card(activity.date_from || "—", "Activity from") +
+      card(activity.date_to || "—", "Activity to") +
+      '</div>';
+    html += '<div class="panel">' +
+      row("Case id", ctx.case_id) +
+      row("Incident date", ctx.incident_date || "—") +
+      row("Incident type", ctx.incident_type || "—") +
+      row("Victim", (victim.name || "") + " (" + (victim.jurisdiction || "") + ")") +
+      row("Generated at", ctx.generated_at) +
+      row("Characterization", activity.characterization || labels.characterization) +
+      '</div>';
+
+    // Subjects table — on-chain addresses receiving / holding suspected proceeds.
+    html += '<h2>Subjects</h2>';
+    var subjects = ctx.subjects || [];
+    if (!subjects.length) {
+      html += '<p class="empty">No subjects derived from this brief.</p>';
+    } else {
+      html += '<table><thead><tr><th>Address</th><th>Chain</th><th>Role</th><th>Venue</th>' +
+              '<th class="right">Amount (USD)</th></tr></thead><tbody>';
+      subjects.forEach(function (s) {
+        s = s || {};
+        html += '<tr>' +
+          '<td class="mono">' + esc(s.address) + '</td>' +
+          '<td>' + esc(s.chain) + '</td>' +
+          '<td>' + esc(s.role) + '</td>' +
+          '<td>' + esc(s.venue) + '</td>' +
+          '<td class="right">' + esc(s.amount_usd) + '</td>' +
+          '</tr>';
+      });
+      html += '</tbody></table>';
+    }
+
+    // Narrative (Part-V-style) — every value escaped.
+    html += '<h2>Narrative</h2>';
+    html += '<div class="panel narrative">' + esc(ctx.sar_narrative) + '</div>';
+
+    $("out").innerHTML = html;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+  function caseId() { return ($("case").value || "").trim(); }
+  function jur() { return ($("jur").value || "us").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    var cid = caseId();
+    if (!cid) { setMsg("Enter a case id.", "err"); return; }
+    var j = jur();
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Generating…");
+    clear();
+    fetch("/v1/sar-filing?case_id=" + encodeURIComponent(cid) + "&jurisdiction=" + encodeURIComponent(j),
+          { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 400) throw new Error("Bad request — check the case id / jurisdiction.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 404) throw new Error("Case not found (no freeze_brief.json — run emit-brief first).");
+        if (res.status === 503) throw new Error("API not configured, or draft unavailable.");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (ctx) { render(ctx); setMsg("Drafted " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
+})();
+</script>
+</body>
+</html>

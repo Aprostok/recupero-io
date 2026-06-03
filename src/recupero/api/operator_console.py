@@ -69,6 +69,19 @@ _NAV: list[dict[str, Any]] = [
     {"group": "Casework", "label": "Case Index", "emoji": "📁",
      "path": "/v1/cases/console", "live": True,
      "desc": "All traced cases + which deliverables each has."},
+    # v0.35.22 UI batch-3 phase consoles.
+    {"group": "Casework", "label": "Exhibit Pack", "emoji": "📑",
+     "path": "/v1/exhibit-pack/console", "live": True,
+     "desc": "Court-admissible exhibit index — every case artifact as Exhibit "
+             "A, B, C… with SHA-256 hash and byte size."},
+    {"group": "Filings", "label": "SAR / STR Filing", "emoji": "🏛️",
+     "path": "/v1/sar-filing/console", "live": True,
+     "desc": "FinCEN SAR / NCA SAR / AMLD STR filing DRAFT from a case's freeze "
+             "brief — Recupero is not the filer."},
+    {"group": "Screening", "label": "Bulk Screening", "emoji": "📊",
+     "path": "/v1/screen/console", "live": True,
+     "desc": "Paste many addresses; bulk sanctions/mixer/drainer risk screen "
+             "via the high-throughput offline cache."},
 ]
 
 

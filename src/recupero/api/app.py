@@ -165,6 +165,10 @@ for _mod, _attr in (
     # v0.35.21 (UI batch-2): graph-analysis + case-index views.
     ("recupero.api.graph_analysis_api", "router"),
     ("recupero.api.case_index_api", "router"),
+    # v0.35.22 (UI batch-3): exhibit-pack + SAR/STR filing + bulk screening.
+    ("recupero.api.exhibit_pack_api", "router"),
+    ("recupero.api.sar_filing_api", "router"),
+    ("recupero.api.screening_api", "router"),
 ):
     try:
         _m = __import__(_mod, fromlist=[_attr])

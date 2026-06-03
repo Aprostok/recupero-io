@@ -1,0 +1,199 @@
+{# Case time-sensitivity / statute-of-limitations advisory (v0.35).
+
+   LEGAL INFORMATION, NOT LEGAL ADVICE. Two clocks:
+     1. Practical — how long ago funds reached each exchange (freeze window).
+        Computed from on-chain timestamps; no legal claim.
+     2. Legal — criminal/civil limitation periods, each with a REAL statutory
+        citation, sourced from recupero.legal.limitations. Unknown
+        jurisdictions and compound periods resolve to "confirm with counsel"
+        rather than a guessed date.
+
+   The approximate runout dates ASSUME the clock started on the incident date;
+   accrual / tolling / the discovery rule (counsel's call) can move them.
+
+   Context: `ts` (recupero.legal.time_sensitivity.TimeSensitivity),
+   `case_id`, `generated_at`.
+#}<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Case Time-Sensitivity Advisory — Case {{ case_id }}</title>
+{% include "_styles.html.j2" %}
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-letterhead">
+    <div class="cover-wordmark">
+      Recupero
+      <span class="tagline">Investigation Services</span>
+    </div>
+    <div class="cover-letterhead-right">
+      <div class="confidential">Strictly Private &amp; Confidential</div>
+      <div class="date">{{ generated_at }} UTC</div>
+    </div>
+  </div>
+
+  <div style="background:#1e3a8a;color:#fff;padding:.75rem 1rem;border-radius:6px;margin:0 0 1rem;font-weight:600;line-height:1.4">
+    ⚖ LEGAL INFORMATION — NOT LEGAL ADVICE. This advisory flags time limits that
+    may affect recovery so they are not missed. It is general information, not a
+    legal opinion. Whether any period below governs this matter — and the exact
+    date it runs — depends on the applicable law, when the claim accrued, and any
+    tolling. Confirm everything here with licensed counsel in the relevant
+    jurisdiction before relying on it.
+  </div>
+
+  <div class="cover-title-block">
+    <div class="cover-eyebrow">Time-Sensitivity Advisory</div>
+    <h1>Acting Before the Clock Runs</h1>
+    <p class="cover-subtitle">
+      Recovery of misappropriated digital assets is time-sensitive on two fronts:
+      a <strong>practical</strong> window (funds can leave an exchange within
+      minutes) and a <strong>legal</strong> window (criminal and civil limitation
+      periods bar action once they run). This advisory summarises both for
+      {{ ts.victim_name }}.
+    </p>
+    <div class="cover-rule"></div>
+  </div>
+
+  <dl class="cover-meta">
+    <div class="cover-meta-item">
+      <dt>Case Number</dt>
+      <dd>{{ case_id or "—" }}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Victim Jurisdiction</dt>
+      <dd>{{ ts.jurisdiction_raw or "not specified" }}<span class="secondary">{% if ts.jurisdiction_canonical %}recognized as {{ ts.jurisdiction_canonical }}{% else %}not matched to a seeded reference — confirm with counsel{% endif %}</span></dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>Incident Date</dt>
+      <dd>{{ ts.incident_date or "—" }}{% if ts.days_since_incident is not none %}<span class="secondary">{{ ts.days_since_incident }} day(s) ago</span>{% endif %}</dd>
+    </div>
+    <div class="cover-meta-item">
+      <dt>As Of</dt>
+      <dd>{{ ts.as_of }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="content">
+
+<h2>1. Practical Clock — Exchange Freeze Window</h2>
+{% if ts.exchange_clocks %}
+<p>
+Stolen funds were traced into the deposit address(es) of the exchange(s) below.
+An administrative freeze is most realistic the sooner it is requested — every
+day widens the window in which funds can be withdrawn.
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Exchange</th>
+      <th>Funds first arrived</th>
+      <th class="amount">Days ago</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for c in ts.exchange_clocks %}
+    <tr>
+      <td>{{ c.exchange }}</td>
+      <td>{% if c.first_flow_at %}{{ c.first_flow_at[:10] }}{% else %}—{% endif %}</td>
+      <td class="amount mono">{% if c.days_since_first_flow is not none %}{{ c.days_since_first_flow }}{% else %}—{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="secondary">
+The asset-freeze request deliverable (per exchange) is the action that acts on
+this window. Send it through the exchange's confirmed law-enforcement channel.
+</p>
+{% else %}
+<p>
+No exchange deposits were identified in the documented flow, so no exchange
+freeze-window clock is shown. If funds remain at an exchange, that exchange's
+clock is the most urgent.
+</p>
+{% endif %}
+
+<h2>2. Legal Clock — Limitation Periods</h2>
+{% if ts.confirm_with_counsel and not ts.limitation_clocks %}
+<div style="background:#7c2d12;color:#fff;padding:.75rem 1rem;border-radius:6px;margin:.5rem 0;font-weight:600;line-height:1.4">
+  No verified limitation reference is on file for
+  {{ ts.jurisdiction_raw or "this jurisdiction" }}. Recupero does not assert a
+  period it cannot cite. Confirm the applicable criminal and civil limitation
+  periods — and their accrual / tolling rules — with licensed counsel in the
+  relevant jurisdiction.
+</div>
+{% else %}
+<p>
+The references below carry their statutory citation. Treat them as a prompt to
+confirm the controlling period with counsel — <strong>not</strong> as the
+governing deadline for this matter.
+</p>
+<table>
+  <thead>
+    <tr>
+      <th>Type</th>
+      <th>Limitation</th>
+      <th>Period</th>
+      <th>Citation</th>
+      <th>Approx. runout</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for lc in ts.limitation_clocks %}
+    <tr>
+      <td>{{ lc.ref.claim_kind | capitalize }}{% if lc.ref.illustrative %}<span class="secondary">example only</span>{% endif %}</td>
+      <td>{{ lc.ref.label }}{% if not lc.ref.verified %}<span class="secondary">unverified — confirm citation</span>{% endif %}</td>
+      <td>{{ lc.ref.period }}</td>
+      <td class="mono">{{ lc.ref.citation }}</td>
+      <td>
+        {% if lc.approx_deadline %}
+          ~{{ lc.approx_deadline }}
+          {% if lc.status == "may_have_elapsed" %}<span class="secondary">may have elapsed — confirm tolling</span>
+          {% elif lc.status == "approaching" %}<span class="secondary">{{ lc.approx_days_remaining }} day(s) left (approx)</span>
+          {% else %}<span class="secondary">{{ lc.approx_days_remaining }} day(s) left (approx)</span>{% endif %}
+        {% else %}
+          <span class="secondary">{% if lc.ref.illustrative %}varies — see note{% else %}confirm with counsel{% endif %}</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="secondary">
+Approximate runout dates assume the clock started on the incident date
+({{ ts.incident_date or "unknown" }}). The true start date can differ — many
+claims accrue on discovery, and statutory tolling can pause the clock. Counsel
+confirms which period applies and the exact date.
+</p>
+{% for lc in ts.limitation_clocks %}
+{% if lc.ref.note or lc.ref.accrual %}
+<p style="font-size:.88em;margin:.4rem 0">
+  <strong>{{ lc.ref.label }}</strong> ({{ lc.ref.citation }}):
+  {% if lc.ref.accrual %}{{ lc.ref.accrual }} {% endif %}{{ lc.ref.note or "" }}
+</p>
+{% endif %}
+{% endfor %}
+{% endif %}
+
+<h2>3. Recommended Next Step</h2>
+<p>
+Engage licensed counsel in {{ ts.jurisdiction_raw or "the relevant jurisdiction" }}
+promptly to confirm the controlling limitation periods and preserve every
+available claim, and — in parallel — pursue the time-critical exchange
+freeze(s) above through law enforcement. The two clocks run independently;
+acting early on both maximises the chance of recovery.
+</p>
+
+<p class="secondary" style="margin-top:1.5rem">
+Recupero is an investigation firm, not a law firm, and provides no legal
+representation. This advisory is general legal information compiled to help a
+victim and their counsel avoid missing a deadline; it is not legal advice and
+creates no attorney–client relationship. Do not rely on any period stated here
+without confirmation from licensed counsel in the applicable jurisdiction.
+</p>
+
+</section>
+</body>
+</html>

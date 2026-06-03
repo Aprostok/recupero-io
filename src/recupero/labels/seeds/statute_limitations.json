@@ -1,0 +1,33 @@
+{
+  "_README": "User/counsel-maintained statute-of-limitations references. This is the OVERRIDE layer for recupero.legal.limitations: entries here win over the small seeded baseline (US federal criminal periods) and are the place a firm records the CONTROLLING civil/criminal limitation periods for the jurisdictions it works. Keys are jurisdiction names (free-form; normalized — 'United States'/'USA'/'US' all map to US; 'United Kingdom'/'UK' -> UK; also EU, CA, AU, SG). Each value is a LIST of references. SAFETY: every entry MUST carry a real 'citation' and a valid 'claim_kind' (criminal|civil) and a 'period' — the loader DROPS (and warns on) any entry missing them, so a period is never shipped without its statute. Set verified=true ONLY with a 'source'; the loader downgrades a sourceless verified entry. 'verified' means the CITATION is confirmed against the statute, NOT that the period governs a given case (accrual/tolling/which offense is always counsel's call — the rendered advisory says so). This is legal INFORMATION, not legal advice.",
+  "_schema": {
+    "<Jurisdiction>": [
+      {
+        "claim_kind": "criminal | civil",
+        "label": "string — human display, e.g. 'Federal wire fraud (general)'",
+        "period": "string — e.g. '5 years' or '6 years, or 2 years from discovery'",
+        "citation": "string — REQUIRED real statutory citation (entry dropped without it)",
+        "accrual": "string|null — when the clock starts / discovery-rule note",
+        "note": "string|null — applicability caveats",
+        "illustrative": "boolean — true if this is a jurisdiction EXAMPLE, not the controlling period",
+        "verified": "boolean — true ONLY when the citation is confirmed and a source is recorded",
+        "source": "string|null — where/when you confirmed it"
+      }
+    ]
+  },
+  "_example": {
+    "United Kingdom": [
+      {
+        "claim_kind": "civil",
+        "label": "Tort/contract (example placeholder — confirm)",
+        "period": "6 years",
+        "citation": "Limitation Act 1980, s.2 / s.5",
+        "accrual": "From the date the cause of action accrued (fraud/concealment may postpone — s.32).",
+        "note": "EXAMPLE ONLY — confirm the controlling period and any s.32 postponement with counsel.",
+        "illustrative": true,
+        "verified": false,
+        "source": "confirm against the Limitation Act 1980 before relying on it"
+      }
+    ]
+  }
+}

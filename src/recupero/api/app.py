@@ -2417,6 +2417,15 @@ def main() -> None:  # pragma: no cover
         init_sentry()
     except Exception as exc:  # noqa: BLE001
         log.warning("API Sentry init failed (non-fatal): %s", exc)
+    # Seed a clearly-labeled DEMO/SAMPLE case when the case store is empty, so a
+    # fresh deploy's operator console is populated + clickable out of the box.
+    # No-ops when real cases exist or RECUPERO_SEED_DEMO_CASE=0. Startup-only
+    # (NOT a FastAPI startup event) so it never runs during tests.
+    try:
+        from recupero.demo_case import maybe_seed_demo_case
+        maybe_seed_demo_case()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("API demo-case seed failed (non-fatal): %s", exc)
     uvicorn.run(
         "recupero.api.app:app",
         host=host, port=port, log_level=log_level,

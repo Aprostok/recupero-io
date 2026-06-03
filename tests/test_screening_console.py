@@ -35,7 +35,7 @@ def test_bulk_503_when_admin_key_unset(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("RECUPERO_ADMIN_KEY", raising=False)
-    res = client.get("/v1/screen", params={"addresses": _ZERO})
+    res = client.get("/v1/screening", params={"addresses": _ZERO})
     assert res.status_code == 503
 
 
@@ -43,7 +43,7 @@ def test_cache_stats_503_when_admin_key_unset(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("RECUPERO_ADMIN_KEY", raising=False)
-    res = client.get("/v1/screen/cache-stats")
+    res = client.get("/v1/screening/cache-stats")
     assert res.status_code == 503
 
 
@@ -52,7 +52,7 @@ def test_bulk_401_on_wrong_key(
 ) -> None:
     monkeypatch.setenv("RECUPERO_ADMIN_KEY", "correct-key")
     res = client.get(
-        "/v1/screen",
+        "/v1/screening",
         params={"addresses": _ZERO},
         headers={"X-Recupero-Admin-Key": "wrong-key"},
     )
@@ -64,7 +64,7 @@ def test_cache_stats_401_on_wrong_key(
 ) -> None:
     monkeypatch.setenv("RECUPERO_ADMIN_KEY", "correct-key")
     res = client.get(
-        "/v1/screen/cache-stats",
+        "/v1/screening/cache-stats",
         headers={"X-Recupero-Admin-Key": "wrong-key"},
     )
     assert res.status_code == 401
@@ -74,13 +74,13 @@ def test_cache_stats_401_on_wrong_key(
 
 
 def test_console_shell_is_unauthenticated_html(client: TestClient) -> None:
-    res = client.get("/v1/screen/console")
+    res = client.get("/v1/screening/console")
     assert res.status_code == 200
     assert res.headers["content-type"].startswith("text/html")
     html = res.text
     assert "Screening" in html
     assert "X-Recupero-Admin-Key" in html
-    assert "/v1/screen" in html
+    assert "/v1/screening" in html
 
 
 # ---- bulk-screen behavior (offline local-seed screener) ---- #
@@ -91,7 +91,7 @@ def test_bulk_screen_200_with_valid_key(
 ) -> None:
     monkeypatch.setenv("RECUPERO_ADMIN_KEY", "correct-key")
     res = client.get(
-        "/v1/screen",
+        "/v1/screening",
         params={"addresses": _ZERO},
         headers={"X-Recupero-Admin-Key": "correct-key"},
     )
@@ -111,7 +111,7 @@ def test_cache_stats_200_with_valid_key(
 ) -> None:
     monkeypatch.setenv("RECUPERO_ADMIN_KEY", "correct-key")
     res = client.get(
-        "/v1/screen/cache-stats",
+        "/v1/screening/cache-stats",
         headers={"X-Recupero-Admin-Key": "correct-key"},
     )
     assert res.status_code == 200
@@ -123,7 +123,7 @@ def test_bulk_screen_400_on_empty_addresses(
 ) -> None:
     monkeypatch.setenv("RECUPERO_ADMIN_KEY", "correct-key")
     res = client.get(
-        "/v1/screen",
+        "/v1/screening",
         params={"addresses": "   "},
         headers={"X-Recupero-Admin-Key": "correct-key"},
     )

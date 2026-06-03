@@ -9,15 +9,21 @@ profile uses (``build_address_profile``), so verdict / band / labels are
 byte-identical to the profile view — nothing here re-derives or invents fields.
 
 Security model mirrors ``/v1/address`` and ``/v1/freshness`` (the established
-secure-shell pattern): the CONSOLE at ``/v1/screen/console`` is served
+secure-shell pattern): the CONSOLE at ``/v1/screening/console`` is served
 unauthenticated and carries NO data; every value is fetched client-side from the
 admin-gated JSON endpoints with the operator's ``X-Recupero-Admin-Key`` (a
 browser navigation cannot send a custom header, so gating the HTML would force
 the key into the URL/logs).
 
-  * ``GET /v1/screen?addresses=&chain=`` — admin-gated bulk-screen JSON
-  * ``GET /v1/screen/cache-stats``       — admin-gated cache hit/miss snapshot
-  * ``GET /v1/screen/console``           — unauthenticated shell (no data)
+NOTE: this admin operator console lives under ``/v1/screening`` (NOT
+``/v1/screen``) deliberately — ``/v1/screen`` + ``/v1/screen/bulk`` are the
+EXISTING POST-only customer/compliance screening API (X-Recupero-API-Key auth),
+and ``test_api_route_authz`` pins that ``GET /v1/screen`` must 405. Mounting a
+GET here under ``/v1/screen`` would shadow that 405 — so we use ``/v1/screening``.
+
+  * ``GET /v1/screening?addresses=&chain=`` — admin-gated bulk-screen JSON
+  * ``GET /v1/screening/cache-stats``       — admin-gated cache hit/miss snapshot
+  * ``GET /v1/screening/console``           — unauthenticated shell (no data)
 
 Forensic posture: the screen path is OFFLINE (local-seed DB only; correlation is
 intentionally not cached) and reports only what the seeds found. A bad address
@@ -39,7 +45,7 @@ from fastapi.responses import HTMLResponse
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/v1/screen", tags=["screening"])
+router = APIRouter(prefix="/v1/screening", tags=["screening"])
 
 _CONSOLE_HTML = (
     Path(__file__).resolve().parent.parent
@@ -173,7 +179,7 @@ def bulk_screen(
     response_class=HTMLResponse,
     summary=(
         "Bulk-screening operator console (HTML shell). Unauthenticated by "
-        "design — contains NO data; fetches /v1/screen client-side with the key."
+        "design — contains NO data; fetches /v1/screening client-side w/ the key."
     ),
 )
 def screening_console() -> HTMLResponse:

@@ -97,7 +97,7 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Screening…"); $("go").disabled = true;
     var joined = lines.join(",");
-    var url = "/v1/screen?addresses=" + encodeURIComponent(joined) + "&chain=" + encodeURIComponent(chain());
+    var url = "/v1/screening?addresses=" + encodeURIComponent(joined) + "&chain=" + encodeURIComponent(chain());
     fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 401) throw new Error("Unauthorized — check the key.");
@@ -114,7 +114,7 @@
   function loadStats() {
     var k = key(); if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    fetch("/v1/screen/cache-stats", { headers: { "X-Recupero-Admin-Key": k } })
+    fetch("/v1/screening/cache-stats", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 401) throw new Error("Unauthorized — check the key.");
         if (res.status === 503) throw new Error("API not configured (set RECUPERO_ADMIN_KEY).");

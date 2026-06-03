@@ -79,7 +79,7 @@ _NAV: list[dict[str, Any]] = [
      "desc": "FinCEN SAR / NCA SAR / AMLD STR filing DRAFT from a case's freeze "
              "brief — Recupero is not the filer."},
     {"group": "Screening", "label": "Bulk Screening", "emoji": "📊",
-     "path": "/v1/screen/console", "live": True,
+     "path": "/v1/screening/console", "live": True,
      "desc": "Paste many addresses; bulk sanctions/mixer/drainer risk screen "
              "via the high-throughput offline cache."},
 ]

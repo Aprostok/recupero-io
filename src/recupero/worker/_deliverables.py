@@ -677,6 +677,7 @@ def build_all_deliverables(
         _maybe_emit_litigation_artifacts(
             case=case,
             case_dir=case_dir,
+            freeze_brief=freeze_brief,
             operator=(investigator or _default_investigator()).name,
             written=written,
         )
@@ -779,28 +780,36 @@ def _maybe_emit_litigation_artifacts(
     *,
     case: Case,
     case_dir: Path,
+    freeze_brief: dict[str, Any],
     operator: str,
     written: list[Path],
 ) -> None:
-    """Opt-in court-grade artifacts over the finished deliverable set.
+    """Opt-in court- + regulatory-grade artifacts over the finished set.
 
-    Closes the gap where the court-exhibit pack + signed chain-of-custody
-    existed only as manual ``recupero-ops`` commands (so a real case never
-    shipped them unless an operator ran them by hand). Gated by
-    ``RECUPERO_AUTO_LITIGATION_ARTIFACTS=1`` so default pipelines / golden
-    tests are byte-for-byte unchanged; enable per-deploy to ship:
+    Closes the gap where the court-exhibit pack, signed chain-of-custody, and
+    the SAR/STR + MLAT/314(b) drafts existed only as manual ``recupero-ops`` /
+    CLI commands (so a real case never shipped them unless an operator ran
+    them by hand). Gated by ``RECUPERO_AUTO_LITIGATION_ARTIFACTS=1`` so default
+    pipelines / golden tests are byte-for-byte unchanged; enable per-deploy to
+    ship:
 
       1. **Exhibit pack** — ``exhibit_pack/exhibit_pack.html`` (SHA-256
          exhibit index + Daubert methodology appendix + 28 U.S.C. 1746
          declaration). A pure index over on-disk artifacts; no key needed.
-      2. **Signed Ed25519 chain-of-custody** — one attestation entry over
-         every deliverable, appended to ``custody/chain.jsonl``. Produced
-         ONLY when a signing key is configured (``RECUPERO_CUSTODY_KEY_PATH``
-         or the default ``~/.recupero/custody_key``); absent a key the step
-         logs and skips (the unsigned per-case SHA-256 manifests already on
-         disk remain the integrity record).
+      2. **SAR/STR draft** — ``regulatory_filing/us_fincen_sar.html`` (US
+         FinCEN baseline; operator regenerates per-jurisdiction via the CLI).
+         Draft only — Recupero is not a filer.
+      3. **MLAT + FinCEN 314(b) drafts** — ``legal_requests/*`` one per
+         exchange that received funds (none -> no files). Drafts only.
+      4. **Signed Ed25519 chain-of-custody** — one attestation entry over
+         every deliverable above, appended to ``custody/chain.jsonl``.
+         Produced ONLY when a signing key is configured
+         (``RECUPERO_CUSTODY_KEY_PATH`` or the default
+         ``~/.recupero/custody_key``); absent a key the step logs and skips
+         (the unsigned per-case SHA-256 manifests already on disk remain the
+         integrity record).
 
-    Both steps are best-effort: any failure logs and the pipeline still
+    Every step is best-effort: any failure logs and the pipeline still
     returns its primary deliverables — a litigation nicety must never block
     a freeze letter or LE handoff.
     """
@@ -816,7 +825,44 @@ def _maybe_emit_litigation_artifacts(
             "litigation: exhibit pack render failed (non-fatal): %s", exc,
         )
 
-    # (2) Signed chain-of-custody — requires a configured Ed25519 key.
+    # (2) SAR/STR regulatory draft — US FinCEN baseline (operator regenerates
+    # per-jurisdiction via the CLI). Drafts only; Recupero is not a filer.
+    # Renders even on a sparse brief (placeholder victim, 0 subjects).
+    try:
+        from recupero.reports.regulatory_filing import render_sar_filing
+        sar = render_sar_filing(
+            freeze_brief, jurisdiction="us",
+            output_dir=case_dir / "regulatory_filing",
+        )
+        if sar.output_path not in written:
+            written.append(sar.output_path)
+        log.info(
+            "litigation: rendered %s draft -> %s",
+            sar.report_acronym, sar.output_path.name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("litigation: SAR/STR render failed (non-fatal): %s", exc)
+
+    # (3) MLAT + FinCEN 314(b) drafts — one per exchange that received funds
+    # (none -> empty list, no files). Drafts only.
+    try:
+        from recupero.reports.legal_requests import render_legal_request
+        for _req in ("mlat", "314b"):
+            renders = render_legal_request(
+                freeze_brief, request_type=_req,
+                output_dir=case_dir / "legal_requests",
+            )
+            for r in renders:
+                if r.output_path not in written:
+                    written.append(r.output_path)
+            if renders:
+                log.info(
+                    "litigation: rendered %d %s request(s)", len(renders), _req,
+                )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("litigation: MLAT/314b render failed (non-fatal): %s", exc)
+
+    # (4) Signed chain-of-custody — requires a configured Ed25519 key.
     try:
         from recupero.custody import chain as _custody
         try:

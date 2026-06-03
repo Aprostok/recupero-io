@@ -78,6 +78,12 @@ def test_litigation_artifacts_off_by_default(tmp_path, monkeypatch) -> None:
     assert not (case_dir / "custody").exists(), (
         "custody chain must NOT be produced unless the knob is set"
     )
+    assert not (case_dir / "regulatory_filing").exists(), (
+        "SAR/STR draft must NOT be produced unless the knob is set"
+    )
+    assert not (case_dir / "legal_requests").exists(), (
+        "MLAT/314b drafts must NOT be produced unless the knob is set"
+    )
 
 
 def test_litigation_artifacts_emitted_and_chain_verifies(tmp_path, monkeypatch) -> None:
@@ -99,6 +105,13 @@ def test_litigation_artifacts_emitted_and_chain_verifies(tmp_path, monkeypatch) 
     assert pack.stat().st_size > 0
     assert pack in written
 
+    # (1b) SAR/STR draft rendered (US FinCEN baseline; renders even on a
+    # sparse brief). MLAT/314b produce no files here (no exchanges in brief).
+    sar = case_dir / "regulatory_filing" / "us_fincen_sar.html"
+    assert sar.exists(), f"SAR/STR draft not produced; written={[p.name for p in written]}"
+    assert sar.stat().st_size > 0
+    assert sar in written
+
     # (2) Signed chain-of-custody appended.
     chain_file = case_dir / "custody" / "chain.jsonl"
     assert chain_file.exists(), "custody chain.jsonl not written"
@@ -106,6 +119,11 @@ def test_litigation_artifacts_emitted_and_chain_verifies(tmp_path, monkeypatch) 
     assert len(entries) == 1, f"expected exactly one attestation entry, got {len(entries)}"
     assert entries[0].stage == "deliverables_built"
     assert entries[0].artifacts, "attestation must cover at least one artifact"
+    attested = {a.relative_path for a in entries[0].artifacts}
+    assert "regulatory_filing/us_fincen_sar.html" in attested, (
+        f"the SAR draft must be covered by the custody chain; "
+        f"attested={sorted(attested)}"
+    )
 
     # (3) The chain verifies end-to-end (signature + prev-hash + artifact hashes).
     report = custody.verify_chain(case_dir)
@@ -127,6 +145,9 @@ def test_litigation_no_key_renders_pack_but_skips_custody(tmp_path, monkeypatch)
 
     assert (case_dir / "exhibit_pack" / "exhibit_pack.html").exists(), (
         "exhibit pack needs no key and must still render"
+    )
+    assert (case_dir / "regulatory_filing" / "us_fincen_sar.html").exists(), (
+        "SAR/STR draft needs no key and must still render"
     )
     assert not (case_dir / "custody").exists(), (
         "custody signing must be skipped when no key is configured"

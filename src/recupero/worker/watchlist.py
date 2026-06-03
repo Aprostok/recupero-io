@@ -106,6 +106,54 @@ def populate_from_case(
     return len(rows)
 
 
+def add_manual_watch(
+    *,
+    dsn: str,
+    address: str,
+    chain: str,
+    investigation_id: UUID | str,
+    note: str | None = None,
+) -> bool:
+    """Flag a single address for monitoring from the operator graph
+    ("Watch this address"). Inserts a ``role='manual'`` row into the
+    existing ``public.watchlist`` at ``priority='hot'`` so the nightly
+    ``run_watch_tick`` picks it up — no parallel watch system.
+
+    Upserts on the table's ``(address, chain, investigation_id)`` key, so
+    re-watching the same node is a safe no-op refresh. Returns True on
+    success.
+    """
+    from recupero._common import canonical_address_key as _ck
+    addr = _ck(address)
+    sql = """
+        INSERT INTO public.watchlist (
+            address, chain, investigation_id,
+            role, is_freezeable, flagged_by, notes, priority, status
+        )
+        VALUES (
+            %(address)s, %(chain)s, %(investigation_id)s,
+            'manual', FALSE, 'operator', %(notes)s, 'hot', 'active'
+        )
+        ON CONFLICT (address, chain, investigation_id)
+        DO UPDATE SET
+            role = 'manual',
+            priority = 'hot',
+            status = 'active',
+            flagged_by = 'operator',
+            notes = COALESCE(EXCLUDED.notes, public.watchlist.notes);
+    """
+    params = {
+        "address": addr,
+        "chain": chain,
+        "investigation_id": str(investigation_id),
+        "notes": (note or None),
+    }
+    with db_connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+    log.info("watchlist: manual watch added addr=%s chain=%s inv=%s", addr, chain, investigation_id)
+    return True
+
+
 def _build_rows(
     *,
     case: Case,

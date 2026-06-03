@@ -76,6 +76,20 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("screen/screen_cache.py", "_results"):
         "lock-guarded by _lock (screening result LRU; E2)",
 
+    # reports/graph_expand.py: in-process TTL cache of expansion results,
+    # keyed by (chain, address, direction, cap, priced). Best-effort — a
+    # race causes at most one redundant chain-API fetch; values are
+    # immutable once stored, and the dict self-bounds (cleared at >512).
+    ("reports/graph_expand.py", "_expansion_cache"):
+        "best-effort TTL cache; race at most causes 1 redundant fetch, self-bounded",
+
+    # reports/graph_events.py: investigation_id -> set of SSE subscriber
+    # asyncio.Queues. Mutated only from the single FastAPI event-loop
+    # thread (subscribe/unsubscribe in the SSE route, publish from async
+    # routes on the same loop) — single-threaded by lifetime.
+    ("reports/graph_events.py", "_subscribers"):
+        "single-threaded by lifetime (FastAPI event loop only)",
+
     # v0.32 monitoring/recovery_rate.py: 60-second cache of the
     # RecoveryStats computation. Read-modify-write is fine
     # best-effort — a race produces at most one extra DB query

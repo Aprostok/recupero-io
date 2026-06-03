@@ -102,6 +102,11 @@ ALLOWLIST_NOT_IMPORTED: dict[str, str] = {
     # the follow-up note at the bottom of this file. Tracked here for
     # now to keep this test green without quietly losing coverage.
     "python-dateutil": "reserved for date parsing; candidate for removal",
+    # FastAPI loads python-multipart at runtime to parse Form(...) bodies
+    # (the /v1/intake route). Never imported by recupero directly, but
+    # FastAPI raises at import time without it — so it's a required,
+    # not-directly-imported runtime dep.
+    "python-multipart": "transitive runtime dep for FastAPI Form() parsing",
 }
 
 

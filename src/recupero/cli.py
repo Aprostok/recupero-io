@@ -124,6 +124,14 @@ def _sync_to_bucket(investigation_id: str | None, case_dir: Path) -> None:
     if not investigation_id:
         return
     _validate_investigation_id(investigation_id)
+    # The docstring promises ".env / environment", but the CLI never pushed
+    # .env into os.environ — so --investigation-id sync failed even with the
+    # keys present in .env. Load it here (no-op if already in the env).
+    try:
+        from dotenv import load_dotenv as _load_dotenv
+        _load_dotenv()
+    except Exception:  # noqa: BLE001
+        pass
     supabase_url = _os.environ.get("SUPABASE_URL", "").strip()
     service_role_key = _os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
     if not supabase_url or not service_role_key:

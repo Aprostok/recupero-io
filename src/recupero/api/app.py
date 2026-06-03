@@ -15,8 +15,8 @@ import logging
 import time
 from typing import Any
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
 from recupero.api.auth import require_api_key
@@ -1901,6 +1901,351 @@ async def review_gate_ui() -> HTMLResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     return HTMLResponse(content=html)
+
+
+# ---- Operator interactive graph (Phase 3) ---- #
+#
+# Two routes, mirroring the /review-gate pattern:
+#   * GET /operator-graph         — unauthenticated HTML shell (no case
+#     data inline); prompts the operator for the admin key + an
+#     investigation id and fetches the JSON below.
+#   * GET /v1/operator/graph/{id} — admin-gated JSON: the FULL operator-
+#     fidelity graph (un-sanitized identities) enriched with per-node
+#     risk verdicts + indirect-exposure. NOT the victim portal view.
+
+
+@app.get(
+    "/operator-graph",
+    response_class=HTMLResponse,
+    tags=["ops"],
+    summary="Operator interactive fund-flow graph UI (Phase 3).",
+)
+async def operator_graph_ui() -> HTMLResponse:
+    """Static shell; all case data is fetched client-side from
+    ``/v1/operator/graph/{investigation_id}`` with the admin key."""
+    from pathlib import Path
+
+    template_path = (
+        Path(__file__).resolve().parent.parent
+        / "web" / "templates" / "operator_graph.html"
+    )
+    try:
+        html = template_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning("operator_graph_ui: template read failed: %s", exc)
+        return HTMLResponse(
+            content="<h1>Operator graph UI unavailable</h1>",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return HTMLResponse(content=html)
+
+
+@app.get(
+    "/v1/operator/graph/{investigation_id}",
+    tags=["ops"],
+    summary="Operator-fidelity fund-flow graph data (admin-gated).",
+)
+async def operator_graph_data(
+    investigation_id: str,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    from recupero.dispatcher.review_api import _require_admin_auth
+    _require_admin_auth(x_recupero_admin_key)
+
+    # Validate the id shape before any network/storage touch.
+    from uuid import UUID
+    try:
+        UUID(str(investigation_id))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid investigation id")
+
+    import os
+    sb_url = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+    if not sb_url or not sb_key:
+        raise HTTPException(status_code=503, detail="storage not configured")
+
+    from recupero.worker.investigations_api import fetch_case_json
+    raw = fetch_case_json(
+        supabase_url=sb_url, service_role_key=sb_key,
+        investigation_id=str(investigation_id),
+    )
+    if not raw:
+        raise HTTPException(status_code=404, detail="case not found for that investigation")
+
+    from recupero.models import Case
+    from recupero.reports.client_journey import build_operator_graph_data
+    try:
+        case = Case.model_validate(raw)
+        data = build_operator_graph_data(case)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("operator graph build failed inv=%s: %s", investigation_id, exc)
+        raise HTTPException(status_code=500, detail="graph build failed")
+    return JSONResponse(content=data)
+
+
+@app.get(
+    "/v1/operator/expand",
+    tags=["ops"],
+    summary="On-demand next-hop expansion for the operator graph (admin-gated).",
+)
+async def operator_expand(
+    chain: str,
+    address: str,
+    direction: str = "out",
+    limit: int = 40,
+    inv: str | None = None,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    """Live counterparty expansion — the TRM/Chainalysis "click a node to
+    grow the graph" interaction. Returns journey-shaped nodes/edges the
+    operator graph merges into the live canvas."""
+    from recupero.dispatcher.review_api import _require_admin_auth
+    _require_admin_auth(x_recupero_admin_key)
+
+    from recupero.models import Chain
+    try:
+        ch = Chain(chain)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="unknown chain")
+
+    address = (address or "").strip()
+    if not address or len(address) > 120 or any(c.isspace() for c in address):
+        raise HTTPException(status_code=400, detail="invalid address")
+    direction = "in" if direction == "in" else "out"
+    limit = max(1, min(int(limit or 40), 150))
+
+    from recupero.reports.graph_expand import expand_address
+    try:
+        data = expand_address(
+            chain=ch, address=address, direction=direction,
+            max_counterparties=limit, with_pricing=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("operator expand failed chain=%s dir=%s: %s", chain, direction, exc)
+        raise HTTPException(
+            status_code=503,
+            detail="expansion unavailable (chain access not configured or upstream error)",
+        )
+    # Live-broadcast the delta to any operator streaming this investigation.
+    inv_id = (inv or "").strip()
+    if inv_id:
+        try:
+            from recupero.reports.graph_events import build_delta_event, publish
+            publish(inv_id, build_delta_event(
+                reason="expand", nodes=data.get("nodes", []), edges=data.get("edges", []),
+            ))
+        except Exception as exc:  # noqa: BLE001
+            log.debug("operator expand: live publish skipped: %s", exc)
+    return JSONResponse(content=data)
+
+
+# ---- Operator graph annotations + saved views (Phase 3.9) ---- #
+
+
+class _AnnotationIn(BaseModel):
+    node_id: str = Field(..., min_length=1, max_length=200)
+    note: str = Field("", max_length=5000)
+
+
+class _SnapshotIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+def _valid_inv(investigation_id: str) -> str:
+    from uuid import UUID
+    try:
+        UUID(str(investigation_id))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="invalid investigation id")
+    return str(investigation_id)
+
+
+@app.get("/v1/operator/graph/{investigation_id}/annotations", tags=["ops"])
+async def operator_annotations_get(
+    investigation_id: str,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    from recupero.dispatcher.review_api import _require_admin_auth, _dsn
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+    from recupero.reports.operator_store import get_annotations
+    try:
+        notes = get_annotations(_dsn(), inv)
+    except Exception as exc:  # noqa: BLE001
+        # Degrade to empty so the graph still works before migration 032.
+        log.info("annotations read unavailable inv=%s: %s", inv, exc)
+        notes = {}
+    return JSONResponse(content={"annotations": notes})
+
+
+@app.put("/v1/operator/graph/{investigation_id}/annotations", tags=["ops"])
+async def operator_annotations_put(
+    investigation_id: str,
+    body: _AnnotationIn,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    from recupero.dispatcher.review_api import _require_admin_auth, _dsn
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+    from recupero.reports.operator_store import upsert_annotation
+    try:
+        upsert_annotation(_dsn(), inv, body.node_id, body.note)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("annotation write failed inv=%s: %s", inv, exc)
+        raise HTTPException(status_code=503, detail="annotation store unavailable (migration 032 applied?)")
+    return JSONResponse(content={"ok": True})
+
+
+@app.get("/v1/operator/graph/{investigation_id}/snapshots", tags=["ops"])
+async def operator_snapshots_list(
+    investigation_id: str,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    from recupero.dispatcher.review_api import _require_admin_auth, _dsn
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+    from recupero.reports.operator_store import list_snapshots
+    try:
+        snaps = list_snapshots(_dsn(), inv)
+    except Exception as exc:  # noqa: BLE001
+        log.info("snapshots list unavailable inv=%s: %s", inv, exc)
+        snaps = []
+    return JSONResponse(content={"snapshots": snaps})
+
+
+@app.put("/v1/operator/graph/{investigation_id}/snapshots", tags=["ops"])
+async def operator_snapshots_save(
+    investigation_id: str,
+    body: _SnapshotIn,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    from recupero.dispatcher.review_api import _require_admin_auth, _dsn
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+    # Cap serialized state so a saved view can't be used to stash megabytes.
+    import json as _json
+    if len(_json.dumps(body.state, default=str)) > 256 * 1024:
+        raise HTTPException(status_code=400, detail="snapshot state too large")
+    from recupero.reports.operator_store import save_snapshot
+    try:
+        save_snapshot(_dsn(), inv, body.name, body.state)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("snapshot save failed inv=%s: %s", inv, exc)
+        raise HTTPException(status_code=503, detail="snapshot store unavailable (migration 032 applied?)")
+    return JSONResponse(content={"ok": True})
+
+
+@app.get("/v1/operator/graph/{investigation_id}/snapshots/{name}", tags=["ops"])
+async def operator_snapshot_load(
+    investigation_id: str,
+    name: str,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    from recupero.dispatcher.review_api import _require_admin_auth, _dsn
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+    if not name or len(name) > 80:
+        raise HTTPException(status_code=400, detail="invalid snapshot name")
+    from recupero.reports.operator_store import load_snapshot
+    try:
+        state = load_snapshot(_dsn(), inv, name)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("snapshot load failed inv=%s: %s", inv, exc)
+        raise HTTPException(status_code=503, detail="snapshot store unavailable")
+    if state is None:
+        raise HTTPException(status_code=404, detail="snapshot not found")
+    return JSONResponse(content={"name": name, "state": state})
+
+
+class _WatchIn(BaseModel):
+    address: str = Field(..., min_length=1, max_length=120)
+    chain: str = Field(..., min_length=1, max_length=40)
+    note: str | None = Field(None, max_length=500)
+
+
+@app.post("/v1/operator/graph/{investigation_id}/watch", tags=["ops"])
+async def operator_watch_address(
+    investigation_id: str,
+    body: _WatchIn,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    """Flag a graph node's address for monitoring — inserts a manual,
+    hot-priority row into the existing ``public.watchlist`` so the nightly
+    watch-tick monitors it (no parallel watch system)."""
+    from recupero.dispatcher.review_api import _require_admin_auth, _dsn
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+
+    from recupero.models import Chain
+    try:
+        Chain(body.chain)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="unknown chain")
+    addr = body.address.strip()
+    if not addr or any(c.isspace() for c in addr):
+        raise HTTPException(status_code=400, detail="invalid address")
+
+    from recupero.worker.watchlist import add_manual_watch
+    try:
+        add_manual_watch(dsn=_dsn(), address=addr, chain=body.chain,
+                         investigation_id=inv, note=body.note)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("operator watch add failed inv=%s: %s", inv, exc)
+        raise HTTPException(status_code=503, detail="watchlist unavailable")
+    return JSONResponse(content={"ok": True})
+
+
+@app.get("/v1/operator/graph/{investigation_id}/stream", tags=["ops"])
+async def operator_graph_stream(
+    investigation_id: str,
+    key: str | None = None,
+    x_recupero_admin_key: str | None = Header(default=None),
+):
+    """Server-Sent-Events stream of live graph deltas for an investigation
+    (Phase 4.13). A browser ``EventSource`` cannot set custom headers, so the
+    admin key is accepted as the ``key`` query param (over HTTPS, operator-
+    internal) as well as the header for curl."""
+    from fastapi.responses import StreamingResponse
+    from recupero.dispatcher.review_api import _require_admin_auth
+    _require_admin_auth(x_recupero_admin_key or key)
+    inv = _valid_inv(investigation_id)
+
+    import asyncio
+    import os
+    from recupero.reports.graph_events import subscribe, unsubscribe, sse_frame
+
+    # Lazily start the cross-process LISTEN bridge (Phase 4.13) on the first
+    # stream connection — opt-in via RECUPERO_GRAPH_EVENTS_BRIDGE so it never
+    # spins up a DB thread in tests / non-streaming deploys. Idempotent.
+    if os.environ.get("RECUPERO_GRAPH_EVENTS_BRIDGE", "").strip() in ("1", "true", "True"):
+        _bridge_dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+        if _bridge_dsn:
+            try:
+                from recupero.reports.graph_events import start_listen_bridge
+                start_listen_bridge(_bridge_dsn, asyncio.get_running_loop())
+            except Exception as exc:  # noqa: BLE001
+                log.warning("graph-events bridge start skipped: %s", exc)
+
+    async def _gen():
+        q = subscribe(inv)
+        try:
+            yield ": connected\n\n"
+            while True:
+                try:
+                    ev = await asyncio.wait_for(q.get(), timeout=20.0)
+                    yield sse_frame(ev)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # heartbeat keeps proxies from closing
+        finally:
+            unsubscribe(inv, q)
+
+    return StreamingResponse(
+        _gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---- Uvicorn entry point ---- #

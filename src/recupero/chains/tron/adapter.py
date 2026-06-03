@@ -609,9 +609,23 @@ _COINGECKO_ID_BY_TRC20: dict[str, str] = {
 }
 
 
+# (symbol, decimals, coingecko_id) for the priceable TRC-20 tokens. Used by
+# watch-tick monitoring to value a watched Tron wallet's token balances
+# (the /v1/accounts trc20 list gives only {contract: raw_amount}; decimals +
+# coingecko_id are needed to convert to USD). Mirrors the contract set in
+# _COINGECKO_ID_BY_TRC20; kept as a single table so adding a token is one edit.
+TRC20_TOKEN_META: dict[str, tuple[str, int, str]] = {
+    "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t": ("USDT", 6, "tether"),
+    "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8": ("USDC", 6, "usd-coin"),
+    "TPYmHEhy5n8TCEfYGqW2rPxsghSfzghPDn": ("USDD", 18, "usdd"),
+    "TCFLL5dx5ZJdKnWuesXxi1VPwjLVmWZZy9": ("JST", 18, "just"),
+}
+
+
 __all__ = (
     "TronAdapter",
     "TRX_SYMBOL",
     "TRX_DECIMALS",
     "TRX_COINGECKO_ID",
+    "TRC20_TOKEN_META",
 )

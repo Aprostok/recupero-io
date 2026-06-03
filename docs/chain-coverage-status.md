@@ -58,10 +58,10 @@ and recommends additions for the next phase of chain work.
 ### Tron
 
 * **Adapter:** `chains/tron/adapter.py` (TronGrid backend). chain_id n/a; tron uses unix-ts cutoff like Solana.
-* **Operations:** TRC-20 outflows via `/v1/accounts/{addr}/transactions/trc20`. `is_contract` via `/v1/accounts/{addr}` `type=="Contract"`. Evidence receipts via `wallet/gettransactionbyid` + `wallet/gettransactioninfobyid` + `wallet/getblockbynum`. `min_timestamp` threading added in v0.18.5 (round-11 CRIT-006) — previously dropped, causing full-history fetches to truncate the oldest 10k rows = incident period.
-* **Known gaps:** **Native TRX outflows NOT implemented** (`fetch_native_outflows` returns `[]` — line 161). Tron USDT laundering is the largest USDT chain (~$60B circulating), and TRX gas dust is fine to ignore, but pure-TRX laundering cases (rare) would silently return 0 outflows.
+* **Operations:** TRC-20 outflows via `/v1/accounts/{addr}/transactions/trc20`. **Native TRX outflows implemented** (v0.32.1 CRIT-2, `fetch_native_outflows` → `get_native_transactions`, filters `raw_data.contract[0].type=="TransferContract"`). `is_contract` via `/v1/accounts/{addr}` `type=="Contract"`. Evidence receipts via `wallet/gettransactionbyid` + `wallet/gettransactioninfobyid` + `wallet/getblockbynum`. `min_timestamp` threading added in v0.18.5 (round-11 CRIT-006) — previously dropped, causing full-history fetches to truncate the oldest 10k rows = incident period.
+* **Monitoring:** **watch_tick supported** (#4) — `_run_tron_chain` / `_snapshot_tron_one` value a watched Tron wallet's confirmed native-TRX balance (`account_balances` → `/v1/accounts`) plus priceable TRC-20 balances (`TRC20_TOKEN_META`: USDT/USDC/USDD/JST), each via CoinGecko. Closes the reach↔monitor loop (previously every `tron` row was `skipped_unsupported_chain`).
 * **Pricing:** `Chain.tron` → `"tron"`. Canonical stables: USDT (`TR7NHq…6t`), USDC (`TEkxi…dz8`), USDD (`TNUC9…WFR` — round-11 pricing-CRIT-002 fixed case).
-* **Labels:** 3 issuer entries (USDT, USDC, USDD). **Zero cex_deposit entries.** No bridge entries that resolve on Tron specifically (bridges.json's `supports_to_chains` includes "tron" for AllBridge Core only).
+* **Labels:** 3 issuer entries (USDT, USDC, USDD) + 7 cex_deposit/hot-wallet entries. No bridge entries that resolve on Tron specifically (bridges.json's `supports_to_chains` includes "tron" for AllBridge Core only).
 * **Tests:** `tests/test_tron_address.py`, `tests/test_tron_client.py`, `tests/test_tron_adapter.py`.
 * **Freeze-pathway:** **Strong** — USDT-TRC20 is Tether's largest stablecoin deployment; LE-responsive. USDC-Tron + USDD-Tron also covered (USDD `limited`).
 
@@ -186,8 +186,8 @@ and recommends additions for the next phase of chain work.
 | bsc          | EvmAdapter*    | yes        | yes              | 4                 | 3              | yes   |
 | polygon      | EvmAdapter     | yes        | yes              | 3                 | 2              | yes (dispatch only) |
 | solana       | SolanaAdapter  | yes        | yes              | 2                 | 2              | yes   |
-| tron         | TronAdapter    | **no**     | yes              | 3                 | 3              | yes   |
-| bitcoin      | BitcoinAdapter | **no**     | n/a              | n/a               | **0**          | yes   |
+| tron         | TronAdapter    | yes        | yes              | 3                 | 3              | yes   |
+| bitcoin      | BitcoinAdapter | yes        | n/a              | n/a               | **0**          | yes   |
 | hyperliquid  | Scraper        | yes        | inline ($1)      | n/a               | 0              | yes (client helpers only) |
 | optimism     | EvmAdapter     | yes        | **NO**           | **0**             | **0**          | **no**|
 | avalanche    | EvmAdapter     | yes        | **NO**           | **0**             | **0**          | **no**|
@@ -319,9 +319,9 @@ These close existing v0.20.0 gaps before adding chains:
 3. **Add `issuers.json` entries** for Circle USDC + Tether USDT (where issued) on the 7 v0.20.0 chains. Enables freeze briefs to surface contacts.
 4. **Add `_CASE_INSENSITIVE_CHAINS` entries** for the 7 v0.20.0 EVM chains (currently only the original 5 EVM chains + bitcoin are listed; the new ones fall through to base58-exact compare for EVM hex, which works by coincidence but is semantically wrong).
 5. **Extend `tests/test_chain_dispatch.py`** with `test_profile_for_*` per new chain + a parameterized dispatch test covering all 11 EVM chains.
-6. **Wire Tron + Bitcoin into `watch_tick`** — they have adapters but `watch_tick._CHAIN_ID_BY_NAME` is EVM-only; Tron + Bitcoin watchlist rows currently increment `skipped_unsupported_chain`. Add `_TRON_CHAIN` / `_BITCOIN_CHAIN` handlers analogous to `_run_solana_chain`.
+6. ~~**Wire Tron + Bitcoin into `watch_tick`**~~ **DONE** — Bitcoin (v0.37.5, `_run_bitcoin_chain`) and Tron (#4, `_run_tron_chain` / `_snapshot_tron_one`) now have non-EVM watch_tick handlers analogous to `_run_solana_chain`.
 7. **Upgrade Hyperliquid scraper to use `Chain.hyperliquid`** in `Case.chain` (currently set to `Chain.ethereum` per scraper.py:76-77 with a "now upgradable" comment).
-8. **Implement native TRX outflows in `TronAdapter.fetch_native_outflows`** — currently returns `[]` (line 161 TODO). Closes the gap for pure-TRX laundering cases.
+8. ~~**Implement native TRX outflows in `TronAdapter.fetch_native_outflows`**~~ **DONE** (v0.32.1 CRIT-2) — filters `TransferContract` from `get_native_transactions`.
 
 Combined, items 1-8 are sub-1-day-each (1+2+3+4 are ~2 hours of JSON/Python edits) and double the effective coverage of the existing 16 chains before any new chain work begins.
 

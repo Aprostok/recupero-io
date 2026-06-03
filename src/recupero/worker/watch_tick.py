@@ -33,6 +33,7 @@ Hyperliquid are deferred (would need a chain-specific snapshot path).
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -100,6 +101,11 @@ _CHAIN_ID_BY_NAME: dict[str, int] = {
 _SOLANA_CHAIN = "solana"
 _HYPERLIQUID_CHAIN = "hyperliquid"
 _BITCOIN_CHAIN = "bitcoin"
+# Tron: native-TRX + TRC-20 (USDT-TRC20 is the #1 stablecoin-laundering rail).
+# The tracer (v0.32.1) reaches Tron resting places and auto-subscription adds
+# them to the watchlist; pre-this every ``tron`` row was skipped_unsupported —
+# a holder we could REACH we could not MONITOR (same gap closed for BTC).
+_TRON_CHAIN = "tron"
 
 
 # Defaults for the materiality bar. All three are env-overridable —
@@ -311,7 +317,8 @@ def run_watch_tick(
         if (chain not in _CHAIN_ID_BY_NAME
                 and chain != _SOLANA_CHAIN
                 and chain != _HYPERLIQUID_CHAIN
-                and chain != _BITCOIN_CHAIN):
+                and chain != _BITCOIN_CHAIN
+                and chain != _TRON_CHAIN):
             report.skipped_unsupported_chain += 1
             continue
         by_chain.setdefault(chain, []).append(r)
@@ -347,6 +354,12 @@ def run_watch_tick(
             )
         elif chain == _BITCOIN_CHAIN:
             _run_bitcoin_chain(
+                rows=chain_rows, dsn=dsn,
+                price_client=cg, parallelism=parallelism,
+                delta_usd_threshold=delta_usd_threshold, report=report,
+            )
+        elif chain == _TRON_CHAIN:
+            _run_tron_chain(
                 rows=chain_rows, dsn=dsn,
                 price_client=cg, parallelism=parallelism,
                 delta_usd_threshold=delta_usd_threshold, report=report,
@@ -750,6 +763,109 @@ def _snapshot_bitcoin_one(
     return snap
 
 
+def _run_tron_chain(
+    *,
+    rows: list[dict[str, Any]],
+    dsn: str,
+    price_client: Any,
+    parallelism: int,
+    delta_usd_threshold: Decimal,
+    report: WatchTickReport,
+) -> None:
+    """Snapshot Tron wallets via TronGrid (native TRX + priceable TRC-20s).
+
+    Closes the reach↔monitor loop for Tron: the tracer reaches Tron resting
+    places (USDT-TRC20 is the dominant stablecoin-laundering rail) and auto-
+    subscription watchlists them, but pre-this every ``tron`` row was skipped.
+    TronGrid works without a key at a lower rate; ``TRON_PRO_API_KEY`` lifts it.
+    """
+    from recupero.chains.tron.client import TronGridClient
+    api_key = os.environ.get("TRON_PRO_API_KEY", "").strip() or None
+    client = TronGridClient(api_key=api_key)
+    try:
+        _run_chain_pool(
+            rows=rows, dsn=dsn,
+            snapshot_fn=lambda row: _snapshot_tron_one(row, client, price_client),
+            parallelism=parallelism,
+            delta_usd_threshold=delta_usd_threshold,
+            report=report,
+        )
+    finally:
+        with contextlib.suppress(Exception):
+            client.close()
+
+
+def _snapshot_tron_one(
+    row: dict[str, Any], client: Any, price_client: Any,
+) -> _Snapshot:
+    """TronGrid snapshot: confirmed native-TRX balance (SUN) + priceable
+    TRC-20 balances, each valued via CoinGecko. tx_count is left None (the
+    monitor only needs the balance delta; movement is the trace stage's job)."""
+    from recupero.chains.tron.adapter import TRC20_TOKEN_META
+
+    addr = row["address"]
+    snap = _Snapshot(
+        native_balance_raw=None, tx_count=None, total_usd=None,
+        source="trongrid",
+    )
+    try:
+        trx_sun, trc20 = client.account_balances(addr)
+    except Exception as exc:  # noqa: BLE001
+        snap.error = f"tron balance: {exc}"
+        return snap
+    snap.native_balance_raw = int(trx_sun)
+
+    # Native TRX → USD (6-decimal SUN).
+    native_usd = Decimal(0)
+    if snap.native_balance_raw and snap.native_balance_raw > 0:
+        trx_decimal = Decimal(snap.native_balance_raw) / Decimal(10 ** 6)
+        trx_token = _native_token_for("tron")
+        if trx_token is not None:
+            try:
+                price = price_client.price_now(trx_token)
+                if price.usd_value is not None:
+                    native_usd = price.usd_value * trx_decimal
+            except Exception as exc:  # noqa: BLE001
+                log.debug("TRX price fetch failed for %s: %s", addr, exc)
+
+    # Priceable TRC-20 token balances.
+    for contract, raw_amount in (trc20 or {}).items():
+        meta = TRC20_TOKEN_META.get(contract)
+        if meta is None or not raw_amount or raw_amount <= 0:
+            continue
+        symbol, decimals, coingecko_id = meta
+        decimal_amount = Decimal(int(raw_amount)) / Decimal(10 ** decimals)
+        token_ref = TokenRef(
+            chain=Chain.tron, contract=contract, symbol=symbol,
+            decimals=decimals, coingecko_id=coingecko_id,
+        )
+        try:
+            price = price_client.price_now(token_ref)
+            token_usd = (
+                price.usd_value * decimal_amount
+                if price.usd_value is not None else None
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.debug("TRC20 price fetch failed for %s/%s: %s",
+                      addr, contract, exc)
+            token_usd = None
+        snap.token_balances.append({
+            "symbol": symbol,
+            "contract": contract,
+            "raw_amount": str(int(raw_amount)),
+            "decimal_amount": str(decimal_amount),
+            "usd_value": (str(token_usd) if token_usd is not None else None),
+        })
+
+    total = native_usd
+    for tb in snap.token_balances:
+        if tb.get("usd_value"):
+            with contextlib.suppress(ValueError, TypeError):
+                total += Decimal(tb["usd_value"])
+    snap.total_usd = total
+    return snap
+
+
 def _emit_graph_event(dsn: str, row: dict[str, Any], change: MaterialChange) -> None:
     """Best-effort: NOTIFY the operator graph that a watched address moved
     (Phase 4.13). Routed by the watchlist row's investigation_id so only
@@ -1053,6 +1169,8 @@ def _native_token_for(chain_name: str) -> TokenRef | None:
         "solana":   ("SOL",  "solana",         9),
         # Bitcoin: BTC has 8 decimals (satoshis). v0.37.5.
         "bitcoin":  ("BTC",  "bitcoin",        8),
+        # Tron: TRX has 6 decimals (SUN; 1 TRX = 1e6 SUN).
+        "tron":     ("TRX",  "tron",           6),
     }
     entry = mapping.get(chain_name)
     if not entry:

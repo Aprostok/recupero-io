@@ -175,6 +175,35 @@ class TronGridClient:
             params={"only_confirmed": "true"},
         )
 
+    def account_balances(self, address: str) -> tuple[int, dict[str, int]]:
+        """Confirmed native-TRX balance (in SUN) + TRC-20 balances.
+
+        Returns ``(trx_sun, {contract_base58: raw_amount})``. An address
+        never observed on-chain (TronGrid ``data: []``) returns ``(0, {})``.
+        Used by watch-tick monitoring to value a watched Tron wallet — the
+        ``/v1/accounts`` endpoint carries both the native ``balance`` (SUN)
+        and a ``trc20`` list of single-key ``{contract: amount}`` dicts.
+        """
+        body = self.get_account(address)
+        data = body.get("data") or []
+        if not isinstance(data, list) or not data:
+            return 0, {}
+        entry = data[0] if isinstance(data[0], dict) else {}
+        try:
+            trx_sun = int(entry.get("balance") or 0)
+        except (TypeError, ValueError):
+            trx_sun = 0
+        trc20: dict[str, int] = {}
+        for item in entry.get("trc20") or []:
+            if not isinstance(item, dict):
+                continue
+            for contract, amount in item.items():
+                try:
+                    trc20[contract] = int(amount)
+                except (TypeError, ValueError):
+                    continue
+        return trx_sun, trc20
+
     def get_trc20_transfers(
         self,
         address: str,

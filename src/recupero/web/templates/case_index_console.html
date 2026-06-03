@@ -5,110 +5,202 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — Case Index</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
-  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
-  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
-  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
-  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-  button.secondary { background: #fff; color: #2563eb; }
-  button:disabled { opacity: .5; cursor: default; }
-  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
-  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
-  .card .v { font-size: 1.3rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
-  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
-  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
-  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
-  .mono a { color: #2563eb; text-decoration: none; }
-  .mono a:hover { text-decoration: underline; }
-  .badge { display:inline-block; padding:.08rem .45rem; border-radius:6px; font-size:.7rem; font-weight:600; margin-right:.25rem; }
-  .badge.on { background:#e3f3e8; color:#1e8449; } .badge.off { background:#eef0f2; color:#9aa0a6; }
-  #msg { font-size: .8rem; margin-left: .5rem; }
-  .err { color: #c0392b; } .ok { color: #1e8449; }
+  :root { --bg:#0b1220; --panel:#11192b; --panel2:#0e1626; --line:#1f2a44; --ink:#e7ecf5;
+          --muted:#93a0bd; --accent:#4f8cff; --accent2:#2563eb; --ok:#37d399; --off:#56627e; --err:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+         margin:0; color:var(--ink); background:var(--bg); }
+  header { padding:1rem 1.25rem .6rem; border-bottom:1px solid var(--line); background:var(--panel2);
+           position:sticky; top:0; z-index:5; }
+  h1 { font-size:1.25rem; margin:0; display:flex; align-items:center; gap:.5rem; }
+  h1 .home { font-size:.78rem; font-weight:500; color:var(--accent); text-decoration:none; margin-left:auto; }
+  .sub { color:var(--muted); font-size:.8rem; margin:.3rem 0 .7rem; max-width:60rem; }
+  .bar { display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; }
+  input[type=password],input[type=text]{ padding:.45rem .7rem; border:1px solid var(--line); border-radius:8px;
+         font-size:.85rem; background:var(--panel); color:var(--ink); }
+  button { padding:.45rem .9rem; border:1px solid var(--accent2); background:var(--accent2); color:#fff;
+           border-radius:8px; cursor:pointer; font-size:.85rem; font-weight:600; }
+  button.ghost { background:transparent; color:var(--accent); }
+  button:disabled { opacity:.5; cursor:default; }
+  #msg { font-size:.8rem; margin-left:.25rem; } .err{ color:var(--err); } .ok{ color:var(--ok); }
+  .wrap { display:grid; grid-template-columns: 340px 1fr; gap:1px; background:var(--line);
+          min-height: calc(100vh - 132px); }
+  .col { background:var(--bg); padding:1rem 1.1rem; overflow:auto; }
+  .col.left { background:var(--panel2); }
+  .sech { font-size:.7rem; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:.2rem 0 .5rem; }
+  .case { display:block; width:100%; text-align:left; background:var(--panel); border:1px solid var(--line);
+          border-radius:9px; padding:.55rem .7rem; margin-bottom:.45rem; cursor:pointer; color:var(--ink); }
+  .case:hover { border-color:var(--accent); }
+  .case.sel { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+  .case .cid { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; word-break:break-all; }
+  .badge { display:inline-block; padding:.06rem .4rem; border-radius:5px; font-size:.62rem; font-weight:700;
+           margin:.25rem .25rem 0 0; }
+  .badge.on{ background:rgba(55,211,153,.16); color:var(--ok); } .badge.off{ background:rgba(86,98,126,.18); color:var(--off); }
+  .grp { margin-bottom:.9rem; }
+  .grp h3 { font-size:.74rem; text-transform:uppercase; letter-spacing:.05em; color:var(--accent);
+            margin:.2rem 0 .35rem; border-bottom:1px solid var(--line); padding-bottom:.2rem; }
+  .file { display:flex; align-items:center; gap:.5rem; padding:.32rem .5rem; border-radius:7px; cursor:pointer; }
+  .file:hover { background:var(--panel); }
+  .file.sel { background:var(--panel); outline:1px solid var(--accent); }
+  .file .nm { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.76rem; flex:1; word-break:break-all; }
+  .file .sz { font-size:.66rem; color:var(--muted); } .file .vw { font-size:.6rem; color:var(--off); text-transform:uppercase; }
+  .viewer { border:1px solid var(--line); border-radius:10px; height: calc(100vh - 230px); background:#fff; overflow:hidden; }
+  .viewer iframe { width:100%; height:100%; border:0; background:#fff; }
+  .viewer pre { margin:0; padding:1rem; height:100%; overflow:auto; color:#1a1a1a; font-size:.78rem;
+                font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; word-break:break-word; }
+  .empty { color:var(--muted); font-size:.85rem; padding:2rem 0; text-align:center; }
+  .vbar { display:flex; align-items:center; gap:.6rem; margin-bottom:.5rem; }
+  .vbar .t { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:.78rem; color:var(--ink); }
+  @media (max-width: 820px){ .wrap{ grid-template-columns:1fr; } .viewer{ height:60vh; } }
 </style>
 </head>
 <body>
-  <h1>📁 Case Index</h1>
-  <div class="sub">Every locally-traced case and which deliverables it has on disk. Click a case_id to open the
-    Graph Analysis console, then paste the id into its input box. Paste your operator key to load; data is
-    fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
+  <header>
+    <h1>📁 Case Index <a class="home" href="/v1/console">← all consoles</a></h1>
+    <div class="sub">Every traced case and its deliverables. Paste your operator key to load — data is fetched
+      from the admin-gated API with the key in a request header (never the URL). Click a case to browse its
+      sorted files; click a file to view it inline. (Rendered HTML is shown in a sandboxed, origin-isolated
+      frame, so a case artifact can never read your key.)</div>
+    <div class="bar">
+      <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+      <button id="load">Load cases</button>
+      <span id="msg"></span>
+    </div>
+  </header>
 
-  <div class="bar">
-    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
-    <button id="load">Load</button>
-    <span id="msg"></span>
+  <div class="wrap">
+    <div class="col left">
+      <div class="sech" id="caseshd">Cases</div>
+      <div id="cases"><div class="empty">Enter the key and Load.</div></div>
+    </div>
+    <div class="col">
+      <div id="detail"><div class="empty">Select a case to see its files.</div></div>
+    </div>
   </div>
-
-  <div class="cards" id="cards"></div>
-  <div id="tablewrap"></div>
 
 <script>
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
-  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) — clears on tab close.
+  function esc(s){ var d=document.createElement("div"); d.textContent=(s==null?"":String(s)); return d.innerHTML.replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+  function key(){ return ($("key").value||"").trim(); }
+  function setMsg(t,c){ var m=$("msg"); m.textContent=t||""; m.className=c||""; }
+  function fmtSize(n){ if(n==null) return ""; if(n<1024) return n+" B"; if(n<1048576) return (n/1024).toFixed(1)+" KB"; return (n/1048576).toFixed(1)+" MB"; }
+  function authHeaders(){ return { "X-Recupero-Admin-Key": key() }; }
+  function httpErr(res){ if(res.status===401) return "Unauthorized — check the key."; if(res.status===503) return "API not configured (admin key)."; return "HTTP "+res.status; }
 
-  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+  var selectedCase = null;
 
-  function card(v, l) { return '<div class="card"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
-
-  function badge(on, label) {
-    return '<span class="badge ' + (on ? "on" : "off") + '">' + esc(label) + '</span>';
+  function loadCases(){
+    var k=key(); if(!k){ setMsg("Enter the admin key.","err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch(e){}
+    setMsg("Loading…");
+    fetch("/v1/cases", { headers: authHeaders() })
+      .then(function(res){ if(!res.ok) throw new Error(httpErr(res)); return res.json(); })
+      .then(function(rep){ renderCases(rep); setMsg("Loaded "+ (rep.count!=null?rep.count:(rep.cases||[]).length) +" case(s)","ok"); })
+      .catch(function(e){ setMsg(e.message,"err"); });
   }
 
-  function render(rep) {
+  function renderCases(rep){
     var rows = rep.cases || [];
-    $("cards").innerHTML = card(rep.count == null ? rows.length : rep.count, "Cases");
+    $("caseshd").textContent = "Cases (" + (rep.count!=null?rep.count:rows.length) + ")";
+    if(!rows.length){ $("cases").innerHTML = '<div class="empty">No traced cases yet.</div>'; return; }
+    var box = document.createElement("div");
+    rows.forEach(function(r){
+      var b = document.createElement("button");
+      b.className = "case"; b.setAttribute("data-cid", r.case_id);
+      var badges = ""
+        + '<span class="badge '+(r.has_brief?"on":"off")+'">brief</span>'
+        + '<span class="badge '+(r.has_ai_triage?"on":"off")+'">triage</span>'
+        + '<span class="badge '+(r.has_exhibit_pack?"on":"off")+'">exhibit</span>'
+        + '<span class="badge '+(r.has_graph?"on":"off")+'">graph</span>';
+      b.innerHTML = '<div class="cid">'+esc(r.case_id)+'</div>'+badges;
+      box.appendChild(b);
+    });
+    $("cases").innerHTML=""; $("cases").appendChild(box);
+  }
 
-    if (rep.error) { setMsg("Scan error: " + rep.error, "err"); }
+  function openCase(cid){
+    selectedCase = cid;
+    document.querySelectorAll(".case").forEach(function(el){ el.classList.toggle("sel", el.getAttribute("data-cid")===cid); });
+    $("detail").innerHTML = '<div class="empty">Loading files…</div>';
+    fetch("/v1/cases/"+encodeURIComponent(cid)+"/artifacts", { headers: authHeaders() })
+      .then(function(res){ if(!res.ok) throw new Error(httpErr(res)); return res.json(); })
+      .then(function(rep){ renderArtifacts(cid, rep.artifacts||[]); })
+      .catch(function(e){ $("detail").innerHTML = '<div class="empty err">'+esc(e.message)+'</div>'; });
+  }
 
-    if (!rows.length) {
-      $("tablewrap").innerHTML = '<p class="sub">No traced cases found.</p>';
+  function renderArtifacts(cid, arts){
+    var head = '<div class="sech">'+esc(cid)+' — '+arts.length+' file(s)</div>';
+    if(!arts.length){ $("detail").innerHTML = head + '<div class="empty">This case has no files on disk.</div>'; return; }
+    var groups = {}; var order = [];
+    arts.forEach(function(a){ if(!groups[a.category]){ groups[a.category]=[]; order.push(a.category); } groups[a.category].push(a); });
+    var html = head + '<div class="vbar"><span class="t" id="vtitle">Select a file →</span></div>'
+             + '<div class="viewer" id="viewer"><div class="empty">No file selected.</div></div><div style="height:.8rem"></div>';
+    order.forEach(function(cat){
+      html += '<div class="grp"><h3>'+esc(cat)+'</h3>';
+      groups[cat].forEach(function(a){
+        html += '<div class="file" data-path="'+esc(a.path)+'" data-view="'+esc(a.view)+'">'
+              + '<span class="nm">'+esc(a.name)+'</span>'
+              + '<span class="sz">'+esc(fmtSize(a.size_bytes))+'</span>'
+              + '<span class="vw">'+esc(a.view)+'</span></div>';
+      });
+      html += '</div>';
+    });
+    $("detail").innerHTML = html;
+  }
+
+  function openArtifact(cid, path, view, el){
+    document.querySelectorAll(".file").forEach(function(f){ f.classList.remove("sel"); });
+    if(el) el.classList.add("sel");
+    var vtitle = $("vtitle"); if(vtitle) vtitle.textContent = path;
+    var viewer = $("viewer");
+    var url = "/v1/cases/"+encodeURIComponent(cid)+"/artifact?path="+encodeURIComponent(path);
+    if(view === "download"){
+      viewer.innerHTML = '<div class="empty">Binary file — <button class="ghost" id="dlbtn">download '+esc(path)+'</button></div>';
+      $("dlbtn").addEventListener("click", function(){ downloadArtifact(url, path.split("/").pop()); });
       return;
     }
-    var h = '<table><thead><tr><th>Case ID</th><th>Deliverables</th></tr></thead><tbody>';
-    rows.forEach(function (r) {
-      var cid = esc(r.case_id);
-      // case_id links to the Graph Analysis console (which takes the id via its
-      // own input box); the visible mono text is the id to copy.
-      h += '<tr>' +
-        '<td class="mono"><a href="/v1/graph-analysis/console" title="Open Graph Analysis console, then paste this id">' + cid + '</a></td>' +
-        '<td>' +
-          badge(r.has_brief, "brief") +
-          badge(r.has_ai_triage, "triage") +
-          badge(r.has_exhibit_pack, "exhibit") +
-          badge(r.has_graph, "graph") +
-        '</td>' +
-        '</tr>';
-    });
-    h += '</tbody></table>';
-    $("tablewrap").innerHTML = h;
-  }
-
-  function key() { return ($("key").value || "").trim(); }
-
-  function load() {
-    var k = key();
-    if (!k) { setMsg("Enter the admin key.", "err"); return; }
-    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
-    fetch("/v1/cases", { headers: { "X-Recupero-Admin-Key": k } })
-      .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
-        if (res.status === 503) throw new Error("API not configured (admin key).");
-        if (!res.ok) throw new Error("HTTP " + res.status);
-        return res.json();
+    viewer.innerHTML = '<div class="empty">Loading…</div>';
+    fetch(url, { headers: authHeaders() })
+      .then(function(res){ if(!res.ok) throw new Error(httpErr(res)); return res.text(); })
+      .then(function(txt){
+        if(view === "html"){
+          var f = document.createElement("iframe");
+          // Origin-isolated: allow-scripts (so D3 graphs work) WITHOUT
+          // allow-same-origin, so the frame cannot read this page's key.
+          f.setAttribute("sandbox", "allow-scripts");
+          f.srcdoc = txt;
+          viewer.innerHTML = ""; viewer.appendChild(f);
+        } else {
+          var pre = document.createElement("pre"); pre.textContent = txt;
+          viewer.innerHTML = ""; viewer.appendChild(pre);
+        }
       })
-      .then(function (rep) { render(rep); if (!rep.error) setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .catch(function(e){ viewer.innerHTML = '<div class="empty err">'+esc(e.message)+'</div>'; });
   }
 
-  $("load").addEventListener("click", load);
-  if (key()) { load(); }
+  function downloadArtifact(url, filename){
+    fetch(url, { headers: authHeaders() })
+      .then(function(res){ if(!res.ok) throw new Error(httpErr(res)); return res.blob(); })
+      .then(function(blob){
+        var a=document.createElement("a"); var u=URL.createObjectURL(blob);
+        a.href=u; a.download=filename||"artifact"; document.body.appendChild(a); a.click();
+        a.remove(); setTimeout(function(){ URL.revokeObjectURL(u); }, 1500);
+      })
+      .catch(function(e){ setMsg(e.message,"err"); });
+  }
+
+  // Event delegation (no inline handlers — keeps interpolated ids out of HTML).
+  $("cases").addEventListener("click", function(ev){
+    var b = ev.target.closest(".case"); if(b) openCase(b.getAttribute("data-cid"));
+  });
+  $("detail").addEventListener("click", function(ev){
+    var f = ev.target.closest(".file"); if(f && selectedCase) openArtifact(selectedCase, f.getAttribute("data-path"), f.getAttribute("data-view"), f);
+  });
+  $("load").addEventListener("click", loadCases);
+  if(key()) loadCases();
 })();
 </script>
 </body>

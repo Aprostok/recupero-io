@@ -107,6 +107,14 @@ _NAV: list[dict[str, Any]] = [
      "path": "/v1/case-overview/console", "live": True,
      "desc": "Per-case launcher — which deliverables a case has produced, with "
              "a deep link into each console."},
+    # v0.35.27 UI batch-8: surface main's just-merged operator-graph feature
+    # (client-journey-graph) into the hub. Distinct from "Graph Analysis"
+    # (computed consolidation hubs + cycles) — this is the INTERACTIVE explorer.
+    {"group": "Investigation", "label": "Operator Graph", "emoji": "🌐",
+     "path": "/operator-graph", "live": True,
+     "desc": "Interactive TRM/Chainalysis-style fund-flow graph for an "
+             "investigation — expand/filter, live updates (SSE), per-node risk, "
+             "annotations, saved views, and watch-address."},
 ]
 
 

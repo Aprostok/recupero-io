@@ -801,6 +801,13 @@ def _maybe_emit_litigation_artifacts(
          Draft only — Recupero is not a filer.
       3. **MLAT + FinCEN 314(b) drafts** — ``legal_requests/*`` one per
          exchange that received funds (none -> no files). Drafts only.
+      3b. **Exchange asset-freeze letters + time-sensitivity advisory** —
+         ``legal_requests/exchange_freeze_*.html`` (one per CEX that received
+         funds, addressed via the verified-aware freeze-contact resolver) and
+         ``legal_requests/legal_time_sensitivity.html`` (the practical freeze
+         window + the jurisdiction's statute-of-limitation references; legal
+         information, not legal advice). None received -> the freeze letters
+         are simply absent; the advisory always renders.
       4. **Signed Ed25519 chain-of-custody** — one attestation entry over
          every deliverable above, appended to ``custody/chain.jsonl``.
          Produced ONLY when a signing key is configured
@@ -861,6 +868,52 @@ def _maybe_emit_litigation_artifacts(
                 )
     except Exception as exc:  # noqa: BLE001
         log.warning("litigation: MLAT/314b render failed (non-fatal): %s", exc)
+
+    # (3b) Exchange asset-FREEZE letters + time-sensitivity advisory (v0.35).
+    # The freeze letter is the time-critical sibling of the records subpoena:
+    # one per CEX that received funds, addressed via the verified-aware freeze
+    # contact resolver (unverified channels render with a confirm-before-sending
+    # banner). The time-sensitivity advisory surfaces the practical freeze
+    # window (days since funds reached each CEX) + the jurisdiction's statute-of-
+    # limitation references (legal information, not advice). Both read the same
+    # documented onward-CEX flows, so inject freeze_asks once and render off it.
+    try:
+        from recupero.reports.legal_requests import (
+            load_freeze_asks,
+            render_legal_request,
+        )
+        from recupero.reports.time_sensitivity_report import render_time_sensitivity
+
+        _legal_brief = {
+            **freeze_brief,
+            "_freeze_asks": load_freeze_asks(case_dir),
+            "_case_dir": str(case_dir),
+        }
+        freeze_renders = render_legal_request(
+            _legal_brief, request_type="exchange-freeze",
+            output_dir=case_dir / "legal_requests",
+        )
+        for r in freeze_renders:
+            if r.output_path not in written:
+                written.append(r.output_path)
+        if freeze_renders:
+            log.info(
+                "litigation: rendered %d exchange-freeze letter(s)",
+                len(freeze_renders),
+            )
+        ts_path = render_time_sensitivity(
+            _legal_brief, output_dir=case_dir / "legal_requests",
+        )
+        if ts_path not in written:
+            written.append(ts_path)
+        log.info(
+            "litigation: rendered time-sensitivity advisory -> %s", ts_path.name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "litigation: freeze-letter / time-sensitivity render failed "
+            "(non-fatal): %s", exc,
+        )
 
     # (4) Signed chain-of-custody — requires a configured Ed25519 key.
     try:

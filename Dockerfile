@@ -71,6 +71,11 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD python -c "import os,urllib.request,sys; url=f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8080\")}/healthz'; sys.exit(0 if urllib.request.urlopen(url, timeout=5).status==200 else 1)" || exit 1
 
-# `recupero-worker` is registered by pyproject.toml's [project.scripts].
-# railway.json's startCommand also points here; both end up the same.
-CMD ["recupero-worker"]
+# `recupero-api` is registered by pyproject.toml's [project.scripts]; it runs
+# the FastAPI app (operator console /v1/console + /v1 API) and serves /healthz
+# (alias of /v1/health) on $PORT, so the HEALTHCHECK + railway.json
+# healthcheckPath above both pass. Kept ALIGNED with railway.json's
+# startCommand (tests/test_deploy_config_audit.py enforces it). The background
+# worker + cron run as separate Railway services that override startCommand to
+# `recupero-worker` / `recupero-cron`.
+CMD ["recupero-api"]

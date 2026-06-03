@@ -5,11 +5,11 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "recupero-worker",
+    "startCommand": "recupero-api",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10,
     "healthcheckPath": "/healthz",
     "healthcheckTimeout": 60
   },
-  "_v031_4_note": "Deploy the cron scheduler as a SECOND Railway service pointing at the same repo. Use startCommand: 'recupero-cron'. The two services share the same Dockerfile + env; only the entrypoint differs."
+  "_v035_default_note": "DEFAULT service entrypoint is now `recupero-api` (the FastAPI app: operator console at /v1/console + the /v1 API). It serves /healthz (alias of /v1/health) so this healthcheckPath passes. The background WORKER and the cron scheduler run as SEPARATE Railway services pointing at the same repo/Dockerfile, each overriding startCommand to `recupero-worker` and `recupero-cron` respectively. To revert the default to the worker, set startCommand back to `recupero-worker` here AND in the Dockerfile CMD (kept aligned by tests/test_deploy_config_audit.py)."
 }

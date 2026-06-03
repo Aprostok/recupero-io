@@ -20,9 +20,13 @@ onto Bitcoin via the already-registered BitcoinAdapter.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from recupero.trace.bridge_calldata import decode_bridge_calldata
 
 _THOR = "THORChain Router"
+_FIXTURE = Path(__file__).parent / "fixtures" / "thorchain_btc_swap.json"
 
 
 def _u256(n: int) -> str:
@@ -69,8 +73,22 @@ def test_thorchain_btc_memo_decodes_to_bitcoin_destination() -> None:
     assert res.destination_chain == "bitcoin"
     assert res.destination_address == _BTC_ADDR
     assert res.bridge_method == "depositWithExpiry"
-    # Capped at medium pending an authoritative on-chain fixture (no auto-cross).
-    assert res.confidence == "medium"
+    # v0.37.4: a bech32 BTC destination is a validated shape → high confidence
+    # (verified against real on-chain calldata) → the BFS auto-crosses onto BTC.
+    assert res.confidence == "high"
+
+
+def test_thorchain_real_onchain_calldata_decodes_high() -> None:
+    """THE authoritative check: decode the REAL THORChain depositWithExpiry tx
+    (Ethereum mainnet, fetched via Etherscan) and confirm we recover the exact
+    native-Bitcoin destination from its on-chain memo at high confidence."""
+    fx = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    res = decode_bridge_calldata(bridge_protocol=_THOR, input_data=fx["input"])
+    assert res is not None
+    assert res.destination_chain == fx["expected_destination_chain"] == "bitcoin"
+    assert res.destination_address == fx["expected_destination_address"]
+    assert res.bridge_method == fx["expected_bridge_method"]
+    assert res.confidence == fx["expected_confidence"] == "high"
 
 
 def test_thorchain_deposit_variant_also_decodes() -> None:

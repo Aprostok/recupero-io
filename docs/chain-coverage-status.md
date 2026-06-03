@@ -327,10 +327,15 @@ Combined, items 1-8 are sub-1-day-each (1+2+3+4 are ~2 hours of JSON/Python edit
 
 ## EVM → Bitcoin reach (deep-reach #4)
 
-**Status (v0.37.3): the THORChain memo decoder is shipped — an EVM→BTC swap now
-SURFACES its bitcoin destination as a handoff candidate at `medium` confidence.
-Auto-crossing onto Bitcoin (`high` confidence) awaits an authoritative on-chain
-swap fixture; all other infrastructure is ready.**
+**Status (v0.37.4): SHIPPED + VERIFIED — a THORChain EVM→BTC swap is decoded to
+its native-Bitcoin destination at `high` confidence and the trace AUTO-CROSSES
+onto the Bitcoin chain end-to-end.** Verified against a real on-chain tx
+(`0x0e9a9c2e…a721`, THORChain Router v4.1.1, memo
+`=:BTC.BTC:bc1q8w2ypqgx39gucxcypqv2m90wz9rvhmmrcnpdjs:117760` →
+`destination_chain=bitcoin` + that address); fixture at
+`tests/fixtures/thorchain_btc_swap.json`. The current v3.0.1 + v4.1.1 routers
+were added to `bridges.json` (the v0.34 seed only had the legacy v2 router, so
+present-day THORChain swaps were undetected).
 
 What's in place so the trace reaches Bitcoin end-to-end the moment a destination
 is decoded at `high`:
@@ -351,19 +356,17 @@ is decoded at `high`:
   issuer DB (Threshold / BitGo / Coinbase) and surfaced as TRACKED/subpoena
   leads — so a redemption candidate is never silently dropped.
 
-Why the THORChain decode is capped at `medium` (not `high`) for now:
+Confidence calibration (v0.37.4):
 
-* The memo destination is on-chain + deterministic to extract, and the decoder
-  logic is verified against a SPEC-ACCURATE SYNTHETIC fixture
-  (`tests/test_thorchain_btc_decoder.py`) — but NOT yet against an authoritative
-  real THORChain swap. This codebase's discipline is to auto-seed cross-chain
-  continuation only at `high` (a wrong destination is a fabricated forensic
-  claim). At `medium` the BTC destination is surfaced in the trace report /
-  candidates for operator follow-up, without the BFS auto-crossing.
+* `high` ONLY for a destination whose SHAPE matches a chain we can continue on —
+  BTC bech32 (`bc1…`) / base58 (`1…`/`3…`), or ETH `0x`+40hex — so a THORName or
+  a malformed memo can't earn a high-confidence auto-cross. `high` BTC/ETH
+  destinations auto-seed the cross-chain continuation.
+* `medium` for a raw-surfaced chain we have no adapter for (DOGE/LTC/BCH/…) or an
+  unvalidated address shape — surfaced as a handoff candidate, not auto-crossed.
+* `low` for an unparseable memo (recognized as THORChain, no destination).
 
-**To promote to `high` (auto-follow onto Bitcoin):** capture one authoritative
-THORChain EVM→BTC swap (the source `depositWithExpiry` tx + the realized BTC
-payout) as a fixture, confirm the decoder extracts the same destination, and
-lift the `medium` cap in `_decode_thorchain`. No other code changes needed — the
-v0.37.1 continuation + `BitcoinAdapter` do the rest. Same posture as the
-bridge-pairing oracle's per-protocol "verified vs &lt;case&gt;" fixtures.
+Remaining limitation (honest): **custodial** wrapped-BTC redemption (WBTC/tBTC →
+BTC) still settles off-chain — that BTC destination is in the custodian's
+records, not the EVM tx, so it stays a subpoena lead (already surfaced via the
+issuer DB). THORChain is the on-chain-decodable EVM→BTC path and is now covered.

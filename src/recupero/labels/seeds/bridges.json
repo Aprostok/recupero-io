@@ -5271,5 +5271,43 @@
     "verified": true,
     "last_verified_at": "2026-05-29T00:00:00Z",
     "_v034_thorchain_addition": true
+  },
+  {
+    "address": "0xd37bbe5744d730a1d98d8dc97c42f0ca46ad7146",
+    "name": "THORChain Router v4.1.1",
+    "category": "bridge",
+    "confidence": "high",
+    "supports_to_chains": [
+      "bitcoin",
+      "bsc",
+      "avalanche",
+      "base"
+    ],
+    "follow_up_url": "https://thornode.thorchain.info/thorchain/inbound_addresses",
+    "source": "etherscan_label+thornode_inbound_addresses",
+    "notes": "CURRENT THORChain Router (v4.1.1, Etherscan-labeled). The v0.34 seed only had the legacy v2 router (0xc145…c2ce); live swaps route through this v4 router, so detection of present-day THORChain laundering requires this entry. Cross-chain destination (incl. native BTC) is in the depositWithExpiry/deposit MEMO — decoded by trace/bridge_calldata._decode_thorchain. VERIFIED on-chain: tx 0x0e9a9c2e6d172724bfcee3e81f973b62bb396df82ccb3932db3f5caae733a721 is a depositWithExpiry with memo '=:BTC.BTC:bc1q8w2ypqgx39gucxcypqv2m90wz9rvhmmrcnpdjs:117760'; the decoder extracts destination_chain=bitcoin + that address at high confidence (see tests/fixtures/thorchain_btc_swap.json).",
+    "added_at": "2026-06-03T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-06-03T00:00:00Z",
+    "chain": "ethereum"
+  },
+  {
+    "address": "0x3624525075b88b24ecc29ce226b0cec1ffcb6976",
+    "name": "THORChain Router v3.0.1",
+    "category": "bridge",
+    "confidence": "high",
+    "supports_to_chains": [
+      "bitcoin",
+      "bsc",
+      "avalanche",
+      "base"
+    ],
+    "follow_up_url": "https://thornode.thorchain.info/thorchain/inbound_addresses",
+    "source": "etherscan_label",
+    "notes": "THORChain Router v3.0.1 (Etherscan-labeled). Intermediate router version between the legacy v2 (0xc145…c2ce) and current v4.1.1 (0xd37b…7146); historical cases may have routed through it. Same depositWithExpiry/deposit MEMO destination encoding decoded by _decode_thorchain.",
+    "added_at": "2026-06-03T00:00:00Z",
+    "verified": true,
+    "last_verified_at": "2026-06-03T00:00:00Z",
+    "chain": "ethereum"
   }
 ]

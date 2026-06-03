@@ -1450,11 +1450,14 @@ def _decode_thorchain(
         "<fn>:<CHAIN.ASSET>:<destination_addr>:<limits>:<affiliate>:<fee>"
     e.g. "=:BTC.BTC:bc1qxy...:0/1/0" → bridge to the bitcoin address bc1qxy…
 
-    Confidence is capped at 'medium' (see _THORCHAIN_METHODS): the memo address
-    is on-chain + deterministic to extract, but the Router seed address + the
-    realized EVM→BTC delivery await an authoritative on-chain fixture, so this
-    SURFACES the BTC destination as a handoff candidate without the BFS auto-
-    crossing (which requires 'high'). v0.37.3.
+    Confidence (v0.37.4 — VERIFIED against authoritative on-chain data):
+    a validated BTC- or ETH-shaped destination is 'high' (the decoder was
+    confirmed against real THORChain depositWithExpiry calldata, tx
+    0x0e9a9c2e…a721 → bc1q8w2ypqg…pdjs; see tests/fixtures/thorchain_btc_swap.json),
+    so the v0.37.1 cross-chain continuation follows it onto Bitcoin end-to-end.
+    A raw-surfaced chain we have no adapter for (DOGE/LTC/…) or an
+    unvalidated-shape destination stays 'medium' (surfaced as a candidate, not
+    auto-crossed); an unparseable memo is 'low'.
     """
     entry = _THORCHAIN_METHODS.get(method_id)
     if entry is None:
@@ -1488,7 +1491,25 @@ def _decode_thorchain(
         dest_raw.replace("_", "").replace("-", "").isalnum()
     ):
         dest_address = dest_raw
-    confidence = "medium" if (dest_chain and dest_address) else "low"
+    # v0.37.4: confidence is 'high' ONLY for an address whose SHAPE matches the
+    # destination chain we can actually continue on (so a THORName or a typo'd
+    # memo doesn't earn a high-confidence auto-cross). BTC: bech32 (bc1…) or
+    # base58 (1…/3…). ETH: 0x + 40 hex. Everything else (raw DOGE/LTC code we
+    # have no adapter for, unvalidated shape) stays 'medium' = surfaced, not
+    # auto-crossed. Verified against real on-chain calldata (see docstring).
+    if dest_chain and dest_address:
+        btc_shaped = (
+            dest_chain == "bitcoin"
+            and (dest_address.startswith("bc1") or dest_address[0] in ("1", "3"))
+        )
+        eth_shaped = (
+            dest_chain == "ethereum"
+            and dest_address.startswith("0x")
+            and len(dest_address) == 42
+        )
+        confidence = "high" if (btc_shaped or eth_shaped) else "medium"
+    else:
+        confidence = "low"
     return BridgeDecodeResult(
         destination_chain=dest_chain,
         destination_address=dest_address,

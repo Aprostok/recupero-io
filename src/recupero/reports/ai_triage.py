@@ -73,8 +73,9 @@ _MAX_LIST_ITEMS = 25
 _MAX_LIST_ITEM_CHARS = 600
 
 _DISCLAIMER = (
-    "AI-generated triage. Probabilistic investigative leads, NOT proof. Every "
-    "address, amount and next-step must be independently verified by a human "
+    "AI-generated triage. Probabilistic investigative leads, NOT proof, and "
+    "NOT legal advice. Every address, amount and next-step must be "
+    "independently verified by a human and reviewed with qualified counsel "
     "before any legal action. Does not assert perpetrator identity or guilt."
 )
 

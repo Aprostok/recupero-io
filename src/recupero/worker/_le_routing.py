@@ -431,10 +431,14 @@ def recommend_le_routes(
         if total_loss_usd >= _FBI_VAU_THRESHOLD_USD:
             plan.escalation_routes.append(FBI_VAU)
             plan.notes.append(
-                f"Loss of ${total_loss_usd:,.2f} qualifies for FBI VAU "
-                f"direct contact (threshold: ${_FBI_VAU_THRESHOLD_USD:,.0f}). "
-                "Recommend forwarding the LE handoff package directly "
-                "to cryptocurrency@fbi.gov in parallel with IC3."
+                f"Loss of ${total_loss_usd:,.2f} qualifies for the FBI VAU "
+                f"escalation path (threshold: ${_FBI_VAU_THRESHOLD_USD:,.0f}). "
+                "File via IC3 (complaint.ic3.gov) first — the officially "
+                "published FBI crypto intake channel — and engage the nearest "
+                "FBI field office. The commonly-cited cryptocurrency@fbi.gov "
+                "VAU address is UNVERIFIED (see the FBI VAU contact note); use "
+                "it only as a secondary, post-IC3 path, never as the primary "
+                "or official channel in client correspondence."
             )
         if total_loss_usd >= _SECRET_SERVICE_THRESHOLD_USD:
             plan.escalation_routes.append(SECRET_SERVICE_ECTF)

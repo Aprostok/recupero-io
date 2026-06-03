@@ -115,6 +115,12 @@ _NAV: list[dict[str, Any]] = [
      "desc": "Interactive TRM/Chainalysis-style fund-flow graph for an "
              "investigation — expand/filter, live updates (SSE), per-node risk, "
              "annotations, saved views, and watch-address."},
+    # v0.35.29 UI batch-10: trace-accuracy benchmark.
+    {"group": "Casework", "label": "Trace Benchmark", "emoji": "🎯",
+     "path": "/v1/benchmark/console", "live": True,
+     "desc": "Score a case's trace against an independently-verified "
+             "ground-truth endpoint list — recall / precision / F1, plus missed "
+             "and spurious endpoints."},
 ]
 
 

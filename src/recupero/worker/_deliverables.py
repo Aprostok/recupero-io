@@ -668,6 +668,19 @@ def build_all_deliverables(
         skip=skip_freeze_briefs,
     )
 
+    # TRACK 3 P0a — opt-in litigation-grade artifacts (court exhibit pack +
+    # signed Ed25519 chain-of-custody) over the finished deliverable set.
+    # Gated (default off) so existing pipelines / golden tests are unchanged;
+    # enable per-deploy with RECUPERO_AUTO_LITIGATION_ARTIFACTS=1 (and, for
+    # the signed chain, a custody key via RECUPERO_CUSTODY_KEY_PATH).
+    if os.environ.get("RECUPERO_AUTO_LITIGATION_ARTIFACTS", "").strip() == "1":
+        _maybe_emit_litigation_artifacts(
+            case=case,
+            case_dir=case_dir,
+            operator=(investigator or _default_investigator()).name,
+            written=written,
+        )
+
     log.info("deliverables done: %d file(s) under %s/briefs/",
              len(written), case_dir.name)
     return written
@@ -760,6 +773,93 @@ def _write_case_manifest(
         )
     except Exception as e:  # noqa: BLE001
         log.warning("case manifest write failed (continuing): %s", e)
+
+
+def _maybe_emit_litigation_artifacts(
+    *,
+    case: Case,
+    case_dir: Path,
+    operator: str,
+    written: list[Path],
+) -> None:
+    """Opt-in court-grade artifacts over the finished deliverable set.
+
+    Closes the gap where the court-exhibit pack + signed chain-of-custody
+    existed only as manual ``recupero-ops`` commands (so a real case never
+    shipped them unless an operator ran them by hand). Gated by
+    ``RECUPERO_AUTO_LITIGATION_ARTIFACTS=1`` so default pipelines / golden
+    tests are byte-for-byte unchanged; enable per-deploy to ship:
+
+      1. **Exhibit pack** — ``exhibit_pack/exhibit_pack.html`` (SHA-256
+         exhibit index + Daubert methodology appendix + 28 U.S.C. 1746
+         declaration). A pure index over on-disk artifacts; no key needed.
+      2. **Signed Ed25519 chain-of-custody** — one attestation entry over
+         every deliverable, appended to ``custody/chain.jsonl``. Produced
+         ONLY when a signing key is configured (``RECUPERO_CUSTODY_KEY_PATH``
+         or the default ``~/.recupero/custody_key``); absent a key the step
+         logs and skips (the unsigned per-case SHA-256 manifests already on
+         disk remain the integrity record).
+
+    Both steps are best-effort: any failure logs and the pipeline still
+    returns its primary deliverables — a litigation nicety must never block
+    a freeze letter or LE handoff.
+    """
+    # (1) Exhibit pack — pure index, no signing key required.
+    try:
+        from recupero.reports.exhibit_pack import render_exhibit_pack
+        pack_path = render_exhibit_pack(case_dir)
+        if pack_path not in written:
+            written.append(pack_path)
+        log.info("litigation: rendered exhibit pack %s", pack_path.name)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "litigation: exhibit pack render failed (non-fatal): %s", exc,
+        )
+
+    # (2) Signed chain-of-custody — requires a configured Ed25519 key.
+    try:
+        from recupero.custody import chain as _custody
+        try:
+            priv = _custody.load_private_key()
+        except FileNotFoundError:
+            log.info(
+                "litigation: custody signing skipped — no key configured "
+                "(set RECUPERO_CUSTODY_KEY_PATH or run "
+                "`recupero-ops custody-keygen` to enable a signed "
+                "chain-of-custody)",
+            )
+            return
+        attest_paths = [p for p in written if p.exists()]
+        if not attest_paths:
+            return
+        prev_hash, entry_index = _custody.latest_prev_hash(case_dir)
+        chain_id = str(getattr(case, "case_id", None) or case_dir.name)
+        entry = _custody.create_attestation(
+            case_dir=case_dir,
+            chain_id=chain_id,
+            stage="deliverables_built",
+            operator=operator,
+            artifact_paths=attest_paths,
+            prev_hash=prev_hash,
+            entry_index=entry_index,
+            note="auto-attested at deliverables build",
+            private_key=priv,
+        )
+        chain_path = _custody.append_to_chain(
+            case_dir, entry,
+            public_key_b64_str=_custody.public_key_b64(priv),
+        )
+        if chain_path not in written:
+            written.append(chain_path)
+        log.info(
+            "litigation: signed custody attestation appended "
+            "(%d artifact(s), entry #%d) -> %s",
+            len(attest_paths), entry_index, chain_path.name,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning(
+            "litigation: custody attestation failed (non-fatal): %s", exc,
+        )
 
 
 def _maybe_auto_send_victim_summary(

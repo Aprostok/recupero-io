@@ -57,10 +57,17 @@ def test_stats_degrades_to_null_without_db(monkeypatch):
     r = _client().get("/v1/console/stats", headers={"X-Recupero-Admin-Key": "secret"})
     assert r.status_code == 200
     s = r.json()
-    # All stats present as keys, all null (no DB) — page never fails.
+    # All DB-backed stats present as keys, all null (no DB) — page never fails.
     for k in ("pending_reviews", "watchlist_items", "watchlist_moved",
               "label_candidates_pending"):
         assert k in s and s[k] is None
+    # Filesystem case rollup keys are ALWAYS present and never require a DB.
+    # Their value is None (no cases dir) or a non-negative int (scan ran) — we
+    # assert the contract, not a specific count (a local cases dir may exist).
+    for k in ("cases_total", "cases_with_brief", "cases_triaged",
+              "cases_with_exhibit"):
+        assert k in s
+        assert s[k] is None or (isinstance(s[k], int) and s[k] >= 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

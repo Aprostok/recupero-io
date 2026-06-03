@@ -163,7 +163,42 @@ def _collect_stats() -> dict[str, Any]:
         "watchlist_items": None,
         "watchlist_moved": None,
         "label_candidates_pending": None,
+        # Filesystem case rollup — populated below; works WITHOUT a DB.
+        "cases_total": None,
+        "cases_with_brief": None,
+        "cases_triaged": None,
+        "cases_with_exhibit": None,
     }
+
+    # Filesystem case rollup (no DB required): a bounded scan of the cases root,
+    # matching case_index_api's deliverable-flag conventions (case.json /
+    # freeze_brief.json / ai_triage.json / exhibit_pack). Fully guarded — a
+    # missing config or cases dir yields nulls, never a failed page. Does NOT
+    # parse case.json (robust against a single corrupted case).
+    try:
+        from recupero.config import load_config
+        from recupero.storage.case_store import CaseStore
+        cfg, _ = load_config()
+        root = CaseStore(cfg).cases_root
+        if root.exists():
+            n_total = n_brief = n_triage = n_exhibit = 0
+            for child in sorted(root.iterdir())[:500]:
+                if not child.is_dir() or not (child / "case.json").is_file():
+                    continue
+                n_total += 1
+                if (child / "freeze_brief.json").exists():
+                    n_brief += 1
+                if (child / "ai_triage.json").exists():
+                    n_triage += 1
+                if (child / "exhibit_pack").exists():
+                    n_exhibit += 1
+            stats["cases_total"] = n_total
+            stats["cases_with_brief"] = n_brief
+            stats["cases_triaged"] = n_triage
+            stats["cases_with_exhibit"] = n_exhibit
+    except Exception as exc:  # noqa: BLE001 — best-effort
+        log.debug("operator stats: case scan unavailable: %s", exc)
+
     dsn = (os.environ.get("SUPABASE_DB_URL", "") or "").strip()
     if not dsn:
         return stats

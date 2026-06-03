@@ -60,6 +60,10 @@
   function renderStats(s) {
     s = s || {};
     $("cards").innerHTML =
+      card(fmt(s.cases_total), "Traced cases") +
+      card(fmt(s.cases_with_brief), "With freeze brief") +
+      card(fmt(s.cases_triaged), "AI-triaged") +
+      card(fmt(s.cases_with_exhibit), "Exhibit packs") +
       card(fmt(s.pending_reviews), "Pending reviews", s.pending_reviews) +
       card(fmt(s.watchlist_items), "Watched addresses") +
       card(fmt(s.watchlist_moved), "Moved since last check", s.watchlist_moved) +

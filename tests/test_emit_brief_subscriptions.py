@@ -379,3 +379,50 @@ def test_auto_subscribe_passes_investigator_email_through():
     assert len(captured_seeds) > 0
     for seed in captured_seeds:
         assert seed.alert_email == "jacob@recupero.io"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v0.37.2 (deep-reach #5): value-holding non-issuer DESTINATIONS are monitored
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DORMANT_ETH = "0xD0" + "0" * 38
+_INVESTIGATE_POOL = "0x52aa899454998be5b000ad077a46bbe360f4e497"
+_DUST_DEST = "0xDU" + "0" * 38
+
+
+def test_derive_includes_value_holding_non_issuer_destination():
+    """A dormant native-asset holder (not an issuer token, so absent from
+    ALL_ISSUER_HOLDINGS) that still holds material value MUST be subscribed so
+    the nightly re-sweep alerts when the perpetrator moves the parked funds."""
+    brief = _v_cfi01_shape_brief(DESTINATIONS=[
+        {"address": _DORMANT_ETH, "chain": "ethereum", "status": "TRACKED",
+         "usd_holding_now": "$120,000.00"},
+    ])
+    seeds = derive_subscriptions_from_brief(brief, case_id=CASE_ID)
+    addrs = {s.address.lower() for s in seeds}
+    assert _DORMANT_ETH.lower() in addrs
+
+
+def test_derive_excludes_investigate_destination():
+    """INVESTIGATE (contract-bleed / pool liquidity) destinations are NOT
+    monitored — watching protocol liquidity for 'movement' is pure noise."""
+    brief = _v_cfi01_shape_brief(DESTINATIONS=[
+        {"address": _INVESTIGATE_POOL, "chain": "ethereum",
+         "status": "INVESTIGATE", "usd_holding_now": "$38,892,365.24"},
+    ])
+    seeds = derive_subscriptions_from_brief(brief, case_id=CASE_ID)
+    addrs = {s.address.lower() for s in seeds}
+    assert _INVESTIGATE_POOL.lower() not in addrs
+
+
+def test_derive_excludes_dust_and_unknown_destinations():
+    brief = _v_cfi01_shape_brief(DESTINATIONS=[
+        {"address": _DUST_DEST, "chain": "ethereum", "status": "TRACKED",
+         "usd_holding_now": "$500.00"},  # below $1k floor
+        {"address": "0xEE" + "0" * 38, "chain": "ethereum",
+         "status": "TRACKED", "usd_holding_now": "unknown (see explorer)"},
+    ])
+    seeds = derive_subscriptions_from_brief(brief, case_id=CASE_ID)
+    addrs = {s.address.lower() for s in seeds}
+    assert _DUST_DEST.lower() not in addrs
+    assert ("0xee" + "0" * 38) not in addrs

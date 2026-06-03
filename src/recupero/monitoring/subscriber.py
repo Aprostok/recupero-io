@@ -47,6 +47,25 @@ _TRIGGER_OFAC_CONTACT = "ofac_contact"
 # capability, but historical briefs may also carry the raw "NO".
 _SKIP_CAPABILITIES = frozenset({"LOW", "NO"})
 
+# v0.37.2 (deep-reach #5): minimum current holding for a non-issuer
+# DESTINATION to be auto-subscribed to movement monitoring. Below this the
+# residual balance is dust and a subscription would just be noise.
+_DEST_MONITOR_MIN_USD = 1000.0
+
+
+def _parse_usd_amount(raw: object) -> float | None:
+    """Parse a brief USD string like ``"$655,751.45"`` to a float. Returns
+    None for missing / non-numeric values (e.g. ``"unknown (see explorer)"``)."""
+    if raw is None:
+        return None
+    s = str(raw).strip().replace("$", "").replace(",", "")
+    if not s:
+        return None
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return None
+
 
 @dataclass(frozen=True)
 class SubscriptionSeed:
@@ -224,6 +243,33 @@ def derive_subscriptions_from_brief(
                 chain=holding.get("chain") or primary_chain_lc,
                 label=label,
             )
+
+    # 3) v0.37.2 (deep-reach #5): value-holding DESTINATIONS that are NOT
+    # issuer-keyed — e.g. a dormant native-asset (ETH/etc.) EOA the BFS
+    # reached. The ALL_ISSUER_HOLDINGS pass only covers issuer tokens, so such
+    # a holder would never be watched; subscribe any destination currently
+    # holding material value so the nightly watch_tick re-sweep alerts when the
+    # perpetrator finally moves those parked funds (the "perp just moved the
+    # dormant $10M" signal without needing a fresh trace). INVESTIGATE
+    # destinations (contract-bleed / pool liquidity) are skipped — monitoring
+    # protocol liquidity for "movement" is pure noise. Dedup via _add means an
+    # address already seeded above (hub / issuer holding) is not double-counted.
+    for dest in brief.get("DESTINATIONS") or []:
+        if not isinstance(dest, dict):
+            continue
+        if (dest.get("status") or "").upper() == "INVESTIGATE":
+            continue
+        held = _parse_usd_amount(dest.get("usd_holding_now"))
+        if held is None or held < _DEST_MONITOR_MIN_USD:
+            continue
+        _add(
+            address=dest.get("address"),
+            chain=dest.get("chain") or primary_chain_lc,
+            label=(
+                f"Dormant holder ~${held:,.0f} — case {case_id} "
+                "[monitor for movement]"
+            ),
+        )
 
     return list(seeds.values())
 

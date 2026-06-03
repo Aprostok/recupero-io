@@ -598,9 +598,11 @@ def test_service_wallet_threshold_env_bad_value_keeps_default(
     config, env = cfg
     config.trace.max_depth = 3
     config.trace.service_wallet_outflow_threshold = 3
-    # This test isolates THRESHOLD parsing. Value-trace is OFF (default), so a
-    # high-fan-out seed stays a dead end (the v0.34.5 top-N follow is gated on
-    # value-trace) — "children not traversed" is the correct observable.
+    # This test isolates THRESHOLD parsing. v0.37.0: deep-reach is now the
+    # default, so we opt OUT (RECUPERO_DEEP_REACH=0) to keep value-trace OFF —
+    # a high-fan-out seed then stays a dead end (the v0.34.5 top-N follow is
+    # gated on value-trace) so "children not traversed" is the observable.
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "0")
     for bad in ("abc", "0", "-5", "  "):
         monkeypatch.setenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", bad)
         edges, children = _fanout_graph(5)
@@ -674,16 +676,18 @@ def test_value_trace_follows_amount_matched_hop_through_service_wallet(
     assert matched[0]["ambiguous"] is False
 
 
-def test_value_trace_off_by_default_stops_at_service_wallet(
+def test_value_trace_stops_at_service_wallet_when_deep_reach_off(
     cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default (RECUPERO_VALUE_TRACE unset): a service wallet is still a dead
-    end — no onward hop is followed and no value-match provenance is recorded.
-    This keeps existing behavior byte-identical."""
+    """OPT-OUT path (v0.37.0): with RECUPERO_DEEP_REACH=0 and VALUE_TRACE
+    unset, a service wallet is still a dead end — no onward hop is followed
+    and no value-match provenance is recorded. This is the legacy/cheap
+    behavior the opt-out restores (deep-reach is now the default)."""
     config, env = cfg
     config.trace.max_depth = 3
     config.trace.service_wallet_outflow_threshold = 3
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "0")
     monkeypatch.delenv("RECUPERO_VALUE_TRACE", raising=False)
     monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
 
@@ -799,16 +803,18 @@ def test_value_trace_follows_same_asset_split_when_enabled(
     assert all(h["confidence"] == "low" for h in split_hops)  # never medium/high
 
 
-def test_value_trace_split_not_followed_by_default(
+def test_value_trace_split_not_followed_when_deep_reach_off(
     cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default (FOLLOW_SPLITS unset): a peel is NOT followed — the node is an
-    honest value-dead-end, byte-identical to pre-v0.34.6 behavior. This keeps
-    the opt-in opt-in (and Zigha 4/4 untouched)."""
+    """OPT-OUT path (v0.37.0): with RECUPERO_DEEP_REACH=0 and only
+    VALUE_TRACE=1 (FOLLOW_SPLITS unset), a peel is NOT followed — the node is
+    an honest value-dead-end. The opt-out restores the legacy split-off-unless-
+    explicitly-enabled behavior (deep-reach is now the default)."""
     config, env = cfg
     config.trace.max_depth = 3
     config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "0")
     monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
     monkeypatch.delenv("RECUPERO_VALUE_TRACE_FOLLOW_SPLITS", raising=False)
     monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)
@@ -889,17 +895,19 @@ def test_labeled_terminal_mixer_recorded_when_enabled(
     assert not any(d["address"].lower() == HOP_A.lower() for d in dead)
 
 
-def test_labeled_terminal_off_by_default(
+def test_labeled_terminal_off_when_deep_reach_off(
     cfg: tuple[RecuperoConfig, RecuperoEnv], tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default (LABELED_TERMINALS unset): the mixer peel is NOT recorded — the
-    node is a generic value-dead-end and the deposit transfers are dropped
-    (directed path keeps only matched hops). Preserves pre-v0.34.7 behavior /
-    Zigha 4/4 byte-identically."""
+    """OPT-OUT path (v0.37.0): with RECUPERO_DEEP_REACH=0 and only
+    VALUE_TRACE=1 (LABELED_TERMINALS unset), the mixer peel is NOT recorded —
+    the node is a generic value-dead-end and the deposit transfers are dropped
+    (directed path keeps only matched hops). The opt-out restores the legacy
+    behavior (deep-reach is now the default)."""
     config, env = cfg
     config.trace.max_depth = 3
     config.trace.service_wallet_outflow_threshold = 200
+    monkeypatch.setenv("RECUPERO_DEEP_REACH", "0")
     monkeypatch.setenv("RECUPERO_VALUE_TRACE", "1")
     monkeypatch.delenv("RECUPERO_VALUE_TRACE_LABELED_TERMINALS", raising=False)
     monkeypatch.delenv("RECUPERO_SERVICE_WALLET_OUTFLOW_THRESHOLD", raising=False)

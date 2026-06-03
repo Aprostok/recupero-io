@@ -497,7 +497,10 @@ def run_trace(
     def _truthy(name: str) -> bool:
         return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
 
-    _deep_reach = _truthy("RECUPERO_DEEP_REACH")
+    # v0.37.0: deep-reach is the DEFAULT (resolved by the module-level
+    # _deep_reach_enabled so run_trace + the bridge oracle agree). Opt out
+    # with RECUPERO_DEEP_REACH=0. Per-knob env vars below still win when set.
+    _deep_reach = _deep_reach_enabled()
 
     # Explicit ``value_trace`` arg wins (used by the multi-chain perpetrator
     # pivot to force directed tracing on a re-trace); else the env var if set;
@@ -1290,6 +1293,62 @@ def _collect_swap_output_seeds(
     return seeds
 
 
+def _collect_onward_value_seeds(
+    transfers: list[Transfer],
+    *,
+    chain: Chain,
+    adapter: ChainAdapter,
+    policy: TracePolicy,
+    visited: set[str],
+    src_time: datetime | None,
+    window_end: datetime | None,
+) -> list[Address]:
+    """v0.37.1 (deep cross-chain #1): return the NEW value-bearing onward
+    recipients to follow on ``chain`` among ``transfers`` — generic onward
+    hops, not just DEX-swap outputs.
+
+    This is what makes the cross-chain destination trace go DEEP: the first
+    cross-chain wave captures the bridge receiver's direct outflows (one hop);
+    a plain ``receiver -> wallet -> ... -> exchange`` trail on the destination
+    chain would otherwise dead-end after that hop because the dest-continuation
+    loop only chased swap outputs. This collector follows the generic onward
+    movement to the configured wave depth.
+
+    Explosion-safe — gated identically to the primary BFS enqueue
+    (``_consider_enqueue``):
+      * ``policy.should_traverse`` (dust threshold + labeled mixer/exchange/
+        bridge STOP + same-asset/value gating the policy already applies),
+      * cross-chain time window (drop hops outside [src_bridge, +window]),
+      * ``stop_at_contract`` (don't recurse into a router/pool contract),
+      * visited-set dedup.
+    The CALLER additionally excludes transfers whose SOURCE node was a
+    high-fan-out service wallet (``is_service``) so a commingling node on the
+    destination chain doesn't fan the trace out — same dead-end-a-service-
+    wallet rule the primary BFS uses. Bounded further by the per-case transfer
+    cap + API budget + ``RECUPERO_DEST_CONTINUATION_WAVES`` already in force.
+    """
+    seeds: list[Address] = []
+    for tx in transfers:
+        if not _tx_within_window(tx, src_time, window_end):
+            continue
+        if not policy.should_traverse(tx):
+            continue
+        dest = tx.to_address
+        dest_key = _address_visited_key(chain, dest)
+        if dest_key in visited:
+            continue
+        if policy.stop_at_contract:
+            try:
+                if adapter.is_contract(dest):
+                    visited.add(dest_key)
+                    continue
+            except Exception:  # noqa: BLE001
+                pass  # treat as EOA on lookup failure
+        seeds.append(dest)
+        visited.add(dest_key)
+    return seeds
+
+
 def _confirm_bridge_handoffs(
     handoffs: list[Any],
     *,
@@ -1382,26 +1441,60 @@ def _confirm_bridge_handoffs(
     return out
 
 
+def _deep_reach_enabled() -> bool:
+    """v0.37.0: DEEP REACH IS THE DEFAULT.
+
+    Recupero goes deep on every trace — value-directed tracing through
+    aggregators/service wallets, 1:N split/peel following, dormancy-aware
+    (no-upper-cap) value window, stop-and-flag at labeled mixer/exchange/
+    bridge terminals, and cryptographic cross-chain bridge confirmation.
+    "Halfway" tracing (dead-ending at the first service wallet, never
+    crossing a bridge) aimed freeze letters at the first hop instead of
+    where the money rests. Opt OUT with ``RECUPERO_DEEP_REACH=0`` (e.g.
+    fixture-build / deterministic R&D runs), or pin an individual knob.
+
+    Centralized here so ``run_trace`` and ``_bridge_confirm_enabled``
+    resolve the default identically.
+    """
+    return os.environ.get("RECUPERO_DEEP_REACH", "1").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _bridge_confirm_enabled() -> bool:
     """Resolve whether the cryptographic cross-chain bridge-pairing oracle
     runs for this trace.
 
-    v0.36.0 (forensic-trace wiring): the oracle is part of the deep-reach
-    recipe. ``RECUPERO_BRIDGE_CONFIRM`` is honored when explicitly set
-    (an explicit value — including ``0`` — always wins, so an operator can
-    deep-reach with the oracle pinned off for a cheaper same-chain-only
-    pass). When it is NOT set, it inherits ``RECUPERO_DEEP_REACH`` so the
-    recommended production ``RECUPERO_DEEP_REACH=1`` turns the oracle on as
-    part of the full forensic depth. Neither set ⇒ OFF ⇒ existing traces
-    are byte-identical.
+    The oracle is part of the deep-reach recipe. ``RECUPERO_BRIDGE_CONFIRM``
+    is honored when explicitly set (an explicit value — including ``0`` —
+    always wins, so an operator can deep-reach with the oracle pinned off
+    for a cheaper same-chain-only pass). When it is NOT set, it inherits the
+    deep-reach default (v0.37.0: ON), so the standard production trace
+    confirms + follows cross-chain destinations cryptographically.
     """
-    def _on(name: str) -> bool:
-        return os.environ.get(name, "0").strip().lower() in (
+    if "RECUPERO_BRIDGE_CONFIRM" in os.environ:
+        return os.environ.get("RECUPERO_BRIDGE_CONFIRM", "0").strip().lower() in (
             "1", "true", "yes", "on",
         )
-    if "RECUPERO_BRIDGE_CONFIRM" in os.environ:
-        return _on("RECUPERO_BRIDGE_CONFIRM")
-    return _on("RECUPERO_DEEP_REACH")
+    return _deep_reach_enabled()
+
+
+def _crosschain_max_bridge_hops() -> int:
+    """How many CONSECUTIVE bridge crossings the cross-chain continuation
+    follows (deep cross-chain #2 — A->bridge->B->bridge->C).
+
+    ``RECUPERO_CROSSCHAIN_MAX_BRIDGE_HOPS`` wins when set (clamped >= 1). When
+    unset: 4 under the deep-reach default, 1 (legacy single crossing) when
+    deep-reach is opted out. A bad explicit value falls back to the
+    deep-reach-derived default. Always >= 1.
+    """
+    raw = os.environ.get("RECUPERO_CROSSCHAIN_MAX_BRIDGE_HOPS")
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except (TypeError, ValueError):
+            pass
+    return 4 if _deep_reach_enabled() else 1
 
 
 def _continue_past_dex_and_bridges(
@@ -1712,9 +1805,21 @@ def _continue_past_dex_and_bridges(
     # continuation seed so the BFS follows the trail onto the destination
     # chain. Default OFF so existing prod traces are byte-for-byte unchanged
     # unless an operator opts into the deeper matching for a specific case.
-    _lockmint_on = os.environ.get(
-        "RECUPERO_LOCKMINT_MATCH", "",
-    ).strip().lower() in ("1", "true", "yes", "on")
+    # v0.37.0: lock-and-mint matching is part of the deep-reach recipe so
+    # "go deep" also covers POOL bridges (Celer/Orbiter/THORChain/Allbridge)
+    # whose recipient is NOT in the source calldata and which the
+    # cryptographic order-id oracle therefore cannot pair. Inherits the
+    # deep-reach default unless RECUPERO_LOCKMINT_MATCH is explicitly set
+    # (explicit value — incl. 0 — always wins). The matches are confidence-
+    # calibrated medium/low (a cross-chain correlation, never proof) and the
+    # brief classifies them as INVESTIGATE leads, never freeze targets — so
+    # this widens coverage without ever billing an inferred edge as freezable.
+    if "RECUPERO_LOCKMINT_MATCH" in os.environ:
+        _lockmint_on = os.environ.get(
+            "RECUPERO_LOCKMINT_MATCH", "0",
+        ).strip().lower() in ("1", "true", "yes", "on")
+    else:
+        _lockmint_on = _deep_reach_enabled()
     if _lockmint_on and cross_chain_continue and handoffs:
         from recupero.trace.cross_chain import (
             bridge_address_on_chain,
@@ -1857,7 +1962,20 @@ def _continue_past_dex_and_bridges(
     # adapter per chain, run a shallow wave. Bounded to prevent
     # quota explosion: at most RECUPERO_MAX_CROSS_CHAIN_SEEDS (default 10)
     # across all destination chains.
-    if cross_chain_seeds:
+    # v0.37.1 (deep cross-chain #2): multi-bridge recursion — follow a chain of
+    # CONSECUTIVE bridge crossings (A -> bridge -> B -> bridge -> C), not just
+    # the first. Bounded by RECUPERO_CROSSCHAIN_MAX_BRIDGE_HOPS rounds (default 4
+    # under the deep-reach default; 1 = legacy single crossing when deep-reach is
+    # off and the var is unset). Each round re-detects bridges among the prior
+    # round's destination-chain transfers and seeds the next; cross_chain_visited
+    # dedup + the per-case transfer cap / budget / deadline bound the total work.
+    _max_bridge_hops = _crosschain_max_bridge_hops()
+    _bridge_round = 0
+    while cross_chain_seeds and _bridge_round < _max_bridge_hops:
+        _bridge_round += 1
+        # Seeds for the NEXT bridge round, collected from this round's
+        # destination-chain transfers (a second bridge crossing).
+        _next_round_seeds: list[tuple[Chain, Address, int, datetime]] = []
         max_xchain = int(os.environ.get(
             "RECUPERO_MAX_CROSS_CHAIN_SEEDS", "10",
         ))
@@ -1948,11 +2066,20 @@ def _continue_past_dex_and_bridges(
                     else None
                 )
                 chain_new: list[Transfer] = []
+                # v0.37.1 (deep cross-chain #1): onward frontier excludes
+                # transfers out of a high-fan-out service-wallet source so a
+                # commingling node on the destination chain does not fan the
+                # trace out (same dead-end rule the primary BFS applies). Swap-
+                # output detection still sees ALL of chain_new (a settler swap
+                # output IS the money even though the settler is high-fan-out).
+                onward_new: list[Transfer] = []
                 dropped = 0
                 for _from_addr, _depth, hop_transfers, _is_service in xchain_results:
                     for tx in hop_transfers:
                         if _tx_within_window(tx, src_time, window_end):
                             chain_new.append(tx)
+                            if not _is_service:
+                                onward_new.append(tx)
                         else:
                             dropped += 1
                 if dropped:
@@ -1962,6 +2089,10 @@ def _continue_past_dex_and_bridges(
                         xchain_window_h, dropped, dst_chain.value,
                     )
                 new_transfers.extend(chain_new)
+                # v0.37.1 (#2): accumulate every transfer discovered on THIS
+                # destination chain this round so we can re-detect a second
+                # bridge among them after the dest-chain continuation completes.
+                _chain_all: list[Transfer] = list(chain_new)
 
                 # v0.34 (compose bridge -> swap -> onward): the cross-chain wave
                 # above is a SINGLE shallow hop. It captures the destination
@@ -1977,25 +2108,44 @@ def _continue_past_dex_and_bridges(
                 # and following them one hop deeper. Bounded to this ONE
                 # destination chain (no further cross-chain recursion) and to
                 # the per-case transfer budget + visited set already in force.
-                try:
-                    _dest_waves = int(os.environ.get(
-                        "RECUPERO_DEST_CONTINUATION_WAVES", "2",
-                    ))
-                except (TypeError, ValueError):
-                    _dest_waves = 2
-                _frontier = chain_new
+                # v0.37.1 (deep cross-chain #1): each dest wave now follows BOTH
+                # swap outputs AND generic value-bearing onward hops, so a plain
+                # receiver -> wallet -> ... -> exchange trail on the destination
+                # chain is chased to depth (not only token->DAI swaps). Under the
+                # deep-reach default the wave budget is raised so the trail is
+                # followed deep; an explicit RECUPERO_DEST_CONTINUATION_WAVES
+                # always wins (and =0 disables the dest continuation entirely).
+                if "RECUPERO_DEST_CONTINUATION_WAVES" in os.environ:
+                    try:
+                        _dest_waves = int(os.environ["RECUPERO_DEST_CONTINUATION_WAVES"])
+                    except (TypeError, ValueError):
+                        _dest_waves = 2
+                else:
+                    _dest_waves = 8 if _deep_reach_enabled() else 2
+                _frontier = chain_new            # swap-output detection: all
+                _onward_frontier = onward_new    # generic onward: service-safe
                 for _wi in range(max(0, _dest_waves)):
-                    if not _frontier:
+                    if not _frontier and not _onward_frontier:
                         break
-                    _dseeds = _collect_swap_output_seeds(
+                    _dseeds: list[Address] = []
+                    _seen_seed: set[str] = set()
+                    for _s in _collect_swap_output_seeds(
                         _frontier, chain=dst_chain, adapter=dst_adapter,
                         visited=visited,
-                    )
+                    ) + _collect_onward_value_seeds(
+                        _onward_frontier, chain=dst_chain, adapter=dst_adapter,
+                        policy=policy, visited=visited,
+                        src_time=src_time, window_end=window_end,
+                    ):
+                        _sk = _address_visited_key(dst_chain, _s)
+                        if _sk not in _seen_seed:
+                            _seen_seed.add(_sk)
+                            _dseeds.append(_s)
                     if not _dseeds:
                         break
                     log.info(
-                        "dest-chain swap continuation on %s: %d swap-output "
-                        "seed(s) (wave %d/%d) — composing bridge->swap->onward",
+                        "dest-chain continuation on %s: %d onward/swap seed(s) "
+                        "(wave %d/%d) — composing bridge->onward",
                         dst_chain.value, len(_dseeds), _wi + 1, _dest_waves,
                     )
                     try:
@@ -2012,23 +2162,90 @@ def _continue_past_dex_and_bridges(
                         )
                     except Exception as exc:  # noqa: BLE001
                         log.warning(
-                            "dest-chain swap continuation wave on %s failed: %s",
+                            "dest-chain continuation wave on %s failed: %s",
                             dst_chain.value, exc,
                         )
                         break
                     _next_frontier: list[Transfer] = []
+                    _next_onward: list[Transfer] = []
                     for _fa, _fd, _hts, _isvc in _dres:
                         for tx in _hts:
                             if not _tx_within_window(tx, src_time, window_end):
                                 continue
                             new_transfers.append(tx)
+                            _chain_all.append(tx)
                             _next_frontier.append(tx)
+                            # Don't fan out from a high-fan-out service wallet
+                            # reached on the destination chain.
+                            if not _isvc:
+                                _next_onward.append(tx)
                     _frontier = _next_frontier
+                    _onward_frontier = _next_onward
+
+                # v0.37.1 (deep cross-chain #2): re-detect a SECOND bridge among
+                # this chain's transfers and seed the next round (while the dst
+                # adapter is still open). Conservative: only HIGH-confidence
+                # calldata-decoded destinations seed onward (same gate as round
+                # 0's heuristic path); deduped via cross_chain_visited so a chain
+                # is never re-traced. Bounded by _max_bridge_hops.
+                if _bridge_round < _max_bridge_hops and _chain_all:
+                    try:
+                        from recupero.trace.cross_chain import (
+                            identify_cross_chain_handoffs,
+                        )
+                        _view = SimpleNamespace(transfers=list(_chain_all))
+                        _h2 = identify_cross_chain_handoffs(_view, adapter=dst_adapter)
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning(
+                            "multi-bridge detection on %s failed: %s",
+                            dst_chain.value, exc,
+                        )
+                        _h2 = []
+                    for _hh in _h2:
+                        if (
+                            getattr(_hh, "decoded_confidence", None) != "high"
+                            or not getattr(_hh, "decoded_destination_address", None)
+                            or not getattr(_hh, "decoded_destination_chain", None)
+                        ):
+                            continue
+                        try:
+                            _ndc = Chain(_hh.decoded_destination_chain)
+                        except (ValueError, KeyError):
+                            continue
+                        _nk = (
+                            _ndc.value,
+                            _address_visited_key(_ndc, _hh.decoded_destination_address),
+                        )
+                        if _nk in cross_chain_visited:
+                            continue
+                        cross_chain_visited.add(_nk)
+                        try:
+                            _src_iso = (_hh.block_time_iso or "").replace("Z", "+00:00")
+                            _nbt = datetime.fromisoformat(_src_iso)
+                            if _nbt.tzinfo is None:
+                                _nbt = _nbt.replace(tzinfo=UTC)
+                        except (TypeError, ValueError, AttributeError):
+                            _nbt = dst_anchor_time
+                        _next_round_seeds.append(
+                            (_ndc, _hh.decoded_destination_address, 1, _nbt),
+                        )
             finally:
                 try:
                     dst_adapter.close()
                 except Exception:  # noqa: BLE001
                     pass
+
+        # v0.37.1 (#2): advance to the next bridge round. The while-loop
+        # re-groups these seeds by chain and processes them; an empty list
+        # (no further bridge detected) terminates the recursion, as does
+        # hitting _max_bridge_hops.
+        if _next_round_seeds:
+            log.info(
+                "multi-bridge recursion: %d onward bridge destination(s) "
+                "detected (round %d/%d)",
+                len(_next_round_seeds), _bridge_round, _max_bridge_hops,
+            )
+        cross_chain_seeds = _next_round_seeds
 
     if new_transfers:
         case.transfers = list(case.transfers) + new_transfers

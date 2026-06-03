@@ -210,7 +210,15 @@ class TestDepthTwoRecursion:
 
 class TestCycleDetection:
     def test_cycle_not_infinite_loop(self, cfg_with_depth, tmp_path, monkeypatch):
-        """SEED → CYCLE → SEED → CYCLE → ... must terminate."""
+        """SEED → CYCLE → SEED → CYCLE → ... must terminate.
+
+        v0.37.0: pinned to the legacy (non-deep) path for a deterministic
+        transfer count. Under the new deep-reach default the directed
+        value-trace prunes the CYCLE→SEED cycle-back edge (it's not a new
+        onward hop — SEED is already visited), so deep records 1 transfer
+        while legacy records 2. Termination — the actual invariant under
+        test — holds in BOTH modes; this asserts the exact legacy count."""
+        monkeypatch.setenv("RECUPERO_DEEP_REACH", "0")
         config, env = cfg_with_depth(5)
         adapter = GraphAdapter({
             SEED:  [_native_row(SEED, CYCLE, "0xa", "10")],

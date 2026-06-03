@@ -325,41 +325,45 @@ These close existing v0.20.0 gaps before adding chains:
 
 Combined, items 1-8 are sub-1-day-each (1+2+3+4 are ~2 hours of JSON/Python edits) and double the effective coverage of the existing 16 chains before any new chain work begins.
 
-## EVM → Bitcoin reach (v0.37.2, deep-reach #4)
+## EVM → Bitcoin reach (deep-reach #4)
 
-**Status: following onto native Bitcoin is infrastructure-ready; the missing
-piece is a *verified* EVM→BTC bridge fixture, which we will not fabricate.**
+**Status (v0.37.3): the THORChain memo decoder is shipped — an EVM→BTC swap now
+SURFACES its bitcoin destination as a handoff candidate at `medium` confidence.
+Auto-crossing onto Bitcoin (`high` confidence) awaits an authoritative on-chain
+swap fixture; all other infrastructure is ready.**
 
-What's already in place so the moment a high-confidence EVM→BTC handoff exists,
-the (v0.37.1 full-depth + multi-bridge) cross-chain continuation follows it onto
-the Bitcoin chain end-to-end:
+What's in place so the trace reaches Bitcoin end-to-end the moment a destination
+is decoded at `high`:
 
 * `Chain.bitcoin` is in the enum; `BitcoinAdapter` (Esplora, UTXO peel-chain
   normalization) is registered in the chain factory.
-* The bridge calldata decoder already maps Wormhole chain-id **21 → `bitcoin`**
-  (`trace/bridge_calldata.py`), and the cross-chain seed path does
-  `Chain(decoded_destination_chain)` + `ChainAdapter.for_chain(...)` — both
-  resolve `bitcoin` today.
-* Wrapped-BTC at a terminal (tBTC / WBTC / cbBTC) is already classified via the
+* The **THORChain Router** is a verified bridge seed (`bridges.json`, v0.34,
+  on-chain confirmed, `0xc145…c2ce`).
+* **v0.37.3: `_decode_thorchain` (`trace/bridge_calldata.py`)** parses the swap
+  MEMO — `<fn>:<CHAIN.ASSET>:<destination>:…` — and extracts the destination
+  chain + address. `BTC.BTC` → `destination_chain="bitcoin"` + the bech32/base58
+  BTC address; other chains (DOGE/LTC/…) surface raw for the candidates list.
+* The cross-chain seed path does `Chain(decoded_destination_chain)` +
+  `ChainAdapter.for_chain(...)` — both resolve `bitcoin`. With the v0.37.1
+  full-depth + multi-bridge continuation, a `high`-confidence BTC destination is
+  followed onto the Bitcoin chain end-to-end.
+* Wrapped-BTC at a terminal (tBTC / WBTC / cbBTC) is also classified via the
   issuer DB (Threshold / BitGo / Coinbase) and surfaced as TRACKED/subpoena
   leads — so a redemption candidate is never silently dropped.
 
-What is deliberately NOT shipped (and why):
+Why the THORChain decode is capped at `medium` (not `high`) for now:
 
-* **No EVM→native-BTC bridge decoder.** Custodial wrapped-BTC redemption
-  (WBTC/tBTC → BTC) settles **off-chain** — the destination BTC address is not
-  in the EVM transaction in a decodable form; it lives in the custodian's
-  records (a subpoena target, already surfaced). The one on-chain-decodable EVM→
-  BTC path is **THORChain** (the BTC address is in the swap memo), but THORChain
-  is not yet in `bridges.json` and we have no authoritative on-chain fixture to
-  verify the memo decoder against. This codebase's discipline is to ship
-  cross-chain decoders ONLY against a verified fixture (cross-chain seeding
-  requires `high` confidence) — an unverified BTC decoder would risk asserting a
-  fabricated destination, exactly what the forensic posture forbids.
+* The memo destination is on-chain + deterministic to extract, and the decoder
+  logic is verified against a SPEC-ACCURATE SYNTHETIC fixture
+  (`tests/test_thorchain_btc_decoder.py`) — but NOT yet against an authoritative
+  real THORChain swap. This codebase's discipline is to auto-seed cross-chain
+  continuation only at `high` (a wrong destination is a fabricated forensic
+  claim). At `medium` the BTC destination is surfaced in the trace report /
+  candidates for operator follow-up, without the BFS auto-crossing.
 
-**To close this:** capture an authoritative THORChain EVM→BTC swap (source tx +
-the realized BTC payout tx) as a fixture, add the THORChain router to
-`bridges.json` + a memo decoder in `bridge_calldata.py` setting
-`decoded_destination_chain="bitcoin"`, and the existing continuation does the
-rest. Best paired with a real example — same posture as the bridge-pairing
-oracle's per-protocol "verified vs <case>" fixtures.
+**To promote to `high` (auto-follow onto Bitcoin):** capture one authoritative
+THORChain EVM→BTC swap (the source `depositWithExpiry` tx + the realized BTC
+payout) as a fixture, confirm the decoder extracts the same destination, and
+lift the `medium` cap in `_decode_thorchain`. No other code changes needed — the
+v0.37.1 continuation + `BitcoinAdapter` do the rest. Same posture as the
+bridge-pairing oracle's per-protocol "verified vs &lt;case&gt;" fixtures.

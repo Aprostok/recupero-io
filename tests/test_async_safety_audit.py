@@ -112,8 +112,14 @@ def test_async_count_matches_baseline(parsed):
     # `_gen` awaits asyncio.wait_for(queue.get()) + a heartbeat (no I/O).
     # graph_events.publish() is deliberately SYNC (put_nowait) so the async
     # surface stays inside api/*.)
-    assert total == 28, (
-        f"async def count drifted to {total} (was 28). Update baseline and "
+    #
+    # (deploy-enablement: +1 in api/app.py — `healthz`, a /healthz liveness
+    # alias for Railway/Dockerfile probes. It is `return await health()`;
+    # health() builds a HealthResponse from _resolve_version/_resolve_git_sha/
+    # time.time() — pure, zero blocking I/O. Covered by
+    # test_no_blocking_io_inside_async_def.)
+    assert total == 29, (
+        f"async def count drifted to {total} (was 29). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

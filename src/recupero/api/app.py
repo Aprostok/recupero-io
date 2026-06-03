@@ -393,6 +393,25 @@ async def health() -> HealthResponse:
     )
 
 
+@app.get(
+    "/healthz",
+    response_model=HealthResponse,
+    tags=["meta"],
+    summary="Liveness probe alias (PaaS / container healthcheck path)",
+    include_in_schema=False,
+)
+async def healthz() -> HealthResponse:
+    """Alias of ``/v1/health`` at the conventional ``/healthz`` path.
+
+    railway.json (``healthcheckPath: /healthz``) and the Dockerfile
+    ``HEALTHCHECK`` both probe ``/healthz``. The worker serves it via its
+    own health server; a ``recupero-api`` Railway service needs the API to
+    answer it too, otherwise the platform marks the service unhealthy
+    forever and the deploy never goes live. No auth (unauthenticated probe).
+    """
+    return await health()
+
+
 @app.post(
     "/v1/screen",
     tags=["screening"],
@@ -2266,7 +2285,13 @@ def main() -> None:  # pragma: no cover
     host = os.environ.get("RECUPERO_API_HOST", "0.0.0.0")
     # Wave-9 audit (type-coercion): operator typo in RECUPERO_API_PORT
     # used to crash uvicorn bootstrap before the 8000 default kicked in.
+    # Port precedence: explicit RECUPERO_API_PORT wins; else honor the PaaS-
+    # injected $PORT (Railway/Heroku/Render route external traffic to it, so
+    # the `recupero-api` service must bind it or the healthcheck never passes);
+    # else the 8000 local default.
     raw_port = (os.environ.get("RECUPERO_API_PORT", "") or "").strip()
+    if not raw_port:
+        raw_port = (os.environ.get("PORT", "") or "").strip()
     try:
         port = int(raw_port) if raw_port else 8000
     except (TypeError, ValueError):

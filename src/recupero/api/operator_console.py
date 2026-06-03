@@ -126,6 +126,11 @@ _NAV: list[dict[str, Any]] = [
      "path": "/v1/recovery-alerts/console", "live": True,
      "desc": "Live act-now / freeze-NOW queue — prioritized D6 recovery alerts "
              "(critical/high) persisted from each watch tick, newest first."},
+    # v0.35.32: D4 incident-response plans.
+    {"group": "Monitoring", "label": "Incident Plans", "emoji": "📋",
+     "path": "/v1/incident-plans/console", "live": True,
+     "desc": "Ordered D4 response playbooks from each recovery alert — re-trace, "
+             "venue-conditional freeze/subpoena, notify, follow-up."},
 ]
 
 

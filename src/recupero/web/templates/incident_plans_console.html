@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero — Incident Plans</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
+  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
+  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
+  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
+  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
+  select { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; background: #fff; }
+  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+  button.secondary { background: #fff; color: #2563eb; }
+  button:disabled { opacity: .5; cursor: default; }
+  .summary { font-size: .85rem; margin-bottom: 1rem; color: #444; }
+  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; margin-bottom: 1rem; overflow: hidden; }
+  .card.sev-critical { border-left: 4px solid #c0392b; }
+  .card.sev-high { border-left: 4px solid #b9770e; }
+  .card-head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .55rem .75rem; background: #f5f5f5; font-size: .82rem; border-bottom: 1px solid #ececec; }
+  .card.sev-critical .card-head { background: #fdf3f2; }
+  .card.sev-high .card-head { background: #fdf8ee; }
+  .card-head .kind { color: #555; }
+  .card-head .count { color: #777; font-size: .72rem; }
+  table { width: 100%; border-collapse: collapse; font-size: .8rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+  th { background: #fafafa; font-size: .68rem; text-transform: uppercase; color: #777; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
+  .badge { display:inline-block; padding:.08rem .4rem; border-radius:6px; font-size:.7rem; font-weight:600; text-transform: uppercase; }
+  .badge.critical { background:#f9e0dd; color:#a93226; }
+  .badge.high { background:#fbeccd; color:#b9770e; }
+  .ub { display:inline-block; padding:.04rem .35rem; border-radius:5px; font-size:.68rem; font-weight:600; text-transform: uppercase; background:#eef2ff; color:#3b4cca; }
+  .ub.immediate { background:#f9e0dd; color:#a93226; }
+  .ub.same-day { background:#fbeccd; color:#b9770e; }
+  .ub.routine { background:#e7f4ea; color:#1e8449; }
+  .ord { text-align: right; width: 2rem; color: #777; }
+  #msg { font-size: .8rem; margin-left: .5rem; }
+  .err { color: #c0392b; } .ok { color: #1e8449; }
+  .rationale { color: #555; font-size: .73rem; max-width: 30rem; }
+</style>
+</head>
+<body>
+  <h1>📋 Incident Plans</h1>
+  <div class="sub">The "what to do RIGHT NOW" ordered playbook. D4 turns each persisted D6 recovery alert into a concrete
+    response plan: re-trace the moved address → venue-conditional freeze/subpoena → notify LE / investigator → set a
+    follow-up. The freeze/subpoena step is CONDITIONAL on the re-trace result (the destination venue is unknown until
+    step 1 runs). Deployment-wide, sourced from the DB. Paste your operator key to load; data is fetched directly from
+    the admin-gated API (the key stays in a request header, never the URL).</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <select id="sev">
+      <option value="">All severities</option>
+      <option value="critical">critical</option>
+      <option value="high">high</option>
+    </select>
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div id="cards"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+  // Persist the key for the session only (not localStorage) — clears on tab close.
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function urgencyClass(u) {
+    var s = (u == null ? "" : String(u));
+    return (s === "immediate" || s === "same-day" || s === "routine") ? s : "";
+  }
+
+  function renderSteps(steps) {
+    var h = '<table><thead><tr>' +
+      '<th class="ord">#</th>' +
+      '<th>Action</th>' +
+      '<th>Target</th>' +
+      '<th>Urgency</th>' +
+      '<th>Rationale</th>' +
+      '</tr></thead><tbody>';
+    steps.forEach(function (s) {
+      h += '<tr>' +
+        '<td class="ord">' + esc(s.order) + '</td>' +
+        '<td>' + esc(s.action) + '</td>' +
+        '<td class="mono">' + esc(s.target) + '</td>' +
+        '<td><span class="ub ' + esc(urgencyClass(s.urgency)) + '">' + esc(s.urgency) + '</span></td>' +
+        '<td class="rationale">' + esc(s.rationale) + '</td>' +
+        '</tr>';
+    });
+    h += '</tbody></table>';
+    return h;
+  }
+
+  function render(rep) {
+    var plans = rep.plans || [];
+    var configured = !!rep.db_configured;
+
+    var nCrit = 0, nHigh = 0;
+    plans.forEach(function (p) {
+      if (p.severity === "critical") { nCrit += 1; }
+      else if (p.severity === "high") { nHigh += 1; }
+    });
+    $("summary").innerHTML =
+      esc(plans.length) + ' plan(s) — ' +
+      '<span class="crit">' + esc(nCrit) + ' critical</span> / ' +
+      '<span class="hi">' + esc(nHigh) + ' high</span>';
+
+    // Empty state — handles BOTH db_configured=false AND an empty list.
+    if (!configured || !plans.length) {
+      $("cards").innerHTML =
+        '<p class="sub">No incident plans (no DB configured, or no recovery alerts have fired yet).</p>';
+      return;
+    }
+
+    var out = "";
+    plans.forEach(function (p) {
+      var sev = (p.severity == null ? "" : String(p.severity));
+      var sevCls = (sev === "critical" || sev === "high") ? sev : "";
+      var steps = p.steps || [];
+      out += '<div class="card sev-' + esc(sevCls) + '">' +
+        '<div class="card-head">' +
+          '<span class="badge ' + esc(sevCls) + '">' + esc(sev) + '</span>' +
+          '<span class="mono">' + esc(p.address) + '</span>' +
+          '<span class="kind">' + esc(p.chain) + '</span>' +
+          '<span class="kind">' + esc(p.alert_kind) + '</span>' +
+          '<span class="count">' + esc(p.step_count == null ? steps.length : p.step_count) + ' step(s)</span>' +
+        '</div>' +
+        renderSteps(steps) +
+        '</div>';
+    });
+    $("cards").innerHTML = out;
+  }
+
+  function key() { return ($("key").value || "").trim(); }
+
+  function load() {
+    var k = key();
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    var sev = ($("sev").value || "").trim();
+    setMsg("Loading…");
+    fetch("/v1/incident-plans" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
+          { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 503) throw new Error("API not configured (admin key).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .catch(function (e) { setMsg(e.message, "err"); });
+  }
+
+  $("load").addEventListener("click", load);
+  $("sev").addEventListener("change", function () { if (key()) { load(); } });
+  if (key()) { load(); }
+})();
+</script>
+</body>
+</html>

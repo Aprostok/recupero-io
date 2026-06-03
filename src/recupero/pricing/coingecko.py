@@ -57,6 +57,10 @@ _CHAIN_TO_CG_PLATFORM: dict[Chain, str] = {
     Chain.zksync:    "zksync",
     Chain.scroll:    "scroll",
     Chain.mantle:    "mantle",
+    # v0.38.0 (Gap#3): TON. Platform id "the-open-network" enables Jetton
+    # contract→id resolution (USDT-TON etc.). Native TON's coingecko_id is
+    # also "the-open-network".
+    Chain.ton:       "the-open-network",
 }
 
 

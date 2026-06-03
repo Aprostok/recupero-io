@@ -63,6 +63,7 @@ _ENV_PREFIXES = (
     "ETHERSCAN_",
     "HELIUS_",
     "TRON_PRO_",
+    "TONCENTER_",
     "COINGECKO_",
     "ANTHROPIC_",
     "RESEND_",

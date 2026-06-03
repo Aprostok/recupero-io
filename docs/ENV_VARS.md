@@ -871,6 +871,7 @@ that uses the corresponding integration. They are also surveyed by
 | `ETHERSCAN_API_KEY` | `worker/watch_tick.py`, `chains/ethereum/etherscan.py` | Etherscan v2 multichain key. |
 | `HELIUS_API_KEY` | `worker/watch_tick.py`, `chains/solana/helius.py` | Helius (Solana) API key. |
 | `TRON_PRO_API_KEY` | `chains/tron/adapter.py` | TronGrid API key. |
+| `TONCENTER_API_KEY` | `chains/ton/client.py` | TON Center API key (optional; lifts the free-tier rate limit for TON native + Jetton fetches). |
 | `COINGECKO_API_KEY` | `pricing/coingecko.py` (required in `_REQUIRED_ENV_VARS`) | CoinGecko Pro API key. |
 | `ANTHROPIC_API_KEY` | `reports/ai_editorial.py`, nightly-audit LLM review | Claude API key for editorial + nightly audit. |
 | `SENTRY_DSN` | `observability/sentry.py` | Sentry DSN; unset disables Sentry init. |

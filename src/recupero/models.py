@@ -112,6 +112,11 @@ class Chain(str, Enum):
     # exists so Case / Transfer records can carry the chain
     # identifier without a Pydantic rejection.
     cosmos = "cosmos"
+    # v0.38.0 (Gap#3): TON (The Open Network) — major DPRK/scam off-ramp;
+    # USDT-TON (a Jetton) is the dominant stablecoin-laundering rail. Wired
+    # into ChainAdapter.for_chain via the TonAdapter (TON Center backend:
+    # v2 native-TON transactions + v3 decoded Jetton transfers).
+    ton = "ton"
 
 
 class LabelCategory(str, Enum):

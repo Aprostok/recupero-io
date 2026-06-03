@@ -75,6 +75,12 @@ class ChainAdapter(ABC):
             # threading needed yet.
             from recupero.chains.bitcoin.adapter import BitcoinAdapter
             return BitcoinAdapter()
+        if chain == Chain.ton:
+            # TON uses the public TON Center API (v2 native + v3 Jetton). Like
+            # Tron/Bitcoin the adapter resolves its own config — an optional
+            # TONCENTER_API_KEY from env lifts the rate limit.
+            from recupero.chains.ton.adapter import TonAdapter
+            return TonAdapter()
         raise NotImplementedError(f"No adapter for chain {chain}")
 
     # --- block / time ---

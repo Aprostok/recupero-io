@@ -344,6 +344,67 @@ class SupabaseCaseStore:
         items = self._list(prefix)
         return [item["name"] for item in items if item.get("id") is not None]
 
+    # ----- Browse (operator console) ----- #
+
+    def list_artifacts(self) -> list[tuple[str, int]]:
+        """Every file under this investigation's prefix as
+        ``(relpath, size_bytes)`` pairs (relpath is prefix-relative, POSIX).
+
+        Powers the Case-Index per-case artifact browser when the console is
+        backed by Supabase. Sizes come from the Storage list ``metadata.size``;
+        a missing/garbage size degrades to 0 rather than raising."""
+        out: list[tuple[str, int]] = []
+        for full, size in self._walk_with_meta(self.storage_prefix):
+            rel = full[len(self.storage_prefix):] if full.startswith(self.storage_prefix) else full
+            out.append((rel, size))
+        return out
+
+    def list_top_level_names(self) -> list[str]:
+        """Names directly under this investigation's prefix (files AND folders),
+        in one non-recursive list call. The console index uses this to derive
+        deliverable-presence flags cheaply (case.json / freeze_brief.json /
+        ai_triage.json / graph_ui.html / the exhibit_pack folder)."""
+        return [
+            str(i["name"]).rstrip("/")
+            for i in self._list(self.storage_prefix)
+            if i.get("name")
+        ]
+
+    def read_artifact(self, relpath: str) -> bytes:
+        """Download one prefix-relative artifact (e.g. ``briefs/le_handoff.html``).
+        Path-traversal-guarded via ``_validate_relpath`` (rejects ``..`` / ``//``
+        / leading-slash / control chars), then size-capped by ``_download``."""
+        _validate_relpath(relpath, kind="artifact path")
+        return self._download(self.storage_prefix + relpath)
+
+    def _walk_with_meta(
+        self, prefix: str, _depth: int = 0,
+    ) -> list[tuple[str, int]]:
+        """Like ``_walk_all_files`` but also returns each file's size from the
+        list ``metadata``. Same depth bound (``_WALK_MAX_DEPTH``)."""
+        if _depth >= _WALK_MAX_DEPTH:
+            log.warning(
+                "supabase _walk_with_meta hit max recursion depth %d at "
+                "prefix %r — skipping deeper traversal", _WALK_MAX_DEPTH, prefix,
+            )
+            return []
+        out: list[tuple[str, int]] = []
+        for item in self._list(prefix):
+            name = item.get("name")
+            if not name:
+                continue
+            full = prefix + name
+            if item.get("id") is None:
+                out.extend(self._walk_with_meta(full + "/", _depth=_depth + 1))
+            else:
+                meta = item.get("metadata") or {}
+                try:
+                    size = int(meta.get("size") or 0)
+                except (TypeError, ValueError):
+                    size = 0
+                out.append((full, max(0, size)))
+        return out
+
     # ----- Cleanup ----- #
 
     def delete_all(self) -> int:
@@ -656,3 +717,41 @@ def _fmt_decimal(d: Decimal | None) -> str:
     if d is None:
         return ""
     return format(d, "f")
+
+
+# Nil UUID used purely to satisfy the per-investigation constructor when we
+# only need the bucket-level list client; its prefix is never read or written.
+_NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+
+def list_investigation_ids(
+    config: RecuperoConfig,
+    supabase_url: str,
+    service_role_key: str,
+    bucket: str = "investigation-files",
+    timeout: float = 30.0,
+) -> list[str]:
+    """List the investigation_id folders under ``investigations/`` in the
+    bucket — the bucket-level enumeration the operator Case-Index console needs
+    to show every Supabase-backed case (the per-investigation store can't do
+    this, it's scoped to one id).
+
+    Reuses the store's hardened, retrying, bounded ``_list`` (built with a nil
+    UUID purely for the client; the nil prefix is never touched). Returns the
+    folder UUIDs in listing order. Closes the throwaway client before
+    returning.
+    """
+    store = SupabaseCaseStore(
+        config, supabase_url=supabase_url, service_role_key=service_role_key,
+        investigation_id=_NIL_UUID, bucket=bucket, timeout=timeout,
+    )
+    try:
+        items = store._list("investigations/")  # noqa: SLF001 — same module
+        # Folders have id == None; their `name` is the investigation_id.
+        return [
+            str(item["name"]).rstrip("/")
+            for item in items
+            if item.get("id") is None and item.get("name")
+        ]
+    finally:
+        store.close()

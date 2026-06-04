@@ -79,6 +79,18 @@ def get_cases(
     x_recupero_admin_key: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _require_admin_auth(x_recupero_admin_key)
+    # v0.36: when the deploy is Supabase-backed (RECUPERO_CASE_STORE=supabase +
+    # creds), list real investigations from the bucket instead of the empty,
+    # ephemeral local store. Default + any failure path stays local-filesystem.
+    from recupero.api import _supabase_case_source as _sb
+    if _sb.enabled():
+        try:
+            cases = _sb.list_cases()
+            return {"cases": cases, "count": len(cases)}
+        except Exception as exc:  # noqa: BLE001 — never 500 the operator console
+            log.warning("get_cases: supabase listing failed: %s", exc)
+            return {"cases": [], "count": 0, "error": str(exc)}
+
     from recupero.config import load_config
     from recupero.storage.case_store import CaseStore, _validate_case_id
 
@@ -216,6 +228,19 @@ def list_case_artifacts(
     x_recupero_admin_key: str | None = Header(default=None),
 ) -> dict[str, Any]:
     _require_admin_auth(x_recupero_admin_key)
+    from recupero.api import _supabase_case_source as _sb
+    if _sb.enabled():
+        try:
+            items = _sb.list_artifacts(case_id)
+        except ValueError as exc:  # bad (non-UUID) case_id
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"invalid case_id: {exc}",
+            ) from exc
+        order = {c: i for i, c in enumerate(_CATEGORY_ORDER)}
+        items.sort(key=lambda d: (order.get(d["category"], 99), d["path"]))
+        return {"case_id": case_id, "artifacts": items, "count": len(items)}
+
     case_dir = _resolve_case_dir(case_id)
     root = case_dir.resolve()
     items: list[dict[str, Any]] = []
@@ -259,14 +284,41 @@ def get_case_artifact(
     x_recupero_admin_key: str | None = Header(default=None),
 ) -> Response:
     _require_admin_auth(x_recupero_admin_key)
-    case_dir = _resolve_case_dir(case_id)
-    root = case_dir.resolve()
-    # Reject absolute paths + any traversal segment before touching the FS.
+    # Reject absolute paths + any traversal segment before touching any store.
     norm = path.replace("\\", "/")
     if not path or norm.startswith("/") or ".." in norm.split("/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail="invalid artifact path"
         )
+
+    from recupero.api import _supabase_case_source as _sb
+    if _sb.enabled():
+        try:
+            content = _sb.read_artifact(case_id, norm)
+        except ValueError as exc:  # bad case_id or path
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"invalid request: {exc}",
+            ) from exc
+        except FileNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail="artifact not found",
+            ) from exc
+        if len(content) > _MAX_ARTIFACT_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"artifact too large to serve ({len(content)} bytes)",
+            )
+        name = norm.rsplit("/", 1)[-1]
+        ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+        media = _MEDIA_BY_EXT.get(ext, "application/octet-stream")
+        headers = {"X-Content-Type-Options": "nosniff"}
+        if media == "application/octet-stream":
+            headers["Content-Disposition"] = f'attachment; filename="{name}"'
+        return Response(content=content, media_type=media, headers=headers)
+
+    case_dir = _resolve_case_dir(case_id)
+    root = case_dir.resolve()
     target = (case_dir / norm).resolve()
     if not target.is_relative_to(root):  # symlink/.. escape → blocked
         raise HTTPException(

@@ -161,6 +161,7 @@ their own section.
 | `RECUPERO_API_KEYS` | unset | str | `name1:secret1,name2:secret2` | v0.18.2 | Cached map of API key secrets → partner names. |
 | `RECUPERO_API_KEY_ISSUERS` | unset | str | `key:Issuer1\|Issuer2,...` | v0.28.0 | Per-key whitelist of issuers the partner can write `freeze_outcomes` for. |
 | `RECUPERO_API_KEY_ADMINS` | unset | str | comma-sep key names | v0.28.0 | Operator key names with universal write access (deny-by-default for everything else). |
+| `RECUPERO_API_KEY_ROLES` | unset | str | `name:role,...` (role ∈ viewer/analyst/admin) | v0.38 | RBAC role per API key. Unmapped keys default to `analyst` (backward-compatible); admins (above) are always `admin`. Enforced by `require_role()`. |
 | `RECUPERO_API_KEY_CASES` | unset | str | `key:uuid\|uuid,...` | v0.27.x | Per-key case-UUID restriction. |
 | `RECUPERO_API_RATE_LIMITS` | unset | str | `name:rps,...` | v0.18.x | Override per-key rate-limit RPS. |
 | `RECUPERO_API_AUTH_OPTIONAL` | unset | bool | `=1` (local-dev only) | v0.17.6 | Local-dev bypass — REFUSED when a production marker is present. |

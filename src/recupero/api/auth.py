@@ -204,6 +204,65 @@ def _load_api_key_admins() -> frozenset[str]:
     )
 
 
+# ── RBAC roles (v0.38, enterprise non-data #2) ───────────────────────────────
+# Three ordered roles. viewer < analyst < admin. Defaulting to ANALYST keeps
+# every pre-RBAC key working exactly as before (additive, no access regression);
+# operators downgrade to viewer or upgrade to admin explicitly. Admin keys
+# (RECUPERO_API_KEY_ADMINS) are always role 'admin' regardless of the roles map.
+_ROLE_ORDER: dict[str, int] = {"viewer": 0, "analyst": 1, "admin": 2}
+_DEFAULT_ROLE = "analyst"
+
+
+def _load_api_key_roles() -> dict[str, str]:
+    """Parse RECUPERO_API_KEY_ROLES ("name:role,name2:role2") → {name: role}.
+    Unknown role tokens are ignored (fall back to the default). Empty → {}."""
+    raw = os.environ.get("RECUPERO_API_KEY_ROLES", "").strip()
+    if not raw:
+        return {}
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or ":" not in pair:
+            continue
+        name, _, role = pair.partition(":")
+        name = name.strip()
+        role = role.strip().lower()
+        if name and role in _ROLE_ORDER:
+            out[name] = role
+    return out
+
+
+def role_for_key(api_key_name: str) -> str:
+    """Resolve an API key NAME to its role. Admins win; then the explicit
+    roles map; else the default (analyst). Optional-auth callers ('anonymous')
+    resolve to 'admin' — the bypass is already prod-gated."""
+    if _is_optional_auth():
+        return "admin"
+    if api_key_name in _load_api_key_admins():
+        return "admin"
+    return _load_api_key_roles().get(api_key_name, _DEFAULT_ROLE)
+
+
+def require_role(min_role: str):
+    """FastAPI dependency factory: authenticate (via require_api_key) THEN
+    require the key's role be >= ``min_role``. Returns the key name. Raises 401
+    (no/invalid key), 429 (rate limit), or 403 (role too low)."""
+    min_rank = _ROLE_ORDER.get(min_role, 99)
+
+    async def _dep(request: Request) -> str:
+        key_name = await require_api_key(request)
+        role = role_for_key(key_name)
+        request.state.api_key_role = role
+        if _ROLE_ORDER.get(role, -1) < min_rank:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"role {role!r} is insufficient; requires {min_role!r} or higher",
+            )
+        return key_name
+
+    return _dep
+
+
 def is_authorized_to_record_outcome(
     *, api_key_name: str, issuer: str,
 ) -> bool:
@@ -334,6 +393,7 @@ async def require_api_key(request: Request) -> str:
     violation.
     """
     if _is_optional_auth():
+        request.state.api_key_name = "anonymous"
         return "anonymous"
 
     # v0.20.2 (adversarial-audit): do NOT .strip() the inbound header.
@@ -368,6 +428,8 @@ async def require_api_key(request: Request) -> str:
             detail=f"Rate limit exceeded for API key {key_name!r}",
         )
 
+    # Stash the resolved actor for audit + RBAC (the secret never leaves here).
+    request.state.api_key_name = key_name
     return key_name
 
 
@@ -412,5 +474,7 @@ def reset_buckets_for_tests() -> None:
 
 __all__ = (
     "require_api_key",
+    "require_role",
+    "role_for_key",
     "reset_buckets_for_tests",
 )

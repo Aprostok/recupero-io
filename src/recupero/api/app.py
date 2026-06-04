@@ -20,7 +20,7 @@ from fastapi import Depends, FastAPI, Form, Header, HTTPException, Request, stat
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field, field_validator
 
-from recupero.api.auth import require_api_key
+from recupero.api.auth import require_api_key, role_for_key
 
 log = logging.getLogger(__name__)
 
@@ -466,6 +466,18 @@ async def healthz() -> HealthResponse:
     forever and the deploy never goes live. No auth (unauthenticated probe).
     """
     return await health()
+
+
+@app.get(
+    "/v1/whoami",
+    tags=["meta"],
+    summary="Return the authenticated API key's name + RBAC role",
+)
+async def whoami(api_key_name: str = Depends(require_api_key)) -> dict[str, Any]:
+    """Identity + RBAC role of the calling key (viewer < analyst < admin).
+    Lets a client confirm what it's authorized for. Role is resolved from
+    RECUPERO_API_KEY_ROLES / RECUPERO_API_KEY_ADMINS; default is 'analyst'."""
+    return {"api_key_name": api_key_name, "role": role_for_key(api_key_name)}
 
 
 def _run_exposure_probe(

@@ -43,7 +43,9 @@ keep owning layer 3.
   **ScamSniffer** community blacklist (`fetch_candidate_scam_addresses`, v0.38
   — ~2.5k scam/drainer EVM addresses → `scam_drainer` candidates that promote
   into the high-risk DB at severity 3 / low confidence; community-sourced so
-  ALWAYS operator-reviewed, never auto-trusted).
+  ALWAYS operator-reviewed, never auto-trusted), and the **MyEtherWallet /
+  ethereum-lists darklist** (`fetch_candidate_mew_darklist`, v0.38 — ~715
+  community-reported phishing/scam EVM addresses with comments → scam_drainer).
   ADD MORE (same pattern — one allow-listed host + one fetcher):
   Blockscout label exports, Arkham/Breadcrumbs free tiers (ToS-permitting),
   community label sets (`ethereum-lists`, `0xScope` public, `walletlabels`),

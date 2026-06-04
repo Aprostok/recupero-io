@@ -767,6 +767,54 @@ def fetch_candidate_scam_addresses() -> list[CandidateLabel]:
     return out
 
 
+_MEW_DARKLIST_URL = (
+    "https://raw.githubusercontent.com/MyEtherWallet/ethereum-lists/master/"
+    "src/addresses/addresses-darklist.json"
+)
+
+
+def fetch_candidate_mew_darklist() -> list[CandidateLabel]:
+    """Harvest the MyEtherWallet / ethereum-lists darklist — community-reported
+    phishing / scam EVM addresses, each with a human comment (e.g. "XRP
+    phishing website … collects funds from malicious wallets"). → scam_drainer
+    candidates (chain=ethereum, EVM-only, lower-cased + deduped). LOW
+    confidence, operator-reviewed before reaching the high-risk DB. Best-effort;
+    never raises."""
+    body = _safe_http_get_json(_MEW_DARKLIST_URL, source_name="mew_darklist")
+    if not isinstance(body, list):
+        return []
+    out: list[CandidateLabel] = []
+    seen: set[str] = set()
+    for row in body:
+        if not isinstance(row, dict):
+            continue
+        addr = row.get("address") or ""
+        if not (isinstance(addr, str) and addr.startswith("0x") and len(addr) == 42):
+            continue
+        key = addr.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        comment = str(row.get("comment") or "").strip()
+        name = (
+            f"MEW darklist: {comment}"[:200] if comment
+            else "MEW darklist scam/phishing address"
+        )
+        try:
+            out.append(CandidateLabel(
+                address=key,
+                chain="ethereum",
+                proposed_category="scam_drainer",
+                proposed_name=name,
+                source="mew_darklist",
+                source_url=f"https://etherscan.io/address/{addr}",
+                raw_metadata={"comment": comment, "date": row.get("date")},
+            ))
+        except ValueError as exc:
+            log.debug("label auto-ingest: skipping malformed MEW darklist row: %s", exc)
+    return out
+
+
 def fetch_candidate_etherscan_label_dumps() -> list[CandidateLabel]:
     """Harvest exchange + bridge candidates from the brianleect/etherscan-labels
     OSS dumps across 6 EVM chains. Maps the dump's label tokens to our category
@@ -1270,12 +1318,14 @@ def run_daily_pull() -> dict[str, int]:
     ton = fetch_candidate_ton_entities()
     oss = fetch_candidate_etherscan_label_dumps()
     scam = fetch_candidate_scam_addresses()
-    total = bridges + cex + ton + oss + scam
+    mew = fetch_candidate_mew_darklist()
+    total = bridges + cex + ton + oss + scam + mew
     persisted = persist_candidates(total)
     log.info(
         "label auto-ingest: daily pull done — bridges=%d cex=%d ton=%d "
-        "oss=%d scam=%d persisted=%d",
-        len(bridges), len(cex), len(ton), len(oss), len(scam), persisted,
+        "oss=%d scam=%d mew=%d persisted=%d",
+        len(bridges), len(cex), len(ton), len(oss), len(scam), len(mew),
+        persisted,
     )
     return {
         "bridges_seen": len(bridges),
@@ -1283,6 +1333,7 @@ def run_daily_pull() -> dict[str, int]:
         "ton_seen": len(ton),
         "oss_seen": len(oss),
         "scam_seen": len(scam),
+        "mew_seen": len(mew),
         "persisted": persisted,
     }
 
@@ -1343,6 +1394,7 @@ __all__ = (
     "fetch_candidate_ton_entities",
     "fetch_candidate_etherscan_label_dumps",
     "fetch_candidate_scam_addresses",
+    "fetch_candidate_mew_darklist",
     "persist_candidates",
     "promote_candidate",
     "reject_candidate",

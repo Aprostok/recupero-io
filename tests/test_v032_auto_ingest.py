@@ -27,6 +27,7 @@ from recupero.labels.auto_ingest import (
     CandidateLabel,
     fetch_candidate_bridges,
     fetch_candidate_etherscan_label_dumps,
+    fetch_candidate_mew_darklist,
     fetch_candidate_scam_addresses,
     fetch_candidate_ton_entities,
     persist_candidates,
@@ -583,6 +584,10 @@ def test_rerunning_cron_with_no_new_data_is_a_noop(
     respx.get(url__regex=r"https://raw\.githubusercontent\.com/scamsniffer/.*").mock(
         return_value=httpx.Response(200, json=[]),
     )
+    # v0.38: MEW/ethereum-lists darklist — empty so the no-op assertion holds.
+    respx.get(url__regex=r"https://raw\.githubusercontent\.com/MyEtherWallet/.*").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
 
     # First run — one INSERT returns a row.
     fake_db.rows_for_fetchone = [(1,)]
@@ -853,6 +858,42 @@ def test_load_high_risk_db_reads_scam_drainers_seed(tmp_path) -> None:
     assert e.risk_category == "scam_drainer"
     assert e.severity == 3
     assert e.confidence == "low"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEW / ethereum-lists darklist → scam_drainer candidates — v0.38
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MEW_URL = (
+    "https://raw.githubusercontent.com/MyEtherWallet/ethereum-lists/master/"
+    "src/addresses/addresses-darklist.json"
+)
+
+
+@respx.mock
+def test_mew_darklist_produces_scam_candidates_with_comment() -> None:
+    respx.get(_MEW_URL).mock(return_value=httpx.Response(200, json=[
+        {"address": "0x09750AD360fdb7a2EE23669c4503c974D86d8694",
+         "comment": "XRP phishing website", "date": "2020-11-17"},
+        {"address": "0x09750ad360fdb7a2ee23669c4503c974d86d8694",
+         "comment": "dup case", "date": "2020-11-18"},   # dedup
+        {"address": "bad", "comment": "skip"},            # non-EVM → skip
+    ]))
+    out = fetch_candidate_mew_darklist()
+    assert len(out) == 1
+    c = out[0]
+    assert c.chain == "ethereum"
+    assert c.proposed_category == "scam_drainer"
+    assert c.proposed_confidence == "low"
+    assert c.source == "mew_darklist"
+    assert c.address == "0x09750ad360fdb7a2ee23669c4503c974d86d8694"
+    assert "XRP phishing" in c.proposed_name
+
+
+@respx.mock
+def test_mew_darklist_unreachable_degrades_to_empty() -> None:
+    respx.get(_MEW_URL).mock(return_value=httpx.Response(500))
+    assert fetch_candidate_mew_darklist() == []
 
 
 if __name__ == "__main__":  # pragma: no cover

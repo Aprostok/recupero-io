@@ -26,6 +26,7 @@ from recupero.labels import auto_ingest
 from recupero.labels.auto_ingest import (
     CandidateLabel,
     fetch_candidate_bridges,
+    fetch_candidate_ton_entities,
     persist_candidates,
 )
 from recupero.labels.confidence_decay import (
@@ -568,6 +569,10 @@ def test_rerunning_cron_with_no_new_data_is_a_noop(
     respx.get(
         "https://public-api.solscan.io/account/labels?category=exchange"
     ).mock(return_value=httpx.Response(200, json=[]))
+    # v0.38: TON entity harvest (tonapi) — empty so the no-op assertion holds.
+    respx.get("https://tonapi.io/v2/accounts/search").mock(
+        return_value=httpx.Response(200, json={"addresses": []}),
+    )
 
     # First run — one INSERT returns a row.
     fake_db.rows_for_fetchone = [(1,)]
@@ -657,6 +662,58 @@ def test_label_store_lookup_returns_decayed_confidence(
     assert result is not None
     # Stored was 'high'; effective is 'medium' after 200d decay.
     assert result.confidence == "medium"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TON entity harvest (tonapi.io) — v0.38 (#1, more-data/TON)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_BINANCE_TON_RAW = "0:f99b14600ae44d2f12b178e8c6eabd78892ae82c5e45b6898f9deb7eb203f9c4"
+
+
+@respx.mock
+def test_tonapi_search_produces_ton_exchange_candidate() -> None:
+    """tonapi name-search → TON exchange_hot_wallet candidate, address
+    canonicalized to raw, low confidence, source tonapi_search."""
+    # One route matches all per-query calls; returns a Binance-named TON addr.
+    respx.get("https://tonapi.io/v2/accounts/search").mock(
+        return_value=httpx.Response(200, json={"addresses": [
+            {"address": _BINANCE_TON_RAW, "name": "Binance cold account"},
+        ]}),
+    )
+    out = fetch_candidate_ton_entities()
+    # Only the "Binance" query's results pass the name-precision filter; dedup
+    # collapses the 8 identical responses to one candidate.
+    assert len(out) == 1
+    c = out[0]
+    assert c.chain == "ton"
+    assert c.proposed_category == "exchange_hot_wallet"
+    assert c.proposed_confidence == "low"
+    assert c.source == "tonapi_search"
+    assert c.address == _BINANCE_TON_RAW  # canonical raw, lowercased
+    assert "Binance" in c.proposed_name
+
+
+@respx.mock
+def test_tonapi_precision_filters_unrelated_names() -> None:
+    """A result whose tonapi name doesn't contain the query term is dropped
+    (precision guard against fuzzy matches reaching the review queue)."""
+    respx.get("https://tonapi.io/v2/accounts/search").mock(
+        return_value=httpx.Response(200, json={"addresses": [
+            {"address": _BINANCE_TON_RAW, "name": "Some random wallet"},
+        ]}),
+    )
+    assert fetch_candidate_ton_entities() == []
+
+
+@respx.mock
+def test_tonapi_skips_unnormalizable_address() -> None:
+    respx.get("https://tonapi.io/v2/accounts/search").mock(
+        return_value=httpx.Response(200, json={"addresses": [
+            {"address": "not-a-ton-address", "name": "Binance"},
+        ]}),
+    )
+    assert fetch_candidate_ton_entities() == []
 
 
 if __name__ == "__main__":  # pragma: no cover

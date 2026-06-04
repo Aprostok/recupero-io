@@ -338,6 +338,10 @@ _AUTO_INGEST_ALLOWED_HOSTS = frozenset({
     "public-api.solscan.io",
     "api.solscan.io",
     "api.etherscan.io",
+    # v0.38 (#1, more-data/TON): tonapi.io curated TON account metadata + name
+    # search — the free attribution source for TON entities (CEX wallets,
+    # services). Names are tonapi-curated, not user memos.
+    "tonapi.io",
 })
 
 # Hard cap on the response body. Realistic upstream JSON is <2MB; the
@@ -669,6 +673,67 @@ def fetch_candidate_cex_deposits() -> list[CandidateLabel]:
                     exc,
                 )
 
+    return out
+
+
+# Major centralized exchanges known to operate on TON. tonapi resolves each
+# name to its curated TON account(s); we accept only results whose tonapi name
+# still contains the query term (precision against unrelated matches). The
+# operator verifies each candidate before promotion — these land low/pending.
+_TON_EXCHANGE_QUERIES: tuple[str, ...] = (
+    "Binance", "OKX", "Bybit", "Bitget", "MEXC", "Gate", "KuCoin", "HTX",
+)
+
+
+def fetch_candidate_ton_entities() -> list[CandidateLabel]:
+    """Pull candidate TON exchange addresses from tonapi.io's curated name
+    search (``/v2/accounts/search``). tonapi names are maintainer-curated (not
+    user memos), so a name match is a defensible LOW-confidence candidate for
+    operator review. Addresses canonicalized to TON raw form; non-TON / un-
+    normalizable results skipped. Best-effort — never raises."""
+    from recupero.chains.ton.address import normalize_ton_address
+
+    out: list[CandidateLabel] = []
+    seen: set[str] = set()
+    for query in _TON_EXCHANGE_QUERIES:
+        body = _safe_http_get_json(
+            f"https://tonapi.io/v2/accounts/search?name={query}",
+            source_name=f"tonapi_search:{query}",
+        )
+        if not isinstance(body, dict):
+            continue
+        for row in body.get("addresses") or []:
+            if not isinstance(row, dict):
+                continue
+            address = row.get("address") or ""
+            name = row.get("name") or ""
+            if not (isinstance(address, str) and address):
+                continue
+            # Precision: tonapi's curated name must still reference the query —
+            # drops unrelated fuzzy matches before they reach the review queue.
+            if query.lower() not in str(name).lower():
+                continue
+            try:
+                canonical = normalize_ton_address(address)
+            except ValueError:
+                continue
+            if canonical in seen:
+                continue
+            seen.add(canonical)
+            try:
+                out.append(CandidateLabel(
+                    address=canonical,
+                    chain="ton",
+                    proposed_category="exchange_hot_wallet",
+                    proposed_name=str(name)[:200],
+                    source="tonapi_search",
+                    source_url=f"https://tonviewer.com/{address}",
+                    raw_metadata={"tonapi_raw": row, "query": query},
+                ))
+            except ValueError as exc:
+                log.debug(
+                    "label auto-ingest: skipping malformed tonapi row: %s", exc,
+                )
     return out
 
 
@@ -1068,15 +1133,17 @@ def run_daily_pull() -> dict[str, int]:
     log.info("label auto-ingest: starting daily pull")
     bridges = fetch_candidate_bridges()
     cex = fetch_candidate_cex_deposits()
-    total = bridges + cex
+    ton = fetch_candidate_ton_entities()
+    total = bridges + cex + ton
     persisted = persist_candidates(total)
     log.info(
-        "label auto-ingest: daily pull done — bridges=%d cex=%d persisted=%d",
-        len(bridges), len(cex), persisted,
+        "label auto-ingest: daily pull done — bridges=%d cex=%d ton=%d persisted=%d",
+        len(bridges), len(cex), len(ton), persisted,
     )
     return {
         "bridges_seen": len(bridges),
         "cex_seen": len(cex),
+        "ton_seen": len(ton),
         "persisted": persisted,
     }
 
@@ -1134,6 +1201,7 @@ __all__ = (
     "CandidateLabel",
     "fetch_candidate_bridges",
     "fetch_candidate_cex_deposits",
+    "fetch_candidate_ton_entities",
     "persist_candidates",
     "promote_candidate",
     "reject_candidate",

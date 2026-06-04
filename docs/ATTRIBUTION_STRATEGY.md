@@ -35,7 +35,9 @@ keep owning layer 3.
 ## 3. Acquisition — build vs buy, in priority order
 
 **Tier A — free / low-cost, harvest now (extend the existing pipeline):**
-- Public tag APIs already wired: DeFiLlama, Tronscan, Solscan, Etherscan. ADD:
+- Public tag APIs already wired: DeFiLlama, Tronscan, Solscan, Etherscan, and
+  **tonapi.io** (TON entity name-search → `fetch_candidate_ton_entities`, v0.38).
+  ADD:
   Blockscout label exports, Arkham/Breadcrumbs free tiers (ToS-permitting),
   community label sets (`ethereum-lists`, `0xScope` public, `walletlabels`),
   per-exchange published deposit/hot-wallet disclosures, OFAC/OpenSanctions

@@ -825,8 +825,9 @@ def _job_label_auto_ingest() -> None:
     from recupero.labels import auto_ingest
     result = auto_ingest.run_daily_pull()
     log.info(
-        "cron: label auto-ingest done — bridges=%d cex=%d persisted=%d",
-        result["bridges_seen"], result["cex_seen"], result["persisted"],
+        "cron: label auto-ingest done — bridges=%d cex=%d ton=%d persisted=%d",
+        result["bridges_seen"], result["cex_seen"],
+        result.get("ton_seen", 0), result["persisted"],
     )
 
 

@@ -184,6 +184,8 @@ for _mod, _attr in (
     ("recupero.api.recovery_alerts_api", "router"),
     # v0.35.32: D4 incident-response plans (derived from persisted D6 alerts).
     ("recupero.api.incident_plans_api", "router"),
+    # v0.38 (enterprise/SOC 2): append-only audit-log read endpoint.
+    ("recupero.api.audit_api", "router"),
 ):
     try:
         _m = __import__(_mod, fromlist=[_attr])

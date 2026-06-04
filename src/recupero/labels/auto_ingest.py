@@ -1223,6 +1223,24 @@ def promote_candidate(
                 candidate_id,
             )
 
+    # SOC 2 audit (best-effort, never breaks the promote): record who promoted
+    # which candidate into the trusted label set.
+    try:
+        from recupero.audit import record_audit_event
+        record_audit_event(
+            dsn, actor=reviewer, action="label.promote",
+            target=str(row.get("address")), target_kind="label_candidate",
+            metadata={
+                "candidate_id": candidate_id,
+                "category": row.get("proposed_category"),
+                "chain": row.get("chain"),
+                "source": row.get("source"),
+                "seed_file": str(seed_path.name),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return {**row, "promoted_to": str(seed_path), "promoted_entry": new_entry}
 
 
@@ -1271,6 +1289,23 @@ def reject_candidate(
             f"candidate {candidate_id} could not be marked rejected "
             "(lost race with another reviewer)"
         )
+
+    # SOC 2 audit (best-effort, never breaks the reject).
+    try:
+        from recupero.audit import record_audit_event
+        record_audit_event(
+            dsn, actor=reviewer, action="label.reject",
+            target=str(row.get("address")), target_kind="label_candidate",
+            metadata={
+                "candidate_id": candidate_id,
+                "category": row.get("proposed_category"),
+                "chain": row.get("chain"),
+                "reason": reason[:500],
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
     return {**row, "rejection_reason": reason}
 
 

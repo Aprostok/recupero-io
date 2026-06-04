@@ -26,6 +26,7 @@ from recupero.labels import auto_ingest
 from recupero.labels.auto_ingest import (
     CandidateLabel,
     fetch_candidate_bridges,
+    fetch_candidate_etherscan_label_dumps,
     fetch_candidate_ton_entities,
     persist_candidates,
 )
@@ -573,6 +574,10 @@ def test_rerunning_cron_with_no_new_data_is_a_noop(
     respx.get("https://tonapi.io/v2/accounts/search").mock(
         return_value=httpx.Response(200, json={"addresses": []}),
     )
+    # v0.38: OSS label dumps (brianleect, 6 EVM chains) — empty so it's a no-op.
+    respx.get(url__regex=r"https://raw\.githubusercontent\.com/brianleect/.*").mock(
+        return_value=httpx.Response(200, json={}),
+    )
 
     # First run — one INSERT returns a row.
     fake_db.rows_for_fetchone = [(1,)]
@@ -714,6 +719,70 @@ def test_tonapi_skips_unnormalizable_address() -> None:
         ]}),
     )
     assert fetch_candidate_ton_entities() == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OSS label-dump harvest (brianleect/etherscan-labels, 6 EVM chains) — v0.38
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _empty_oss_dumps_except(explorer: str, payload: dict) -> None:
+    """Mock all 6 brianleect dump URLs: `payload` for `explorer`, {} for rest."""
+    for ex in ("etherscan", "bscscan", "polygonscan", "arbiscan", "optimism", "ftmscan"):
+        url = (
+            "https://raw.githubusercontent.com/brianleect/etherscan-labels/main/"
+            f"data/{ex}/combined/combinedAllLabels.json"
+        )
+        respx.get(url).mock(return_value=httpx.Response(
+            200, json=payload if ex == explorer else {}))
+
+
+@respx.mock
+def test_oss_dump_maps_exchange_and_bridge_labels() -> None:
+    """An exchange-name label → exchange_hot_wallet; a 'deposit' name →
+    exchange_deposit; an exact 'bridge' label → bridge. EVM addr lower-cased."""
+    _empty_oss_dumps_except("etherscan", {
+        "0xAAA0000000000000000000000000000000000001": {"name": "Binance 35", "labels": ["binance"]},
+        "0xBBB0000000000000000000000000000000000002": {"name": "Huobi: Deposit", "labels": ["huobi"]},
+        "0xCCC0000000000000000000000000000000000003": {"name": "Hop Protocol: WBTC Bridge", "labels": ["bridge", "hop-protocol"]},
+        "0xDDD0000000000000000000000000000000000004": {"name": "Some Token", "labels": ["bridged-token"]},  # NOT a bridge
+        "0xEEE0000000000000000000000000000000000005": {"name": "Sushi", "labels": ["sushiswap"]},  # skipped
+    })
+    out = fetch_candidate_etherscan_label_dumps()
+    by_addr = {c.address: c for c in out}
+    assert by_addr["0xaaa0000000000000000000000000000000000001"].proposed_category == "exchange_hot_wallet"
+    assert by_addr["0xbbb0000000000000000000000000000000000002"].proposed_category == "exchange_deposit"
+    assert by_addr["0xccc0000000000000000000000000000000000003"].proposed_category == "bridge"
+    # bridged-token (not exact 'bridge') and sushiswap are skipped
+    assert "0xddd0000000000000000000000000000000000004" not in by_addr
+    assert "0xeee0000000000000000000000000000000000005" not in by_addr
+    for c in out:
+        assert c.chain == "ethereum"
+        assert c.source == "etherscan_labels_oss"
+        assert c.proposed_confidence == "low"
+
+
+@respx.mock
+def test_oss_dump_chain_mapping_for_non_eth() -> None:
+    """A bscscan dump entry is emitted with chain='bsc'."""
+    _empty_oss_dumps_except("bscscan", {
+        "0xfff0000000000000000000000000000000000009": {"name": "Binance Hot", "labels": ["binance"]},
+    })
+    out = fetch_candidate_etherscan_label_dumps()
+    assert len(out) == 1
+    assert out[0].chain == "bsc"
+    assert out[0].address == "0xfff0000000000000000000000000000000000009"
+
+
+@respx.mock
+def test_oss_dump_unreachable_degrades_to_empty() -> None:
+    for ex in ("etherscan", "bscscan", "polygonscan", "arbiscan", "optimism", "ftmscan"):
+        url = (
+            "https://raw.githubusercontent.com/brianleect/etherscan-labels/main/"
+            f"data/{ex}/combined/combinedAllLabels.json"
+        )
+        respx.get(url).mock(return_value=httpx.Response(503))
+    assert fetch_candidate_etherscan_label_dumps() == []
 
 
 if __name__ == "__main__":  # pragma: no cover

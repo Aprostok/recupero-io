@@ -342,6 +342,9 @@ _AUTO_INGEST_ALLOWED_HOSTS = frozenset({
     # search — the free attribution source for TON entities (CEX wallets,
     # services). Names are tonapi-curated, not user memos.
     "tonapi.io",
+    # v0.38 (#1, more-sources): brianleect/etherscan-labels — a large free OSS
+    # dump of explorer labels across 6 EVM chains, served as static JSON.
+    "raw.githubusercontent.com",
 })
 
 # Hard cap on the response body. Realistic upstream JSON is <2MB; the
@@ -683,6 +686,78 @@ def fetch_candidate_cex_deposits() -> list[CandidateLabel]:
 _TON_EXCHANGE_QUERIES: tuple[str, ...] = (
     "Binance", "OKX", "Bybit", "Bitget", "MEXC", "Gate", "KuCoin", "HTX",
 )
+
+
+# brianleect/etherscan-labels — combined explorer-label dumps per EVM chain.
+# {explorer_path: (chain, address_explorer_prefix)}. Each is a static JSON dict
+# keyed by address → {"name", "labels": [...]}. Free, no key, GitHub-hosted.
+_OSS_LABEL_DUMPS: dict[str, tuple[str, str]] = {
+    "etherscan":   ("ethereum", "https://etherscan.io/address/"),
+    "bscscan":     ("bsc",      "https://bscscan.com/address/"),
+    "polygonscan": ("polygon",  "https://polygonscan.com/address/"),
+    "arbiscan":    ("arbitrum", "https://arbiscan.io/address/"),
+    "optimism":    ("optimism", "https://optimistic.etherscan.io/address/"),
+    "ftmscan":     ("fantom",   "https://ftmscan.com/address/"),
+}
+_OSS_DUMP_URL = (
+    "https://raw.githubusercontent.com/brianleect/etherscan-labels/main/"
+    "data/{explorer}/combined/combinedAllLabels.json"
+)
+# Exact label tokens that mark a centralized-exchange address in the dump.
+_OSS_EXCHANGE_LABELS = frozenset({
+    "binance", "coinbase", "kraken", "kucoin", "okx", "okex", "bybit",
+    "bitfinex", "huobi", "htx", "gate", "gate.io", "crypto-com", "bitget",
+    "mexc", "gemini", "bitstamp", "poloniex", "upbit", "bithumb",
+    "exchange", "cex", "centralized-exchange",
+})
+
+
+def fetch_candidate_etherscan_label_dumps() -> list[CandidateLabel]:
+    """Harvest exchange + bridge candidates from the brianleect/etherscan-labels
+    OSS dumps across 6 EVM chains. Maps the dump's label tokens to our category
+    set: an exact ``bridge`` label → bridge; an exchange-name / ``cex`` /
+    ``exchange`` label → exchange_hot_wallet (or exchange_deposit when the name
+    says "deposit"). Anything else is skipped — we only harvest the two
+    categories the promote pipeline supports. EVM addresses lower-cased
+    (canonical). Best-effort; never raises."""
+    out: list[CandidateLabel] = []
+    for explorer, (chain, addr_prefix) in _OSS_LABEL_DUMPS.items():
+        body = _safe_http_get_json(
+            _OSS_DUMP_URL.format(explorer=explorer),
+            source_name=f"etherscan_labels_oss:{explorer}",
+        )
+        if not isinstance(body, dict):
+            continue
+        for addr, v in body.items():
+            if not isinstance(addr, str) or not isinstance(v, dict):
+                continue
+            labels = {str(x).lower() for x in (v.get("labels") or [])}
+            name = str(v.get("name") or "").strip()
+            if labels & _OSS_EXCHANGE_LABELS:
+                category = (
+                    "exchange_deposit" if "deposit" in name.lower()
+                    else "exchange_hot_wallet"
+                )
+            elif "bridge" in labels:
+                category = "bridge"
+            else:
+                continue  # not an exchange/bridge label → skip
+            display = name or (sorted(labels)[0] if labels else "")
+            try:
+                out.append(CandidateLabel(
+                    address=addr.lower(),
+                    chain=chain,
+                    proposed_category=category,
+                    proposed_name=display[:200] or "(unnamed)",
+                    source="etherscan_labels_oss",
+                    source_url=f"{addr_prefix}{addr}",
+                    raw_metadata={"labels": sorted(labels), "explorer": explorer},
+                ))
+            except ValueError as exc:
+                log.debug(
+                    "label auto-ingest: skipping malformed OSS-dump row: %s", exc,
+                )
+    return out
 
 
 def fetch_candidate_ton_entities() -> list[CandidateLabel]:
@@ -1134,16 +1209,19 @@ def run_daily_pull() -> dict[str, int]:
     bridges = fetch_candidate_bridges()
     cex = fetch_candidate_cex_deposits()
     ton = fetch_candidate_ton_entities()
-    total = bridges + cex + ton
+    oss = fetch_candidate_etherscan_label_dumps()
+    total = bridges + cex + ton + oss
     persisted = persist_candidates(total)
     log.info(
-        "label auto-ingest: daily pull done — bridges=%d cex=%d ton=%d persisted=%d",
-        len(bridges), len(cex), len(ton), persisted,
+        "label auto-ingest: daily pull done — bridges=%d cex=%d ton=%d "
+        "oss=%d persisted=%d",
+        len(bridges), len(cex), len(ton), len(oss), persisted,
     )
     return {
         "bridges_seen": len(bridges),
         "cex_seen": len(cex),
         "ton_seen": len(ton),
+        "oss_seen": len(oss),
         "persisted": persisted,
     }
 
@@ -1202,6 +1280,7 @@ __all__ = (
     "fetch_candidate_bridges",
     "fetch_candidate_cex_deposits",
     "fetch_candidate_ton_entities",
+    "fetch_candidate_etherscan_label_dumps",
     "persist_candidates",
     "promote_candidate",
     "reject_candidate",

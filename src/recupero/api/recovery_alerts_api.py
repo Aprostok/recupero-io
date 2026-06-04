@@ -30,6 +30,7 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, status
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,81 @@ def get_recovery_alerts(
             "db_configured": True,
             "error": "recovery alerts unavailable",
         }
+
+
+class AlertCaseUpdate(BaseModel):
+    """Case-management transition (#10). Any subset of fields; unspecified
+    fields are left unchanged."""
+    status: str | None = Field(
+        None, description="open | acknowledged | in_progress | resolved | dismissed",
+    )
+    assignee: str | None = Field(None, max_length=200)
+    note: str | None = Field(None, max_length=4000)
+
+
+@router.patch(
+    "/{alert_id}",
+    summary=(
+        "Case-management update for one recovery alert — assign an owner, "
+        "transition status (open→acknowledged→in_progress→resolved/dismissed), "
+        "and/or attach a note. Admin-gated; audit-logged."
+    ),
+)
+def update_recovery_alert(
+    alert_id: int,
+    body: AlertCaseUpdate,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_admin_auth(x_recupero_admin_key)
+    dsn = (os.environ.get("SUPABASE_DB_URL", "") or "").strip()
+    if not dsn:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="case-management requires a database (SUPABASE_DB_URL)",
+        )
+    if body.status is None and body.assignee is None and body.note is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="no fields to update (provide status, assignee, and/or note)",
+        )
+
+    from recupero.monitoring.recovery_alerts_store import update_alert_case
+    try:
+        updated = update_alert_case(
+            dsn, alert_id,
+            status=body.status, assignee=body.assignee, note=body.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc),
+        ) from exc
+    except Exception as exc:  # noqa: BLE001
+        log.warning("update_recovery_alert: case update failed: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="case update failed",
+        ) from exc
+    if updated is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"recovery alert {alert_id} not found",
+        )
+
+    # SOC 2 audit (best-effort): record who changed the alert and how.
+    try:
+        from recupero.audit import record_audit_event
+        record_audit_event(
+            dsn, actor="admin", action="alert.update",
+            target=str(alert_id), target_kind="recovery_alert",
+            metadata={
+                "status": body.status, "assignee": body.assignee,
+                "note_set": body.note is not None,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return {"alert": updated, "updated": True}
 
 
 @router.get(

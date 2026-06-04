@@ -46,6 +46,15 @@ is (a) an independent validation/peer review of the method, and (b) accepted-in-
 court precedent + named experts — both of which accrue with real cases, like the
 attribution-data moat.
 
+## 2b. Engine / scale gaps (#7–10) — status
+
+| # | Gap | Status |
+|---|---|---|
+| **7** | Continuous chain-wide clustering + ML | Per-case clustering (co-spend/funding/multichain) + cross-case victim clustering (`cluster_builder`, address_observations) exist. **Persistent, ahead-of-case chain-wide clustering** (an address→cluster store accumulated continuously) is the next CODE build. ML/behavioral attribution is research-track. |
+| **8** | Own indexing infrastructure | **INFRA, not code** — running your own full nodes/indexers for sub-second high-QPS reads. Today recupero reads third-party explorer APIs (rate-limited). Codeable PROXY = a fetched-data cache (the priced-data cache already exists; a transfer/tx cache would cut explorer dependence) — but true own-indexing is an ops program (nodes, storage, pipelines), not a feature. |
+| **9** | Chain breadth | ~13 functional adapters (EVM family + SOL/TRON/BTC/TON). Each new chain (XRP/Stellar/Sui/Aptos/Cardano/Cosmos-zones) = a full adapter + **live-fixture verification** (the no-fabrication rule). Bounded but per-chain; cosmos adapter exists but is incomplete (unwired in `for_chain`). |
+| **10** | KYT case-management | ✅ **Shipped (v0.38):** assign/transition/note lifecycle on the recovery-alerts queue (`open→acknowledged→in_progress→resolved/dismissed`), `PATCH /v1/recovery-alerts/{id}`, every transition audit-logged. migration 035 + `update_alert_case`. |
+
 ## 3. Honest split of the non-data gaps
 
 - **Code can close:** audit logging (done), RBAC/SSO, status/SLA surface,

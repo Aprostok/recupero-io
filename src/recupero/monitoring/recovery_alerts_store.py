@@ -25,7 +25,13 @@ from recupero._common import db_connect
 log = logging.getLogger(__name__)
 
 _ALLOWED_SEVERITY = ("critical", "high")
-_ALLOWED_STATUS = ("open", "acknowledged")
+# v0.38 #10: widened to a case-management lifecycle. 'open'/'acknowledged' are
+# the original D6 states; the rest are operator triage transitions.
+_ALLOWED_STATUS = (
+    "open", "acknowledged", "in_progress", "resolved", "dismissed",
+)
+# Statuses an operator may transition an alert TO via the case-update path.
+_ASSIGNABLE_STATUS = frozenset(_ALLOWED_STATUS)
 
 
 def _alert_to_row(alert: Any) -> dict[str, Any]:
@@ -128,7 +134,8 @@ def list_recent_alerts(
         sql = (
             "SELECT id, created_at, tick_started_at, address, chain, severity, "
             "kind, delta_usd, dormant_days, role, label_name, message, "
-            "recommended_action, status FROM public.recovery_alerts"
+            "recommended_action, status, assignee, resolution_note, "
+            "status_changed_at FROM public.recovery_alerts"
             + where_sql
             + " ORDER BY created_at DESC, id DESC LIMIT %s"
         )
@@ -137,7 +144,7 @@ def list_recent_alerts(
         out: list[dict[str, Any]] = []
         for row in cur.fetchall():
             d = dict(zip(cols, row, strict=False))
-            for k in ("created_at", "tick_started_at"):
+            for k in ("created_at", "tick_started_at", "status_changed_at"):
                 v = d.get(k)
                 if v is not None and hasattr(v, "isoformat"):
                     d[k] = v.isoformat()
@@ -145,4 +152,54 @@ def list_recent_alerts(
         return out
 
 
-__all__ = ("persist_alerts", "list_recent_alerts")
+def update_alert_case(
+    dsn: str,
+    alert_id: int,
+    *,
+    status: str | None = None,
+    assignee: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any] | None:
+    """Case-management update (#10): set any of status / assignee / note on one
+    alert. Returns the updated row, or ``None`` if no such alert. Raises
+    ValueError on an invalid status. ``status_changed_at`` is bumped only when a
+    status is supplied.
+
+    A single CONSTANT UPDATE using COALESCE leaves unspecified columns
+    unchanged — inline-SQL-audit safe (no runtime SET-clause assembly; all
+    values bound %s params)."""
+    if status is not None and status not in _ASSIGNABLE_STATUS:
+        raise ValueError(
+            f"invalid status {status!r}; allowed: {sorted(_ASSIGNABLE_STATUS)}"
+        )
+    try:
+        alert_id = int(alert_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid alert_id {alert_id!r}") from exc
+
+    note_capped = note[:4000] if isinstance(note, str) else None
+
+    with db_connect(dsn, connect_timeout=5) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE public.recovery_alerts
+               SET status = COALESCE(%s, status),
+                   assignee = COALESCE(%s, assignee),
+                   resolution_note = COALESCE(%s, resolution_note),
+                   status_changed_at = CASE
+                       WHEN %s IS NOT NULL THEN now() ELSE status_changed_at END
+             WHERE id = %s
+            RETURNING id, address, chain, severity, kind, status,
+                      assignee, resolution_note
+            """,
+            (status, assignee, note_capped, status, alert_id),
+        )
+        row = cur.fetchone()
+    if row is None:
+        return None
+    cols = ("id", "address", "chain", "severity", "kind", "status",
+            "assignee", "resolution_note")
+    return dict(zip(cols, row, strict=False))
+
+
+__all__ = ("persist_alerts", "list_recent_alerts", "update_alert_case")

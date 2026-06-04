@@ -27,6 +27,7 @@ from recupero.labels.auto_ingest import (
     CandidateLabel,
     fetch_candidate_bridges,
     fetch_candidate_etherscan_label_dumps,
+    fetch_candidate_scam_addresses,
     fetch_candidate_ton_entities,
     persist_candidates,
 )
@@ -578,6 +579,10 @@ def test_rerunning_cron_with_no_new_data_is_a_noop(
     respx.get(url__regex=r"https://raw\.githubusercontent\.com/brianleect/.*").mock(
         return_value=httpx.Response(200, json={}),
     )
+    # v0.38: ScamSniffer blacklist — empty so the no-op assertion holds.
+    respx.get(url__regex=r"https://raw\.githubusercontent\.com/scamsniffer/.*").mock(
+        return_value=httpx.Response(200, json=[]),
+    )
 
     # First run — one INSERT returns a row.
     fake_db.rows_for_fetchone = [(1,)]
@@ -783,6 +788,71 @@ def test_oss_dump_unreachable_degrades_to_empty() -> None:
         )
         respx.get(url).mock(return_value=httpx.Response(503))
     assert fetch_candidate_etherscan_label_dumps() == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ScamSniffer scam/drainer harvest → scam_drainer candidates — v0.38
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SCAMSNIFFER_URL = (
+    "https://raw.githubusercontent.com/scamsniffer/scam-database/main/"
+    "blacklist/address.json"
+)
+
+
+@respx.mock
+def test_scamsniffer_blacklist_produces_scam_candidates() -> None:
+    """Flat EVM-address list → scam_drainer candidates, chain=ethereum, low
+    confidence, lower-cased + deduped; non-EVM entries skipped."""
+    respx.get(_SCAMSNIFFER_URL).mock(return_value=httpx.Response(200, json=[
+        "0x101Ce0ceDD142F199C9eF61739AE59b6611A0Fc0",
+        "0x101ce0cedd142f199c9ef61739ae59b6611a0fc0",  # dup (case) → collapsed
+        "not-an-address",                               # skipped
+        "bc1qsomethingbtc",                             # non-EVM → skipped
+    ]))
+    out = fetch_candidate_scam_addresses()
+    assert len(out) == 1
+    c = out[0]
+    assert c.chain == "ethereum"
+    assert c.proposed_category == "scam_drainer"
+    assert c.proposed_confidence == "low"
+    assert c.source == "scamsniffer_blacklist"
+    assert c.address == "0x101ce0cedd142f199c9ef61739ae59b6611a0fc0"
+
+
+@respx.mock
+def test_scamsniffer_unreachable_degrades_to_empty() -> None:
+    respx.get(_SCAMSNIFFER_URL).mock(return_value=httpx.Response(503))
+    assert fetch_candidate_scam_addresses() == []
+
+
+@respx.mock
+def test_scamsniffer_caps_per_run() -> None:
+    from recupero.labels.auto_ingest import _SCAM_MAX_PER_RUN
+    many = ["0x" + f"{i:040x}" for i in range(_SCAM_MAX_PER_RUN + 50)]
+    respx.get(_SCAMSNIFFER_URL).mock(return_value=httpx.Response(200, json=many))
+    out = fetch_candidate_scam_addresses()
+    assert len(out) == _SCAM_MAX_PER_RUN
+
+
+def test_load_high_risk_db_reads_scam_drainers_seed(tmp_path) -> None:
+    """A promoted scam entry (generic `category` shape) loads as a severity-3,
+    low-confidence scam_drainer HighRiskEntry."""
+    import json as _json
+
+    from recupero.trace.risk_scoring import load_high_risk_db
+    seed = tmp_path / "scam.json"
+    addr = "0x" + "ab" * 20
+    seed.write_text(_json.dumps([{
+        "address": addr, "name": "ScamSniffer-flagged", "category": "scam_drainer",
+        "confidence": "low", "chain": "ethereum",
+    }]))
+    db = load_high_risk_db(scam_drainers_path=seed)
+    e = db.get(addr)
+    assert e is not None
+    assert e.risk_category == "scam_drainer"
+    assert e.severity == 3
+    assert e.confidence == "low"
 
 
 if __name__ == "__main__":  # pragma: no cover

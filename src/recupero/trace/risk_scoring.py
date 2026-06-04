@@ -98,6 +98,12 @@ _MIXERS_SEED_PATH = (
 _RANSOMWARE_SEED_PATH = (
     Path(__file__).parent.parent / "labels" / "seeds" / "ransomware.json"
 )
+# v0.38 (#1): community-flagged scam/drainer addresses promoted via the
+# auto_ingest review pipeline (ScamSniffer etc.). Flat JSON list; severity 3
+# (high-risk, below sanctioned); confidence low (community-sourced).
+_SCAM_DRAINERS_SEED_PATH = (
+    Path(__file__).parent.parent / "labels" / "seeds" / "scam_drainers.json"
+)
 
 
 @dataclass(frozen=True)
@@ -153,6 +159,7 @@ def load_high_risk_db(
     ransomware_path: Path | None = None,
     ofac_csv_path: Path | None = None,
     intl_sanctions_csv_path: Path | None = None,
+    scam_drainers_path: Path | None = None,
 ) -> dict[str, HighRiskEntry]:
     """Load high-risk address labels from THREE seed files.
 
@@ -388,6 +395,44 @@ def load_high_risk_db(
         log.debug("mixers seed not found at %s", mx_path)
     except Exception as exc:  # noqa: BLE001
         log.warning("mixers seed load failed: %s", exc)
+
+    # scam_drainers.json (v0.38) — community-flagged scam/drainer addresses
+    # promoted via the auto_ingest review pipeline. Loaded LAST + dupe-skipped
+    # so every curated / OFAC / sanctioned source outranks this weaker,
+    # community-sourced signal. Flat list; promoted entries carry `category`
+    # (not `risk_category`), so we map it. severity 3, confidence low.
+    sd_path = scam_drainers_path or _SCAM_DRAINERS_SEED_PATH
+    try:
+        raw = json.loads(sd_path.read_text(encoding="utf-8-sig"))
+        rows = raw if isinstance(raw, list) else raw.get("addresses", [])
+        for entry in rows:
+            if not isinstance(entry, dict):
+                continue
+            addr = entry.get("address")
+            if not isinstance(addr, str) or not addr.strip():
+                continue
+            key = _canonical_address_key(addr)
+            if not key or key in out:
+                continue  # curated / OFAC / sanctioned sources take precedence
+            try:
+                severity = int(entry.get("severity", 3))
+            except (TypeError, ValueError):
+                severity = 3
+            out[key] = HighRiskEntry(
+                address=key,
+                name=entry.get("name", "(scam/drainer)"),
+                risk_category=(
+                    entry.get("risk_category") or entry.get("category")
+                    or "scam_drainer"
+                ),
+                severity=severity,
+                notes=entry.get("notes"),
+                confidence=entry.get("confidence", "low"),
+            )
+    except FileNotFoundError:
+        log.debug("scam_drainers seed not found at %s", sd_path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("scam_drainers seed load failed: %s", exc)
 
     log.debug("loaded %d high-risk address labels", len(out))
     return out

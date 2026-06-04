@@ -81,6 +81,9 @@ _VALID_CATEGORIES = frozenset({
     "mixer", "sanctioned", "ofac", "custodian", "dex_pool",
     "lp_token", "stablecoin_issuer", "service_wallet",
     "psm_stable_swap",
+    # v0.38 (#1, more-sources): community-flagged scam/drainer addresses
+    # (ScamSniffer etc.) — promotes into the high-risk DB at severity 3.
+    "scam_drainer",
 })
 
 # Name charset: printable ASCII + extended Latin + common punctuation.
@@ -308,11 +311,12 @@ class CandidateLabel:
         if not self.chain or not isinstance(self.chain, str):
             raise ValueError("CandidateLabel.chain must be a non-empty string")
         if self.proposed_category not in (
-            "bridge", "exchange_hot_wallet", "exchange_deposit",
+            "bridge", "exchange_hot_wallet", "exchange_deposit", "scam_drainer",
         ):
             raise ValueError(
                 f"CandidateLabel.proposed_category {self.proposed_category!r} "
-                "must be one of bridge / exchange_hot_wallet / exchange_deposit"
+                "must be one of bridge / exchange_hot_wallet / exchange_deposit "
+                "/ scam_drainer"
             )
         if self.proposed_confidence not in ("low", "medium", "high"):
             raise ValueError(
@@ -712,6 +716,57 @@ _OSS_EXCHANGE_LABELS = frozenset({
 })
 
 
+_SCAMSNIFFER_URL = (
+    "https://raw.githubusercontent.com/scamsniffer/scam-database/main/"
+    "blacklist/address.json"
+)
+# Cap how many we surface per run so a 2.5k-address list doesn't swamp the
+# review queue in one go; the daily cap rotates through the rest over time.
+_SCAM_MAX_PER_RUN = 500
+
+
+def fetch_candidate_scam_addresses() -> list[CandidateLabel]:
+    """Harvest community-flagged scam / drainer addresses from ScamSniffer's
+    public blacklist (a flat JSON list of EVM addresses). Each → a
+    ``scam_drainer`` candidate (chain=ethereum; drainers reuse the same address
+    across EVM chains and the high-risk match is address-keyed / chain-agnostic).
+    LOW confidence, operator-reviewed before it ever reaches the high-risk DB —
+    community lists carry false positives, so this is never auto-trusted.
+    Best-effort; never raises."""
+    body = _safe_http_get_json(_SCAMSNIFFER_URL, source_name="scamsniffer_blacklist")
+    if not isinstance(body, list):
+        return []
+    out: list[CandidateLabel] = []
+    seen: set[str] = set()
+    for addr in body:
+        if not isinstance(addr, str):
+            continue
+        a = addr.strip()
+        # EVM only — ScamSniffer's address list is hex; skip anything else
+        # rather than guess a chain.
+        if not (a.startswith("0x") and len(a) == 42):
+            continue
+        key = a.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            out.append(CandidateLabel(
+                address=key,
+                chain="ethereum",
+                proposed_category="scam_drainer",
+                proposed_name="ScamSniffer-flagged scam/drainer address",
+                source="scamsniffer_blacklist",
+                source_url="https://scamsniffer.io/",
+                raw_metadata={"list": "scamsniffer/scam-database"},
+            ))
+        except ValueError as exc:
+            log.debug("label auto-ingest: skipping malformed ScamSniffer row: %s", exc)
+        if len(out) >= _SCAM_MAX_PER_RUN:
+            break
+    return out
+
+
 def fetch_candidate_etherscan_label_dumps() -> list[CandidateLabel]:
     """Harvest exchange + bridge candidates from the brianleect/etherscan-labels
     OSS dumps across 6 EVM chains. Maps the dump's label tokens to our category
@@ -910,6 +965,10 @@ _CATEGORY_TO_SEED_FILE = {
     "bridge": "bridges.json",
     "exchange_hot_wallet": "cex_deposits.json",
     "exchange_deposit": "cex_deposits.json",
+    # v0.38: promoted scam/drainer addresses land in a flat-list seed that
+    # load_high_risk_db reads (severity 3, low confidence). List-shaped so the
+    # generic _append_to_seed_file works (high_risk.json is a dict — can't).
+    "scam_drainer": "scam_drainers.json",
 }
 
 
@@ -1210,18 +1269,20 @@ def run_daily_pull() -> dict[str, int]:
     cex = fetch_candidate_cex_deposits()
     ton = fetch_candidate_ton_entities()
     oss = fetch_candidate_etherscan_label_dumps()
-    total = bridges + cex + ton + oss
+    scam = fetch_candidate_scam_addresses()
+    total = bridges + cex + ton + oss + scam
     persisted = persist_candidates(total)
     log.info(
         "label auto-ingest: daily pull done — bridges=%d cex=%d ton=%d "
-        "oss=%d persisted=%d",
-        len(bridges), len(cex), len(ton), len(oss), persisted,
+        "oss=%d scam=%d persisted=%d",
+        len(bridges), len(cex), len(ton), len(oss), len(scam), persisted,
     )
     return {
         "bridges_seen": len(bridges),
         "cex_seen": len(cex),
         "ton_seen": len(ton),
         "oss_seen": len(oss),
+        "scam_seen": len(scam),
         "persisted": persisted,
     }
 
@@ -1281,6 +1342,7 @@ __all__ = (
     "fetch_candidate_cex_deposits",
     "fetch_candidate_ton_entities",
     "fetch_candidate_etherscan_label_dumps",
+    "fetch_candidate_scam_addresses",
     "persist_candidates",
     "promote_candidate",
     "reject_candidate",

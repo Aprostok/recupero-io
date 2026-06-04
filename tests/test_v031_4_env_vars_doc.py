@@ -64,6 +64,7 @@ _ENV_PREFIXES = (
     "HELIUS_",
     "TRON_PRO_",
     "TONCENTER_",
+    "MISTTRACK_",
     "COINGECKO_",
     "ANTHROPIC_",
     "RESEND_",

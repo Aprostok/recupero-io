@@ -58,10 +58,31 @@ keep owning layer 3.
   the off-ramp directly and is the freeze unlock. This is relationship work, not
   code.
 
-**Tier B — paid data:** license an entity/attribution dataset (Chainalysis
-Kryptos, TRM, Elliptic, Merkle Science, Crystal, or a regional provider). Cost
-scales with coverage; negotiate a forensic/recovery-use license. This is the
-fastest way to jump layer-2 coverage by orders of magnitude.
+**Tier B — paid data (API-ingestable; verified 2026 deep-research):** all of
+the below expose a real programmatic API (not UI-only) and are wired-or-wireable
+through `labels/providers/`:
+
+| Vendor | API / shape | Coverage strength | Pricing / access |
+|---|---|---|---|
+| **MistTrack (SlowMist)** ⭐ | `openapi.misttrack.io/v1/{address_labels,risk_score,address_trace,counterparty}` — `label_type` ∈ exchange/defi/mixer/nft; auth `api_key`. **Wired** (`providers/misttrack.py`). | 400M+ addrs; best on **USDT-Tron + Asian CEX + scam**. | Self-serve. Dev API from **$20/yr** (usage); Basic $229 / Standard $689 / Compliance $2,069 per mo; $10/48h trial; free Light tier. *Lowest-friction start.* |
+| **Bitrace** ⭐ | `docs.bitrace.io` KYA/KYT — `getAddressEntity`, `getAddressRisk`, `getAddressCounterparties`, **`getAddressFreezeEvents`** (recovery-relevant). API key from aml.bitrace.io. | 1B+ labels; **Tron-first**, ETH/BTC/BSC; 20+ entity / 16 risk types. | Sales-contact; embeds risk engine in internal systems. Query-oriented. |
+| **TRM Labs** | **BLOCKINT API** (addresses→entities, risk, 100+ chains, 200M+ assets). Plus a **free Sanctions-Screening REST API** (no-key 100/day → 100k/day with free key). | Broadest multi-chain + risk. | BLOCKINT enterprise, no public price, likely KYB-gated; sanctions API free. |
+| **Arkham** | `intel.arkm.com/api` — Addresses/Entities/Labels + custom labels; usage/credit-priced. | Broad multi-chain; **Tron only ~57%** (weakest for our profile). | Credit-based base tier; enterprise ~$50k+/yr, application-gated. |
+| **Allium** | REST + Kafka/PubSub/SNS streaming, 20–150+ chains. | Raw on-chain **data infra**, NOT forensic entity attribution. | Enterprise. Use as a data backbone, not a label source. |
+
+**⚠️ The dominant unresolved term across ALL vendors: redistribution + litigation
+use.** No public page confirms the right to embed vendor labels inside the
+buyer's own deliverables (SAR / exhibit packs) or expert-witness/litigation use.
+This MUST be settled in the signed contract before any vendor label enters a
+client-facing forensic product. (Refuted in research: Nansen's API does not
+clearly expose its label dataset; Bitquery is raw data, not attribution.)
+
+**Recommended access order:** (1) **MistTrack** Dev API ($20/yr, self-serve) →
+set `MISTTRACK_API_KEY`, the `providers/misttrack.py` enrichment activates. (2)
+**Bitrace** for Tron freeze-event + entity depth (sales). (3) **TRM** free
+sanctions API now; evaluate BLOCKINT if budget. (4) **Arkham** for broad
+multi-chain custom labels. In every case, get redistribution/litigation rights
+in writing.
 
 **Tier C — intelligence/OSINT:** scam-report aggregators (Chainabuse, IC3
 referrals, ScamSniffer), darknet/forum monitoring, victim-reported deposit

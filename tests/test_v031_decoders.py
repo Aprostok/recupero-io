@@ -116,7 +116,7 @@ def test_connext_xcall_decodes_optimism() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "optimism"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "xcall"
 
 
@@ -220,7 +220,7 @@ def test_v0_34_decoders_reject_nonaligned_recipient_slot() -> None:
     assert v3_bad.destination_address is None            # but no fabrication
     assert v3_bad.confidence != "high"
     assert v3_good.destination_address == "0x" + "a" * 40
-    assert v3_good.confidence == "high"
+    assert v3_good.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
     # Across legacy deposit: recipient = slot 0; destinationChainId = slot 3.
     def _across_legacy(recip: str) -> BridgeDecodeResult:
@@ -247,7 +247,7 @@ def test_v0_34_decoders_reject_nonaligned_recipient_slot() -> None:
     assert cx_bad.destination_address is None
     assert cx_bad.confidence != "high"
     assert cx_good.destination_address == "0x" + "a" * 40
-    assert cx_good.confidence == "high"
+    assert cx_good.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
     # Wormhole transferTokens: recipientChain = slot 2 (uint16), recipient
     # bytes32 = slot 3. recipientChain 23 -> arbitrum (an EVM destination).
@@ -263,7 +263,7 @@ def test_v0_34_decoders_reject_nonaligned_recipient_slot() -> None:
     assert wh_bad.destination_address is None
     assert wh_bad.confidence != "high"
     assert wh_good.destination_address == "0x" + "a" * 40
-    assert wh_good.confidence == "high"
+    assert wh_good.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -338,7 +338,7 @@ def test_axelar_call_contract_with_token_evm_destination() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "1" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "callContractWithToken"
 
 
@@ -375,7 +375,7 @@ def test_axelar_unknown_chain_name_preserved_as_raw_lowercase() -> None:
     assert out.destination_address == "0x" + "2" * 40
     # Address salvaged + chain string salvaged but not canonicalized — still 'high'
     # per the decoder's truthiness rule (both fields populated)
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_axelar_truncated_calldata_returns_low() -> None:
@@ -469,7 +469,7 @@ def test_lifi_start_bridge_tokens_via_stargate_polygon() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "9" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "startBridgeTokensViaStargate"
 
 

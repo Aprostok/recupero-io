@@ -84,10 +84,16 @@ class BridgeDecodeResult:
     """One decoded bridge call.
 
     ``confidence`` is one of:
-      'high'   — method signature recognized + all fields extracted
-      'medium' — signature recognized but one field missing (e.g.,
-                 destination address there but chain unclear)
-      'low'    — partial decode based on heuristics
+      'high'   — RESERVED. A cross-chain destination is 'high' ONLY when it is
+                 cryptographically confirmed by the bridge-pairing oracle
+                 (``bridge_pairings.confirm_bridge_destination`` — order-id
+                 matched on both chains) or is a deterministic same-address
+                 continuation (OP-Stack msg.sender). A destination decoded from
+                 the SOURCE tx's calldata is NEVER 'high' — see
+                 ``_calldata_destination_confidence``.
+      'medium' — a usable destination decoded from calldata (TRM-parity: a
+                 decoded *intent*, not observed receipt).
+      'low'    — partial/heuristic decode with no usable destination.
     """
     destination_chain: str | None
     destination_address: str | None
@@ -99,6 +105,28 @@ class BridgeDecodeResult:
     # destination to the immediate on-chain sender (a DETERMINISTIC same-address
     # continuation), so the trace doesn't dead-end at the bridge.
     recipient_is_msg_sender: bool = False
+
+
+def _calldata_destination_confidence(have_chain: object, have_recipient: object) -> str:
+    """Confidence for a bridge destination decoded ONLY from the SOURCE
+    transaction's calldata.
+
+    v0.36 (TRM-parity doctrine): a calldata decode reveals the sender's stated
+    *intent* (where they asked the bridge to send funds) — it is NOT proof the
+    funds arrived. So it is NEVER 'high'. 'high' is reserved for a cryptographic
+    cross-chain-id match (``bridge_pairings.confirm_bridge_destination``) or a
+    deterministic same-address continuation. A usable decoded destination
+    (chain and/or recipient present) is 'medium'; nothing usable is 'low'.
+
+    This preserves the previous medium/low boundary verbatim — only the former
+    'high' tier (a full chain+address calldata decode) is demoted to 'medium'.
+    The tracer still *follows* a 'medium' decoded destination (continuation is
+    gated on confidence in {'high','medium'} + a decoded address), so demoting
+    the label costs no trace reach — it only stops over-claiming the edge.
+    """
+    if have_chain or have_recipient:
+        return "medium"
+    return "low"
 
 
 # Method-ID prefixes (first 4 bytes of keccak256(signature)) for
@@ -793,12 +821,11 @@ def _decode_wormhole(
         #   medium = chain known XOR raw recipient bytes present (an unknown
         #            chain still carries the raw recipient bytes32, so it
         #            stays medium rather than low for manual follow-up)
-        if dest_chain is not None and dest_address is not None:
-            confidence = "high"
-        elif dest_chain is not None or recipient_hex:
-            confidence = "medium"
-        else:
-            confidence = "low"
+        # Calldata decode → never 'high' (v0.36 doctrine). recipient_hex is the
+        # raw bytes32; dest_address is derived from it, so gating on recipient_hex
+        # preserves the exact medium/low boundary (only the former 'high' tier,
+        # chain+address both present, is demoted to 'medium').
+        confidence = _calldata_destination_confidence(dest_chain, recipient_hex)
 
         return BridgeDecodeResult(
             destination_chain=dest_chain,
@@ -870,11 +897,7 @@ def _decode_across_deposit_v3(
             destination_chain=dest_chain,
             destination_address=recipient,
             bridge_method=method_name,
-            confidence=(
-                "high" if (dest_chain and recipient)
-                else "medium" if (dest_chain or recipient)
-                else "low"
-            ),
+            confidence=_calldata_destination_confidence(dest_chain, recipient),
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:
@@ -909,11 +932,7 @@ def _decode_across_deposit_legacy(
             destination_chain=dest_chain,
             destination_address=recipient,
             bridge_method=method_name,
-            confidence=(
-                "high" if (dest_chain and recipient)
-                else "medium" if (dest_chain or recipient)
-                else "low"
-            ),
+            confidence=_calldata_destination_confidence(dest_chain, recipient),
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError):
@@ -1001,11 +1020,7 @@ def _decode_stargate(
             except (ValueError, IndexError):
                 dest_address = None
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -1183,11 +1198,7 @@ def _decode_debridge(
                 except (ValueError, IndexError):
                     dest_address = None
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -1305,11 +1316,7 @@ def _decode_connext(
         # misaligned / uint256 slot can't fabricate a high-confidence wallet.
         dest_address = _extract_addr_slot(args_blob, 1)
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -1417,11 +1424,7 @@ def _decode_axelar(
             if is_evm or is_nonevm_addr:
                 dest_address = s
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -1497,19 +1500,11 @@ def _decode_thorchain(
     # base58 (1…/3…). ETH: 0x + 40 hex. Everything else (raw DOGE/LTC code we
     # have no adapter for, unvalidated shape) stays 'medium' = surfaced, not
     # auto-crossed. Verified against real on-chain calldata (see docstring).
-    if dest_chain and dest_address:
-        btc_shaped = (
-            dest_chain == "bitcoin"
-            and (dest_address.startswith("bc1") or dest_address[0] in ("1", "3"))
-        )
-        eth_shaped = (
-            dest_chain == "ethereum"
-            and dest_address.startswith("0x")
-            and len(dest_address) == 42
-        )
-        confidence = "high" if (btc_shaped or eth_shaped) else "medium"
-    else:
-        confidence = "low"
+    # Calldata decode → never 'high' (v0.36 doctrine): a full chain+address
+    # decode is 'medium', anything less is 'low'. The btc/eth address-shape
+    # heuristic only ever chose high-vs-medium (a distinction that no longer
+    # exists), so it is dropped.
+    confidence = "medium" if (dest_chain and dest_address) else "low"
     return BridgeDecodeResult(
         destination_chain=dest_chain,
         destination_address=dest_address,
@@ -1610,7 +1605,7 @@ def _decode_lifi(
                 destination_chain=dest_chain,
                 destination_address=dest_address,
                 bridge_method=method_name,
-                confidence="high",
+                confidence="medium",  # calldata decode: never 'high' (v0.36 doctrine)
                 raw_calldata_excerpt=full_data[:400],
             )
 
@@ -1681,11 +1676,7 @@ def _decode_hop(
         # _extract_addr_slot guard (v0.34 #228) rejects a non-address slot.
         dest_address: str | None = _extract_addr_slot(args_blob, 1)
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -1761,11 +1752,7 @@ def _decode_squid(
             if is_evm or is_nonevm_addr:
                 dest_address = s
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -1846,11 +1833,7 @@ def _decode_celer(
         chain_id = int(chain_hex, 16) if chain_hex else 0
         dest_chain = _EVM_CHAIN_BY_ID.get(chain_id)
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -1915,11 +1898,7 @@ def _decode_synapse(
         chain_id = int(chain_hex, 16) if chain_hex else 0
         dest_chain = _EVM_CHAIN_BY_ID.get(chain_id)
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -2154,11 +2133,7 @@ def _decode_symbiosis(
             except (ValueError, IndexError):
                 dest_chain = None
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -2302,11 +2277,7 @@ def _decode_layerzero(
                 ):
                     dest_address = "0x" + recv_slot[-40:]
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -2405,11 +2376,7 @@ def _decode_ccip(
             except (ValueError, IndexError):
                 dest_address = None
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -2472,11 +2439,7 @@ def _decode_multichain(
         chain_id = int(chain_hex, 16) if chain_hex else 0
         dest_chain = _EVM_CHAIN_BY_ID.get(chain_id)
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -2576,11 +2539,7 @@ def _decode_stargate_v2(
             if len(to_slot) == 64 and to_slot[:24] == "0" * 24 and to_hex != "0" * 40:
                 dest_address = "0x" + to_hex
 
-        confidence = (
-            "high" if (dest_chain and dest_address)
-            else "medium" if (dest_chain or dest_address)
-            else "low"
-        )
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
         return BridgeDecodeResult(
             destination_chain=dest_chain,
             destination_address=dest_address,
@@ -2659,7 +2618,7 @@ def _decode_polygon_pos(
             destination_chain="polygon",
             destination_address=dest_addr,
             bridge_method=method_name,
-            confidence="high" if dest_addr else "medium",
+            confidence="medium",  # calldata decode: never 'high' (v0.36 doctrine)
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:
@@ -2733,7 +2692,7 @@ def _decode_op_stack_l1(
             destination_chain=effective_chain,
             destination_address=dest_addr,
             bridge_method=method_name,
-            confidence="high" if dest_addr else "medium",
+            confidence="medium",  # calldata decode: never 'high' (v0.36 doctrine)
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:
@@ -2797,7 +2756,7 @@ def _decode_arbitrum_l1(
             destination_chain="arbitrum",
             destination_address=dest_addr,
             bridge_method=method_name,
-            confidence="high" if dest_addr else "medium",
+            confidence="medium",  # calldata decode: never 'high' (v0.36 doctrine)
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:
@@ -2839,7 +2798,7 @@ def _decode_zksync_l1(
             destination_chain="zksync",
             destination_address=dest_addr,
             bridge_method=method_name,
-            confidence="high" if dest_addr else "medium",
+            confidence="medium",  # calldata decode: never 'high' (v0.36 doctrine)
             raw_calldata_excerpt=full_data[:400],
         )
     except (ValueError, IndexError) as exc:

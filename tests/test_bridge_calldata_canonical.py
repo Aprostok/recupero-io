@@ -153,7 +153,7 @@ def test_polygon_pos_deposit_for_decodes_user() -> None:
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + user
     assert out.bridge_method == "depositFor"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_polygon_pos_deposit_ether_for_decodes_user() -> None:
@@ -167,7 +167,7 @@ def test_polygon_pos_deposit_ether_for_decodes_user() -> None:
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + user
     assert out.bridge_method == "depositEtherFor"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_polygon_pos_malformed_returns_low_confidence_no_exception() -> None:
@@ -223,7 +223,7 @@ def test_optimism_deposit_erc20_to_decodes_recipient() -> None:
     assert out.destination_chain == "optimism"
     assert out.destination_address == "0x" + to
     assert out.bridge_method == "depositERC20To"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_optimism_deposit_eth_to_decodes_recipient() -> None:
@@ -243,7 +243,7 @@ def test_optimism_deposit_eth_to_decodes_recipient() -> None:
     assert out.destination_chain == "optimism"
     assert out.destination_address == "0x" + to
     assert out.bridge_method == "depositETHTo"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_optimism_deposit_erc20_no_recipient_surfaces_chain_only() -> None:
@@ -331,7 +331,7 @@ def test_optimism_withdraw_to_decodes_recipient_on_ethereum() -> None:
     assert out.destination_chain == "ethereum"
     assert out.destination_address == "0x" + to
     assert out.bridge_method == "withdrawTo"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_optimism_malformed_returns_low_confidence_no_exception() -> None:
@@ -371,7 +371,7 @@ def test_arbitrum_outbound_transfer_decodes_recipient() -> None:
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + to
     assert out.bridge_method == "outboundTransfer"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_arbitrum_outbound_transfer_custom_refund_decodes_recipient() -> None:
@@ -447,7 +447,7 @@ def test_zksync_era_deposit_decodes_l2_receiver() -> None:
     assert out.destination_chain == "zksync"
     assert out.destination_address == "0x" + l2_receiver
     assert out.bridge_method == "deposit"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_zksync_malformed_returns_low_confidence_no_exception() -> None:

@@ -95,7 +95,7 @@ def test_hop_send_to_l2_arbitrum_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "sendToL2"
 
 
@@ -112,7 +112,7 @@ def test_hop_send_to_l2_polygon_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "c" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_hop_send_to_l2_optimism_via_older_selector() -> None:
@@ -129,7 +129,7 @@ def test_hop_send_to_l2_optimism_via_older_selector() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "optimism"
     assert out.destination_address == "0x" + "d" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_hop_unknown_chain_id_medium_confidence() -> None:
@@ -251,7 +251,7 @@ def test_squid_bridge_call_polygon_evm_destination() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "1" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "bridgeCall"
 
 
@@ -269,7 +269,7 @@ def test_squid_call_bridge_call_avalanche() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "avalanche"
     assert out.destination_address == "0x" + "2" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "callBridgeCall"
 
 
@@ -304,7 +304,7 @@ def test_squid_unknown_chain_name_preserved_lowercase() -> None:
     assert out.destination_chain == "crescent"
     assert out.destination_address == "0x" + "3" * 40
     # Both fields populated → high
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_squid_truncated_calldata_returns_low() -> None:

@@ -322,7 +322,7 @@ def test_wormhole_eth_side_recipient_chain_18_decodes_to_tron() -> None:
     )
     assert out is not None
     assert out.destination_chain == "tron"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     # Tron base58check addresses start with 'T'. Verifies that the
     # 21-byte payload + 4-byte sha256d checksum encoder produced a
     # canonical-shape b58check string, not a 0x-hex form.

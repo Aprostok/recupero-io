@@ -167,7 +167,7 @@ def test_symbiosis_metaroute_polygon_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "metaRoute"
 
 
@@ -185,7 +185,7 @@ def test_symbiosis_metaroute_arbitrum_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + "c" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_symbiosis_metaroute_bsc_via_slot_index_zero() -> None:
@@ -202,7 +202,7 @@ def test_symbiosis_metaroute_bsc_via_slot_index_zero() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "bsc"
     assert out.destination_address == "0x" + "d" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -306,7 +306,7 @@ def test_symbiosis_1mb_calldata_does_not_crash() -> None:
     # The valid prefix should still decode cleanly to Optimism + recipient.
     assert out.destination_chain == "optimism"
     assert out.destination_address == "0x" + "a" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

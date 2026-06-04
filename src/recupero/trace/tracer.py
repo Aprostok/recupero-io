@@ -1654,7 +1654,13 @@ def _continue_past_dex_and_bridges(
         decoded_chain_str = handoff.decoded_destination_chain
         decoded_addr = handoff.decoded_destination_address
         decoded_conf = handoff.decoded_confidence
-        if decoded_conf != "high" or not decoded_addr:
+        # v0.36: a FULL calldata decode (chain+address) is now labelled
+        # 'medium' (TRM-parity: decoded intent, not observed receipt — never
+        # 'high'). It is still followed: continuation is gated on a usable
+        # decoded address + confidence in {high, medium}, so demoting the label
+        # costs no reach. 'low' (partial/garbage) is still skipped, and the
+        # `not decoded_addr` guard still drops address-less decodes.
+        if decoded_conf not in ("high", "medium") or not decoded_addr:
             continue
         if decoded_chain_str and decoded_chain_str == chain.value:
             # Same chain — use the existing continuation seed list.
@@ -2214,7 +2220,10 @@ def _continue_past_dex_and_bridges(
                         _h2 = []
                     for _hh in _h2:
                         if (
-                            getattr(_hh, "decoded_confidence", None) != "high"
+                            # v0.36: full calldata decode is 'medium' now (never
+                            # 'high'); still followed when chain+address present.
+                            getattr(_hh, "decoded_confidence", None)
+                            not in ("high", "medium")
                             or not getattr(_hh, "decoded_destination_address", None)
                             or not getattr(_hh, "decoded_destination_chain", None)
                         ):

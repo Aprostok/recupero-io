@@ -525,27 +525,29 @@ def test_1inch_decoder_returns_low_confidence() -> None:
     assert result.confidence == "low"
 
 
-def test_tracer_gates_bfs_continuation_on_confidence_high() -> None:
-    """The tracer source must contain the
-    `decoded_conf != "high"` early-continue (or equivalent). A
-    regression that loosens this gate would cause low-confidence
-    DeBridge/1inch handoffs to claim wrong destinations.
+def test_tracer_gates_bfs_continuation_excludes_low_confidence() -> None:
+    """The tracer must GATE OUT low-confidence decodes from BFS
+    auto-continuation. v0.36 (TRM-parity doctrine): a FULL calldata decode is
+    now 'medium' (never 'high' — that's reserved for the cross-chain-id oracle /
+    a label hit), and the gate follows {'high','medium'} via
+    `decoded_conf not in ("high", "medium")`. The contract this protects is
+    UNCHANGED: a 'low' (partial/garbage) DeBridge/1inch decode must NOT
+    auto-continue and claim a destination.
     """
     import inspect
 
     from recupero.trace import tracer as tracer_mod
 
     src = inspect.getsource(tracer_mod)
-    # The gate pattern (with either literal style).
+    # The gate pattern (with either quote style).
     assert any(pattern in src for pattern in (
-        'decoded_conf != "high"',
-        "decoded_conf != 'high'",
+        'not in ("high", "medium")',
+        "not in ('high', 'medium')",
     )), (
-        "tracer.py no longer guards BFS continuation on "
-        "decoded_conf == 'high'. Likely regression: a low-confidence "
-        "DeBridge / 1inch handoff would now claim a destination and "
-        "the BFS would chase it, producing wrong transfers in the "
-        "destination chain."
+        "tracer.py no longer guards BFS continuation on decoded confidence. "
+        "Likely regression: a low-confidence DeBridge / 1inch handoff would "
+        "now claim a destination and the BFS would chase it, producing wrong "
+        "transfers in the destination chain."
     )
 
 
@@ -984,23 +986,27 @@ def test_cross_chain_low_confidence_handoff_skips_continuation(
 
 
 def test_tracer_source_contains_confidence_gate() -> None:
-    """The tracer.py source must contain the literal confidence-
-    gate check. A regression that loosens or removes the gate
-    (e.g. accepting medium-confidence DeBridge decodes for BFS
-    continuation) is caught by this structural check.
+    """The tracer.py source must contain the literal confidence-gate check.
+    A regression that REMOVES the gate (accepting ANY confidence — incl. 'low'
+    — for BFS continuation) is caught by this structural check.
+
+    v0.36: the gate is `decoded_conf not in ("high", "medium")`. 'medium' is
+    now followed deliberately (a full calldata decode is medium, not high, per
+    the TRM-parity doctrine — the destination is still worth chasing); 'low'
+    remains gated out.
     """
     import inspect
 
     from recupero.trace import tracer as tracer_mod
     src = inspect.getsource(tracer_mod)
     assert (
-        'decoded_conf != "high"' in src
-        or "decoded_conf != 'high'" in src
+        'not in ("high", "medium")' in src
+        or "not in ('high', 'medium')" in src
     ), (
-        "tracer.py no longer enforces the 'must be high confidence "
-        "to auto-continue BFS' contract. Likely regression: a "
-        "low-confidence DeBridge / 1inch handoff would now claim "
-        "a destination address and the BFS would chase it."
+        "tracer.py no longer enforces the confidence gate on BFS auto-"
+        "continuation. Likely regression: a low-confidence DeBridge / 1inch "
+        "handoff would now claim a destination address and the BFS would "
+        "chase it."
     )
 
 

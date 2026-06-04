@@ -73,22 +73,25 @@ def test_thorchain_btc_memo_decodes_to_bitcoin_destination() -> None:
     assert res.destination_chain == "bitcoin"
     assert res.destination_address == _BTC_ADDR
     assert res.bridge_method == "depositWithExpiry"
-    # v0.37.4: a bech32 BTC destination is a validated shape → high confidence
-    # (verified against real on-chain calldata) → the BFS auto-crosses onto BTC.
-    assert res.confidence == "high"
+    # v0.36: a bech32 BTC destination decoded from calldata is 'medium' (decoded
+    # intent, not observed receipt). The BFS still auto-crosses onto BTC — the
+    # continuation gate follows {high, medium} — it just no longer over-claims.
+    assert res.confidence == "medium"
 
 
-def test_thorchain_real_onchain_calldata_decodes_high() -> None:
+def test_thorchain_real_onchain_calldata_decodes_medium() -> None:
     """THE authoritative check: decode the REAL THORChain depositWithExpiry tx
     (Ethereum mainnet, fetched via Etherscan) and confirm we recover the exact
-    native-Bitcoin destination from its on-chain memo at high confidence."""
+    native-Bitcoin destination from its on-chain memo. v0.36: a destination
+    decoded from the source calldata is 'medium' (decoded intent, not observed
+    receipt) — never 'high'."""
     fx = json.loads(_FIXTURE.read_text(encoding="utf-8"))
     res = decode_bridge_calldata(bridge_protocol=_THOR, input_data=fx["input"])
     assert res is not None
     assert res.destination_chain == fx["expected_destination_chain"] == "bitcoin"
     assert res.destination_address == fx["expected_destination_address"]
     assert res.bridge_method == fx["expected_bridge_method"]
-    assert res.confidence == fx["expected_confidence"] == "high"
+    assert res.confidence == fx["expected_confidence"] == "medium"
 
 
 def test_thorchain_deposit_variant_also_decodes() -> None:

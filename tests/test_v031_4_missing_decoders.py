@@ -144,7 +144,7 @@ def test_debridge_create_sale_order_polygon_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "createSaleOrder"
 
 
@@ -319,7 +319,7 @@ def test_layerzero_v1_send_arbitrum_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "send_v1"
 
 
@@ -336,7 +336,7 @@ def test_layerzero_v2_send_polygon_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "c" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "send_v2"
 
 
@@ -498,7 +498,7 @@ def test_ccip_send_arbitrum_high_confidence() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "ccipSend"
 
 
@@ -611,7 +611,7 @@ def test_multichain_any_swap_out_underlying_bsc_high() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "bsc"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "anySwapOutUnderlying"
 
 
@@ -629,7 +629,7 @@ def test_multichain_any_swap_out_avalanche_high() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "avalanche"
     assert out.destination_address == "0x" + "c" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "anySwapOut"
 
 
@@ -782,7 +782,7 @@ def test_stargate_v2_send_token_arbitrum_high() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "sendToken_v2"
 
 
@@ -982,7 +982,7 @@ def test_symbiosis_slot_7_boundary_decodes() -> None:
     )
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_symbiosis_slot_10_outside_window_falls_to_medium() -> None:
@@ -1056,7 +1056,7 @@ def test_symbiosis_1mb_calldata_does_not_crash() -> None:
     )
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "optimism"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_symbiosis_case_insensitive_protocol_dispatch() -> None:

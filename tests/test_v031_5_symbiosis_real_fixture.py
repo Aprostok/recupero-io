@@ -224,7 +224,7 @@ def test_symbiosis_real_shape_eth_to_polygon() -> None:
         f"expected polygon, got {out.destination_chain!r}"
     )
     assert out.destination_address == "0x" + "a" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "metaRoute"
 
 
@@ -245,7 +245,7 @@ def test_symbiosis_real_shape_eth_to_bsc() -> None:
         f"expected bsc, got {out.destination_chain!r}"
     )
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_symbiosis_real_shape_eth_to_arbitrum() -> None:
@@ -271,7 +271,7 @@ def test_symbiosis_real_shape_eth_to_arbitrum() -> None:
         f"expected arbitrum, got {out.destination_chain!r}"
     )
     assert out.destination_address == "0x" + "c" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ def test_symbiosis_real_shape_chain_at_first_arg() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "optimism"
     assert out.destination_address == "0x" + "d" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_symbiosis_real_shape_chain_at_seventh_arg() -> None:
@@ -315,7 +315,7 @@ def test_symbiosis_real_shape_chain_at_seventh_arg() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "base"
     assert out.destination_address == "0x" + "e" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_symbiosis_real_shape_malformed_inner_payload_falls_back_to_low() -> None:
@@ -396,7 +396,7 @@ def test_symbiosis_real_shape_avalanche() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "avalanche"
     assert out.destination_address == "0x" + "8" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_symbiosis_real_shape_structured_parse_beats_collision() -> None:
@@ -433,4 +433,4 @@ def test_symbiosis_real_shape_structured_parse_beats_collision() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "7" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'

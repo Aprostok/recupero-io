@@ -109,7 +109,7 @@ def test_celer_send_decodes_polygon() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "polygon"
     assert out.destination_address == "0x" + "b" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "send"
 
 
@@ -126,7 +126,7 @@ def test_celer_send_native_decodes_arbitrum() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + "f" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "sendNative"
 
 
@@ -238,7 +238,7 @@ def test_synapse_bridge_decodes_arbitrum() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + "9" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "bridge"
 
 
@@ -255,7 +255,7 @@ def test_synapse_swap_and_redeem_decodes_base() -> None:
     assert isinstance(out, BridgeDecodeResult)
     assert out.destination_chain == "base"
     assert out.destination_address == "0x" + "3" * 40
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     assert out.bridge_method == "swapAndRedeem"
 
 

@@ -374,7 +374,7 @@ def test_wormhole_solana_recipient_decodes_to_base58_pubkey() -> None:
     )
     assert out is not None
     assert out.destination_chain == "solana"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
     # The encoder produces base58 of 32 bytes — must match the
     # round-trip through _b58encode_no_checksum so changes to the
     # encoder are caught here, not only in test_bridge_calldata.

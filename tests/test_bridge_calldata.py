@@ -109,7 +109,7 @@ def test_wormhole_decode_solana_recipient() -> None:
         bytes.fromhex(pubkey_hex)
     )
     assert out.bridge_method == "transferTokens"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_wormhole_decode_ethereum_recipient() -> None:
@@ -189,7 +189,7 @@ def test_across_depositv3_arbitrum() -> None:
     assert out.destination_chain == "arbitrum"
     assert out.destination_address == "0x" + recipient
     assert out.bridge_method == "depositV3"
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_across_depositv3_optimism() -> None:
@@ -304,10 +304,12 @@ def test_raw_calldata_excerpt_included() -> None:
 # rule (high only when chain known AND a trusted address parsed).
 
 
-def test_wormhole_tron_valid_0x41_payload_is_high_confidence() -> None:
+def test_wormhole_tron_valid_0x41_payload_is_medium_confidence() -> None:
     """A well-formed Tron recipient (21-byte payload, 0x41 version byte,
-    left-padded in the bytes32) decodes to a base58check T-address at
-    high confidence."""
+    left-padded in the bytes32) decodes to a base58check T-address. v0.36:
+    a calldata-decoded destination is 'medium' (decoded intent, not observed
+    receipt) — 'high' is reserved for cryptographic cross-chain-id confirmation
+    or a direct label hit."""
     payload_hex = "41" + "aa" * 20           # 0x41 + 20 addr bytes = 21 bytes
     recipient = "0" * 22 + payload_hex        # left-pad to 32 bytes (64 hex)
     assert len(recipient) == 64
@@ -319,7 +321,7 @@ def test_wormhole_tron_valid_0x41_payload_is_high_confidence() -> None:
     assert out.destination_chain == "tron"
     assert out.destination_address is not None
     assert out.destination_address.startswith("T")  # base58check Tron form
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_wormhole_tron_without_0x41_prefix_is_not_fabricated() -> None:
@@ -372,7 +374,7 @@ def test_wormhole_solana_all_zero_recipient_is_not_fabricated() -> None:
 # ---- v0.34: real deBridge DLN createSaltedOrder (Zigha hub, on-chain) ---- #
 
 
-def test_debridge_createsaltedorder_real_calldata_decodes_high() -> None:
+def test_debridge_createsaltedorder_real_calldata_decodes_medium() -> None:
     """Pin the DeBridge decoder against AUTHORITATIVE on-chain data.
 
     The Zigha consolidation hub bridged ~$17M USDC->DAI Arbitrum->Ethereum via
@@ -381,7 +383,9 @@ def test_debridge_createsaltedorder_real_calldata_decodes_high() -> None:
     returned None and the cross-chain continuation silently dead-ended at the
     bridge. With the selector added, the existing OrderCreation slot-scan
     (takeChainId@slot4, receiverDst@slot5) must recover the real destination:
-    Ethereum + 0xc1ee32fa... at HIGH confidence (both fields extracted).
+    Ethereum + 0xc1ee32fa... at MEDIUM confidence (v0.36: both fields extracted
+    from calldata = a decoded *intent*, not observed receipt — 'high' is
+    reserved for the bridge-pairing oracle's cross-chain-id match).
 
     Fixture provenance: tests/fixtures/zigha_dln_createsaltedorder.json
     (tx 0xd4bf228f… on Arbitrum, captured via Etherscan v2).
@@ -407,7 +411,7 @@ def test_debridge_createsaltedorder_real_calldata_decodes_high() -> None:
         == fx["expected_destination_address"].lower()  # 0xc1ee32fa...
     )
     # both chain + receiver extracted from real calldata -> high
-    assert out.confidence == "high"
+    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
 
 
 def test_debridge_createsaltedorder_selector_registered() -> None:

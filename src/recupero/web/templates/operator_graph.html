@@ -164,8 +164,18 @@ canvas#cmap:active { cursor: grabbing; }
 .edge.cross { stroke-dasharray: 6 4; }
 .edge.dim { opacity: .07; }
 .edge.hidden { display: none; }
-.edge.hot { stroke: var(--green) !important; filter: drop-shadow(0 0 3px var(--green-glow)); }
-.edge.path { stroke: var(--path-col) !important; stroke-opacity: 1; filter: drop-shadow(0 0 3px var(--path-glow)); }
+.edge.hot { stroke: var(--green) !important; filter: drop-shadow(0 0 4px var(--green-glow)); }
+/* Path edges: animated marching-ants flowing source → target */
+.edge.path {
+  stroke: var(--path-col) !important; stroke-opacity: 1; stroke-width: 3 !important;
+  stroke-dasharray: 14 8;
+  filter: drop-shadow(0 0 5px var(--path-glow));
+  animation: flowDash .65s linear infinite;
+}
+@keyframes flowDash {
+  from { stroke-dashoffset: 22; }
+  to   { stroke-dashoffset: 0; }
+}
 
 /* ── Nodes ── */
 .node { cursor: pointer; }
@@ -174,10 +184,25 @@ canvas#cmap:active { cursor: grabbing; }
 .node .count { font-size: 10px; font-weight: 800; fill: #fff; pointer-events: none; }
 .node.dim { opacity: .11; }
 .node.faded { opacity: .26; }
-.node.sel circle  { stroke: var(--path-col) !important; stroke-width: 3.5; filter: drop-shadow(0 0 10px var(--path-glow)); }
-.node.path circle { stroke: var(--path-col) !important; stroke-width: 3; filter: drop-shadow(0 0 7px var(--path-glow)); }
-.node.pick circle { stroke: var(--warn) !important; stroke-width: 3.5; filter: drop-shadow(0 0 10px var(--warn-glow)); }
+.node.sel circle  { stroke: var(--path-col) !important; stroke-width: 3.5; filter: drop-shadow(0 0 12px var(--path-glow)); }
+/* Path nodes: pulsing glow */
+.node.path circle {
+  stroke: var(--path-col) !important; stroke-width: 3;
+  animation: pathPulse 1.6s ease-in-out infinite;
+}
+@keyframes pathPulse {
+  0%, 100% { filter: drop-shadow(0 0 7px var(--path-glow)); }
+  50%       { filter: drop-shadow(0 0 18px var(--path-glow)); }
+}
+.node.pick circle  { stroke: var(--warn) !important; stroke-width: 3.5; filter: drop-shadow(0 0 12px var(--warn-glow)); }
 .node.origin circle { filter: drop-shadow(0 0 9px var(--green-glow)); }
+
+/* ── Flow particles (JS-animated dots on path edges) ── */
+.flow-dot { pointer-events: none; }
+
+/* ── Hop-number badges on path nodes ── */
+.hop-badge-bg { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+.hop-badge { pointer-events: none; font-size: 9px; font-weight: 800; fill: #fff; text-anchor: middle; dominant-baseline: central; }
 
 /* ── Tooltip ── */
 #tip {
@@ -411,6 +436,8 @@ function initGraph(DATA, viewId) {
   let minUsd = 0, asset = "", timeCutoff = null, layout = "force", colorBy = "recoverability";
   let pathMode = false, pickA = null;
   const pathNodes = new Set(), pathEdges = new Set();
+  let pathNodeOrder = [], pathEdgeOrder = [];   // ordered for badges + panel
+  let pathParticles = [], pathHopLabels = [];   // SVG elements, cleaned on rebuild
   let selected = null, isolated = null, isoKeep = null;
   const expandedHops = new Set();   // "address|direction" already pulled in
   let annotations = {};             // node_id -> note (server-backed)
@@ -567,7 +594,33 @@ function initGraph(DATA, viewId) {
   canvas.addEventListener("mouseleave", hideTip);
   function setRenderer(on){ useCanvas = on; sizeCanvas(); svg.style.display = on ? "none" : "block"; canvas.style.display = on ? "block" : "none"; document.getElementById("btn-canvas").classList.toggle("on", on); }
 
-  function loop(){ step(); if (useCanvas) { paintCanvas(); if((miniTick=(miniTick+1)%12)===0) drawMini(); } else { paint(); } requestAnimationFrame(loop); }
+  function loop(){
+    step();
+    // ── Animate flow particles along path edges ──
+    if (pathParticles.length){
+      const t = (performance.now() / 850) % 1;
+      for (const dot of pathParticles){
+        const e=dot.__e, a=pos.get(e.source), b=pos.get(e.target);
+        if (!a||!b){ dot.style.display="none"; continue; }
+        dot.style.display="";
+        const f = (t + dot.__offset) % 1;
+        let px,py;
+        if (layout==="value"){
+          // Follow bezier curve used in sankey paint()
+          const dx=(b.x-a.x)*0.5, u=1-f;
+          px=u*u*u*a.x + 3*u*u*f*(a.x+dx) + 3*u*f*f*(b.x-dx) + f*f*f*b.x;
+          py=u*u*u*a.y + 3*u*u*f*a.y       + 3*u*f*f*b.y       + f*f*f*b.y;
+        } else {
+          px = a.x+(b.x-a.x)*f;
+          py = a.y+(b.y-a.y)*f;
+        }
+        dot.setAttribute("cx",String(px));
+        dot.setAttribute("cy",String(py));
+      }
+    }
+    if (useCanvas) { paintCanvas(); if((miniTick=(miniTick+1)%12)===0) drawMini(); } else { paint(); }
+    requestAnimationFrame(loop);
+  }
   function rebuild(reheat){ view=buildView(); seedPositions(view); computeRadial(view); computeValueRanks(view); render(); if(reheat)alpha=.9; saveState(); }
 
   function edgeVisible(e){ if(e.usd<minUsd)return false; if(asset&&!(e.assets&&e.assets.has(asset)))return false; if(timeCutoff&&e.first&&e.first>timeCutoff)return false; return true; }
@@ -689,12 +742,100 @@ function initGraph(DATA, viewId) {
     rebuild(true); selectNode(parent.id);
   }
 
-  function onPathPick(n){ if(!pickA){pickA=n.id;markPick();return;} if(n.id===pickA){pickA=null;markPick();return;} const p=findPath(pickA,n.id); pathNodes.clear();pathEdges.clear(); if(p){for(const id of p.nodes)pathNodes.add(id);for(const k of p.edges)pathEdges.add(k);} pickA=null;markPick();paintPath();showPathPanel(p); }
+  function onPathPick(n){ if(!pickA){pickA=n.id;markPick();return;} if(n.id===pickA){pickA=null;markPick();return;} const p=findPath(pickA,n.id); pathNodes.clear();pathEdges.clear();pathNodeOrder=[];pathEdgeOrder=[]; if(p){for(const id of p.nodes){pathNodes.add(id);pathNodeOrder.push(id);} for(const k of p.edges){pathEdges.add(k);pathEdgeOrder.push(k);}} pickA=null;markPick();paintPath();showPathPanel(p); }
   function markPick(){ for (const g of nodeEls) g.classList.toggle("pick",g.__n.id===pickA); }
   function findPath(a,b){ const adj=new Map(),ek=new Map(); for(const e of view.edges){ if(!edgeVisible(e))continue; if(!adj.has(e.source))adj.set(e.source,[]); if(!adj.has(e.target))adj.set(e.target,[]); adj.get(e.source).push(e.target); adj.get(e.target).push(e.source); ek.set(e.source+">"+e.target,e.id); ek.set(e.target+">"+e.source,e.id);} const prev=new Map([[a,null]]),q=[a]; while(q.length){const u=q.shift(); if(u===b)break; for(const v of (adj.get(u)||[]))if(!prev.has(v)){prev.set(v,u);q.push(v);}} if(!prev.has(b))return null; const nodes=[],edges=[]; let cur=b; while(cur!=null){nodes.unshift(cur);const p=prev.get(cur);if(p!=null)edges.push(ek.get(p+">"+cur));cur=p;} return {nodes,edges}; }
-  function paintPath(){ for (const g of nodeEls) g.classList.toggle("path",pathNodes.has(g.__n.id)); for (const ln of edgeEls) ln.classList.toggle("path",pathEdges.has(ln.__e.id)); }
-  function clearPath(){ pathNodes.clear();pathEdges.clear();pickA=null; for (const g of nodeEls) g.classList.remove("path","pick"); for (const ln of edgeEls) ln.classList.remove("path"); }
-  function showPathPanel(p){ const box=document.createElement("div"); if(!p){head(box,"No path found","#9a2a2a","pathfinding");const d=document.createElement("div");d.textContent="No connecting path in the current view.";box.appendChild(d);} else {head(box,"Path","#1D4ED8",(p.nodes.length-1)+" hop"+(p.nodes.length-1===1?"":"s")); for(let i=0;i<p.nodes.length;i++){const r=document.createElement("div");r.className="p-row";const s=document.createElement("span");s.textContent=(i+1)+". "+nodeName(p.nodes[i]);r.appendChild(s);box.appendChild(r);}} panel.replaceChildren(...box.childNodes);panel.classList.add("show"); }
+
+  function paintPath(){
+    // Remove stale particles + hop badges (safe if already detached by render())
+    for (const p of pathParticles) p.remove();
+    for (const l of pathHopLabels) l.remove();
+    pathParticles=[]; pathHopLabels=[];
+    // Toggle CSS classes
+    for (const g of nodeEls) g.classList.toggle("path",pathNodes.has(g.__n.id));
+    for (const ln of edgeEls) ln.classList.toggle("path",pathEdges.has(ln.__e.id));
+    if (!pathNodeOrder.length) return;
+    // ── Hop-number badges ──
+    const hopIdx = new Map(pathNodeOrder.map((id,i)=>[id,i+1]));
+    for (const g of nodeEls){
+      if (!pathNodes.has(g.__n.id)) continue;
+      const r = radius(g.__n), bx = r*0.68, by = -r*0.68, br = 7;
+      const bg = document.createElementNS(NS,"circle");
+      bg.setAttribute("class","hop-badge-bg"); bg.setAttribute("cx",String(bx)); bg.setAttribute("cy",String(by)); bg.setAttribute("r",String(br));
+      const tx = document.createElementNS(NS,"text");
+      tx.setAttribute("class","hop-badge"); tx.setAttribute("x",String(bx)); tx.setAttribute("y",String(by));
+      tx.textContent = String(hopIdx.get(g.__n.id)||"");
+      g.appendChild(bg); g.appendChild(tx);
+      pathHopLabels.push(bg,tx);
+    }
+    // ── Flow particles (2 per path edge, staggered) ──
+    const pathEls = edgeEls.filter(ln=>pathEdges.has(ln.__e.id));
+    pathEls.forEach((ln,i)=>{
+      for (const off of [0, 0.5]){
+        const dot = document.createElementNS(NS,"circle");
+        dot.setAttribute("class","flow-dot"); dot.setAttribute("r","3.5");
+        dot.setAttribute("fill","#93c5fd"); dot.setAttribute("opacity","0.9");
+        dot.__e = ln.__e; dot.__offset = (off + i*0.17) % 1;
+        gN.appendChild(dot); pathParticles.push(dot);
+      }
+    });
+  }
+
+  function clearPath(){
+    for (const p of pathParticles) p.remove();
+    for (const l of pathHopLabels) l.remove();
+    pathParticles=[]; pathHopLabels=[];
+    pathNodes.clear(); pathEdges.clear(); pathNodeOrder=[]; pathEdgeOrder=[];
+    pickA=null;
+    for (const g of nodeEls) g.classList.remove("path","pick");
+    for (const ln of edgeEls) ln.classList.remove("path");
+  }
+
+  function showPathPanel(p){
+    const box=document.createElement("div");
+    if (!p){
+      head(box,"No path found","#9a2a2a","pathfinding");
+      const d=document.createElement("div"); d.style.cssText="margin-top:8px;font-size:12px;color:var(--ink-soft)"; d.textContent="No connecting path in the current view."; box.appendChild(d);
+    } else {
+      const hops=p.nodes.length-1;
+      head(box,"Fund flow path","#1D4ED8",hops+" hop"+(hops===1?"":"s"));
+      // Build edge lookup for amounts
+      const eLookup=new Map(view.edges.map(e=>[e.source+">"+e.target,e]));
+      let totalUsd=0;
+      for (let i=0;i<p.nodes.length;i++){
+        const wrap=document.createElement("div");
+        wrap.style.cssText="display:flex;align-items:flex-start;gap:9px;padding:6px 0;border-bottom:1px solid rgba(255,255,255,.08)";
+        // Step badge
+        const badge=document.createElement("span");
+        badge.style.cssText="flex-shrink:0;width:20px;height:20px;border-radius:50%;background:var(--accent);color:#fff;font-size:10px;font-weight:800;display:grid;place-items:center;margin-top:1px";
+        badge.textContent=String(i+1); wrap.appendChild(badge);
+        // Content
+        const content=document.createElement("div"); content.style.flex="1;min-width:0";
+        const name=document.createElement("div"); name.style.cssText="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"; name.textContent=nodeName(p.nodes[i]); content.appendChild(name);
+        // Edge to next hop
+        if (i<p.nodes.length-1){
+          const e=eLookup.get(p.nodes[i]+">"+p.nodes[i+1])||eLookup.get(p.nodes[i+1]+">"+p.nodes[i]);
+          if (e){
+            totalUsd+=e.usd||0;
+            const detail=document.createElement("div"); detail.style.cssText="font-size:11px;color:var(--path-col);margin-top:2px;display:flex;gap:6px;align-items:center";
+            const arrow=document.createElement("span"); arrow.textContent="↓"; arrow.style.color="var(--ink-faint)"; detail.appendChild(arrow);
+            const amt=document.createElement("span"); amt.style.fontWeight="600"; amt.textContent=fmtUsd(e.usd||0); detail.appendChild(amt);
+            if (e.assets&&e.assets.size){ const a=document.createElement("span"); a.style.cssText="font-size:10px;background:var(--accent-soft);color:var(--path-col);border-radius:4px;padding:1px 5px"; a.textContent=[...e.assets].slice(0,2).join("/"); detail.appendChild(a); }
+            content.appendChild(detail);
+          }
+        }
+        wrap.appendChild(content); box.appendChild(wrap);
+      }
+      // Total
+      if (totalUsd>0){
+        const tot=document.createElement("div"); tot.style.cssText="margin-top:10px;padding:8px 0 2px;font-size:12px;font-weight:700;color:var(--path-col);border-top:1px solid rgba(255,255,255,.12);display:flex;justify-content:space-between";
+        const lbl=document.createElement("span"); lbl.textContent="Total traced"; lbl.style.color="var(--ink-soft)"; lbl.style.fontWeight="400";
+        const val=document.createElement("span"); val.textContent=fmtUsd(totalUsd);
+        tot.appendChild(lbl); tot.appendChild(val); box.appendChild(tot);
+      }
+    }
+    panel.replaceChildren(...box.childNodes); panel.classList.add("show");
+  }
 
   function ttRow(p,k,v){const r=document.createElement("div");r.className="tt-row";const a=document.createElement("span");a.textContent=k;const b=document.createElement("span");b.textContent=v;r.appendChild(a);r.appendChild(b);p.appendChild(r);}
   function place(ev){const r=svg.getBoundingClientRect();tip.style.left=(ev.clientX-r.left+14)+"px";tip.style.top=(ev.clientY-r.top+14)+"px";tip.style.opacity="1";}

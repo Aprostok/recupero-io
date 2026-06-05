@@ -4,28 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — Address Profile</title>
+<link rel="stylesheet" href="/v1/console/app.css">
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
-  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
-  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
-  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
-  select { padding: .4rem .5rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
-  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-  button:disabled { opacity: .5; cursor: default; }
-  #msg { font-size: .8rem; margin-left: .5rem; } .err { color: #c0392b; } .ok { color: #1e8449; }
-  .verdict { display:inline-block; padding:.25rem .7rem; border-radius:8px; font-weight:700; font-size:1rem; }
-  .v-sanctioned, .v-high { background:#f9e0dd; color:#a93226; }
-  .v-medium { background:#fdf1d9; color:#9c6a13; }
-  .v-low, .v-clean { background:#e3f3e8; color:#1e8449; }
-  .panel { background:#fff; border:1px solid #e3e3e3; border-radius:10px; padding:.8rem 1rem; margin-bottom:1rem; }
-  .tags span { display:inline-block; background:#f9e0dd; color:#a93226; border-radius:999px; padding:.15rem .6rem; margin:0 .3rem .3rem 0; font-size:.78rem; font-weight:600; }
-  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
-  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; }
-  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
-  .conf-high { color:#a93226; font-weight:600; } .conf-medium { color:#9c6a13; } .conf-low { color:#777; }
+  /* page-specific: address profile */
+  .verdict { display:inline-block; padding:.25rem .7rem; border-radius: var(--r-sm); font-weight:700; font-size:1rem; }
+  .v-sanctioned, .v-high { background: var(--crit-soft); color: var(--crit); }
+  .v-medium { background: var(--warn-soft); color: var(--warn); }
+  .v-low, .v-clean { background: rgba(29,138,78,.12); color: var(--ok); }
+  .tags span { display:inline-block; background: var(--crit-soft); color: var(--crit); border-radius:999px; padding:.15rem .6rem; margin:0 .3rem .3rem 0; font-size:.78rem; font-weight:600; }
+  .conf-high { color: var(--crit); font-weight:600; } .conf-medium { color: var(--warn); } .conf-low { color: var(--ink-soft); }
   .note { font-size:.8rem; color:#555; }
 </style>
 </head>

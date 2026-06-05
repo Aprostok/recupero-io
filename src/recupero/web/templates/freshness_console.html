@@ -4,36 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — Label Freshness</title>
+<link rel="stylesheet" href="/v1/console/app.css">
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
-  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
-  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
-  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
-  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-  button.secondary { background: #fff; color: #2563eb; }
-  button:disabled { opacity: .5; cursor: default; }
-  .alarm { border-radius: 10px; padding: .7rem 1rem; margin-bottom: 1rem; font-size: .9rem; font-weight: 600; border: 1px solid #e3e3e3; background: #fff; }
-  .alarm.critical { background: #fdf3f2; border-color: #f5c6c0; color: #a93226; }
-  .alarm.stale { background: #fdf6ec; border-color: #f3dca6; color: #9c6a13; }
-  .alarm.fresh { background: #e3f3e8; border-color: #bfe3cb; color: #1e8449; }
-  .alarm.unknown { background: #eef0f2; border-color: #dfe2e6; color: #555; }
-  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
-  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
-  .card .v { font-size: 1.3rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
-  .card.alert .v { color: #c0392b; } .card.ok .v { color: #1e8449; }
-  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
-  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; }
-  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
-  tr.critical td { background: #fdf3f2; } tr.stale td { background: #fdf6ec; }
-  tr.unknown td { background: #f4f5f6; } tr.fresh td { background: #fff; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; }
-  .badge { display:inline-block; padding:.08rem .4rem; border-radius:6px; font-size:.7rem; font-weight:600; }
-  .badge.critical { background:#f9e0dd; color:#a93226; } .badge.stale { background:#f7e7c6; color:#9c6a13; }
-  .badge.unknown { background:#eef0f2; color:#555; } .badge.fresh { background:#e3f3e8; color:#1e8449; }
-  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
-  .err { color: #c0392b; } .ok { color: #1e8449; }
+  /* page-specific: label-freshness alarms */
+  .alarm { border-radius: var(--r); padding: .8rem 1.05rem; margin-bottom: 1.2rem; font-size: .9rem; font-weight: 600; border: 1px solid var(--hair); background: var(--surface); box-shadow: var(--shadow-sm); }
+  .alarm.critical { background: var(--crit-soft); border-color: var(--crit); color: var(--crit); }
+  .alarm.stale { background: var(--warn-soft); border-color: var(--warn); color: var(--warn); }
+  .alarm.fresh { background: rgba(29,138,78,.10); border-color: var(--ok); color: var(--ok); }
+  .alarm.unknown { background: var(--surface-2); border-color: var(--hair-strong); color: var(--ink-soft); }
+  .card.alert .v { color: var(--crit); } .card.ok .v { color: var(--ok); }
+  tr.critical td { background: var(--crit-soft); } tr.stale td { background: var(--warn-soft); }
+  tr.unknown td { background: var(--surface-2); }
+  .badge.stale { background: var(--warn-soft); color: var(--warn); }
+  .badge.unknown { background: var(--surface-2); color: var(--ink-soft); }
+  .badge.fresh { background: rgba(29,138,78,.12); color: var(--ok); }
 </style>
 </head>
 <body>

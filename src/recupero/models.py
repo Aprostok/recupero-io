@@ -117,6 +117,10 @@ class Chain(str, Enum):
     # into ChainAdapter.for_chain via the TonAdapter (TON Center backend:
     # v2 native-TON transactions + v3 decoded Jetton transfers).
     ton = "ton"
+    # v0.38 (#9 chain breadth): Stellar — native XLM + issued assets (USDC/USDT).
+    # Stablecoin off-ramp with issuer-freezable assets. Wired into for_chain via
+    # StellarAdapter (Horizon backend: classic payment operations).
+    stellar = "stellar"
 
 
 class LabelCategory(str, Enum):

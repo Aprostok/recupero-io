@@ -61,6 +61,9 @@ _CHAIN_TO_CG_PLATFORM: dict[Chain, str] = {
     # contract→id resolution (USDT-TON etc.). Native TON's coingecko_id is
     # also "the-open-network".
     Chain.ton:       "the-open-network",
+    # v0.38 (#9): Stellar. Native XLM coingecko_id is "stellar"; issued-asset
+    # pricing uses the adapter's per-code map (USDC→usd-coin, USDT→tether).
+    Chain.stellar:   "stellar",
 }
 
 

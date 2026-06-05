@@ -87,6 +87,17 @@ and recommends additions for the next phase of chain work.
 * **Tests:** `tests/test_ton_address.py` (codec vs live vectors), `tests/test_ton_adapter.py` (native + Jetton normalization, injected-client + respx transport).
 * **Freeze-pathway:** USDT-TON is Tether-issued → same issuer-freeze pathway as USDT on other chains (subject to issuer contact coverage).
 
+### Stellar
+
+* **Adapter:** `chains/stellar/adapter.py` (Horizon backend, public no-auth). v0.38 (#9 chain breadth). Stablecoin off-ramp — **USDC (Circle) + USDT** live as issued assets, freeze-relevant (issuer-controlled). `block_at_or_before` returns a unix-ts cutoff (Horizon has no ts→ledger index at the payments endpoint); fetches filter on each payment's `created_at`.
+* **Operations:** classic `payment` operations via `GET /accounts/{id}/payments`. Native XLM (`asset_type=native`, 7-dec) → `fetch_native_outflows`; issued assets (`credit_alphanum4/12`, 7-dec) → `fetch_erc20_outflows`, contract = `{code}-{issuer}`. Amounts are 7-decimal strings → raw integer units. `is_contract` False (Soroban C-addresses out of scope). Path-payments / create_account deferred (only direct `payment` ops normalized in v1).
+* **Address:** `chains/stellar/address.py` — StrKey account-id validation (`G` + 55 base32). Case preserved (base32 is case-sensitive).
+* **Pricing:** `Chain.stellar` → `"stellar"`. Native XLM coingecko_id `stellar`; USDC→`usd-coin`, USDT→`tether` (per-code map); other assets unpriced (coingecko_id=None) but still traced.
+* **Labels:** Zero Stellar entries yet (adapter-only). USDC/USDT issuers freeze-relevant — issuer seeding is a follow-up.
+* **Known gaps:** watch_tick monitoring not wired; path-payment / create_account ops not normalized; single-page payments (limit 100). Soroban (smart-contract) activity out of scope.
+* **Tests:** `tests/test_stellar_adapter.py` (address, native + asset normalization, filters, Horizon transport via respx).
+* **Freeze-pathway:** **Strong for USDC/USDT** — both are issuer-controlled (Circle/Tether) and freezable on Stellar, same posture as their EVM/Tron deployments.
+
 ### Arbitrum
 
 * **Adapter:** Shared `EvmAdapter`. chain_id=42161. native=ETH, explorer=arbiscan.io.
@@ -201,6 +212,7 @@ and recommends additions for the next phase of chain work.
 | tron         | TronAdapter    | yes        | yes              | 3                 | 3              | yes   |
 | bitcoin      | BitcoinAdapter | yes        | n/a              | n/a               | **0**          | yes   |
 | ton          | TonAdapter     | yes        | yes              | 1 (USDT)          | 1 (USDT issuer)| yes   |
+| stellar      | StellarAdapter | no         | yes              | USDC/USDT         | 0              | yes   |
 | hyperliquid  | Scraper        | yes        | inline ($1)      | n/a               | 0              | yes (client helpers only) |
 | optimism     | EvmAdapter     | yes        | **NO**           | **0**             | **0**          | **no**|
 | avalanche    | EvmAdapter     | yes        | **NO**           | **0**             | **0**          | **no**|

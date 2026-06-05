@@ -81,6 +81,11 @@ class ChainAdapter(ABC):
             # TONCENTER_API_KEY from env lifts the rate limit.
             from recupero.chains.ton.adapter import TonAdapter
             return TonAdapter()
+        if chain == Chain.stellar:
+            # Stellar uses the public Horizon API (no auth). Like Tron/TON the
+            # adapter resolves its own config.
+            from recupero.chains.stellar.adapter import StellarAdapter
+            return StellarAdapter()
         raise NotImplementedError(f"No adapter for chain {chain}")
 
     # --- block / time ---

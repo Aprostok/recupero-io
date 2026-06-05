@@ -4,28 +4,15 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — AI Triage</title>
+<link rel="stylesheet" href="/v1/console/app.css">
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
-  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
-  h2 { font-size: 1rem; margin: 1.4rem 0 .5rem; text-transform: capitalize; }
-  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
-  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
-  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-  button:disabled { opacity: .5; cursor: default; }
-  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
-  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
-  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
+  /* page-specific: AI triage */
+  h2 { text-transform: capitalize; }
   .label { font-weight: 700; white-space: nowrap; }
-  #msg { font-size: .8rem; margin-left: .5rem; }
-  .err { color: #c0392b; } .ok { color: #1e8449; }
-  .explain { background: #eef2fb; border: 1px solid #d6e0f5; color: #2c3e50; border-radius: 10px; padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
-  .empty { color: #888; font-size: .8rem; }
-  .banner { background: #fff4e5; border: 2px solid #e67e22; color: #8a4b00; border-radius: 10px; padding: .7rem 1rem; font-size: .9rem; font-weight: 700; margin-bottom: 1rem; }
-  .banner .note { display: block; font-weight: 400; font-size: .78rem; margin-top: .3rem; color: #a05a00; }
-  .section { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .2rem 1rem 1rem; margin-bottom: 1rem; }
+  .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink); border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
+  .banner { background: var(--warn-soft); border: 2px solid var(--warn); color: var(--warn); border-radius: var(--r); padding: .7rem 1rem; font-size: .9rem; font-weight: 700; margin-bottom: 1rem; }
+  .banner .note { display: block; font-weight: 400; font-size: .78rem; margin-top: .3rem; color: var(--warn); }
+  .section { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .2rem 1rem 1rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm); }
   .section p { white-space: pre-wrap; font-size: .85rem; line-height: 1.45; }
   .section ul { margin: .3rem 0 .3rem 1.1rem; padding: 0; font-size: .85rem; line-height: 1.5; }
   .section li { margin: .2rem 0; }

@@ -62,6 +62,8 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
     if not case_dir.exists():
         raise FileNotFoundError(f"case_dir does not exist: {case_dir}")
 
+    # Resolve once for the containment guard below.
+    case_root = case_dir.resolve()
     uploaded = 0
     skipped_oversize = 0
     for path in sorted(case_dir.rglob("*")):
@@ -80,6 +82,18 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
         from recupero._common import is_link_like
         if is_link_like(path):
             log.warning("skipping symlink in case_dir: %s", path)
+            continue
+        # Containment guard (v0.36): a file reached THROUGH a junctioned /
+        # symlinked PARENT dir is itself a regular file (is_link_like misses
+        # it), but its real path escapes case_dir. Pre-v0.36 the blanket
+        # "skip nested non-briefs" branch happened to block this; now that we
+        # mirror every nested subdir, refuse anything whose resolved path is
+        # not inside case_dir so a planted junction can't exfiltrate host
+        # files under the bucket prefix.
+        try:
+            path.resolve().relative_to(case_root)
+        except (OSError, ValueError):
+            log.warning("skipping path resolving outside case_dir: %s", path)
             continue
         # Per-file size cap — refuse oversized files BEFORE
         # read_bytes() / _read_text() pulls them into RAM. Without
@@ -121,17 +135,23 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
                 )
             continue
 
-        # building_package deliverables: case_dir/briefs/*.html, *.pdf, *.svg etc.
-        # Mirror the directory verbatim under the bucket prefix.
+        # Any nested deliverable subdir — briefs/, legal_requests/,
+        # regulatory_filing/, exhibit_pack/, custody/, … — is mirrored
+        # VERBATIM under the bucket prefix so the FULL deliverable tree
+        # reaches the operator console, not just briefs/. (tx_evidence/ is
+        # handled above; logs/ + prices_cache/ are in _SKIP_DIRS.)
         #
-        # IMPORTANT: read_bytes() rather than _read_text() — briefs/ now
-        # contains PDF files emitted by WeasyPrint, and PDF is a binary
-        # format (UTF-8 decoding chokes on the binary stream at the
-        # first non-ASCII byte after the `%PDF-1.4` header). HTML/SVG
-        # files written with utf-8 encoding round-trip fine through
-        # read_bytes — we just don't need to transcode here, so binary
-        # round-trip is the safer default.
-        if parts[0] == "briefs":
+        # v0.36: pre-fix this branch only matched ``briefs`` and a blanket
+        # ``if len(parts) != 1: skip`` dropped every other subdir, so the
+        # exchange-freeze letters / time-sensitivity advisory / SAR draft /
+        # exhibit pack never synced to the console from a CLI run.
+        #
+        # IMPORTANT: read_bytes() rather than _read_text() — these dirs hold
+        # PDF (WeasyPrint) + SVG (Graphviz) binaries; UTF-8 decoding chokes
+        # on the binary stream. HTML/JSON written utf-8 round-trip fine
+        # through read_bytes, so binary is the safe default. Each path
+        # segment is validated inside _upload_to_subpath.
+        if len(parts) >= 2:
             bucket_path = "/".join(parts)
             content_type = _content_type_for(path.suffix.lower())
             _upload_to_subpath(store, bucket_path, path.read_bytes(),
@@ -141,10 +161,6 @@ def upload_case_dir(case_dir: Path, store: SupabaseCaseStore) -> int:
             continue
 
         # Top-level files: write_json for *.json, write_text for the rest.
-        if len(parts) != 1:
-            log.warning("skipping nested non-evidence file: %s", rel)
-            continue
-
         filename = parts[0]
         if filename.endswith(".json"):
             data = json.loads(_read_text(path))

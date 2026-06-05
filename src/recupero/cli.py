@@ -183,6 +183,14 @@ def trace_cmd(
              "are mirrored to investigation-files/investigations/<id>/ in addition "
              "to the local case dir. Requires SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.",
     ),
+    max_transfers: int | None = typer.Option(
+        None, "--max-transfers",
+        help="Hard cap on TOTAL transfers fetched for this case — the runtime + "
+             "OOM guard. Overrides RECUPERO_MAX_TRANSFERS_PER_CASE (default 50000). "
+             "Use to bound a whale / mega-hack trace so it finishes fast, "
+             "e.g. --max-transfers 300. The trace exits with a partial result "
+             "once the cap is hit.",
+    ),
 ) -> None:
     cfg, env = load_config(config_path)
     if max_depth is not None:
@@ -193,6 +201,15 @@ def trace_cmd(
         cfg.trace.stop_at_contract = False
     if follow_bridges:
         cfg.trace.stop_at_bridge = False
+    if max_transfers is not None:
+        # The tracer reads RECUPERO_MAX_TRANSFERS_PER_CASE from os.environ
+        # (OOM/runtime backstop). Surface it as a first-class CLI flag so an
+        # operator can bound a high-fanout trace without exporting an env var.
+        if max_transfers <= 0:
+            console.print("[bold red]--max-transfers must be a positive integer[/]")
+            raise typer.Exit(code=2)
+        import os as _os
+        _os.environ["RECUPERO_MAX_TRANSFERS_PER_CASE"] = str(max_transfers)
 
     try:
         chain_enum_early = Chain(chain)

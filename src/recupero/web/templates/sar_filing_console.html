@@ -4,34 +4,17 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — SAR / STR Filing (DRAFT)</title>
+<link rel="stylesheet" href="/v1/console/app.css">
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
-  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
-  h2 { font-size: 1rem; margin: 1.4rem 0 .5rem; }
-  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
-  input[type=password], input[type=text], select { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; background: #fff; }
-  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-  button.secondary { background: #fff; color: #2563eb; }
-  button:disabled { opacity: .5; cursor: default; }
-  .draft-banner { border-radius: 10px; padding: .7rem 1rem; margin-bottom: 1rem; font-size: .9rem; font-weight: 700;
-                  background: #fdf6ec; border: 1px solid #f3dca6; color: #9c6a13; }
-  .draft-banner .small { display: block; font-weight: 400; font-size: .78rem; margin-top: .25rem; color: #8a6310; }
-  .cards { display: flex; flex-wrap: wrap; gap: .6rem; margin-bottom: 1rem; }
-  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .7rem 1rem; min-width: 110px; }
-  .card .v { font-size: 1.05rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em; color: #888; }
-  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
-  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
-  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
-  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
-  .err { color: #c0392b; } .ok { color: #1e8449; }
-  .panel { background: #fff; border: 1px solid #e3e3e3; border-radius: 10px; padding: .8rem 1rem; margin-bottom: 1rem; font-size: .82rem; }
+  /* page-specific: SAR / STR filing (draft) */
+  .draft-banner { border-radius: var(--r); padding: .7rem 1rem; margin-bottom: 1rem; font-size: .9rem; font-weight: 700;
+                  background: var(--warn-soft); border: 1px solid var(--warn); color: var(--warn); }
+  .draft-banner .small { display: block; font-weight: 400; font-size: .78rem; margin-top: .25rem; color: var(--warn); }
+  .card .v { font-size: 1.05rem; }
+  .panel { font-size: .82rem; }
   .panel .row { margin-bottom: .25rem; }
-  .panel .k { color: #888; display: inline-block; min-width: 9rem; }
+  .panel .k { color: var(--ink-faint); display: inline-block; min-width: 9rem; }
   .narrative { white-space: pre-wrap; line-height: 1.45; }
-  .empty { color: #888; font-size: .8rem; }
 </style>
 </head>
 <body>

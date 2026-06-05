@@ -782,7 +782,11 @@ def _run_zigha_pipeline(tmp_root: Path) -> tuple[Path, list[str]]:
     # log per HTML file is expected. Filter to the same allow-list the
     # production-shape E2E uses.
     allow = ("WeasyPrint", "libgobject", "PDF render skipped",
-             "PDF generation skipped", "libpangocairo", "libcairo")
+             "PDF generation skipped", "libpangocairo", "libcairo",
+             # RECUPERO_RANDOMIZATION_SECRET not set is intentional in dev/CI
+             # — the module itself says "This is fine for local dev / CI smoke
+             # tests". Allowlisted so it doesn't trip the no-warnings canary.
+             "RECUPERO_RANDOMIZATION_SECRET not set")
     warnings = [
         f"{r.name}/{r.levelname}: {r.getMessage()}"
         for r in captured

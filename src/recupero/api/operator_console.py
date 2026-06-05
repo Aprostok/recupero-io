@@ -26,7 +26,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, status
+from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi.responses import HTMLResponse
 
 log = logging.getLogger(__name__)
@@ -173,6 +173,20 @@ def operator_hub() -> HTMLResponse:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     return HTMLResponse(content=html)
+
+
+@router.get(
+    "/app.css",
+    summary="Shared console design-system stylesheet (Apple-grade). Public — "
+            "styling only, no secret. Linked by every console template.",
+    include_in_schema=False,
+)
+def operator_css() -> Response:
+    from recupero.web.theme import CONSOLE_CSS
+    return Response(
+        content=CONSOLE_CSS, media_type="text/css",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.get(

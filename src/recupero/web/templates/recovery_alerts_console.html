@@ -4,34 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — Recovery Alerts</title>
-<style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0 1.25rem 3rem; color: #1a1a1a; background: #fafafa; }
-  h1 { font-size: 1.4rem; margin: 1rem 0 0.2rem; }
-  .sub { color: #666; font-size: 0.82rem; margin-bottom: 1rem; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1rem; }
-  input[type=password], input[type=text] { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; }
-  select { padding: .4rem .6rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; background: #fff; }
-  button { padding: .4rem .8rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-  button.secondary { background: #fff; color: #2563eb; }
-  button:disabled { opacity: .5; cursor: default; }
-  .summary { font-size: .85rem; margin-bottom: 1rem; color: #444; }
-  .summary .crit { color: #c0392b; font-weight: 700; }
-  .summary .hi { color: #b9770e; font-weight: 700; }
-  table { width: 100%; border-collapse: collapse; background: #fff; font-size: .8rem; border: 1px solid #e3e3e3; border-radius: 10px; overflow: hidden; }
-  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
-  th { background: #f5f5f5; font-size: .68rem; text-transform: uppercase; color: #777; }
-  tr.sev-critical td { background: #fdf3f2; }
-  tr.sev-high td { background: #fdf8ee; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .76rem; word-break: break-all; }
-  .badge { display:inline-block; padding:.08rem .4rem; border-radius:6px; font-size:.7rem; font-weight:600; text-transform: uppercase; }
-  .badge.critical { background:#f9e0dd; color:#a93226; }
-  .badge.high { background:#fbeccd; color:#b9770e; }
-  .right { text-align: right; } #msg { font-size: .8rem; margin-left: .5rem; }
-  .err { color: #c0392b; } .ok { color: #1e8449; }
-  .action { color: #555; font-size: .72rem; max-width: 24rem; }
-  .msgcell { max-width: 22rem; }
-</style>
+<link rel="stylesheet" href="/v1/console/app.css">
 </head>
 <body>
   <h1>🚨 Recovery Alerts</h1>

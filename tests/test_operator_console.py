@@ -27,6 +27,26 @@ def test_hub_is_unauth_html_with_no_secret(monkeypatch):
     assert "RECUPERO_ADMIN_KEY" not in r.text or "set RECUPERO_ADMIN_KEY" not in r.text.split("<script")[0]
 
 
+def test_shared_design_system_css_is_served():
+    """The shared console stylesheet is public, text/css, and carries the
+    design tokens consoles depend on."""
+    r = _client().get("/v1/console/app.css")
+    assert r.status_code == 200
+    assert "text/css" in r.headers["content-type"]
+    assert "--accent" in r.text and "prefers-color-scheme" in r.text
+    # No secret in a public stylesheet.
+    assert "RECUPERO_ADMIN_KEY" not in r.text
+
+
+def test_recovery_alerts_console_links_shared_css():
+    """A converted console links the shared stylesheet and no longer ships its
+    own inline <style> block."""
+    r = _client().get("/v1/recovery-alerts/console")
+    assert r.status_code == 200
+    assert '/v1/console/app.css' in r.text
+    assert "<style>" not in r.text
+
+
 def test_nav_is_public_and_links_live_consoles():
     r = _client().get("/v1/console/nav")
     assert r.status_code == 200

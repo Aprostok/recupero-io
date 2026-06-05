@@ -468,6 +468,12 @@ async def healthz() -> HealthResponse:
     return await health()
 
 
+@app.get("/", include_in_schema=False)
+async def root() -> RedirectResponse:
+    """Bare-domain convenience: send visitors to the operator console."""
+    return RedirectResponse(url="/v1/console")
+
+
 @app.get(
     "/v1/whoami",
     tags=["meta"],

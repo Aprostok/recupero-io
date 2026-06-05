@@ -122,8 +122,9 @@ def test_async_count_matches_baseline(parsed):
     # awaits the existing require_api_key dep) and `require_role()._dep` (awaits
     # require_api_key + a sync env-read role lookup). Both non-blocking; covered
     # by test_no_blocking_io_inside_async_def.
-    assert total == 31, (
-        f"async def count drifted to {total} (was 31). Update baseline and "
+    # v0.38 (UI): +1 — `root` (bare-domain → /v1/console RedirectResponse; pure).
+    assert total == 32, (
+        f"async def count drifted to {total} (was 32). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

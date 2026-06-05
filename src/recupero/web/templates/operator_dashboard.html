@@ -5,46 +5,159 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — Operator Console</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-         margin: 0; padding: 0 1.5rem 3rem; color: #1a1a1a; background: #f7f8fa; }
-  header { padding: 1.2rem 0 .4rem; }
-  h1 { font-size: 1.5rem; margin: 0; }
-  .sub { color: #666; font-size: 0.85rem; margin: .25rem 0 1rem; }
-  .bar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: 1.2rem; }
-  input[type=password] { padding: .45rem .7rem; border: 1px solid #ccc; border-radius: 6px; font-size: .85rem; width: 320px;
-         font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  button { padding: .45rem .9rem; border: 1px solid #2563eb; background: #2563eb; color: #fff; border-radius: 6px; cursor: pointer; font-size: .85rem; }
-  button:hover { background: #1d4ed8; } #msg { font-size: .8rem; margin-left: .5rem; } .err { color: #c0392b; } .ok { color: #1e8449; }
-  .cards { display: flex; flex-wrap: wrap; gap: .7rem; margin-bottom: 1.6rem; }
-  .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 12px; padding: .8rem 1.1rem; min-width: 150px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
-  .card .v { font-size: 1.5rem; font-weight: 700; } .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .05em; color: #888; }
-  .card.alert .v { color: #c0392b; }
-  .group { margin: 1.3rem 0 .5rem; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: #999; font-weight: 700; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: .8rem; }
-  a.tile { display: block; text-decoration: none; color: inherit; background: #fff; border: 1px solid #e3e3e3; border-radius: 12px;
-           padding: 1rem 1.1rem; transition: border-color .12s, box-shadow .12s; }
-  a.tile:hover { border-color: #2563eb; box-shadow: 0 3px 12px rgba(37,99,235,.12); }
-  a.tile .t { font-size: 1.05rem; font-weight: 600; } a.tile .d { color: #666; font-size: .82rem; margin-top: .3rem; line-height: 1.35; }
-  a.tile .emoji { font-size: 1.2rem; margin-right: .4rem; }
-  .soon { opacity: .55; } .soon .badge { background:#eef0f2; color:#777; border-radius:6px; font-size:.62rem; padding:.05rem .4rem; margin-left:.4rem; vertical-align:middle; }
+  /* ── Recupero design system (Apple-grade): typography, depth, motion ── */
+  :root {
+    --bg: #f5f5f7; --bg-grad-1: #eef1f6; --bg-grad-2: #f7f8fb;
+    --surface: rgba(255,255,255,.72); --surface-solid: #ffffff;
+    --ink: #1d1d1f; --ink-soft: #6e6e73; --ink-faint: #86868b;
+    --hair: rgba(0,0,0,.08); --hair-strong: rgba(0,0,0,.12);
+    --accent: #0071e3; --accent-press: #0058b0; --accent-soft: rgba(0,113,227,.10);
+    --alert: #d70015; --alert-soft: rgba(215,0,21,.08); --ok: #1d8a4e;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.05);
+    --shadow-md: 0 6px 24px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.05);
+    --shadow-lg: 0 18px 48px rgba(0,0,0,.14), 0 6px 16px rgba(0,0,0,.08);
+    --r-sm: 10px; --r: 16px; --r-lg: 22px;
+    --ease: cubic-bezier(.32,.72,0,1);
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000; --bg-grad-1: #0a0a0c; --bg-grad-2: #161618;
+      --surface: rgba(28,28,30,.66); --surface-solid: #1c1c1e;
+      --ink: #f5f5f7; --ink-soft: #aeaeb2; --ink-faint: #8e8e93;
+      --hair: rgba(255,255,255,.10); --hair-strong: rgba(255,255,255,.16);
+      --accent: #0a84ff; --accent-press: #409cff; --accent-soft: rgba(10,132,255,.16);
+      --alert: #ff453a; --alert-soft: rgba(255,69,58,.14); --ok: #30d158;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,.5);
+      --shadow-md: 0 8px 28px rgba(0,0,0,.55);
+      --shadow-lg: 0 22px 56px rgba(0,0,0,.7);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  body {
+    font-family: var(--font); margin: 0; color: var(--ink);
+    background:
+      radial-gradient(1200px 600px at 80% -10%, var(--accent-soft), transparent 60%),
+      linear-gradient(180deg, var(--bg-grad-1), var(--bg-grad-2) 280px, var(--bg) 600px);
+    background-attachment: fixed; min-height: 100vh;
+    padding-bottom: 4rem; letter-spacing: -0.011em;
+  }
+
+  /* Sticky frosted top bar */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: .85rem; flex-wrap: wrap;
+    padding: .8rem clamp(1rem, 4vw, 2.5rem);
+    background: var(--surface); backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: saturate(180%) blur(20px);
+    border-bottom: 1px solid var(--hair);
+  }
+  .brand { display: flex; align-items: center; gap: .6rem; margin-right: auto; }
+  .brand .mark {
+    width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(140deg, var(--accent), #34c0ff); color: #fff; font-size: 1.05rem;
+    box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,.4);
+  }
+  .brand .name { font-size: 1.02rem; font-weight: 650; letter-spacing: -0.02em; }
+  .brand .name small { display: block; font-size: .68rem; font-weight: 500; color: var(--ink-faint); letter-spacing: .01em; }
+  input#key {
+    padding: .55rem .8rem; border: 1px solid var(--hair-strong); border-radius: var(--r-sm);
+    font-size: .82rem; width: min(340px, 52vw); background: var(--surface-solid); color: var(--ink);
+    font-family: var(--mono); transition: border-color .18s var(--ease), box-shadow .18s var(--ease);
+  }
+  input#key:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+  button#load {
+    padding: .55rem 1.1rem; border: 0; background: var(--accent); color: #fff; border-radius: var(--r-sm);
+    cursor: pointer; font-size: .82rem; font-weight: 590; letter-spacing: -0.01em;
+    transition: transform .12s var(--ease), background .18s, box-shadow .18s; box-shadow: var(--shadow-sm);
+  }
+  button#load:hover { background: var(--accent-press); }
+  button#load:active { transform: scale(.96); }
+  #msg { font-size: .76rem; color: var(--ink-soft); }
+  #msg.err { color: var(--alert); } #msg.ok { color: var(--ok); }
+
+  main { padding: 0 clamp(1rem, 4vw, 2.5rem); max-width: 1280px; margin: 0 auto; }
+
+  /* Hero */
+  .hero { padding: 2.6rem 0 1.4rem; }
+  .hero h1 { font-size: clamp(1.9rem, 4.5vw, 2.9rem); font-weight: 700; margin: 0; letter-spacing: -0.03em; line-height: 1.05; }
+  .hero h1 .grad {
+    background: linear-gradient(120deg, var(--accent), #34c0ff 60%, #7c5cff);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero p { color: var(--ink-soft); font-size: 1.0rem; line-height: 1.5; max-width: 60ch; margin: .7rem 0 0; }
+
+  /* Metric cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: .85rem; margin: 1.8rem 0 .5rem; }
+  .card {
+    position: relative; overflow: hidden; background: var(--surface-solid); border: 1px solid var(--hair);
+    border-radius: var(--r); padding: 1.05rem 1.1rem 1rem; box-shadow: var(--shadow-sm);
+    transition: transform .25s var(--ease), box-shadow .25s var(--ease);
+  }
+  .card::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); opacity: .0; transition: opacity .25s; }
+  .card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
+  .card:hover::before { opacity: .9; }
+  .card .v { font-size: 1.85rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin-top: .5rem; font-weight: 600; }
+  .card.alert .v { color: var(--alert); } .card.alert::before { background: var(--alert); opacity: .9; }
+
+  /* Section + console tiles */
+  .group { display: flex; align-items: center; gap: .6rem; margin: 2rem 0 .9rem; }
+  .group .glabel { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-faint); font-weight: 700; }
+  .group .gline { height: 1px; flex: 1; background: var(--hair); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: .9rem; }
+  .tile {
+    display: flex; gap: .85rem; text-decoration: none; color: inherit; background: var(--surface-solid);
+    border: 1px solid var(--hair); border-radius: var(--r); padding: 1.05rem 1.15rem;
+    box-shadow: var(--shadow-sm); transition: transform .25s var(--ease), box-shadow .25s var(--ease), border-color .25s;
+  }
+  a.tile:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: transparent; }
+  .tile .ico {
+    flex: 0 0 auto; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
+    font-size: 1.25rem; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--hair);
+    transition: transform .25s var(--ease);
+  }
+  a.tile:hover .ico { transform: scale(1.08) rotate(-3deg); }
+  .tile .body { min-width: 0; }
+  .tile .t { font-size: 1.02rem; font-weight: 620; letter-spacing: -0.015em; display: flex; align-items: center; gap: .4rem; }
+  .tile .d { color: var(--ink-soft); font-size: .83rem; margin-top: .25rem; line-height: 1.4; }
+  .tile .chev { margin-left: auto; align-self: center; color: var(--ink-faint); transition: transform .25s var(--ease), color .25s; font-size: 1.1rem; }
+  a.tile:hover .chev { transform: translateX(3px); color: var(--accent); }
+  .tile.soon { opacity: .6; }
+  .badge { background: var(--accent-soft); color: var(--accent); border-radius: 6px; font-size: .6rem; font-weight: 700;
+           text-transform: uppercase; letter-spacing: .04em; padding: .12rem .42rem; }
+  .empty { color: var(--ink-faint); font-size: .85rem; padding: 1rem 0; }
+
+  /* entrance motion */
+  @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+  .cards .card, .grid .tile { animation: rise .5s var(--ease) both; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
-  <header>
-    <h1>🛡️ Recupero Operator Console</h1>
-    <div class="sub">One place to run every phase of the investigation pipeline. Paste your operator key once —
-      it is held in this tab only (sessionStorage) and travels in a request header, never the URL; the linked
-      consoles pick it up automatically.</div>
-  </header>
-
-  <div class="bar">
-    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" autocomplete="off">
+  <div class="topbar">
+    <div class="brand" aria-label="Recupero Operator Console">
+      <div class="mark">🛡️</div>
+      <div class="name">Recupero<small>Operator Console</small></div>
+    </div>
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" autocomplete="off" spellcheck="false">
     <button id="load">Load</button>
     <span id="msg"></span>
   </div>
 
-  <div class="cards" id="cards"></div>
-  <div id="nav"></div>
+  <main>
+    <section class="hero">
+      <h1>Trace. Freeze. <span class="grad">Recover.</span></h1>
+      <p>One place to run every phase of the investigation pipeline — tracing, screening,
+         clustering, freeze letters, and litigation artifacts. Paste your operator key once;
+         it lives in this tab only (sessionStorage) and travels in a request header, never the URL.</p>
+    </section>
+
+    <div class="cards" id="cards"></div>
+    <div id="nav"></div>
+  </main>
 
 <script>
 (function () {
@@ -54,53 +167,50 @@
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
   function key() { return ($("key").value || "").trim(); }
-
   function fmt(v) { return (v === null || v === undefined) ? "—" : esc(v); }
 
+  var STATS = [
+    ["cases_total", "Traced cases"], ["cases_with_brief", "With freeze brief"],
+    ["cases_triaged", "AI-triaged"], ["cases_with_exhibit", "Exhibit packs"],
+    ["pending_reviews", "Pending reviews", true], ["watchlist_items", "Watched addresses"],
+    ["watchlist_moved", "Moved since check", true], ["label_candidates_pending", "Label candidates"]
+  ];
   function renderStats(s) {
     s = s || {};
-    $("cards").innerHTML =
-      card(fmt(s.cases_total), "Traced cases") +
-      card(fmt(s.cases_with_brief), "With freeze brief") +
-      card(fmt(s.cases_triaged), "AI-triaged") +
-      card(fmt(s.cases_with_exhibit), "Exhibit packs") +
-      card(fmt(s.pending_reviews), "Pending reviews", s.pending_reviews) +
-      card(fmt(s.watchlist_items), "Watched addresses") +
-      card(fmt(s.watchlist_moved), "Moved since last check", s.watchlist_moved) +
-      card(fmt(s.label_candidates_pending), "Label candidates");
-  }
-  function card(v, l, alertN) {
-    var cls = (alertN && alertN > 0) ? "card alert" : "card";
-    return '<div class="' + cls + '"><div class="v">' + v + '</div><div class="l">' + esc(l) + '</div></div>';
+    $("cards").innerHTML = STATS.map(function (d, i) {
+      var v = s[d[0]], alertN = d[2] ? v : 0;
+      var cls = (alertN && alertN > 0) ? "card alert" : "card";
+      return '<div class="' + cls + '" style="animation-delay:' + (i * 35) + 'ms">' +
+             '<div class="v">' + fmt(v) + '</div><div class="l">' + esc(d[1]) + '</div></div>';
+    }).join("");
   }
 
   function renderNav(consoles) {
-    var groups = {};
-    (consoles || []).forEach(function (c) { (groups[c.group] = groups[c.group] || []).push(c); });
-    var h = "";
-    Object.keys(groups).forEach(function (g) {
-      h += '<div class="group">' + esc(g) + '</div><div class="grid">';
+    var groups = {}, order = [];
+    (consoles || []).forEach(function (c) { if (!groups[c.group]) { groups[c.group] = []; order.push(c.group); } groups[c.group].push(c); });
+    var n = 0, h = "";
+    order.forEach(function (g) {
+      h += '<div class="group"><span class="glabel">' + esc(g) + '</span><span class="gline"></span></div><div class="grid">';
       groups[g].forEach(function (c) {
         var live = c.live !== false;
-        var inner = '<div class="t"><span class="emoji">' + esc(c.emoji || "•") + '</span>' + esc(c.label) +
-                    (live ? "" : '<span class="badge">soon</span>') + '</div>' +
-                    '<div class="d">' + esc(c.desc || "") + '</div>';
-        if (live) {
-          h += '<a class="tile" href="' + esc(c.path) + '">' + inner + '</a>';
-        } else {
-          h += '<div class="tile soon">' + inner + '</div>';
-        }
+        var inner =
+          '<div class="ico">' + esc(c.emoji || "•") + '</div>' +
+          '<div class="body"><div class="t">' + esc(c.label) + (live ? "" : ' <span class="badge">soon</span>') + '</div>' +
+          '<div class="d">' + esc(c.desc || "") + '</div></div>' +
+          (live ? '<span class="chev">›</span>' : '');
+        var style = ' style="animation-delay:' + (n++ * 28) + 'ms"';
+        h += live ? '<a class="tile" href="' + esc(c.path) + '"' + style + '>' + inner + '</a>'
+                  : '<div class="tile soon"' + style + '>' + inner + '</div>';
       });
       h += '</div>';
     });
-    $("nav").innerHTML = h;
+    $("nav").innerHTML = h || '<p class="empty">No consoles registered.</p>';
   }
 
   function loadNav() {
-    // Public metadata — no key needed.
     fetch("/v1/console/nav").then(function (r) { return r.json(); })
       .then(function (d) { renderNav(d.consoles); })
-      .catch(function () { $("nav").innerHTML = '<p class="err">Could not load navigation.</p>'; });
+      .catch(function () { $("nav").innerHTML = '<p class="empty">Could not load navigation.</p>'; });
   }
 
   function loadStats() {

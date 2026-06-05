@@ -197,10 +197,11 @@ def test_only_known_safe_filters_used():
         # v0.35.8 (F1): line shifted 233 → 342 when the filter/focus control
         # row + its CSS/JS were added above this embed. v0.38.0 (#6): shifted
         # 342 → 370 when the risk-colour toggle + risk legend + high-risk badge
-        # + tooltip risk row were added above it. Same JSON-in-application/json
-        # boundary with the same data-layer </script> / <!-- / --> escaping in
-        # graph_ui.py — re-pinned, not newly trusted.
-        "src/recupero/reports/templates/interactive_graph.html.j2": {370},
+        # + tooltip risk row were added above it. v0.38 (UI): 370 → 279 when the
+        # <style> block was upgraded to the design-system (more compact CSS).
+        # Same JSON-in-application/json boundary with the same data-layer
+        # </script> / <!-- / --> escaping in graph_ui.py — re-pinned, not newly trusted.
+        "src/recupero/reports/templates/interactive_graph.html.j2": {279},
         "src/recupero/reports/templates/engagement_letter.html.j2": {185},
         "src/recupero/portal/templates/journey.html.j2": {208},
     }

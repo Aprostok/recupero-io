@@ -105,6 +105,55 @@ def test_trace_max_transfers_sets_cap(tmp_path, monkeypatch) -> None:
     assert captured.get("cap") == "300"
 
 
+# ----- recovery_snapshot_iff_recoverable gate (Jacob round finding) -----
+
+def test_max_recoverable_usd_resolution() -> None:
+    """The recovery-snapshot emission gate parses the recoverable figure with
+    the SAME field resolution the output_integrity validator uses, so a $0
+    case never ships a (misleading) recovery snapshot."""
+    from decimal import Decimal
+
+    from recupero.worker._deliverables import _max_recoverable_usd
+
+    assert _max_recoverable_usd({}) == Decimal(0)
+    assert _max_recoverable_usd({"MAX_RECOVERABLE_USD": "$0.00"}) == Decimal(0)
+    assert _max_recoverable_usd({"max_recoverable_usd": "$100,000.00"}) == Decimal("100000.00")
+    assert _max_recoverable_usd({"TOTAL_FREEZABLE_USD": "$50,000"}) == Decimal("50000")
+    # Unparseable / hostile value degrades to 0 (never raises) → no snapshot.
+    assert _max_recoverable_usd({"MAX_RECOVERABLE_USD": "garbage"}) == Decimal(0)
+
+
+def test_recovery_snapshot_suppressed_at_zero_recoverable(tmp_path) -> None:
+    """Regression for the Jacob-round HIGH: a recovery snapshot must NOT be
+    emitted when nothing is recoverable, even though RECOVERY_ESTIMATE exists —
+    shipping it would mislead the victim (recovery_snapshot_iff_recoverable)."""
+    from datetime import UTC, datetime
+
+    from recupero.models import Case, Chain
+    from recupero.reports.victim import VictimInfo
+    from recupero.worker._deliverables import build_all_deliverables
+
+    case = Case(
+        case_id="rs-zero", seed_address="0x" + "a" * 40, chain=Chain.ethereum,
+        incident_time=datetime(2024, 1, 1, tzinfo=UTC), transfers=[],
+        exchange_endpoints=[], unlabeled_counterparties=[], software_version="t",
+        trace_started_at=datetime(2024, 1, 1, tzinfo=UTC),
+        trace_completed_at=datetime(2024, 1, 1, tzinfo=UTC),
+    )
+    victim = VictimInfo(name="V", wallet_address="0x" + "a" * 40)
+    fb = {
+        "FREEZABLE": [], "DESTINATIONS": [], "MAX_RECOVERABLE_USD": "$0.00",
+        "RECOVERY_ESTIMATE": {"realistic_recovery_usd": "$0.00"},
+    }
+    written = build_all_deliverables(
+        case=case, victim=victim, freeze_brief=fb, case_dir=tmp_path,
+        skip_freeze_briefs=False, investigation_id="t",
+    )
+    assert not any(p.name.startswith("recovery_snapshot_") for p in written), (
+        "recovery snapshot must not ship at $0 recoverable"
+    )
+
+
 def test_trace_max_transfers_rejects_nonpositive(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ETHERSCAN_API_KEY", "test-key")
     monkeypatch.setenv("RECUPERO_DATA_DIR", str(tmp_path))

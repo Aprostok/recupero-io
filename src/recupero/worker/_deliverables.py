@@ -49,6 +49,26 @@ from recupero.reports.victim import VictimInfo
 log = logging.getLogger(__name__)
 
 
+def _max_recoverable_usd(freeze_brief: dict[str, Any]) -> Decimal:
+    """The case's recoverable-USD figure, parsed from freeze_brief.
+
+    Field resolution mirrors the output_integrity validator's
+    ``_brief_max_recoverable_usd`` (MAX_RECOVERABLE_USD / max_recoverable_usd /
+    TOTAL_FREEZABLE_USD) so the recovery-snapshot emission gate and the
+    ``recovery_snapshot_iff_recoverable`` invariant never disagree. Returns
+    Decimal(0) on a missing / unparseable value (never raises)."""
+    raw = (
+        freeze_brief.get("MAX_RECOVERABLE_USD")
+        or freeze_brief.get("max_recoverable_usd")
+        or freeze_brief.get("TOTAL_FREEZABLE_USD")
+        or 0
+    )
+    try:
+        return Decimal(str(raw).replace("$", "").replace(",", "").strip() or "0")
+    except (ArithmeticError, ValueError, TypeError):
+        return Decimal(0)
+
+
 # Default investigator info when the cases row doesn't carry it (the
 # schema doesn't have an investigator column today). Each Railway
 # deployment can override via RECUPERO_INVESTIGATOR_* env vars.
@@ -259,10 +279,16 @@ def build_all_deliverables(
     # v0.22.0 — Recovery Snapshot. Pre-engagement deliverable:
     # 1-page HTML summarising recommendation + headline ROI +
     # per-issuer breakdown + drivers. Designed to be shared with
-    # the victim BEFORE they pay the engagement fee. Always
-    # emitted when freeze_brief carries a RECOVERY_ESTIMATE.
+    # the victim BEFORE they pay the engagement fee. Emitted when
+    # freeze_brief carries a RECOVERY_ESTIMATE *and* there is something
+    # recoverable. v0.36: gating additionally on a non-zero recoverable
+    # amount — a recovery snapshot at $0 recoverable would mislead the
+    # victim about recovery prospects (and trips the output_integrity
+    # invariant recovery_snapshot_iff_recoverable). Field resolution
+    # mirrors the validator (MAX_RECOVERABLE_USD / max_recoverable_usd /
+    # TOTAL_FREEZABLE_USD).
     try:
-        if freeze_brief.get("RECOVERY_ESTIMATE"):
+        if freeze_brief.get("RECOVERY_ESTIMATE") and _max_recoverable_usd(freeze_brief) > 0:
             from recupero.reports.recovery_snapshot import render_recovery_snapshot
             briefs_dir = case_dir / "briefs"
             briefs_dir.mkdir(parents=True, exist_ok=True)

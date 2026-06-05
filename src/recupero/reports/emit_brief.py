@@ -1489,6 +1489,32 @@ def _build_wallet_clusters_section(case: Case) -> dict[str, Any]:
         clusters = compute_clusters_with_metadata(
             case, label_store=label_store,
         )
+        # v0.38 (#7): feed each cluster into the CONTINUOUS cross-case cluster
+        # store and stamp the cluster with its persistent id. This is what makes
+        # clustering continuous: a later case sharing any member resolves to the
+        # SAME persistent_cluster_id (the store unions them). Best-effort + DSN-
+        # gated — never breaks the brief; no-op without SUPABASE_DB_URL.
+        try:
+            import os as _os
+
+            from recupero.trace.cluster_store import accumulate_cluster
+            _dsn = (_os.environ.get("SUPABASE_DB_URL", "") or "").strip()
+            if _dsn:
+                _chain = case.chain.value
+                for _c in clusters:
+                    _members = _c.get("addresses") or []
+                    if len(_members) < 2:
+                        continue
+                    _conf = _c.get("confidence") or "low"
+                    _heur = (_c.get("heuristics") or [None])[0]
+                    _pid = accumulate_cluster(
+                        _dsn, _members, _chain,
+                        heuristic=_heur, confidence=_conf,
+                    )
+                    if _pid:
+                        _c["persistent_cluster_id"] = _pid
+        except Exception as _exc:  # noqa: BLE001 — never break the brief
+            log.debug("emit_brief: cluster accumulation skipped: %s", _exc)
         # Spec: only surface a section when 2+ identified addresses
         # cluster together. compute_clusters_with_metadata already
         # filters singletons, so any non-empty list satisfies that.

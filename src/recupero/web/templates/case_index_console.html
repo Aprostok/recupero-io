@@ -49,6 +49,21 @@
   }
   .case .cid { font-family: var(--mono); font-size: .78rem; word-break: break-all; }
   .case .vname { font-size: .82rem; font-weight: 600; color: var(--ink); margin-bottom: .22rem; }
+  /* deliverable pipeline */
+  .dl-pipe { display: flex; align-items: center; margin-top: .32rem; gap: 0; }
+  .dl-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; transition: background .2s; }
+  .dl-dot.on  { background: var(--ok); }
+  .dl-dot.off { background: var(--hair-strong); }
+  .dl-seg { flex: 1; height: 1.5px; min-width: 10px; }
+  .dl-seg.on  { background: var(--ok); }
+  .dl-seg.off { background: var(--hair-strong); }
+  /* completeness left border */
+  .case.dl-full { border-left: 3px solid var(--ok); }
+  .case.dl-some { border-left: 3px solid var(--warn); }
+  .case.dl-none { border-left: 3px solid var(--crit); }
+  /* stagger entry */
+  @keyframes case-rise { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+  .case { animation: case-rise .3s var(--ease,cubic-bezier(.32,.72,0,1)) both; }
   .badge.on  { background: var(--ok-soft);    color: var(--ok);        }
   .badge.off { background: var(--surface-3);  color: var(--ink-faint); }
   .badge.test { background: var(--warn-soft, #fde9c8); color: var(--warn, #8a5a00); }
@@ -155,25 +170,42 @@
     if(rep.hidden_test && !rep.include_test){ hd += " · " + rep.hidden_test + " test hidden"; }
     $("caseshd").textContent = hd;
     if(!rows.length){ $("cases").innerHTML = '<div class="empty">No real cases. Tick “Show test/validation” to see fixtures.</div>'; return; }
+    var _DL_LABELS = ['Brief', 'Triage', 'Exhibit', 'Graph'];
     var box = document.createElement("div");
-    rows.forEach(function(r){
+    rows.forEach(function(r, idx){
       var b = document.createElement("button");
-      b.className = "case"; b.setAttribute("data-cid", r.case_id);
-      var badges = ""
-        + (r.is_test ? '<span class="badge test" title="'+esc(r.test_reason||"test/validation fixture")+'">test</span>' : '')
-        + '<span class="badge '+(r.has_brief?"on":"off")+'">brief</span>'
-        + '<span class="badge '+(r.has_ai_triage?"on":"off")+'">triage</span>'
-        + '<span class="badge '+(r.has_exhibit_pack?"on":"off")+'">exhibit</span>'
-        + '<span class="badge '+(r.has_graph?"on":"off")+'">graph</span>';
-      var vname = r.victim_name ? '<div class="vname">'+esc(r.victim_name)+'</div>' : '';
-      // Deliverable completeness ring
-      var dN = [r.has_brief,r.has_ai_triage,r.has_exhibit_pack,r.has_graph].filter(Boolean).length;
+      var dFlags = [r.has_brief, r.has_ai_triage, r.has_exhibit_pack, r.has_graph];
+      var dN = dFlags.filter(Boolean).length;
       var dRingCls = dN===4?"r-ok":dN>=2?"r-high":"r-crit";
+      var dlCls = dN===4?"dl-full":dN>=1?"dl-some":"dl-none";
+      b.className = "case " + dlCls;
+      b.setAttribute("data-cid", r.case_id);
+      b.style.animationDelay = (idx * 22) + "ms";
+
+      // Completeness ring
       var dRing = '<span class="score-ring sm '+dRingCls+'" style="--score:'+(dN*2.5)+';flex-shrink:0">'
                 + '<span class="ring-inner" style="font-size:.4rem">'+dN+'/4</span></span>';
-      b.innerHTML = '<div style="display:flex;align-items:flex-start;gap:.42rem">'
+
+      // Victim name + case id
+      var vname = r.victim_name ? '<div class="vname">'+esc(r.victim_name)+'</div>' : '';
+      var testBadge = r.is_test ? '<span class="badge test" title="'+esc(r.test_reason||"fixture")+'">test</span> ' : '';
+
+      // Deliverable pipeline: ●━━●━━○━━○
+      var pipe = '<div class="dl-pipe" title="Brief · Triage · Exhibit · Graph">';
+      dFlags.forEach(function(on, fi) {
+        if (fi > 0) { pipe += '<div class="dl-seg '+(on?'on':'off')+'"></div>'; }
+        pipe += '<div class="dl-dot '+(on?'on':'off')+'" title="'+_DL_LABELS[fi]+(on?' ✓':' ✗')+'"></div>';
+      });
+      pipe += '</div>';
+
+      b.innerHTML = '<div style="display:flex;align-items:flex-start;gap:.45rem">'
                   + dRing
-                  + '<div style="min-width:0">' + vname + '<div class="cid">'+esc(r.case_id)+'</div>'+badges+'</div>'
+                  + '<div style="min-width:0;flex:1">'
+                  + testBadge
+                  + vname
+                  + '<div class="cid">'+esc(r.case_id)+'</div>'
+                  + pipe
+                  + '</div>'
                   + '</div>';
       box.appendChild(b);
     });

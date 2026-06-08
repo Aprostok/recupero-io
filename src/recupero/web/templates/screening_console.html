@@ -19,9 +19,32 @@
   tr.errored td { background: var(--surface-2); color: var(--ink-soft); }
   /* live-mode progress bar */
   .rc-prog-wrap { margin: .5rem 0 .3rem; display: none; }
-  .rc-prog-track { height: 4px; background: var(--hair-strong); border-radius: 2px; }
-  .rc-prog-fill { height: 100%; background: var(--accent); border-radius: 2px; width: 0%; transition: width .3s var(--ease,cubic-bezier(.4,0,.2,1)); }
-  .rc-prog-label { font-size: .72rem; color: var(--ink-soft); margin-top: .2rem; }
+  .rc-prog-track { height: 5px; background: var(--hair-strong); border-radius: 2px; overflow: hidden; }
+  .rc-prog-fill {
+    height: 100%; border-radius: 2px; width: 0%;
+    background: linear-gradient(90deg, var(--accent), #34c0ff);
+    transition: width .28s cubic-bezier(.4,0,.2,1);
+    position: relative;
+  }
+  @keyframes rc-scan-pulse {
+    0%,100% { box-shadow: 3px 0 12px 2px rgba(0,113,227,.7); }
+    50%     { box-shadow: 3px 0 4px  0   rgba(0,113,227,.3); }
+  }
+  .rc-prog-fill.active { animation: rc-scan-pulse 1s ease-in-out infinite; }
+  .rc-prog-label { font-size: .72rem; color: var(--ink-soft); margin-top: .25rem; display: flex; align-items: center; gap: .45rem; }
+  .rc-prog-addr { font-family: var(--mono,monospace); font-size: .68rem; color: var(--ink-faint); }
+  /* risk distribution donut */
+  .risk-dist-panel {
+    display: none; align-items: center; gap: 1.15rem; flex-wrap: wrap;
+    padding: .72rem 1rem; background: var(--surface); border: 1px solid var(--hair);
+    border-radius: var(--r); box-shadow: var(--shadow-sm); margin-bottom: .9rem;
+    animation: rc-rise .4s var(--ease,cubic-bezier(.32,.72,0,1)) both;
+  }
+  .risk-dist-legend { display: flex; flex-direction: column; gap: .2rem; justify-content: center; flex: 1; min-width: 140px; }
+  .risk-dist-row { display: flex; align-items: center; gap: .4rem; font-size: .72rem; }
+  .risk-dist-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .risk-dist-lbl { color: var(--ink-soft); flex: 1; }
+  .risk-dist-cnt { color: var(--ink-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -46,6 +69,7 @@
     <div class="rc-prog-label" id="prog-label"></div>
   </div>
   <div id="statsbox" class="stats"></div>
+  <div id="risk-dist" class="risk-dist-panel"></div>
   <div id="cards" class="cards" style="margin-top:1rem"></div>
   <div id="out"></div>
 
@@ -91,11 +115,74 @@
            '<span class="ring-inner">' + esc(String(n)) + '</span></span>';
   }
 
+  // ── Risk distribution donut ──────────────────────────────────────────────
+  var _RISK_COLORS = { sanctioned: '#d70015', critical: '#d70015', high: '#ef4444', medium: '#f59e0b', low: '#22d3ee', clean: '#1d8a4e' };
+  var _RISK_ORDER  = ['sanctioned', 'high', 'medium', 'low', 'clean'];
+  var _buckets = { sanctioned: 0, high: 0, medium: 0, low: 0, clean: 0 };
+
+  function _addBucket(bc) {
+    var k = (bc === 'critical') ? 'sanctioned' : (bc || 'clean');
+    if (_buckets[k] != null) { _buckets[k]++; }
+    else { _buckets.clean++; }
+  }
+  function _resetBuckets() { _RISK_ORDER.forEach(function(k){ _buckets[k] = 0; }); }
+
+  function _drawRiskDist() {
+    var el = $("risk-dist"); if (!el) return;
+    var total = _RISK_ORDER.reduce(function(s, k) { return s + _buckets[k]; }, 0);
+    if (!total) { el.style.display = "none"; return; }
+    el.style.display = "flex";
+
+    // SVG donut
+    var cx = 52, cy = 52, ro = 44, ri = 28, gap = 1.5;
+    var svg = ['<svg viewBox="0 0 104 104" xmlns="http://www.w3.org/2000/svg" style="width:104px;height:104px;flex-shrink:0">'];
+    var angle = -Math.PI / 2;
+    _RISK_ORDER.forEach(function(k) {
+      var n = _buckets[k]; if (!n) return;
+      var sweep = (n / total) * (2 * Math.PI);
+      if (sweep < 0.05) { angle += sweep; return; }
+      var end = angle + sweep, laf = sweep > Math.PI ? 1 : 0;
+      var sa = angle + gap / ro, ea = end - gap / ro;
+      var x1 = cx + ro * Math.cos(sa), y1 = cy + ro * Math.sin(sa);
+      var x2 = cx + ro * Math.cos(ea), y2 = cy + ro * Math.sin(ea);
+      var x3 = cx + ri * Math.cos(ea), y3 = cy + ri * Math.sin(ea);
+      var x4 = cx + ri * Math.cos(sa), y4 = cy + ri * Math.sin(sa);
+      var d = 'M'+x1.toFixed(1)+' '+y1.toFixed(1)+
+              ' A '+ro+' '+ro+' 0 '+laf+' 1 '+x2.toFixed(1)+' '+y2.toFixed(1)+
+              ' L '+x3.toFixed(1)+' '+y3.toFixed(1)+
+              ' A '+ri+' '+ri+' 0 '+laf+' 0 '+x4.toFixed(1)+' '+y4.toFixed(1)+'Z';
+      svg.push('<path d="'+d+'" fill="'+_RISK_COLORS[k]+'" opacity=".9"/>');
+      angle = end;
+    });
+    svg.push('<text x="52" y="48" text-anchor="middle" font-size="16" font-weight="800" fill="var(--ink)" font-family="-apple-system,system-ui,sans-serif">' + total + '</text>');
+    svg.push('<text x="52" y="62" text-anchor="middle" font-size="7" letter-spacing=".04em" fill="var(--ink-faint)" font-family="-apple-system,system-ui,sans-serif">SCREENED</text>');
+    svg.push('</svg>');
+
+    // Legend
+    var lgd = '<div class="risk-dist-legend">';
+    _RISK_ORDER.forEach(function(k) {
+      var n = _buckets[k]; if (!n) return;
+      var pct = Math.round(n / total * 100);
+      lgd += '<div class="risk-dist-row">'
+           + '<span class="risk-dist-dot" style="background:' + _RISK_COLORS[k] + '"></span>'
+           + '<span class="risk-dist-lbl">' + k.charAt(0).toUpperCase() + k.slice(1) + '</span>'
+           + '<span class="risk-dist-cnt">' + n + ' &middot; ' + pct + '%</span>'
+           + '</div>';
+    });
+    lgd += '</div>';
+    el.innerHTML = svg.join('') + lgd;
+  }
+
   function render(rep) {
     var rows = rep.results || [];
     var flaggedCount = rows.filter(function(r){ return r.flagged; }).length;
     var cleanCount   = rows.filter(function(r){ return !r.flagged && !r.error; }).length;
     var errCount     = rows.filter(function(r){ return !!r.error; }).length;
+
+    // Rebuild risk buckets from all rows
+    _resetBuckets();
+    rows.forEach(function(r){ if (!r.error) _addBucket(bandClass(r.risk_band)); });
+    _drawRiskDist();
 
     // Summary cards
     $("cards").innerHTML =
@@ -193,10 +280,12 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     $("go").disabled = true; $("live").disabled = true;
     $("out").innerHTML = ""; $("cards").innerHTML = "";
+    _resetBuckets(); $("risk-dist").style.display = "none";
 
     // Progress bar
     var pw = $("prog-wrap"), pf = $("prog-fill"), pl = $("prog-label");
-    pw.style.display = "block"; pf.style.width = "0%"; pl.textContent = "0 / " + lines.length;
+    pw.style.display = "block"; pf.style.width = "0%"; pf.className = "rc-prog-fill active";
+    pl.innerHTML = '<span>0 / ' + lines.length + '</span>';
 
     // Empty live table
     var tbodyId = "live-tbody-" + Date.now();
@@ -211,20 +300,25 @@
 
     function finish() {
       $("go").disabled = false; $("live").disabled = false;
-      pw.style.display = "none";
+      pw.style.display = "none"; pf.className = "rc-prog-fill";
       $("cards").innerHTML =
         card(lines.length,     "Screened",  "") +
         card(nFlagged,          "Flagged",   nFlagged ? "alert" : "") +
         card(nClean,            "Clean",     nClean && !nFlagged ? "ok" : "") +
         (nErr ? card(nErr, "Errors", "alert") : "");
+      _drawRiskDist();
       setMsg("Live screen done " + new Date().toLocaleTimeString(), "ok");
+      if (window.RC && window.RC.toast) { window.RC.toast("Screening complete ✓", "ok"); }
     }
 
     function next(i) {
       if (i >= lines.length) { finish(); return; }
       var addr = lines[i];
-      pf.style.width = Math.round(i / lines.length * 100) + "%";
-      pl.textContent = (i + 1) + " / " + lines.length + "  —  " + addr.slice(0, 16) + (addr.length > 16 ? "…" : "");
+      var pct = Math.round(i / lines.length * 100);
+      pf.style.width = pct + "%";
+      var shortAddr = addr.length > 18 ? addr.slice(0,10) + "…" + addr.slice(-6) : addr;
+      pl.innerHTML = '<span>' + (i + 1) + " / " + lines.length + '</span>'
+                   + '<span class="rc-prog-addr">' + esc(shortAddr) + '</span>';
       setMsg("Screening " + (i + 1) + " / " + lines.length + "…");
 
       // Append spinner row
@@ -255,6 +349,7 @@
             var flagged = !!r.flagged;
             if (flagged) nFlagged++; else nClean++;
             var bc = bandClass(r.risk_band);
+            _addBucket(bc); _drawRiskDist();
             var profUrl = "/v1/console/address-profile?address=" + encodeURIComponent(addr) + "&chain=" + encodeURIComponent(chainVal);
             row.className = flagged ? "flagged" : "";
             row.style.animation = "rc-rowIn .3s ease both";

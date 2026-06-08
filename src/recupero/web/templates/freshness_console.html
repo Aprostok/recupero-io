@@ -91,6 +91,7 @@
       card(sum.stale,    "Stale",    sum.stale    ? "alert" : "") +
       card(sum.unknown,  "Unknown",  sum.unknown  ? "alert" : "") +
       card(sum.fresh,    "Fresh",    "ok");
+    if (window.RC) { window.RC.countUp($("cards")); }
 
     var rows = rep.sources || [];
     if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">No label sources reported.</p>'; return; }
@@ -110,6 +111,11 @@
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+      window.RC.attachSort($("tablewrap"));
+      window.RC.animateGauges($("tablewrap"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -119,6 +125,10 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Loading…");
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(5);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(4, 6);
+    }
     fetch("/v1/freshness", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 401) throw new Error("Unauthorized — check the key.");
@@ -126,8 +136,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (rep) {
+        render(rep);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Freshness data loaded", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

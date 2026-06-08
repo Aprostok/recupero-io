@@ -229,6 +229,11 @@
     html += extra;
 
     $("out").innerHTML = html;
+    if (window.RC) {
+      window.RC.animateRings($("out"));
+      window.RC.animateGauges($("out"));
+      window.RC.staggerRows($("out"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -242,6 +247,7 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Loading…");
     clear();
+    if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(3) + window.RC.skeletonTable(4, 5); }
     fetch("/v1/recovery-snapshot?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
@@ -251,8 +257,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (payload) { render(payload); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (payload) {
+        render(payload);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Recovery snapshot loaded ✓", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

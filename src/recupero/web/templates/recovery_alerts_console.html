@@ -25,6 +25,7 @@
   </div>
 
   <div id="cards" class="cards" style="margin-bottom:.5rem"></div>
+  <div id="sev-hist" class="sev-hist-wrap"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -51,14 +52,45 @@
     var configured = !!rep.db_configured;
     var sum = rep.summary || {};
     var nCrit = sum.critical || 0, nHigh = sum.high || 0;
+    var nMed  = sum.medium  || 0, nLow  = sum.low   || 0;
+    var total = rows.length;
 
     // Summary metric cards
     $("cards").innerHTML =
-      card(nCrit,        "Critical",     nCrit ? "alert" : "") +
-      card(nHigh,        "High",         nHigh ? "" : "ok")   +
-      card(rows.length,  "Total alerts", "");
+      card(nCrit,  "Critical",     nCrit ? "alert" : "") +
+      card(nHigh,  "High",         nHigh ? "" : "ok")   +
+      card(nMed,   "Medium",       "")                   +
+      card(total,  "Total alerts", "");
+    if (window.RC) { window.RC.countUp($("cards")); }
 
-    // Empty state -- handles BOTH db_configured=false AND an empty list.
+    // Severity histogram bar
+    var hist = $("sev-hist");
+    if (hist) {
+      if (!total) {
+        hist.innerHTML = "";
+      } else {
+        var segs = [
+          { n: nCrit, color: "var(--crit)", label: "Critical" },
+          { n: nHigh, color: "var(--warn)", label: "High" },
+          { n: nMed,  color: "#f59e0b",     label: "Medium" },
+          { n: nLow,  color: "var(--ok)",   label: "Low" }
+        ];
+        var bar = '<div class="sev-hist-bar">';
+        segs.forEach(function(s) {
+          if (!s.n) return;
+          bar += '<div class="sev-hist-seg" style="width:' + Math.round(s.n / total * 100) + '%;background:' + s.color + '" title="' + s.label + ': ' + s.n + '"></div>';
+        });
+        bar += '</div><div class="sev-hist-legend">';
+        segs.forEach(function(s) {
+          if (!s.n) return;
+          bar += '<div class="sev-hist-item"><span class="sev-hist-dot" style="background:' + s.color + '"></span>' + esc(s.label) + ' &middot; ' + esc(s.n) + '</div>';
+        });
+        bar += '</div>';
+        hist.innerHTML = bar;
+      }
+    }
+
+    // Empty state
     if (!configured || !rows.length) {
       $("tablewrap").innerHTML =
         '<p class="sub">No recovery alerts (no DB configured, or none fired yet).</p>';
@@ -70,7 +102,7 @@
       '<th>Kind</th>' +
       '<th>Address</th>' +
       '<th>Chain</th>' +
-      '<th class="right">Δ USD</th>' +
+      '<th class="right">&#916; USD</th>' +
       '<th class="right">Dormant days</th>' +
       '<th>Role</th>' +
       '<th>Label</th>' +
@@ -80,23 +112,27 @@
       '</tr></thead><tbody>';
     rows.forEach(function (r) {
       var sev = (r.severity == null ? "" : String(r.severity));
-      var sevCls = (sev === "critical" || sev === "high") ? sev : "";
+      var sevCls = (sev === "critical" || sev === "high") ? sev : (sev === "medium" ? "warn" : "");
       h += '<tr class="sev-' + esc(sevCls) + '">' +
         '<td><span class="badge ' + esc(sevCls) + '">' + esc(sev) + '</span></td>' +
         '<td><span class="chip">' + esc(r.kind) + '</span></td>' +
         '<td class="mono">' + esc(r.address) + '</td>' +
         '<td>' + (window.RC && window.RC.chainChip ? window.RC.chainChip(r.chain) : '<span class="chip">' + esc(r.chain) + '</span>') + '</td>' +
         deltaCell(r.delta_usd) +
-        '<td class="right">' + esc(r.dormant_days == null ? "—" : r.dormant_days) + '</td>' +
-        '<td>' + esc(r.role == null ? "—" : r.role) + '</td>' +
-        '<td>' + esc(r.label_name == null ? "—" : r.label_name) + '</td>' +
+        '<td class="right">' + esc(r.dormant_days == null ? "&#8212;" : r.dormant_days) + '</td>' +
+        '<td>' + esc(r.role == null ? "&#8212;" : r.role) + '</td>' +
+        '<td>' + esc(r.label_name == null ? "&#8212;" : r.label_name) + '</td>' +
         '<td class="msgcell">' + esc(r.message) + '</td>' +
         '<td class="action">' + esc(r.recommended_action) + '</td>' +
-        '<td class="mono age" title="' + esc(r.created_at || '') + '">' + (window.RC ? window.RC.timeAgo(r.created_at) : esc(r.created_at || '—')) + '</td>' +
+        '<td class="mono age" title="' + esc(r.created_at || '') + '">' + (window.RC ? window.RC.timeAgo(r.created_at) : esc(r.created_at || '&#8212;')) + '</td>' +
         '</tr>';
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+      window.RC.attachSort($("tablewrap"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -107,6 +143,10 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     var sev = ($("sev").value || "").trim();
     setMsg("Loading…");
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(4);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(5, 8);
+    }
     fetch("/v1/recovery-alerts" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
@@ -115,8 +155,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (rep) {
+        render(rep);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Recovery alerts loaded", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

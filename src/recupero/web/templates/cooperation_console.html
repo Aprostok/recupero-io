@@ -88,6 +88,7 @@
       card(nIssuers, "Issuers") +
       card(nLetters, "Letters sent") +
       card(nBlackHoles, "Black holes", nBlackHoles ? "alert" : "ok");
+    if (window.RC) { window.RC.countUp($("cards")); }
 
     // Empty state â€” handles BOTH db_configured=false AND an empty list.
     if (!configured || !rows.length) {
@@ -128,6 +129,12 @@
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+      window.RC.attachSort($("tablewrap"));
+      window.RC.animateRings($("tablewrap"));
+      window.RC.animateGauges($("tablewrap"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -136,7 +143,11 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(3);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(5, 9);
+    }
     fetch("/v1/cooperation", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
@@ -144,8 +155,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (rep) {
+        render(rep);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Cooperation data loaded", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   var timer = null;

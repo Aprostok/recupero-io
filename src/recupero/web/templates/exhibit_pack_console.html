@@ -47,10 +47,11 @@
   function render(rep) {
     var entries = rep.entries || [];
     var count = (rep.exhibit_count == null) ? entries.length : rep.exhibit_count;
-    $("cards").innerHTML =
-      card(count, "Exhibits") +
-      card(rep.case_id || "â€”", "Case") +
-      card(rep.software_version || "â€”", "Version");
+    $(“cards”).innerHTML =
+      card(count, “Exhibits”) +
+      card(rep.case_id || “&#8212;”, “Case”) +
+      card(rep.software_version || “&#8212;”, “Version”);
+    if (window.RC) { window.RC.countUp($(“cards”)); }
 
     if (!entries.length) {
       $("tablewrap").innerHTML = '<p class="empty">No exhibits / case not found.</p>';
@@ -75,6 +76,9 @@
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -86,8 +90,12 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
     clear();
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(3);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(4, 4);
+    }
     fetch("/v1/exhibit-pack?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 400) throw new Error("Bad case id â€” must be 1..128 non-blank characters.");
@@ -97,8 +105,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (rep) {
+        render(rep);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Exhibit pack loaded ✓", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

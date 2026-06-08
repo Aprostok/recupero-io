@@ -160,8 +160,12 @@
         var n = rep.count!=null?rep.count:(rep.cases||[]).length;
         var note = (rep.hidden_test && !rep.include_test) ? " ("+rep.hidden_test+" test/validation hidden)" : "";
         setMsg("Loaded "+ n +" case(s)"+note,"ok");
+        if (window.RC) { window.RC.toast(n + " case(s) loaded", "ok"); }
       })
-      .catch(function(e){ setMsg(e.message,"err"); });
+      .catch(function(e){
+        setMsg(e.message,"err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   function renderCases(rep){
@@ -213,6 +217,7 @@
     var cnt = $("case-count"); if (cnt) { cnt.textContent = rows.length + " cases"; }
     // Clear search on reload
     var inp = $("case-search"); if (inp && inp.value) { inp.value = ""; }
+    if (window.RC) { window.RC.animateRings($("cases")); }
   }
 
   function openCase(cid){

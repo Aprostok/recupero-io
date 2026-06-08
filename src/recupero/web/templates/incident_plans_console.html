@@ -31,6 +31,9 @@
   .ord { text-align: center; width: 2.5rem; }
   .rationale { color: var(--ink-soft); font-size: .73rem; max-width: 30rem; }
   .plan-cards-wrap { margin-top: .5rem; }
+  /* stagger animation for plan cards */
+  @keyframes plan-rise { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+  .plan-card { animation: plan-rise .35s cubic-bezier(.32,.72,0,1) both; }
 </style>
 </head>
 <body>
@@ -112,6 +115,7 @@
       card(nCrit,        "Critical",           nCrit ? "alert" : "") +
       card(nHigh,        "High",               nHigh ? "" : "ok") +
       card(nImmediate,   "Immediate actions",  nImmediate ? "alert" : "");
+    if (window.RC) { window.RC.countUp($("cards")); }
 
     // Empty state -- handles BOTH db_configured=false AND an empty list.
     if (!configured || !plans.length) {
@@ -121,11 +125,11 @@
     }
 
     var out = "";
-    plans.forEach(function (p) {
+    plans.forEach(function (p, idx) {
       var sev = (p.severity == null ? "" : String(p.severity));
       var sevCls = (sev === "critical" || sev === "high") ? sev : "";
       var steps = p.steps || [];
-      out += '<div class="plan-card sev-' + esc(sevCls) + '">' +
+      out += '<div class="plan-card sev-' + esc(sevCls) + '" style="animation-delay:' + (idx * 40) + 'ms">' +
         '<div class="card-head">' +
           '<span class="badge ' + esc(sevCls) + '">' + esc(sev) + '</span>' +
           '<span class="mono">' + esc(p.address) + '</span>' +
@@ -147,6 +151,7 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     var sev = ($("sev").value || "").trim();
     setMsg("Loading…");
+    if (window.RC) { $("cards").innerHTML = window.RC.skeletonCards(4); }
     fetch("/v1/incident-plans" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
@@ -155,8 +160,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (rep) {
+        render(rep);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Incident plans loaded", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

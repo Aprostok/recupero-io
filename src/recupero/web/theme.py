@@ -176,6 +176,13 @@ tr.sev-high td:first-child     { border-left: 3px solid var(--warn); }
 .action  { color: var(--ink-soft); font-size: .74rem; max-width: 24rem; }
 .msgcell { max-width: 28rem; font-size: .8rem; }
 td.age   { white-space: nowrap; font-size: .76rem; }
+/* ── Severity histogram (recovery-alerts, shared) ── */
+.sev-hist-wrap   { margin: .6rem 0 .9rem; }
+.sev-hist-bar    { display: flex; height: 8px; border-radius: 99px; overflow: hidden; background: var(--hair-strong); }
+.sev-hist-seg    { height: 100%; transition: width .75s cubic-bezier(.32,.72,0,1); }
+.sev-hist-legend { display: flex; flex-wrap: wrap; gap: .3rem .85rem; margin-top: .42rem; }
+.sev-hist-item   { display: flex; align-items: center; gap: .3rem; font-size: .72rem; color: var(--ink-soft); }
+.sev-hist-dot    { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 
 /* ── Badges / pills ── */
 .badge {
@@ -1154,6 +1161,50 @@ CONSOLE_JS = r"""
     return function () { running = false; };
   }
 
+  // buildSparkline(el, data, opts)
+  // data: array of numbers. opts: {color?, fillColor?, width?, height?, strokeWidth?}
+  // Renders a pure-SVG sparkline into el (replaces content).
+  // Returns null if data has < 2 points.
+  function buildSparkline(el, data, opts) {
+    if (!el || !data || data.length < 2) return null;
+    opts = opts || {};
+    var W  = opts.width  || (el.clientWidth  || 80);
+    var H  = opts.height || (el.clientHeight || 28);
+    var SW = opts.strokeWidth || 1.5;
+    var col  = opts.color     || 'var(--accent)';
+    var fill = opts.fillColor || 'none';
+    // Normalize
+    var nums = data.map(Number).filter(isFinite);
+    if (nums.length < 2) return null;
+    var mn = Math.min.apply(null, nums);
+    var mx = Math.max.apply(null, nums);
+    var range = mx - mn || 1;
+    var pad = SW + 1;
+    var xStep = (W - pad * 2) / (nums.length - 1);
+    // Build SVG path
+    var pts = nums.map(function(v, i) {
+      var x = pad + i * xStep;
+      var y = H - pad - ((v - mn) / range) * (H - pad * 2);
+      return [x, y];
+    });
+    var d = 'M' + pts.map(function(p) { return p[0].toFixed(1) + ',' + p[1].toFixed(1); }).join('L');
+    var svgFill = fill !== 'none'
+      ? '<path d="' + d + 'L' + pts[pts.length-1][0].toFixed(1) + ',' + (H-pad).toFixed(1) +
+        'L' + pts[0][0].toFixed(1) + ',' + (H-pad).toFixed(1) + 'Z"' +
+        ' fill="' + fill + '" opacity="0.25"/>'
+      : '';
+    el.innerHTML = '<svg width="' + W + '" height="' + H + '" viewBox="0 0 ' + W + ' ' + H + '"' +
+      ' style="display:block;overflow:visible" aria-hidden="true">' +
+      svgFill +
+      '<path d="' + d + '" fill="none" stroke="' + col + '" stroke-width="' + SW +
+        '" stroke-linecap="round" stroke-linejoin="round"/>' +
+      // Highlight last point
+      '<circle cx="' + pts[pts.length-1][0].toFixed(1) + '" cy="' + pts[pts.length-1][1].toFixed(1) + '"' +
+        ' r="2.5" fill="' + col + '"/>' +
+      '</svg>';
+    return el;
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1168,7 +1219,8 @@ CONSOLE_JS = r"""
     animateGauges: animateGauges,
     timeAgo: timeAgo,
     toast: toast,
-    buildFlowGraph: buildFlowGraph
+    buildFlowGraph: buildFlowGraph,
+    buildSparkline: buildSparkline
   };
 })();
 """

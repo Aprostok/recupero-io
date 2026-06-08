@@ -19,6 +19,9 @@
   .iss-chip .mono { font-size: .7rem; }
   /* frozen rate bar cell */
   td.rec-cell { white-space: nowrap; }
+  /* throughput timing cell */
+  .tp-wrap { display: flex; align-items: center; gap: .38rem; justify-content: flex-end; }
+  .tp-val  { font-variant-numeric: tabular-nums; white-space: nowrap; font-size: .78rem; }
 </style>
 </head>
 <body>
@@ -52,6 +55,19 @@
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
   function hours(x) { return (x == null) ? "—" : (Math.round(x * 10) / 10) + "h"; }
+
+  // Throughput timing cell: pbar (0–168h = 1 week) + numeric value
+  function tpCell(h) {
+    if (h == null) return '<td class="right"><span style="color:var(--ink-faint)">&#8212;</span></td>';
+    var n = Number(h);
+    var cls    = n > 72 ? "crit" : n > 24 ? "warn" : "ok";
+    var barPct = Math.min(100, Math.round(n / 168 * 100));
+    return '<td class="right">' +
+      '<div class="tp-wrap">' +
+      '<span class="pbar" style="width:36px"><span class="pbar-fill ' + cls + '" style="width:' + barPct + '%"></span></span>' +
+      '<span class="tp-val">' + esc((Math.round(n * 10) / 10) + "h") + '</span>' +
+      '</div></td>';
+  }
 
   // Parse a human USD string like "$1.2M" or "$450k" or "$12,345" back to a rough number
   function parseUSD(s) {
@@ -113,6 +129,7 @@
       card(nCompleted,   "Completed traces",  nCompleted ? "ok" : "") +
       card(fmtM(totalFrozen),   "Total frozen",   totalFrozen ? "ok" : "") +
       card(fmtM(totalReturned), "Returned to victims", totalReturned ? "ok" : "");
+    if (window.RC) { window.RC.countUp($("cards")); }
 
     // Empty state -- handles BOTH db_configured=false AND an empty list.
     if (!configured || !rows.length) {
@@ -154,13 +171,18 @@
         '<td class="right">' + esc(r.total_frozen_usd_human) + '</td>' +
         recBarCell(r.total_frozen_usd_human, r.total_loss_usd_human) +
         '<td class="right">' + esc(r.total_returned_to_victim_usd_human) + '</td>' +
-        '<td class="right">' + esc(hours(r.median_hours_intake_to_first_letter)) + '</td>' +
-        '<td class="right">' + esc(hours(r.median_hours_letter_to_first_freeze)) + '</td>' +
+        tpCell(r.median_hours_intake_to_first_letter) +
+        tpCell(r.median_hours_letter_to_first_freeze) +
         '<td>' + issuersCell(r.top_issuers) + '</td>' +
         '</tr>';
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+      window.RC.attachSort($("tablewrap"));
+      window.RC.animateGauges($("tablewrap"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -170,6 +192,10 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Loading…");
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(5);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(6, 12);
+    }
     fetch("/v1/law-firm", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 401) throw new Error("Unauthorized — check the key.");
@@ -177,8 +203,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (rep) {
+        render(rep);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Law firm data loaded", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

@@ -13,6 +13,21 @@
   .panel .k { color: var(--ink-faint); flex-shrink: 0; min-width: 9rem; font-size: .74rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
   .narrative { white-space: pre-wrap; line-height: 1.6; font-size: .84rem; }
   h2 { margin: 1.4rem 0 .5rem; }
+  /* jurisdiction pills row */
+  .jur-pills { display: flex; gap: .45rem; margin: .7rem 0 .4rem; flex-wrap: wrap; }
+  .jur-pill  { display: inline-flex; align-items: center; gap: .3rem; padding: .22rem .65rem;
+    border-radius: 99px; font-size: .75rem; font-weight: 600; letter-spacing: .02em;
+    background: var(--surface-2); border: 1.5px solid var(--hair); color: var(--ink-soft);
+    transition: background .15s, border-color .15s, color .15s; cursor: default; }
+  .jur-pill.active { background: var(--accent-soft,rgba(0,113,227,.1)); border-color: var(--accent);
+    color: var(--accent); }
+  .jur-pill .jur-flag { font-size: .9rem; }
+  /* narrative section header */
+  .nar-header { display: flex; align-items: center; justify-content: space-between; margin: 1.4rem 0 .5rem; }
+  .nar-header h2 { margin: 0; }
+  .nar-copy-btn { font-size: .72rem; color: var(--ink-soft); background: var(--surface-2);
+    border: 1px solid var(--hair); border-radius: var(--r); padding: .18rem .55rem; cursor: pointer; }
+  .nar-copy-btn:hover { color: var(--ink); border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -49,15 +64,32 @@
   function card(v, l) { return '<div class="card"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
   function row(k, v) { return '<div class="row"><span class="k">' + esc(k) + '</span><span>' + esc(v) + '</span></div>'; }
 
+  var _JUR_META = {
+    "us": { flag: "&#127482;&#127480;", name: "FinCEN SAR" },
+    "uk": { flag: "&#127468;&#127463;", name: "NCA SAR" },
+    "eu": { flag: "&#127466;&#127482;", name: "goAML STR" }
+  };
+
   function render(ctx) {
     ctx = ctx || {};
     var labels = ctx.labels || {};
     var activity = ctx.activity || {};
     var victim = ctx.victim || {};
+    var jurKey = (ctx.jurisdiction_key || "us").toLowerCase();
 
     var html = '';
 
-    // DRAFT disclaimer -- uses shared .ai-disclaimer style
+    // Jurisdiction pills strip
+    html += '<div class="jur-pills">';
+    ["us","uk","eu"].forEach(function(k) {
+      var m = _JUR_META[k] || {};
+      html += '<span class="jur-pill' + (k === jurKey ? " active" : "") + '">' +
+              '<span class="jur-flag">' + (m.flag || "") + '</span>' +
+              esc(k.toUpperCase()) + ' &middot; ' + esc(m.name || k) + '</span>';
+    });
+    html += '</div>';
+
+    // DRAFT disclaimer
     html += '<div class="ai-disclaimer">' +
       '<div class="ai-disclaimer-icon">&#128196;</div>' +
       '<div class="ai-disclaimer-body">' +
@@ -79,8 +111,8 @@
       row("Jurisdiction",   ctx.jurisdiction_key) +
       '</div>';
 
-    // Key amounts / activity
-    html += '<h2>&#128202;&thinsp;Activity summary</h2><div class="cards">' +
+    // Key amounts / activity cards
+    html += '<h2>&#128202;&thinsp;Activity summary</h2><div class="cards" id="sar-cards">' +
       card(activity.amount_usd || ctx.total_loss_usd || "$0.00", "Amount (USD)") +
       card((ctx.subjects || []).length, "Subjects") +
       card(activity.date_from || "—", "Activity from") +
@@ -101,12 +133,12 @@
     if (!subjects.length) {
       html += '<p class="empty">No subjects derived from this brief.</p>';
     } else {
-      html += '<table><thead><tr><th>Address</th><th>Chain</th><th>Role</th><th>Venue</th>' +
+      html += '<div id="sar-subj-table"><table><thead><tr><th>Address</th><th>Chain</th><th>Role</th><th>Venue</th>' +
               '<th class="right">Amount (USD)</th></tr></thead><tbody>';
       subjects.forEach(function (s) {
         s = s || {};
-        var roleCls = (s.role || "").toLowerCase().includes("perpetrator") ? "crit"
-                    : (s.role || "").toLowerCase().includes("mule") ? "warn" : "";
+        var role = (s.role || "").toLowerCase();
+        var roleCls = role.indexOf("perpetrator") >= 0 ? "crit" : role.indexOf("mule") >= 0 ? "warn" : "";
         html += '<tr>' +
           '<td class="mono">' + esc(s.address) + '</td>' +
           '<td>' + (window.RC && window.RC.chainChip ? window.RC.chainChip(s.chain) : '<span class="chip">' + esc(s.chain) + '</span>') + '</td>' +
@@ -115,14 +147,37 @@
           '<td class="right">' + esc(s.amount_usd) + '</td>' +
           '</tr>';
       });
-      html += '</tbody></table>';
+      html += '</tbody></table></div>';
     }
 
-    // Narrative
-    html += '<h2>&#128221;&thinsp;Narrative</h2>';
-    html += '<div class="panel narrative">' + esc(ctx.sar_narrative) + '</div>';
+    // Narrative with copy button
+    var narText = ctx.sar_narrative || "";
+    html += '<div class="nar-header"><h2>&#128221;&thinsp;Narrative</h2>' +
+            '<button class="nar-copy-btn" id="nar-copy-btn">Copy text</button></div>';
+    html += '<div class="panel narrative" id="nar-text">' + esc(narText) + '</div>';
 
     $("out").innerHTML = html;
+
+    // Post-render enhancements
+    if (window.RC) {
+      var sarCards = document.getElementById("sar-cards");
+      if (sarCards) { window.RC.countUp(sarCards); }
+      var subjTable = document.getElementById("sar-subj-table");
+      if (subjTable) { window.RC.staggerRows(subjTable); window.RC.attachSort(subjTable); }
+    }
+
+    // Narrative copy button
+    var copyBtn = document.getElementById("nar-copy-btn");
+    if (copyBtn && narText) {
+      copyBtn.addEventListener("click", function() {
+        try {
+          navigator.clipboard.writeText(narText).then(function() {
+            copyBtn.textContent = "Copied!";
+            setTimeout(function() { copyBtn.textContent = "Copy text"; }, 1800);
+          });
+        } catch(e) { copyBtn.textContent = "Copy text"; }
+      });
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -138,6 +193,7 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Generating…");
     clear();
+    if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(4) + window.RC.skeletonTable(4, 5); }
     fetch("/v1/sar-filing?case_id=" + encodeURIComponent(cid) + "&jurisdiction=" + encodeURIComponent(j),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
@@ -148,8 +204,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (ctx) { render(ctx); setMsg("Drafted " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (ctx) {
+        render(ctx);
+        setMsg("Drafted " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("SAR draft ready ✓", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

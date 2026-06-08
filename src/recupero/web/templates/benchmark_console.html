@@ -173,6 +173,10 @@
     }
 
     $("out").innerHTML = html;
+    if (window.RC) {
+      window.RC.animateGauges($("out"));
+      window.RC.staggerRows($("out"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -186,6 +190,7 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Loading…");
     clear();
+    if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(3); }
     fetch("/v1/benchmark?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 400) throw new Error("Bad input — invalid case id or malformed ground_truth.json.");
@@ -195,8 +200,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (score) { render(score); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (score) {
+        render(score);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Benchmark loaded ✓", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

@@ -278,6 +278,7 @@
       return '<div class="' + cls + '" style="animation-delay:' + (i * 35) + 'ms">' +
              '<div class="v">' + fmt(v) + '</div><div class="l">' + esc(d[1]) + '</div></div>';
     }).join("");
+    if (window.RC && window.RC.countUp) { window.RC.countUp($("cards")); }
   }
 
   function renderNav(consoles) {
@@ -321,7 +322,11 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (s) { renderStats(s); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
+      .then(function (s) {
+        renderStats(s);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC && window.RC.toast) { window.RC.toast("Dashboard stats loaded", "ok"); }
+      })
       .catch(function (e) { setMsg(e.message, "err"); });
   }
 

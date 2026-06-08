@@ -107,6 +107,7 @@
       card(n, st.replace("_", " "), st === "pending_review" && n ? "alert" : st === "promoted" ? "ok" : "") +
       (nHigh ? card(nHigh, "High confidence", "ok") : "") +
       (nMed  ? card(nMed,  "Medium confidence", "") : "");
+    if (window.RC) { window.RC.countUp($("cards")); }
 
     if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">No candidates for this status.</p>'; return; }
     var h = '<table><thead><tr>' +
@@ -130,6 +131,11 @@
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+      window.RC.attachSort($("tablewrap"));
+      window.RC.animateRings($("tablewrap"));
+    }
   }
 
   function load() {
@@ -137,6 +143,10 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Loading…");
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(3);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(5, 7);
+    }
     var st = ($("status").value || "pending_review").trim();
     var url = "/v1/labels/candidates?status_filter=" + encodeURIComponent(st);
     fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
@@ -150,8 +160,12 @@
         render(body);
         var n = (body && typeof body.count === "number") ? body.count : ((body.candidates || []).length);
         setMsg(n + " candidate(s) · updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast(n + " label candidate(s) loaded", "ok"); }
       })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   $("load").addEventListener("click", load);

@@ -938,6 +938,25 @@ def _job_refresh_priors() -> None:
     log.info("cron: refreshed %d per-issuer freeze prior(s)", n)
 
 
+def _job_promote_confirmed_wins() -> None:
+    """v0.39 — auto-arm the internal blacklist from CONFIRMED WINS (the
+    compounding moat). Re-materializes every address where stolen funds were
+    actually frozen/returned (full/partial freeze, returned_to_victim) from
+    ``freeze_outcomes`` into the internal-blacklist manual file, so every future
+    case routing through a confirmed-bad address fires instantly.
+
+    The DB is the durable source of truth and the arm is idempotent, so re-running
+    rebuilds the file — it survives an ephemeral data_dir (a redeploy that wipes
+    the file is healed on the next tick). DSN-less → skip."""
+    dsn = _supabase_dsn()
+    if not dsn:
+        log.info("cron: confirmed-win auto-arm skipped — SUPABASE_DB_URL unset")
+        return
+    from recupero.freeze_learning.confirmed_bad import promote_confirmed_wins
+    n = promote_confirmed_wins(dsn=dsn)
+    log.info("cron: confirmed-win auto-arm done — %d address(es) armed", n)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Driver
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1004,6 +1023,15 @@ def _build_default_jobs() -> list[CronJob]:
             name="refresh_priors",
             schedule_fn=_next_daily(hour_utc=3),
             run_fn=_job_refresh_priors,
+        ),
+        CronJob(
+            # v0.39 — confirmed-win auto-arm (compounding moat). Promotes
+            # confirmed-bad addresses (funds actually frozen/returned) from
+            # freeze_outcomes into the internal blacklist. 08:00 UTC, after the
+            # freeze follow-up pass (07:00) so a same-day win is captured.
+            name="confirmed_win_autoarm",
+            schedule_fn=_next_daily(hour_utc=8),
+            run_fn=_job_promote_confirmed_wins,
         ),
     ]
 

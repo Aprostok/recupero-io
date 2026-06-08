@@ -80,8 +80,11 @@
     var pct = Math.min(100, Math.round(score / 10 * 100));
 
     // ── Verdict hero ──────────────────────────────────────────────────────
+    var ringCls = score >= 8 ? "r-crit" : score >= 4 ? "r-high" : "r-ok";
     var h = '<div class="verdict-hero v-' + esc(band) + '">';
-    h += '<div class="vh-icon">' + icon + '</div>';
+    h += '<div class="score-ring ' + ringCls + '" style="--score:' + score + '">' +
+         '<div class="ring-inner">' + esc(p.risk_score != null ? String(p.risk_score) : icon) + '</div>' +
+         '</div>';
     h += '<div class="vh-body">';
     h += '<div class="vh-label">' + esc(p.risk_band || band.toUpperCase()) + '</div>';
     h += '<div class="vh-sub">Risk score <strong>' + esc(p.risk_score) + '</strong>/10 &nbsp;·&nbsp; ' + esc(p.chain) + '</div>';

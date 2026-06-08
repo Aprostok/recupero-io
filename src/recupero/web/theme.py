@@ -377,12 +377,56 @@ td.mono:hover, div.mono:hover { opacity: .82; }
 .ai-disclaimer-title { font-weight: 800; color: var(--warn); font-size: .9rem; letter-spacing: -.01em; margin-bottom: .25rem; }
 .ai-disclaimer-note { font-size: .77rem; color: var(--ink-soft); line-height: 1.5; }
 
+/* ── Table sort + filter ── */
+thead th { cursor: pointer; user-select: none; -webkit-user-select: none; }
+thead th:hover { color: var(--ink-soft); }
+.rc-sa { font-size: .62rem; opacity: .38; margin-left: .25rem; transition: opacity .12s; vertical-align: middle; display: inline-block; pointer-events: none; }
+.rc-sa::after { content: "\21C5"; }
+thead th:hover .rc-sa { opacity: .72; }
+thead th[data-rc-asc]  .rc-sa { opacity: 1; color: var(--accent); }
+thead th[data-rc-desc] .rc-sa { opacity: 1; color: var(--accent); }
+thead th[data-rc-asc]  .rc-sa::after { content: "\25B2"; }
+thead th[data-rc-desc] .rc-sa::after { content: "\25BC"; }
+.rc-filter-bar {
+  display: flex; align-items: center; gap: .55rem;
+  padding: .42rem .78rem; background: var(--surface-2);
+  border: 1px solid var(--hair); border-bottom: 0;
+  border-radius: var(--r) var(--r) 0 0;
+}
+.rc-filter-icon { font-size: 1rem; color: var(--ink-faint); flex-shrink: 0; line-height: 1; }
+.rc-filter-input {
+  flex: 1; border: 0; background: transparent; outline: none;
+  font-size: .82rem; color: var(--ink); font-family: var(--font); padding: .1rem 0;
+}
+.rc-filter-input::placeholder { color: var(--ink-faint); }
+.rc-filter-count { font-size: .72rem; color: var(--ink-faint); white-space: nowrap; padding-right: .2rem; }
+
+/* ── Score ring (conic-gradient gauge) ── */
+.score-ring {
+  --score: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0; position: relative;
+  background: conic-gradient(var(--ring-color, var(--accent)) calc(var(--score) * 36deg), var(--hair-strong) 0deg);
+  animation: rc-rise .55s var(--ease) both;
+}
+.score-ring.sm { width: 28px; height: 28px; }
+.score-ring .ring-inner {
+  position: absolute; top: 5px; right: 5px; bottom: 5px; left: 5px;
+  border-radius: 50%; background: var(--surface);
+  display: flex; align-items: center; justify-content: center;
+  font-size: .7rem; font-weight: 800; line-height: 1; color: var(--ink);
+}
+.score-ring.sm .ring-inner { top: 4px; right: 4px; bottom: 4px; left: 4px; font-size: .56rem; }
+.score-ring.r-crit { --ring-color: var(--crit); }
+.score-ring.r-high { --ring-color: var(--warn); }
+.score-ring.r-ok   { --ring-color: var(--ok);   }
+
 /* ── Accessibility ── */
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 """
 
 CONSOLE_JS = r"""
-/* Recupero console micro-interactions (app.js v1) */
+/* Recupero console micro-interactions (app.js v2) */
 (function () {
   "use strict";
 
@@ -391,7 +435,6 @@ CONSOLE_JS = r"""
     if (!el || el.hasAttribute("data-counting")) return;
     var raw = el.getAttribute("data-target") || el.textContent.trim();
     el.setAttribute("data-target", raw);
-    // Only count if the value is mostly numeric (skip "—", "$1.2M", complex strings)
     var stripped = raw.replace(/[^\d.]/g, "");
     var num = parseFloat(stripped);
     if (isNaN(num) || num < 2 || stripped.length < raw.length * 0.35) return;
@@ -400,7 +443,7 @@ CONSOLE_JS = r"""
     var t0 = performance.now();
     (function tick(now) {
       var p = Math.min(1, (now - t0) / dur);
-      var e = 1 - Math.pow(1 - p, 3); // cubic ease-out
+      var e = 1 - Math.pow(1 - p, 3);
       el.textContent = Math.round(num * e).toLocaleString();
       if (p < 1) { requestAnimationFrame(tick); }
       else { el.textContent = raw; el.removeAttribute("data-counting"); }
@@ -415,6 +458,126 @@ CONSOLE_JS = r"""
     });
   }
 
+  // ── Sort helpers ─────────────────────────────────────────────────────────
+  function _cellVal(td) {
+    if (!td) return "";
+    var v = (td.getAttribute("data-sort") || td.textContent || "").trim();
+    var stripped = v.replace(/[$,%\s]/g, "");
+    var n = parseFloat(stripped.replace(/[^0-9.-]/g, ""));
+    return isNaN(n) ? v.toLowerCase() : n;
+  }
+
+  function _sortTable(table, col) {
+    var ths = table.querySelectorAll("thead th");
+    var th = ths[col];
+    if (!th) return;
+    var asc = th.hasAttribute("data-rc-asc");
+    ths.forEach(function (h) {
+      h.removeAttribute("data-rc-asc");
+      h.removeAttribute("data-rc-desc");
+    });
+    if (asc) { th.setAttribute("data-rc-desc", ""); }
+    else      { th.setAttribute("data-rc-asc",  ""); }
+    var dir = asc ? -1 : 1;
+    var tbody = table.querySelector("tbody");
+    if (!tbody) return;
+    var rows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+    rows.sort(function (a, b) {
+      var av = _cellVal(a.querySelectorAll("td")[col]);
+      var bv = _cellVal(b.querySelectorAll("td")[col]);
+      if (av < bv) return -dir;
+      if (av > bv) return  dir;
+      return 0;
+    });
+    rows.forEach(function (r) { tbody.appendChild(r); });
+    rows.forEach(function (r, i) {
+      r.style.animation = "none";
+      var _ = r.offsetHeight;
+      r.style.animation = "rc-rowIn .22s cubic-bezier(.32,.72,0,1) " + (i * 10) + "ms both";
+    });
+  }
+
+  // Wire sort arrows onto every <thead th> in el (or document)
+  function attachSort(el) {
+    (el || document).querySelectorAll("table").forEach(function (table) {
+      if (table.getAttribute("data-rc-sort")) return;
+      table.setAttribute("data-rc-sort", "1");
+      table.querySelectorAll("thead th").forEach(function (th, i) {
+        if (!th.querySelector(".rc-sa")) {
+          var sa = document.createElement("span");
+          sa.className = "rc-sa";
+          th.appendChild(sa);
+        }
+        th.addEventListener("click", function () { _sortTable(table, i); });
+      });
+    });
+  }
+
+  // ── Filter bar ───────────────────────────────────────────────────────────
+  function attachFilter(el) {
+    var root = el || document;
+    root.querySelectorAll("table").forEach(function (table) {
+      if (table.getAttribute("data-rc-filter")) return;
+      var tbody = table.querySelector("tbody");
+      if (!tbody) return;
+      var allRows = Array.prototype.slice.call(tbody.querySelectorAll("tr"));
+      if (allRows.length < 5) return;
+      table.setAttribute("data-rc-filter", "1");
+
+      var bar = document.createElement("div");
+      bar.className = "rc-filter-bar";
+      bar.innerHTML =
+        '<span class="rc-filter-icon">&#9906;</span>' +
+        '<input class="rc-filter-input" type="text" placeholder="Filter rows…" autocomplete="off" spellcheck="false">' +
+        '<span class="rc-filter-count"></span>';
+      if (table.parentNode) { table.parentNode.insertBefore(bar, table); }
+
+      var inp = bar.querySelector(".rc-filter-input");
+      var cnt = bar.querySelector(".rc-filter-count");
+      cnt.textContent = allRows.length + " rows";
+
+      inp.addEventListener("input", function () {
+        var q = inp.value.trim().toLowerCase();
+        var vis = 0;
+        allRows.forEach(function (row) {
+          var match = !q || (row.textContent || "").toLowerCase().indexOf(q) >= 0;
+          row.style.display = match ? "" : "none";
+          if (match) { vis++; }
+        });
+        cnt.textContent = q ? (vis + " / " + allRows.length) : (allRows.length + " rows");
+      });
+    });
+  }
+
+  // ── Skeleton loading helpers ─────────────────────────────────────────────
+  function skeletonCards(n) {
+    var h = "";
+    for (var i = 0; i < (n || 4); i++) {
+      h += '<div class="card">' +
+           '<div class="v skeleton" style="width:48px;height:1.7rem;border-radius:6px">&nbsp;</div>' +
+           '<div class="l skeleton" style="width:72px;height:.65rem;border-radius:4px;margin-top:.6rem">&nbsp;</div>' +
+           '</div>';
+    }
+    return h;
+  }
+
+  function skeletonTable(rows, cols) {
+    rows = rows || 5; cols = cols || 4;
+    var h = '<table style="pointer-events:none"><thead><tr>';
+    for (var c = 0; c < cols; c++) {
+      h += '<th><span class="skeleton" style="display:inline-block;width:' + (44 + c * 14) + 'px;height:.65rem;border-radius:4px">&nbsp;</span></th>';
+    }
+    h += '</tr></thead><tbody>';
+    for (var r = 0; r < rows; r++) {
+      h += '<tr>';
+      for (var cc = 0; cc < cols; cc++) {
+        h += '<td><span class="skeleton" style="display:inline-block;width:' + (52 + (cc + r) * 7 % 44) + 'px;height:.75rem;border-radius:4px">&nbsp;</span></td>';
+      }
+      h += '</tr>';
+    }
+    return h + '</tbody></table>';
+  }
+
   // ── Watch a DOM node for dynamic content injection ──────────────────────
   function watch(id, fn) {
     var el = document.getElementById(id);
@@ -426,14 +589,22 @@ CONSOLE_JS = r"""
     }).observe(el, { childList: true });
   }
 
-  watch("cards",     function (el) { el.querySelectorAll(".card .v").forEach(countUp); });
-  watch("tablewrap", staggerRows);
-  watch("out",       function (el) {
+  watch("cards", function (el) {
+    el.querySelectorAll(".card .v").forEach(countUp);
+  });
+  watch("tablewrap", function (el) {
+    staggerRows(el);
+    attachSort(el);
+    attachFilter(el);
+  });
+  watch("out", function (el) {
     el.querySelectorAll(".card .v").forEach(countUp);
     staggerRows(el);
+    attachSort(el);
+    attachFilter(el);
   });
 
-  // ── Clipboard copy: click any .mono to copy its text ──────────────────────
+  // ── Clipboard copy: click any .mono to copy its text ─────────────────────
   (function () {
     if (!navigator.clipboard || !navigator.clipboard.writeText) return;
     document.addEventListener("click", function (ev) {
@@ -451,7 +622,14 @@ CONSOLE_JS = r"""
     });
   })();
 
-  // Public API for consoles that need manual triggers (e.g. after tab switch)
-  window.RC = { countUp: countUp, staggerRows: staggerRows };
+  // Public API
+  window.RC = {
+    countUp: countUp,
+    staggerRows: staggerRows,
+    attachSort: attachSort,
+    attachFilter: attachFilter,
+    skeletonCards: skeletonCards,
+    skeletonTable: skeletonTable
+  };
 })();
 """

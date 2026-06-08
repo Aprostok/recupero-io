@@ -73,6 +73,14 @@
     return "score-ok";
   }
 
+  function scoreRingCell(s) {
+    if (s == null) return '<span class="score-ok">&#8212;</span>';
+    var n = Number(s);
+    var cls = n >= 8 ? "r-crit" : n >= 4 ? "r-high" : "r-ok";
+    return '<span class="score-ring sm ' + cls + '" style="--score:' + n + '">' +
+           '<span class="ring-inner">' + esc(String(n)) + '</span></span>';
+  }
+
   function render(rep) {
     var rows = rep.results || [];
     var flaggedCount = rows.filter(function(r){ return r.flagged; }).length;
@@ -102,12 +110,11 @@
       }
       var flagged = !!r.flagged;
       var bc = bandClass(r.risk_band);
-      var sc = scoreClass(r.score);
       h += '<tr class="' + (flagged ? "flagged" : "clean") + '">' +
         '<td class="mono">' + esc(r.address) + '</td>' +
         '<td><span class="rband ' + bc + '">' + esc(r.risk_band) + '</span></td>' +
         '<td>' + esc(r.verdict) + '</td>' +
-        '<td class="right ' + sc + '">' + esc(r.score == null ? "—" : r.score) + '</td>' +
+        '<td class="right">' + scoreRingCell(r.score) + '</td>' +
         '<td class="right">' + esc(r.label_count == null ? 0 : r.label_count) + '</td>' +
         '<td><span class="badge ' + (flagged ? "critical" : "ok") + '">' +
           (flagged ? "⚠ Flagged" : "✓ Clean") + '</span></td>' +

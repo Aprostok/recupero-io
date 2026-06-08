@@ -27,15 +27,21 @@ We surface the integer amount and the denom string verbatim — the
 brief's pricing layer is responsible for converting uatom -> ATOM
 and ATOM -> USD via the same `pricing.py` lookup as ERC-20.
 
-TODO(wave-7-integration):
-  1. Register CosmosAdapter in `chains/base.ChainAdapter.for_chain`
-     behind `Chain.cosmos`.
-  2. Add bech32-shape Address validation to `models.Address` or
-     introduce a sibling `CosmosAddress` type.
-  3. Wire IBC packet decode for cross-chain continuation: the
-     `MsgRecvPacket` and `MsgTransfer` event types carry the
-     source-chain identifier in the IBC counterparty channel.
-  4. Add Mintscan label ingest to `labels/seeds/cosmos_labels.json`.
+DONE (v0.39, Activation Sprint #5): CosmosAdapter is now a concrete
+``ChainAdapter`` registered in ``chains/base.ChainAdapter.for_chain`` behind
+``Chain.cosmos`` with a real httpx transport injected at the factory, and
+bech32 addresses validate structurally — ``models.Address`` is an
+unconstrained ``str`` (chain-aware normalization happens here), so no model
+change was needed. The BFS now reaches + follows funds ON Cosmos and persists
+a real ``EvidenceReceipt`` per hop.
+
+TODO(wave-8-integration) — remaining cross-chain depth:
+  1. Wire IBC packet decode for cross-chain continuation OUT of Cosmos: the
+     ``MsgRecvPacket`` / ``MsgTransfer`` event types carry the source-chain
+     identifier in the IBC counterparty channel.
+  2. Add Mintscan label ingest to ``labels/seeds/cosmos_labels.json``.
+  3. Upgrade ``_bech32_basic_check`` to a full BIP-173 polymod checksum verify
+     + plumb the ``/cosmwasm/wasm/v1/contract`` lookup into ``is_contract``.
 """
 
 from __future__ import annotations
@@ -47,11 +53,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from recupero.chains.base import ChainAdapter
 from recupero.chains.cosmos.client import (
     CosmosLCDClient,
     base_denom_for,
     resolve_zone,
 )
+from recupero.models import Chain, EvidenceReceipt
 
 log = logging.getLogger(__name__)
 
@@ -496,17 +504,24 @@ def _resolve_max_pages(max_transfers_per_address: int | None) -> int:
 # -----------------------------------------------------------------------------
 
 
-class CosmosAdapter:
-    """Minimal read-only Cosmos / IBC adapter.
+class CosmosAdapter(ChainAdapter):
+    """Read-only Cosmos / IBC adapter.
 
-    Method signatures match `chains/base.ChainAdapter` where possible
-    so the wave-7 integration is straightforward.
+    v0.39 (Activation Sprint #5): now a concrete ``ChainAdapter`` subclass and
+    wired into ``ChainAdapter.for_chain`` behind ``Chain.cosmos``. The earlier
+    "don't inherit because the ABC's ``Address`` is EVM-shaped" rationale is
+    moot — ``models.Address`` is an unconstrained ``str`` alias (chain-aware
+    normalization happens in the adapter), so a bech32 string is already a
+    valid ``Address``.
 
-    All public methods accept a bech32 address string; we do not
-    require the EVM-shaped ``Address`` type since Cosmos addresses
-    aren't 0x-prefixed hex.
+    All public methods accept a bech32 address string. Cross-chain IBC
+    *continuation* (following funds OUT of Cosmos via ``MsgRecvPacket`` /
+    ``MsgTransfer`` counterparty channels) is the next layer and not yet
+    wired — the trace reaches and follows funds ON Cosmos and surfaces the
+    hop + destination address rather than dead-ending.
     """
 
+    chain = Chain.cosmos
     chain_str: str = "cosmos"
 
     def __init__(
@@ -614,13 +629,47 @@ class CosmosAdapter:
 
     # ----- evidence / explorer -----
 
-    def fetch_evidence_receipt(self, tx_hash: str) -> dict[str, Any]:
-        """Minimal evidence-receipt shape. wave-7 will widen to match EVM."""
+    def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
+        """Fetch the full chain-of-custody receipt for ``tx_hash``.
+
+        Builds a real :class:`~recupero.models.EvidenceReceipt` from the LCD
+        ``/cosmos/tx/v1beta1/txs/{hash}`` response — its ``tx_response`` carries
+        the block ``height`` + ``timestamp`` + the raw tx/result. Raises
+        ``ValueError`` if the tx can't be fetched or lacks a block timestamp:
+        the tracer's evidence writer is best-effort (it logs the failure) and we
+        never fabricate a chain-of-custody record with a made-up block time.
+        """
         if not tx_hash or not isinstance(tx_hash, str):
-            return {"_error": "invalid tx_hash"}
-        # LCD: /cosmos/tx/v1beta1/txs/{hash}
-        url = f"{self.client._default_lcd.rstrip('/')}/cosmos/tx/v1beta1/txs/{tx_hash}"
-        return self.client.get_json(url)
+            raise ValueError("invalid tx_hash for cosmos evidence receipt")
+        base = self.client._default_lcd.rstrip("/")
+        url = f"{base}/cosmos/tx/v1beta1/txs/{tx_hash}"
+        body = self.client.get_json(url)
+        if not isinstance(body, dict) or body.get("_error"):
+            err = body.get("_error") if isinstance(body, dict) else "no response"
+            raise ValueError(f"cosmos evidence fetch failed tx={tx_hash}: {err}")
+        tx_response = body.get("tx_response")
+        if not isinstance(tx_response, dict):
+            raise ValueError(f"cosmos evidence: no tx_response for tx={tx_hash}")
+        block_time = _parse_lcd_timestamp(tx_response.get("timestamp"))
+        if block_time is None:
+            raise ValueError(f"cosmos evidence: no block timestamp for tx={tx_hash}")
+        try:
+            block_number = int(tx_response.get("height") or 0)
+        except (TypeError, ValueError):
+            block_number = 0
+        raw_tx = tx_response.get("tx")
+        return EvidenceReceipt(
+            chain=Chain.cosmos,
+            tx_hash=tx_hash,
+            block_number=block_number,
+            block_time=block_time,
+            raw_transaction=raw_tx if isinstance(raw_tx, dict) else {},
+            raw_receipt=tx_response,
+            raw_block_header={},
+            fetched_at=datetime.now(UTC),
+            fetched_from=f"{base}/cosmos/tx/v1beta1/txs",
+            explorer_url=self.explorer_tx_url(tx_hash),
+        )
 
     def explorer_tx_url(self, tx_hash: str, *, zone: str = "cosmos-hub") -> str:
         """Mintscan tx URL — works for the major zones we support."""

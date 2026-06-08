@@ -86,6 +86,29 @@ class ChainAdapter(ABC):
             # adapter resolves its own config.
             from recupero.chains.stellar.adapter import StellarAdapter
             return StellarAdapter()
+        if chain == Chain.cosmos:
+            # v0.39 (Activation Sprint #5): Cosmos / IBC zones (Cosmos Hub,
+            # Osmosis, Injective, Juno, Stargaze, Axelar, Secret, Kava,
+            # Celestia). The adapter resolves the per-zone LCD endpoint from the
+            # queried address's bech32 prefix, so — like Tron/TON/Stellar — it
+            # owns its own config rather than threading RecuperoConfig.
+            #
+            # We MUST inject a real httpx transport here: the CosmosLCDClient
+            # default is a no-network stub used by unit tests, so a bare
+            # CosmosAdapter() would silently fetch ZERO transfers and dead-end
+            # at a Cosmos hop. IBC cross-chain *continuation* (following funds
+            # OUT of Cosmos) is the next layer and not yet wired — the BFS now
+            # reaches + follows funds ON Cosmos and surfaces the hop.
+            import httpx
+
+            from recupero.chains.cosmos.adapter import CosmosAdapter
+            from recupero.chains.cosmos.client import CosmosLCDClient
+            httpx_client = httpx.Client(
+                timeout=httpx.Timeout(connect=10.0, read=20.0, write=20.0, pool=20.0),
+                headers={"User-Agent": "recupero-cosmos/1.0"},
+                follow_redirects=True,
+            )
+            return CosmosAdapter(client=CosmosLCDClient(http_client=httpx_client))
         raise NotImplementedError(f"No adapter for chain {chain}")
 
     # --- block / time ---

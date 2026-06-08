@@ -46,6 +46,7 @@ not transient failures.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from dataclasses import dataclass
@@ -178,6 +179,41 @@ def resolve_zone(address: str) -> ZoneInfo | None:
 # -----------------------------------------------------------------------------
 
 
+def _build_httpx_http_get(client: Any) -> Any:
+    """Adapt an ``httpx.Client`` to the ``http_get(url, params, headers) ->
+    {"status_code", "json"}`` shape :meth:`CosmosLCDClient.get_json` expects.
+
+    Used by the production ``ChainAdapter.for_chain`` path (a bare
+    ``CosmosLCDClient()`` keeps the no-network fallback so unit tests never
+    touch the wire). A transport-level failure is mapped to a synthetic ``503``
+    so ``get_json``'s existing 5xx backoff retries transient network blips
+    rather than letting the exception escape into the tracer; a persistent
+    failure surfaces as an ``_error`` dict after the retries, so the adapter
+    degrades to "no transfers" instead of crashing the trace.
+    """
+
+    def _get(
+        url: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            resp = client.get(url, params=params or {}, headers=headers or {})
+        except Exception as exc:  # noqa: BLE001 — transport flakiness → retryable
+            log.warning("cosmos_lcd_transport_error url=%s: %s", url, exc)
+            return {"status_code": 503, "json": {}}
+        try:
+            body = resp.json()
+        except Exception:  # noqa: BLE001 — non-JSON / truncated body
+            body = {}
+        return {
+            "status_code": int(getattr(resp, "status_code", 0)),
+            "json": body if isinstance(body, dict) else {},
+        }
+
+    return _get
+
+
 class CosmosLCDClient:
     """Thin HTTP wrapper over Cosmos LCD endpoints.
 
@@ -197,10 +233,21 @@ class CosmosLCDClient:
         *,
         default_lcd_base_url: str | None = None,
         http_get: Any = None,
+        http_client: Any = None,
         max_retries: int = 3,
         initial_backoff_sec: float = 1.0,
     ) -> None:
         self._default_lcd = default_lcd_base_url or "https://rest.cosmos.network"
+        # v0.39 (Activation Sprint #5 — for_chain wiring): when a real
+        # ``httpx.Client`` is supplied (the production path from
+        # ``ChainAdapter.for_chain``) and no explicit ``http_get`` override is
+        # given, build the transport callable from it and own it for ``close()``.
+        # Tests keep injecting ``http_get`` directly (network-free); a bare
+        # ``CosmosLCDClient()`` still uses the no-network fallback so unit tests
+        # never touch the wire.
+        self._httpx_client = http_client
+        if http_get is None and http_client is not None:
+            http_get = _build_httpx_http_get(http_client)
         self._http_get = http_get  # callable(url, params, headers) -> {"status_code": int, "json": dict}
         self._max_retries = max_retries
         self._initial_backoff_sec = initial_backoff_sec
@@ -493,5 +540,12 @@ class CosmosLCDClient:
         return zi.lcd_base_url
 
     def close(self) -> None:
-        """No-op for the urllib fallback. Real http_get owners close their own."""
-        return
+        """Close the owned ``httpx.Client`` if one was supplied (the
+        ``ChainAdapter.for_chain`` production path). For an injected
+        ``http_get`` (tests) or the no-network fallback there is nothing to
+        close."""
+        client = self._httpx_client
+        if client is not None and hasattr(client, "close"):
+            with contextlib.suppress(Exception):
+                client.close()
+        self._httpx_client = None

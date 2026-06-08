@@ -10,8 +10,14 @@ What's in scope (v0.32.1):
   * Injective (inj1...)
   * Generic LCD / Mintscan tx-history fetch for any Cosmos zone.
 
-What's NOT in scope (deferred to wave-7+):
-  * IBC packet decode -> cross-chain continuation
+Wired into the live BFS (v0.39, Activation Sprint #5): ``CosmosAdapter`` is
+now registered in ``chains/base.ChainAdapter.for_chain`` behind
+``Chain.cosmos`` (real httpx transport), so a bridge handoff that resolves to
+a cosmos-shape destination (e.g. Axelar/Squid → ``destination_chain="cosmos"``)
+now continues into Cosmos instead of dead-ending.
+
+What's NOT in scope (deferred to wave-8+):
+  * IBC packet decode -> cross-chain continuation OUT of Cosmos
   * CosmWasm contract decode
   * Stargate Token Factory follow-the-money
   * Validator slashing / delegation events
@@ -19,11 +25,9 @@ What's NOT in scope (deferred to wave-7+):
 Even a basic read-only adapter answers "what transactions did this address
 send/receive in window W" — a 0% -> 60% jump vs the v0.32.0 baseline.
 
-TODO(wave-7-integration):
-  * Register `CosmosAdapter` in `chains/base.ChainAdapter.for_chain`
-    behind `Chain.cosmos`.
-  * Add Cosmos chain detection to the BFS frontier when a bridge
-    handoff resolves to a cosmos-shape destination address.
+TODO(wave-8-integration):
+  * Wire IBC packet decode so a Cosmos hop continues to its IBC
+    counterparty chain (follow-the-money OUT of Cosmos).
 """
 
 from recupero.chains.cosmos.adapter import CosmosAdapter

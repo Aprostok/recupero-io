@@ -152,12 +152,14 @@ _TODO_NOTES: dict[tuple[str, str], str] = {
         "frontier + brief Section 4 dead-end reasons"
     ),
     ("src/recupero/chains/cosmos/__init__.py", "TODO"): (
-        "deferred: wave-7-integration — register CosmosAdapter + cosmos BFS "
-        "frontier detection (documented integration plan)"
+        "deferred: wave-8-integration — IBC packet decode for cross-chain "
+        "continuation OUT of Cosmos (CosmosAdapter itself is now registered "
+        "in for_chain + reached by the BFS as of v0.39)"
     ),
     ("src/recupero/chains/cosmos/adapter.py", "TODO"): (
-        "deferred: wave-7-integration — register CosmosAdapter, bech32 "
-        "Address validation, IBC packet decode"
+        "deferred: wave-8-integration — IBC packet decode, Mintscan labels, "
+        "full BIP-173 bech32 checksum (register + bech32-shape validation + "
+        "real EvidenceReceipt done in v0.39 Activation Sprint #5)"
     ),
     ("src/recupero/reports/brief.py", "TODO"): (
         "domain: 6× references to the 'TODO:' placeholder/sentinel "

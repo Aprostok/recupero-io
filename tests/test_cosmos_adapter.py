@@ -732,3 +732,170 @@ def test_extract_transfer_garbage_height_and_amount():
 def test_extract_transfer_events_not_a_list():
     resp = {"txhash": "X", "height": "1", "logs": [], "events": "garbage"}
     assert _extract_transfers_from_tx_response(resp) == []
+
+
+# -----------------------------------------------------------------------------
+# v0.39 (Activation Sprint #5): ChainAdapter.for_chain wiring
+# -----------------------------------------------------------------------------
+
+
+def test_cosmos_adapter_is_chain_adapter_subclass():
+    """CosmosAdapter is now a concrete ChainAdapter subclass with the Chain attr."""
+    from recupero.chains.base import ChainAdapter
+
+    assert issubclass(CosmosAdapter, ChainAdapter)
+    a = CosmosAdapter()
+    assert a.chain == Chain.cosmos
+    a.close()
+
+
+def test_for_chain_returns_working_cosmos_adapter():
+    """for_chain(Chain.cosmos) returns a CosmosAdapter with a real (httpx)
+    transport injected — not the no-network stub. Construction must NOT hit the
+    network (httpx.Client() doesn't connect until a request is made)."""
+    from recupero.chains.base import ChainAdapter
+
+    adapter = ChainAdapter.for_chain(Chain.cosmos, None)
+    try:
+        assert isinstance(adapter, ChainAdapter)
+        assert isinstance(adapter, CosmosAdapter)
+        assert adapter.chain == Chain.cosmos
+        # A non-bech32 (EVM-shape) address degrades to [] before any HTTP, so
+        # this exercises the wiring without a network call.
+        assert adapter.fetch_native_outflows("0xdeadbeef") == []
+    finally:
+        adapter.close()
+
+
+def test_http_client_transport_routes_get_end_to_end():
+    """A supplied http_client (httpx-shaped) is adapted to the http_get contract
+    and actually drives the fetch — proving the for_chain transport works."""
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"tx_responses": [_SAMPLE_TX_RESPONSE]}
+
+    class _FakeHttpx:
+        def __init__(self):
+            self.urls: list[str] = []
+            self.closed = False
+
+        def get(self, url, params=None, headers=None):
+            self.urls.append(url)
+            return _Resp()
+
+        def close(self):
+            self.closed = True
+
+    fake = _FakeHttpx()
+    adapter = CosmosAdapter(client=CosmosLCDClient(http_client=fake))
+    out = adapter.fetch_native_outflows("cosmos1sender0aaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    assert len(out) == 1
+    assert out[0]["amount_raw"] == 1_000_000
+    assert fake.urls  # the httpx transport was actually exercised
+    adapter.close()
+    assert fake.closed is True  # adapter.close() → client.close() → httpx.close()
+
+
+def test_http_client_transport_error_degrades_not_raises():
+    """A transport exception is mapped to a retryable 503 and ultimately an
+    _error dict — the adapter yields [] rather than crashing the trace."""
+    class _BoomHttpx:
+        def get(self, url, params=None, headers=None):
+            raise RuntimeError("connection reset")
+
+        def close(self):
+            pass
+
+    adapter = CosmosAdapter(
+        client=CosmosLCDClient(
+            http_client=_BoomHttpx(), max_retries=1, initial_backoff_sec=0.0
+        )
+    )
+    assert adapter.fetch_native_outflows(
+        "cosmos1sender0aaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ) == []
+    adapter.close()
+
+
+def test_client_close_closes_owned_httpx():
+    class _FakeHttpx:
+        def __init__(self):
+            self.closed = False
+
+        def get(self, url, params=None, headers=None):  # pragma: no cover
+            raise AssertionError("not called in this test")
+
+        def close(self):
+            self.closed = True
+
+    fake = _FakeHttpx()
+    client = CosmosLCDClient(http_client=fake)
+    client.close()
+    assert fake.closed is True
+    # Idempotent: a second close is a no-op and doesn't raise.
+    client.close()
+
+
+# -----------------------------------------------------------------------------
+# v0.39: fetch_evidence_receipt builds a real EvidenceReceipt
+# -----------------------------------------------------------------------------
+
+
+def test_fetch_evidence_receipt_builds_receipt():
+    from recupero.models import EvidenceReceipt
+
+    tx_response = {
+        "txhash": "DEADBEEF",
+        "height": "12345678",
+        "timestamp": "2024-04-12T07:23:11.456Z",
+        "tx": {"body": {"messages": []}},
+        "logs": [],
+    }
+    http_get = _mock_http_get_with_response({"tx_response": tx_response})
+    adapter = CosmosAdapter(client=CosmosLCDClient(http_get=http_get))
+    rcpt = adapter.fetch_evidence_receipt("DEADBEEF")
+    assert isinstance(rcpt, EvidenceReceipt)
+    assert rcpt.chain == Chain.cosmos
+    assert rcpt.tx_hash == "DEADBEEF"
+    assert rcpt.block_number == 12345678
+    assert rcpt.block_time.year == 2024
+    assert rcpt.raw_receipt["txhash"] == "DEADBEEF"
+    assert "mintscan.io" in rcpt.explorer_url
+    # model_dump must succeed (this is the path evidence.py exercises).
+    assert rcpt.model_dump(mode="json")["tx_hash"] == "DEADBEEF"
+
+
+def test_fetch_evidence_receipt_raises_on_fetch_error():
+    import pytest
+
+    def _http_get(url, params=None, headers=None):
+        return {"status_code": 404, "json": {}}
+
+    adapter = CosmosAdapter(
+        client=CosmosLCDClient(
+            http_get=_http_get, max_retries=1, initial_backoff_sec=0.0
+        )
+    )
+    with pytest.raises(ValueError):
+        adapter.fetch_evidence_receipt("NOPE")
+
+
+def test_fetch_evidence_receipt_raises_without_block_timestamp():
+    import pytest
+
+    tx_response = {"txhash": "X", "height": "1", "timestamp": None, "tx": {}}
+    http_get = _mock_http_get_with_response({"tx_response": tx_response})
+    adapter = CosmosAdapter(client=CosmosLCDClient(http_get=http_get))
+    with pytest.raises(ValueError):
+        # never fabricate a chain-of-custody block time
+        adapter.fetch_evidence_receipt("X")
+
+
+def test_fetch_evidence_receipt_rejects_empty_tx_hash():
+    import pytest
+
+    adapter = CosmosAdapter()
+    with pytest.raises(ValueError):
+        adapter.fetch_evidence_receipt("")

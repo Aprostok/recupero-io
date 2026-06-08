@@ -30,6 +30,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -146,6 +147,39 @@ class PayloadTooLargeError(RuntimeError):
         self.path = path
         self.size = size
         self.status_code = status_code
+
+
+# building_package writes per-issuer deliverables tagged with a shared
+# generation stamp ``BRIEF-<YYYYMMDDTHHMMSS>`` (the per-issuer short hash
+# follows). Grouping briefs by that stamp lets us keep the latest generation
+# and prune older ones. The timestamp is fixed-width + zero-padded, so a
+# lexicographic max is chronological.
+_BRIEF_GEN_RE = re.compile(r"BRIEF-(\d{8}T\d{6})")
+
+
+def latest_brief_generation(names: list[str]) -> str | None:
+    """The newest ``BRIEF-<YYYYMMDDTHHMMSS>`` stamp among ``names``, or None."""
+    stamps = {m.group(1) for n in names if (m := _BRIEF_GEN_RE.search(n))}
+    return max(stamps) if stamps else None
+
+
+def stale_brief_generation_files(names: list[str]) -> list[str]:
+    """Given briefs/ filenames, return those belonging to a NON-latest
+    ``BRIEF-<timestamp>`` generation (i.e. safe to prune).
+
+    Files with no ``BRIEF-<timestamp>`` token (flow diagrams, investigator
+    findings, trace report, recovery snapshot, the case-level manifest) are
+    NEVER returned — they aren't generation-scoped. Returns [] when 0 or 1
+    generation is present (nothing to prune)."""
+    gens: dict[str, list[str]] = {}
+    for n in names:
+        m = _BRIEF_GEN_RE.search(n)
+        if m:
+            gens.setdefault(m.group(1), []).append(n)
+    if len(gens) <= 1:
+        return []
+    latest = max(gens)
+    return sorted(f for ts, fs in gens.items() if ts != latest for f in fs)
 
 
 class SupabaseCaseStore:
@@ -436,10 +470,13 @@ class SupabaseCaseStore:
         """Batch-delete every file under ``prefix``. Shared
         implementation between delete_all and delete_under so the
         batching + error-handling stays in one place."""
-        paths = self._walk_all_files(prefix)
+        return self._delete_object_paths(self._walk_all_files(prefix))
+
+    def _delete_object_paths(self, paths: list[str]) -> int:
+        """Batch-delete an explicit list of full object paths (200/req).
+        Shared by prefix-deletes and the brief-generation dedupe."""
         if not paths:
             return 0
-
         deleted = 0
         for i in range(0, len(paths), 200):
             batch = paths[i : i + 200]
@@ -456,9 +493,41 @@ class SupabaseCaseStore:
                 )
             try:
                 deleted += len(resp.json())
-            except Exception:
+            except Exception:  # noqa: BLE001
                 deleted += len(batch)
         return deleted
+
+    def dedupe_brief_generations(self, *, dry_run: bool = True) -> dict[str, Any]:
+        """Keep only the LATEST ``BRIEF-<timestamp>`` generation under briefs/;
+        remove older generations' files.
+
+        Each building_package re-run writes a fresh ``BRIEF-<YYYYMMDDTHHMMSS>``
+        generation of every per-issuer deliverable (le_handoff / freeze_request
+        / manifest). Pre-cleanup-era cases accumulated multiple generations in
+        one folder; the output_integrity validator then sees N disagreeing
+        generations and fires cross-document-consistency criticals. This
+        collapses the case to one clean generation.
+
+        Default ``dry_run=True`` returns what WOULD be removed without touching
+        the bucket. Returns ``{latest, removed, kept, dry_run, deleted}``.
+        No-op (removed=[]) when 0 or 1 generation is present.
+        """
+        names = self.list_files("briefs")
+        stale = stale_brief_generation_files(names)
+        latest = latest_brief_generation(names)
+        removed = [f"briefs/{n}" for n in stale]
+        deleted = 0
+        if removed and not dry_run:
+            deleted = self._delete_object_paths(
+                [self.storage_prefix + r for r in removed]
+            )
+        return {
+            "latest": latest,
+            "removed": removed,
+            "kept": len(names) - len(stale),
+            "dry_run": dry_run,
+            "deleted": deleted,
+        }
 
     # ----- Lifecycle ----- #
 

@@ -1,5 +1,72 @@
 [
   {
+    "address": "0xBd3fa81B58Ba92a82136038B25aDec7066af3155",
+    "name": "Circle CCTP TokenMessenger",
+    "category": "bridge",
+    "source": "circle_cctp_onchain_verified",
+    "confidence": "high",
+    "supports_to_chains": ["avalanche", "optimism", "arbitrum", "base", "polygon", "solana"],
+    "follow_up_url": "https://developers.circle.com/stablecoins/cctp-getting-started",
+    "notes": "CCTP v1 burn entrypoint. depositForBurn(amount, destinationDomain, mintRecipient, burnToken) — destinationDomain is Circle's domain id; mintRecipient is the dest recipient. Verified on-chain (recent txs all depositForBurn).",
+    "added_at": "2026-06-08T00:00:00Z",
+    "chain": "ethereum"
+  },
+  {
+    "address": "0x6B25532e1060CE10cc3B0A99e5683b91BFDe6982",
+    "name": "Circle CCTP TokenMessenger",
+    "category": "bridge",
+    "source": "circle_cctp_onchain_verified",
+    "confidence": "high",
+    "follow_up_url": "https://developers.circle.com/stablecoins/cctp-getting-started",
+    "notes": "CCTP v1 burn entrypoint (Avalanche). Verified on-chain.",
+    "added_at": "2026-06-08T00:00:00Z",
+    "chain": "avalanche"
+  },
+  {
+    "address": "0x2B4069517957735bE00ceE0fadAE88a26365528f",
+    "name": "Circle CCTP TokenMessenger",
+    "category": "bridge",
+    "source": "circle_cctp_onchain_verified",
+    "confidence": "high",
+    "follow_up_url": "https://developers.circle.com/stablecoins/cctp-getting-started",
+    "notes": "CCTP v1 burn entrypoint (Optimism). Verified on-chain.",
+    "added_at": "2026-06-08T00:00:00Z",
+    "chain": "optimism"
+  },
+  {
+    "address": "0x19330d10D9Cc8751218eaf51E8885D058642E08A",
+    "name": "Circle CCTP TokenMessenger",
+    "category": "bridge",
+    "source": "circle_cctp_onchain_verified",
+    "confidence": "high",
+    "follow_up_url": "https://developers.circle.com/stablecoins/cctp-getting-started",
+    "notes": "CCTP v1 burn entrypoint (Arbitrum). Verified on-chain.",
+    "added_at": "2026-06-08T00:00:00Z",
+    "chain": "arbitrum"
+  },
+  {
+    "address": "0x1682Ae6375C4E4A97e4B583BC394c861A46D8962",
+    "name": "Circle CCTP TokenMessenger",
+    "category": "bridge",
+    "source": "circle_cctp_onchain_verified",
+    "confidence": "high",
+    "follow_up_url": "https://developers.circle.com/stablecoins/cctp-getting-started",
+    "notes": "CCTP v1 burn entrypoint (Base). Verified on-chain.",
+    "added_at": "2026-06-08T00:00:00Z",
+    "chain": "base"
+  },
+  {
+    "address": "0x9daF8c91AEFAE50b9c0E69629D3F6Ca40cA3B3FE",
+    "name": "Circle CCTP TokenMessenger",
+    "category": "bridge",
+    "source": "circle_cctp_onchain_verified",
+    "confidence": "high",
+    "follow_up_url": "https://developers.circle.com/stablecoins/cctp-getting-started",
+    "notes": "CCTP v1 burn entrypoint (Polygon PoS). Verified on-chain.",
+    "added_at": "2026-06-08T00:00:00Z",
+    "chain": "polygon"
+  },
+  {
     "address": "0x43dE2d77BF8027e25dBD179B491e8d64f38398aA",
     "name": "deBridgeGate (DLN)",
     "category": "bridge",

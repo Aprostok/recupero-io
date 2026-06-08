@@ -629,6 +629,11 @@ def decode_bridge_calldata(
         return _decode_layerzero(method_id, args_blob, data)
     if "ccip" in proto_lc:
         return _decode_ccip(method_id, args_blob, data)
+    # v0.39 (Activation Sprint #3) — Circle CCTP (highest-volume USDC bridge).
+    # Match "cctp" or "circle"; the burn calldata carries destinationDomain +
+    # mintRecipient. Restores the rail lost despite task #247.
+    if "cctp" in proto_lc or "circle" in proto_lc:
+        return _decode_cctp(method_id, args_blob, data)
     if "multichain" in proto_lc or "anyswap" in proto_lc:
         return _decode_multichain(method_id, args_blob, data)
     # v0.32.1 JACOB_ADVERSARY_AUDIT_v032 M-6 close-out: rollup-canonical
@@ -1261,6 +1266,83 @@ def _decode_1inch(
 # Connext domain IDs. Source: docs.connext.network/resources/deployments
 # Connext uses its own "domain ID" namespace (not Wormhole, not LayerZero,
 # not EVM chainID). The xcall() first uint32 arg is this domain ID.
+# v0.39 (Activation Sprint #3) — Circle CCTP. Selectors verified by keccak +
+# decoded against live mainnet TokenMessenger txs (0x6fd3504e depositForBurn,
+# 0xf856ddb6 depositForBurnWithCaller; both share the first 4 args). Domain IDs
+# are Circle's OWN numbering (NOT EVM chain ids) — verified 6→Base, 5→Solana
+# against real txs; the rest from Circle's CCTP domain table.
+_CCTP_METHODS = {
+    "0x6fd3504e": ("CCTP", "depositForBurn"),
+    "0xf856ddb6": ("CCTP", "depositForBurnWithCaller"),
+}
+_CCTP_DOMAIN_IDS: dict[int, str] = {
+    0: "ethereum",
+    1: "avalanche",
+    2: "optimism",
+    3: "arbitrum",
+    5: "solana",
+    6: "base",
+    7: "polygon",
+}
+
+
+def _decode_cctp(
+    method_id: str,
+    args_blob: str,
+    full_data: str,
+) -> BridgeDecodeResult | None:
+    """Decode Circle CCTP TokenMessenger ``depositForBurn`` calldata.
+
+    Signature:
+      depositForBurn(uint256 amount, uint32 destinationDomain,
+                     bytes32 mintRecipient, address burnToken)
+      depositForBurnWithCaller(... , bytes32 destinationCaller)  # +1 trailing word
+
+    Calldata layout (each arg a 32-byte word):
+      [0..32]    amount (uint256)
+      [32..64]   destinationDomain (uint32, right-aligned) — CCTP domain id
+      [64..96]   mintRecipient (bytes32; EVM dest = left-padded address)
+      [96..128]  burnToken (address)
+
+    Verified against live mainnet TokenMessenger txs. The mintRecipient is read
+    via the shared ``_extract_addr_slot`` guard (requires top-12-bytes-zero), so
+    a non-EVM (e.g. Solana, domain 5) recipient correctly yields ``None`` — we
+    never fabricate an EVM address from a 32-byte non-EVM key, but the
+    destination CHAIN is still reported.
+    """
+    method_entry = _CCTP_METHODS.get(method_id)
+    if method_entry is None:
+        return None
+    _, method_name = method_entry
+
+    if len(args_blob) < 128 * 2:
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+    try:
+        domain_hex = args_blob[64:128]
+        domain_id = int(domain_hex, 16) if domain_hex else -1
+        dest_chain = _CCTP_DOMAIN_IDS.get(domain_id)
+        dest_address = _extract_addr_slot(args_blob, 2)
+        confidence = _calldata_destination_confidence(dest_chain, dest_address)
+        return BridgeDecodeResult(
+            destination_chain=dest_chain,
+            destination_address=dest_address,
+            bridge_method=method_name,
+            confidence=confidence,
+            raw_calldata_excerpt=full_data[:400],
+        )
+    except (ValueError, IndexError) as exc:
+        log.debug("cctp decode failed: %s", exc)
+        return BridgeDecodeResult(
+            destination_chain=None, destination_address=None,
+            bridge_method=method_name, confidence="low",
+            raw_calldata_excerpt=full_data[:400],
+        )
+
+
 _CONNEXT_DOMAIN_IDS: dict[int, str] = {
     6648936: "ethereum",
     1869640809: "optimism",

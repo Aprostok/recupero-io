@@ -285,6 +285,46 @@ def cli() -> None:
              "(default: attribution_feed).",
     )
 
+    # ----- harvest-blacklist (v0.39) ----- #
+    p_bl = sub.add_parser(
+        "harvest-blacklist",
+        help="Harvest the internal known-bad blacklist from the case corpus "
+             "(Supabase bucket). Every wallet across all investigations, "
+             "deduped with provenance; only REAL illicit-role addresses "
+             "(perpetrator/mixer/current-holder) are ARMED to alert — never "
+             "test fixtures, victims, or legitimate services. Writes a JSON "
+             "the screener + tracer consult so a future case routing through a "
+             "listed wallet fires a high-risk verdict.",
+    )
+    p_bl.add_argument(
+        "--out", dest="blacklist_out", default=None,
+        help="Output path (default: RECUPERO_INTERNAL_BLACKLIST_PATH env or "
+             "{data_dir}/intel/internal_blacklist.json).",
+    )
+    p_bl.add_argument(
+        "--limit", dest="blacklist_limit", type=int, default=None,
+        help="Cap the number of investigations scanned (debugging).",
+    )
+
+    # ----- blacklist-arm / blacklist-disarm (v0.39, operator-curated) ----- #
+    p_arm = sub.add_parser(
+        "blacklist-arm",
+        help="Manually arm a known-bad wallet (e.g. an exploiter seed or a "
+             "Tornado deposit you've attributed). Survives re-harvest. The "
+             "screener + tracer then fire a high-risk verdict on a hit.",
+    )
+    p_arm.add_argument("--address", required=True, help="Wallet address.")
+    p_arm.add_argument("--chain", default="ethereum", help="Chain (default: ethereum).")
+    p_arm.add_argument("--reason", default=None, help="Why it's known-bad (shown in the alert).")
+    p_arm.add_argument("--label", dest="arm_label", default=None, help="Short display label.")
+
+    p_disarm = sub.add_parser(
+        "blacklist-disarm",
+        help="Remove a manually-armed wallet from the internal blacklist.",
+    )
+    p_disarm.add_argument("--address", required=True, help="Wallet address.")
+    p_disarm.add_argument("--chain", default="ethereum", help="Chain (default: ethereum).")
+
     # ----- benchmark (v0.35.12 / J1) ----- #
     p_bench = sub.add_parser(
         "benchmark",
@@ -999,6 +1039,63 @@ def cli() -> None:
         if result.skipped_reasons:
             print(f"  skipped breakdown: {result.skipped_reasons}")
         sys.exit(0)
+
+    if args.command == "harvest-blacklist":
+        from pathlib import Path as _Path
+
+        from recupero.intel_harvest import harvest_from_supabase
+        from recupero.labels.internal_blacklist import (
+            default_blacklist_path,
+            save_blacklist,
+        )
+        try:
+            entries, stats = harvest_from_supabase(limit=args.blacklist_limit)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        out_path = (
+            _Path(args.blacklist_out) if args.blacklist_out
+            else default_blacklist_path()
+        )
+        save_blacklist(entries, out_path)
+        armed = [e for e in entries if e.alert_enabled]
+        print(
+            f"Harvested {len(entries)} address(es) from {stats['cases_parsed']} "
+            f"case(s) ({stats['real_cases']} real, {stats['test_cases']} test) "
+            f"-> {out_path}"
+        )
+        print(f"  ARMED (alert-triggering): {len(armed)}")
+        for e in armed[:15]:
+            print(
+                f"    [{e.confidence}] {e.address} ({e.role}) "
+                f"- {e.real_case_count} real case(s)"
+            )
+        sys.exit(0)
+
+    if args.command in ("blacklist-arm", "blacklist-disarm"):
+        from recupero.labels.internal_blacklist import (
+            add_manual_arm,
+            default_manual_arm_path,
+            remove_manual_arm,
+        )
+        mpath = default_manual_arm_path()
+        if args.command == "blacklist-arm":
+            try:
+                added = add_manual_arm(
+                    mpath, args.address, args.chain,
+                    reason=args.reason, label_name=args.arm_label,
+                )
+            except ValueError as exc:
+                print(f"ERROR: {exc}", file=sys.stderr)
+                sys.exit(2)
+            verb = "Armed" if added else "Updated"
+            print(f"{verb} {args.address} ({args.chain}) on the internal "
+                  f"blacklist -> {mpath}. Screener + tracer now fire on a hit.")
+            sys.exit(0)
+        removed = remove_manual_arm(mpath, args.address, args.chain)
+        print(f"{'Disarmed' if removed else 'No manual entry for'} "
+              f"{args.address} ({args.chain}).")
+        sys.exit(0 if removed else 1)
 
     if args.command == "benchmark":
         import json as _json

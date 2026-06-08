@@ -343,6 +343,8 @@ def _source_for_category(cat_lower: str) -> str:
         return "ransomware_seed"
     if "mixer" in cat_lower:
         return "mixers_seed"
+    if "internal_blacklist" in cat_lower:
+        return "internal_blacklist"
     return "high_risk_seed"
 
 
@@ -536,6 +538,13 @@ def _build_investigator_note(
             f"HIGH-RISK — known drainer infrastructure "
             f"({entry.name if entry else 'unknown'}). "
             "Address typically receives stolen funds from approval exploits."
+        )
+    if entry is not None and (entry.risk_category or "").lower() == "internal_blacklist":
+        return (
+            f"HIGH-RISK — internal blacklist hit: {entry.name}. "
+            f"{entry.notes or 'Appeared as known-bad in a prior Recupero investigation.'} "
+            "Re-trace this routing — treat as known-bad from our own casework "
+            "(internal attribution, NOT an OFAC sanction)."
         )
     if correlation.prior_ofac_exposed_count > 0:
         return (

@@ -70,7 +70,7 @@
     '</div>';
 
     // Jurisdiction / form labels
-    html += '<h2>Filing regime</h2><div class="panel">' +
+    html += '<h2>&#127963;&thinsp;Filing regime</h2><div class="panel">' +
       row("Report",         (labels.report_acronym || "") + " — " + (labels.report_name || "")) +
       row("Regulator",      labels.regulator) +
       row("Form reference", labels.form_reference) +
@@ -80,7 +80,7 @@
       '</div>';
 
     // Key amounts / activity
-    html += '<h2>Activity summary</h2><div class="cards">' +
+    html += '<h2>&#128202;&thinsp;Activity summary</h2><div class="cards">' +
       card(activity.amount_usd || ctx.total_loss_usd || "$0.00", "Amount (USD)") +
       card((ctx.subjects || []).length, "Subjects") +
       card(activity.date_from || "—", "Activity from") +
@@ -96,7 +96,7 @@
       '</div>';
 
     // Subjects table
-    html += '<h2>Subjects</h2>';
+    html += '<h2>&#128100;&thinsp;Subjects</h2>';
     var subjects = ctx.subjects || [];
     if (!subjects.length) {
       html += '<p class="empty">No subjects derived from this brief.</p>';
@@ -105,10 +105,12 @@
               '<th class="right">Amount (USD)</th></tr></thead><tbody>';
       subjects.forEach(function (s) {
         s = s || {};
+        var roleCls = (s.role || "").toLowerCase().includes("perpetrator") ? "crit"
+                    : (s.role || "").toLowerCase().includes("mule") ? "warn" : "";
         html += '<tr>' +
           '<td class="mono">' + esc(s.address) + '</td>' +
-          '<td>' + esc(s.chain) + '</td>' +
-          '<td>' + esc(s.role) + '</td>' +
+          '<td><span class="chip">' + esc(s.chain) + '</span></td>' +
+          '<td><span class="chip ' + roleCls + '">' + esc(s.role) + '</span></td>' +
           '<td>' + esc(s.venue) + '</td>' +
           '<td class="right">' + esc(s.amount_usd) + '</td>' +
           '</tr>';
@@ -117,7 +119,7 @@
     }
 
     // Narrative
-    html += '<h2>Narrative</h2>';
+    html += '<h2>&#128221;&thinsp;Narrative</h2>';
     html += '<div class="panel narrative">' + esc(ctx.sar_narrative) + '</div>';
 
     $("out").innerHTML = html;

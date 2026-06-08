@@ -213,6 +213,18 @@
 
   $("go").addEventListener("click", go);
   $("addr").addEventListener("keydown", function (e) { if (e.key === "Enter") go(); });
+
+  // Deep-link support: ?address=0x…&chain=ethereum pre-fills + auto-screens
+  (function () {
+    try {
+      var _qs = new URLSearchParams(window.location.search);
+      var _addr = _qs.get("address");
+      if (_addr) { $("addr").value = _addr; }
+      var _chain = _qs.get("chain");
+      if (_chain && $("chain")) { $("chain").value = _chain; }
+      if (_addr && $("key") && $("key").value) { go(); }
+    } catch (e) {}
+  })();
 })();
 </script>
 <script src="/v1/console/app.js" defer></script>

@@ -100,16 +100,18 @@
     h += '<div class="sub" style="margin-bottom:.6rem">' + esc(rep.count) + ' result(s) · chain ' + esc(rep.chain) + '</div>';
     h += '<table><thead><tr>' +
          '<th>Address</th><th>Risk band</th><th>Verdict</th>' +
-         '<th class="right">Score</th><th class="right">Labels</th><th>Status</th>' +
+         '<th class="right">Score</th><th class="right">Labels</th><th>Status</th><th></th>' +
          '</tr></thead><tbody>';
     rows.forEach(function (r) {
       if (r.error) {
         h += '<tr class="errored"><td class="mono">' + esc(r.address) + '</td>' +
-             '<td colspan="5">' + esc(r.error) + '</td></tr>';
+             '<td colspan="6">' + esc(r.error) + '</td></tr>';
         return;
       }
       var flagged = !!r.flagged;
       var bc = bandClass(r.risk_band);
+      var profUrl = '/v1/console/address-profile?address=' + encodeURIComponent(r.address) +
+                    '&chain=' + encodeURIComponent(rep.chain || 'ethereum');
       h += '<tr class="' + (flagged ? "flagged" : "clean") + '">' +
         '<td class="mono">' + esc(r.address) + '</td>' +
         '<td><span class="rband ' + bc + '">' + esc(r.risk_band) + '</span></td>' +
@@ -117,7 +119,8 @@
         '<td class="right">' + scoreRingCell(r.score) + '</td>' +
         '<td class="right">' + esc(r.label_count == null ? 0 : r.label_count) + '</td>' +
         '<td><span class="badge ' + (flagged ? "critical" : "ok") + '">' +
-          (flagged ? "⚠ Flagged" : "✓ Clean") + '</span></td>' +
+          (flagged ? "&#9888; Flagged" : "&#10003; Clean") + '</span></td>' +
+        '<td><a href="' + esc(profUrl) + '" target="_blank" style="font-size:.75rem;color:var(--accent);white-space:nowrap;text-decoration:none;border:1px solid var(--accent-soft);border-radius:var(--r-sm);padding:.12rem .42rem" title="Full address profile">&#10140;</a></td>' +
         '</tr>';
     });
     h += '</tbody></table>';

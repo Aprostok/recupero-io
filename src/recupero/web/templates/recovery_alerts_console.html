@@ -83,9 +83,9 @@
       var sevCls = (sev === "critical" || sev === "high") ? sev : "";
       h += '<tr class="sev-' + esc(sevCls) + '">' +
         '<td><span class="badge ' + esc(sevCls) + '">' + esc(sev) + '</span></td>' +
-        '<td>' + esc(r.kind) + '</td>' +
+        '<td><span class="chip">' + esc(r.kind) + '</span></td>' +
         '<td class="mono">' + esc(r.address) + '</td>' +
-        '<td>' + esc(r.chain) + '</td>' +
+        '<td><span class="chip">' + esc(r.chain) + '</span></td>' +
         deltaCell(r.delta_usd) +
         '<td class="right">' + esc(r.dormant_days == null ? "—" : r.dormant_days) + '</td>' +
         '<td>' + esc(r.role == null ? "—" : r.role) + '</td>' +

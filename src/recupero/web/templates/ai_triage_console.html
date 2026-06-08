@@ -73,8 +73,26 @@
     "confidence_note":        "Confidence Note",
     "_meta":                  "Metadata"
   };
+  // Section icons keyed on raw field name
+  var SECTION_ICONS = {
+    "case_summary_plain":     "🔍",
+    "recommended_next_steps": "📋",
+    "completeness_gaps":      "⚠️",
+    "confidence_note":        "🎯",
+    "_meta":                  "📎",
+    "key_findings":           "💡",
+    "risk_assessment":        "🔴",
+    "legal_basis":            "⚖️",
+    "attribution_chain":      "🔗",
+    "victim_note":            "👤",
+    "perpetrator_note":       "🚨",
+    "timeline":               "🕐",
+    "funds_at_risk":          "💰",
+    "freezable_assets":       "🔒"
+  };
 
   function titleFor(k) { return TITLES[k] || k.replace(/^_+/, "").replace(/_/g, " "); }
+  function iconFor(k) { return SECTION_ICONS[k] || ""; }
 
   function renderList(arr) {
     if (!arr.length) return '<p class="empty">None.</p>';
@@ -146,7 +164,8 @@
     keys.forEach(function (k) {
       if (BANNER_KEYS[k]) return;
       shown++;
-      html += '<div class="section"><h2>' + esc(titleFor(k)) + "</h2>" + renderValue(rep[k]) + "</div>";
+      var ico = iconFor(k);
+      html += '<div class="section"><h2>' + (ico ? ico + '&thinsp;' : '') + esc(titleFor(k)) + "</h2>" + renderValue(rep[k]) + "</div>";
     });
     if (!shown) { html += '<p class="empty">No further triage fields present.</p>'; }
 

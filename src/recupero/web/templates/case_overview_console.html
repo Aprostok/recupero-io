@@ -87,6 +87,23 @@
     var pack   = !!d.exhibit_pack;
     var graph  = !!d.graph_ui;
 
+    // Completion ring header
+    var delivList = [freeze, triage, pack, graph];
+    var nReady = delivList.filter(Boolean).length;
+    var nTotal = delivList.length;
+    var ringScore = Math.round(nReady / nTotal * 10);
+    var ringCls = ringScore === 10 ? “r-ok” : ringScore >= 5 ? “r-high” : “r-crit”;
+    html += '<div style=”display:flex;align-items:center;gap:1rem;margin-bottom:.85rem;padding:.75rem 1rem;' +
+      'background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow-sm)”>' +
+      '<div class=”score-ring ' + ringCls + '” style=”--score:' + ringScore + '”>' +
+        '<div class=”ring-inner”>' + nReady + '/' + nTotal + '</div>' +
+      '</div>' +
+      '<div>' +
+        '<div style=”font-weight:700;font-size:1rem”>' + nReady + ' of ' + nTotal + ' deliverables ready</div>' +
+        '<div class=”mono” style=”font-size:.76rem;color:var(--ink-soft);margin-top:.18rem”>' + esc(cid) + '</div>' +
+      '</div>' +
+      '</div>';
+
     html += '<div class=”deliv-grid”>';
     html += delivCard({
       present: freeze, icon: “📄”, name: “Freeze Brief”, delay: 0,

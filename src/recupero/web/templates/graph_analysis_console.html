@@ -8,9 +8,9 @@
 <style>
   /* page-specific: graph analysis */
   .card.alert .v { color: var(--crit); } .card.ok .v { color: var(--ok); }
-  .cycles { list-style: none; padding: 0; margin: 0; }
-  .cycles li { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .55rem .8rem; margin-bottom: .4rem; font-size: .8rem; box-shadow: var(--shadow-sm); }
-  .cycles .size { font-weight: 700; color: var(--warn); margin-right: .5rem; }
+  /* cycle path chips */
+  .cycle-path { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .18rem; }
+  .cycle-arrow { color: var(--ink-faint); font-size: .72rem; line-height: 1; flex-shrink: 0; }
   .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink); border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
   .empty { color: #888; font-size: .8rem; }
 </style>
@@ -81,12 +81,24 @@
     if (!cycles.length) {
       ch += '<p class="empty">No value cycles detected.</p>';
     } else {
-      ch += '<ul class="cycles">';
+      ch += ‘<table><thead><tr><th class="right" style="width:48px">Size</th><th style="width:72px">Risk</th><th>Cycle path</th></tr></thead><tbody>’;
       cycles.forEach(function (c) {
-        var members = (c.members || []).map(function (m) { return esc(m); }).join(" â†’ ");
-        ch += '<li><span class="size">size ' + esc(c.size) + '</span><span class="mono">' + members + '</span></li>';
+        var sz = c.size || (c.members || []).length;
+        var riskCls = sz >= 6 ? "critical" : sz >= 3 ? "high" : "";
+        var riskLabel = sz >= 6 ? "High" : sz >= 3 ? "Medium" : "Low";
+        var mems = (c.members || []).map(function (m) {
+          var ms = String(m);
+          var disp = ms.length > 16 ? ms.slice(0, 8) + "…" + ms.slice(-4) : ms;
+          return ‘<span class="chip" style="font-family:var(--mono);font-size:.65rem;padding:.1rem .38rem" title="’ + esc(ms) + ‘">’ + esc(disp) + ‘</span>’;
+        });
+        var path = ‘<span class="cycle-path">’ + mems.join(‘<span class="cycle-arrow">&rarr;</span>’) + ‘</span>’;
+        ch += ‘<tr>’ +
+          ‘<td class="right" style="font-weight:700">’ + esc(sz) + ‘</td>’ +
+          ‘<td><span class="badge ‘ + esc(riskCls) + ‘">’ + esc(riskLabel) + ‘</span></td>’ +
+          ‘<td style="white-space:normal">’ + path + ‘</td>’ +
+          ‘</tr>’;
       });
-      ch += '</ul>';
+      ch += ‘</tbody></table>’;
     }
     $("cycleswrap").innerHTML = ch;
   }

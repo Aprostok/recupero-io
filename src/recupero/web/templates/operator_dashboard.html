@@ -211,7 +211,8 @@
   .qp-link { font-size: .8rem; color: var(--accent); text-decoration: none; flex-shrink: 0; font-weight: 590; }
   .qp-link:hover { text-decoration: underline; }
 
-  /* ── Metric card sparkline + delta indicators ── */
+  /* ── Metric card icon + sparkline + delta indicators ── */
+  .card .c-icon { font-size: .95rem; line-height: 1; margin-bottom: .3rem; opacity: .9; }
   .card .spark { width: 100%; height: 22px; margin-top: .42rem; opacity: .74; pointer-events: none; }
   .card .delta { font-size: .62rem; font-weight: 700; margin-top: .18rem; line-height: 1; }
   .card .delta.up   { color: var(--ok);   }
@@ -310,11 +311,16 @@
   function key() { return ($("key").value || "").trim(); }
   function fmt(v) { return (v === null || v === undefined) ? "—" : esc(v); }
 
+  // [key, label, isAlert, icon]
   var STATS = [
-    ["cases_total", "Traced cases"], ["cases_with_brief", "With freeze brief"],
-    ["cases_triaged", "AI-triaged"], ["cases_with_exhibit", "Exhibit packs"],
-    ["pending_reviews", "Pending reviews", true], ["watchlist_items", "Watched addresses"],
-    ["watchlist_moved", "Moved since check", true], ["label_candidates_pending", "Label candidates"]
+    ["cases_total",              "Traced cases",       false, "&#128269;"],
+    ["cases_with_brief",         "Freeze briefs",      false, "&#128203;"],
+    ["cases_triaged",            "AI-triaged",         false, "&#129302;"],
+    ["cases_with_exhibit",       "Exhibit packs",      false, "&#128193;"],
+    ["pending_reviews",          "Pending reviews",    true,  "&#9203;"],
+    ["watchlist_items",          "Watched addresses",  false, "&#128065;"],
+    ["watchlist_moved",          "Moved since check",  true,  "&#128680;"],
+    ["label_candidates_pending", "Label candidates",   false, "&#127991;"]
   ];
 
   // Synthetic 7-point trend ending at finalVal (visual only, not historical data)
@@ -347,6 +353,7 @@
           : '<div class="delta down">&#8595;&nbsp;' + diff + ' since last load</div>';
       }
       return '<div class="' + cls + '" style="animation-delay:' + (i * 35) + 'ms">' +
+             '<div class="c-icon">' + d[3] + '</div>' +
              '<div class="v">' + fmt(v) + '</div>' +
              '<div class="l">' + esc(d[1]) + '</div>' +
              deltaHtml +

@@ -327,10 +327,21 @@
       })
       .then(function (p) {
         render(p);
-        if (window.RC) { window.RC.animateGauges($("out")); }
+        if (window.RC) {
+          window.RC.animateGauges($("out"));
+          window.RC.animateRings($("out"));
+          window.RC.staggerRows($("out"));
+          window.RC.attachSort($("out"));
+          window.RC.attachFilter($("out"));
+          $("out").querySelectorAll(".card .v").forEach(window.RC.countUp);
+          window.RC.toast("Profile loaded ✓", "ok");
+        }
         setMsg("Screened " + new Date().toLocaleTimeString(), "ok");
       })
-      .catch(function (e) { setMsg(e.message, "err"); })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      })
       .finally(function () { $("go").disabled = false; });
   }
 

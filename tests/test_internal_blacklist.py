@@ -175,14 +175,23 @@ def test_load_high_risk_db_merges_only_armed(tmp_path: Path) -> None:
 def test_committed_seed_loads_ronin_armed() -> None:
     """The shipped curated seed file parses, and the Ronin/Lazarus exploiter is
     present + armed (a regression guard on the seed file itself)."""
-    from recupero.trace.risk_scoring import _INTERNAL_BLACKLIST_SEED_PATH
+    import re
 
+    from recupero.trace.risk_scoring import _INTERNAL_BLACKLIST_SEED_PATH
     entries = load_blacklist_entries(_INTERNAL_BLACKLIST_SEED_PATH)
+    assert entries, "committed internal-blacklist seed must not be empty"
     armed = {e.address for e in entries if e.alert_enabled}
     ronin = ck("0x098b716b8aaf21512996dc57eb0615e2383e2f96")
     assert ronin in armed
     hrd = armed_high_risk_entries(entries)
     assert hrd[ronin].risk_category == "internal_blacklist"
+    # Address-shape guard (this file is excluded from the Label-seed integrity
+    # gate, so pin EVM/base58 shape + a non-empty reason here instead).
+    evm = re.compile(r"^0x[0-9a-fA-F]{40}$")
+    b58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+    for e in entries:
+        assert evm.match(e.address) or b58.match(e.address), f"bad addr {e.address!r}"
+        assert e.reason and e.reason.strip(), f"{e.address} missing sourced reason"
 
 
 # ----- operator-curated manual arms ----- #

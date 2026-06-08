@@ -177,6 +177,10 @@ def test_load_high_risk_missing_file_returns_empty() -> None:
         mixers_path=Path("/does/not/exist2.json"),
         ransomware_path=Path("/does/not/exist3.json"),
         ofac_csv_path=Path("/does/not/exist_ofac.csv"),
+        # v0.39: isolate the committed internal-blacklist seed too, so this
+        # asserts seed-loading behavior, not the shipped curated known-bad list.
+        internal_blacklist_path=Path("/does/not/exist_ibl.json"),
+        internal_blacklist_seed_path=Path("/does/not/exist_ibl_seed.json"),
     )
     assert db == {}
 
@@ -198,6 +202,8 @@ def test_load_high_risk_with_custom_paths(tmp_path) -> None:
         mixers_path=Path("/nope.json"),
         ransomware_path=Path("/nope2.json"),
         ofac_csv_path=Path("/nope_ofac.csv"),
+        internal_blacklist_path=Path("/nope_ibl.json"),
+        internal_blacklist_seed_path=Path("/nope_ibl_seed.json"),
     )
     assert len(db) == 1
     entry = next(iter(db.values()))

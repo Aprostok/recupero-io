@@ -78,7 +78,13 @@ def _load_entries(path: Path) -> list[dict]:
 
 
 def _all_seed_files() -> list[Path]:
-    return sorted(_SEEDS_DIR.glob("*.json"))
+    # internal_blacklist_seed.json uses the BlacklistEntry schema (address +
+    # label_name + alert_enabled + provenance), NOT the Label seed shape, and
+    # is validated by load_blacklist_entries + tests/test_internal_blacklist.py.
+    # Exclude it from the Label-seed integrity gate (it deliberately omits the
+    # name/category fields these checks require).
+    _non_label = {"internal_blacklist_seed.json"}
+    return sorted(p for p in _SEEDS_DIR.glob("*.json") if p.name not in _non_label)
 
 
 # ---------------------------------------------------------------------------

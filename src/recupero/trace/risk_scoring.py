@@ -104,6 +104,11 @@ _RANSOMWARE_SEED_PATH = (
 _SCAM_DRAINERS_SEED_PATH = (
     Path(__file__).parent.parent / "labels" / "seeds" / "scam_drainers.json"
 )
+# v0.39 — curated, version-controlled internal known-bad seed (ships to prod).
+# Read alongside the operator-curated runtime files (data_dir / bucket).
+_INTERNAL_BLACKLIST_SEED_PATH = (
+    Path(__file__).parent.parent / "labels" / "seeds" / "internal_blacklist_seed.json"
+)
 
 
 @dataclass(frozen=True)
@@ -161,6 +166,7 @@ def load_high_risk_db(
     intl_sanctions_csv_path: Path | None = None,
     scam_drainers_path: Path | None = None,
     internal_blacklist_path: Path | None = None,
+    internal_blacklist_seed_path: Path | None = None,
 ) -> dict[str, HighRiskEntry]:
     """Load high-risk address labels from THREE seed files.
 
@@ -453,14 +459,17 @@ def load_high_risk_db(
         )
         ibl_path = internal_blacklist_path or default_blacklist_path()
         # Auto-harvested armed entries + operator-curated manual arms (the
-        # latter live in a sibling file so re-harvesting never clobbers them).
+        # latter live in a sibling file so re-harvesting never clobbers them) +
+        # the committed curated seed that ships with the code.
         manual_path = (
             ibl_path.parent / "internal_blacklist_manual.json"
             if internal_blacklist_path is not None
             else default_manual_arm_path()
         )
+        seed_path = internal_blacklist_seed_path or _INTERNAL_BLACKLIST_SEED_PATH
         all_armed = list(load_blacklist_entries(ibl_path))
         all_armed.extend(load_manual_arms(manual_path))
+        all_armed.extend(load_blacklist_entries(seed_path))
         for key, hre in armed_high_risk_entries(all_armed).items():
             if key in out:
                 continue  # any curated / sanctioned source wins on a dupe

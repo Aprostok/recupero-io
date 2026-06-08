@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "kind": "recupero_internal_blacklist",
+  "note": "Curated, version-controlled internal known-bad SEED (ships to prod; read by load_high_risk_db). Every entry is ARMED and MUST cite an authoritative source in `reason` (OFAC/Treasury, FBI/CISA, or multi-source firm attribution). Famous OFAC/mixer addresses are ALSO covered by the OFAC + mixers feeds, which WIN on dupes (so a listed address stays 'sanctioned', not just 'high') — entries here are our consolidated, auditable known-bad list that survives a feed outage and holds hand-attributed addresses. DISCIPLINE: add only HIGH-CONFIDENCE, verified addresses here. Route community/low-confidence internet feeds (ScamSniffer, Chainabuse, darklists) through `recupero-ops import-attribution` (pending-review queue) — NEVER bulk-arm unverified internet data into an alerting list (false positives risk a wrongful freeze).",
+  "entries": [
+    {
+      "address": "0x098b716b8aaf21512996dc57eb0615e2383e2f96",
+      "chain": "ethereum",
+      "role": "perpetrator",
+      "label_category": "perpetrator",
+      "label_name": "Ronin Bridge exploiter (Lazarus Group / DPRK)",
+      "alert_enabled": true,
+      "confidence": "high",
+      "source_investigation_ids": [],
+      "source_case_count": 0,
+      "real_case_count": 0,
+      "reason": "Ronin Network bridge exploiter (~$625M, Mar 2022). OFAC SDN-designated 2022-04-14 attributing the address to the Lazarus Group (DPRK); corroborated by Elliptic and Chainalysis. Also present in the OFAC live feed (which wins on dupe -> verdict 'sanctioned')."
+    }
+  ]
+}

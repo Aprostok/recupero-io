@@ -163,12 +163,26 @@ def test_load_high_risk_db_merges_only_armed(tmp_path: Path) -> None:
         high_risk_path=missing, mixers_path=missing, ransomware_path=missing,
         ofac_csv_path=missing, intl_sanctions_csv_path=missing,
         scam_drainers_path=missing, internal_blacklist_path=p,
+        internal_blacklist_seed_path=missing,
     )
     assert ck(_MIX) in db
     assert db[ck(_MIX)].risk_category == "internal_blacklist"
     # Non-armed addresses are NEVER merged into the risk DB.
     assert ck(_HOP) not in db
     assert ck(_FIXTURE_PERP) not in db
+
+
+def test_committed_seed_loads_ronin_armed() -> None:
+    """The shipped curated seed file parses, and the Ronin/Lazarus exploiter is
+    present + armed (a regression guard on the seed file itself)."""
+    from recupero.trace.risk_scoring import _INTERNAL_BLACKLIST_SEED_PATH
+
+    entries = load_blacklist_entries(_INTERNAL_BLACKLIST_SEED_PATH)
+    armed = {e.address for e in entries if e.alert_enabled}
+    ronin = ck("0x098b716b8aaf21512996dc57eb0615e2383e2f96")
+    assert ronin in armed
+    hrd = armed_high_risk_entries(entries)
+    assert hrd[ronin].risk_category == "internal_blacklist"
 
 
 # ----- operator-curated manual arms ----- #

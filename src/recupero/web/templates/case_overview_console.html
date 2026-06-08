@@ -1,185 +1,599 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
+
+
 <html lang="en">
+
+
 <head>
+
+
 <meta charset="utf-8">
+
+
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Case Overview</title>
+
+
+<title>Recupero &#8211; Case Overview</title>
+
+
 <link rel="stylesheet" href="/v1/console/app.css">
+
+
 <style>
+
+
   /* page-specific: case overview */
+
+
   .label { font-weight: 700; white-space: nowrap; }
+
+
   .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink); border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
+
+
   .caseid { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .7rem 1rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm); }
+
+
   .caseid .big { font-size: 1.05rem; font-weight: 700; }
+
+
   .caseid .note { display: block; color: var(--ink-soft); font-size: .74rem; margin-top: .25rem; }
+
+
   .badge-on { color: var(--ok); font-weight: 700; }
+
+
   .badge-off { color: var(--ink-faint); font-weight: 700; }
+
+
   td .pasteid { color: var(--ink-soft); font-size: .72rem; }
+
+
   td .pasteid .mono { color: var(--ink); }
+
+  /* Investigation pipeline bar */
+  .pipe-track { display:flex;align-items:flex-start;gap:0;margin-bottom:1.05rem;padding:.82rem 1.1rem;background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow-sm);overflow-x:auto; }
+  .pipe-stage { display:flex;flex-direction:column;align-items:center;gap:.28rem;flex:1;min-width:76px; }
+  .pipe-node { width:26px;height:26px;border-radius:50%;border:2px solid var(--hair-strong);background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:700;color:var(--ink-faint);transition:background .4s,border-color .4s,box-shadow .4s,transform .3s; }
+  .pipe-stage.done .pipe-node { background:var(--ok);border-color:var(--ok);color:#fff;box-shadow:0 0 7px rgba(52,199,89,.38);transform:scale(1.1); }
+  .pipe-label { font-size:.63rem;font-weight:600;color:var(--ink-soft);text-align:center;white-space:nowrap; }
+  .pipe-stage.done .pipe-label { color:var(--ink); }
+  .pipe-sub { font-size:.56rem;color:var(--ink-faint);text-align:center; }
+  .pipe-stage.done .pipe-sub { color:var(--ok);font-weight:700; }
+  .pipe-conn { flex:2;height:2px;background:var(--hair-strong);margin-top:12px;min-width:12px;transition:background .6s; }
+  .pipe-conn.done { background:var(--ok); }
+
+  /* Deliverable cards animated entrance */
+  .deliv-card { opacity:0;transform:translateY(8px);animation:fadeUp .35s forwards; }
+  @keyframes fadeUp { to { opacity:1;transform:none; } }
+
 </style>
+
+
 </head>
+
+
 <body>
-  <h1>ðŸ“‹ Case Overview</h1>
+
+
+  <h1>&#128203; Case Overview</h1>
+
+
   <div class="sub">Per-case launcher. Paste your operator key and a case id to see which deliverables the case
+
+
     has produced, with a deep link into each one. Data is fetched directly from the admin-gated API
+
+
     (the key stays in a request header, never the URL).</div>
 
-  <div class="explain">Read-only, filesystem-only: deliverables are detected by file presence on disk â€” this console
+
+
+
+
+  <div class="explain">Read-only, filesystem-only: deliverables are detected by file presence on disk &#8212; this console
+
+
     never parses <span class="mono">case.json</span> or any artifact, so it stays robust against a corrupted case.</div>
 
+
+
+
+
   <div class="bar">
+
+
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+
+
     <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
+
+
     <button id="load">Load</button>
+
+
     <span id="msg"></span>
+
+
   </div>
+
+
+
+
 
   <div id="out"></div>
 
+
+
+
+
 <script>
+
+
 (function () {
+
+
   "use strict";
+
+
   var $ = function (id) { return document.getElementById(id); };
+
+
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+
+
+  // Persist the key for the session only (not localStorage) &#8212; clears on tab close.
+
+
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
+
+
+
+
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+
   function clear() { $("out").innerHTML = ""; }
 
+
+
+
+
   function delivCard(opts) {
+
+
     // opts: { present, icon, name, links: [{label, href}], delay }
-    var cls = opts.present ? “deliv-card present” : “deliv-card absent”;
-    var status = opts.present ? “✓ Ready” : “— Not produced”;
-    var h = '<div class=”' + cls + '” style=”animation-delay:' + (opts.delay || 0) + 'ms”>';
-    h += '<div class=”deliv-card-head”>';
-    h += '<span class=”deliv-card-icon”>' + opts.icon + '</span>';
-    h += '<span class=”deliv-card-name”>' + opts.name + '</span>';
-    h += '<span class=”deliv-card-status”>' + status + '</span>';
+
+
+    var cls = opts.present ? "deliv-card present" : "deliv-card absent";
+
+
+    var status = opts.present ? "&#10003; Ready" : "&#8212; Not produced";
+
+
+    var h = '<div class="' + cls + '" style="animation-delay:' + (opts.delay || 0) + 'ms">';
+
+
+    h += '<div class="deliv-card-head">';
+
+
+    h += '<span class="deliv-card-icon">' + opts.icon + '</span>';
+
+
+    h += '<span class="deliv-card-name">' + opts.name + '</span>';
+
+
+    h += '<span class="deliv-card-status">' + status + '</span>';
+
+
     h += '</div>';
+
+
     if (opts.present && opts.links && opts.links.length) {
-      h += '<div class=”deliv-links”>';
+
+
+      h += '<div class="deliv-links">';
+
+
       opts.links.forEach(function (lk) {
-        h += '<a href=”' + esc(lk.href) + '”>' + esc(lk.label) + ' →</a>';
+
+
+        h += '<a href="' + esc(lk.href) + '">' + esc(lk.label) + ' &#8594;</a>';
+
+
       });
+
+
       h += '</div>';
+
+
     }
+
+
     h += '</div>';
+
+
     return h;
+
+
   }
 
+
+
+
+
   function render(rep) {
+
+
     clear();
-    if (!rep || typeof rep !== “object”) {
-      $(“out”).innerHTML = '<p class=”empty”>No case data.</p>';
+
+
+    if (!rep || typeof rep !== "object") {
+
+
+      $("out").innerHTML = '<p class="empty">No case data.</p>';
+
+
       return;
+
+
     }
-    var cid = rep.case_id == null ? “” : String(rep.case_id);
-    var d = (rep.deliverables && typeof rep.deliverables === “object”) ? rep.deliverables : {};
 
-    var html = “”;
-    html += '<div class=”caseid”><div class=”big mono”>' + esc(cid) + '</div>' +
-      '<span class=”note”>Click an address to copy it. The linked consoles each read case_id from their own input — this id is pre-filled where supported.</span></div>';
 
-    var qs = “?case_id=” + encodeURIComponent(cid);
+    var cid = rep.case_id == null ? "" : String(rep.case_id);
+
+
+    var d = (rep.deliverables && typeof rep.deliverables === "object") ? rep.deliverables : {};
+
+
+
+
+
+    var html = "";
+
+
+    html += '<div class="caseid"><div class="big mono">' + esc(cid) + '</div>' +
+
+
+      '<span class="note">Click an address to copy it. The linked consoles each read case_id from their own input &#8212; this id is pre-filled where supported.</span></div>';
+
+
+
+
+
+    var qs = "?case_id=" + encodeURIComponent(cid);
+
+
     var freeze = !!d.freeze_brief;
+
+
     var triage = !!d.ai_triage;
+
+
     var pack   = !!d.exhibit_pack;
+
+
     var graph  = !!d.graph_ui;
 
+
+
+
+
     // Completion ring header
+
+
     var delivList = [freeze, triage, pack, graph];
+
+
     var nReady = delivList.filter(Boolean).length;
+
+
     var nTotal = delivList.length;
+
+
     var ringScore = Math.round(nReady / nTotal * 10);
-    var ringCls = ringScore === 10 ? “r-ok” : ringScore >= 5 ? “r-high” : “r-crit”;
-    html += '<div style=”display:flex;align-items:center;gap:1rem;margin-bottom:.85rem;padding:.75rem 1rem;' +
-      'background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow-sm)”>' +
-      '<div class=”score-ring ' + ringCls + '” style=”--score:' + ringScore + '”>' +
-        '<div class=”ring-inner”>' + nReady + '/' + nTotal + '</div>' +
+
+
+    var ringCls = ringScore === 10 ? "r-ok" : ringScore >= 5 ? "r-high" : "r-crit";
+
+
+    html += '<div style="display:flex;align-items:center;gap:1rem;margin-bottom:.85rem;padding:.75rem 1rem;' +
+
+
+      'background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow-sm)">' +
+
+
+      '<div class="score-ring ' + ringCls + '" style="--score:' + ringScore + '">' +
+
+
+        '<div class="ring-inner">' + nReady + '/' + nTotal + '</div>' +
+
+
       '</div>' +
+
+
       '<div>' +
-        '<div style=”font-weight:700;font-size:1rem”>' + nReady + ' of ' + nTotal + ' deliverables ready</div>' +
-        '<div class=”mono” style=”font-size:.76rem;color:var(--ink-soft);margin-top:.18rem”>' + esc(cid) + '</div>' +
+
+
+        '<div style="font-weight:700;font-size:1rem">' + nReady + ' of ' + nTotal + ' deliverables ready</div>' +
+
+
+        '<div class="mono" style="font-size:.76rem;color:var(--ink-soft);margin-top:.18rem">' + esc(cid) + '</div>' +
+
+
       '</div>' +
+
+
       '</div>';
 
-    html += '<div class=”deliv-grid”>';
-    html += delivCard({
-      present: freeze, icon: “📄”, name: “Freeze Brief”, delay: 0,
-      links: [
-        { label: “SAR / STR Filing”,  href: “/v1/sar-filing/console”       + qs },
-        { label: “Recovery Snapshot”, href: “/v1/recovery-snapshot/console” + qs },
-      ]
-    });
-    html += delivCard({
-      present: triage, icon: “🧠”, name: “AI Triage”, delay: 55,
-      links: [{ label: “AI Triage console”, href: “/v1/ai-triage/console” + qs }]
-    });
-    html += delivCard({
-      present: pack, icon: “📑”, name: “Exhibit Pack”, delay: 110,
-      links: [{ label: “Exhibit Pack console”, href: “/v1/exhibit-pack/console” + qs }]
-    });
-    html += delivCard({
-      present: graph, icon: “🕸️”, name: “Graph Analysis”, delay: 165,
-      links: [{ label: “Graph Analysis console”, href: “/v1/graph-analysis/console” + qs }]
+
+
+
+
+
+    // Investigation pipeline stage bar
+    var _pstages = [
+      { name: 'Freeze Brief',   icon: '&#128196;', done: freeze },
+      { name: 'AI Triage',      icon: '&#129504;', done: triage },
+      { name: 'Exhibit Pack',   icon: '&#128209;', done: pack   },
+      { name: 'Graph Analysis', icon: '&#128376;', done: graph  }
+    ];
+    html += '<div class="pipe-track">';
+    _pstages.forEach(function (ps, i) {
+      var sc = ps.done ? 'pipe-stage done' : 'pipe-stage pending';
+      var mk = ps.done ? '&#10003;' : (i + 1);
+      html += '<div class="' + sc + '">' +
+        '<div class="pipe-node">' + mk + '</div>' +
+        '<div class="pipe-label">' + ps.icon + ' ' + esc(ps.name) + '</div>' +
+        '<div class="pipe-sub">' + (ps.done ? 'Ready' : 'Pending') + '</div>' +
+        '</div>';
+      if (i < _pstages.length - 1) {
+        var cc = (ps.done && _pstages[i + 1].done) ? 'pipe-conn done' : 'pipe-conn';
+        html += '<div class="' + cc + '"></div>';
+      }
     });
     html += '</div>';
 
-    $(“out”).innerHTML = html;
-    if (window.RC) { window.RC.animateRings($(“out”)); }
+    html += '<div class="deliv-grid">';
+
+
+    html += delivCard({
+
+
+      present: freeze, icon: "&#128196;", name: "Freeze Brief", delay: 0,
+
+
+      links: [
+
+
+        { label: "SAR / STR Filing",  href: "/v1/sar-filing/console"       + qs },
+
+
+        { label: "Recovery Snapshot", href: "/v1/recovery-snapshot/console" + qs },
+
+
+      ]
+
+
+    });
+
+
+    html += delivCard({
+
+
+      present: triage, icon: "&#129504;", name: "AI Triage", delay: 55,
+
+
+      links: [{ label: "AI Triage console", href: "/v1/ai-triage/console" + qs }]
+
+
+    });
+
+
+    html += delivCard({
+
+
+      present: pack, icon: "&#128209;", name: "Exhibit Pack", delay: 110,
+
+
+      links: [{ label: "Exhibit Pack console", href: "/v1/exhibit-pack/console" + qs }]
+
+
+    });
+
+
+    html += delivCard({
+
+
+      present: graph, icon: "&#128376;&#65039;", name: "Graph Analysis", delay: 165,
+
+
+      links: [{ label: "Graph Analysis console", href: "/v1/graph-analysis/console" + qs }]
+
+
+    });
+
+
+    html += '</div>';
+
+
+
+
+
+    $("out").innerHTML = html;
+
+
+    if (window.RC) {
+      window.RC.animateRings($("out"));
+      // Stagger-animate the deliverable cards
+      var cards = $("out").querySelectorAll('.deliv-card');
+      cards.forEach(function (c, i) { c.style.animationDelay = (i * 65) + 'ms'; });
+    }
+
+
   }
 
-  function key() { return ($(“key”).value || “”).trim(); }
-  function caseId() { return ($(“case”).value || “”).trim(); }
+
+
+
+
+  function key() { return ($("key").value || "").trim(); }
+
+
+  function caseId() { return ($("case").value || "").trim(); }
+
+
+
+
 
   function load() {
+
+
     var k = key();
-    if (!k) { setMsg(“Enter the admin key.”, “err”); return; }
+
+
+    if (!k) { setMsg("Enter the admin key.", "err"); return; }
+
+
     var cid = caseId();
-    if (!cid) { setMsg(“Enter a case id.”, “err”); return; }
-    try { sessionStorage.setItem(“rk_admin_key”, k); } catch (e) {}
-    setMsg(“Loading…”);
+
+
+    if (!cid) { setMsg("Enter a case id.", "err"); return; }
+
+
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+
+
+    setMsg("Loading&#8230;");
+
+
     clear();
-    if (window.RC) { $(“out”).innerHTML = window.RC.skeletonCards(4); }
+
+
+    if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(4); }
+
+
     fetch("/v1/case-overview?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
+
+
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad case id â€” must be 1..128 non-blank characters.");
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
+
+
+        if (res.status === 400) throw new Error("Bad case id &#8212; must be 1..128 non-blank characters.");
+
+
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
+
+
         if (res.status === 404) throw new Error("Case not found.");
+
+
         if (res.status === 503) throw new Error("API not configured (admin key).");
+
+
         if (!res.ok) throw new Error("HTTP " + res.status);
+
+
         return res.json();
+
+
       })
+
+
       .then(function (rep) {
+
+
         render(rep);
+
+
         setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
-        if (window.RC) { window.RC.toast("Case loaded ✓", "ok"); }
+
+
+        if (window.RC) { window.RC.toast("Case loaded &#10003;", "ok"); }
+
+
       })
+
+
       .catch(function (e) {
+
+
         setMsg(e.message, "err");
+
+
         if (window.RC) { window.RC.toast(e.message, "err"); }
+
+
       });
+
+
   }
 
+
+
+
+
   $("load").addEventListener("click", load);
+
+
   $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
 
+
+
+
+
   // Deep-link support: prefill + auto-load from ?case_id= (e.g. from Case Overview).
+
+
   (function () {
+
+
     try {
+
+
       var _qs = new URLSearchParams(window.location.search);
+
+
       var _cid = _qs.get("case_id");
+
+
       if (_cid) { $("case").value = _cid; }
+
+
       var _jur = _qs.get("jurisdiction");
+
+
       if (_jur && $("jur")) { $("jur").value = _jur; }   // sar_filing only; no-op elsewhere
+
+
       // Auto-trigger only when we have both a case_id AND a key already present
-      // (single sign-in via sessionStorage) â€” otherwise just prefill and wait.
+
+
+      // (single sign-in via sessionStorage) &#8212; otherwise just prefill and wait.
+
+
       if (_cid && $("key") && $("key").value) { load(); }
+
+
     } catch (e) {}
+
+
   })();
+
+
 })();
+
+
 </script>
+
+
 <script src="/v1/console/app.js" defer></script>
+
+
 </body>
+
+
 </html>
+
+

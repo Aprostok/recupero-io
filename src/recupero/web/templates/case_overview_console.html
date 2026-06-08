@@ -47,84 +47,69 @@
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
   function clear() { $("out").innerHTML = ""; }
 
-  // Each deliverable flag maps to one or more linked consoles. The linked
-  // consoles read the case_id from their OWN input, so we display the id next
-  // to each link with a "paste this case_id" note.
-  function pasteNote(cid) {
-    return '<span class="pasteid">paste this case_id: <span class="mono">' + esc(cid) + '</span></span>';
-  }
-  function linkRow(badgeOn, labelHtml, linksHtml) {
-    var badge = badgeOn
-      ? '<span class="badge-on">&#10003;</span>'
-      : '<span class="badge-off">&mdash;</span>';
-    return '<tr><td>' + badge + '</td><td class="label">' + labelHtml + '</td><td>' + linksHtml + '</td></tr>';
+  function delivCard(opts) {
+    // opts: { present, icon, name, links: [{label, href}], delay }
+    var cls = opts.present ? “deliv-card present” : “deliv-card absent”;
+    var status = opts.present ? “✓ Ready” : “— Not produced”;
+    var h = '<div class=”' + cls + '” style=”animation-delay:' + (opts.delay || 0) + 'ms”>';
+    h += '<div class=”deliv-card-head”>';
+    h += '<span class=”deliv-card-icon”>' + opts.icon + '</span>';
+    h += '<span class=”deliv-card-name”>' + opts.name + '</span>';
+    h += '<span class=”deliv-card-status”>' + status + '</span>';
+    h += '</div>';
+    if (opts.present && opts.links && opts.links.length) {
+      h += '<div class=”deliv-links”>';
+      opts.links.forEach(function (lk) {
+        h += '<a href=”' + esc(lk.href) + '”>' + esc(lk.label) + ' →</a>';
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+    return h;
   }
 
   function render(rep) {
     clear();
-    if (!rep || typeof rep !== "object") {
-      $("out").innerHTML = '<p class="empty">No case data.</p>';
+    if (!rep || typeof rep !== “object”) {
+      $(“out”).innerHTML = '<p class=”empty”>No case data.</p>';
       return;
     }
-    var cid = rep.case_id == null ? "" : String(rep.case_id);
-    var d = (rep.deliverables && typeof rep.deliverables === "object") ? rep.deliverables : {};
+    var cid = rep.case_id == null ? “” : String(rep.case_id);
+    var d = (rep.deliverables && typeof rep.deliverables === “object”) ? rep.deliverables : {};
 
-    var html = "";
-    html += '<div class="caseid"><div class="big mono">' + esc(cid) + "</div>" +
-      '<span class="note">The linked consoles each read the case_id from their own input â€” copy this value to paste in.</span></div>';
+    var html = “”;
+    html += '<div class=”caseid”><div class=”big mono”>' + esc(cid) + '</div>' +
+      '<span class=”note”>Click an address to copy it. The linked consoles each read case_id from their own input — this id is pre-filled where supported.</span></div>';
 
+    var qs = “?case_id=” + encodeURIComponent(cid);
     var freeze = !!d.freeze_brief;
     var triage = !!d.ai_triage;
-    var pack = !!d.exhibit_pack;
-    var graph = !!d.graph_ui;
-    var any = freeze || triage || pack || graph;
+    var pack   = !!d.exhibit_pack;
+    var graph  = !!d.graph_ui;
 
-    if (!any) {
-      html += '<p class="empty">This case has no produced deliverables yet.</p>';
-      $("out").innerHTML = html;
-      return;
-    }
+    html += '<div class=”deliv-grid”>';
+    html += delivCard({
+      present: freeze, icon: “📄”, name: “Freeze Brief”, delay: 0,
+      links: [
+        { label: “SAR / STR Filing”,  href: “/v1/sar-filing/console”       + qs },
+        { label: “Recovery Snapshot”, href: “/v1/recovery-snapshot/console” + qs },
+      ]
+    });
+    html += delivCard({
+      present: triage, icon: “🧠”, name: “AI Triage”, delay: 55,
+      links: [{ label: “AI Triage console”, href: “/v1/ai-triage/console” + qs }]
+    });
+    html += delivCard({
+      present: pack, icon: “📑”, name: “Exhibit Pack”, delay: 110,
+      links: [{ label: “Exhibit Pack console”, href: “/v1/exhibit-pack/console” + qs }]
+    });
+    html += delivCard({
+      present: graph, icon: “🕸️”, name: “Graph Analysis”, delay: 165,
+      links: [{ label: “Graph Analysis console”, href: “/v1/graph-analysis/console” + qs }]
+    });
+    html += '</div>';
 
-    html += '<table><thead><tr><th></th><th>Deliverable</th><th>Open</th></tr></thead><tbody>';
-
-    // Freeze brief â€” core artifact; also enables two derived views.
-    if (freeze) {
-      var qs = "?case_id=" + encodeURIComponent(cid);
-      var freezeLinks =
-        '<a href="/v1/sar-filing/console' + qs + '">SAR / STR Filing</a> &middot; ' +
-        '<a href="/v1/recovery-snapshot/console' + qs + '">Recovery Snapshot</a><br>' +
-        pasteNote(cid);
-      html += linkRow(true, "Freeze Brief (core artifact)", freezeLinks);
-    } else {
-      html += linkRow(false, "Freeze Brief (core artifact)", '<span class="empty">not produced</span>');
-    }
-
-    // AI triage.
-    if (triage) {
-      html += linkRow(true, "AI Triage",
-        '<a href="/v1/ai-triage/console?case_id=' + encodeURIComponent(cid) + '">AI Triage</a><br>' + pasteNote(cid));
-    } else {
-      html += linkRow(false, "AI Triage", '<span class="empty">not produced</span>');
-    }
-
-    // Exhibit pack.
-    if (pack) {
-      html += linkRow(true, "Exhibit Pack",
-        '<a href="/v1/exhibit-pack/console?case_id=' + encodeURIComponent(cid) + '">Exhibit Pack</a><br>' + pasteNote(cid));
-    } else {
-      html += linkRow(false, "Exhibit Pack", '<span class="empty">not produced</span>');
-    }
-
-    // Interactive graph.
-    if (graph) {
-      html += linkRow(true, "Graph Analysis",
-        '<a href="/v1/graph-analysis/console?case_id=' + encodeURIComponent(cid) + '">Graph Analysis</a><br>' + pasteNote(cid));
-    } else {
-      html += linkRow(false, "Graph Analysis", '<span class="empty">not produced</span>');
-    }
-
-    html += "</tbody></table>";
-    $("out").innerHTML = html;
+    $(“out”).innerHTML = html;
   }
 
   function key() { return ($("key").value || "").trim(); }

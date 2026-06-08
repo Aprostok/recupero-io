@@ -44,7 +44,17 @@
 
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
-  function pct(x) { return (x == null) ? "â€”" : (Math.round(x * 1000) / 10) + "%"; }
+  function pct(x) { return (x == null) ? “—“ : (Math.round(x * 1000) / 10) + “%”; }
+
+  function pctCell(x) {
+    if (x == null) return '<td class=”right”>—</td>';
+    var p = Math.round(x * 1000) / 10;
+    var w = Math.min(100, Math.max(0, x * 100));
+    var cls = w >= 60 ? “ok” : w >= 25 ? “” : “crit”;
+    return '<td class=”right” style=”white-space:nowrap”>' +
+      '<span class=”pbar”><span class=”pbar-fill ' + cls + '” style=”width:' + w + '%”></span></span>&nbsp;' +
+      p + '%</td>';
+  }
 
   function render(rep) {
     var rows = rep.profiles || [];
@@ -89,9 +99,9 @@
         '<td class="mono">' + esc(r.issuer) + '</td>' +
         '<td class="right">' + esc(r.n_letters_sent == null ? "â€”" : r.n_letters_sent) + '</td>' +
         '<td class="right">' + esc(r.n_responded == null ? "â€”" : r.n_responded) + '</td>' +
-        '<td class="right">' + esc(pct(r.response_rate)) + '</td>' +
-        '<td class="right">' + esc(pct(r.full_freeze_rate)) + '</td>' +
-        '<td class="right">' + esc(pct(r.partial_freeze_rate)) + '</td>' +
+        pctCell(r.response_rate) +
+        pctCell(r.full_freeze_rate) +
+        pctCell(r.partial_freeze_rate) +
         '<td><span class="badge instrument">' + esc(r.recommended_instrument) + '</span>' +
           '<div class="reason">' + esc(r.recommended_instrument_reason) + '</div></td>' +
         '<td>' + flags + '</td>' +

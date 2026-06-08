@@ -18,6 +18,7 @@ CONSOLE_CSS = """
   --crit: #d70015; --crit-soft: rgba(215,0,21,.07);
   --warn: #b9770e; --warn-soft: rgba(185,119,14,.10);
   --ok: #1d8a4e; --ok-soft: rgba(29,138,78,.10);
+  --crit-border: rgba(215,0,21,.22); --warn-border: rgba(185,119,14,.22); --ok-border: rgba(29,138,78,.22);
   --r-sm: 9px; --r: 14px; --r-lg: 20px;
   --ease: cubic-bezier(.32,.72,0,1);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -35,6 +36,7 @@ CONSOLE_CSS = """
     --crit: #ff453a; --crit-soft: rgba(255,69,58,.13);
     --warn: #ffd60a; --warn-soft: rgba(255,214,10,.14);
     --ok: #30d158; --ok-soft: rgba(48,209,88,.13);
+    --crit-border: rgba(255,69,58,.32); --warn-border: rgba(255,214,10,.28); --ok-border: rgba(48,209,88,.28);
     --shadow-sm: 0 1px 3px rgba(0,0,0,.5);
     --shadow-md: 0 10px 30px rgba(0,0,0,.55);
     --shadow-lg: 0 22px 56px rgba(0,0,0,.7);
@@ -250,6 +252,74 @@ tr.sev-high td     { background: var(--warn-soft); }
 @keyframes rc-rowIn { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
 .cards .card { animation: rc-rise .45s var(--ease) both; }
 
+/* ── Progress bars (inline rate visualisation) ── */
+.pbar { display: inline-flex; width: 56px; height: 4px; background: var(--hair-strong); border-radius: 99px; vertical-align: middle; overflow: hidden; flex-shrink: 0; }
+.pbar-fill { height: 100%; background: var(--accent); border-radius: 99px; transition: width .6s var(--ease); min-width: 0; }
+.pbar-fill.ok   { background: var(--ok);   }
+.pbar-fill.warn { background: var(--warn); }
+.pbar-fill.crit { background: var(--crit); }
+
+/* ── .mono copy affordance ── */
+td.mono, div.mono { cursor: copy; }
+td.mono:hover, div.mono:hover { opacity: .82; }
+
+/* ── Verdict hero (address profile) ── */
+.verdict-hero {
+  display: flex; align-items: center; gap: 1.1rem;
+  border-radius: var(--r); padding: 1.15rem 1.4rem;
+  border: 1px solid var(--hair); box-shadow: var(--shadow-sm);
+  animation: rc-rise .4s var(--ease) both;
+}
+.verdict-hero.v-sanctioned, .verdict-hero.v-high { background: var(--crit-soft); border-color: var(--crit-border); }
+.verdict-hero.v-medium { background: var(--warn-soft); border-color: var(--warn-border); }
+.verdict-hero.v-low, .verdict-hero.v-clean { background: var(--ok-soft); border-color: var(--ok-border); }
+.vh-icon { font-size: 2.2rem; flex-shrink: 0; line-height: 1; }
+.vh-body { flex: 1; min-width: 0; }
+.vh-label { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.025em; line-height: 1.1; }
+.verdict-hero.v-sanctioned .vh-label, .verdict-hero.v-high .vh-label { color: var(--crit); }
+.verdict-hero.v-medium .vh-label { color: var(--warn); }
+.verdict-hero.v-low .vh-label, .verdict-hero.v-clean .vh-label { color: var(--ok); }
+.vh-sub { font-size: .84rem; color: var(--ink-soft); margin-top: .25rem; }
+.vh-bar { height: 5px; border-radius: 99px; background: var(--hair-strong); margin-top: .6rem; max-width: 220px; overflow: hidden; }
+@keyframes bar-grow { from { width: 0 } to { width: var(--tw, 0%) } }
+.vh-bar-fill { height: 100%; border-radius: 99px; animation: bar-grow .85s var(--ease) forwards; }
+.verdict-hero.v-sanctioned .vh-bar-fill, .verdict-hero.v-high .vh-bar-fill { background: var(--crit); }
+.verdict-hero.v-medium .vh-bar-fill { background: var(--warn); }
+.verdict-hero.v-low .vh-bar-fill, .verdict-hero.v-clean .vh-bar-fill { background: var(--ok); }
+
+/* ── Deliverable cards (case overview) ── */
+.deliv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .75rem; margin: 1rem 0; }
+.deliv-card {
+  display: flex; flex-direction: column; gap: .5rem;
+  background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r);
+  padding: 1rem 1.1rem; box-shadow: var(--shadow-sm);
+  transition: transform .22s var(--ease), box-shadow .22s var(--ease), border-color .22s;
+  animation: rc-rise .4s var(--ease) both;
+}
+.deliv-card.present { border-color: var(--ok-border); }
+.deliv-card.absent  { opacity: .62; }
+.deliv-card-head { display: flex; align-items: center; gap: .55rem; }
+.deliv-card-icon { font-size: 1.35rem; }
+.deliv-card-name { font-weight: 700; font-size: .95rem; letter-spacing: -0.01em; }
+.deliv-card-status { margin-left: auto; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.deliv-card.present .deliv-card-status { color: var(--ok); }
+.deliv-card.absent  .deliv-card-status { color: var(--ink-faint); }
+.deliv-links { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .25rem; }
+.deliv-links a { font-size: .78rem; color: var(--accent); border: 1px solid var(--accent-soft); border-radius: var(--r-sm); padding: .22rem .55rem; transition: background .15s; }
+.deliv-links a:hover { background: var(--accent-soft); text-decoration: none; }
+.deliv-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); border-color: transparent; }
+.deliv-card.present:hover { border-color: var(--ok-border); }
+
+/* ── Risk band pills (screening) ── */
+.rband { display: inline-block; padding: .12rem .48rem; border-radius: 999px; font-size: .67rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.rband.critical, .rband.sanctioned { background: var(--crit-soft); color: var(--crit); }
+.rband.high { background: var(--warn-soft); color: var(--warn); }
+.rband.medium { background: var(--warn-soft); color: var(--warn); }
+.rband.low, .rband.clean { background: var(--ok-soft); color: var(--ok); }
+.score-crit { color: var(--crit); font-weight: 700; }
+.score-high { color: var(--warn); font-weight: 600; }
+.score-ok   { color: var(--ok);   }
+
 /* ── Live pulse dot ── */
 @keyframes rc-live-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -317,6 +387,24 @@ CONSOLE_JS = r"""
     el.querySelectorAll(".card .v").forEach(countUp);
     staggerRows(el);
   });
+
+  // ── Clipboard copy: click any .mono to copy its text ──────────────────────
+  (function () {
+    if (!navigator.clipboard || !navigator.clipboard.writeText) return;
+    document.addEventListener("click", function (ev) {
+      var el = ev.target.closest(".mono");
+      if (!el || el.tagName === "A" || ev.target.tagName === "A") return;
+      var text = (el.getAttribute("data-copy") || el.textContent || "").trim();
+      if (text.length < 6) return;
+      navigator.clipboard.writeText(text).then(function () {
+        var was = el.innerHTML;
+        var wasColor = el.style.color;
+        el.textContent = "✓ Copied";
+        el.style.color = "var(--ok)";
+        setTimeout(function () { el.innerHTML = was; el.style.color = wasColor; }, 950);
+      }).catch(function () {});
+    });
+  })();
 
   // Public API for consoles that need manual triggers (e.g. after tab switch)
   window.RC = { countUp: countUp, staggerRows: staggerRows };

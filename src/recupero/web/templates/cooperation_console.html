@@ -26,6 +26,10 @@
   <div class="bar">
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
     <button id="load">Load</button>
+    <label style="display:inline-flex;align-items:center;gap:.35rem;font-size:.8rem;color:var(--ink-soft);cursor:pointer;user-select:none">
+      <input type="checkbox" id="auto" style="width:15px;height:15px;accent-color:var(--accent);cursor:pointer"> auto-refresh 60s
+    </label>
+    <span class="live-dot" id="live-dot" style="display:none"></span>
     <span id="msg"></span>
   </div>
 
@@ -45,6 +49,19 @@
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
   function pct(x) { return (x == null) ? “—“ : (Math.round(x * 1000) / 10) + “%”; }
+
+  // Overall cooperation score ring: avg of response, full_freeze, partial_freeze rates → 0-10
+  function coopRingCell(r) {
+    if (r.is_black_hole) {
+      return '<td style=”text-align:center”><span class=”score-ring sm r-crit” style=”--score:0”><span class=”ring-inner”>0</span></span></td>';
+    }
+    var rates = [r.response_rate, r.full_freeze_rate, r.partial_freeze_rate].filter(function (v) { return v != null; });
+    if (!rates.length) return '<td style=”color:var(--ink-faint);text-align:center”>&#8212;</td>';
+    var avg = rates.reduce(function (s, v) { return s + v; }, 0) / rates.length;
+    var score = Math.round(avg * 10);
+    var cls = score >= 7 ? “r-ok” : score >= 4 ? “r-high” : “r-crit”;
+    return '<td style=”text-align:center”><span class=”score-ring sm ' + cls + '” style=”--score:' + score + '”><span class=”ring-inner”>' + score + '</span></span></td>';
+  }
 
   function pctCell(x) {
     if (x == null) return '<td class=”right”>—</td>';
@@ -80,12 +97,13 @@
     }
 
     var h = '<table><thead><tr>' +
+      '<th>Score</th>' +
       '<th>Issuer</th>' +
       '<th class="right">Letters</th>' +
       '<th class="right">Responded</th>' +
-      '<th class="right">Response</th>' +
-      '<th class="right">Full freeze</th>' +
-      '<th class="right">Partial freeze</th>' +
+      '<th class="right">Response %</th>' +
+      '<th class="right">Full freeze %</th>' +
+      '<th class="right">Partial freeze %</th>' +
       '<th>Recommended instrument</th>' +
       '<th>Flags</th>' +
       '</tr></thead><tbody>';
@@ -96,6 +114,7 @@
         : (r.has_confident_profile ? '<span class="badge ok">profiled</span>'
                                    : '<span class="badge">low sample</span>');
       h += '<tr class="' + (bh ? "blackhole" : "") + '">' +
+        coopRingCell(r) +
         '<td class="mono">' + esc(r.issuer) + '</td>' +
         '<td class="right">' + esc(r.n_letters_sent == null ? "â€”" : r.n_letters_sent) + '</td>' +
         '<td class="right">' + esc(r.n_responded == null ? "â€”" : r.n_responded) + '</td>' +
@@ -129,7 +148,17 @@
       .catch(function (e) { setMsg(e.message, "err"); });
   }
 
+  var timer = null;
   $("load").addEventListener("click", load);
+  $("auto").addEventListener("change", function () {
+    if (timer) { clearInterval(timer); timer = null; }
+    $("live-dot").style.display = "none";
+    if (this.checked) {
+      timer = setInterval(load, 60000);
+      $("live-dot").style.display = "inline-block";
+      setMsg("Live · auto-refresh on", "ok");
+    }
+  });
   if (key()) { load(); }
 })();
 </script>

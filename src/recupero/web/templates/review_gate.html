@@ -172,7 +172,7 @@
         return "<tr data-id=\"" + r.id + "\">"
           + '<td class="mono" title="' + sha + '">' + shortSha(sha) + '</td>'
           + "<td class=\"mono\">" + (r.case_id || "—") + "</td>"
-          + "<td>" + (r.artifact_kind || "—") + "</td>"
+          + '<td><span class="chip">' + (r.artifact_kind ? r.artifact_kind.replace(/</g, "&lt;") : "&#8212;") + '</span></td>'
           + "<td class=\"mono\">" + (r.created_at_utc || "—") + "</td>"
           + "<td>" + inlineUrl + "</td>"
           + '<td><span class="status-awaiting">awaiting_review</span></td>'

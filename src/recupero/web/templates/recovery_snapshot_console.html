@@ -191,8 +191,15 @@
     var prob = fmtProb(probRaw);
     if (prob) {
       var probPct = typeof probRaw === "number" ? Math.round(Math.max(0, Math.min(1, probRaw)) * 100) : 0;
+      var probScore = typeof probRaw === "number" ? Math.round(probRaw * 10) : 0;
+      var probRingCls = probScore >= 7 ? "r-ok" : probScore >= 3 ? "r-high" : "r-crit";
       kpis += '<div class="kpi"><div class="k-label">Probability of any recovery (90d)</div>' +
-        '<div class="k-amount">' + esc(prob) + '</div>' +
+        '<div style="display:flex;align-items:center;gap:.65rem;margin:.3rem 0">' +
+          '<div class="score-ring ' + probRingCls + '" style="--score:' + probScore + '">' +
+            '<div class="ring-inner">' + esc(prob) + '</div>' +
+          '</div>' +
+          '<span class="k-amount" style="font-size:1.15rem">' + esc(prob) + '</span>' +
+        '</div>' +
         '<div class="kpi-gauge"><div class="kpi-gauge-fill" style="width:' + probPct + '%"></div></div>' +
         '</div>';
     }

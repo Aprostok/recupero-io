@@ -101,7 +101,7 @@
       var st = r.status || "unknown";
       h += '<tr class="' + esc(st) + '">' +
         '<td class="mono">' + esc(r.name) + '</td>' +
-        '<td>' + esc(r.source_class) + '</td>' +
+        '<td><span class="chip">' + esc(r.source_class) + '</span></td>' +
         '<td><span class="badge ' + esc(st) + '">' + esc(st) + '</span></td>' +
         ageBarCell(r.age_days, r.sla_days) +
         '<td class="right">' + esc(r.sla_days) + '</td>' +

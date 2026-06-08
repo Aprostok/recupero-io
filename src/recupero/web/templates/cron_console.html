@@ -15,6 +15,9 @@
   .badge.ok    { background: rgba(29,138,78,.12); color: var(--ok); }
   label.autolabel { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--ink-soft); cursor: pointer; user-select: none; }
   label.autolabel input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
+  td.hrs-crit { color: var(--crit); font-weight: 700; }
+  td.hrs-warn { color: var(--warn); font-weight: 600; }
+  td.hrs-ok   { color: var(--ok); }
 </style>
 </head>
 <body>
@@ -27,6 +30,7 @@
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
     <button id="load">Load</button>
     <label class="autolabel"><input type="checkbox" id="auto"> auto-refresh 60s</label>
+    <span class="live-dot" id="live-dot" style="display:none"></span>
     <span id="msg"></span>
   </div>
 
@@ -48,6 +52,13 @@
   function statusBadge(st) {
     var cls = (st === "ok") ? "ok" : (st === "stale") ? "stale" : "down";
     return '<span class="badge ' + cls + '">' + esc(st || "?") + '</span>';
+  }
+
+  function hrsCell(h) {
+    if (h == null) return '<td class="right">&#8212;</td>';
+    var n = Number(h);
+    var cls = n > 48 ? "hrs-crit" : n > 24 ? "hrs-warn" : n > 12 ? "hrs-warn" : "hrs-ok";
+    return '<td class="right ' + cls + '">' + esc(h) + '</td>';
   }
 
   function render(payload) {
@@ -78,7 +89,7 @@
         '<td class="mono">' + esc(n) + '</td>' +
         '<td>' + statusBadge(j.status) + '</td>' +
         '<td class="mono">' + esc(j.last_success_utc != null ? j.last_success_utc : "â€”") + '</td>' +
-        '<td class="right">' + esc(j.hours_since_last_success != null ? j.hours_since_last_success : "â€”") + '</td>' +
+        hrsCell(j.hours_since_last_success) +
         '<td class="right">' + esc(j.consecutive_failures != null ? j.consecutive_failures : "â€”") + '</td>' +
         '<td class="errmsg">' + esc(j.last_error_message != null ? j.last_error_message : "") + '</td>' +
         '</tr>';
@@ -109,7 +120,12 @@
   $("load").addEventListener("click", load);
   $("auto").addEventListener("change", function () {
     if (timer) { clearInterval(timer); timer = null; }
-    if (this.checked) { timer = setInterval(load, 60000); }
+    $("live-dot").style.display = "none";
+    if (this.checked) {
+      timer = setInterval(load, 60000);
+      $("live-dot").style.display = "inline-block";
+      setMsg("Live · auto-refresh on", "ok");
+    }
   });
   if (key()) { load(); }
 })();

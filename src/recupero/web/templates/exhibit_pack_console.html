@@ -60,11 +60,17 @@
             '<th>Exhibit</th><th>Filename</th><th class="right">Size</th><th>SHA-256</th>' +
             '</tr></thead><tbody>';
     entries.forEach(function (e) {
+      var sha = e.sha256 || "";
+      var shaDisp = sha.length > 24 ? sha.slice(0, 16) + "…" + sha.slice(-8) : sha;
+      var shaCell = sha
+        ? '<span class="mono" title="' + esc(sha) + '" style="cursor:help">' + esc(shaDisp) + '</span>' +
+          (navigator.clipboard ? '&thinsp;<button style="font-size:.62rem;padding:.06rem .3rem;border:1px solid var(--hair);border-radius:3px;background:transparent;cursor:pointer;color:var(--ink-soft)" title="Copy full hash" onclick="navigator.clipboard.writeText(\'' + esc(sha) + '\')">copy</button>' : '')
+        : '&#8212;';
       h += '<tr>' +
         '<td class="label">' + esc(e.exhibit_label) + '</td>' +
         '<td class="mono">' + esc(e.filename) + '</td>' +
         '<td class="right">' + esc(e.size_human) + '</td>' +
-        '<td class="mono">' + esc(e.sha256) + '</td>' +
+        '<td>' + shaCell + '</td>' +
         '</tr>';
     });
     h += '</tbody></table>';

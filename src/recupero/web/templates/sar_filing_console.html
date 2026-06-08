@@ -1,25 +1,23 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” SAR / STR Filing (DRAFT)</title>
+<title>Recupero &#8211; SAR / STR Filing (DRAFT)</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: SAR / STR filing (draft) */
-  .draft-banner { border-radius: var(--r); padding: .7rem 1rem; margin-bottom: 1rem; font-size: .9rem; font-weight: 700;
-                  background: var(--warn-soft); border: 1px solid var(--warn); color: var(--warn); }
-  .draft-banner .small { display: block; font-weight: 400; font-size: .78rem; margin-top: .25rem; color: var(--warn); }
   .card .v { font-size: 1.05rem; }
-  .panel { font-size: .82rem; }
-  .panel .row { margin-bottom: .25rem; }
-  .panel .k { color: var(--ink-faint); display: inline-block; min-width: 9rem; }
-  .narrative { white-space: pre-wrap; line-height: 1.45; }
+  .panel { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .75rem 1rem; margin-bottom: 1rem; font-size: .82rem; box-shadow: var(--shadow-sm); }
+  .panel .row { display: flex; gap: .6rem; margin-bottom: .3rem; align-items: baseline; }
+  .panel .k { color: var(--ink-faint); flex-shrink: 0; min-width: 9rem; font-size: .74rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .narrative { white-space: pre-wrap; line-height: 1.6; font-size: .84rem; }
+  h2 { margin: 1.4rem 0 .5rem; }
 </style>
 </head>
 <body>
-  <h1>ðŸ›ï¸ SAR / STR Filing (DRAFT)</h1>
-  <div class="sub">Suspicious-activity-report DRAFT context assembled from a single case's freeze brief. Paste your
+  <h1>&#127963; SAR / STR Filing (DRAFT)</h1>
+  <div class="sub">Suspicious-activity-report DRAFT context assembled from a single case&#8217;s freeze brief. Paste your
     operator key and a case id, pick a jurisdiction, then generate. Data is fetched directly from the admin-gated
     API (the key stays in a request header, never the URL).</div>
 
@@ -27,9 +25,9 @@
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
     <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
     <select id="jur" title="Filing regime">
-      <option value="us">us â€” FinCEN SAR (Form 111)</option>
-      <option value="uk">uk â€” NCA SAR (POCA 2002)</option>
-      <option value="eu">eu â€” AMLD STR (goAML)</option>
+      <option value="us">us &#8211; FinCEN SAR (Form 111)</option>
+      <option value="uk">uk &#8211; NCA SAR (POCA 2002)</option>
+      <option value="eu">eu &#8211; AMLD STR (goAML)</option>
     </select>
     <button id="load">Generate Draft</button>
     <span id="msg"></span>
@@ -42,14 +40,14 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) -- clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
   function clear() { $("out").innerHTML = ""; }
 
   function card(v, l) { return '<div class="card"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
-  function row(k, v) { return '<div class="row"><span class="k">' + esc(k) + '</span>' + esc(v) + '</div>'; }
+  function row(k, v) { return '<div class="row"><span class="k">' + esc(k) + '</span><span>' + esc(v) + '</span></div>'; }
 
   function render(ctx) {
     ctx = ctx || {};
@@ -59,40 +57,45 @@
 
     var html = '';
 
-    // Prominent DRAFT banner â€” Recupero is not the filer.
-    html += '<div class="draft-banner">DRAFT â€” Recupero is NOT the filer.' +
-      '<span class="small">A ' + esc(labels.report_acronym || "SAR/STR") +
-      ' is filed by an obligated financial institution (or, in the UK, a POCA-2002 reporter). ' +
-      'This draft compresses the analyst\'s work into a reviewable package; the obligated institution ' +
-      'completes its identifiers + officer attestation and submits via the named portal.</span></div>';
+    // DRAFT disclaimer -- uses shared .ai-disclaimer style
+    html += '<div class="ai-disclaimer">' +
+      '<div class="ai-disclaimer-icon">&#128196;</div>' +
+      '<div class="ai-disclaimer-body">' +
+        '<div class="ai-disclaimer-title">DRAFT &mdash; Recupero is NOT the filer</div>' +
+        '<div class="ai-disclaimer-note">A ' + esc(labels.report_acronym || "SAR/STR") +
+        ' is filed by an obligated financial institution (or, in the UK, a POCA-2002 reporter). ' +
+        'This draft compresses the analyst&#8217;s work into a reviewable package; the obligated institution ' +
+        'completes its identifiers + officer attestation and submits via the named portal.</div>' +
+      '</div>' +
+    '</div>';
 
-    // Jurisdiction / form labels.
+    // Jurisdiction / form labels
     html += '<h2>Filing regime</h2><div class="panel">' +
-      row("Report", (labels.report_acronym || "") + " â€” " + (labels.report_name || "")) +
-      row("Regulator", labels.regulator) +
+      row("Report",         (labels.report_acronym || "") + " — " + (labels.report_name || "")) +
+      row("Regulator",      labels.regulator) +
       row("Form reference", labels.form_reference) +
-      row("Statute", labels.statute) +
-      row("Filing portal", labels.filing_portal) +
-      row("Jurisdiction key", ctx.jurisdiction_key) +
+      row("Statute",        labels.statute) +
+      row("Filing portal",  labels.filing_portal) +
+      row("Jurisdiction",   ctx.jurisdiction_key) +
       '</div>';
 
-    // Key amounts / activity.
+    // Key amounts / activity
     html += '<h2>Activity summary</h2><div class="cards">' +
       card(activity.amount_usd || ctx.total_loss_usd || "$0.00", "Amount (USD)") +
       card((ctx.subjects || []).length, "Subjects") +
-      card(activity.date_from || "â€”", "Activity from") +
-      card(activity.date_to || "â€”", "Activity to") +
+      card(activity.date_from || "—", "Activity from") +
+      card(activity.date_to   || "—", "Activity to")  +
       '</div>';
     html += '<div class="panel">' +
-      row("Case id", ctx.case_id) +
-      row("Incident date", ctx.incident_date || "â€”") +
-      row("Incident type", ctx.incident_type || "â€”") +
-      row("Victim", (victim.name || "") + " (" + (victim.jurisdiction || "") + ")") +
-      row("Generated at", ctx.generated_at) +
+      row("Case id",         ctx.case_id) +
+      row("Incident date",   ctx.incident_date || "—") +
+      row("Incident type",   ctx.incident_type || "—") +
+      row("Victim",          (victim.name || "") + " (" + (victim.jurisdiction || "") + ")") +
+      row("Generated at",    ctx.generated_at) +
       row("Characterization", activity.characterization || labels.characterization) +
       '</div>';
 
-    // Subjects table â€” on-chain addresses receiving / holding suspected proceeds.
+    // Subjects table
     html += '<h2>Subjects</h2>';
     var subjects = ctx.subjects || [];
     if (!subjects.length) {
@@ -113,7 +116,7 @@
       html += '</tbody></table>';
     }
 
-    // Narrative (Part-V-style) â€” every value escaped.
+    // Narrative
     html += '<h2>Narrative</h2>';
     html += '<div class="panel narrative">' + esc(ctx.sar_narrative) + '</div>';
 
@@ -131,14 +134,14 @@
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     var j = jur();
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Generatingâ€¦");
+    setMsg("Generating…");
     clear();
     fetch("/v1/sar-filing?case_id=" + encodeURIComponent(cid) + "&jurisdiction=" + encodeURIComponent(j),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad request â€” check the case id / jurisdiction.");
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
-        if (res.status === 404) throw new Error("Case not found (no freeze_brief.json â€” run emit-brief first).");
+        if (res.status === 400) throw new Error("Bad request — check the case id / jurisdiction.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 404) throw new Error("Case not found (no freeze_brief.json — run emit-brief first).");
         if (res.status === 503) throw new Error("API not configured, or draft unavailable.");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -150,16 +153,14 @@
   $("load").addEventListener("click", load);
   $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
 
-  // Deep-link support: prefill + auto-load from ?case_id= (e.g. from Case Overview).
+  // Deep-link support: prefill + auto-load from ?case_id=
   (function () {
     try {
       var _qs = new URLSearchParams(window.location.search);
       var _cid = _qs.get("case_id");
       if (_cid) { $("case").value = _cid; }
       var _jur = _qs.get("jurisdiction");
-      if (_jur && $("jur")) { $("jur").value = _jur; }   // sar_filing only; no-op elsewhere
-      // Auto-trigger only when we have both a case_id AND a key already present
-      // (single sign-in via sessionStorage) â€” otherwise just prefill and wait.
+      if (_jur && $("jur")) { $("jur").value = _jur; }
       if (_cid && $("key") && $("key").value) { load(); }
     } catch (e) {}
   })();

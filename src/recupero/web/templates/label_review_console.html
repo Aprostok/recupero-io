@@ -1,28 +1,35 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Label-candidate Review</title>
+<title>Recupero &#8211; Label-candidate Review</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: label-candidate review */
-  .note { background: var(--surface); border: 1px solid var(--hair); border-left: 4px solid var(--accent); border-radius: var(--r-sm);
-          padding: .6rem .85rem; font-size: .8rem; color: var(--ink-soft); margin-bottom: 1.2rem; }
+  .note {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-left: 4px solid var(--accent); border-radius: var(--r-sm);
+    padding: .6rem .85rem; font-size: .8rem; color: var(--ink-soft); margin-bottom: 1.2rem;
+  }
   .note code { font-family: var(--mono); font-size: .76rem; }
   .badge.pending_review { background: var(--warn-soft); color: var(--warn); }
-  .badge.promoted { background: rgba(29,138,78,.12); color: var(--ok); }
-  .badge.rejected { background: var(--crit-soft); color: var(--crit); }
-  .badge.expired { background: var(--surface-2); color: var(--ink-soft); }
+  .badge.promoted       { background: rgba(29,138,78,.12); color: var(--ok); }
+  .badge.rejected       { background: var(--crit-soft); color: var(--crit); }
+  .badge.expired        { background: var(--surface-2); color: var(--ink-soft); }
+  /* confidence pill */
+  .conf-high   { color: var(--ok);   font-weight: 700; }
+  .conf-medium { color: var(--warn); font-weight: 600; }
+  .conf-low    { color: var(--crit); font-weight: 600; }
 </style>
 </head>
 <body>
-  <h1>ðŸ·ï¸ Label-candidate Review</h1>
+  <h1>&#127991; Label-candidate Review</h1>
   <div class="sub">Review the auto-ingested label-candidate queue. Paste your operator key to load;
     data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
 
   <div class="note">
-    This console is <b>read-only</b> â€” it displays the candidate queue.
+    This console is <b>read-only</b> &#8212; it displays the candidate queue.
     Promote / reject are mutating actions and are done <b>via the API</b> with the
     candidate-row confirm hash:
     <code>POST /v1/labels/candidates/&lt;id&gt;/promote</code> (with
@@ -41,6 +48,7 @@
     <span id="msg"></span>
   </div>
 
+  <div id="cards" class="cards" style="margin-bottom:.8rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -48,36 +56,57 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) -- clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
+
+  function confClass(c) {
+    if (!c) return "";
+    var n = parseFloat(String(c));
+    if (!isNaN(n)) { return n >= 0.8 ? "conf-high" : n >= 0.5 ? "conf-medium" : "conf-low"; }
+    var s = String(c).toLowerCase();
+    return s === "high" ? "conf-high" : s === "medium" ? "conf-medium" : s === "low" ? "conf-low" : "";
+  }
 
   function key() { return ($("key").value || "").trim(); }
 
   function render(body) {
     var rows = (body && body.candidates) || [];
+    var n = (body && typeof body.count === "number") ? body.count : rows.length;
+
+    // Summary cards
+    var nHigh = 0, nMed = 0;
+    rows.forEach(function(r) {
+      var cc = confClass(r.proposed_confidence);
+      if (cc === "conf-high") nHigh++;
+      else if (cc === "conf-medium") nMed++;
+    });
+    var st = ($("status").value || "pending_review").trim();
+    $("cards").innerHTML =
+      card(n, st.replace("_", " "), st === "pending_review" && n ? "alert" : st === "promoted" ? "ok" : "") +
+      (nHigh ? card(nHigh, "High confidence", "ok") : "") +
+      (nMed  ? card(nMed,  "Medium confidence", "") : "");
+
     if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">No candidates for this status.</p>'; return; }
     var h = '<table><thead><tr>' +
             '<th>Address</th><th>Chain</th><th>Category</th><th>Proposed name</th>' +
             '<th>Confidence</th><th>Source</th><th>Status</th></tr></thead><tbody>';
     rows.forEach(function (r) {
-      // source_url comes from the auto-ingested label-candidate queue
-      // (third-party attribution feeds), so it is attacker-influenceable.
-      // Whitelist the scheme to http(s) ONLY â€” never render a javascript:/
-      // data: URL into an href (that would run in the operator's admin
-      // session and could read the key from sessionStorage). encodeURI +
-      // the quote-hardened esc() also prevent any attribute breakout.
+      // source_url is attacker-influenceable -- whitelist http(s) only
       var safeUrl = /^https?:\/\//i.test(r.source_url || "") ? r.source_url : null;
       var src = safeUrl
         ? '<a href="' + esc(encodeURI(safeUrl)) + '" target="_blank" rel="noopener noreferrer">' + esc(r.source) + '</a>'
         : esc(r.source);
+      var cc = confClass(r.proposed_confidence);
       h += '<tr>' +
         '<td class="mono">' + esc(r.address) + '</td>' +
         '<td>' + esc(r.chain) + '</td>' +
         '<td>' + esc(r.proposed_category) + '</td>' +
         '<td>' + esc(r.proposed_name) + '</td>' +
-        '<td>' + esc(r.proposed_confidence) + '</td>' +
+        '<td class="' + cc + '">' + esc(r.proposed_confidence) + '</td>' +
         '<td>' + src + '</td>' +
         '<td><span class="badge ' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
         '</tr>';
@@ -90,14 +119,12 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
     var st = ($("status").value || "pending_review").trim();
-    // The /v1/labels/candidates endpoint binds the filter to the
-    // ``status_filter`` query parameter.
     var url = "/v1/labels/candidates?status_filter=" + encodeURIComponent(st);
     fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key / DB).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -105,7 +132,7 @@
       .then(function (body) {
         render(body);
         var n = (body && typeof body.count === "number") ? body.count : ((body.candidates || []).length);
-        setMsg(n + " candidate(s) Â· updated " + new Date().toLocaleTimeString(), "ok");
+        setMsg(n + " candidate(s) · updated " + new Date().toLocaleTimeString(), "ok");
       })
       .catch(function (e) { setMsg(e.message, "err"); });
   }

@@ -1,35 +1,42 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Incident Plans</title>
+<title>Recupero &#8211; Incident Plans</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: incident plans (card-as-container layout) */
-  .card { padding: 0; margin-bottom: 1rem; overflow: hidden; }
-  .card.sev-critical { border-left: 4px solid var(--crit); }
-  .card.sev-high { border-left: 4px solid var(--warn); }
-  .card-head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .55rem .75rem; background: var(--surface-2); font-size: .82rem; border-bottom: 1px solid var(--hair); }
-  .card.sev-critical .card-head { background: var(--crit-soft); }
-  .card.sev-high .card-head { background: var(--warn-soft); }
-  .card-head .kind { color: var(--ink-soft); }
+  .card.sev-critical::before { background: var(--crit); transform: scaleY(1); }
+  .card.sev-high::before     { background: var(--warn); transform: scaleY(1); }
+  .card.sev-critical { border: 1px solid var(--crit-border); }
+  .card.sev-high     { border: 1px solid var(--warn-border); }
+  /* plan cards are containers — remove default padding so table fills edge-to-edge */
+  .plan-card { padding: 0; margin-bottom: 1rem; overflow: hidden; }
+  .plan-card.sev-critical { border-left: 4px solid var(--crit); background: var(--surface); border: 1px solid var(--crit-border); border-radius: var(--r); box-shadow: var(--shadow-sm); }
+  .plan-card.sev-high     { border-left: 4px solid var(--warn); background: var(--surface); border: 1px solid var(--warn-border); border-radius: var(--r); box-shadow: var(--shadow-sm); }
+  .plan-card.sev-         { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); box-shadow: var(--shadow-sm); }
+  .card-head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; padding: .65rem .85rem; border-bottom: 1px solid var(--hair); font-size: .82rem; }
+  .plan-card.sev-critical .card-head { background: var(--crit-soft); }
+  .plan-card.sev-high     .card-head { background: var(--warn-soft); }
+  .card-head .kind  { color: var(--ink-soft); }
   .card-head .count { color: var(--ink-faint); font-size: .72rem; }
-  /* table sits INSIDE the card â€” borderless, no radius/shadow of its own */
-  table { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
-  th { background: transparent; }
+  /* table sits INSIDE the plan card -- borderless, no radius/shadow of its own */
+  .plan-card table { border: 0; border-radius: 0; box-shadow: none; background: transparent; }
+  .plan-card th    { background: transparent; }
   .ub { display:inline-block; padding:.04rem .35rem; border-radius:5px; font-size:.68rem; font-weight:600; text-transform: uppercase; background: var(--accent-soft); color: var(--accent); }
   .ub.immediate { background: var(--crit-soft); color: var(--crit); }
-  .ub.same-day { background: var(--warn-soft); color: var(--warn); }
-  .ub.routine { background: rgba(29,138,78,.12); color: var(--ok); }
-  .ord { text-align: right; width: 2rem; color: var(--ink-faint); }
+  .ub.same-day  { background: var(--warn-soft); color: var(--warn); }
+  .ub.routine   { background: rgba(29,138,78,.12); color: var(--ok); }
+  .ord { text-align: center; width: 2.5rem; }
   .rationale { color: var(--ink-soft); font-size: .73rem; max-width: 30rem; }
+  .plan-cards-wrap { margin-top: .5rem; }
 </style>
 </head>
 <body>
-  <h1>ðŸ“‹ Incident Plans</h1>
-  <div class="sub">The "what to do RIGHT NOW" ordered playbook. D4 turns each persisted D6 recovery alert into a concrete
-    response plan: re-trace the moved address â†’ venue-conditional freeze/subpoena â†’ notify LE / investigator â†’ set a
+  <h1>&#128203; Incident Plans</h1>
+  <div class="sub">The &#8220;what to do RIGHT NOW&#8221; ordered playbook. D4 turns each persisted D6 recovery alert into a concrete
+    response plan: re-trace the moved address &rarr; venue-conditional freeze/subpoena &rarr; notify LE / investigator &rarr; set a
     follow-up. The freeze/subpoena step is CONDITIONAL on the re-trace result (the destination venue is unknown until
     step 1 runs). Deployment-wide, sourced from the DB. Paste your operator key to load; data is fetched directly from
     the admin-gated API (the key stays in a request header, never the URL).</div>
@@ -45,18 +52,20 @@
     <span id="msg"></span>
   </div>
 
-  <div class="summary" id="summary"></div>
-  <div id="cards"></div>
+  <div id="cards" class="cards" style="margin-bottom:.8rem"></div>
+  <div id="plan-cards" class="plan-cards-wrap"></div>
 
 <script>
 (function () {
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) -- clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+
+  function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
   function urgencyClass(u) {
     var s = (u == null ? "" : String(u));
@@ -73,7 +82,7 @@
       '</tr></thead><tbody>';
     steps.forEach(function (s) {
       h += '<tr>' +
-        '<td class="ord">' + esc(s.order) + '</td>' +
+        '<td class="ord"><span class="step-bubble">' + esc(s.order) + '</span></td>' +
         '<td>' + esc(s.action) + '</td>' +
         '<td class="mono">' + esc(s.target) + '</td>' +
         '<td><span class="ub ' + esc(urgencyClass(s.urgency)) + '">' + esc(s.urgency) + '</span></td>' +
@@ -88,19 +97,25 @@
     var plans = rep.plans || [];
     var configured = !!rep.db_configured;
 
-    var nCrit = 0, nHigh = 0;
+    var nCrit = 0, nHigh = 0, nImmediate = 0;
     plans.forEach(function (p) {
       if (p.severity === "critical") { nCrit += 1; }
       else if (p.severity === "high") { nHigh += 1; }
+      (p.steps || []).forEach(function (s) {
+        if (s.urgency === "immediate") { nImmediate += 1; }
+      });
     });
-    $("summary").innerHTML =
-      esc(plans.length) + ' plan(s) â€” ' +
-      '<span class="crit">' + esc(nCrit) + ' critical</span> / ' +
-      '<span class="hi">' + esc(nHigh) + ' high</span>';
 
-    // Empty state â€” handles BOTH db_configured=false AND an empty list.
+    // Summary metric cards
+    $("cards").innerHTML =
+      card(plans.length, "Plans",              "") +
+      card(nCrit,        "Critical",           nCrit ? "alert" : "") +
+      card(nHigh,        "High",               nHigh ? "" : "ok") +
+      card(nImmediate,   "Immediate actions",  nImmediate ? "alert" : "");
+
+    // Empty state -- handles BOTH db_configured=false AND an empty list.
     if (!configured || !plans.length) {
-      $("cards").innerHTML =
+      $("plan-cards").innerHTML =
         '<p class="sub">No incident plans (no DB configured, or no recovery alerts have fired yet).</p>';
       return;
     }
@@ -110,7 +125,7 @@
       var sev = (p.severity == null ? "" : String(p.severity));
       var sevCls = (sev === "critical" || sev === "high") ? sev : "";
       var steps = p.steps || [];
-      out += '<div class="card sev-' + esc(sevCls) + '">' +
+      out += '<div class="plan-card sev-' + esc(sevCls) + '">' +
         '<div class="card-head">' +
           '<span class="badge ' + esc(sevCls) + '">' + esc(sev) + '</span>' +
           '<span class="mono">' + esc(p.address) + '</span>' +
@@ -121,7 +136,7 @@
         renderSteps(steps) +
         '</div>';
     });
-    $("cards").innerHTML = out;
+    $("plan-cards").innerHTML = out;
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -131,11 +146,11 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     var sev = ($("sev").value || "").trim();
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
     fetch("/v1/incident-plans" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();

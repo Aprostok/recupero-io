@@ -1,52 +1,72 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Trace Benchmark</title>
+<title>Recupero &#8211; Trace Benchmark</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: trace benchmark */
   h2 { text-transform: capitalize; }
   .label { font-weight: 700; white-space: nowrap; }
-  .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink); border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
-  .banner { background: var(--warn-soft); border: 2px solid var(--warn); color: var(--warn); border-radius: var(--r); padding: .7rem 1rem; font-size: .9rem; font-weight: 700; margin-bottom: 1rem; }
-  .banner .note { display: block; font-weight: 400; font-size: .78rem; margin-top: .3rem; color: var(--warn); }
-  .section { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .2rem 1rem 1rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm); }
-  .section p { white-space: pre-wrap; font-size: .85rem; line-height: 1.45; }
+  .explain {
+    background: var(--accent-soft); border: 1px solid var(--hair);
+    color: var(--ink); border-radius: var(--r); padding: .55rem .8rem;
+    font-size: .8rem; margin-bottom: 1rem;
+  }
+  .section {
+    background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r);
+    padding: .2rem 1rem 1rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm);
+  }
+  .section p  { white-space: pre-wrap; font-size: .85rem; line-height: 1.45; }
   .section ul { margin: .3rem 0 .3rem 1.1rem; padding: 0; font-size: .85rem; line-height: 1.5; }
   .section li { margin: .2rem 0; }
+  /* headline KPI row */
   .headline { display: flex; flex-wrap: wrap; gap: .8rem; margin-bottom: 1rem; }
   .kpi { flex: 1 1 12rem; background: var(--surface); border: 1px solid var(--hair); border-left: 4px solid var(--accent); border-radius: var(--r); padding: .7rem 1rem; box-shadow: var(--shadow-sm); }
-  .kpi.recall { border-left-color: var(--ok); }
+  .kpi.recall    { border-left-color: var(--ok); }
   .kpi.precision { border-left-color: #8e44ad; }
-  .kpi.f1 { border-left-color: var(--accent); }
-  .kpi .k-label { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin-bottom: .25rem; }
+  .kpi.f1        { border-left-color: var(--accent); }
+  .kpi .k-label  { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin-bottom: .25rem; }
   .kpi .k-amount { font-size: 1.7rem; font-weight: 700; color: var(--ink); line-height: 1.1; }
-  .kpi .k-sub { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
+  .kpi .k-sub    { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
+  /* metric gauge bar under KPI value */
+  .kpi-gauge { height: 4px; border-radius: 99px; background: var(--hair-strong); margin-top: .5rem; overflow: hidden; }
+  .kpi-gauge-fill { height: 100%; border-radius: 99px; transition: width .8s cubic-bezier(.32,.72,0,1); }
+  .kpi.recall    .kpi-gauge-fill { background: var(--ok); }
+  .kpi.precision .kpi-gauge-fill { background: #8e44ad; }
+  .kpi.f1        .kpi-gauge-fill { background: var(--accent); }
+  /* count mini cards */
   .counts { display: flex; flex-wrap: wrap; gap: .8rem; margin-bottom: 1rem; }
   .count { flex: 1 1 10rem; background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .55rem .8rem; box-shadow: var(--shadow-sm); }
-  .count .c-label { font-size: .64rem; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); }
+  .count .c-label  { font-size: .64rem; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); }
   .count .c-amount { font-size: 1.15rem; font-weight: 700; }
+  /* missed / spurious count pills */
   .pill { display: inline-block; padding: .15rem .5rem; border-radius: 12px; font-size: .72rem; font-weight: 700; }
-  .pill.bad { background: var(--crit-soft); color: var(--crit); }
+  .pill.bad  { background: var(--crit-soft); color: var(--crit); }
   .pill.warn { background: var(--warn-soft); color: var(--warn); }
 </style>
 </head>
 <body>
-  <h1>ðŸŽ¯ Trace Benchmark</h1>
+  <h1>&#127919; Trace Benchmark</h1>
   <div class="sub">Trace-accuracy score for a single case. Paste your operator key and a case id
     to load; data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
 
-  <div class="explain">Scores the case's already-produced trace against a STORED
-    <span class="mono">ground_truth.json</span> â€” recall (did we reach the known endpoints?),
+  <div class="explain">Scores the case&#8217;s already-produced trace against a STORED
+    <span class="mono">ground_truth.json</span> &#8212; recall (did we reach the known endpoints?),
     endpoint precision (were our flagged endpoints real?), and F1. This console never recomputes
-    the trace and never fabricates numbers â€” it displays only the scored result.</div>
+    the trace and never fabricates numbers &#8212; it displays only the scored result.</div>
 
-  <div class="banner">âš  GROUND TRUTH MUST BE INDEPENDENTLY VERIFIED
-    <span class="note">The ground truth is operator-supplied input from an independent, verified source
-      (a published incident report, an indictment, a recovered-funds record). It is NEVER derived from
-      the trace itself â€” that would be circular.</span></div>
+  <!-- Ground-truth disclaimer — shared .ai-disclaimer style -->
+  <div class="ai-disclaimer">
+    <div class="ai-disclaimer-icon">&#9888;&#65039;</div>
+    <div class="ai-disclaimer-body">
+      <div class="ai-disclaimer-title">GROUND TRUTH MUST BE INDEPENDENTLY VERIFIED</div>
+      <div class="ai-disclaimer-note">The ground truth is operator-supplied input from an independent, verified source
+        (a published incident report, an indictment, a recovered-funds record). It is NEVER derived from
+        the trace itself &#8212; that would be circular.</div>
+    </div>
+  </div>
 
   <div class="bar">
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
@@ -62,15 +82,20 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) -- clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
   function clear() { $("out").innerHTML = ""; }
 
   function fmtPct(v) {
-    if (typeof v !== "number" || !isFinite(v)) return "â€”";
+    if (typeof v !== "number" || !isFinite(v)) return "—";
     return (v * 100).toFixed(1) + "%";
+  }
+
+  function gaugePct(v) {
+    if (typeof v !== "number" || !isFinite(v)) return 0;
+    return Math.round(Math.max(0, Math.min(1, v)) * 100);
   }
 
   function renderAddrList(arr) {
@@ -88,46 +113,52 @@
     }
     var html = "";
 
-    // Headline metrics â€” recall / endpoint precision / F1 as percentages.
+    // Headline KPI cards with animated gauge bars
     html += '<div class="headline">' +
       '<div class="kpi recall"><div class="k-label">Recall</div>' +
         '<div class="k-amount">' + esc(fmtPct(score.recall)) + '</div>' +
-        '<div class="k-sub">Of the known endpoints, how many the trace reached</div></div>' +
+        '<div class="k-sub">Known endpoints reached by trace</div>' +
+        '<div class="kpi-gauge"><div class="kpi-gauge-fill" style="width:' + gaugePct(score.recall) + '%"></div></div>' +
+      '</div>' +
       '<div class="kpi precision"><div class="k-label">Endpoint Precision</div>' +
         '<div class="k-amount">' + esc(fmtPct(score.endpoint_precision)) + '</div>' +
-        '<div class="k-sub">Of the endpoints the trace flagged, how many were real</div></div>' +
+        '<div class="k-sub">Flagged endpoints that were real</div>' +
+        '<div class="kpi-gauge"><div class="kpi-gauge-fill" style="width:' + gaugePct(score.endpoint_precision) + '%"></div></div>' +
+      '</div>' +
       '<div class="kpi f1"><div class="k-label">F1</div>' +
         '<div class="k-amount">' + esc(fmtPct(score.f1)) + '</div>' +
-        '<div class="k-sub">Harmonic mean of recall &amp; precision</div></div>' +
-      '</div>';
+        '<div class="k-sub">Harmonic mean of recall &amp; precision</div>' +
+        '<div class="kpi-gauge"><div class="kpi-gauge-fill" style="width:' + gaugePct(score.f1) + '%"></div></div>' +
+      '</div>' +
+    '</div>';
 
-    // Counts.
+    // Counts
     html += '<div class="counts">' +
       '<div class="count"><div class="c-label">Ground-truth endpoints</div>' +
         '<div class="c-amount">' + esc(score.ground_truth_count) + '</div></div>' +
-      '<div class="count"><div class="c-label">Reached (âˆ© truth)</div>' +
+      '<div class="count"><div class="c-label">Reached (&#8745; truth)</div>' +
         '<div class="c-amount">' + esc(score.reached_truth_count) + '</div></div>' +
       '<div class="count"><div class="c-label">Flagged endpoints</div>' +
         '<div class="c-amount">' + esc(score.flagged_count) + '</div></div>' +
-      '<div class="count"><div class="c-label">Flagged &amp; true (âˆ© truth)</div>' +
+      '<div class="count"><div class="c-label">Flagged &amp; true (&#8745; truth)</div>' +
         '<div class="c-amount">' + esc(score.flagged_true_count) + '</div></div>' +
-      '</div>';
+    '</div>';
 
-    // Missed â€” truth endpoints the trace did NOT reach.
+    // Missed -- truth endpoints the trace did NOT reach
     var missed = Array.isArray(score.missed) ? score.missed : [];
     html += '<div class="section"><h2>Missed ' +
       (missed.length ? '<span class="pill bad">' + esc(missed.length) + '</span>' : '') +
       '</h2><p class="empty" style="margin:.2rem 0 .4rem">Verified truth endpoints the trace did NOT reach.</p>' +
       renderAddrList(missed) + '</div>';
 
-    // Spurious â€” flagged endpoints NOT in the ground truth.
+    // Spurious -- flagged endpoints NOT in the ground truth
     var spurious = Array.isArray(score.spurious) ? score.spurious : [];
     html += '<div class="section"><h2>Spurious ' +
       (spurious.length ? '<span class="pill warn">' + esc(spurious.length) + '</span>' : '') +
       '</h2><p class="empty" style="margin:.2rem 0 .4rem">Endpoints the trace flagged that are NOT in the ground truth.</p>' +
       renderAddrList(spurious) + '</div>';
 
-    // Per-category recall table (only when present).
+    // Per-category recall table (only when present)
     var byCat = (score.by_category_recall && typeof score.by_category_recall === "object")
       ? score.by_category_recall : {};
     var catKeys = Object.keys(byCat);
@@ -153,13 +184,13 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
     clear();
     fetch("/v1/benchmark?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad input â€” invalid case id or malformed ground_truth.json.");
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
-        if (res.status === 404) throw new Error("No ground_truth.json â€” add an independently-verified ground-truth file, or case not found.");
+        if (res.status === 400) throw new Error("Bad input — invalid case id or malformed ground_truth.json.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 404) throw new Error("No ground_truth.json — add an independently-verified ground-truth file, or case not found.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -171,14 +202,12 @@
   $("load").addEventListener("click", load);
   $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
 
-  // Deep-link support: prefill + auto-load from ?case_id= (e.g. from Case Overview).
+  // Deep-link support: prefill + auto-load from ?case_id=
   (function () {
     try {
       var _qs = new URLSearchParams(window.location.search);
       var _cid = _qs.get("case_id");
       if (_cid) { $("case").value = _cid; }
-      // Auto-trigger only when we have both a case_id AND a key already present
-      // (single sign-in via sessionStorage) â€” otherwise just prefill and wait.
       if (_cid && $("key") && $("key").value) { load(); }
     } catch (e) {}
   })();

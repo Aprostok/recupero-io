@@ -1,25 +1,42 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” AI Triage</title>
+<title>Recupero &#8211; AI Triage</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: AI triage */
   h2 { text-transform: capitalize; }
   .label { font-weight: 700; white-space: nowrap; }
-  .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink); border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
-  .banner { background: var(--warn-soft); border: 2px solid var(--warn); color: var(--warn); border-radius: var(--r); padding: .7rem 1rem; font-size: .9rem; font-weight: 700; margin-bottom: 1rem; }
-  .banner .note { display: block; font-weight: 400; font-size: .78rem; margin-top: .3rem; color: var(--warn); }
-  .section { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .2rem 1rem 1rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm); }
-  .section p { white-space: pre-wrap; font-size: .85rem; line-height: 1.45; }
-  .section ul { margin: .3rem 0 .3rem 1.1rem; padding: 0; font-size: .85rem; line-height: 1.5; }
+  .explain {
+    background: var(--accent-soft); border: 1px solid var(--hair);
+    color: var(--ink); border-radius: var(--r);
+    padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem;
+  }
+  /* section cards */
+  .section {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-radius: var(--r); padding: .2rem 1rem 1rem; margin-bottom: .85rem;
+    box-shadow: var(--shadow-sm);
+    animation: rc-rise .4s cubic-bezier(.32,.72,0,1) both;
+  }
+  .section p  { white-space: pre-wrap; font-size: .85rem; line-height: 1.5; }
+  .section ul { margin: .3rem 0 .3rem 1.1rem; padding: 0; font-size: .85rem; line-height: 1.55; }
   .section li { margin: .2rem 0; }
+  /* stagger sections */
+  .section:nth-child(1) { animation-delay: 0ms; }
+  .section:nth-child(2) { animation-delay: 40ms; }
+  .section:nth-child(3) { animation-delay: 80ms; }
+  .section:nth-child(4) { animation-delay: 120ms; }
+  .section:nth-child(5) { animation-delay: 160ms; }
+  .section:nth-child(n+6) { animation-delay: 200ms; }
+  /* copy button in top-right of #out */
+  .copy-all-bar { display: flex; justify-content: flex-end; margin-bottom: .5rem; }
 </style>
 </head>
 <body>
-  <h1>ðŸ§  AI Triage</h1>
+  <h1>&#129504; AI Triage</h1>
   <div class="sub">Plain-English AI triage for a single case. Paste your operator key and a case id
     to load; data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
 
@@ -40,7 +57,7 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) -- clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
@@ -50,11 +67,11 @@
   var BANNER_KEYS = { "AI_GENERATED": 1, "REVIEW_REQUIRED": 1, "_DISCLAIMER": 1 };
   // Human-friendly headings for the common keys; anything else uses the raw key.
   var TITLES = {
-    "case_summary_plain": "Case Summary",
+    "case_summary_plain":     "Case Summary",
     "recommended_next_steps": "Recommended Next Steps",
-    "completeness_gaps": "Completeness Gaps",
-    "confidence_note": "Confidence Note",
-    "_meta": "Metadata"
+    "completeness_gaps":      "Completeness Gaps",
+    "confidence_note":        "Confidence Note",
+    "_meta":                  "Metadata"
   };
 
   function titleFor(k) { return TITLES[k] || k.replace(/^_+/, "").replace(/_/g, " "); }
@@ -80,10 +97,22 @@
   }
 
   function renderValue(v) {
-    if (v == null) return '<span class="empty">â€”</span>';
+    if (v == null) return '<span class="empty">—</span>';
     if (Array.isArray(v)) return renderList(v);
     if (typeof v === "object") return renderDict(v);
     return "<p>" + esc(v) + "</p>";
+  }
+
+  // Build a plain-text version of the report for the "Copy all" button
+  function toPlainText(rep) {
+    var lines = [];
+    Object.keys(rep).forEach(function (k) {
+      if (BANNER_KEYS[k]) return;
+      lines.push("=== " + titleFor(k).toUpperCase() + " ===");
+      lines.push(JSON.stringify(rep[k], null, 2));
+      lines.push("");
+    });
+    return lines.join("\n");
   }
 
   function render(rep) {
@@ -94,17 +123,24 @@
     }
     var html = "";
 
-    // Always show the AI-generated / review-required banner, surfacing the
-    // markers the artifact carries.
-    var disclaimer = rep._DISCLAIMER ? String(rep._DISCLAIMER) : "";
-    html += '<div class="banner">âš  AI-GENERATED â€” REVIEW REQUIRED' +
-      '<span class="note">AI_GENERATED: ' + esc(rep.AI_GENERATED) +
-      ' Â· REVIEW_REQUIRED: ' + esc(rep.REVIEW_REQUIRED) +
-      (disclaimer ? '<br>' + esc(disclaimer) : '') +
-      '</span></div>';
+    // Copy-all action bar
+    html += '<div class="copy-all-bar"><button id="copy-all" class="secondary" style="font-size:.78rem;padding:.4rem .8rem">Copy all</button></div>';
 
-    // Render every remaining top-level key generically and robustly: strings as
-    // paragraphs, arrays as lists, dicts as key/value rows â€” all via esc().
+    // AI disclaimer — polished banner with icon + structured layout
+    var disclaimer = rep._DISCLAIMER ? String(rep._DISCLAIMER) : "";
+    html += '<div class="ai-disclaimer">' +
+      '<div class="ai-disclaimer-icon">&#9888;&#65039;</div>' +
+      '<div class="ai-disclaimer-body">' +
+        '<div class="ai-disclaimer-title">AI-GENERATED &mdash; HUMAN REVIEW REQUIRED</div>' +
+        '<div class="ai-disclaimer-note">' +
+          'AI_GENERATED: <b>' + esc(rep.AI_GENERATED) + '</b> &nbsp;&middot;&nbsp; ' +
+          'REVIEW_REQUIRED: <b>' + esc(rep.REVIEW_REQUIRED) + '</b>' +
+          (disclaimer ? '<br>' + esc(disclaimer) : '') +
+        '</div>' +
+      '</div>' +
+    '</div>';
+
+    // Render every remaining top-level key generically and robustly.
     var keys = Object.keys(rep);
     var shown = 0;
     keys.forEach(function (k) {
@@ -115,6 +151,18 @@
     if (!shown) { html += '<p class="empty">No further triage fields present.</p>'; }
 
     $("out").innerHTML = html;
+
+    // Wire the copy-all button now that it exists in the DOM
+    var btn = document.getElementById("copy-all");
+    if (btn && navigator.clipboard) {
+      btn.addEventListener("click", function () {
+        navigator.clipboard.writeText(toPlainText(rep)).then(function () {
+          var was = btn.textContent;
+          btn.textContent = "✓ Copied";
+          setTimeout(function () { btn.textContent = was; }, 1400);
+        }).catch(function () {});
+      });
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -126,13 +174,13 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
     clear();
     fetch("/v1/ai-triage?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad case id â€” must be 1..128 non-blank characters.");
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
-        if (res.status === 404) throw new Error("No ai_triage.json â€” run `recupero ai-triage <case_id>` first, or case not found.");
+        if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 404) throw new Error("No ai_triage.json — run `recupero ai-triage <case_id>` first, or case not found.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -144,16 +192,14 @@
   $("load").addEventListener("click", load);
   $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
 
-  // Deep-link support: prefill + auto-load from ?case_id= (e.g. from Case Overview).
+  // Deep-link support: prefill + auto-load from ?case_id=
   (function () {
     try {
       var _qs = new URLSearchParams(window.location.search);
       var _cid = _qs.get("case_id");
       if (_cid) { $("case").value = _cid; }
       var _jur = _qs.get("jurisdiction");
-      if (_jur && $("jur")) { $("jur").value = _jur; }   // sar_filing only; no-op elsewhere
-      // Auto-trigger only when we have both a case_id AND a key already present
-      // (single sign-in via sessionStorage) â€” otherwise just prefill and wait.
+      if (_jur && $("jur")) { $("jur").value = _jur; }
       if (_cid && $("key") && $("key").value) { load(); }
     } catch (e) {}
   })();

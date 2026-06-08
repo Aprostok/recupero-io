@@ -332,6 +332,51 @@ td.mono:hover, div.mono:hover { opacity: .82; }
   vertical-align: middle; margin-right: .3rem;
 }
 
+/* ── Generic chips ── */
+.chip {
+  display: inline-flex; align-items: center; gap: .28rem;
+  background: var(--surface); border: 1px solid var(--hair);
+  border-radius: 999px; padding: .18rem .62rem;
+  font-size: .75rem; font-weight: 600; color: var(--ink-soft); white-space: nowrap;
+  transition: background .15s var(--ease), border-color .15s var(--ease);
+}
+.chip.crit { background: var(--crit-soft); border-color: var(--crit-border); color: var(--crit); }
+.chip.warn { background: var(--warn-soft); border-color: var(--warn-border); color: var(--warn); }
+.chip.ok   { background: var(--ok-soft);   border-color: var(--ok-border);   color: var(--ok);   }
+.chips-row { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin: .5rem 0 .9rem; }
+.chips-row .chips-label { font-size: .67rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); white-space: nowrap; }
+
+/* ── Urgency / action chips ── */
+.act-chip { display: inline-block; padding: .18rem .6rem; border-radius: var(--r-sm); font-size: .72rem; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; background: var(--surface-2); color: var(--ink-soft); white-space: nowrap; }
+.act-chip.immediate { background: var(--crit-soft); color: var(--crit); }
+.act-chip.same-day  { background: var(--warn-soft); color: var(--warn); }
+.act-chip.routine   { background: var(--ok-soft);   color: var(--ok);   }
+
+/* ── Delta / direction values ── */
+.delta-pos { color: var(--ok);   font-weight: 700; }
+.delta-neg { color: var(--crit); font-weight: 700; }
+
+/* ── Recovery rate bar (law-firm table) ── */
+.rec-bar { display: inline-flex; width: 56px; height: 5px; border-radius: 99px; background: var(--hair-strong); overflow: hidden; flex-shrink: 0; vertical-align: middle; }
+.rec-bar-fill { height: 100%; background: var(--ok); border-radius: 99px; transition: width .7s var(--ease); }
+.rec-bar-fill.warn { background: var(--warn); }
+.rec-bar-fill.crit { background: var(--crit); }
+
+/* ── Step number bubble (incident plans) ── */
+.step-bubble { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-size: .68rem; font-weight: 800; flex-shrink: 0; vertical-align: middle; }
+
+/* ── AI disclaimer banner ── */
+.ai-disclaimer {
+  display: flex; align-items: flex-start; gap: .9rem;
+  background: var(--warn-soft); border: 1px solid var(--warn-border);
+  border-radius: var(--r); padding: 1rem 1.2rem; margin-bottom: 1.2rem;
+  animation: rc-rise .35s var(--ease) both;
+}
+.ai-disclaimer-icon { font-size: 1.5rem; flex-shrink: 0; line-height: 1.2; }
+.ai-disclaimer-body { flex: 1; min-width: 0; }
+.ai-disclaimer-title { font-weight: 800; color: var(--warn); font-size: .9rem; letter-spacing: -.01em; margin-bottom: .25rem; }
+.ai-disclaimer-note { font-size: .77rem; color: var(--ink-soft); line-height: 1.5; }
+
 /* ── Accessibility ── */
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 """

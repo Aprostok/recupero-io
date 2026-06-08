@@ -1,22 +1,25 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Watchlist Console</title>
+<title>Recupero &#8211; Watchlist Console</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: watchlist */
   .card.alert .v { color: var(--crit); } .card.ok .v { color: var(--ok); }
-  .chips span { display:inline-block; background: var(--surface); border:1px solid var(--hair); border-radius:999px; padding:.12rem .55rem; margin:0 .25rem .25rem 0; font-size:.78rem; }
-  tr.moved td { background: var(--crit-soft); } td.age.stale { color: var(--crit); font-weight: 600; }
-  .badge.moved { background: var(--crit-soft); color: var(--crit); }
-  .badge.ok { background: rgba(29,138,78,.12); color: var(--ok); }
-  .badge.new { background: var(--surface-2); color: var(--ink-soft); }
+  tr.moved td { background: var(--crit-soft); }
+  td.age.stale { color: var(--crit); font-weight: 600; }
+  .badge.moved   { background: var(--crit-soft); color: var(--crit); }
+  .badge.ok      { background: rgba(29,138,78,.12); color: var(--ok); }
+  .badge.new     { background: var(--surface-2); color: var(--ink-soft); }
+  /* auto-refresh label */
+  label.autolabel { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--ink-soft); cursor: pointer; user-select: none; }
+  label.autolabel input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 </style>
 </head>
 <body>
-  <h1>ðŸ›°ï¸ Watchlist Console</h1>
+  <h1>&#128752; Watchlist Console</h1>
   <div class="sub">Live view of everything under monitoring. Paste your operator key to load;
     data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
 
@@ -25,12 +28,12 @@
     <input id="inv" type="text" placeholder="investigation id (optional)" size="22" autocomplete="off">
     <button id="load">Load</button>
     <button id="run" class="secondary">Run check now</button>
-    <label class="sub"><input type="checkbox" id="auto"> auto-refresh 60s</label>
+    <label class="autolabel"><input type="checkbox" id="auto"> auto-refresh 60s</label>
     <span id="msg"></span>
   </div>
 
   <div class="cards" id="cards"></div>
-  <div class="chips" id="chips"></div>
+  <div id="chipwrap"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -38,31 +41,59 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) -- clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
 
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
+  // Build a coloured .chip from a status emoji + name string to detect risk level
+  function statusChipCls(status) {
+    var s = (status || "").toLowerCase();
+    if (s.includes("move") || s.includes("alert") || s.includes("critical")) return "crit";
+    if (s.includes("stale") || s.includes("warn") || s.includes("high"))     return "warn";
+    if (s.includes("present") || s.includes("ok") || s.includes("active"))   return "ok";
+    return "";
+  }
+
   function render(ov) {
     $("cards").innerHTML =
-      card(ov.n_items, "Addresses watched") +
-      card(ov.total_watched_usd_human, "Total under watch") +
-      card(ov.n_moved, "Moved since last check", ov.n_moved ? "alert" : "") +
+      card(ov.n_items,                   "Addresses watched", "") +
+      card(ov.total_watched_usd_human,   "Total under watch",  "") +
+      card(ov.n_moved,                   "Moved since check",  ov.n_moved ? "alert" : "") +
       card(ov.total_still_present_usd_human, "Still present", "ok") +
-      card(ov.n_stale, "Due for re-check", ov.n_stale ? "alert" : "") +
-      card(ov.n_never_checked, "Never checked");
-    var chips = "<b>By status:</b> ";
-    (ov.by_status || []).forEach(function (s) { chips += '<span>' + esc(s.emoji + " " + s.status + " Â· " + s.n) + '</span>'; });
-    chips += ' &nbsp; <b>By chain:</b> ';
-    (ov.by_chain || []).forEach(function (c) { chips += '<span>' + esc(c.chain + " Â· " + c.n + " Â· " + c.usd_human) + '</span>'; });
-    $("chips").innerHTML = chips;
+      card(ov.n_stale,                   "Due for re-check",  ov.n_stale ? "alert" : "") +
+      card(ov.n_never_checked,           "Never checked",      "");
+
+    // Chip breakdowns — styled chip rows
+    var chipHtml = "";
+
+    var byStatus = ov.by_status || [];
+    if (byStatus.length) {
+      chipHtml += '<div class="chips-row"><span class="chips-label">By status</span>';
+      byStatus.forEach(function (s) {
+        var cls = statusChipCls(s.status || "");
+        chipHtml += '<span class="chip ' + cls + '">' + esc(s.emoji ? s.emoji + " " : "") + esc(s.status) + ' &middot; ' + esc(s.n) + '</span>';
+      });
+      chipHtml += '</div>';
+    }
+
+    var byChain = ov.by_chain || [];
+    if (byChain.length) {
+      chipHtml += '<div class="chips-row"><span class="chips-label">By chain</span>';
+      byChain.forEach(function (c) {
+        chipHtml += '<span class="chip">' + esc(c.chain) + ' &middot; ' + esc(c.n) + ' &middot; ' + esc(c.usd_human) + '</span>';
+      });
+      chipHtml += '</div>';
+    }
+    $("chipwrap").innerHTML = chipHtml;
 
     var rows = ov.rows || [];
     if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">Nothing under watch yet.</p>'; return; }
-    var h = '<table><thead><tr><th>Status</th><th>Address</th><th>Chain</th><th>Asset</th>' +
-            '<th class="right">Balance USD</th><th>Movement</th><th>Î” prior</th><th>Last checked</th>' +
+    var h = '<table><thead><tr>' +
+            '<th>Status</th><th>Address</th><th>Chain</th><th>Asset</th>' +
+            '<th class="right">Balance USD</th><th>Movement</th><th>&#916; prior</th><th>Last checked</th>' +
             '<th class="right">Days</th><th>Issuer / label</th></tr></thead><tbody>';
     rows.forEach(function (r) {
       var addr = r.explorer_url
@@ -77,7 +108,7 @@
         '<td class="right">' + esc(r.last_delta_usd_human) + '</td>' +
         '<td class="age ' + (r.stale ? "stale" : "") + '" title="' + esc(r.last_checked_human) + '">' + esc(r.age_human) + '</td>' +
         '<td class="right">' + esc(r.days_watched) + '</td>' +
-        '<td>' + esc(r.issuer) + (r.label_name && r.label_name !== "â€”" ? " Â· " + esc(r.label_name) : "") + '</td>' +
+        '<td>' + esc(r.issuer) + (r.label_name && r.label_name !== "—" ? " &middot; " + esc(r.label_name) : "") + '</td>' +
         '</tr>';
     });
     h += '</tbody></table>';
@@ -90,12 +121,12 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
     var inv = ($("inv").value || "").trim();
     var url = "/v1/watchlist" + (inv ? "?investigation_id=" + encodeURIComponent(inv) : "");
     fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key / DB).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -107,7 +138,7 @@
   function runCheck() {
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
-    $("run").disabled = true; setMsg("Running re-checkâ€¦");
+    $("run").disabled = true; setMsg("Running re-check…");
     fetch("/v1/watchlist/run", { method: "POST", headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(function (r) {

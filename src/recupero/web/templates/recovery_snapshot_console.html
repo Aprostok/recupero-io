@@ -1,26 +1,38 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Recovery Snapshot</title>
+<title>Recupero &#8211; Recovery Snapshot</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: recovery snapshot */
   h2 { text-transform: capitalize; }
   .label { font-weight: 700; white-space: nowrap; }
-  .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink); border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
-  .banner { background: var(--warn-soft); border: 2px solid var(--warn); color: var(--warn); border-radius: var(--r); padding: .7rem 1rem; font-size: .9rem; font-weight: 700; margin-bottom: 1rem; }
-  .banner .note { display: block; font-weight: 400; font-size: .78rem; margin-top: .3rem; color: var(--warn); }
-  .section { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r); padding: .2rem 1rem 1rem; margin-bottom: 1rem; box-shadow: var(--shadow-sm); }
-  .section p { white-space: pre-wrap; font-size: .85rem; line-height: 1.45; }
+  .explain {
+    background: var(--accent-soft); border: 1px solid var(--hair);
+    color: var(--ink); border-radius: var(--r); padding: .55rem .8rem;
+    font-size: .8rem; margin-bottom: 1rem;
+  }
+  .section {
+    background: var(--surface); border: 1px solid var(--hair);
+    border-radius: var(--r); padding: .2rem 1rem 1rem; margin-bottom: 1rem;
+    box-shadow: var(--shadow-sm);
+    animation: rc-rise .4s cubic-bezier(.32,.72,0,1) both;
+  }
+  .section p  { white-space: pre-wrap; font-size: .85rem; line-height: 1.45; }
   .section ul { margin: .3rem 0 .3rem 1.1rem; padding: 0; font-size: .85rem; line-height: 1.5; }
   .section li { margin: .2rem 0; }
+  /* headline KPI row */
   .headline { display: flex; flex-wrap: wrap; gap: .8rem; margin-bottom: 1rem; }
-  .kpi { flex: 1 1 14rem; background: var(--surface); border: 1px solid var(--hair); border-left: 4px solid var(--accent); border-radius: var(--r); padding: .7rem 1rem; box-shadow: var(--shadow-sm); }
-  .kpi .k-label { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin-bottom: .25rem; }
+  .kpi { flex: 1 1 14rem; background: var(--surface); border: 1px solid var(--hair); border-left: 4px solid var(--accent); border-radius: var(--r); padding: .7rem 1rem; box-shadow: var(--shadow-sm); animation: rc-rise .4s var(--ease) both; }
+  .kpi .k-label  { font-size: .66rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin-bottom: .25rem; }
   .kpi .k-amount { font-size: 1.5rem; font-weight: 700; color: var(--ink); line-height: 1.1; }
-  .kpi .k-sub { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
+  .kpi .k-sub    { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
+  /* probability gauge under the probability KPI */
+  .kpi-gauge { height: 4px; border-radius: 99px; background: var(--hair-strong); margin-top: .5rem; overflow: hidden; }
+  .kpi-gauge-fill { height: 100%; border-radius: 99px; background: var(--ok); transition: width .85s cubic-bezier(.32,.72,0,1); }
+  /* recommendation pill */
   .rec { display: inline-block; padding: .2rem .6rem; border-radius: 12px; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; }
   .rec.recommend  { background: rgba(29,138,78,.14); color: var(--ok); }
   .rec.caveat     { background: var(--warn-soft); color: var(--warn); }
@@ -29,13 +41,13 @@
 </style>
 </head>
 <body>
-  <h1>ðŸ’° Recovery Snapshot</h1>
+  <h1>&#128176; Recovery Snapshot</h1>
   <div class="sub">Pre-engagement recovery estimate for a single case. Paste your operator key and a case id
     to load; data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
 
-  <div class="explain">Read-only view of the STORED <span class="mono">RECOVERY_ESTIMATE</span> inside the case's
+  <div class="explain">Read-only view of the STORED <span class="mono">RECOVERY_ESTIMATE</span> inside the case&#8217;s
     <span class="mono">freeze_brief.json</span> (run <span class="mono">emit-brief</span> first). This console never recomputes
-    the estimate, never calls the trace/estimator, and never fabricates numbers â€” it displays only what is stored.</div>
+    the estimate, never calls the trace/estimator, and never fabricates numbers &#8212; it displays only what is stored.</div>
 
   <div class="bar">
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
@@ -51,7 +63,7 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) -- clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
@@ -67,10 +79,10 @@
     "per_issuer": 1, "drivers": 1
   };
   var TITLES = {
-    "total_recoverable_usd": "Total Recoverable",
+    "total_recoverable_usd":  "Total Recoverable",
     "expected_recovered_usd": "Expected Recovered",
-    "confidence_note": "Confidence Note",
-    "_meta": "Metadata"
+    "confidence_note":        "Confidence Note",
+    "_meta":                  "Metadata"
   };
   function titleFor(k) { return TITLES[k] || k.replace(/^_+/, "").replace(/_/g, " "); }
 
@@ -95,15 +107,14 @@
   }
 
   function renderValue(v) {
-    if (v == null) return '<span class="empty">â€”</span>';
+    if (v == null) return '<span class="empty">—</span>';
     if (Array.isArray(v)) return renderList(v);
     if (typeof v === "object") return renderDict(v);
     return "<p>" + esc(v) + "</p>";
   }
 
-  // Render an array of objects as a table whose columns are the union of keys â€”
-  // used for per_issuer / drivers when they arrive as a list of dicts. Falls
-  // back to the generic list renderer for anything else.
+  // Render an array of objects as a table whose columns are the union of keys --
+  // used for per_issuer / drivers when they arrive as a list of dicts.
   function renderRows(arr) {
     if (!Array.isArray(arr) || !arr.length) return '<p class="empty">None.</p>';
     var allObjects = arr.every(function (r) { return r && typeof r === "object" && !Array.isArray(r); });
@@ -118,7 +129,7 @@
       cols.forEach(function (c) {
         var cell = r[c];
         if (cell != null && typeof cell === "object") { h += "<td>" + renderValue(cell) + "</td>"; }
-        else { h += "<td>" + (cell == null ? '<span class="empty">â€”</span>' : esc(cell)) + "</td>"; }
+        else { h += "<td>" + (cell == null ? '<span class="empty">—</span>' : esc(cell)) + "</td>"; }
       });
       h += "</tr>";
     });
@@ -126,10 +137,10 @@
   }
 
   var REC_LABELS = {
-    "recommend": "Recommended for engagement",
-    "caveat": "Engage with caveat",
+    "recommend":  "Recommended for engagement",
+    "caveat":     "Engage with caveat",
     "discourage": "Engagement discouraged",
-    "reject": "Recovery not advised"
+    "reject":     "Recovery not advised"
   };
 
   function fmtProb(p) {
@@ -146,13 +157,18 @@
     }
     var html = "";
 
-    // Pre-engagement disclaimer â€” this is an ESTIMATE, not a guarantee.
-    html += '<div class="banner">âš  PRE-ENGAGEMENT ESTIMATE â€” NOT A GUARANTEE' +
-      '<span class="note">Probability-weighted figures derived from per-issuer freeze-outcome history. ' +
-      'Actual recovery depends on issuer responsiveness, jurisdiction, and the perpetratorâ€™s actions. ' +
-      'Not legal advice; not the full case record.</span></div>';
+    // Pre-engagement disclaimer -- shared .ai-disclaimer style
+    html += '<div class="ai-disclaimer">' +
+      '<div class="ai-disclaimer-icon">&#128176;</div>' +
+      '<div class="ai-disclaimer-body">' +
+        '<div class="ai-disclaimer-title">PRE-ENGAGEMENT ESTIMATE &mdash; NOT A GUARANTEE</div>' +
+        '<div class="ai-disclaimer-note">Probability-weighted figures derived from per-issuer freeze-outcome history. ' +
+        'Actual recovery depends on issuer responsiveness, jurisdiction, and the perpetrator&#8217;s actions. ' +
+        'Not legal advice; not the full case record.</div>' +
+      '</div>' +
+    '</div>';
 
-    // Headline KPIs â€” surface the recovery numbers prominently if present.
+    // Headline KPIs -- surface the recovery numbers prominently if present.
     var kpis = "";
     var rec = est.recommendation;
     if (rec) {
@@ -166,15 +182,19 @@
       var lbl = negative ? "Estimated net cost if engaged" : "Projected net recovery to victim";
       var lo = est.expected_net_low_usd, hi = est.expected_net_high_usd;
       var rangeStr = (lo != null && lo !== "") || (hi != null && hi !== "")
-        ? "90% range: " + esc(lo == null ? "â€”" : lo) + " â€“ " + esc(hi == null ? "â€”" : hi) : "";
+        ? "90% range: " + esc(lo == null ? "—" : lo) + " — " + esc(hi == null ? "—" : hi) : "";
       kpis += '<div class="kpi"><div class="k-label">' + esc(lbl) + '</div>' +
-        '<div class="k-amount"' + (negative ? ' style="color:#7f1d1d"' : '') + '>' + esc(net) + '</div>' +
+        '<div class="k-amount"' + (negative ? ' style="color:var(--crit)"' : '') + '>' + esc(net) + '</div>' +
         (rangeStr ? '<div class="k-sub">' + rangeStr + '</div>' : '') + '</div>';
     }
-    var prob = fmtProb(est.probability_any_recovery_90d);
+    var probRaw = est.probability_any_recovery_90d;
+    var prob = fmtProb(probRaw);
     if (prob) {
+      var probPct = typeof probRaw === "number" ? Math.round(Math.max(0, Math.min(1, probRaw)) * 100) : 0;
       kpis += '<div class="kpi"><div class="k-label">Probability of any recovery (90d)</div>' +
-        '<div class="k-amount">' + esc(prob) + '</div></div>';
+        '<div class="k-amount">' + esc(prob) + '</div>' +
+        '<div class="kpi-gauge"><div class="kpi-gauge-fill" style="width:' + probPct + '%"></div></div>' +
+        '</div>';
     }
     if (kpis) { html += '<div class="headline">' + kpis + "</div>"; }
 
@@ -182,17 +202,17 @@
       html += '<div class="section"><h2>Summary</h2><p>' + esc(est.headline_summary) + "</p></div>";
     }
 
-    // Per-issuer breakdown.
+    // Per-issuer breakdown
     if (est.per_issuer && est.per_issuer.length) {
       html += '<div class="section"><h2>Per-issuer breakdown</h2>' + renderRows(est.per_issuer) + "</div>";
     }
 
-    // Drivers â€” what's helping / hurting.
+    // Drivers -- what's helping / hurting
     if (est.drivers && est.drivers.length) {
-      html += '<div class="section"><h2>Drivers (whatâ€™s helping / hurting)</h2>' + renderRows(est.drivers) + "</div>";
+      html += '<div class="section"><h2>Drivers (what&#8217;s helping / hurting)</h2>' + renderRows(est.drivers) + "</div>";
     }
 
-    // Any remaining fields rendered generically and robustly via esc().
+    // Any remaining fields rendered generically and robustly via esc()
     var keys = Object.keys(est);
     var extra = "";
     keys.forEach(function (k) {
@@ -213,13 +233,13 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+    setMsg("Loading…");
     clear();
     fetch("/v1/recovery-snapshot?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad case id â€” must be 1..128 non-blank characters.");
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
-        if (res.status === 404) throw new Error("No RECOVERY_ESTIMATE â€” run emit-brief first, or case not found.");
+        if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 404) throw new Error("No RECOVERY_ESTIMATE — run emit-brief first, or case not found.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -231,16 +251,14 @@
   $("load").addEventListener("click", load);
   $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
 
-  // Deep-link support: prefill + auto-load from ?case_id= (e.g. from Case Overview).
+  // Deep-link support: prefill + auto-load from ?case_id=
   (function () {
     try {
       var _qs = new URLSearchParams(window.location.search);
       var _cid = _qs.get("case_id");
       if (_cid) { $("case").value = _cid; }
       var _jur = _qs.get("jurisdiction");
-      if (_jur && $("jur")) { $("jur").value = _jur; }   // sar_filing only; no-op elsewhere
-      // Auto-trigger only when we have both a case_id AND a key already present
-      // (single sign-in via sessionStorage) â€” otherwise just prefill and wait.
+      if (_jur && $("jur")) { $("jur").value = _jur; }
       if (_cid && $("key") && $("key").value) { load(); }
     } catch (e) {}
   })();

@@ -136,6 +136,7 @@
     var k=key(); if(!k){ setMsg("Enter the admin key.","err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch(e){}
     setMsg("Loading…");
+    $("cases").innerHTML = '<div class="empty" style="padding:.7rem 0">Loading cases&#8230;</div>';
     var url = "/v1/cases" + ($("showtest").checked ? "?include_test=1" : "");
     fetch(url, { headers: authHeaders() })
       .then(function(res){ if(!res.ok) throw new Error(httpErr(res)); return res.json(); })

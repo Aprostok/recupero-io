@@ -167,10 +167,13 @@ tbody tr { transition: background .12s var(--ease); }
 tbody tr:hover td { background: var(--accent-soft); }
 tr.sev-critical td { background: var(--crit-soft); }
 tr.sev-high td     { background: var(--warn-soft); }
+tr.sev-critical td:first-child { border-left: 3px solid var(--crit); }
+tr.sev-high td:first-child     { border-left: 3px solid var(--warn); }
 .right { text-align: right; }
 .mono { font-family: var(--mono); font-size: .77rem; word-break: break-all; }
 .action  { color: var(--ink-soft); font-size: .74rem; max-width: 24rem; }
-.msgcell { max-width: 22rem; }
+.msgcell { max-width: 28rem; font-size: .8rem; }
+td.age   { white-space: nowrap; font-size: .76rem; }
 
 /* ── Badges / pills ── */
 .badge {
@@ -400,6 +403,9 @@ thead th[data-rc-desc] .rc-sa::after { content: "\25BC"; }
 }
 .rc-filter-input::placeholder { color: var(--ink-faint); }
 .rc-filter-count { font-size: .72rem; color: var(--ink-faint); white-space: nowrap; padding-right: .2rem; }
+mark.rc-hl { background: rgba(255,214,0,.38); color: inherit; border-radius: 2px; padding: 0 1px; }
+@media (prefers-color-scheme: dark) { mark.rc-hl { background: rgba(255,214,0,.22); } }
+.rc-no-results td { text-align: center; color: var(--ink-faint); padding: 1.4rem .8rem; font-size: .85rem; }
 .rc-export-btn {
   flex-shrink: 0; padding: .22rem .6rem; border: 1px solid var(--hair-strong); border-radius: var(--r-sm);
   background: transparent; color: var(--ink-soft); font-size: .72rem; font-weight: 590; cursor: pointer;
@@ -435,6 +441,22 @@ thead th[data-rc-desc] .rc-sa::after { content: "\25BC"; }
 .score-ring.r-crit { --ring-color: var(--crit); }
 .score-ring.r-high { --ring-color: var(--warn); }
 .score-ring.r-ok   { --ring-color: var(--ok);   }
+
+/* ── Toast notifications ── */
+.rc-toast-rack { position: fixed; bottom: 1.4rem; right: 1.4rem; z-index: 8000; display: flex; flex-direction: column-reverse; gap: .45rem; pointer-events: none; }
+.rc-toast {
+  display: inline-flex; align-items: center; gap: .5rem;
+  padding: .52rem .85rem; border-radius: var(--r-sm);
+  background: var(--surface-solid); color: var(--ink); font-size: .8rem; font-weight: 600;
+  box-shadow: 0 4px 18px rgba(0,0,0,.18); border: 1px solid var(--hair);
+  animation: rc-toast-in .25s var(--ease) both;
+  pointer-events: auto;
+}
+.rc-toast.ok   { border-left: 3px solid var(--ok);   }
+.rc-toast.err  { border-left: 3px solid var(--crit); }
+.rc-toast.info { border-left: 3px solid var(--accent); }
+@keyframes rc-toast-in { from { opacity: 0; transform: translateY(8px) scale(.95); } to { opacity: 1; transform: none; } }
+@keyframes rc-toast-out { from { opacity: 1; } to { opacity: 0; transform: translateY(4px); } }
 
 /* ── Accessibility ── */
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
@@ -529,6 +551,47 @@ CONSOLE_JS = r"""
   }
 
   // ── Filter bar ───────────────────────────────────────────────────────────
+  // Private HTML-escape helper (not exposed — theme-internal only).
+  function _hesc(s) {
+    return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  // Highlight plain-text cells (no child elements) with <mark class="rc-hl">.
+  // Cells containing badges/chips/rings are left untouched.
+  function _highlightCells(row, q) {
+    row.querySelectorAll("td").forEach(function (td) {
+      // Skip cells with child elements (badges, rings, chips)
+      var hasElChild = Array.prototype.some.call(td.childNodes, function (n) { return n.nodeType === 1; });
+      if (hasElChild) return;
+      // Store original text/html on first use
+      if (!td.hasAttribute("data-rc-orig")) {
+        td.setAttribute("data-rc-orig", td.textContent || "");
+        td.setAttribute("data-rc-oh",   td.innerHTML  || "");
+      }
+      var orig = td.getAttribute("data-rc-orig") || "";
+      var lc   = orig.toLowerCase();
+      var idx  = lc.indexOf(q);
+      if (idx < 0) { td.innerHTML = td.getAttribute("data-rc-oh") || _hesc(orig); return; }
+      // Build highlighted markup
+      var parts = [], pos = 0;
+      while (true) {
+        idx = lc.indexOf(q, pos);
+        if (idx < 0) { parts.push(_hesc(orig.slice(pos))); break; }
+        if (idx > pos) { parts.push(_hesc(orig.slice(pos, idx))); }
+        parts.push('<mark class="rc-hl">' + _hesc(orig.slice(idx, idx + q.length)) + '</mark>');
+        pos = idx + q.length;
+      }
+      td.innerHTML = parts.join("");
+    });
+  }
+  // Restore all highlighted cells in a row back to their original HTML.
+  function _restoreCells(row) {
+    row.querySelectorAll("td[data-rc-oh]").forEach(function (td) {
+      td.innerHTML = td.getAttribute("data-rc-oh") || "";
+      td.removeAttribute("data-rc-orig");
+      td.removeAttribute("data-rc-oh");
+    });
+  }
+
   function attachFilter(el) {
     var root = el || document;
     root.querySelectorAll("table").forEach(function (table) {
@@ -539,6 +602,13 @@ CONSOLE_JS = r"""
       if (allRows.length < 5) return;
       table.setAttribute("data-rc-filter", "1");
 
+      // "no results" pseudo-row (hidden by default)
+      var noRow = document.createElement("tr");
+      noRow.className = "rc-no-results";
+      noRow.style.display = "none";
+      noRow.innerHTML = '<td colspan="99">&#128270; No matching rows &mdash; clear the filter to show all ' + allRows.length + '</td>';
+      tbody.appendChild(noRow);
+
       var bar = document.createElement("div");
       bar.className = "rc-filter-bar";
       bar.innerHTML =
@@ -548,8 +618,8 @@ CONSOLE_JS = r"""
         '<span class="rc-filter-count"></span>';
       if (table.parentNode) { table.parentNode.insertBefore(bar, table); }
 
-      var inp = bar.querySelector(".rc-filter-input");
-      var cnt = bar.querySelector(".rc-filter-count");
+      var inp    = bar.querySelector(".rc-filter-input");
+      var cnt    = bar.querySelector(".rc-filter-count");
       var clrBtn = bar.querySelector(".rc-filter-clear");
       cnt.textContent = allRows.length + " rows";
 
@@ -566,10 +636,15 @@ CONSOLE_JS = r"""
         clrBtn.style.display = q ? "inline-flex" : "none";
         var vis = 0;
         allRows.forEach(function (row) {
+          _restoreCells(row);
           var match = !q || (row.textContent || "").toLowerCase().indexOf(q) >= 0;
           row.style.display = match ? "" : "none";
-          if (match) { vis++; }
+          if (match) {
+            vis++;
+            if (q) { _highlightCells(row, q); }
+          }
         });
+        noRow.style.display = (vis === 0 && q) ? "" : "none";
         cnt.textContent = q ? (vis + " / " + allRows.length) : (allRows.length + " rows");
       });
       clrBtn.addEventListener("click", function () {
@@ -603,6 +678,7 @@ CONSOLE_JS = r"""
     a.href = url; a.download = filename || "recupero-export.csv";
     document.body.appendChild(a);
     a.click();
+    toast("CSV exported ✓", "ok");
     setTimeout(function () { if (a.parentNode) { a.parentNode.removeChild(a); } URL.revokeObjectURL(url); }, 1200);
   }
 
@@ -715,6 +791,54 @@ CONSOLE_JS = r"""
     if (document.body) { _start(); } else { document.addEventListener('DOMContentLoaded', _start); }
   })();
 
+  // ── Keyboard shortcut help overlay ─────────────────────────────────────
+  (function () {
+    var _overlay = null;
+    function _showHelp() {
+      if (_overlay) return;
+      _overlay = document.createElement("div");
+      _overlay.setAttribute("role", "dialog");
+      _overlay.setAttribute("aria-label", "Keyboard shortcuts");
+      _overlay.style.cssText = [
+        "position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center",
+        "background:rgba(0,0,0,.44);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)",
+        "animation:rc-rise .22s var(--ease,cubic-bezier(.32,.72,0,1)) both"
+      ].join(";");
+      _overlay.innerHTML =
+        '<div style="background:var(--surface-solid,#fff);border:1px solid var(--hair);border-radius:var(--r,14px);' +
+        'box-shadow:0 24px 64px rgba(0,0,0,.28);padding:1.6rem 1.8rem;min-width:300px;max-width:92vw">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem">' +
+          '<span style="font-size:1rem;font-weight:700;letter-spacing:-.02em">Keyboard shortcuts</span>' +
+          '<button style="border:0;background:transparent;font-size:1.2rem;cursor:pointer;color:var(--ink-faint);padding:0;line-height:1" aria-label="Close">&times;</button>' +
+        '</div>' +
+        '<table style="border:0;width:100%;font-size:.82rem">' +
+          '<tr><td style="padding:.22rem 0"><kbd style="' + _kbdStyle() + '">/</kbd></td><td style="padding:.22rem 0 .22rem .75rem;color:var(--ink-soft)">Focus table filter</td></tr>' +
+          '<tr><td><kbd style="' + _kbdStyle() + '">E</kbd></td><td style="padding:.22rem 0 .22rem .75rem;color:var(--ink-soft)">Export visible rows as CSV</td></tr>' +
+          '<tr><td><kbd style="' + _kbdStyle() + '">?</kbd></td><td style="padding:.22rem 0 .22rem .75rem;color:var(--ink-soft)">Show / hide this panel</td></tr>' +
+          '<tr><td><kbd style="' + _kbdStyle() + '">Esc</kbd></td><td style="padding:.22rem 0 .22rem .75rem;color:var(--ink-soft)">Close this panel</td></tr>' +
+          '<tr><td><kbd style="' + _kbdStyle() + '">Click</kbd></td><td style="padding:.22rem 0 .22rem .75rem;color:var(--ink-soft)">Copy any <span style="font-family:var(--mono);font-size:.74rem">.mono</span> address to clipboard</td></tr>' +
+        '</table>' +
+        '</div>';
+      document.body.appendChild(_overlay);
+      _overlay.addEventListener("click", function (e) {
+        if (e.target === _overlay || e.target.tagName === "BUTTON") { _closeHelp(); }
+      });
+    }
+    function _kbdStyle() {
+      return "display:inline-block;background:var(--surface-2,#f5f5f7);border:1px solid var(--hair-strong);border-radius:5px;" +
+             "padding:.1rem .38rem;font-size:.72rem;font-family:var(--mono);font-weight:700;color:var(--ink);white-space:nowrap";
+    }
+    function _closeHelp() {
+      if (_overlay && _overlay.parentNode) { _overlay.parentNode.removeChild(_overlay); }
+      _overlay = null;
+    }
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key === "Escape" && _overlay) { _closeHelp(); ev.preventDefault(); return; }
+    });
+    window._rcShowHelp  = _showHelp;
+    window._rcCloseHelp = _closeHelp;
+  })();
+
   // ── Keyboard shortcuts (not when focused in an input) ────────────────────
   document.addEventListener("keydown", function (ev) {
     if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
@@ -731,7 +855,30 @@ CONSOLE_JS = r"""
       var btn = document.querySelector(".rc-export-btn");
       if (btn) { ev.preventDefault(); btn.click(); }
     }
+    // "?" → toggle shortcut help
+    if (ev.key === "?" && !inInput) {
+      ev.preventDefault();
+      if (window._rcShowHelp) { window._rcShowHelp(); }
+    }
   });
+
+  // ── Toast notifications ─────────────────────────────────────────────────
+  var _rack = null;
+  function toast(msg, type) {
+    if (!_rack) {
+      _rack = document.createElement("div");
+      _rack.className = "rc-toast-rack";
+      document.body.appendChild(_rack);
+    }
+    var el = document.createElement("div");
+    el.className = "rc-toast " + (type || "info");
+    el.textContent = msg;
+    _rack.appendChild(el);
+    setTimeout(function () {
+      el.style.animation = "rc-toast-out .22s var(--ease) forwards";
+      setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, 240);
+    }, 2400);
+  }
 
   // ── Clipboard copy: click any .mono to copy its text ─────────────────────
   (function () {
@@ -742,11 +889,7 @@ CONSOLE_JS = r"""
       var text = (el.getAttribute("data-copy") || el.textContent || "").trim();
       if (text.length < 6) return;
       navigator.clipboard.writeText(text).then(function () {
-        var was = el.innerHTML;
-        var wasColor = el.style.color;
-        el.textContent = "✓ Copied";
-        el.style.color = "var(--ok)";
-        setTimeout(function () { el.innerHTML = was; el.style.color = wasColor; }, 950);
+        toast("Copied to clipboard", "ok");
       }).catch(function () {});
     });
   })();
@@ -806,7 +949,8 @@ CONSOLE_JS = r"""
     chainChip: chainChip,
     animateRings: animateRings,
     animateGauges: animateGauges,
-    timeAgo: timeAgo
+    timeAgo: timeAgo,
+    toast: toast
   };
 })();
 """

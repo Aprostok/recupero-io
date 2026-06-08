@@ -69,6 +69,25 @@
 
   var BAND_ICON = { sanctioned: "⛔", high: "🔴", medium: "🟠", low: "🟡", clean: "✅" };
 
+  // ── Block-explorer address URL by chain ─────────────────────────────────
+  var _EXPLORER = {
+    ethereum:  "https://etherscan.io/address/",
+    arbitrum:  "https://arbiscan.io/address/",
+    base:      "https://basescan.org/address/",
+    optimism:  "https://optimistic.etherscan.io/address/",
+    bsc:       "https://bscscan.com/address/",
+    polygon:   "https://polygonscan.com/address/",
+    avalanche: "https://snowtrace.io/address/",
+    bitcoin:   "https://mempool.space/address/",
+    solana:    "https://explorer.solana.com/address/",
+    tron:      "https://tronscan.org/#/address/"
+  };
+  function explorerUrl(chain, addr) {
+    var base = _EXPLORER[(chain || "ethereum").toLowerCase()];
+    if (!base || !addr) return null;
+    return base + encodeURIComponent(addr);
+  }
+
   // ── Confidence cell: score ring for 0-1 numerics, coloured text otherwise ─
   function confCell(c) {
     if (c == null || c === "") return '<span class="conf-low">&#8212;</span>';
@@ -157,9 +176,15 @@
 
     // ── Address + tags ────────────────────────────────────────────────────
     h += '<div class="addr-panel">';
+    var exUrl = explorerUrl(p.chain, p.address);
+    var graphUrl = '/v1/operator-graph?address=' + encodeURIComponent(p.address) + '&chain=' + encodeURIComponent(p.chain);
     h += '<div class="addr-row">';
     h += (window.RC && window.RC.chainChip ? window.RC.chainChip(p.chain) : '<span class="chain-chip">' + esc(p.chain) + '</span>');
     h += '<div class="mono" style="flex:1;font-size:.85rem">' + esc(p.address) + '</div>';
+    if (exUrl) {
+      h += '<a href="' + esc(exUrl) + '" target="_blank" rel="noopener" style="font-size:.72rem;color:var(--accent);text-decoration:none;white-space:nowrap;border:1px solid var(--accent-soft);border-radius:var(--r-sm);padding:.12rem .42rem;flex-shrink:0" title="View on block explorer">&#128279; Explorer</a>';
+    }
+    h += '<a href="' + esc(graphUrl) + '" target="_blank" style="font-size:.72rem;color:var(--ink-soft);text-decoration:none;white-space:nowrap;border:1px solid var(--hair);border-radius:var(--r-sm);padding:.12rem .42rem;flex-shrink:0" title="Trace in operator graph">&#128200; Trace</a>';
     h += '</div>';
     if ((p.exposure_tags || []).length) {
       h += '<div class="tags" style="margin-top:.65rem">';
@@ -262,6 +287,10 @@
     var a = ($("addr").value || "").trim(); if (!a) { setMsg("Enter an address.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Screening…"); $("go").disabled = true;
+    // Show skeleton immediately so the UI doesn't feel frozen
+    if (window.RC) {
+      $("out").innerHTML = '<div class="cards" style="margin-bottom:.8rem">' + window.RC.skeletonCards(3) + '</div>' + window.RC.skeletonTable(4, 5);
+    }
     var url = "/v1/address/profile?address=" + encodeURIComponent(a) + "&chain=" + encodeURIComponent($("chain").value);
     fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {

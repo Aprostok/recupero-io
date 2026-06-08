@@ -138,6 +138,10 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Loading…");
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(4);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(6, 7);
+    }
     var inv = ($("inv").value || "").trim();
     var url = "/v1/watchlist" + (inv ? "?investigation_id=" + encodeURIComponent(inv) : "");
     fetch(url, { headers: { "X-Recupero-Admin-Key": k } })

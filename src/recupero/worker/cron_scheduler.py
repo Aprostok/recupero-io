@@ -896,6 +896,48 @@ def _job_stale_label_alert() -> None:
     )
 
 
+def _job_freeze_followup() -> None:
+    """v0.39 — drive the freeze follow-up escalation ladder
+    (initial → nudge_72h → escalation_7d → silence_14d) from the MANAGED
+    scheduler.
+
+    Previously this only ran via a manual ``recupero-worker --freeze-followups``
+    invocation that an operator had to wire to an external cron — a silent
+    single-point-of-failure for the recovery revenue loop (if that external cron
+    was never configured, no follow-up ever fired). Registering it here makes it
+    fire as long as the cron service runs, under the same leader-election + health
+    recording as every other job. Daily cadence is ample for day-granularity
+    stages (72h/7d/14d). DSN-less → skip (best-effort, never raises into the HA
+    wrapper as a failure)."""
+    dsn = _supabase_dsn()
+    if not dsn:
+        log.info("cron: freeze-followup skipped — SUPABASE_DB_URL unset")
+        return
+    log.info("cron: running freeze follow-ups")
+    from recupero.worker._freeze_followup import run_freeze_followup_cron
+    r = run_freeze_followup_cron(dsn)
+    log.info(
+        "cron: freeze follow-ups done — candidates=%d sent=%d "
+        "outcome_race_skips=%d send_failures=%d silence_written=%d errors=%d",
+        r.candidates_found, r.sent_ok, r.skipped_due_to_outcome_race,
+        r.send_failures, r.silence_outcomes_written, len(r.errors or []),
+    )
+
+
+def _job_refresh_priors() -> None:
+    """v0.39 — refresh per-issuer Bayesian freeze priors from recorded outcomes
+    so the recovery scorer's RECOVERY_ESTIMATE stays current. Previously only
+    piggybacked on the (also-external) watch-tick cron; registering it here makes
+    the learning loop self-sustaining independent of watch-tick. DSN-less → skip."""
+    dsn = _supabase_dsn()
+    if not dsn:
+        log.info("cron: refresh-priors skipped — SUPABASE_DB_URL unset")
+        return
+    from recupero.freeze_learning.recorder import refresh_priors
+    n = refresh_priors(dsn)
+    log.info("cron: refreshed %d per-issuer freeze prior(s)", n)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Driver
 # ─────────────────────────────────────────────────────────────────────────────
@@ -945,6 +987,23 @@ def _build_default_jobs() -> list[CronJob]:
             name="review_sla_scan",
             schedule_fn=_next_hourly(minute_utc=15),
             run_fn=_job_review_sla_scan,
+        ),
+        CronJob(
+            # v0.39 — drive the freeze follow-up escalation ladder from the
+            # MANAGED scheduler (was external-cron-only; a silent SPOF for the
+            # recovery loop). 07:00 UTC daily — ample for day-granularity
+            # 72h/7d/14d stages.
+            name="freeze_followup",
+            schedule_fn=_next_daily(hour_utc=7),
+            run_fn=_job_freeze_followup,
+        ),
+        CronJob(
+            # v0.39 — refresh per-issuer Bayesian freeze priors so the recovery
+            # scorer stays current independent of the (also-external) watch-tick
+            # cron. 03:00 UTC, before OFAC sync (04:00).
+            name="refresh_priors",
+            schedule_fn=_next_daily(hour_utc=3),
+            run_fn=_job_refresh_priors,
         ),
     ]
 

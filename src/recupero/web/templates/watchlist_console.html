@@ -29,6 +29,7 @@
     <button id="load">Load</button>
     <button id="run" class="secondary">Run check now</button>
     <label class="autolabel"><input type="checkbox" id="auto"> auto-refresh 60s</label>
+    <span class="live-dot" id="live-dot" style="display:none"></span>
     <span id="msg"></span>
   </div>
 
@@ -97,18 +98,33 @@
             '<th class="right">Days</th><th>Issuer / label</th></tr></thead><tbody>';
     rows.forEach(function (r) {
       var addr = r.explorer_url
-        ? '<a href="' + esc(r.explorer_url) + '" target="_blank" rel="noopener">' + esc(r.address) + '</a>'
-        : esc(r.address);
+        ? '<a href="' + esc(r.explorer_url) + '" target="_blank" rel="noopener" class="mono">' + esc(r.address) + '</a>'
+        : '<span class="mono">' + esc(r.address) + '</span>';
+
+      // Status badge: derive color class from movement + stale flag
+      var sBadgeCls = r.movement === "moved" ? "critical" : (r.stale ? "high" : "ok");
+      var statusHtml = (r.status_emoji ? esc(r.status_emoji) + '&thinsp;' : '') +
+                       '<span class="badge ' + sBadgeCls + '">' + esc(r.status_label || "active") + '</span>';
+
+      // Delta coloring
+      var dv = r.last_delta_usd_human;
+      var dvNum = parseFloat((dv || "").replace(/[^0-9.-]/g, ""));
+      var dvHtml = (dv == null || dv === "—" || dv === "") ? '<span style="color:var(--ink-faint)">&#8212;</span>'
+                 : (!isNaN(dvNum) && dvNum > 0) ? '<span class="delta-pos">' + esc(dv) + '</span>'
+                 : (!isNaN(dvNum) && dvNum < 0) ? '<span class="delta-neg">' + esc(dv) + '</span>'
+                 : esc(dv);
+
       h += '<tr class="' + (r.movement === "moved" ? "moved" : "") + '">' +
-        '<td class="mono">' + esc(r.status_emoji + " " + r.status_label) + '</td>' +
-        '<td class="mono">' + addr + '</td>' +
-        '<td>' + esc(r.chain) + '</td><td>' + esc(r.asset_symbol) + '</td>' +
-        '<td class="right">' + esc(r.balance_usd_human) + '</td>' +
+        '<td>' + statusHtml + '</td>' +
+        '<td>' + addr + '</td>' +
+        '<td>' + esc(r.chain) + '</td>' +
+        '<td><span class="chip">' + esc(r.asset_symbol) + '</span></td>' +
+        '<td class="right mono">' + esc(r.balance_usd_human) + '</td>' +
         '<td><span class="badge ' + esc(r.movement_class) + '">' + esc(r.movement_badge) + '</span></td>' +
-        '<td class="right">' + esc(r.last_delta_usd_human) + '</td>' +
+        '<td class="right">' + dvHtml + '</td>' +
         '<td class="age ' + (r.stale ? "stale" : "") + '" title="' + esc(r.last_checked_human) + '">' + esc(r.age_human) + '</td>' +
         '<td class="right">' + esc(r.days_watched) + '</td>' +
-        '<td>' + esc(r.issuer) + (r.label_name && r.label_name !== "—" ? " &middot; " + esc(r.label_name) : "") + '</td>' +
+        '<td>' + esc(r.issuer) + (r.label_name && r.label_name !== "&#8212;" && r.label_name !== "—" ? ' <span style="color:var(--ink-faint)">&middot;</span> ' + esc(r.label_name) : "") + '</td>' +
         '</tr>';
     });
     h += '</tbody></table>';
@@ -154,7 +170,12 @@
   $("run").addEventListener("click", runCheck);
   $("auto").addEventListener("change", function () {
     if (timer) { clearInterval(timer); timer = null; }
-    if (this.checked) { timer = setInterval(load, 60000); }
+    $("live-dot").style.display = "none";
+    if (this.checked) {
+      timer = setInterval(load, 60000);
+      $("live-dot").style.display = "inline-block";
+      setMsg("Live · auto-refresh on", "ok");
+    }
   });
   if (key()) { load(); }
 })();

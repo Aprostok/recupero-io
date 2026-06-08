@@ -630,20 +630,19 @@ CONSOLE_JS = r"""
     }).observe(el, { childList: true });
   }
 
-  watch("cards", function (el) {
-    el.querySelectorAll(".card .v").forEach(countUp);
-  });
-  watch("tablewrap", function (el) {
-    staggerRows(el);
-    attachSort(el);
-    attachFilter(el);
-  });
-  watch("out", function (el) {
+  // Generic "table container" handler
+  function _tableContainerFn(el) {
     el.querySelectorAll(".card .v").forEach(countUp);
     staggerRows(el);
     attachSort(el);
     attachFilter(el);
-  });
+  }
+
+  watch("cards",      function (el) { el.querySelectorAll(".card .v").forEach(countUp); });
+  watch("tablewrap",  _tableContainerFn);
+  watch("out",        _tableContainerFn);
+  watch("hubswrap",   _tableContainerFn);
+  watch("cycleswrap", _tableContainerFn);
 
   // ── "/" key: focus first visible filter bar ───────────────────────────────
   document.addEventListener("keydown", function (ev) {

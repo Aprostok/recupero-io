@@ -106,6 +106,11 @@
   <div class="wrap">
     <div class="col left">
       <div class="sech" id="caseshd">Cases</div>
+      <div class="rc-filter-bar" style="margin-bottom:.5rem;border-radius:var(--r-sm);border-bottom:1px solid var(--hair)">
+        <span class="rc-filter-icon">&#9906;</span>
+        <input id="case-search" class="rc-filter-input" type="text" placeholder="Search cases&#8230;" autocomplete="off" spellcheck="false">
+        <span class="rc-filter-count" id="case-count"></span>
+      </div>
       <div id="cases"><div class="empty">Enter the key and Load.</div></div>
     </div>
     <div class="col">
@@ -163,7 +168,10 @@
       b.innerHTML = vname + '<div class="cid">'+esc(r.case_id)+'</div>'+badges;
       box.appendChild(b);
     });
-    $("cases").innerHTML=""; $("cases").appendChild(box);
+    $("cases").innerHTML = ""; $("cases").appendChild(box);
+    var cnt = $("case-count"); if (cnt) { cnt.textContent = rows.length + " cases"; }
+    // Clear search on reload
+    var inp = $("case-search"); if (inp && inp.value) { inp.value = ""; }
   }
 
   function openCase(cid){
@@ -236,6 +244,24 @@
       })
       .catch(function(e){ setMsg(e.message,"err"); });
   }
+
+  // Live case search
+  (function() {
+    var inp = $("case-search");
+    var cnt = $("case-count");
+    if (!inp) return;
+    inp.addEventListener("input", function() {
+      var q = inp.value.trim().toLowerCase();
+      var all = document.querySelectorAll(".case");
+      var vis = 0;
+      all.forEach(function(btn) {
+        var match = !q || (btn.textContent || "").toLowerCase().indexOf(q) >= 0;
+        btn.style.display = match ? "" : "none";
+        if (match) vis++;
+      });
+      if (cnt) { cnt.textContent = q ? (vis + " / " + all.length) : (all.length > 0 ? all.length + " cases" : ""); }
+    });
+  })();
 
   // Event delegation (no inline handlers — keeps interpolated ids out of HTML).
   $("cases").addEventListener("click", function(ev){

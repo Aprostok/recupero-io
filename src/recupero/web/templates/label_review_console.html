@@ -71,6 +71,24 @@
     return s === "high" ? "conf-high" : s === "medium" ? "conf-medium" : s === "low" ? "conf-low" : "";
   }
 
+  // Confidence cell: score ring for numeric 0-1, coloured chip for string
+  function confCell(c) {
+    if (c == null || c === "") return '<td style="color:var(--ink-faint)">&#8212;</td>';
+    var n = parseFloat(String(c));
+    if (!isNaN(n) && n >= 0 && n <= 1) {
+      var pct = Math.round(n * 100);
+      var score = n * 10;
+      var cls = n >= 0.8 ? "r-ok" : n >= 0.5 ? "r-high" : "r-crit";
+      return '<td style="white-space:nowrap;vertical-align:middle">' +
+             '<span class="score-ring sm ' + cls + '" style="--score:' + score + '">' +
+             '<span class="ring-inner">' + pct + '</span></span>' +
+             '</td>';
+    }
+    var s = String(c).toLowerCase();
+    var chipCls = s === "high" ? "ok" : s === "medium" ? "warn" : s === "low" ? "crit" : "";
+    return '<td><span class="chip ' + chipCls + '">' + esc(c) + '</span></td>';
+  }
+
   function key() { return ($("key").value || "").trim(); }
 
   function render(body) {
@@ -100,13 +118,12 @@
       var src = safeUrl
         ? '<a href="' + esc(encodeURI(safeUrl)) + '" target="_blank" rel="noopener noreferrer">' + esc(r.source) + '</a>'
         : esc(r.source);
-      var cc = confClass(r.proposed_confidence);
       h += '<tr>' +
         '<td class="mono">' + esc(r.address) + '</td>' +
-        '<td>' + esc(r.chain) + '</td>' +
+        '<td><span class="chip">' + esc(r.chain) + '</span></td>' +
         '<td>' + esc(r.proposed_category) + '</td>' +
         '<td>' + esc(r.proposed_name) + '</td>' +
-        '<td class="' + cc + '">' + esc(r.proposed_confidence) + '</td>' +
+        confCell(r.proposed_confidence) +
         '<td>' + src + '</td>' +
         '<td><span class="badge ' + esc(r.status) + '">' + esc(r.status) + '</span></td>' +
         '</tr>';

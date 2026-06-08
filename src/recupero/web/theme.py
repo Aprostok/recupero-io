@@ -400,6 +400,13 @@ thead th[data-rc-desc] .rc-sa::after { content: "\25BC"; }
 }
 .rc-filter-input::placeholder { color: var(--ink-faint); }
 .rc-filter-count { font-size: .72rem; color: var(--ink-faint); white-space: nowrap; padding-right: .2rem; }
+.rc-export-btn {
+  flex-shrink: 0; padding: .22rem .6rem; border: 1px solid var(--hair-strong); border-radius: var(--r-sm);
+  background: transparent; color: var(--ink-soft); font-size: .72rem; font-weight: 590; cursor: pointer;
+  font-family: var(--font); line-height: 1.4;
+  transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease);
+}
+.rc-export-btn:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); box-shadow: none; transform: none; }
 
 /* ── Score ring (conic-gradient gauge) ── */
 .score-ring {
@@ -536,6 +543,14 @@ CONSOLE_JS = r"""
       var cnt = bar.querySelector(".rc-filter-count");
       cnt.textContent = allRows.length + " rows";
 
+      // CSV export button (appended to the filter bar)
+      var expBtn = document.createElement("button");
+      expBtn.className = "rc-export-btn";
+      expBtn.title = "Export visible rows as CSV";
+      expBtn.textContent = "↓ CSV";
+      expBtn.addEventListener("click", function () { exportTable(table); });
+      bar.appendChild(expBtn);
+
       inp.addEventListener("input", function () {
         var q = inp.value.trim().toLowerCase();
         var vis = 0;
@@ -547,6 +562,32 @@ CONSOLE_JS = r"""
         cnt.textContent = q ? (vis + " / " + allRows.length) : (allRows.length + " rows");
       });
     });
+  }
+
+  // ── CSV export ───────────────────────────────────────────────────────────
+  function exportTable(table, filename) {
+    var rows = [];
+    var ths = table.querySelectorAll("thead th");
+    if (ths.length) {
+      rows.push(Array.prototype.map.call(ths, function (th) {
+        return '"' + (th.textContent || "").replace(/"/g, '""').replace(/[\r\n]+/g, " ").trim() + '"';
+      }).join(","));
+    }
+    table.querySelectorAll("tbody tr").forEach(function (row) {
+      if (row.style.display === "none") return;
+      rows.push(Array.prototype.map.call(row.querySelectorAll("td"), function (td) {
+        return '"' + (td.getAttribute("data-export") || td.textContent || "")
+               .replace(/"/g, '""').replace(/[\r\n]+/g, " ").trim() + '"';
+      }).join(","));
+    });
+    var csv = rows.join("\r\n");
+    var blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = filename || "recupero-export.csv";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { if (a.parentNode) { a.parentNode.removeChild(a); } URL.revokeObjectURL(url); }, 1200);
   }
 
   // ── Skeleton loading helpers ─────────────────────────────────────────────
@@ -604,6 +645,16 @@ CONSOLE_JS = r"""
     attachFilter(el);
   });
 
+  // ── "/" key: focus first visible filter bar ───────────────────────────────
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key !== "/" || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    var t = ev.target;
+    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" ||
+        t.isContentEditable) return;
+    var inp = document.querySelector(".rc-filter-input");
+    if (inp) { ev.preventDefault(); inp.focus(); inp.select(); }
+  });
+
   // ── Clipboard copy: click any .mono to copy its text ─────────────────────
   (function () {
     if (!navigator.clipboard || !navigator.clipboard.writeText) return;
@@ -628,6 +679,7 @@ CONSOLE_JS = r"""
     staggerRows: staggerRows,
     attachSort: attachSort,
     attachFilter: attachFilter,
+    exportTable: exportTable,
     skeletonCards: skeletonCards,
     skeletonTable: skeletonTable
   };

@@ -110,7 +110,53 @@
     // ── Label hits ────────────────────────────────────────────────────────
     var labels = p.labels || [];
     if (labels.length) {
+      // Category breakdown mini-chart
+      var catCounts = {}, sevCounts = {};
+      labels.forEach(function (l) {
+        var c = l.category || "unknown";
+        catCounts[c] = (catCounts[c] || 0) + 1;
+        var s = l.severity || "low";
+        sevCounts[s] = (sevCounts[s] || 0) + 1;
+      });
+      var cats = Object.keys(catCounts).sort(function (a, b) { return catCounts[b] - catCounts[a]; });
+      var maxVal = cats.reduce(function (m, k) { return Math.max(m, catCounts[k]); }, 1);
+      var SEV_CLS = { critical: "crit", high: "warn", medium: "warn", low: "ok" };
+
       h += '<h2>Label hits <span style="color:var(--ink-faint);font-weight:500;font-size:.85rem">(' + esc(p.label_count) + ')</span></h2>';
+
+      // Mini breakdown bars
+      h += '<div style="display:flex;flex-wrap:wrap;gap:1.2rem 2.4rem;margin-bottom:1rem">';
+      h += '<div style="min-width:180px">';
+      h += '<div style="font-size:.64rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-bottom:.4rem">By category</div>';
+      cats.slice(0, 6).forEach(function (cat) {
+        var pct = Math.round(catCounts[cat] / maxVal * 100);
+        h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.28rem">' +
+             '<span style="width:80px;font-size:.72rem;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(cat) + '</span>' +
+             '<span class="pbar" style="width:80px"><span class="pbar-fill" style="width:' + pct + '%"></span></span>' +
+             '<span style="font-size:.68rem;color:var(--ink-faint);font-variant-numeric:tabular-nums">' + esc(catCounts[cat]) + '</span>' +
+             '</div>';
+      });
+      h += '</div>';
+
+      // Severity breakdown
+      var sevOrder = ["critical", "high", "medium", "low"];
+      var SEV_FILL = { critical: "crit", high: "warn", medium: "warn", low: "ok" };
+      var maxSev = sevOrder.reduce(function (m, s) { return Math.max(m, sevCounts[s] || 0); }, 1);
+      h += '<div style="min-width:160px">';
+      h += '<div style="font-size:.64rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-bottom:.4rem">By severity</div>';
+      sevOrder.forEach(function (sev) {
+        var n = sevCounts[sev] || 0;
+        if (!n) return;
+        var pct = Math.round(n / maxSev * 100);
+        var fc = SEV_FILL[sev] || "";
+        h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.28rem">' +
+             '<span style="width:64px;font-size:.72rem;color:var(--ink-soft)">' + esc(sev) + '</span>' +
+             '<span class="pbar" style="width:64px"><span class="pbar-fill ' + fc + '" style="width:' + pct + '%"></span></span>' +
+             '<span style="font-size:.68rem;color:var(--ink-faint);font-variant-numeric:tabular-nums">' + esc(n) + '</span>' +
+             '</div>';
+      });
+      h += '</div></div>';
+
       h += '<table><thead><tr><th>Name</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Source</th></tr></thead><tbody>';
       labels.forEach(function (l) {
         h += '<tr><td>' + esc(l.name) + '</td><td class="mono">' + esc(l.category) + '</td>' +

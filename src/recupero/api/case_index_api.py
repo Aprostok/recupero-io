@@ -22,8 +22,10 @@ header and leaks nothing to an unauthenticated visitor.
 from __future__ import annotations
 
 import hmac
+import json
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,101 @@ from fastapi.responses import HTMLResponse, Response
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/cases", tags=["cases"])
+
+# ----- real-case vs test/validation-fixture classification (v0.39) ----- #
+#
+# A long-lived dev/Supabase bucket accumulates test + validation + baseline
+# runs alongside genuine investigations. Those fixtures carry no real theft
+# (zero theft_events, no totals) and AI editorials generated against fictional
+# prompts, so they fire the output-integrity validator on incoherent synthetic
+# data — noise that makes the operator console look broken. We classify them
+# off the tiny ``victim.json`` name (never the potentially-large case.json) and
+# hide them from the index by DEFAULT; ``?include_test=1`` shows everything.
+# Deliberately conservative: only obvious fixtures are hidden, and a case with
+# any genuine victim name is always treated as real.
+_TEST_VICTIM_RE = re.compile(
+    r"""(?xi)
+    \btest\b                 # "TEST CFI-00265", "Form Test Case", "test case"
+    | validation\b           # "... Validation"
+    | \bbaseline\b           # "Phase 2 baseline run"
+    | (?:^\s*phase\s+\d)      # "Phase 2 baseline run"
+    | \bsmoke\b              # smoke-test fixtures
+    | \bfixture\b
+    | \bsample\s+case\b
+    | \bdemo\s+case\b
+    | \bno\s+victim\b        # "(no victim)" sentinel
+    """
+)
+
+# victim.json is a tiny record; cap the read so a pathological file can't slow
+# the index or blow memory.
+_MAX_VICTIM_BYTES = 256 * 1024
+
+
+def classify_is_test(
+    victim_name: str | None, *, has_victim_json: bool
+) -> tuple[bool, str]:
+    """Classify a case as a dev/test/validation fixture vs a real investigation.
+
+    Cheap + conservative — relies only on the small ``victim.json`` name, never
+    the (potentially huge) case.json. A case with NO victim record is a
+    skeleton/test case; a victim name matching a test/validation marker is a
+    fixture; anything else is a real case. Returns ``(is_test, reason)``. Always
+    reversible at the API via ``?include_test=1``.
+    """
+    if not has_victim_json:
+        return True, "no victim record (skeleton/test case)"
+    name = (victim_name or "").strip()
+    if not name:
+        return True, "empty victim name"
+    if _TEST_VICTIM_RE.search(name):
+        return True, f"victim name matches a test/validation marker: {name!r}"
+    return False, ""
+
+
+def _read_victim_name_local(case_dir: Path) -> tuple[bool, str | None]:
+    """``(has_victim_json, name)`` for a local case dir — best-effort, size-capped.
+    A present-but-unreadable victim.json returns ``(True, None)`` so the case is
+    NOT silently hidden on a transient parse error (empty name → test only when
+    the file is genuinely absent or its name is blank)."""
+    vp = case_dir / "victim.json"
+    try:
+        if not vp.is_file():
+            return False, None
+        if vp.stat().st_size > _MAX_VICTIM_BYTES:
+            return True, None
+        data = json.loads(vp.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return True, None
+    name = data.get("name") if isinstance(data, dict) else None
+    return True, (name if isinstance(name, str) else None)
+
+
+def _finalize_case_index(
+    raw: list[dict[str, Any]], *, include_test: bool
+) -> dict[str, Any]:
+    """Classify each raw case (is_test + reason), drop fixtures unless
+    ``include_test``, and attach the shown/total/hidden counts the console
+    surfaces. Shared by the Supabase and local-filesystem paths."""
+    shown: list[dict[str, Any]] = []
+    hidden = 0
+    for c in raw:
+        is_test, reason = classify_is_test(
+            c.get("victim_name"), has_victim_json=bool(c.get("has_victim"))
+        )
+        c["is_test"] = is_test
+        c["test_reason"] = reason
+        if is_test and not include_test:
+            hidden += 1
+            continue
+        shown.append(c)
+    return {
+        "cases": shown,
+        "count": len(shown),
+        "total": len(raw),
+        "hidden_test": hidden,
+        "include_test": include_test,
+    }
 
 _CONSOLE_HTML = (
     Path(__file__).resolve().parent.parent
@@ -77,59 +174,79 @@ def _require_admin_auth(provided: str | None) -> None:
 )
 def get_cases(
     x_recupero_admin_key: str | None = Header(default=None),
+    # Plain bool default (NOT Query(...)) so the endpoint stays directly
+    # callable in tests — FastAPI still exposes it as a ?include_test query
+    # param. When false (default) dev/test/validation fixtures are hidden.
+    include_test: bool = False,
 ) -> dict[str, Any]:
     _require_admin_auth(x_recupero_admin_key)
     # v0.36: when the deploy is Supabase-backed (RECUPERO_CASE_STORE=supabase +
     # creds), list real investigations from the bucket instead of the empty,
     # ephemeral local store. Default + any failure path stays local-filesystem.
+    # v0.39: every path produces raw cases (with victim_name + has_victim) which
+    # _finalize_case_index classifies (real vs test fixture) + filters.
     from recupero.api import _supabase_case_source as _sb
     if _sb.enabled():
         try:
-            cases = _sb.list_cases()
-            return {"cases": cases, "count": len(cases)}
+            raw = _sb.list_cases()
         except Exception as exc:  # noqa: BLE001 — never 500 the operator console
             log.warning("get_cases: supabase listing failed: %s", exc)
-            return {"cases": [], "count": 0, "error": str(exc)}
+            return {"cases": [], "count": 0, "total": 0, "hidden_test": 0,
+                    "include_test": include_test, "error": str(exc)}
+        return _finalize_case_index(raw, include_test=include_test)
 
+    try:
+        raw = _scan_local_cases()
+    except Exception as exc:  # noqa: BLE001 — never 500 the operator console
+        log.warning("get_cases: scan failed: %s", exc)
+        return {"cases": [], "count": 0, "total": 0, "hidden_test": 0,
+                "include_test": include_test, "error": str(exc)}
+    return _finalize_case_index(raw, include_test=include_test)
+
+
+def _scan_local_cases() -> list[dict[str, Any]]:
+    """Directory-scan the local cases_root into raw case dicts (deliverable
+    flags + victim name for classification). Deliberately does NOT parse the
+    potentially-large case.json — only the tiny victim.json — so it stays fast
+    and robust against a single corrupted case."""
     from recupero.config import load_config
     from recupero.storage.case_store import CaseStore, _validate_case_id
 
-    try:
-        cfg, _ = load_config()
-        store = CaseStore(cfg)
-        root = store.cases_root
-        if not root.exists():
-            return {"cases": [], "count": 0}
+    cfg, _ = load_config()
+    store = CaseStore(cfg)
+    root = store.cases_root
+    if not root.exists():
+        return []
 
-        cases: list[dict[str, Any]] = []
-        for child in sorted(root.iterdir()):
-            if len(cases) >= _MAX_CASES:
-                break
-            if not child.is_dir():
-                continue
-            # Defense-in-depth: skip any subdirectory name that wouldn't pass
-            # case_id validation (control chars, traversal patterns, reserved
-            # device names) — we never want to surface such an entry as a
-            # clickable/copyable case_id.
-            try:
-                _validate_case_id(child.name)
-            except ValueError:
-                continue
-            if not (child / "case.json").is_file():
-                continue
-            cases.append(
-                {
-                    "case_id": child.name,
-                    "has_brief": (child / "freeze_brief.json").exists(),
-                    "has_ai_triage": (child / "ai_triage.json").exists(),
-                    "has_exhibit_pack": (child / "exhibit_pack").exists(),
-                    "has_graph": (child / "graph_ui.html").exists(),
-                }
-            )
-        return {"cases": cases, "count": len(cases)}
-    except Exception as exc:  # noqa: BLE001 — never 500 the operator console
-        log.warning("get_cases: scan failed: %s", exc)
-        return {"cases": [], "count": 0, "error": str(exc)}
+    cases: list[dict[str, Any]] = []
+    for child in sorted(root.iterdir()):
+        if len(cases) >= _MAX_CASES:
+            break
+        if not child.is_dir():
+            continue
+        # Defense-in-depth: skip any subdirectory name that wouldn't pass
+        # case_id validation (control chars, traversal patterns, reserved
+        # device names) — we never want to surface such an entry as a
+        # clickable/copyable case_id.
+        try:
+            _validate_case_id(child.name)
+        except ValueError:
+            continue
+        if not (child / "case.json").is_file():
+            continue
+        has_victim, victim_name = _read_victim_name_local(child)
+        cases.append(
+            {
+                "case_id": child.name,
+                "has_brief": (child / "freeze_brief.json").exists(),
+                "has_ai_triage": (child / "ai_triage.json").exists(),
+                "has_exhibit_pack": (child / "exhibit_pack").exists(),
+                "has_graph": (child / "graph_ui.html").exists(),
+                "has_victim": has_victim,
+                "victim_name": victim_name,
+            }
+        )
+    return cases
 
 
 # ----- Per-case artifact browser (v0.35: "click a case → view its files") ----- #

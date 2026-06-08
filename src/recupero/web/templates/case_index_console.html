@@ -48,8 +48,12 @@
     box-shadow: 0 0 0 1px var(--accent) inset;
   }
   .case .cid { font-family: var(--mono); font-size: .78rem; word-break: break-all; }
+  .case .vname { font-size: .82rem; font-weight: 600; color: var(--ink); margin-bottom: .22rem; }
   .badge.on  { background: var(--ok-soft);    color: var(--ok);        }
   .badge.off { background: var(--surface-3);  color: var(--ink-faint); }
+  .badge.test { background: var(--warn-soft, #fde9c8); color: var(--warn, #8a5a00); }
+  .tgl { font-size: .74rem; color: var(--ink-soft); display: inline-flex; align-items: center; gap: .3rem; cursor: pointer; }
+  .tgl input { cursor: pointer; }
   .grp { margin-bottom: .9rem; }
   .grp h3 {
     font-size: .7rem; text-transform: uppercase; letter-spacing: .05em; color: var(--accent);
@@ -92,6 +96,9 @@
     <div class="bar">
       <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
       <button id="load">Load cases</button>
+      <label class="tgl" title="Show dev/test/validation fixtures (hidden by default)">
+        <input id="showtest" type="checkbox"> Show test/validation
+      </label>
       <span id="msg"></span>
     </div>
   </header>
@@ -124,26 +131,36 @@
     var k=key(); if(!k){ setMsg("Enter the admin key.","err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch(e){}
     setMsg("Loading…");
-    fetch("/v1/cases", { headers: authHeaders() })
+    var url = "/v1/cases" + ($("showtest").checked ? "?include_test=1" : "");
+    fetch(url, { headers: authHeaders() })
       .then(function(res){ if(!res.ok) throw new Error(httpErr(res)); return res.json(); })
-      .then(function(rep){ renderCases(rep); setMsg("Loaded "+ (rep.count!=null?rep.count:(rep.cases||[]).length) +" case(s)","ok"); })
+      .then(function(rep){
+        renderCases(rep);
+        var n = rep.count!=null?rep.count:(rep.cases||[]).length;
+        var note = (rep.hidden_test && !rep.include_test) ? " ("+rep.hidden_test+" test/validation hidden)" : "";
+        setMsg("Loaded "+ n +" case(s)"+note,"ok");
+      })
       .catch(function(e){ setMsg(e.message,"err"); });
   }
 
   function renderCases(rep){
     var rows = rep.cases || [];
-    $("caseshd").textContent = "Cases (" + (rep.count!=null?rep.count:rows.length) + ")";
-    if(!rows.length){ $("cases").innerHTML = '<div class="empty">No traced cases yet.</div>'; return; }
+    var hd = "Cases (" + (rep.count!=null?rep.count:rows.length) + ")";
+    if(rep.hidden_test && !rep.include_test){ hd += " · " + rep.hidden_test + " test hidden"; }
+    $("caseshd").textContent = hd;
+    if(!rows.length){ $("cases").innerHTML = '<div class="empty">No real cases. Tick “Show test/validation” to see fixtures.</div>'; return; }
     var box = document.createElement("div");
     rows.forEach(function(r){
       var b = document.createElement("button");
       b.className = "case"; b.setAttribute("data-cid", r.case_id);
       var badges = ""
+        + (r.is_test ? '<span class="badge test" title="'+esc(r.test_reason||"test/validation fixture")+'">test</span>' : '')
         + '<span class="badge '+(r.has_brief?"on":"off")+'">brief</span>'
         + '<span class="badge '+(r.has_ai_triage?"on":"off")+'">triage</span>'
         + '<span class="badge '+(r.has_exhibit_pack?"on":"off")+'">exhibit</span>'
         + '<span class="badge '+(r.has_graph?"on":"off")+'">graph</span>';
-      b.innerHTML = '<div class="cid">'+esc(r.case_id)+'</div>'+badges;
+      var vname = r.victim_name ? '<div class="vname">'+esc(r.victim_name)+'</div>' : '';
+      b.innerHTML = vname + '<div class="cid">'+esc(r.case_id)+'</div>'+badges;
       box.appendChild(b);
     });
     $("cases").innerHTML=""; $("cases").appendChild(box);
@@ -228,6 +245,7 @@
     var f = ev.target.closest(".file"); if(f && selectedCase) openArtifact(selectedCase, f.getAttribute("data-path"), f.getAttribute("data-view"), f);
   });
   $("load").addEventListener("click", loadCases);
+  $("showtest").addEventListener("change", function(){ if(key()) loadCases(); });
   if(key()) loadCases();
 })();
 </script>

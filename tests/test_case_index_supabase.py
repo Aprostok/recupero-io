@@ -143,11 +143,57 @@ def test_get_cases_uses_supabase_when_enabled(monkeypatch) -> None:
     monkeypatch.setattr(sbsrc, "enabled", lambda: True)
     monkeypatch.setattr(sbsrc, "list_cases", lambda: [
         {"case_id": _INV, "has_brief": True, "has_ai_triage": False,
-         "has_exhibit_pack": True, "has_graph": False},
+         "has_exhibit_pack": True, "has_graph": False,
+         "has_victim": True, "victim_name": "Acme Trading Ltd"},
     ])
     out = api.get_cases(x_recupero_admin_key="secret")
     assert out["count"] == 1
+    assert out["total"] == 1
+    assert out["hidden_test"] == 0
     assert out["cases"][0]["case_id"] == _INV
+    assert out["cases"][0]["is_test"] is False
+
+
+def test_get_cases_hides_test_fixtures_by_default(monkeypatch) -> None:
+    """A real case shows; a dev/test/validation fixture is hidden unless
+    ?include_test is passed. This is the operator-console 'real cases only'
+    filter (v0.39)."""
+    from recupero.api import case_index_api as api
+
+    real_id = _INV
+    fixture_id = "22222222-2222-2222-2222-222222222222"
+    skeleton_id = "33333333-3333-3333-3333-333333333333"
+    rows = [
+        {"case_id": real_id, "has_brief": True, "has_ai_triage": True,
+         "has_exhibit_pack": True, "has_graph": True,
+         "has_victim": True, "victim_name": "Sky Mavis / Ronin Network"},
+        {"case_id": fixture_id, "has_brief": True, "has_ai_triage": False,
+         "has_exhibit_pack": False, "has_graph": False,
+         "has_victim": True, "victim_name": "TEST CFI-00265 Validation"},
+        {"case_id": skeleton_id, "has_brief": False, "has_ai_triage": False,
+         "has_exhibit_pack": False, "has_graph": False,
+         "has_victim": False, "victim_name": None},
+    ]
+    monkeypatch.setenv("RECUPERO_ADMIN_KEY", "secret")
+    monkeypatch.setattr(sbsrc, "enabled", lambda: True)
+    monkeypatch.setattr(sbsrc, "list_cases", lambda: [dict(r) for r in rows])
+
+    # Default: only the real case is shown; both fixtures counted as hidden.
+    out = api.get_cases(x_recupero_admin_key="secret")
+    assert out["total"] == 3
+    assert out["count"] == 1
+    assert out["hidden_test"] == 2
+    assert out["include_test"] is False
+    assert [c["case_id"] for c in out["cases"]] == [real_id]
+
+    # include_test=True surfaces everything, with is_test flags + reasons.
+    out_all = api.get_cases(x_recupero_admin_key="secret", include_test=True)
+    assert out_all["count"] == 3
+    assert out_all["hidden_test"] == 0
+    by_id = {c["case_id"]: c for c in out_all["cases"]}
+    assert by_id[real_id]["is_test"] is False
+    assert by_id[fixture_id]["is_test"] is True and "Validation" in by_id[fixture_id]["test_reason"]
+    assert by_id[skeleton_id]["is_test"] is True and "no victim" in by_id[skeleton_id]["test_reason"]
 
 
 def test_get_case_artifact_supabase_traversal_still_400(monkeypatch) -> None:

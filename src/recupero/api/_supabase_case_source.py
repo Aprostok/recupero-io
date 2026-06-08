@@ -79,6 +79,11 @@ def list_cases() -> list[dict[str, Any]]:
             continue
         try:
             names = set(store.list_top_level_names())
+            # v0.39: pull the tiny victim.json name so the index can classify
+            # real investigations vs dev/test/validation fixtures (and show the
+            # victim, not just a UUID). Best-effort — never fails the listing.
+            has_victim = "victim.json" in names
+            victim_name = _victim_name(store) if has_victim else None
         except Exception as exc:  # noqa: BLE001
             log.warning("supabase list_cases: %s skipped (%s)", inv_id, exc)
             continue
@@ -92,8 +97,35 @@ def list_cases() -> list[dict[str, Any]]:
             "has_ai_triage": "ai_triage.json" in names,
             "has_exhibit_pack": "exhibit_pack" in names,
             "has_graph": "graph_ui.html" in names,
+            "has_victim": has_victim,
+            "victim_name": victim_name,
         })
     return cases
+
+
+# victim.json is a tiny record; cap the parse so a pathological file can't slow
+# the index. Mirror of case_index_api._MAX_VICTIM_BYTES (kept local to avoid an
+# import cycle).
+_MAX_VICTIM_BYTES = 256 * 1024
+
+
+def _victim_name(store) -> str | None:  # noqa: ANN001 — SupabaseCaseStore
+    """Best-effort victim display name from the bucket's victim.json. Returns
+    None on absence / oversize / malformed content (never raises)."""
+    import json
+
+    try:
+        raw = store.read_artifact("victim.json")
+    except Exception:  # noqa: BLE001
+        return None
+    if not raw or len(raw) > _MAX_VICTIM_BYTES:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    name = data.get("name") if isinstance(data, dict) else None
+    return name if isinstance(name, str) else None
 
 
 def list_artifacts(case_id: str) -> list[dict[str, Any]]:

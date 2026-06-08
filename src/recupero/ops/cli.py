@@ -325,6 +325,24 @@ def cli() -> None:
     p_disarm.add_argument("--address", required=True, help="Wallet address.")
     p_disarm.add_argument("--chain", default="ethereum", help="Chain (default: ethereum).")
 
+    # ----- demix-leads (v0.39 Activation Sprint #4) ----- #
+    p_demix = sub.add_parser(
+        "demix-leads",
+        help="Run mixer-demixing LEADS on a finished case: for each Tornado "
+             "deposit, fetch the pool's withdrawals and score candidate links "
+             "(address-reuse / relayer / FIFO timing). Probabilistic, "
+             "low-confidence, for MANUAL review (e.g. subpoena) — never a "
+             "followed destination. Writes demix_leads.json into the case dir.",
+    )
+    p_demix.add_argument(
+        "--case", dest="demix_case", required=True,
+        help="Case id (dir name under data/cases) to demix.",
+    )
+    p_demix.add_argument(
+        "--window-hours", dest="demix_window", type=int, default=0,
+        help="Withdrawal window after each deposit in hours (0 = unbounded).",
+    )
+
     # ----- benchmark (v0.35.12 / J1) ----- #
     p_bench = sub.add_parser(
         "benchmark",
@@ -1096,6 +1114,50 @@ def cli() -> None:
         print(f"{'Disarmed' if removed else 'No manual entry for'} "
               f"{args.address} ({args.chain}).")
         sys.exit(0 if removed else 1)
+
+    if args.command == "demix-leads":
+        import json as _json
+        import os as _os
+
+        from recupero.chains.base import ChainAdapter
+        from recupero.config import load_config
+        from recupero.storage.case_store import CaseStore
+        from recupero.trace.demix_runner import (
+            find_mixer_deposits,
+            leads_to_json,
+            run_demix_leads,
+        )
+        cfg, _ = load_config()
+        store = CaseStore(cfg)
+        try:
+            case = store.read_case(args.demix_case)
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: could not load case {args.demix_case!r}: {exc}",
+                  file=sys.stderr)
+            sys.exit(2)
+        deposits = find_mixer_deposits(case.transfers, default_chain=case.chain.value)
+        if not deposits:
+            print("No mixer deposits found in this case — nothing to demix.")
+            sys.exit(0)
+        try:
+            adapter = ChainAdapter.for_chain(case.chain, (cfg, _os.environ))
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: no adapter for chain {case.chain}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        results = run_demix_leads(
+            transfers=case.transfers, adapter=adapter,
+            default_chain=case.chain.value, window_hours=args.demix_window,
+            force=True,  # explicit CLI invocation IS the opt-in
+        )
+        out_path = store.cases_root / args.demix_case / "demix_leads.json"
+        out_path.write_text(_json.dumps(leads_to_json(results), indent=2),
+                            encoding="utf-8")
+        total = sum(len(v) for v in results.values())
+        print(
+            f"Demix: {len(deposits)} mixer deposit(s); {total} lead(s) across "
+            f"{len(results)} pool(s) -> {out_path} (probabilistic, low-confidence)"
+        )
+        sys.exit(0)
 
     if args.command == "benchmark":
         import json as _json

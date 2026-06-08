@@ -26,137 +26,74 @@
   <meta charset="utf-8">
   <title>Recupero — Review Gate (awaiting briefs)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/v1/console/app.css">
   <style>
-    /* Minimal CSS — match the rest of the operator surfaces (sans-serif,
-       neutral palette). Pre-v0.32.1 we shipped no operator console at
-       all; this is intentionally not pixel-perfect, just legible. */
-    :root {
-      --bg: #fbfbfb;
-      --fg: #1c1c1c;
-      --muted: #6b6b6b;
-      --border: #d4d4d4;
-      --accent: #1d4ed8;
-      --approve: #15803d;
-      --reject: #b91c1c;
-      --pending: #b45309;
-      --done: #047857;
-    }
-    * { box-sizing: border-box; }
-    body {
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: var(--bg);
-      color: var(--fg);
-      margin: 0;
-      padding: 1.5rem 2rem;
-      max-width: 1100px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    h1 { font-size: 1.4rem; margin: 0 0 0.25rem 0; }
-    .subtitle { color: var(--muted); margin: 0 0 1.5rem 0; font-size: 0.9rem; }
+    /* page-specific: review gate */
+    main { max-width: 1100px; margin: 0 auto; }
     .auth-row {
-      background: #fff;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 0.75rem 1rem;
-      margin-bottom: 1.25rem;
-      display: flex;
-      gap: 0.75rem;
-      align-items: center;
+      display: flex; gap: .75rem; align-items: center;
+      background: var(--surface); border: 1px solid var(--hair);
+      border-radius: var(--r); padding: .75rem 1rem; margin-bottom: 1.25rem;
+      box-shadow: var(--shadow-sm);
     }
-    .auth-row label { font-size: 0.85rem; color: var(--muted); }
+    .auth-row label { font-size: .85rem; color: var(--ink-soft); white-space: nowrap; }
     .auth-row input {
-      flex: 1;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 0.85rem;
-      padding: 0.4rem 0.6rem;
-      border: 1px solid var(--border);
-      border-radius: 4px;
+      flex: 1; font-family: var(--mono); font-size: .85rem;
+      padding: .4rem .6rem; border: 1px solid var(--hair-strong);
+      border-radius: var(--r-sm); background: var(--surface-2); color: var(--ink);
     }
-    button {
-      cursor: pointer;
-      font-size: 0.85rem;
-      padding: 0.4rem 0.8rem;
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      background: #fff;
-    }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    button.approve { background: var(--approve); color: #fff; border-color: var(--approve); }
-    button.reject  { background: var(--reject);  color: #fff; border-color: var(--reject);  }
-    button.reload  { background: var(--accent);  color: #fff; border-color: var(--accent);  }
-
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: #fff;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      overflow: hidden;
-    }
-    th, td {
-      text-align: left;
-      padding: 0.6rem 0.8rem;
-      border-bottom: 1px solid var(--border);
-      vertical-align: top;
-    }
-    th { background: #f3f3f3; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-    tr:last-child td { border-bottom: none; }
-    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
-    .status-awaiting { color: var(--pending); font-weight: 600; }
-    .status-approved { color: var(--done); font-weight: 600; }
-    .status-rejected { color: var(--reject); font-weight: 600; }
-    .actions { display: flex; gap: 0.4rem; }
-    .empty {
-      padding: 2rem;
-      text-align: center;
-      color: var(--muted);
-      background: #fff;
-      border: 1px dashed var(--border);
-      border-radius: 6px;
-    }
+    .auth-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+    button.approve { background: var(--ok); color: #fff; border: 0; }
+    button.approve:hover { background: #166d3b; }
+    button.reject  { background: var(--crit); color: #fff; border: 0; }
+    button.reject:hover  { background: #a80010; }
+    button.reload  { background: var(--accent); color: #fff; border: 0; box-shadow: var(--shadow-sm); }
+    .actions { display: flex; gap: .4rem; }
+    .status-awaiting { color: var(--warn); font-weight: 700; }
+    .status-approved { color: var(--ok);   font-weight: 700; }
+    .status-rejected { color: var(--crit); font-weight: 700; }
+    .resolved-meta { font-size: .75rem; color: var(--ink-faint); margin-top: .2rem; }
+    details { background: var(--surface-2); padding: .4rem .6rem; border-radius: var(--r-sm); }
+    summary { cursor: pointer; font-size: .8rem; color: var(--ink-soft); }
+    /* Toast — fixed overlay */
+    @keyframes toast-in  { from { opacity:0; transform:translateY(6px); } to { opacity:.96; transform:none; } }
+    @keyframes toast-out { from { opacity:.96; } to { opacity:0; } }
     .toast {
-      position: fixed;
-      bottom: 1.25rem;
-      right: 1.25rem;
-      background: #1c1c1c;
-      color: #fff;
-      padding: 0.6rem 1rem;
-      border-radius: 4px;
-      font-size: 0.85rem;
-      max-width: 22rem;
-      opacity: 0;
-      transition: opacity 0.2s ease;
+      position: fixed; bottom: 1.25rem; right: 1.25rem; z-index: 100;
+      background: var(--ink); color: var(--bg);
+      padding: .6rem 1rem; border-radius: var(--r-sm);
+      font-size: .85rem; max-width: 22rem; pointer-events: none;
+      opacity: 0; box-shadow: var(--shadow-lg);
     }
-    .toast.visible { opacity: 0.95; }
-    details { background: #fafafa; padding: 0.4rem 0.6rem; border-radius: 4px; }
-    summary { cursor: pointer; font-size: 0.8rem; color: var(--muted); }
-    .resolved-meta { font-size: 0.75rem; color: var(--muted); margin-top: 0.3rem; }
+    .toast.visible { animation: toast-in .25s var(--ease) forwards; }
+    .toast.hiding  { animation: toast-out .25s var(--ease) forwards; }
   </style>
 </head>
 <body>
 
-<h1>Recupero — Brief Review Gate</h1>
-<p class="subtitle">
-  Pending deliverables awaiting human sign-off before the dispatcher
-  releases them downstream. v0.32 Tier-0 gap #1 (see
-  <code>recupero.dispatcher.review_gate</code>).
-</p>
+<main>
+  <h1>🚪 Brief Review Gate</h1>
+  <p class="sub">
+    Pending deliverables awaiting human sign-off before the dispatcher
+    releases them downstream. v0.32 Tier-0 gap #1 (see
+    <code>recupero.dispatcher.review_gate</code>).
+  </p>
 
-<div class="auth-row">
-  <label for="admin-key">X-Recupero-Admin-Key:</label>
-  <input
-    type="password"
-    id="admin-key"
-    autocomplete="off"
-    spellcheck="false"
-    placeholder="paste admin key (held in memory only — not stored)">
-  <button type="button" class="reload" id="reload-btn">Reload queue</button>
-</div>
+  <div class="auth-row">
+    <label for="admin-key">X-Recupero-Admin-Key:</label>
+    <input
+      type="password"
+      id="admin-key"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="paste admin key (held in memory only — not stored)">
+    <button type="button" class="reload" id="reload-btn">Reload queue</button>
+  </div>
 
-<div id="queue-container">
-  <p class="empty">Paste your admin key and click <strong>Reload queue</strong>.</p>
-</div>
+  <div id="queue-container">
+    <p class="empty">Paste your admin key and click <strong>Reload queue</strong>.</p>
+  </div>
+</main>
 
 <div class="toast" id="toast"></div>
 
@@ -169,11 +106,18 @@
     const keyInput  = document.getElementById("admin-key");
     const reloadBtn = document.getElementById("reload-btn");
     const toastEl   = document.getElementById("toast");
+    var toastTimer = 0;
 
     function toast(msg) {
       toastEl.textContent = msg;
+      toastEl.classList.remove("hiding");
       toastEl.classList.add("visible");
-      setTimeout(() => toastEl.classList.remove("visible"), 3000);
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function() {
+        toastEl.classList.remove("visible");
+        toastEl.classList.add("hiding");
+        setTimeout(function(){ toastEl.classList.remove("hiding"); }, 260);
+      }, 3000);
     }
 
     function adminHeaders() {
@@ -195,15 +139,15 @@
         return;
       }
       if (resp.status === 401) {
-        container.innerHTML = '<p class="empty">401 — invalid or missing admin key.</p>';
+        container.innerHTML = '<p class="empty err">401 — invalid or missing admin key.</p>';
         return;
       }
       if (resp.status === 503) {
-        container.innerHTML = '<p class="empty">503 — review API disabled (RECUPERO_ADMIN_KEY unset on the server).</p>';
+        container.innerHTML = '<p class="empty err">503 — review API disabled (RECUPERO_ADMIN_KEY unset on the server).</p>';
         return;
       }
       if (!resp.ok) {
-        container.innerHTML = '<p class="empty">Unexpected status ' + resp.status + '.</p>';
+        container.innerHTML = '<p class="empty err">Unexpected status ' + resp.status + '.</p>';
         return;
       }
       const data = await resp.json();
@@ -306,6 +250,7 @@
     });
   })();
 </script>
+<script src="/v1/console/app.js" defer></script>
 
 </body>
 </html>

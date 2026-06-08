@@ -190,6 +190,20 @@ def operator_css() -> Response:
 
 
 @router.get(
+    "/app.js",
+    summary="Shared console micro-interaction script (animated counters, row stagger). "
+            "Public — behaviour only, no secret. Linked by every console template.",
+    include_in_schema=False,
+)
+def operator_js() -> Response:
+    from recupero.web.theme import CONSOLE_JS
+    return Response(
+        content=CONSOLE_JS, media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get(
     "/nav",
     summary="Public nav metadata for the hub grid (paths + labels; no secret). "
             "The linked consoles each enforce their own admin auth.",

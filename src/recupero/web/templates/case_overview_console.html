@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero — Case Overview</title>
+<title>Recupero â€” Case Overview</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: case overview */
@@ -19,12 +19,12 @@
 </style>
 </head>
 <body>
-  <h1>📋 Case Overview</h1>
+  <h1>ðŸ“‹ Case Overview</h1>
   <div class="sub">Per-case launcher. Paste your operator key and a case id to see which deliverables the case
     has produced, with a deep link into each one. Data is fetched directly from the admin-gated API
     (the key stays in a request header, never the URL).</div>
 
-  <div class="explain">Read-only, filesystem-only: deliverables are detected by file presence on disk — this console
+  <div class="explain">Read-only, filesystem-only: deliverables are detected by file presence on disk â€” this console
     never parses <span class="mono">case.json</span> or any artifact, so it stays robust against a corrupted case.</div>
 
   <div class="bar">
@@ -41,7 +41,7 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) — clears on tab close.
+  // Persist the key for the session only (not localStorage) â€” clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
@@ -71,7 +71,7 @@
 
     var html = "";
     html += '<div class="caseid"><div class="big mono">' + esc(cid) + "</div>" +
-      '<span class="note">The linked consoles each read the case_id from their own input — copy this value to paste in.</span></div>';
+      '<span class="note">The linked consoles each read the case_id from their own input â€” copy this value to paste in.</span></div>';
 
     var freeze = !!d.freeze_brief;
     var triage = !!d.ai_triage;
@@ -87,7 +87,7 @@
 
     html += '<table><thead><tr><th></th><th>Deliverable</th><th>Open</th></tr></thead><tbody>';
 
-    // Freeze brief — core artifact; also enables two derived views.
+    // Freeze brief â€” core artifact; also enables two derived views.
     if (freeze) {
       var qs = "?case_id=" + encodeURIComponent(cid);
       var freezeLinks =
@@ -136,12 +136,12 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loadingâ€¦");
     clear();
     fetch("/v1/case-overview?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 400) throw new Error("Bad case id â€” must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
         if (res.status === 404) throw new Error("Case not found.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
@@ -163,11 +163,12 @@
       var _jur = _qs.get("jurisdiction");
       if (_jur && $("jur")) { $("jur").value = _jur; }   // sar_filing only; no-op elsewhere
       // Auto-trigger only when we have both a case_id AND a key already present
-      // (single sign-in via sessionStorage) — otherwise just prefill and wait.
+      // (single sign-in via sessionStorage) â€” otherwise just prefill and wait.
       if (_cid && $("key") && $("key").value) { load(); }
     } catch (e) {}
   })();
 })();
 </script>
+<script src="/v1/console/app.js" defer></script>
 </body>
 </html>

@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero — Label Freshness</title>
+<title>Recupero â€” Label Freshness</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: label-freshness alarms */
@@ -21,7 +21,7 @@
 </style>
 </head>
 <body>
-  <h1>🕒 Label Freshness</h1>
+  <h1>ðŸ•’ Label Freshness</h1>
   <div class="sub">Per-source label freshness vs SLA, with the OFAC feed as the headline alarm. Paste your
     operator key to load; data is fetched directly from the admin-gated API (the key stays in a request
     header, never the URL).</div>
@@ -41,7 +41,7 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) — clears on tab close.
+  // Persist the key for the session only (not localStorage) â€” clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
@@ -50,13 +50,13 @@
 
   function render(rep) {
     var sum = rep.summary || {};
-    // OFAC feed-age headline alarm — red when critical/stale.
+    // OFAC feed-age headline alarm â€” red when critical/stale.
     var ofacStatus = sum.ofac_status || "unknown";
     var ofacAge = (sum.ofac_age_days == null) ? "unknown" : (sum.ofac_age_days + "d");
     var alarmCls = (ofacStatus === "critical" || ofacStatus === "stale") ? ofacStatus
                  : (ofacStatus === "fresh" ? "fresh" : "unknown");
     $("alarm").innerHTML = '<div class="alarm ' + esc(alarmCls) + '">OFAC feed: ' +
-      esc(ofacStatus.toUpperCase()) + ' — age ' + esc(ofacAge) + '</div>';
+      esc(ofacStatus.toUpperCase()) + ' â€” age ' + esc(ofacAge) + '</div>';
 
     $("cards").innerHTML =
       card(sum.total, "Sources") +
@@ -76,7 +76,7 @@
         '<td class="mono">' + esc(r.name) + '</td>' +
         '<td>' + esc(r.source_class) + '</td>' +
         '<td><span class="badge ' + esc(st) + '">' + esc(st) + '</span></td>' +
-        '<td class="right">' + esc(r.age_days == null ? "—" : r.age_days) + '</td>' +
+        '<td class="right">' + esc(r.age_days == null ? "â€”" : r.age_days) + '</td>' +
         '<td class="right">' + esc(r.sla_days) + '</td>' +
         '<td>' + esc(r.message) + '</td>' +
         '</tr>';
@@ -91,10 +91,10 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loadingâ€¦");
     fetch("/v1/freshness", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -107,5 +107,6 @@
   if (key()) { load(); }
 })();
 </script>
+<script src="/v1/console/app.js" defer></script>
 </body>
 </html>

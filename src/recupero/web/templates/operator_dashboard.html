@@ -77,14 +77,23 @@
   button#load:active { transform: scale(.96); }
   #msg { font-size: .76rem; color: var(--ink-soft); }
   #msg.err { color: var(--alert); } #msg.ok { color: var(--ok); }
+  @keyframes live-pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.55;transform:scale(.8)} }
+  #live-dot { display:none; width:8px; height:8px; background:var(--ok); border-radius:50%;
+              animation:live-pulse 2.2s ease-in-out infinite; flex-shrink:0; }
 
   main { padding: 0 clamp(1rem, 4vw, 2.5rem); max-width: 1280px; margin: 0 auto; }
 
   /* Hero */
   .hero { padding: 2.6rem 0 1.4rem; }
   .hero h1 { font-size: clamp(1.9rem, 4.5vw, 2.9rem); font-weight: 700; margin: 0; letter-spacing: -0.03em; line-height: 1.05; }
+  @keyframes grad-shift {
+    0%   { background-position: 0% 50%; }
+    50%  { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
   .hero h1 .grad {
-    background: linear-gradient(120deg, var(--accent), #34c0ff 60%, #7c5cff);
+    background: linear-gradient(120deg, var(--accent), #34c0ff, #7c5cff, var(--accent));
+    background-size: 300% 300%; animation: grad-shift 10s ease infinite;
     -webkit-background-clip: text; background-clip: text; color: transparent;
   }
   .hero p { color: var(--ink-soft); font-size: 1.0rem; line-height: 1.5; max-width: 60ch; margin: .7rem 0 0; }
@@ -144,6 +153,7 @@
     </div>
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" autocomplete="off" spellcheck="false">
     <button id="load">Load</button>
+    <span id="live-dot"></span>
     <span id="msg"></span>
   </div>
 
@@ -165,7 +175,10 @@
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
-  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+  function setMsg(t, cls) {
+    var m = $("msg"); m.textContent = t || ""; m.className = cls || "";
+    var dot = $("live-dot"); if (dot) dot.style.display = (cls === "ok") ? "inline-block" : "none";
+  }
   function key() { return ($("key").value || "").trim(); }
   function fmt(v) { return (v === null || v === undefined) ? "—" : esc(v); }
 
@@ -234,5 +247,6 @@
   if (key()) { loadStats(); }
 })();
 </script>
+<script src="/v1/console/app.js" defer></script>
 </body>
 </html>

@@ -8,6 +8,7 @@
       "chain": "ethereum",
       "role": "perpetrator",
       "label_category": "perpetrator",
+      "name": "Ronin Bridge exploiter (Lazarus Group / DPRK)",
       "label_name": "Ronin Bridge exploiter (Lazarus Group / DPRK)",
       "alert_enabled": true,
       "confidence": "high",

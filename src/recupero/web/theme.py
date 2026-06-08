@@ -646,19 +646,74 @@ CONSOLE_JS = r"""
     }).observe(el, { childList: true });
   }
 
+  // ── Progress bar / gauge fill animation ─────────────────────────────────
+  // CSS transitions only fire on property CHANGES; these bars are injected with
+  // their final width already set, so we reset to 0 then apply the target on
+  // the next two rAF ticks (double-rAF guarantees a paint between the two states).
+  function animateGauges(root) {
+    (root || document).querySelectorAll(
+      '.kpi-gauge-fill:not([data-rc-bar]),.rec-bar-fill:not([data-rc-bar]),.pbar-fill:not([data-rc-bar])'
+    ).forEach(function (fill) {
+      fill.setAttribute('data-rc-bar', '1');
+      var target = fill.style.width;
+      if (!target || target === '0%') return;
+      fill.style.width = '0%';
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () { fill.style.width = target; });
+      });
+    });
+  }
+
+  // ── Score ring fill animation ────────────────────────────────────────────
+  function animateRings(root) {
+    (root || document).querySelectorAll('.score-ring:not([data-rc-anim])').forEach(function (ring) {
+      ring.setAttribute('data-rc-anim', '1');
+      var target = parseFloat(ring.style.getPropertyValue('--score')) || 0;
+      if (!target) return;
+      ring.style.setProperty('--score', '0');
+      var start = null;
+      function step(ts) {
+        if (!start) start = ts;
+        var t = Math.min((ts - start) / 700, 1);
+        var ease = 1 - Math.pow(1 - t, 3);
+        ring.style.setProperty('--score', String(+(target * ease).toFixed(3)));
+        if (t < 1) requestAnimationFrame(step);
+        else ring.style.setProperty('--score', String(target));
+      }
+      requestAnimationFrame(step);
+    });
+  }
+
   // Generic "table container" handler
   function _tableContainerFn(el) {
-    el.querySelectorAll(".card .v").forEach(countUp);
+    el.querySelectorAll(".card .v, .kpi .k-amount").forEach(countUp);
     staggerRows(el);
     attachSort(el);
     attachFilter(el);
+    animateRings(el);
+    animateGauges(el);
   }
 
-  watch("cards",      function (el) { el.querySelectorAll(".card .v").forEach(countUp); });
+  watch("cards",      function (el) { el.querySelectorAll(".card .v, .kpi .k-amount").forEach(countUp); animateRings(el); animateGauges(el); });
   watch("tablewrap",  _tableContainerFn);
   watch("out",        _tableContainerFn);
   watch("hubswrap",   _tableContainerFn);
   watch("cycleswrap", _tableContainerFn);
+
+  // Auto-animate score-rings injected outside the watched containers
+  (function () {
+    function _onBodyMut(muts) {
+      muts.forEach(function (m) {
+        m.addedNodes.forEach(function (n) {
+          if (n.nodeType !== 1) return;
+          if (n.classList && n.classList.contains('score-ring')) { animateRings(n.parentNode || document.body); }
+          else if (n.querySelectorAll && n.querySelectorAll('.score-ring').length) { animateRings(n); }
+        });
+      });
+    }
+    function _start() { new MutationObserver(_onBodyMut).observe(document.body, { childList: true, subtree: true }); }
+    if (document.body) { _start(); } else { document.addEventListener('DOMContentLoaded', _start); }
+  })();
 
   // ── Keyboard shortcuts (not when focused in an input) ────────────────────
   document.addEventListener("keydown", function (ev) {
@@ -724,6 +779,21 @@ CONSOLE_JS = r"""
            _esc(chain) + '</span>';
   }
 
+  // ── Relative time display ─────────────────────────────────────────────────
+  function timeAgo(iso) {
+    try {
+      var dt = new Date(iso);
+      if (isNaN(dt.getTime())) return iso || '—';
+      var sec = Math.floor((Date.now() - dt.getTime()) / 1000);
+      if (sec < 0)   return 'just now';
+      if (sec < 60)  return sec + 's ago';
+      if (sec < 3600) return Math.floor(sec / 60) + 'min ago';
+      if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
+      if (sec < 604800) return Math.floor(sec / 86400) + 'd ago';
+      return dt.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch (e) { return String(iso || '—'); }
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -733,7 +803,10 @@ CONSOLE_JS = r"""
     exportTable: exportTable,
     skeletonCards: skeletonCards,
     skeletonTable: skeletonTable,
-    chainChip: chainChip
+    chainChip: chainChip,
+    animateRings: animateRings,
+    animateGauges: animateGauges,
+    timeAgo: timeAgo
   };
 })();
 """

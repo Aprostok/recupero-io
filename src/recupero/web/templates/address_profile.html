@@ -69,8 +69,72 @@
 
   var BAND_ICON = { sanctioned: "⛔", high: "🔴", medium: "🟠", low: "🟡", clean: "✅" };
 
+  // ── Confidence cell: score ring for 0-1 numerics, coloured text otherwise ─
+  function confCell(c) {
+    if (c == null || c === "") return '<span class="conf-low">&#8212;</span>';
+    var n = parseFloat(String(c));
+    if (!isNaN(n) && n >= 0 && n <= 1) {
+      var cls = n >= 0.8 ? "r-ok" : n >= 0.5 ? "r-high" : "r-crit";
+      return '<span class="score-ring sm ' + cls + '" style="--score:' + (n*10) + ';vertical-align:middle">' +
+             '<span class="ring-inner" style="font-size:.45rem">' + Math.round(n*100) + '</span></span>';
+    }
+    var s = String(c).toLowerCase();
+    var cls2 = s === "high" ? "conf-high" : s === "medium" ? "conf-medium" : "conf-low";
+    return '<span class="' + cls2 + '">' + esc(c) + '</span>';
+  }
+
   function card(v, l, cls) {
     return '<div class="card ' + (cls || "") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>';
+  }
+
+  // ── Category color map for donut + legend ────────────────────────────────
+  var _CAT_COLORS = {
+    ransomware: '#ef4444', mixer: '#8b5cf6', scam: '#f59e0b', fraud: '#f97316',
+    exchange: '#22d3ee', cex: '#22d3ee', sanctioned: '#dc2626', sanctions: '#dc2626',
+    darkmarket: '#6366f1', drainer: '#ec4899', defi: '#10b981', bridge: '#06b6d4',
+    seed: '#64748b', unknown: '#94a3b8'
+  };
+  function catColor(cat) {
+    var lc = String(cat || "unknown").toLowerCase();
+    for (var k in _CAT_COLORS) { if (lc.indexOf(k) !== -1) return _CAT_COLORS[k]; }
+    var h = 0;
+    for (var i = 0; i < lc.length; i++) { h = ((h * 31) + lc.charCodeAt(i)) & 0xffff; }
+    return 'hsl(' + (h % 360) + ',55%,52%)';
+  }
+
+  function renderCatDonut(catCounts, cats, total) {
+    if (!total || cats.length < 1) return '';
+    if (cats.length === 1) {
+      // Single category — just show a solid ring
+      var c1 = catColor(cats[0]);
+      return '<div style="width:148px;height:148px;border-radius:50%;border:12px solid ' + c1 + ';display:flex;align-items:center;justify-content:center;flex-shrink:0">' +
+             '<span style="font-size:1.5rem;font-weight:800;color:var(--ink)">' + total + '</span>' +
+             '</div>';
+    }
+    var W = 148, H = 148, cx = 74, cy = 74, ro = 62, ri = 42;
+    var p = ['<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="width:' + W + 'px;height:' + H + 'px;flex-shrink:0;display:block">'];
+    var angle = -Math.PI / 2;
+    cats.slice(0, 8).forEach(function (cat) {
+      var n = catCounts[cat];
+      var sweep = (n / total) * 2 * Math.PI;
+      if (sweep < 0.025) { angle += sweep; return; }
+      var end = angle + sweep, laf = sweep > Math.PI ? 1 : 0;
+      var col = catColor(cat);
+      var x1 = cx + ro * Math.cos(angle), y1 = cy + ro * Math.sin(angle);
+      var x2 = cx + ro * Math.cos(end),   y2 = cy + ro * Math.sin(end);
+      var x3 = cx + ri * Math.cos(end),   y3 = cy + ri * Math.sin(end);
+      var x4 = cx + ri * Math.cos(angle), y4 = cy + ri * Math.sin(angle);
+      var d = 'M'+x1.toFixed(1)+' '+y1.toFixed(1)+
+              ' A '+ro+' '+ro+' 0 '+laf+' 1 '+x2.toFixed(1)+' '+y2.toFixed(1)+
+              ' L '+x3.toFixed(1)+' '+y3.toFixed(1)+
+              ' A '+ri+' '+ri+' 0 '+laf+' 0 '+x4.toFixed(1)+' '+y4.toFixed(1)+'Z';
+      p.push('<path d="' + d + '" fill="' + col + '" stroke="var(--surface)" stroke-width="2"/>');
+      angle = end;
+    });
+    p.push('<text x="' + cx + '" y="' + (cy - 5) + '" text-anchor="middle" font-size="19" font-weight="800" fill="var(--ink)">' + total + '</text>');
+    p.push('<text x="' + cx + '" y="' + (cy + 12) + '" text-anchor="middle" font-size="8" letter-spacing=".06em" fill="var(--ink-faint)">LABELS</text>');
+    p.push('</svg>');
+    return p.join('');
   }
 
   function render(p) {
@@ -124,44 +188,45 @@
 
       h += '<h2>Label hits <span style="color:var(--ink-faint);font-weight:500;font-size:.85rem">(' + esc(p.label_count) + ')</span></h2>';
 
-      // Mini breakdown bars
-      h += '<div style="display:flex;flex-wrap:wrap;gap:1.2rem 2.4rem;margin-bottom:1rem">';
-      h += '<div style="min-width:180px">';
-      h += '<div style="font-size:.64rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-bottom:.4rem">By category</div>';
-      cats.slice(0, 6).forEach(function (cat) {
-        var pct = Math.round(catCounts[cat] / maxVal * 100);
-        h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.28rem">' +
-             '<span style="width:80px;font-size:.72rem;color:var(--ink-soft);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">' + esc(cat) + '</span>' +
-             '<span class="pbar" style="width:80px"><span class="pbar-fill" style="width:' + pct + '%"></span></span>' +
-             '<span style="font-size:.68rem;color:var(--ink-faint);font-variant-numeric:tabular-nums">' + esc(catCounts[cat]) + '</span>' +
+      // Category donut + legend
+      h += '<div style="display:flex;flex-wrap:wrap;gap:1.1rem;align-items:center;margin-bottom:1rem">';
+      h += renderCatDonut(catCounts, cats, labels.length);
+      h += '<div style="display:flex;flex-direction:column;justify-content:center;gap:.3rem;min-width:120px;flex:1">';
+      cats.slice(0, 8).forEach(function (cat) {
+        var n = catCounts[cat];
+        var pct = Math.round(n / labels.length * 100);
+        var c = catColor(cat);
+        h += '<div style="display:flex;align-items:center;gap:.42rem;min-width:0">' +
+             '<span style="width:9px;height:9px;border-radius:2px;flex-shrink:0;background:' + c + '"></span>' +
+             '<span style="font-size:.72rem;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0">' + esc(cat) + '</span>' +
+             '<span style="font-size:.68rem;color:var(--ink-faint);font-variant-numeric:tabular-nums;flex-shrink:0;white-space:nowrap">' + n + ' &middot; ' + pct + '%</span>' +
              '</div>';
       });
-      h += '</div>';
+      h += '</div></div>';
 
       // Severity breakdown
       var sevOrder = ["critical", "high", "medium", "low"];
       var SEV_FILL = { critical: "crit", high: "warn", medium: "warn", low: "ok" };
       var maxSev = sevOrder.reduce(function (m, s) { return Math.max(m, sevCounts[s] || 0); }, 1);
-      h += '<div style="min-width:160px">';
-      h += '<div style="font-size:.64rem;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);font-weight:700;margin-bottom:.4rem">By severity</div>';
+      h += '<div style="display:flex;flex-wrap:wrap;gap:.55rem .8rem;align-items:center;margin-bottom:1rem">';
       sevOrder.forEach(function (sev) {
         var n = sevCounts[sev] || 0;
         if (!n) return;
-        var pct = Math.round(n / maxSev * 100);
         var fc = SEV_FILL[sev] || "";
-        h += '<div style="display:flex;align-items:center;gap:.5rem;margin-bottom:.28rem">' +
-             '<span style="width:64px;font-size:.72rem;color:var(--ink-soft)">' + esc(sev) + '</span>' +
-             '<span class="pbar" style="width:64px"><span class="pbar-fill ' + fc + '" style="width:' + pct + '%"></span></span>' +
+        var barPct = Math.round(n / maxSev * 100);
+        h += '<div style="display:flex;align-items:center;gap:.45rem">' +
+             '<span style="width:56px;font-size:.72rem;color:var(--ink-soft)">' + esc(sev) + '</span>' +
+             '<span class="pbar" style="width:60px"><span class="pbar-fill ' + fc + '" style="width:' + barPct + '%"></span></span>' +
              '<span style="font-size:.68rem;color:var(--ink-faint);font-variant-numeric:tabular-nums">' + esc(n) + '</span>' +
              '</div>';
       });
-      h += '</div></div>';
+      h += '</div>';
 
       h += '<table><thead><tr><th>Name</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Source</th></tr></thead><tbody>';
       labels.forEach(function (l) {
         h += '<tr><td>' + esc(l.name) + '</td><td class="mono">' + esc(l.category) + '</td>' +
              '<td>' + esc(l.severity) + '</td>' +
-             '<td class="conf-' + esc(l.confidence) + '">' + esc(l.confidence) + '</td>' +
+             '<td style="vertical-align:middle">' + confCell(l.confidence) + '</td>' +
              '<td>' + esc(l.source) + '</td></tr>';
       });
       h += '</tbody></table>';

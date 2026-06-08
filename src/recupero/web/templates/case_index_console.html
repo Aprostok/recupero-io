@@ -107,7 +107,7 @@
     <div class="col left">
       <div class="sech" id="caseshd">Cases</div>
       <div class="rc-filter-bar" style="margin-bottom:.5rem;border-radius:var(--r-sm);border-bottom:1px solid var(--hair)">
-        <span class="rc-filter-icon">&#9906;</span>
+        <span class="rc-filter-icon">&#128270;</span>
         <input id="case-search" class="rc-filter-input" type="text" placeholder="Search cases&#8230;" autocomplete="off" spellcheck="false">
         <span class="rc-filter-count" id="case-count"></span>
       </div>
@@ -165,7 +165,15 @@
         + '<span class="badge '+(r.has_exhibit_pack?"on":"off")+'">exhibit</span>'
         + '<span class="badge '+(r.has_graph?"on":"off")+'">graph</span>';
       var vname = r.victim_name ? '<div class="vname">'+esc(r.victim_name)+'</div>' : '';
-      b.innerHTML = vname + '<div class="cid">'+esc(r.case_id)+'</div>'+badges;
+      // Deliverable completeness ring
+      var dN = [r.has_brief,r.has_ai_triage,r.has_exhibit_pack,r.has_graph].filter(Boolean).length;
+      var dRingCls = dN===4?"r-ok":dN>=2?"r-high":"r-crit";
+      var dRing = '<span class="score-ring sm '+dRingCls+'" style="--score:'+(dN*2.5)+';flex-shrink:0">'
+                + '<span class="ring-inner" style="font-size:.4rem">'+dN+'/4</span></span>';
+      b.innerHTML = '<div style="display:flex;align-items:flex-start;gap:.42rem">'
+                  + dRing
+                  + '<div style="min-width:0">' + vname + '<div class="cid">'+esc(r.case_id)+'</div>'+badges+'</div>'
+                  + '</div>';
       box.appendChild(b);
     });
     $("cases").innerHTML = ""; $("cases").appendChild(box);

@@ -88,7 +88,7 @@
       h += '<tr class="' + (bad ? "bad" : "") + '">' +
         '<td class="mono">' + esc(n) + '</td>' +
         '<td>' + statusBadge(j.status) + '</td>' +
-        '<td class="mono">' + esc(j.last_success_utc != null ? j.last_success_utc : "â€”") + '</td>' +
+        '<td class=”mono age” title=”' + esc(j.last_success_utc != null ? j.last_success_utc : '') + '”>' + (j.last_success_utc != null ? window.RC.timeAgo(j.last_success_utc) : '—') + '</td>' +
         hrsCell(j.hours_since_last_success) +
         '<td class="right">' + esc(j.consecutive_failures != null ? j.consecutive_failures : "â€”") + '</td>' +
         '<td class="errmsg">' + esc(j.last_error_message != null ? j.last_error_message : "") + '</td>' +

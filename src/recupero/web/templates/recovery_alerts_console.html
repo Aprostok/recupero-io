@@ -92,7 +92,7 @@
         '<td>' + esc(r.label_name == null ? "—" : r.label_name) + '</td>' +
         '<td class="msgcell">' + esc(r.message) + '</td>' +
         '<td class="action">' + esc(r.recommended_action) + '</td>' +
-        '<td class="mono">' + esc(r.created_at) + '</td>' +
+        '<td class="mono age" title="' + esc(r.created_at || '') + '">' + (window.RC ? window.RC.timeAgo(r.created_at) : esc(r.created_at || '—')) + '</td>' +
         '</tr>';
     });
     h += '</tbody></table>';

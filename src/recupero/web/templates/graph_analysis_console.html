@@ -35,6 +35,8 @@
 
   <div class="cards" id="cards"></div>
 
+  <div id="graphcanvas" class="flow-graph-wrap" style="display:none"></div>
+
   <div id="hubswrap"></div>
   <div id="cycleswrap"></div>
 
@@ -87,7 +89,57 @@
     return p.join('');
   }
 
-  function clear() { $("cards").innerHTML = ""; $("hubswrap").innerHTML = ""; $("cycleswrap").innerHTML = ""; }
+  function clear() {
+    $("cards").innerHTML = ""; $("hubswrap").innerHTML = ""; $("cycleswrap").innerHTML = "";
+    var gc = $("graphcanvas");
+    if (gc) { gc.innerHTML = ""; gc.style.display = "none"; }
+  }
+
+  // ── Force-directed graph from hubs + cycles data ─────────────────────
+  var _CYCLE_COLS = ['#8b5cf6', '#22d3ee', '#f59e0b', '#10b981', '#ef4444'];
+  function renderGraph(rep) {
+    var gEl = $("graphcanvas");
+    if (!gEl || !window.RC || !window.RC.buildFlowGraph) return;
+    gEl.style.display = "none"; gEl.innerHTML = "";
+    var nodes = [], edges = [], seen = {};
+    (rep.consolidation_hubs || []).forEach(function (h) {
+      if (!seen[h.address]) {
+        nodes.push({ id: h.address, label: h.address, color: '#f97316', radius: 15 });
+        seen[h.address] = true;
+      }
+    });
+    (rep.value_cycles || []).forEach(function (c, ci) {
+      var col = _CYCLE_COLS[ci % _CYCLE_COLS.length];
+      var mems = c.members || [];
+      mems.forEach(function (addr) {
+        if (!seen[addr]) {
+          nodes.push({ id: addr, label: addr, color: col, radius: 12 });
+          seen[addr] = true;
+        }
+      });
+      for (var i = 0; i < mems.length; i++) {
+        edges.push({ source: mems[i], target: mems[(i + 1) % mems.length], color: col + 'a0', width: 2 });
+      }
+      if (rep.consolidation_hubs && rep.consolidation_hubs.length && mems.length) {
+        edges.push({ source: rep.consolidation_hubs[0].address, target: mems[0], color: '#f9731666', width: 1.5 });
+      }
+    });
+    if (nodes.length < 2) return;
+    gEl.style.display = "block";
+    window.RC.buildFlowGraph(gEl, nodes, edges, { width: gEl.clientWidth || 580, height: 300 });
+    var lgd = '<div class="flow-graph-legend">';
+    if (rep.consolidation_hubs && rep.consolidation_hubs.length) {
+      lgd += '<div class="flow-graph-legend-item"><span class="flow-graph-legend-dot" style="background:#f97316"></span>Consolidation hub</div>';
+    }
+    (rep.value_cycles || []).forEach(function (c, ci) {
+      lgd += '<div class="flow-graph-legend-item"><span class="flow-graph-legend-dot" style="background:' +
+             _CYCLE_COLS[ci % _CYCLE_COLS.length] + '"></span>Cycle ' + (ci + 1) + ' &middot; ' +
+             ((c.members || []).length) + ' nodes</div>';
+    });
+    lgd += '<span class="flow-graph-hint">Hover to inspect &middot; click node to copy address</span>';
+    lgd += '</div>';
+    gEl.insertAdjacentHTML('beforeend', lgd);
+  }
 
   function render(rep) {
     var sum = rep.summary || {};
@@ -157,6 +209,7 @@
       ch += ‘</tbody></table>’;
     }
     $("cycleswrap").innerHTML = ch;
+    renderGraph(rep);
   }
 
   function key() { return ($("key").value || "").trim(); }

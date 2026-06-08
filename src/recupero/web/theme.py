@@ -19,6 +19,7 @@ CONSOLE_CSS = """
   --warn: #b9770e; --warn-soft: rgba(185,119,14,.10);
   --ok: #1d8a4e; --ok-soft: rgba(29,138,78,.10);
   --crit-border: rgba(215,0,21,.22); --warn-border: rgba(185,119,14,.22); --ok-border: rgba(29,138,78,.22);
+  --surface-solid: var(--surface);
   --r-sm: 9px; --r: 14px; --r-lg: 20px;
   --ease: cubic-bezier(.32,.72,0,1);
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -37,6 +38,7 @@ CONSOLE_CSS = """
     --warn: #ffd60a; --warn-soft: rgba(255,214,10,.14);
     --ok: #30d158; --ok-soft: rgba(48,209,88,.13);
     --crit-border: rgba(255,69,58,.32); --warn-border: rgba(255,214,10,.28); --ok-border: rgba(48,209,88,.28);
+    --surface-solid: var(--surface);
     --shadow-sm: 0 1px 3px rgba(0,0,0,.5);
     --shadow-md: 0 10px 30px rgba(0,0,0,.55);
     --shadow-lg: 0 22px 56px rgba(0,0,0,.7);
@@ -457,6 +459,29 @@ mark.rc-hl { background: rgba(255,214,0,.38); color: inherit; border-radius: 2px
 .rc-toast.info { border-left: 3px solid var(--accent); }
 @keyframes rc-toast-in { from { opacity: 0; transform: translateY(8px) scale(.95); } to { opacity: 1; transform: none; } }
 @keyframes rc-toast-out { from { opacity: 1; } to { opacity: 0; transform: translateY(4px); } }
+
+/* ── Force-directed flow graph ── */
+.flow-graph-wrap {
+  width: 100%; background: var(--surface); border: 1px solid var(--hair);
+  border-radius: var(--r); box-shadow: var(--shadow-sm); overflow: hidden;
+  margin-bottom: 1.2rem; animation: rc-rise .45s var(--ease) both;
+}
+.flow-graph-wrap canvas { display: block; width: 100% !important; }
+.flow-graph-empty {
+  height: 100px; display: flex; align-items: center; justify-content: center;
+  font-size: .82rem; color: var(--ink-faint);
+}
+.flow-graph-legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .32rem .72rem;
+  padding: .48rem .88rem; border-top: 1px solid var(--hair);
+  background: var(--surface-2);
+}
+.flow-graph-legend-item {
+  display: flex; align-items: center; gap: .3rem;
+  font-size: .68rem; color: var(--ink-soft);
+}
+.flow-graph-legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.flow-graph-hint { margin-left: auto; font-size: .62rem; color: var(--ink-faint); font-style: italic; }
 
 /* ── Accessibility ── */
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
@@ -937,6 +962,198 @@ CONSOLE_JS = r"""
     } catch (e) { return String(iso || '—'); }
   }
 
+  // ── Canvas force-directed flow graph ────────────────────────────────────
+  // buildFlowGraph(el, nodesIn, edgesIn, opts)
+  //   nodesIn: [{id, label?, color?, radius?, pinned?}]
+  //   edgesIn: [{source, target, color?, width?}]
+  //   opts:    {width?, height?}
+  // Returns a stop() function. Exposed on window.RC.buildFlowGraph.
+  function buildFlowGraph(el, nodesIn, edgesIn, opts) {
+    if (!el || !nodesIn || nodesIn.length < 2) return null;
+    opts = opts || {};
+    var W   = opts.width  || Math.max(360, el.clientWidth  || 520);
+    var H   = opts.height || 300;
+    var DPR = Math.min(typeof devicePixelRatio !== 'undefined' ? (devicePixelRatio || 1) : 1, 2);
+
+    var nodes = nodesIn.map(function (n, i) {
+      var a = (2 * Math.PI * i / nodesIn.length) - Math.PI / 2;
+      var r = Math.min(W, H) * 0.30;
+      return {
+        id: n.id, label: n.label || n.id,
+        color: n.color || '#627eea', radius: n.radius || 12,
+        x: W / 2 + r * Math.cos(a) + (Math.random() * 22 - 11),
+        y: H / 2 + r * Math.sin(a) + (Math.random() * 22 - 11),
+        vx: 0, vy: 0, pinned: !!n.pinned
+      };
+    });
+    var idxMap = {};
+    nodes.forEach(function (n, i) { idxMap[n.id] = i; });
+
+    var cv = document.createElement('canvas');
+    cv.width = W * DPR; cv.height = H * DPR;
+    cv.style.cssText = 'display:block;width:100%;height:' + H + 'px;cursor:default';
+    el.insertBefore(cv, el.firstChild);
+    var ctx = cv.getContext('2d');
+    ctx.scale(DPR, DPR);
+
+    var hov = -1, running = true, tick = 0;
+    var K_REPEL = 2400, K_SPRING = 0.038, REST_LEN = 90, DAMP = 0.80, GRAVITY = 0.008;
+
+    function simulate() {
+      var n = nodes.length;
+      for (var i = 0; i < n; i++) {
+        for (var j = i + 1; j < n; j++) {
+          var dx = nodes[j].x - nodes[i].x, dy = nodes[j].y - nodes[i].y;
+          var d2 = dx * dx + dy * dy || 0.01, d = Math.sqrt(d2);
+          var f = K_REPEL / d2, fx = f * dx / d, fy = f * dy / d;
+          if (!nodes[i].pinned) { nodes[i].vx -= fx; nodes[i].vy -= fy; }
+          if (!nodes[j].pinned) { nodes[j].vx += fx; nodes[j].vy += fy; }
+        }
+      }
+      edgesIn.forEach(function (e) {
+        var ai = idxMap[e.source], bi = idxMap[e.target];
+        if (ai == null || bi == null) return;
+        var a = nodes[ai], b = nodes[bi];
+        var dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+        var f = (d - REST_LEN) * K_SPRING, fx = f * dx / d, fy = f * dy / d;
+        if (!a.pinned) { a.vx += fx; a.vy += fy; }
+        if (!b.pinned) { b.vx -= fx; b.vy -= fy; }
+      });
+      nodes.forEach(function (n) {
+        if (n.pinned) return;
+        n.vx += (W / 2 - n.x) * GRAVITY; n.vy += (H / 2 - n.y) * GRAVITY;
+        n.vx *= DAMP; n.vy *= DAMP; n.x += n.vx; n.y += n.vy;
+        var pad = n.radius + 5;
+        if (n.x < pad) { n.x = pad; n.vx *= -0.4; }
+        if (n.x > W - pad) { n.x = W - pad; n.vx *= -0.4; }
+        if (n.y < pad) { n.y = pad; n.vy *= -0.4; }
+        if (n.y > H - pad) { n.y = H - pad; n.vy *= -0.4; }
+      });
+    }
+
+    function _isDark() {
+      try { return window.matchMedia('(prefers-color-scheme:dark)').matches; } catch (e) { return false; }
+    }
+
+    function draw() {
+      var dk = _isDark();
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = dk ? '#1c1c1e' : '#ffffff';
+      ctx.fillRect(0, 0, W, H);
+
+      // Grid dots (subtle)
+      ctx.fillStyle = dk ? 'rgba(255,255,255,.04)' : 'rgba(0,0,0,.04)';
+      for (var gx = 20; gx < W; gx += 28) {
+        for (var gy = 16; gy < H; gy += 28) {
+          ctx.beginPath(); ctx.arc(gx, gy, 1, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+
+      // Edges
+      edgesIn.forEach(function (e) {
+        var ai = idxMap[e.source], bi = idxMap[e.target];
+        if (ai == null || bi == null) return;
+        var a = nodes[ai], b = nodes[bi];
+        var dx = b.x - a.x, dy = b.y - a.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+        var ux = dx / d, uy = dy / d;
+        var x1 = a.x + ux * (a.radius + 1), y1 = a.y + uy * (a.radius + 1);
+        var x2 = b.x - ux * (b.radius + 9), y2 = b.y - uy * (b.radius + 9);
+        ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+        ctx.strokeStyle = e.color || (dk ? 'rgba(255,255,255,.20)' : 'rgba(0,0,0,.14)');
+        ctx.lineWidth = e.width || 1.5; ctx.stroke();
+        // Arrowhead
+        var ang = Math.atan2(y2 - y1, x2 - x1);
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - 8 * Math.cos(ang - 0.42), y2 - 8 * Math.sin(ang - 0.42));
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(x2 - 8 * Math.cos(ang + 0.42), y2 - 8 * Math.sin(ang + 0.42));
+        ctx.strokeStyle = e.color || (dk ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.22)');
+        ctx.lineWidth = 1.5; ctx.stroke();
+      });
+
+      // Nodes
+      nodes.forEach(function (nd, i) {
+        var isHov = i === hov, r = nd.radius;
+        if (isHov) {
+          var gr = ctx.createRadialGradient(nd.x, nd.y, r, nd.x, nd.y, r + 9);
+          gr.addColorStop(0, nd.color + 'aa'); gr.addColorStop(1, nd.color + '00');
+          ctx.beginPath(); ctx.arc(nd.x, nd.y, r + 9, 0, Math.PI * 2);
+          ctx.fillStyle = gr; ctx.fill();
+        }
+        ctx.beginPath(); ctx.arc(nd.x, nd.y, r, 0, Math.PI * 2);
+        ctx.fillStyle = nd.color; ctx.fill();
+        // Specular
+        ctx.beginPath(); ctx.arc(nd.x - r * 0.22, nd.y - r * 0.28, r * 0.38, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,255,255,.3)'; ctx.fill();
+        // Label
+        var lbl = nd.label || '';
+        if (lbl.length > 13) { lbl = lbl.slice(0, 6) + '…' + lbl.slice(-4); }
+        ctx.font = '600 8px -apple-system,system-ui,sans-serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+        ctx.fillStyle = dk ? 'rgba(235,235,245,.65)' : 'rgba(28,28,30,.5)';
+        ctx.fillText(lbl, nd.x, nd.y + r + 4);
+      });
+
+      // Hover tooltip
+      if (hov >= 0) {
+        var nd = nodes[hov], tip = nd.id || '';
+        if (tip.length > 24) { tip = tip.slice(0, 10) + '…' + tip.slice(-8); }
+        ctx.font = '600 10px -apple-system,system-ui,sans-serif';
+        ctx.textBaseline = 'bottom'; ctx.textAlign = 'center';
+        var tw = ctx.measureText(tip).width;
+        var tx = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, nd.x));
+        var ty = nd.y - nd.radius - 8;
+        ctx.fillStyle = dk ? 'rgba(44,44,46,.92)' : 'rgba(255,255,255,.95)';
+        var bx = tx - tw / 2 - 8, bw = tw + 16, bh = 18;
+        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, ty - bh, bw, bh, 5); ctx.fill(); }
+        else { ctx.fillRect(bx, ty - bh, bw, bh); }
+        ctx.strokeStyle = dk ? 'rgba(255,255,255,.15)' : 'rgba(0,0,0,.10)';
+        ctx.lineWidth = 0.5;
+        if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, ty - bh, bw, bh, 5); ctx.stroke(); }
+        ctx.fillStyle = dk ? '#f5f5f7' : '#1d1d1f';
+        ctx.fillText(tip, tx, ty - 2);
+      }
+    }
+
+    function loop() {
+      if (!running) return;
+      simulate(); draw(); tick++;
+      if (tick < 220) { requestAnimationFrame(loop); }
+      else {
+        setTimeout(function () {
+          if (!running) return;
+          simulate(); draw();
+          tick = 200; // keep ticking slowly
+          setTimeout(function () { if (running) loop(); }, 120);
+        }, 120);
+      }
+    }
+
+    cv.addEventListener('mousemove', function (e) {
+      var rect = cv.getBoundingClientRect();
+      var sx = rect.width / W, sy = rect.height / H;
+      var mx = (e.clientX - rect.left) / sx, my = (e.clientY - rect.top) / sy;
+      var prev = hov; hov = -1;
+      nodes.forEach(function (n, i) {
+        var dx = n.x - mx, dy = n.y - my;
+        if (dx * dx + dy * dy <= (n.radius + 5) * (n.radius + 5)) { hov = i; }
+      });
+      if (hov !== prev) { draw(); }
+      cv.style.cursor = hov >= 0 ? 'pointer' : 'default';
+    });
+    cv.addEventListener('mouseleave', function () { hov = -1; draw(); cv.style.cursor = 'default'; });
+    cv.addEventListener('click', function () {
+      if (hov < 0) return;
+      var addr = nodes[hov].id || '';
+      if (!addr || !navigator.clipboard) return;
+      navigator.clipboard.writeText(addr).then(function () { toast('Address copied', 'ok'); }).catch(function () {});
+    });
+
+    requestAnimationFrame(loop);
+    return function () { running = false; };
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -950,7 +1167,8 @@ CONSOLE_JS = r"""
     animateRings: animateRings,
     animateGauges: animateGauges,
     timeAgo: timeAgo,
-    toast: toast
+    toast: toast,
+    buildFlowGraph: buildFlowGraph
   };
 })();
 """

@@ -67,7 +67,8 @@
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
   function key() { return ($("key").value || "").trim(); }
 
-  var BAND_ICON = { sanctioned: "⛔", high: "🔴", medium: "🟠", low: "🟡", clean: "✅" };
+  var BAND_ICON = { sanctioned: "&#9940;", high: "&#128308;", medium: "&#128992;", low: "&#128993;", clean: "&#9989;" };
+  var TAG_ICONS = { "OFAC-sanctioned": "&#9940;", "Mixer": "&#128260;", "Ransomware": "&#128128;", "Drainer": "&#129383;" };
 
   // ── Block-explorer address URL by chain ─────────────────────────────────
   var _EXPLORER = {
@@ -188,7 +189,10 @@
     h += '</div>';
     if ((p.exposure_tags || []).length) {
       h += '<div class="tags" style="margin-top:.65rem">';
-      p.exposure_tags.forEach(function (t) { h += '<span>' + esc(t) + '</span>'; });
+      p.exposure_tags.forEach(function (t, idx) {
+        var icon = TAG_ICONS[t] || '&#9888;';
+        h += '<span style="animation-delay:' + (idx * 80) + 'ms">' + icon + ' ' + esc(t) + '</span>';
+      });
       h += '</div>';
     }
     if (p.note) {
@@ -257,7 +261,7 @@
       h += '</tbody></table>';
     }
 
-    // ── Sighting history — metric cards ───────────────────────────────────
+    // ── Sighting history — metric cards + risk indicator strip ────────────
     var c = p.sighting_history || {};
     var priorCases = c.prior_case_count || 0;
     var ofacExp    = c.prior_ofac_exposed_count || 0;
@@ -271,6 +275,27 @@
     h += card(drainAttr,   "Drainer-attr.",    drainAttr   ? "alert" : "");
     h += card(c.prior_total_usd_flowed || "—", "Total USD seen");
     h += '</div>';
+    // Risk indicator strip — TRM-style horizontal bars
+    var _indicators = [
+      { label: "OFAC exposure", val: ofacExp, color: "crit" },
+      { label: "Mixer exposure", val: mixExp, color: "warn" },
+      { label: "Drainer attribution", val: drainAttr, color: "crit" },
+      { label: "Prior cases", val: priorCases, color: "warn" }
+    ];
+    var _maxInd = _indicators.reduce(function(m, d) { return Math.max(m, d.val); }, 1);
+    if (_indicators.some(function(d) { return d.val > 0; })) {
+      h += '<div style="background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);padding:.85rem 1.1rem;box-shadow:var(--shadow-sm);margin-top:.75rem">';
+      h += '<div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-faint);margin-bottom:.65rem">Risk indicators</div>';
+      _indicators.forEach(function(ind) {
+        var pct = Math.round(ind.val / _maxInd * 100);
+        h += '<div style="display:flex;align-items:center;gap:.65rem;margin-bottom:.45rem">' +
+             '<span style="width:130px;font-size:.74rem;color:var(--ink-soft);flex-shrink:0">' + esc(ind.label) + '</span>' +
+             '<span class="pbar" style="flex:1;height:5px"><span class="pbar-fill ' + ind.color + '" style="width:' + pct + '%"></span></span>' +
+             '<span style="width:28px;text-align:right;font-size:.72rem;font-variant-numeric:tabular-nums;color:var(--ink-faint)">' + esc(ind.val) + '</span>' +
+             '</div>';
+      });
+      h += '</div>';
+    }
 
     // ── Investigator note ─────────────────────────────────────────────────
     if (p.investigator_note) {
@@ -300,7 +325,11 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (p) { render(p); setMsg("Screened " + new Date().toLocaleTimeString(), "ok"); })
+      .then(function (p) {
+        render(p);
+        if (window.RC) { window.RC.animateGauges($("out")); }
+        setMsg("Screened " + new Date().toLocaleTimeString(), "ok");
+      })
       .catch(function (e) { setMsg(e.message, "err"); })
       .finally(function () { $("go").disabled = false; });
   }

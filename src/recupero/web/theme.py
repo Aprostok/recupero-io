@@ -271,6 +271,13 @@ td.age   { white-space: nowrap; font-size: .76rem; }
 .pbar-fill.warn { background: var(--warn); }
 .pbar-fill.crit { background: var(--crit); }
 
+/* ── Spark cell (table cell holding a buildSparkline SVG) ── */
+.spark-cell {
+  width: 72px; min-width: 64px; max-width: 88px; padding: .38rem .55rem !important;
+  vertical-align: middle; white-space: nowrap;
+}
+.spark-cell svg { display: block; overflow: visible; }
+
 /* ── .mono copy affordance ── */
 td.mono, div.mono { cursor: copy; }
 td.mono:hover, div.mono:hover { opacity: .82; }

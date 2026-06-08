@@ -1,259 +1,528 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
+
 <html lang="en">
+
 <head>
+
 <meta charset="utf-8">
+
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Graph Analysis</title>
+
+<title>Recupero &#8211; Graph Analysis</title>
+
 <link rel="stylesheet" href="/v1/console/app.css">
+
 <style>
+
   /* page-specific: graph analysis */
+
   .card.alert .v { color: var(--crit); } .card.ok .v { color: var(--ok); }
+
   /* cycle path chips */
+
   .cycle-path { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem .18rem; }
+
   .cycle-arrow { color: var(--ink-faint); font-size: .72rem; line-height: 1; flex-shrink: 0; }
+
   .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink); border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
+
   .empty { color: #888; font-size: .8rem; }
+
   /* cycle SVG cards */
+
   .cycle-svg-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:.75rem; margin-bottom:1.1rem; }
+
   .cycle-svg-card { background:var(--surface); border:1px solid var(--hair); border-radius:var(--r); box-shadow:var(--shadow-sm); padding:.6rem .7rem; overflow:hidden; }
+
   .cycle-svg-head { display:flex; align-items:center; gap:.4rem; margin-bottom:.35rem; font-size:.8rem; }
+
 </style>
+
 </head>
+
 <body>
-  <h1>ðŸ•¸ï¸ Graph Analysis</h1>
+
+  <h1>&#128376;&#65039; Graph Analysis</h1>
+
   <div class="sub">Structural fund-flow graph analysis for a single case. Paste your operator key and a case id
+
     to load; data is fetched directly from the admin-gated API (the key stays in a request header, never the URL).</div>
+
+
 
   <div class="explain">Consolidation hubs = where split funds re-merge (the actor's hub); value cycles = wash/loop obfuscation.</div>
 
+
+
   <div class="bar">
+
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+
     <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
+
     <button id="load">Load</button>
+
     <span id="msg"></span>
+
   </div>
+
+
 
   <div class="cards" id="cards"></div>
 
+
+
   <div id="graphcanvas" class="flow-graph-wrap" style="display:none"></div>
 
+
+
   <div id="hubswrap"></div>
+
   <div id="cycleswrap"></div>
 
+
+
 <script>
+
 (function () {
+
   "use strict";
+
   var $ = function (id) { return document.getElementById(id); };
+
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+
+  // Persist the key for the session only (not localStorage) &#8212; clears on tab close.
+
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+
+
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
 
+
+
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
+
+
   // ── SVG node-arc diagram for a single cycle ──────────────────────────────
+
   function renderCycleSvg(members, riskLabel) {
+
     var n = members.length;
+
     if (n < 2) return '';
+
     var W = 420, H = 230, R = Math.min(W * 0.37, H * 0.37);
+
     var cx = W / 2, cy = H / 2 + 6;
+
     var colorMap = { "High": "#ef4444", "Medium": "#f59e0b", "Low": "#6b7280" };
+
     var nc = colorMap[riskLabel] || colorMap["Low"];
+
     var NR = 17;
+
     var nodes = members.map(function (addr, i) {
+
       var angle = (2 * Math.PI * i / n) - Math.PI / 2;
+
       return { x: cx + R * Math.cos(angle), y: cy + R * Math.sin(angle), addr: String(addr) };
+
     });
+
     var uid = 'arr' + n + '_' + Math.floor(Math.random() * 9999);
+
     var p = ['<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:' + W + 'px;height:auto;display:block">'];
+
     p.push('<defs><marker id="' + uid + '" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto"><polygon points="0 0 7 2.5 0 5" fill="' + nc + '" opacity=".7"/></marker></defs>');
+
     p.push('<circle cx="' + cx + '" cy="' + cy + '" r="' + R + '" fill="none" stroke-width="1" stroke-dasharray="4 4" stroke="rgba(128,128,128,.2)"/>');
+
     nodes.forEach(function (nd, i) {
+
       var nx = nodes[(i + 1) % n];
+
       var dx = nx.x - nd.x, dy = nx.y - nd.y, dist = Math.sqrt(dx*dx + dy*dy);
+
       var ux = dx/dist, uy = dy/dist;
+
       var x1 = (nd.x + ux*(NR+2)).toFixed(1), y1 = (nd.y + uy*(NR+2)).toFixed(1);
+
       var x2 = (nx.x - ux*(NR+9)).toFixed(1), y2 = (nx.y - uy*(NR+9)).toFixed(1);
+
       p.push('<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="' + nc + '" stroke-width="1.5" stroke-opacity=".5" marker-end="url(#' + uid + ')"/>');
+
     });
+
     nodes.forEach(function (nd, i) {
+
       var addr = nd.addr, lbl = addr.length > 14 ? addr.slice(0,6) + '…' + addr.slice(-4) : addr;
+
       var fill = i === 0 ? nc : nc + '28', stroke = nc;
+
       p.push('<circle cx="' + nd.x.toFixed(1) + '" cy="' + nd.y.toFixed(1) + '" r="' + NR + '" fill="' + fill + '" stroke="' + stroke + '" stroke-width="1.5"/>');
+
       p.push('<text x="' + nd.x.toFixed(1) + '" y="' + (nd.y+4).toFixed(1) + '" text-anchor="middle" font-size="9" font-weight="800" fill="' + (i===0?'#fff':nc) + '">' + esc(String(i+1)) + '</text>');
+
       var ly = (nd.y + NR + 12).toFixed(1);
+
       p.push('<text x="' + nd.x.toFixed(1) + '" y="' + ly + '" text-anchor="middle" font-size="8" font-family="monospace" fill="rgba(128,128,128,.75)">' + esc(lbl) + '</text>');
+
     });
+
     p.push('</svg>');
+
     return p.join('');
+
   }
+
+
 
   function clear() {
+
     $("cards").innerHTML = ""; $("hubswrap").innerHTML = ""; $("cycleswrap").innerHTML = "";
+
     var gc = $("graphcanvas");
+
     if (gc) { gc.innerHTML = ""; gc.style.display = "none"; }
+
   }
+
+
 
   // ── Force-directed graph from hubs + cycles data ─────────────────────
+
   var _CYCLE_COLS = ['#8b5cf6', '#22d3ee', '#f59e0b', '#10b981', '#ef4444'];
+
   function renderGraph(rep) {
+
     var gEl = $("graphcanvas");
+
     if (!gEl || !window.RC || !window.RC.buildFlowGraph) return;
+
     gEl.style.display = "none"; gEl.innerHTML = "";
+
     var nodes = [], edges = [], seen = {};
+
     (rep.consolidation_hubs || []).forEach(function (h) {
+
       if (!seen[h.address]) {
+
         nodes.push({ id: h.address, label: h.address, color: '#f97316', radius: 15 });
+
         seen[h.address] = true;
+
       }
+
     });
+
     (rep.value_cycles || []).forEach(function (c, ci) {
+
       var col = _CYCLE_COLS[ci % _CYCLE_COLS.length];
+
       var mems = c.members || [];
+
       mems.forEach(function (addr) {
+
         if (!seen[addr]) {
+
           nodes.push({ id: addr, label: addr, color: col, radius: 12 });
+
           seen[addr] = true;
+
         }
+
       });
+
       for (var i = 0; i < mems.length; i++) {
+
         edges.push({ source: mems[i], target: mems[(i + 1) % mems.length], color: col + 'a0', width: 2 });
+
       }
+
       if (rep.consolidation_hubs && rep.consolidation_hubs.length && mems.length) {
+
         edges.push({ source: rep.consolidation_hubs[0].address, target: mems[0], color: '#f9731666', width: 1.5 });
+
       }
+
     });
+
     if (nodes.length < 2) return;
+
     gEl.style.display = "block";
+
     window.RC.buildFlowGraph(gEl, nodes, edges, { width: gEl.clientWidth || 580, height: 300 });
+
     var lgd = '<div class="flow-graph-legend">';
+
     if (rep.consolidation_hubs && rep.consolidation_hubs.length) {
+
       lgd += '<div class="flow-graph-legend-item"><span class="flow-graph-legend-dot" style="background:#f97316"></span>Consolidation hub</div>';
+
     }
+
     (rep.value_cycles || []).forEach(function (c, ci) {
+
       lgd += '<div class="flow-graph-legend-item"><span class="flow-graph-legend-dot" style="background:' +
+
              _CYCLE_COLS[ci % _CYCLE_COLS.length] + '"></span>Cycle ' + (ci + 1) + ' &middot; ' +
+
              ((c.members || []).length) + ' nodes</div>';
+
     });
+
     lgd += '<span class="flow-graph-hint">Hover to inspect &middot; click node to copy address</span>';
+
     lgd += '</div>';
+
     gEl.insertAdjacentHTML('beforeend', lgd);
+
   }
+
+
 
   function render(rep) {
+
     var sum = rep.summary || {};
+
     $("cards").innerHTML =
+
       card(rep.node_count, "Nodes") +
+
       card(rep.edge_count, "Edges") +
-      card(rep.max_depth_from_seed == null ? "â€”" : rep.max_depth_from_seed, "Max Depth") +
+
+      card(rep.max_depth_from_seed == null ? "&#8212;" : rep.max_depth_from_seed, "Max Depth") +
+
       card(sum.n_consolidation_hubs, "Consolidation Hubs", sum.n_consolidation_hubs ? "alert" : "") +
+
       card(sum.n_value_cycles, "Value Cycles", sum.n_value_cycles ? "alert" : "");
+    if (window.RC) { $("cards").querySelectorAll(".v").forEach(window.RC.countUp); }
 
-    // Consolidation hubs â€” where split funds re-merge (the actor's hub).
+
+
+    // Consolidation hubs &#8212; where split funds re-merge (the actor's hub).
+
     var hubs = rep.consolidation_hubs || [];
-    var hh = '<h2>Consolidation hubs</h2>';
-    if (!hubs.length) {
-      hh += '<p class="empty">No consolidation hubs detected.</p>';
-    } else {
-      hh += '<table><thead><tr><th>Address</th><th class="right">Distinct sources</th><th class="right">Inbound USD</th></tr></thead><tbody>';
-      hubs.forEach(function (h) {
-        hh += '<tr>' +
-          '<td class="mono">' + esc(h.address) + '</td>' +
-          '<td class="right">' + esc(h.distinct_sources) + '</td>' +
-          '<td class="right">' + esc(h.inbound_usd) + '</td>' +
-          '</tr>';
-      });
-      hh += '</tbody></table>';
-    }
-    $("hubswrap").innerHTML = hh;
 
-    // Value cycles â€” wash / loop obfuscation.
-    var cycles = rep.value_cycles || [];
-    var ch = '<h2>Value cycles</h2>';
-    if (!cycles.length) {
-      ch += '<p class="empty">No value cycles detected.</p>';
+    var hh = '<h2>Consolidation hubs</h2>';
+
+    if (!hubs.length) {
+
+      hh += '<p class="empty">No consolidation hubs detected.</p>';
+
     } else {
-      // SVG node-arc previews for the top 3 cycles
-      ch += ‘<div class="cycle-svg-grid">’;
-      for (var _pi = 0; _pi < Math.min(cycles.length, 3); _pi++) {
-        var _pc = cycles[_pi], _psz = _pc.size || (_pc.members || []).length;
-        var _prl = _psz >= 6 ? "High" : _psz >= 3 ? "Medium" : "Low";
-        var _prc = _psz >= 6 ? "critical" : _psz >= 3 ? "high" : "";
-        ch += ‘<div class="cycle-svg-card">’ +
-          ‘<div class="cycle-svg-head">’ +
-            ‘<span class="badge ‘ + _prc + ‘">’ + _prl + ‘</span>’ +
-            ‘<span style="font-size:.72rem;color:var(--ink-faint)">’ + esc(_psz) + ‘-node cycle</span>’ +
-          ‘</div>’ +
-          renderCycleSvg(_pc.members || [], _prl) +
-          ‘</div>’;
-      }
-      ch += ‘</div>’;
-      ch += ‘<table><thead><tr><th class="right" style="width:48px">Size</th><th style="width:72px">Risk</th><th>Cycle path</th></tr></thead><tbody>’;
-      cycles.forEach(function (c) {
-        var sz = c.size || (c.members || []).length;
-        var riskCls = sz >= 6 ? "critical" : sz >= 3 ? "high" : "";
-        var riskLabel = sz >= 6 ? "High" : sz >= 3 ? "Medium" : "Low";
-        var mems = (c.members || []).map(function (m) {
-          var ms = String(m);
-          var disp = ms.length > 16 ? ms.slice(0, 8) + "…" + ms.slice(-4) : ms;
-          return ‘<span class="chip" style="font-family:var(--mono);font-size:.65rem;padding:.1rem .38rem" title="’ + esc(ms) + ‘">’ + esc(disp) + ‘</span>’;
-        });
-        var path = ‘<span class="cycle-path">’ + mems.join(‘<span class="cycle-arrow">&rarr;</span>’) + ‘</span>’;
-        ch += ‘<tr>’ +
-          ‘<td class="right" style="font-weight:700">’ + esc(sz) + ‘</td>’ +
-          ‘<td><span class="badge ‘ + esc(riskCls) + ‘">’ + esc(riskLabel) + ‘</span></td>’ +
-          ‘<td style="white-space:normal">’ + path + ‘</td>’ +
-          ‘</tr>’;
+
+      hh += '<table><thead><tr><th>Address</th><th class="right">Distinct sources</th><th class="right">Inbound USD</th></tr></thead><tbody>';
+
+      hubs.forEach(function (h) {
+
+        hh += '<tr>' +
+
+          '<td class="mono">' + esc(h.address) + '</td>' +
+
+          '<td class="right">' + esc(h.distinct_sources) + '</td>' +
+
+          '<td class="right">' + esc(h.inbound_usd) + '</td>' +
+
+          '</tr>';
+
       });
-      ch += ‘</tbody></table>’;
+
+      hh += '</tbody></table>';
+
     }
+
+    $("hubswrap").innerHTML = hh;
+    if (window.RC) { window.RC.staggerRows($("hubswrap")); window.RC.attachSort($("hubswrap")); }
+
+
+
+    // Value cycles &#8212; wash / loop obfuscation.
+
+    var cycles = rep.value_cycles || [];
+
+    var ch = '<h2>Value cycles</h2>';
+
+    if (!cycles.length) {
+
+      ch += '<p class="empty">No value cycles detected.</p>';
+
+    } else {
+
+      // SVG node-arc previews for the top 3 cycles
+
+      ch += '<div class="cycle-svg-grid">';
+
+      for (var _pi = 0; _pi < Math.min(cycles.length, 3); _pi++) {
+
+        var _pc = cycles[_pi], _psz = _pc.size || (_pc.members || []).length;
+
+        var _prl = _psz >= 6 ? "High" : _psz >= 3 ? "Medium" : "Low";
+
+        var _prc = _psz >= 6 ? "critical" : _psz >= 3 ? "high" : "";
+
+        ch += '<div class="cycle-svg-card">' +
+
+          '<div class="cycle-svg-head">' +
+
+            '<span class="badge ' + _prc + '">' + _prl + '</span>' +
+
+            '<span style="font-size:.72rem;color:var(--ink-faint)">' + esc(_psz) + '-node cycle</span>' +
+
+          '</div>' +
+
+          renderCycleSvg(_pc.members || [], _prl) +
+
+          '</div>';
+
+      }
+
+      ch += '</div>';
+
+      ch += '<table><thead><tr><th class="right" style="width:48px">Size</th><th style="width:72px">Risk</th><th>Cycle path</th></tr></thead><tbody>';
+
+      cycles.forEach(function (c) {
+
+        var sz = c.size || (c.members || []).length;
+
+        var riskCls = sz >= 6 ? "critical" : sz >= 3 ? "high" : "";
+
+        var riskLabel = sz >= 6 ? "High" : sz >= 3 ? "Medium" : "Low";
+
+        var mems = (c.members || []).map(function (m) {
+
+          var ms = String(m);
+
+          var disp = ms.length > 16 ? ms.slice(0, 8) + "…" + ms.slice(-4) : ms;
+
+          return '<span class="chip" style="font-family:var(--mono);font-size:.65rem;padding:.1rem .38rem" title="' + esc(ms) + '">' + esc(disp) + '</span>';
+
+        });
+
+        var path = '<span class="cycle-path">' + mems.join('<span class="cycle-arrow">&rarr;</span>') + '</span>';
+
+        ch += '<tr>' +
+
+          '<td class="right" style="font-weight:700">' + esc(sz) + '</td>' +
+
+          '<td><span class="badge ' + esc(riskCls) + '">' + esc(riskLabel) + '</span></td>' +
+
+          '<td style="white-space:normal">' + path + '</td>' +
+
+          '</tr>';
+
+      });
+
+      ch += '</tbody></table>';
+
+    }
+
     $("cycleswrap").innerHTML = ch;
+    if (window.RC) { window.RC.staggerRows($("cycleswrap")); window.RC.attachSort($("cycleswrap")); }
+
     renderGraph(rep);
+
   }
+
+
 
   function key() { return ($("key").value || "").trim(); }
+
   function caseId() { return ($("case").value || "").trim(); }
 
+
+
   function load() {
+
     var k = key();
+
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
+
     var cid = caseId();
+
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
+
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loadingâ€¦");
+
+    setMsg("Loading&#8230;");
+
     clear();
+    if (window.RC) { $("cards").innerHTML = window.RC.skeletonCards(5); }
+
     fetch("/v1/graph-analysis?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
+
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad case id â€” must be 1..128 non-blank characters.");
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
+
+        if (res.status === 400) throw new Error("Bad case id &#8212; must be 1..128 non-blank characters.");
+
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
+
         if (res.status === 404) throw new Error("Case not found.");
+
         if (res.status === 503) throw new Error("API not configured, or analysis unavailable.");
+
         if (!res.ok) throw new Error("HTTP " + res.status);
+
         return res.json();
+
       })
-      .then(function (rep) { render(rep); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+
+      .then(function (rep) {
+        render(rep);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Graph analysis loaded ✓", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
+
   }
 
+
+
   $("load").addEventListener("click", load);
+
   $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
 
+
+
   // Deep-link support: prefill + auto-load from ?case_id= (e.g. from Case Overview).
+
   (function () {
+
     try {
+
       var _qs = new URLSearchParams(window.location.search);
+
       var _cid = _qs.get("case_id");
+
       if (_cid) { $("case").value = _cid; }
+
       var _jur = _qs.get("jurisdiction");
+
       if (_jur && $("jur")) { $("jur").value = _jur; }   // sar_filing only; no-op elsewhere
+
       // Auto-trigger only when we have both a case_id AND a key already present
-      // (single sign-in via sessionStorage) â€” otherwise just prefill and wait.
+
+      // (single sign-in via sessionStorage) &#8212; otherwise just prefill and wait.
+
       if (_cid && $("key") && $("key").value) { load(); }
+
     } catch (e) {}
+
   })();
+
 })();
+
 </script>
+
 <script src="/v1/console/app.js" defer></script>
+
 </body>
+
 </html>
+

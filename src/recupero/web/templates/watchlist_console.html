@@ -75,6 +75,9 @@
       card(ov.total_still_present_usd_human, "Still present", "ok") +
       card(ov.n_stale,                   "Due for re-check",  ov.n_stale ? "alert" : "") +
       card(ov.n_never_checked,           "Never checked",      "");
+    if (window.RC && window.RC.countUp) {
+      $("cards").querySelectorAll(".v").forEach(window.RC.countUp);
+    }
 
     // ── Monitor status distribution bar ────────────────────────────────
     var total = ov.n_items || 0;
@@ -171,6 +174,8 @@
     if (window.RC) {
       window.RC.staggerRows($("tablewrap"));
       window.RC.attachSort($("tablewrap"));
+      window.RC.attachFilter($("tablewrap"));
+      window.RC.animateGauges($("tablewrap"));
     }
   }
 
@@ -194,8 +199,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (ov) { render(ov); setMsg("Updated " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); });
+      .then(function (ov) {
+        render(ov);
+        setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Watchlist loaded ✓", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      });
   }
 
   function runCheck() {

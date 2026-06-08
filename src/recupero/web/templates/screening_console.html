@@ -222,6 +222,13 @@
     });
     h += '</tbody></table>';
     $("out").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("out"));
+      window.RC.attachSort($("out"));
+      window.RC.attachFilter($("out"));
+      window.RC.animateRings($("out"));
+      $("cards").querySelectorAll(".v").forEach(window.RC.countUp);
+    }
   }
 
   function go() {
@@ -241,8 +248,15 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
       })
-      .then(function (rep) { render(rep); setMsg("Screened " + new Date().toLocaleTimeString(), "ok"); })
-      .catch(function (e) { setMsg(e.message, "err"); })
+      .then(function (rep) {
+        render(rep);
+        setMsg("Screened " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Batch screen complete ✓", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      })
       .finally(function () { $("go").disabled = false; });
   }
 

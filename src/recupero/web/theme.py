@@ -407,6 +407,14 @@ thead th[data-rc-desc] .rc-sa::after { content: "\25BC"; }
   transition: background .15s var(--ease), color .15s var(--ease), border-color .15s var(--ease);
 }
 .rc-export-btn:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); box-shadow: none; transform: none; }
+.rc-filter-clear {
+  flex-shrink: 0; width: 18px; height: 18px; display: none;
+  align-items: center; justify-content: center; border: 0;
+  background: transparent; cursor: pointer; color: var(--ink-faint);
+  border-radius: 50%; padding: 0; font-size: .72rem; line-height: 1;
+  transition: color .12s var(--ease), background .12s var(--ease);
+}
+.rc-filter-clear:hover { color: var(--ink); background: var(--hair-strong); }
 
 /* ── Score ring (conic-gradient gauge) ── */
 .score-ring {
@@ -534,25 +542,28 @@ CONSOLE_JS = r"""
       var bar = document.createElement("div");
       bar.className = "rc-filter-bar";
       bar.innerHTML =
-        '<span class="rc-filter-icon">&#9906;</span>' +
-        '<input class="rc-filter-input" type="text" placeholder="Filter rows…" autocomplete="off" spellcheck="false">' +
+        '<span class="rc-filter-icon">&#128270;</span>' +
+        '<input class="rc-filter-input" type="text" placeholder="Filter rows… (press /)" autocomplete="off" spellcheck="false">' +
+        '<button class="rc-filter-clear" title="Clear filter" aria-label="Clear filter">&#10005;</button>' +
         '<span class="rc-filter-count"></span>';
       if (table.parentNode) { table.parentNode.insertBefore(bar, table); }
 
       var inp = bar.querySelector(".rc-filter-input");
       var cnt = bar.querySelector(".rc-filter-count");
+      var clrBtn = bar.querySelector(".rc-filter-clear");
       cnt.textContent = allRows.length + " rows";
 
       // CSV export button (appended to the filter bar)
       var expBtn = document.createElement("button");
       expBtn.className = "rc-export-btn";
-      expBtn.title = "Export visible rows as CSV";
+      expBtn.title = "Export visible rows as CSV  (press E)";
       expBtn.textContent = "↓ CSV";
       expBtn.addEventListener("click", function () { exportTable(table); });
       bar.appendChild(expBtn);
 
       inp.addEventListener("input", function () {
         var q = inp.value.trim().toLowerCase();
+        clrBtn.style.display = q ? "inline-flex" : "none";
         var vis = 0;
         allRows.forEach(function (row) {
           var match = !q || (row.textContent || "").toLowerCase().indexOf(q) >= 0;
@@ -560,6 +571,11 @@ CONSOLE_JS = r"""
           if (match) { vis++; }
         });
         cnt.textContent = q ? (vis + " / " + allRows.length) : (allRows.length + " rows");
+      });
+      clrBtn.addEventListener("click", function () {
+        inp.value = "";
+        inp.dispatchEvent(new Event("input"));
+        inp.focus();
       });
     });
   }
@@ -644,14 +660,22 @@ CONSOLE_JS = r"""
   watch("hubswrap",   _tableContainerFn);
   watch("cycleswrap", _tableContainerFn);
 
-  // ── "/" key: focus first visible filter bar ───────────────────────────────
+  // ── Keyboard shortcuts (not when focused in an input) ────────────────────
   document.addEventListener("keydown", function (ev) {
-    if (ev.key !== "/" || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+    if (ev.metaKey || ev.ctrlKey || ev.altKey) return;
     var t = ev.target;
-    if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" ||
-        t.isContentEditable) return;
-    var inp = document.querySelector(".rc-filter-input");
-    if (inp) { ev.preventDefault(); inp.focus(); inp.select(); }
+    var inInput = t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+                  t.tagName === "SELECT" || t.isContentEditable;
+    // "/" → focus first filter bar
+    if (ev.key === "/" && !inInput) {
+      var inp = document.querySelector(".rc-filter-input");
+      if (inp) { ev.preventDefault(); inp.focus(); inp.select(); }
+    }
+    // "e" / "E" → click first CSV export button
+    if ((ev.key === "e" || ev.key === "E") && !inInput) {
+      var btn = document.querySelector(".rc-export-btn");
+      if (btn) { ev.preventDefault(); btn.click(); }
+    }
   });
 
   // ── Clipboard copy: click any .mono to copy its text ─────────────────────
@@ -672,6 +696,34 @@ CONSOLE_JS = r"""
     });
   })();
 
+  // ── Chain brand-coloured chips ───────────────────────────────────────────
+  function _esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML; }
+  var _CHAIN_META = {
+    "ethereum":  { fg: "#627eea", symbol: "&#206;" },       // Ξ
+    "arbitrum":  { fg: "#2d6ae0", symbol: "A" },
+    "base":      { fg: "#0052ff", symbol: "B" },
+    "optimism":  { fg: "#ff0420", symbol: "O" },
+    "bsc":       { fg: "#c99407", symbol: "B" },
+    "polygon":   { fg: "#8247e5", symbol: "&#11043;" },     // ⬡
+    "avalanche": { fg: "#e84142", symbol: "A" },
+    "bitcoin":   { fg: "#f7931a", symbol: "&#8383;" },      // ₿
+    "solana":    { fg: "#9945ff", symbol: "&#9676;" },      // ◎
+    "tron":      { fg: "#eb0029", symbol: "T" }
+  };
+  function chainChip(chain) {
+    var lc = (chain || "").toLowerCase().replace(/[\s-]+/g, "");
+    var meta = _CHAIN_META[lc] || null;
+    if (!meta) {
+      return '<span class="chip">' + _esc(chain) + '</span>';
+    }
+    var fg = meta.fg;
+    // 18% opacity background derived from the brand color inline
+    var style = 'style="background:' + fg + '18;color:' + fg + ';border-color:' + fg + '40"';
+    return '<span class="chip" ' + style + '>' +
+           '<span style="font-weight:900;margin-right:.18rem;font-size:.75em">' + meta.symbol + '</span>' +
+           _esc(chain) + '</span>';
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -680,7 +732,8 @@ CONSOLE_JS = r"""
     attachFilter: attachFilter,
     exportTable: exportTable,
     skeletonCards: skeletonCards,
-    skeletonTable: skeletonTable
+    skeletonTable: skeletonTable,
+    chainChip: chainChip
   };
 })();
 """

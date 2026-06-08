@@ -120,7 +120,7 @@
         : esc(r.source);
       h += '<tr>' +
         '<td class="mono">' + esc(r.address) + '</td>' +
-        '<td><span class="chip">' + esc(r.chain) + '</span></td>' +
+        '<td>' + (window.RC && window.RC.chainChip ? window.RC.chainChip(r.chain) : '<span class="chip">' + esc(r.chain) + '</span>') + '</td>' +
         '<td>' + esc(r.proposed_category) + '</td>' +
         '<td>' + esc(r.proposed_name) + '</td>' +
         confCell(r.proposed_confidence) +

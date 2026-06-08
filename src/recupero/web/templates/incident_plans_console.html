@@ -129,7 +129,7 @@
         '<div class="card-head">' +
           '<span class="badge ' + esc(sevCls) + '">' + esc(sev) + '</span>' +
           '<span class="mono">' + esc(p.address) + '</span>' +
-          '<span class="chip">' + esc(p.chain) + '</span>' +
+          (window.RC && window.RC.chainChip ? window.RC.chainChip(p.chain) : '<span class="chip">' + esc(p.chain) + '</span>') +
           '<span class="chip">' + esc(p.alert_kind) + '</span>' +
           '<span class="count">' + esc(p.step_count == null ? steps.length : p.step_count) + ' step(s)</span>' +
         '</div>' +

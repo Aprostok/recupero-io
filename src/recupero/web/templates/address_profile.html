@@ -94,7 +94,7 @@
     // ── Address + tags ────────────────────────────────────────────────────
     h += '<div class="addr-panel">';
     h += '<div class="addr-row">';
-    h += '<span class="chain-chip">' + esc(p.chain) + '</span>';
+    h += (window.RC && window.RC.chainChip ? window.RC.chainChip(p.chain) : '<span class="chain-chip">' + esc(p.chain) + '</span>');
     h += '<div class="mono" style="flex:1;font-size:.85rem">' + esc(p.address) + '</div>';
     h += '</div>';
     if ((p.exposure_tags || []).length) {

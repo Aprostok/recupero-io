@@ -109,7 +109,7 @@
                     : (s.role || "").toLowerCase().includes("mule") ? "warn" : "";
         html += '<tr>' +
           '<td class="mono">' + esc(s.address) + '</td>' +
-          '<td><span class="chip">' + esc(s.chain) + '</span></td>' +
+          '<td>' + (window.RC && window.RC.chainChip ? window.RC.chainChip(s.chain) : '<span class="chip">' + esc(s.chain) + '</span>') + '</td>' +
           '<td><span class="chip ' + roleCls + '">' + esc(s.role) + '</span></td>' +
           '<td>' + esc(s.venue) + '</td>' +
           '<td class="right">' + esc(s.amount_usd) + '</td>' +

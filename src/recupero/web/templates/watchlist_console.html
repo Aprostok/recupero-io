@@ -117,7 +117,7 @@
       h += '<tr class="' + (r.movement === "moved" ? "moved" : "") + '">' +
         '<td>' + statusHtml + '</td>' +
         '<td>' + addr + '</td>' +
-        '<td>' + esc(r.chain) + '</td>' +
+        '<td>' + (window.RC ? window.RC.chainChip(r.chain) : '<span class="chip">' + esc(r.chain) + '</span>') + '</td>' +
         '<td><span class="chip">' + esc(r.asset_symbol) + '</span></td>' +
         '<td class="right mono">' + esc(r.balance_usd_human) + '</td>' +
         '<td><span class="badge ' + esc(r.movement_class) + '">' + esc(r.movement_badge) + '</span></td>' +

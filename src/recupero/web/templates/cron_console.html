@@ -18,6 +18,18 @@
   td.hrs-crit { color: var(--crit); font-weight: 700; }
   td.hrs-warn { color: var(--warn); font-weight: 600; }
   td.hrs-ok   { color: var(--ok); }
+  /* freshness cell */
+  .fresh-wrap { display: flex; align-items: center; gap: .45rem; justify-content: flex-end; }
+  .fresh-val  { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  /* health overview strip */
+  .health-strip {
+    display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+    padding: .55rem .9rem; background: var(--surface); border: 1px solid var(--hair);
+    border-radius: var(--r); box-shadow: var(--shadow-sm); margin-bottom: .9rem;
+    animation: rc-rise .4s cubic-bezier(.32,.72,0,1) both; display: none;
+  }
+  .health-strip-item { display: flex; align-items: center; gap: .38rem; font-size: .78rem; }
+  .health-strip-dot  { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -35,6 +47,7 @@
   </div>
 
   <div class="cards" id="cards"></div>
+  <div id="health-strip" class="health-strip"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -55,10 +68,16 @@
   }
 
   function hrsCell(h) {
-    if (h == null) return '<td class="right">&#8212;</td>';
+    if (h == null) return '<td class="right"><span style="color:var(--ink-faint)">&#8212;</span></td>';
     var n = Number(h);
-    var cls = n > 48 ? "hrs-crit" : n > 24 ? "hrs-warn" : n > 12 ? "hrs-warn" : "hrs-ok";
-    return '<td class="right ' + cls + '">' + esc(h) + '</td>';
+    var textCls  = n > 48 ? "hrs-crit" : n > 24 ? "hrs-warn" : "hrs-ok";
+    var barCls   = n > 48 ? "crit"     : n > 24 ? "warn"     : "ok";
+    var barPct   = Math.min(100, Math.round(n / 72 * 100)); // 72h = full red
+    return '<td class="right ' + textCls + '">' +
+           '<div class="fresh-wrap">' +
+           '<span class="pbar" style="width:40px"><span class="pbar-fill ' + barCls + '" style="width:' + barPct + '%"></span></span>' +
+           '<span class="fresh-val">' + esc(n.toFixed(1)) + 'h</span>' +
+           '</div></td>';
   }
 
   function render(payload) {
@@ -69,13 +88,39 @@
       var st = jobs[n] && jobs[n].status;
       if (st === "down") { nDown++; } else if (st === "stale") { nStale++; } else { nOk++; }
     });
+    var healthPct = names.length ? Math.round(nOk / names.length * 100) : 100;
+    var healthCls = healthPct < 60 ? "alert" : healthPct < 90 ? "" : "ok";
 
     $("cards").innerHTML =
-      card(payload && payload.status, "Overall", (payload && payload.status === "ok") ? "ok" : "alert") +
-      card(names.length, "Jobs") +
-      card(nOk, "Healthy", nOk ? "ok" : "") +
+      card(healthPct + "%", "Health", healthCls) +
+      card(names.length, "Jobs", "") +
+      card(nOk, "Healthy", nOk && !nDown ? "ok" : "") +
       card(nStale, "Stale", nStale ? "alert" : "") +
       card(nDown, "Down", nDown ? "alert" : "");
+
+    // Health overview strip
+    var hs = $("health-strip");
+    if (hs && names.length > 0) {
+      var ringCls = nDown ? "r-crit" : nStale ? "r-high" : "r-ok";
+      var ringScore = (healthPct / 10).toFixed(1);
+      var strip = '<span class="score-ring sm ' + ringCls + '" style="--score:' + ringScore + '">' +
+                  '<span class="ring-inner">' + healthPct + '</span></span>';
+      var segs = [
+        { n: nOk,    color: "var(--ok)",   label: "Healthy" },
+        { n: nStale, color: "var(--warn)",  label: "Stale" },
+        { n: nDown,  color: "var(--crit)", label: "Down" }
+      ];
+      segs.forEach(function(s) {
+        if (!s.n) return;
+        strip += '<div class="health-strip-item">' +
+                 '<span class="health-strip-dot" style="background:' + s.color + '"></span>' +
+                 '<span>' + esc(s.n) + ' ' + s.label + '</span>' +
+                 '</div>';
+      });
+      hs.innerHTML = strip;
+      hs.style.display = "flex";
+      if (window.RC && window.RC.animateRings) { window.RC.animateRings(hs); }
+    }
 
     if (!names.length) { $("tablewrap").innerHTML = '<p class="sub">No jobs reported.</p>'; return; }
     var h = '<table><thead><tr>' +
@@ -96,6 +141,11 @@
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+      window.RC.attachSort($("tablewrap"));
+      window.RC.animateGauges($("tablewrap"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }

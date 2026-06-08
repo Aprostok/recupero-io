@@ -13,6 +13,15 @@
   .badge.moved   { background: var(--crit-soft); color: var(--crit); }
   .badge.ok      { background: rgba(29,138,78,.12); color: var(--ok); }
   .badge.new     { background: var(--surface-2); color: var(--ink-soft); }
+  /* monitor status distribution bar */
+  .mon-dist-wrap { margin: .6rem 0 .85rem; }
+  .mon-dist-bar  { display: flex; height: 7px; border-radius: 99px; overflow: hidden; background: var(--hair-strong); }
+  .mon-dist-seg  { height: 100%; transition: width .75s cubic-bezier(.32,.72,0,1); }
+  .mon-dist-legend { display: flex; flex-wrap: wrap; gap: .3rem .8rem; margin-top: .38rem; }
+  .mon-dist-item { display: flex; align-items: center; gap: .3rem; font-size: .7rem; color: var(--ink-soft); }
+  .mon-dist-dot  { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  /* chain chip rows */
+  .chips-row .chain-amount { font-size: .67rem; color: var(--ink-faint); margin-left: .18rem; }
   /* auto-refresh label */
   label.autolabel { display: inline-flex; align-items: center; gap: .35rem; font-size: .8rem; color: var(--ink-soft); cursor: pointer; user-select: none; }
   label.autolabel input[type=checkbox] { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
@@ -67,8 +76,37 @@
       card(ov.n_stale,                   "Due for re-check",  ov.n_stale ? "alert" : "") +
       card(ov.n_never_checked,           "Never checked",      "");
 
+    // ── Monitor status distribution bar ────────────────────────────────
+    var total = ov.n_items || 0;
+    var distHtml = "";
+    if (total > 0) {
+      var nMoved  = ov.n_moved || 0;
+      var nStale  = ov.n_stale || 0;
+      var nNever  = ov.n_never_checked || 0;
+      var nPresent = Math.max(0, total - nMoved - nStale - nNever);
+      var segs = [
+        { n: nMoved,   color: "var(--crit)",         label: "Moved" },
+        { n: nStale,   color: "var(--warn)",         label: "Stale" },
+        { n: nPresent, color: "var(--ok)",           label: "Present" },
+        { n: nNever,   color: "var(--ink-faint)",    label: "Never checked" }
+      ];
+      var bar = '<div class="mon-dist-bar">';
+      segs.forEach(function(s) {
+        if (!s.n) return;
+        bar += '<div class="mon-dist-seg" style="width:' + Math.round(s.n / total * 100) + '%;background:' + s.color + '" title="' + s.label + ': ' + s.n + '"></div>';
+      });
+      bar += '</div>';
+      var lgd = '<div class="mon-dist-legend">';
+      segs.forEach(function(s) {
+        if (!s.n) return;
+        lgd += '<div class="mon-dist-item"><span class="mon-dist-dot" style="background:' + s.color + '"></span>' + esc(s.label) + ' &middot; ' + esc(s.n) + '</div>';
+      });
+      lgd += '</div>';
+      distHtml = '<div class="mon-dist-wrap">' + bar + lgd + '</div>';
+    }
+
     // Chip breakdowns — styled chip rows
-    var chipHtml = "";
+    var chipHtml = distHtml;
 
     var byStatus = ov.by_status || [];
     if (byStatus.length) {
@@ -84,7 +122,8 @@
     if (byChain.length) {
       chipHtml += '<div class="chips-row"><span class="chips-label">By chain</span>';
       byChain.forEach(function (c) {
-        chipHtml += '<span class="chip">' + esc(c.chain) + ' &middot; ' + esc(c.n) + ' &middot; ' + esc(c.usd_human) + '</span>';
+        var chp = (window.RC && window.RC.chainChip) ? window.RC.chainChip(c.chain) : '<span class="chip">' + esc(c.chain) + '</span>';
+        chipHtml += chp + '<span class="chain-amount">' + esc(c.n) + ' &middot; ' + esc(c.usd_human) + '</span>';
       });
       chipHtml += '</div>';
     }
@@ -129,6 +168,10 @@
     });
     h += '</tbody></table>';
     $("tablewrap").innerHTML = h;
+    if (window.RC) {
+      window.RC.staggerRows($("tablewrap"));
+      window.RC.attachSort($("tablewrap"));
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }

@@ -45,13 +45,44 @@ def test_unknown_exchange_resolves_to_none() -> None:
 
 def test_known_starter_exchange_is_unverified() -> None:
     """An exchange present only in the unverified starter dict resolves to an
-    UNVERIFIED contact (so the letter flags 'confirm before sending')."""
-    c = resolve_exchange_freeze_contact("Binance")
+    UNVERIFIED contact (so the letter flags 'confirm before sending').
+
+    Uses 'BTC Markets', which is intentionally NOT in the verified override
+    seed, so it exercises the starter-dict fallback path. (Binance et al. now
+    ship verified overrides — see test_seed_verified_entries_resolve.)"""
+    c = resolve_exchange_freeze_contact("BTC Markets")
     assert isinstance(c, ExchangeFreezeContact)
     assert c.verified is False
     assert c.freeze_capability == "unknown"
     # case/space-insensitive
-    assert resolve_exchange_freeze_contact("  bInAnCe ") is not None
+    assert resolve_exchange_freeze_contact("  bTc MaRkEtS ") is not None
+
+
+def test_seed_verified_entries_resolve() -> None:
+    """The shipped seed's high-confidence entries resolve as VERIFIED contacts
+    carrying a real channel + a source (so the freeze letter omits the
+    UNVERIFIED banner and cites the channel). Locks the v0.39 freeze-contact DB
+    — each entry was confirmed against the exchange's own published LE page."""
+    for name in ("Binance", "Coinbase", "Kraken", "OKX", "Crypto.com",
+                 "KuCoin", "Gate.io", "Bitget", "Bitfinex", "MEXC", "Robinhood"):
+        c = resolve_exchange_freeze_contact(name)
+        assert isinstance(c, ExchangeFreezeContact), name
+        assert c.verified is True, name
+        assert c.has_channel, name
+        assert c.source, name
+        assert c.freeze_capability in ("yes", "limited"), name
+
+
+def test_seed_medium_confidence_entries_unverified_but_populated() -> None:
+    """Gemini/Bitstamp/Bybit are populated from research but kept verified=False
+    (confirm-before-send): the letter still shows the UNVERIFIED banner. They
+    carry a source so they're a better starting point than the bare starter
+    pattern guess, without overclaiming a confirmed channel."""
+    for name in ("Gemini", "Bitstamp", "Bybit"):
+        c = resolve_exchange_freeze_contact(name)
+        assert isinstance(c, ExchangeFreezeContact), name
+        assert c.verified is False, name
+        assert c.source, name
 
 
 def test_verified_override_wins() -> None:

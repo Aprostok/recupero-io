@@ -1,15 +1,16 @@
 {
-  "_README": "User-maintained VERIFIED exchange FREEZE contacts. This file is the OVERRIDE layer: entries here win over the unverified pattern-style starter contacts in reports/legal_requests.py (_EXCHANGE_COMPLIANCE_CONTACTS). Add an entry once you have CONFIRMED the exchange's law-enforcement freeze channel, then set verified=true and record a source. NEVER set verified=true without a real channel (compliance_email or le_portal_url) AND a source — the loader will downgrade it to unverified and warn, and tests will fail on the committed file. Keys are exchange display names; matching is case- and space-insensitive against the names the tracer emits (e.g. \"Binance\", \"Crypto.com\", \"OKX\").",
+  "_README": "User-maintained VERIFIED exchange FREEZE contacts. This file is the OVERRIDE layer: entries here win over the unverified pattern-style starter contacts in reports/legal_requests.py (_EXCHANGE_COMPLIANCE_CONTACTS). Add an entry once you have CONFIRMED the exchange's law-enforcement freeze channel, then set verified=true and record a source. NEVER set verified=true without a real channel (compliance_email or le_portal_url) AND a source - the loader will downgrade it to unverified and warn, and tests will fail on the committed file. Keys are exchange display names; matching is case- and space-insensitive against the names the tracer emits (e.g. \"Binance\", \"Crypto.com\", \"OKX\").",
+  "_provenance": "v0.39 (2026-06): seeded from each exchange's OWN published law-enforcement guidance page (cited per-entry in `source`). verified=true is set ONLY where the channel was confirmed on the exchange's official LE page; entries confirmed only via legal/agreement docs or where the exact submission method could not be extracted are left verified=false with the researched channel populated as a confirm-before-send starting point. Kodex (app.kodexglobal.com) is the dominant LE-portal vendor (Binance/Coinbase/OKX/Crypto.com/Bitget/Bitfinex) and typically requires an agency (.gov/.police) email to register. RE-CONFIRM channels periodically: exchange LE pages and portal URLs change. Channels are an LE workflow aid, NOT legal advice.",
   "_schema": {
     "<Exchange Display Name>": {
-      "legal_name": "string — registered legal entity to address the request to",
-      "compliance_email": "string|null — verified LE/compliance email",
-      "le_portal_url": "string|null — verified law-enforcement request portal (preferred for most major CEXes)",
+      "legal_name": "string - registered legal entity to address the request to",
+      "compliance_email": "string|null - verified LE/compliance email",
+      "le_portal_url": "string|null - verified law-enforcement request portal (preferred for most major CEXes)",
       "freeze_capability": "yes | limited | no | unknown",
       "freeze_request_channel": "portal | email | both | null",
-      "verified": "boolean — true ONLY when you have confirmed the channel",
-      "source": "string|null — where/when you verified it (e.g. 'Binance LE Request Guide, 2026-06')",
-      "notes": "string|null — e.g. 'portal requires a .gov/agency email domain'"
+      "verified": "boolean - true ONLY when you have confirmed the channel",
+      "source": "string|null - where/when you verified it (e.g. 'Binance LE Request Guide, 2026-06')",
+      "notes": "string|null - e.g. 'portal requires a .gov/agency email domain'"
     }
   },
   "_example": {
@@ -21,5 +22,157 @@
     "verified": false,
     "source": "confirmed via the exchange's published LE guide YYYY-MM-DD",
     "notes": "Portal requires an agency email domain; freezes typically hold 30 days pending legal process."
+  },
+
+  "Binance": {
+    "legal_name": "Binance Holdings Ltd. (group; regional entities vary)",
+    "compliance_email": null,
+    "le_portal_url": "https://app.kodexglobal.com/binance/signup",
+    "freeze_capability": "yes",
+    "freeze_request_channel": "portal",
+    "verified": true,
+    "source": "Binance Government/Law Enforcement Request System (LERS), https://www.binance.com/en/support/law-enforcement (accessed 2026-06)",
+    "notes": "Kodex-hosted LERS portal; mark a case 'Exigent' for emergency/imminent-harm. China LE uses a separate link (app.kodexglobal.com/binance-cn/signup). Binance.US is a SEPARATE entity with its own LE guide at support.binance.us. No public LE email - submission is portal-only."
+  },
+  "Coinbase": {
+    "legal_name": "Coinbase, Inc. (Coinbase Global, Inc.)",
+    "compliance_email": "subpoenas@coinbase.com",
+    "le_portal_url": "https://app.kodexglobal.com/gov/signup",
+    "freeze_capability": "yes",
+    "freeze_request_channel": "both",
+    "verified": true,
+    "source": "Coinbase legal/LE contact help page, https://help.coinbase.com (legal-policies: subpoena/legal-document contact), accessed 2026-06",
+    "notes": "Criminal subpoenas / legal process via the Kodex gov portal; other LE questions to subpoenas@coinbase.com. Coinbase documents preservation/legal-process handling in its Transparency Report."
+  },
+  "Kraken": {
+    "legal_name": "Payward, Inc. (US) / Payward Ltd. (group)",
+    "compliance_email": null,
+    "le_portal_url": "https://support.kraken.com/forms/648008",
+    "freeze_capability": "limited",
+    "freeze_request_channel": "portal",
+    "verified": true,
+    "source": "Kraken 'How do I submit a legal inquiry' support article, https://support.kraken.com/articles/how-do-i-submit-a-legal-inquiry (accessed 2026-06)",
+    "notes": "Kraken routes Compliance/Legal/Privacy inquiries through a web form (Compliance & Legal support form, ID 648008). privacy@kraken.tech is for data-subject/privacy requests, NOT the LE channel. No standalone public freeze-on-request policy located."
+  },
+  "OKX": {
+    "legal_name": "Aux Cayes FinTech Co. Ltd. (OKX group)",
+    "compliance_email": "enforcement@okx.com",
+    "le_portal_url": "https://www.okx.com/en-us/help/okx-law-enforcement-request-guide",
+    "freeze_capability": "yes",
+    "freeze_request_channel": "both",
+    "verified": true,
+    "source": "OKX Law Enforcement Request Guide, https://www.okx.com/en-us/help/okx-law-enforcement-request-guide (accessed 2026-06)",
+    "notes": "Account-based portal (linked from the guide) plus enforcement@okx.com for all LE requests. Use 'URGENT REQUEST' in the subject for death/serious-danger exigent cases. A separate US guide exists (us-law-enforcement-request-guide)."
+  },
+  "Crypto.com": {
+    "legal_name": "Foris DAX, Inc. / Foris DAX MT (Malta) Ltd. (group entities vary)",
+    "compliance_email": null,
+    "le_portal_url": "https://help.crypto.com/en/articles/1360625-how-can-law-enforcement-agencies-get-in-touch-with-crypto-com",
+    "freeze_capability": "limited",
+    "freeze_request_channel": "portal",
+    "verified": true,
+    "source": "Crypto.com 'How can law enforcement agencies get in touch' help article #1360625, https://help.crypto.com (accessed 2026-06)",
+    "notes": "Crypto.com's help page states the Kodex portal is the dedicated global LE channel; acknowledges receipt with a reference number, ~30-day response target. The specific Kodex signup URL is not published on the help page - it links through."
+  },
+  "KuCoin": {
+    "legal_name": "Mek Global Limited / Phoenixfin Pte. Ltd. (group)",
+    "compliance_email": "rbenquiries@kucoin.com",
+    "le_portal_url": "https://www.kucoin.com/legal/requests",
+    "freeze_capability": "limited",
+    "freeze_request_channel": "both",
+    "verified": true,
+    "source": "KuCoin Law Enforcement Request Guidelines, https://www.kucoin.com/legal/law-enforcement-request-guidelines (accessed 2026-06)",
+    "notes": "Primary channel = KuCoin Information Request System (kucoin.com/legal/requests); other LE to rbenquiries@kucoin.com; KuCoin EU uses lawenforcement@kucoin.eu. Requires a SIGNED/SEALED subpoena/court order/warrant (digital sig/seal NOT accepted). ~10-15 working-day internal investigation."
+  },
+  "Gate.io": {
+    "legal_name": "Gate Technology Inc. / Gate Group (entities vary)",
+    "compliance_email": "regulatory@gate.io",
+    "le_portal_url": null,
+    "freeze_capability": "limited",
+    "freeze_request_channel": "email",
+    "verified": true,
+    "source": "Gate Law Enforcement Request Guidelines, https://www.gate.com/legal/law-enforcement (accessed 2026-06)",
+    "notes": "All LE requests to regulatory@gate.io, in English, from an official .gov-domain email with proof of authority. ~5-15 working-day processing. Email-based (no separate portal stated)."
+  },
+  "Bitget": {
+    "legal_name": "Bitget Limited (Seychelles)",
+    "compliance_email": "lawenforcement@bitget.com",
+    "le_portal_url": "https://www.bitget.com/support/articles/12560603829062",
+    "freeze_capability": "yes",
+    "freeze_request_channel": "both",
+    "verified": true,
+    "source": "Bitget 'Law enforcement request guide' (support article 12560603829062), https://www.bitget.com/support/articles/12560603829062 (accessed 2026-06)",
+    "notes": "Government LE Request Portal via Kodex (Chrome/Edge only); LE docs to lawenforcement@bitget.com, regulatory inquiries to regulatory@bitget.com. Signup requires an official agency email (.gov/.police; no Gmail/QQ). Generates a case number (BITGET-####); 'Emergency' legal-process type for urgent cases."
+  },
+  "Bitfinex": {
+    "legal_name": "iFinex Inc. / BFXNA Inc. / BFXWW Inc.",
+    "compliance_email": "compliance@bitfinex.com",
+    "le_portal_url": "https://www.bitfinex.com/legal/general/law-enforcement-requests-policy/",
+    "freeze_capability": "limited",
+    "freeze_request_channel": "both",
+    "verified": true,
+    "source": "Bitfinex Law Enforcement Requests Policy, https://www.bitfinex.com/legal/general/law-enforcement-requests-policy/ (accessed 2026-06)",
+    "notes": "Bitfinex has adopted Kodex to intake/verify LE requests (per Bitfinex's policy page + Kodex case study). compliance@bitfinex.com is the published compliance contact. Confirm whether the policy page links the current Kodex intake URL vs. email at time of use."
+  },
+  "MEXC": {
+    "legal_name": "MEXC Global (operating entities vary; e.g. MEXC Global Ltd.)",
+    "compliance_email": "legal@mexc.com",
+    "le_portal_url": "https://www.mexc.com/support/requests/legal",
+    "freeze_capability": "yes",
+    "freeze_request_channel": "both",
+    "verified": true,
+    "source": "MEXC Law Enforcement Guidelines, https://www.mexc.com/announcements/article/law-enforcement-guidelines-4403594602778 (accessed 2026-06)",
+    "notes": "Primary = MEXC Law Enforcement Online Request System (LEORS) at mexc.com/support/requests/legal (access approval ~3 business days); or legal@mexc.com. Documents data PRESERVATION for 90 days on formal legal request, extendable via LEORS - directly relevant to freeze/preservation. Warrant/court order required to compel disclosure."
+  },
+  "Robinhood": {
+    "legal_name": "Robinhood Markets, Inc. (incl. Robinhood Crypto, LLC; Robinhood Securities, LLC)",
+    "compliance_email": "LERequests@robinhood.com",
+    "le_portal_url": null,
+    "freeze_capability": "yes",
+    "freeze_request_channel": "email",
+    "verified": true,
+    "source": "Robinhood 'Information for Law Enforcement Authorities' PDF, https://cdn.robinhood.com/assets/robinhood/legal/Law-Enforcement-Request.pdf (accessed 2026-06)",
+    "notes": "LE requests - including turnover of funds via attachment/garnishment/seizure - to LERequests@robinhood.com (explicitly NOT to support). ~45-day minimum response. Must identify the correct Robinhood entity (Crypto vs. Securities)."
+  },
+  "Robinhood Crypto": {
+    "legal_name": "Robinhood Crypto, LLC (Robinhood Markets, Inc.)",
+    "compliance_email": "LERequests@robinhood.com",
+    "le_portal_url": null,
+    "freeze_capability": "yes",
+    "freeze_request_channel": "email",
+    "verified": true,
+    "source": "Robinhood 'Information for Law Enforcement Authorities' PDF, https://cdn.robinhood.com/assets/robinhood/legal/Law-Enforcement-Request.pdf (accessed 2026-06)",
+    "notes": "Alias of the Robinhood entry so 'Robinhood Crypto' labels resolve. Same LERequests@robinhood.com channel."
+  },
+
+  "Gemini": {
+    "legal_name": "Gemini Trust Company, LLC",
+    "compliance_email": "lawenforcement@gemini.com",
+    "le_portal_url": null,
+    "freeze_capability": "yes",
+    "freeze_request_channel": "email",
+    "verified": false,
+    "source": "Gemini User/Custody Agreement legal docs, https://www.gemini.com/legal (accessed 2026-06)",
+    "notes": "CONFIRM BEFORE SENDING: lawenforcement@gemini.com surfaced from Gemini's legal/agreement docs (which document freezing/locking funds and complying with subpoenas/warrants/restraining orders), NOT from a dedicated LE-request guide page - left verified=false pending that confirmation. Mailing: Gemini Trust Company, LLC, 600 Third Avenue, 2nd Floor, New York, NY 10016."
+  },
+  "Bitstamp": {
+    "legal_name": "Bitstamp Ltd. / Bitstamp Europe S.A. (Bitstamp by Robinhood)",
+    "compliance_email": null,
+    "le_portal_url": "https://www.bitstamp.net/legal/guidelines-for-law-enforcement-agencies/",
+    "freeze_capability": "limited",
+    "freeze_request_channel": null,
+    "verified": false,
+    "source": "Bitstamp 'Guidelines for Law Enforcement Agencies' page, https://www.bitstamp.net/legal/guidelines-for-law-enforcement-agencies/ (page existence confirmed 2026-06)",
+    "notes": "CONFIRM BEFORE SENDING: the official LE guidelines page exists but the exact submission channel (email vs. portal) was not extractable - open the page to confirm before relying on it. Supports preservation requests. Now part of Robinhood."
+  },
+  "Bybit": {
+    "legal_name": "Bybit Fintech Ltd.",
+    "compliance_email": null,
+    "le_portal_url": "https://www.bybit.com/en/help-center/article/How-to-Report-Stolen-Assets",
+    "freeze_capability": "limited",
+    "freeze_request_channel": "portal",
+    "verified": false,
+    "source": "Bybit Help Center 'How to Report Stolen Assets', https://www.bybit.com/en/help-center/article/How-to-Report-Stolen-Assets (accessed 2026-06)",
+    "notes": "CONFIRM BEFORE SENDING: no dedicated official LE-request channel confirmed. Use the official help-center reporting flow; Bybit (Sept 2025) launched a VIP stolen-fund-inflow reporting portal that can place temporary internal restrictions. SECURITY WARNING: 'BYBIT159@amail.com' originates only from the non-official clone domain bybitexcai.com - it is a SCAM, do NOT use it. Verify any LE email directly with Bybit."
   }
 }

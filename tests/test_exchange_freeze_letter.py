@@ -76,16 +76,31 @@ def test_renders_freeze_letter_per_exchange() -> None:
 
 
 def test_unverified_contact_shows_warning_banner() -> None:
-    # Binance is only in the unverified starter dict (no verified override
-    # shipped), so the letter must carry the confirm-channel banner.
+    # 'BTC Markets' is only in the unverified starter dict (no verified
+    # override), so the letter must carry the confirm-channel banner.
+    with TemporaryDirectory() as tmp:
+        renders = render_legal_request(
+            _brief([_flow("BTC Markets")]),
+            request_type="exchange-freeze", output_dir=Path(tmp),
+        )
+        html = renders[0].output_path.read_text(encoding="utf-8")
+        assert "UNVERIFIED CONTACT CHANNEL" in html
+        assert "before sending" in html.lower()
+
+
+def test_verified_contact_omits_warning_and_cites_source() -> None:
+    # Binance now ships a verified override (Kodex LERS portal), so the freeze
+    # letter must OMIT the unverified banner and instead cite the channel as
+    # verified, rendering the real portal URL.
     with TemporaryDirectory() as tmp:
         renders = render_legal_request(
             _brief([_flow("Binance")]),
             request_type="exchange-freeze", output_dir=Path(tmp),
         )
         html = renders[0].output_path.read_text(encoding="utf-8")
-        assert "UNVERIFIED CONTACT CHANNEL" in html
-        assert "before sending" in html.lower()
+        assert "UNVERIFIED CONTACT CHANNEL" not in html
+        assert "channel verified" in html.lower()
+        assert "kodexglobal.com" in html  # the verified portal URL is rendered
 
 
 def test_no_flows_returns_empty() -> None:

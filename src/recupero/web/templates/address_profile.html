@@ -253,6 +253,7 @@
              '</div>';
       });
       h += '</div></div>';
+      h += '<div id="label-heatmap" style="margin:.1rem 0 .7rem"></div>';
 
       // Severity breakdown
       var sevOrder = ["critical", "high", "medium", "low"];
@@ -273,6 +274,8 @@
       h += '</div>';
 
       h += _riskBarHtml(sevCounts, labels.length);
+      // Confidence distribution bar above table
+      h += '<div id="lbl-conf-bar" style="margin:.1rem 0 .5rem"></div>';
       h += '<table><thead><tr><th>Name</th><th>Category</th><th>Severity</th><th>Confidence</th><th>Source</th></tr></thead><tbody>';
       labels.forEach(function (l) {
         h += '<tr><td>' + esc(l.name) + '</td><td class="mono">' + esc(l.category) + '</td>' +
@@ -327,6 +330,46 @@
 
     h += '<p class="sub" style="margin-top:1.2rem">Sources: ' + esc((p.data_sources_used || []).join(", ")) + '</p>';
     $("out").innerHTML = h;
+    // Category x severity heatmap (real label data)
+    if (window.RC && window.RC.buildHeatmap && labels.length > 0) {
+      var hmEl2 = document.getElementById("label-heatmap");
+      if (hmEl2) {
+        var sevOrder2 = ["critical", "high", "medium", "low"];
+        var topCats2  = cats.slice(0, 6);
+        var catSevMx = topCats2.map(function(cat) {
+          return sevOrder2.map(function(sev) {
+            return labels.filter(function(l){ return l.category===cat && l.severity===sev; }).length;
+          });
+        });
+        var anyNZ = catSevMx.some(function(row){ return row.some(function(v){ return v>0; }); });
+        if (anyNZ) {
+          window.RC.buildHeatmap(hmEl2, catSevMx, {
+            rows: topCats2,
+            cols: sevOrder2,
+            title: "Category x severity",
+            cellSize: 20, showLabels: true
+          });
+        }
+      }
+    }
+    // Confidence distribution bar
+    if (window.RC && window.RC.buildRiskBar && labels.length > 0) {
+      var cbEl = document.getElementById("lbl-conf-bar");
+      if (cbEl) {
+        var nCHigh=0, nCMed=0, nCLow=0;
+        labels.forEach(function(l) {
+          var c = l.confidence || 0;
+          if (c >= 0.75) nCHigh++;
+          else if (c >= 0.40) nCMed++;
+          else nCLow++;
+        });
+        window.RC.buildRiskBar(cbEl, [
+          { label: "High conf (" + nCHigh + ")", pct: nCHigh, cls: "ok"   },
+          { label: "Med conf ("  + nCMed  + ")", pct: nCMed,  cls: "warn" },
+          { label: "Low conf ("  + nCLow  + ")", pct: nCLow,  cls: "crit" }
+        ].filter(function(s){return s.pct>0;}), { height: 5, showLabels: true });
+      }
+    }
   }
 
   function go() {

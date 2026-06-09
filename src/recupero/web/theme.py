@@ -282,6 +282,17 @@ td.age   { white-space: nowrap; font-size: .76rem; }
 td.mono, div.mono { cursor: copy; }
 td.mono:hover, div.mono:hover { opacity: .82; }
 
+/* ── Timeline cell (holds a buildTimeline SVG) ── */
+.rc-timeline-cell {
+  padding: .3rem .55rem !important; min-width: 180px; max-width: 320px;
+  vertical-align: middle; overflow: visible;
+}
+.rc-timeline-cell svg { display: block; overflow: visible; }
+
+/* ── Risk bar (holds a buildRiskBar div) ── */
+.rc-risk-bar { margin: .35rem 0; }
+.rc-risk-bar + .rc-risk-bar-labels { margin-top: .22rem; }
+
 /* ── Verdict hero (address profile) ── */
 .verdict-hero {
   display: flex; align-items: center; gap: 1.1rem;
@@ -1212,6 +1223,92 @@ CONSOLE_JS = r"""
     return el;
   }
 
+  // ── buildTimeline ─────────────────────────────────────────────────────────
+  // Renders a horizontal SVG event-timeline into el.
+  // events: [{date:'2024-01-15', label:'Initial theft', type:'crit'|'warn'|'ok'|'neutral'}]
+  // opts: {width?, height?, maxItems?}
+  function buildTimeline(el, events, opts) {
+    if (!el || !events || !events.length) return null;
+    opts = opts || {};
+    var max = opts.maxItems || 12;
+    var evs = events.slice(-max); // show most recent N
+    var W = opts.width  || (el.clientWidth  || 480);
+    var H = opts.height || 56;
+    var DOT_R = 5, STEM = 14, PAD = DOT_R + 2;
+    var n = evs.length;
+    var xStep = n > 1 ? (W - PAD * 2) / (n - 1) : 0;
+    var typeColor = function(t) {
+      return t === 'crit' ? 'var(--crit)' : t === 'warn' ? 'var(--warn)' :
+             t === 'ok'   ? 'var(--ok)'   : 'var(--ink-faint)';
+    };
+    var svg = '<svg width="' + W + '" height="' + H +
+              '" viewBox="0 0 ' + W + ' ' + H + '" style="display:block;overflow:visible" aria-hidden="true">';
+    // Baseline
+    svg += '<line x1="' + PAD + '" y1="' + (STEM + DOT_R) + '" x2="' + (W - PAD) + '" y2="' + (STEM + DOT_R) +
+           '" stroke="var(--hair-strong)" stroke-width="1.5"/>';
+    evs.forEach(function(ev, i) {
+      var x = PAD + i * xStep;
+      var cy = STEM + DOT_R;
+      var col = typeColor(ev.type);
+      // Dot
+      svg += '<circle cx="' + x.toFixed(1) + '" cy="' + cy + '" r="' + DOT_R + '"' +
+             ' fill="' + col + '" stroke="var(--bg)" stroke-width="1.5"/>';
+      // Label above (alternating heights to avoid overlap)
+      var labelY = i % 2 === 0 ? 10 : 3;
+      var short = (ev.label || '').slice(0, 18);
+      svg += '<text x="' + x.toFixed(1) + '" y="' + labelY + '"' +
+             ' font-size="7" fill="var(--ink-soft)" text-anchor="middle"' +
+             ' font-family="var(--mono)">' + short.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</text>';
+      // Date below
+      if (ev.date) {
+        var dateShort = String(ev.date).slice(0, 10);
+        svg += '<text x="' + x.toFixed(1) + '" y="' + (cy + DOT_R + 10) + '"' +
+               ' font-size="6.5" fill="var(--ink-faint)" text-anchor="middle"' +
+               ' font-family="var(--mono)">' + dateShort + '</text>';
+      }
+    });
+    svg += '</svg>';
+    el.innerHTML = svg;
+    return el;
+  }
+
+  // ── buildRiskBar ───────────────────────────────────────────────────────────
+  // Renders a segmented risk bar into el.
+  // segments: [{label:'Sanctions', pct:65, cls:'crit'|'warn'|'ok'|'neutral'}]
+  // opts: {height?, showLabels?}
+  function buildRiskBar(el, segments, opts) {
+    if (!el || !segments || !segments.length) return null;
+    opts = opts || {};
+    var H = opts.height || 18;
+    var showLabels = opts.showLabels !== false;
+    var total = segments.reduce(function(a, s) { return a + (s.pct || 0); }, 0);
+    if (total <= 0) return null;
+    var clsColor = function(c) {
+      return c === 'crit' ? 'var(--crit)' : c === 'warn' ? 'var(--warn)' :
+             c === 'ok'   ? 'var(--ok)'   : 'var(--ink-faint)';
+    };
+    var html = '<div style="width:100%;border-radius:99px;overflow:hidden;display:flex;height:' + H + 'px;gap:1px">';
+    segments.forEach(function(s) {
+      var pct = Math.max(1, Math.round((s.pct || 0) / total * 100));
+      var col = clsColor(s.cls);
+      html += '<div style="flex:' + pct + ';background:' + col + ';min-width:2px;transition:flex .6s" ' +
+              'title="' + (s.label || '') + ': ' + (s.pct || 0).toFixed(1) + '%"></div>';
+    });
+    html += '</div>';
+    if (showLabels) {
+      html += '<div style="display:flex;gap:.55rem;margin-top:.32rem;flex-wrap:wrap">';
+      segments.forEach(function(s) {
+        var col = clsColor(s.cls);
+        html += '<span style="display:inline-flex;align-items:center;gap:.25rem;font-size:.62rem;color:var(--ink-soft)">' +
+                '<span style="width:7px;height:7px;border-radius:50%;background:' + col + ';flex-shrink:0"></span>' +
+                (s.label || '') + '</span>';
+      });
+      html += '</div>';
+    }
+    el.innerHTML = html;
+    return el;
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1227,7 +1324,9 @@ CONSOLE_JS = r"""
     timeAgo: timeAgo,
     toast: toast,
     buildFlowGraph: buildFlowGraph,
-    buildSparkline: buildSparkline
+    buildSparkline: buildSparkline,
+    buildTimeline: buildTimeline,
+    buildRiskBar: buildRiskBar
   };
 })();
 """

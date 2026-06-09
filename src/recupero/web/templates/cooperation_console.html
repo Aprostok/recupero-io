@@ -132,8 +132,25 @@
     if (window.RC) {
       window.RC.staggerRows($("tablewrap"));
       window.RC.attachSort($("tablewrap"));
+      window.RC.attachFilter($("tablewrap"));
       window.RC.animateRings($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
+      window.RC.buildRiskBar && (function() {
+        var nGood = 0, nPart = 0, nBH = 0;
+        rows.forEach(function(r) {
+          if (r.is_black_hole) { nBH++; }
+          else if ((r.response_rate || 0) >= 0.5) { nGood++; }
+          else { nPart++; }
+        });
+        var barEl = document.createElement("div");
+        barEl.style.cssText = "margin:.6rem 0 .9rem";
+        window.RC.buildRiskBar(barEl, [
+          {label:"Good cooperators ("+nGood+")",  pct:nGood, cls:"ok"},
+          {label:"Partial ("+nPart+")",           pct:nPart, cls:"warn"},
+          {label:"Black holes ("+nBH+")",         pct:nBH,  cls:"crit"}
+        ].filter(function(s){return s.pct>0;}), {height:7});
+        $("tablewrap").insertBefore(barEl, $("tablewrap").firstChild);
+      })();
     }
   }
 

@@ -33,6 +33,20 @@
   .section:nth-child(n+6) { animation-delay: 200ms; }
   /* copy button in top-right of #out */
   .copy-all-bar { display: flex; justify-content: flex-end; margin-bottom: .5rem; }
+
+  /* Section type color-coding via left border */
+  .section.s-risk      { border-left: 3px solid var(--crit); }
+  .section.s-warn      { border-left: 3px solid var(--warn); }
+  .section.s-ok        { border-left: 3px solid var(--ok); }
+  .section.s-accent    { border-left: 3px solid var(--accent); }
+  .section.s-neutral   { border-left: 3px solid var(--hair-strong); }
+  .section h2 { margin-top: .65rem; font-size: .95rem; display: flex; align-items: center; gap: .35rem; }
+  .section h2 .s-ico { font-size: .9rem; }
+  /* Confidence badge */
+  .conf-badge { display:inline-block; padding:.2rem .58rem; border-radius:var(--r-sm); font-size:.72rem; font-weight:700; margin-left: auto; }
+  .conf-badge.high  { background:rgba(29,138,78,.14); color:var(--ok); }
+  .conf-badge.med   { background:var(--warn-soft); color:var(--warn); }
+  .conf-badge.low   { background:var(--crit-soft); color:var(--crit); }
 </style>
 </head>
 <body>
@@ -75,20 +89,20 @@
   };
   // Section icons keyed on raw field name
   var SECTION_ICONS = {
-    "case_summary_plain":     "🔍",
-    "recommended_next_steps": "📋",
-    "completeness_gaps":      "⚠️",
-    "confidence_note":        "🎯",
-    "_meta":                  "📎",
-    "key_findings":           "💡",
-    "risk_assessment":        "🔴",
-    "legal_basis":            "⚖️",
-    "attribution_chain":      "🔗",
-    "victim_note":            "👤",
-    "perpetrator_note":       "🚨",
-    "timeline":               "🕐",
-    "funds_at_risk":          "💰",
-    "freezable_assets":       "🔒"
+    "case_summary_plain":     "&#128269;",
+    "recommended_next_steps": "&#128203;",
+    "completeness_gaps":      "&#9888;&#65039;",
+    "confidence_note":        "&#127919;",
+    "_meta":                  "&#128206;",
+    "key_findings":           "&#128161;",
+    "risk_assessment":        "&#128308;",
+    "legal_basis":            "&#9878;&#65039;",
+    "attribution_chain":      "&#128279;",
+    "victim_note":            "&#128100;",
+    "perpetrator_note":       "&#128680;",
+    "timeline":               "&#128336;",
+    "funds_at_risk":          "&#128176;",
+    "freezable_assets":       "&#128274;"
   };
 
   function titleFor(k) { return TITLES[k] || k.replace(/^_+/, "").replace(/_/g, " "); }
@@ -115,7 +129,7 @@
   }
 
   function renderValue(v) {
-    if (v == null) return '<span class="empty">—</span>';
+    if (v == null) return '<span class="empty">&#8212;</span>';
     if (Array.isArray(v)) return renderList(v);
     if (typeof v === "object") return renderDict(v);
     return "<p>" + esc(v) + "</p>";
@@ -144,7 +158,7 @@
     // Copy-all action bar
     html += '<div class="copy-all-bar"><button id="copy-all" class="secondary" style="font-size:.78rem;padding:.4rem .8rem">Copy all</button></div>';
 
-    // AI disclaimer — polished banner with icon + structured layout
+    // AI disclaimer &#8212; polished banner with icon + structured layout
     var disclaimer = rep._DISCLAIMER ? String(rep._DISCLAIMER) : "";
     html += '<div class="ai-disclaimer">' +
       '<div class="ai-disclaimer-icon">&#9888;&#65039;</div>' +
@@ -160,16 +174,30 @@
 
     // Render every remaining top-level key generically and robustly.
     var keys = Object.keys(rep);
+    // Section risk classifier
+    var RISK_KEYS = { risk_assessment:1, perpetrator_note:1, funds_at_risk:1, freezable_assets:1 };
+    var WARN_KEYS = { completeness_gaps:1, recommended_next_steps:1 };
+    var OK_KEYS   = { confidence_note:1 };
+    var ACC_KEYS  = { case_summary_plain:1, key_findings:1, attribution_chain:1 };
+
     var shown = 0;
     keys.forEach(function (k) {
       if (BANNER_KEYS[k]) return;
       shown++;
       var ico = iconFor(k);
-      html += '<div class="section"><h2>' + (ico ? ico + '&thinsp;' : '') + esc(titleFor(k)) + "</h2>" + renderValue(rep[k]) + "</div>";
+      var typeCls = RISK_KEYS[k] ? 's-risk' : WARN_KEYS[k] ? 's-warn' : OK_KEYS[k] ? 's-ok' : ACC_KEYS[k] ? 's-accent' : 's-neutral';
+      html += '<div class="section ' + typeCls + '">' +
+              '<h2>' + (ico ? '<span class="s-ico">' + ico + '</span>' : '') + esc(titleFor(k)) + '</h2>' +
+              renderValue(rep[k]) +
+              '</div>';
     });
     if (!shown) { html += '<p class="empty">No further triage fields present.</p>'; }
 
     $("out").innerHTML = html;
+    if (window.RC) {
+      window.RC.staggerRows($("out"));
+      window.RC.attachFilter($("out"));
+    }
 
     // Wire the copy-all button now that it exists in the DOM
     var btn = document.getElementById("copy-all");
@@ -177,7 +205,7 @@
       btn.addEventListener("click", function () {
         navigator.clipboard.writeText(toPlainText(rep)).then(function () {
           var was = btn.textContent;
-          btn.textContent = "✓ Copied";
+          btn.textContent = "&#10003; Copied";
           setTimeout(function () { btn.textContent = was; }, 1400);
         }).catch(function () {});
       });
@@ -193,14 +221,14 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading&#8230;");
     clear();
     if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(3) + window.RC.skeletonTable(4, 2); }
     fetch("/v1/ai-triage?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
-        if (res.status === 404) throw new Error("No ai_triage.json — run `recupero ai-triage <case_id>` first, or case not found.");
+        if (res.status === 400) throw new Error("Bad case id &#8212; must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
+        if (res.status === 404) throw new Error("No ai_triage.json &#8212; run `recupero ai-triage <case_id>` first, or case not found.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -208,7 +236,7 @@
       .then(function (rep) {
         render(rep);
         setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
-        if (window.RC) { window.RC.toast("AI triage loaded ✓", "ok"); }
+        if (window.RC) { window.RC.toast("AI triage loaded &#10003;", "ok"); }
       })
       .catch(function (e) {
         setMsg(e.message, "err");

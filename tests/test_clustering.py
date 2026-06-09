@@ -123,6 +123,11 @@ def test_h1_common_funding_clusters_two_addresses() -> None:
     assert "common_funding" in heuristics
     related = {ev.related_address for ev in cluster.evidence}
     assert funder in related
+    # v0.39 forensic-posture (audit): common-funding is a co-spend correlation
+    # (the shared funder is often a CEX hot wallet / disperse / OTC desk), NOT
+    # proof of same ownership → confidence "medium", never "high".
+    assert all(ev.confidence == "medium"
+               for ev in cluster.evidence if ev.heuristic == "common_funding")
 
 
 def test_h1_outside_window_no_cluster() -> None:
@@ -188,6 +193,10 @@ def test_h2_common_withdrawal_clusters() -> None:
     cluster = clusters[0]
     heuristics = {ev.heuristic for ev in cluster.evidence}
     assert "common_withdrawal" in heuristics
+    # v0.39 forensic-posture (audit): common-withdrawal target is a co-spend
+    # correlation (often a shared CEX deposit address), not ownership proof.
+    assert all(ev.confidence == "medium"
+               for ev in cluster.evidence if ev.heuristic == "common_withdrawal")
 
 
 def test_h2_outside_window_no_cluster() -> None:

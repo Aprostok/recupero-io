@@ -787,6 +787,13 @@ def _score_hypothesis(
 
     if n_in == 1 and fee_ratio < 0.02:
         # Single-input UTXO with tight fee match → high confidence.
+        # NOTE (v0.39 audit): a forensic-posture review flagged whether this
+        # should be capped at "medium" like the mixer/demixing doctrine. Left
+        # as "high" deliberately — with n_in == 1 there is a SINGLE contributor
+        # at this round amount, so the input<->output match is a structural
+        # identity, not an anonymity-set guess (materially stronger than a
+        # cross-tx Tornado link). Revisit as an explicit doctrine decision if
+        # the team wants coinjoin unwrap to stop auto-crossing.
         confidence = "high"
         rationale = (
             f"Single-input contribution of {input_sum:,} sats "

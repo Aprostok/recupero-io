@@ -1105,7 +1105,9 @@ def _decode_debridge(
       * unknown method ID → return None (dispatcher contract)
       * truncated calldata or no candidate slot found → confidence='low'
       * only one of (chain, receiver) extracted → confidence='medium'
-      * both extracted + chain in known table → confidence='high'
+      * both extracted → confidence='medium' (calldata decode is destination
+        INTENT, never 'high' — per the v0.36 doctrine, only a cryptographic
+        cross-chain-id pairing in bridge_pairings may claim 'high').
     """
     method_entry = _DEBRIDGE_METHODS.get(method_id)
     if method_entry is None:

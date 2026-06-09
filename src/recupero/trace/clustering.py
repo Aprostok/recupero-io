@@ -295,7 +295,14 @@ def cluster_addresses(
                         f"Both addresses received first material funding from "
                         f"{source} within {abs((ts_a - ts_b).total_seconds()) / 3600:.1f}h"
                     ),
-                    confidence="high",
+                    # v0.39 forensic-posture fix (audit finding): common funding
+                    # source is a behavioral CO-SPEND correlation, NOT proof of
+                    # same ownership — the shared funder is frequently a CEX
+                    # withdrawal hot wallet, a disperse.app / airdrop contract, an
+                    # OTC desk, or a payment processor (the shared_infra filter is
+                    # best-effort). "high" is reserved for cryptographic identity
+                    # (e.g. same EVM address across chains in address_clustering).
+                    confidence="medium",
                     related_address=source,
                 ))
 
@@ -322,7 +329,11 @@ def cluster_addresses(
                         f"Both addresses sent first material outflow to "
                         f"{dest} within {abs((ts_a - ts_b).total_seconds()) / 3600:.1f}h"
                     ),
-                    confidence="high",
+                    # v0.39 forensic-posture fix (audit finding): common
+                    # withdrawal target is a co-spend correlation, not ownership
+                    # proof (the shared target is often a CEX deposit address or
+                    # a common service). Demoted high → medium; see common_funding.
+                    confidence="medium",
                     related_address=dest,
                 ))
 

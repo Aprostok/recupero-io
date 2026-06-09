@@ -783,6 +783,26 @@ def _job_ofac_sync() -> None:
         result.entries_written, result.fetched_at,
     )
 
+    # roadmap #9: re-screen open cases against the freshly-synced OFAC delta —
+    # if Treasury just listed a wallet that's already on an active case's
+    # watchlist, surface a forward-looking alert. Best-effort: this must NEVER
+    # turn a successful sync into a job failure (the sync itself is the
+    # strict/page-on-failure path), so it's wrapped + DSN-gated. First run
+    # establishes a baseline and emits nothing.
+    try:
+        dsn = _supabase_dsn()
+        if dsn:
+            from recupero.monitoring.ofac_delta_rescreen import screen_ofac_additions
+            alerts = screen_ofac_additions(dsn=dsn)
+            log.info(
+                "cron: OFAC-delta rescreen — %d open-case watchlist match(es)",
+                len(alerts),
+            )
+        else:
+            log.info("cron: OFAC-delta rescreen skipped — SUPABASE_DB_URL unset")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cron: OFAC-delta rescreen skipped: %s", exc)
+
 
 def _job_retrace_backfill() -> None:
     """Find cases that would benefit from re-trace after label-DB updates."""

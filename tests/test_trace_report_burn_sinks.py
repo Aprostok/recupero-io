@@ -46,11 +46,11 @@ def test_burn_label_zero_address() -> None:
 
 
 def test_burn_label_dead_case_insensitive_on_evm() -> None:
-    # mixed-case 0xdEaD lowercases to a registry key. (The registry stores both
-    # a "dead-address" and a "dead-shortform" entry on the same lowercased key,
-    # so either label is acceptable — the point is the mixed-case form resolves
-    # to a dead-burn classification, proving EVM case-insensitivity.)
-    assert burn_label(_DEAD, "ethereum") in ("dead-address", "dead-shortform")
+    # mixed-case 0xdEaD lowercases to the canonical dead-address registry key.
+    # (The duplicate "dead-shortform" key — the same lowercased address — was
+    # removed, so this now resolves DETERMINISTICALLY to "dead-address",
+    # proving both EVM case-insensitivity and the deduped registry.)
+    assert burn_label(_DEAD, "ethereum") == "dead-address"
 
 
 def test_burn_label_tron_burn_case_sensitive() -> None:

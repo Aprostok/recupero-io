@@ -56,8 +56,12 @@ _EVM_BURN_SINKS: dict[str, str] = {
     "0xa160cdab225685da1d56aa342ad8841c3b53f291": "tornado-100eth",
     # Vyper-deployed null-pattern dead address.
     "0xdead000000000000000042069420694206942069": "vyper-dead",
-    # Lazy "0xdEaD" address with no extra padding (DeFi era convention).
-    "0x000000000000000000000000000000000000dEaD".lower(): "dead-shortform",
+    # NOTE: the "0xdEaD"-shortform address (no padding) is the SAME 40-hex
+    # address as the canonical "dead-address" entry above once lowercased, so
+    # it is intentionally NOT re-listed here — a duplicate key only clobbered
+    # the "dead-address" label without adding a distinct sink. EVM lookups are
+    # lowercased (see is_burn_sink / burn_label), so "0xdEaD" resolves to
+    # "dead-address" regardless of caller casing.
 }
 
 _SOLANA_BURN_SINKS: dict[str, str] = {

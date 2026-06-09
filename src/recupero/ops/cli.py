@@ -182,6 +182,28 @@ def cli() -> None:
              "Default: send to every issuer in the FREEZABLE list.",
     )
 
+    # ----- parse-freeze-reply ----- #
+    p_reply = sub.add_parser(
+        "parse-freeze-reply",
+        help="Classify an issuer/exchange reply to a freeze request into a "
+             "freeze_outcomes outcome and record it (feeds the cooperation "
+             "priors). Ambiguous replies record as 'acknowledged' — never a "
+             "strong outcome from a vague reply.",
+    )
+    p_reply.add_argument("case_id", help="UUID of the case")
+    p_reply.add_argument("--issuer", required=True, help="Issuer/exchange name (e.g. 'Circle')")
+    p_reply.add_argument(
+        "--target", required=True, dest="target_address",
+        help="Freeze-target address the letter was sent about",
+    )
+    p_reply.add_argument("--asset", default=None, dest="asset_symbol", help="Asset symbol (optional)")
+    _reply_grp = p_reply.add_mutually_exclusive_group(required=True)
+    _reply_grp.add_argument("--reply", default=None, help="Reply body text (inline)")
+    _reply_grp.add_argument(
+        "--reply-file", default=None, dest="reply_file",
+        help="Path to a file containing the reply body",
+    )
+
     # ----- send-le-handoff ----- #
     p_le = sub.add_parser(
         "send-le-handoff",
@@ -892,6 +914,28 @@ def cli() -> None:
             dsn=_require_dsn(),
             confirm=_confirm,
         ))
+
+    if args.command == "parse-freeze-reply":
+        from pathlib import Path as _Path
+
+        from recupero.freeze_learning.reply_parser import ingest_reply
+        reply_text = (
+            _Path(args.reply_file).read_text(encoding="utf-8")
+            if args.reply_file else (args.reply or "")
+        )
+        c = ingest_reply(
+            case_id=_parse_uuid(args.case_id, field_name="case_id"),
+            issuer=args.issuer,
+            target_address=args.target_address,
+            reply_text=reply_text,
+            asset_symbol=args.asset_symbol,
+            dsn=_require_dsn(),
+        )
+        print(
+            f"parsed outcome={c.outcome_type} confidence={c.confidence} "
+            f"needs_human_review={c.needs_human_review} — {c.rationale}"
+        )
+        sys.exit(0)
 
     if args.command == "send-le-handoff":
         from recupero.ops.commands import send_le_handoff as cmd

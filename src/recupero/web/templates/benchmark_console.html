@@ -75,6 +75,8 @@
     <span id="msg"></span>
   </div>
 
+  <div id="metric-bar" style="margin:.3rem 0 .6rem"></div>
+  <div id="metric-sparkline" style="height:32px;margin:.2rem 0 .7rem"></div>
   <div id="out"></div>
 
 <script>
@@ -176,6 +178,31 @@
     if (window.RC) {
       window.RC.animateGauges($("out"));
       window.RC.staggerRows($("out"));
+      window.RC.attachSort($("out"));
+      window.RC.attachFilter($("out"));
+      // countUp on count cards
+      $("out").querySelectorAll(".c-amount").forEach(function(el) {
+        if (window.RC.countUp) window.RC.countUp(el.parentElement);
+      });
+      // Score overview risk bar
+      var mbarEl = document.getElementById("metric-bar");
+      if (mbarEl && window.RC.buildRiskBar && typeof score.recall === "number") {
+        var r=score.recall,p=score.endpoint_precision,f=score.f1;
+        var msegs = [
+          { label: "Recall "    + (r*100).toFixed(1)+"%", pct: Math.round(r*100),  cls: r>=.7?"ok":r>=.5?"warn":"crit" },
+          { label: "Precision " + (p*100).toFixed(1)+"%", pct: Math.round(p*100),  cls: p>=.7?"ok":p>=.5?"warn":"crit" },
+          { label: "F1 "        + (f*100).toFixed(1)+"%", pct: Math.round(f*100),  cls: f>=.7?"ok":f>=.5?"warn":"crit" }
+        ];
+        window.RC.buildRiskBar(mbarEl, msegs, { height: 7, showLabels: true });
+      }
+      // Sparkline: [recall, precision, f1] trend
+      var spkEl = document.getElementById("metric-sparkline");
+      if (spkEl && window.RC.buildSparkline && typeof score.recall === "number") {
+        var spkData = [score.recall, score.endpoint_precision, score.f1].map(function(v){
+          return typeof v==="number"&&isFinite(v) ? Math.round(v*100) : 0;
+        });
+        window.RC.buildSparkline(spkEl, spkData, { height: 30, color: "var(--accent)", fillColor: "rgba(0,113,227,.08)" });
+      }
     }
   }
 

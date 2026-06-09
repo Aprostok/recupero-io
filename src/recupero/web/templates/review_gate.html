@@ -90,6 +90,7 @@
     <button type="button" class="reload" id="reload-btn">Reload queue</button>
   </div>
 
+  <div class="cards" id="rg-summary" style="display:none;margin-bottom:.8rem"></div>
   <div id="queue-container">
     <p class="empty">Paste your admin key and click <strong>Reload queue</strong>.</p>
   </div>
@@ -189,6 +190,23 @@
         window.RC.attachSort(container);
         window.RC.attachFilter(container);
         window.RC.toast(rows.length + " review(s) awaiting &#8212; click Approve or Reject", "info");
+      }
+      // Summary cards
+      var sumDiv = document.getElementById("rg-summary");
+      if (sumDiv) {
+        var nAw  = rows.filter(function(r){return !r.status||r.status==="awaiting_review";}).length;
+        var nAp  = rows.filter(function(r){return r.status==="approved";}).length;
+        var nRej = rows.filter(function(r){return r.status==="rejected";}).length;
+        sumDiv.innerHTML = '<div class="card"><div class="v">' + rows.length +
+          '</div><div class="l">Total</div></div>' +
+          '<div class="card alert"><div class="v">' + nAw +
+          '</div><div class="l">Awaiting</div></div>' +
+          '<div class="card ok"><div class="v">' + nAp +
+          '</div><div class="l">Approved</div></div>' +
+          '<div class="card"><div class="v">' + nRej +
+          '</div><div class="l">Rejected</div></div>';
+        sumDiv.style.display = "";
+        if (window.RC) window.RC.countUp(sumDiv);
       }
 
       container.querySelectorAll("button[data-action]").forEach(btn => {

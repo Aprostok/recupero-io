@@ -33,6 +33,7 @@
 
   <div id="alarm"></div>
   <div class="cards" id="cards"></div>
+  <div id="fresh-bar" style="margin:-.3rem 0 .8rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -91,7 +92,19 @@
       card(sum.stale,    "Stale",    sum.stale    ? "alert" : "") +
       card(sum.unknown,  "Unknown",  sum.unknown  ? "alert" : "") +
       card(sum.fresh,    "Fresh",    "ok");
-    if (window.RC) { window.RC.countUp($("cards")); }
+    if (window.RC) {
+      window.RC.countUp($("cards"));
+      var fbarEl = document.getElementById("fresh-bar");
+      if (fbarEl && window.RC.buildRiskBar) {
+        var fsegs = [
+          { label: "Critical (" + (sum.critical||0) + ")", pct: sum.critical||0, cls: "crit" },
+          { label: "Stale ("   + (sum.stale||0)    + ")", pct: sum.stale||0,    cls: "warn" },
+          { label: "Unknown (" + (sum.unknown||0)  + ")", pct: sum.unknown||0,  cls: ""     },
+          { label: "Fresh ("   + (sum.fresh||0)    + ")", pct: sum.fresh||0,    cls: "ok"   }
+        ].filter(function(s){return s.pct>0;});
+        if (fsegs.length) window.RC.buildRiskBar(fbarEl, fsegs, { height: 7, showLabels: true });
+      }
+    }
 
     var rows = rep.sources || [];
     if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">No label sources reported.</p>'; return; }
@@ -114,6 +127,7 @@
     if (window.RC) {
       window.RC.staggerRows($("tablewrap"));
       window.RC.attachSort($("tablewrap"));
+      window.RC.attachFilter($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
     }
   }

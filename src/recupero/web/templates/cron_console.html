@@ -157,6 +157,10 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     setMsg("Loading&#8230;");
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(5);
+      $("tablewrap").innerHTML = window.RC.skeletonTable(6, 6);
+    }
     fetch("/v1/cron/jobs", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
         if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");

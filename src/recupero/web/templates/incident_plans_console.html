@@ -56,6 +56,7 @@
   </div>
 
   <div id="cards" class="cards" style="margin-bottom:.8rem"></div>
+  <div id="sev-bar" style="margin:-.3rem 0 .8rem"></div>
   <div id="plan-cards" class="plan-cards-wrap"></div>
 
 <script>
@@ -115,7 +116,19 @@
       card(nCrit,        "Critical",           nCrit ? "alert" : "") +
       card(nHigh,        "High",               nHigh ? "" : "ok") +
       card(nImmediate,   "Immediate actions",  nImmediate ? "alert" : "");
-    if (window.RC) { window.RC.countUp($("cards")); }
+    if (window.RC) {
+      window.RC.countUp($("cards"));
+      // Severity risk bar
+      var sevEl = document.getElementById("sev-bar");
+      if (sevEl && window.RC.buildRiskBar) {
+        var sevSegs = [
+          { label: "Critical (" + nCrit + ")",    pct: nCrit,        cls: "crit" },
+          { label: "High ("    + nHigh + ")",     pct: nHigh,        cls: "warn" },
+          { label: "Immediate actions",           pct: nImmediate,   cls: "" }
+        ].filter(function(s){return s.pct>0;});
+        if (sevSegs.length) window.RC.buildRiskBar(sevEl, sevSegs, { height: 7, showLabels: true });
+      }
+    }
 
     // Empty state -- handles BOTH db_configured=false AND an empty list.
     if (!configured || !plans.length) {
@@ -141,6 +154,12 @@
         '</div>';
     });
     $("plan-cards").innerHTML = out;
+    if (window.RC) {
+      document.querySelectorAll(".plan-card table").forEach(function(t) {
+        window.RC.staggerRows(t);
+        window.RC.attachSort(t);
+      });
+    }
   }
 
   function key() { return ($("key").value || "").trim(); }
@@ -151,7 +170,10 @@
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     var sev = ($("sev").value || "").trim();
     setMsg("Loading&#8230;");
-    if (window.RC) { $("cards").innerHTML = window.RC.skeletonCards(4); }
+    if (window.RC) {
+      $("cards").innerHTML = window.RC.skeletonCards(4);
+      $("plan-cards").innerHTML = window.RC.skeletonTable(5, 5);
+    }
     fetch("/v1/incident-plans" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {

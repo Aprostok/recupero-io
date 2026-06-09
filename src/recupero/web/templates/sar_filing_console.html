@@ -156,14 +156,27 @@
             '<button class="nar-copy-btn" id="nar-copy-btn">Copy text</button></div>';
     html += '<div class="panel narrative" id="nar-text">' + esc(narText) + '</div>';
 
+    // Timeline of key dates (date_from, incident_date, date_to)
+    var _tlEvs = [];
+    if (activity.date_from) _tlEvs.push({ label: "Activity start", type: "warn" });
+    if (ctx.incident_date)  _tlEvs.push({ label: "Incident",       type: "crit" });
+    if (activity.date_to)   _tlEvs.push({ label: "Activity end",   type: "" });
+    if (_tlEvs.length > 1) {
+      html += '<h2>&#128337;&thinsp;Activity timeline</h2>' +
+              '<div id="sar-tl" style="padding:.55rem 1rem;background:var(--surface);border:1px solid var(--hair);border-radius:var(--r);box-shadow:var(--shadow-sm);margin-bottom:1rem"></div>';
+    }
     $("out").innerHTML = html;
 
     // Post-render enhancements
     if (window.RC) {
       var sarCards = document.getElementById("sar-cards");
-      if (sarCards) { window.RC.countUp(sarCards); }
+      if (sarCards) { window.RC.countUp(sarCards); window.RC.animateRings(sarCards); }
       var subjTable = document.getElementById("sar-subj-table");
       if (subjTable) { window.RC.staggerRows(subjTable); window.RC.attachSort(subjTable); window.RC.attachFilter(subjTable); }
+      var sarTl = document.getElementById("sar-tl");
+      if (sarTl && window.RC.buildTimeline && _tlEvs.length > 1) {
+        window.RC.buildTimeline(sarTl, _tlEvs, { height: 52 });
+      }
     }
 
     // Narrative copy button

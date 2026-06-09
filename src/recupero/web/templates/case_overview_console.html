@@ -121,6 +121,8 @@
 
 
 
+  <div id="deliv-bar" style="margin:.3rem 0 .6rem"></div>
+  <div id="pipe-tl"   style="margin:.2rem 0 .7rem"></div>
   <div id="out"></div>
 
 
@@ -429,6 +431,23 @@
       // Stagger-animate the deliverable cards
       var cards = $("out").querySelectorAll('.deliv-card');
       cards.forEach(function (c, i) { c.style.animationDelay = (i * 65) + 'ms'; });
+      // Deliverable completion risk bar
+      var dbarEl = document.getElementById("deliv-bar");
+      if (dbarEl && window.RC.buildRiskBar) {
+        var dsegs = [
+          { label: "Ready ("   + nReady + ")",         pct: nReady,          cls: "ok"   },
+          { label: "Pending (" + (nTotal-nReady) + ")",pct: nTotal-nReady,   cls: "crit" }
+        ].filter(function(s){return s.pct>0;});
+        window.RC.buildRiskBar(dbarEl, dsegs, { height: 6, showLabels: true });
+      }
+      // Pipeline timeline strip
+      var tlEl = document.getElementById("pipe-tl");
+      if (tlEl && window.RC.buildTimeline) {
+        var tlEvs = _pstages.map(function(ps) {
+          return { label: ps.name, type: ps.done ? "ok" : "crit" };
+        });
+        window.RC.buildTimeline(tlEl, tlEvs, { height: 50 });
+      }
     }
 
 

@@ -64,6 +64,7 @@
     <span id="msg"></span>
   </div>
 
+  <div id="conf-bar" style="margin:.3rem 0 .6rem"></div>
   <div id="out"></div>
 
 <script>
@@ -197,6 +198,26 @@
     if (window.RC) {
       window.RC.staggerRows($("out"));
       window.RC.attachFilter($("out"));
+      window.RC.animateRings($("out"));
+      // Confidence-type risk bar from section types
+      var confEl = document.getElementById("conf-bar");
+      if (confEl && window.RC.buildRiskBar) {
+        var nRisk=0, nWarn=0, nOk=0, nNeut=0;
+        Object.keys(rep).forEach(function(k) {
+          if (k in BANNER_KEYS) return;
+          if (k in RISK_KEYS) nRisk++;
+          else if (k in WARN_KEYS) nWarn++;
+          else if (k in OK_KEYS) nOk++;
+          else nNeut++;
+        });
+        var cSegs = [
+          { label: "Risk signals (" + nRisk + ")", pct: nRisk, cls: "crit" },
+          { label: "Gaps/Steps ("  + nWarn + ")", pct: nWarn, cls: "warn" },
+          { label: "Confidence ("  + nOk   + ")", pct: nOk,   cls: "ok"   },
+          { label: "Context ("     + nNeut  + ")", pct: nNeut, cls: ""     }
+        ].filter(function(s){return s.pct>0;});
+        if (cSegs.length) window.RC.buildRiskBar(confEl, cSegs, { height: 6, showLabels: true });
+      }
     }
 
     // Wire the copy-all button now that it exists in the DOM

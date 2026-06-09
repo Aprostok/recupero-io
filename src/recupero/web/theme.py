@@ -1358,6 +1358,110 @@ CONSOLE_JS = r"""
     return el;
   }
 
+
+  // ── buildHeatmap ─────────────────────────────────────────────────────────
+  // Renders a risk-coloured cell-matrix into el.
+  // data:  2-D JS array  [[v00, v01, ...], [v10, ...], ...]
+  //        OR flat array [{row:0, col:0, val:150}, ...]
+  // opts:  rows (string[]), cols (string[]), maxVal, cellSize, showLabels, title
+  function buildHeatmap(el, data, opts) {
+    if (!el || !data || !data.length) return null;
+    opts = opts || {};
+    var cellSize    = opts.cellSize    || 14;
+    var gap         = 2;
+    var showLabels  = opts.showLabels  !== false;
+    var rowLabels   = opts.rows   || [];
+    var colLabels   = opts.cols   || [];
+
+    // Normalise to flat [{row, col, val}]
+    var cells = [];
+    if (Array.isArray(data[0])) {
+      for (var ri = 0; ri < data.length; ri++) {
+        for (var ci = 0; ci < data[ri].length; ci++) {
+          cells.push({ row: ri, col: ci, val: data[ri][ci] || 0 });
+        }
+      }
+    } else {
+      cells = data;
+    }
+
+    var maxVal = opts.maxVal || Math.max.apply(null, cells.map(function (c) { return c.val || 0; })) || 1;
+    var nRows  = Math.max.apply(null, cells.map(function (c) { return (c.row || 0) + 1; })) || 1;
+    var nCols  = Math.max.apply(null, cells.map(function (c) { return (c.col || 0) + 1; })) || 1;
+
+    // Build lookup: byRow[ri][ci] = val
+    var byRow = {};
+    cells.forEach(function (c) {
+      var r = c.row || 0; var cc = c.col || 0;
+      if (!byRow[r]) byRow[r] = {};
+      byRow[r][cc] = c.val || 0;
+    });
+
+    // Risk-colour ramp (4 bands)
+    var cellColor = function (v) {
+      var p = Math.max(0, Math.min(1, v / maxVal));
+      if (p === 0)   return 'var(--surface-2)';
+      if (p < 0.25)  return 'var(--ok-soft)';
+      if (p < 0.50)  return 'var(--warn-soft)';
+      if (p < 0.80)  return 'var(--warn)';
+      return 'var(--crit)';
+    };
+    var textColor = function (v) {
+      var p = v / maxVal;
+      return p >= 0.50 ? 'rgba(255,255,255,.88)' : 'var(--ink-soft)';
+    };
+
+    var labelW   = showLabels && rowLabels.length ? 52 : 0;
+    var labelFontSz = '.52rem';
+    var html = '<div style="display:inline-block;overflow:visible">';
+
+    // Optional title
+    if (opts.title) {
+      html += '<div style="font-size:.65rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;' +
+              'color:var(--ink-faint);margin-bottom:5px">' + opts.title + '</div>';
+    }
+
+    // Column headers
+    if (showLabels && colLabels.length) {
+      html += '<div style="display:flex;margin-left:' + labelW + 'px;gap:' + gap + 'px;margin-bottom:3px">';
+      for (var ci2 = 0; ci2 < nCols; ci2++) {
+        html += '<div style="width:' + cellSize + 'px;font-size:' + labelFontSz + ';text-align:center;' +
+                'color:var(--ink-faint);overflow:hidden;white-space:nowrap">' +
+                (colLabels[ci2] || '') + '</div>';
+      }
+      html += '</div>';
+    }
+
+    // Rows
+    for (var ri2 = 0; ri2 < nRows; ri2++) {
+      html += '<div style="display:flex;gap:' + gap + 'px;margin-bottom:' + gap + 'px;align-items:center">';
+      if (showLabels && rowLabels.length) {
+        html += '<div style="width:' + labelW + 'px;font-size:' + labelFontSz + ';color:var(--ink-soft);' +
+                'text-align:right;padding-right:5px;overflow:hidden;white-space:nowrap;flex-shrink:0">' +
+                (rowLabels[ri2] || '') + '</div>';
+      }
+      for (var ci3 = 0; ci3 < nCols; ci3++) {
+        var val = (byRow[ri2] || {})[ci3] || 0;
+        var bg  = cellColor(val);
+        var fg  = textColor(val);
+        var fmt = val >= 1000 ? (val / 1000).toFixed(1) + 'k' : val > 0 ? String(Math.round(val)) : '';
+        html += '<div style="width:' + cellSize + 'px;height:' + cellSize + 'px;border-radius:3px;' +
+                'background:' + bg + ';display:flex;align-items:center;justify-content:center;' +
+                'font-size:.48rem;font-weight:700;color:' + fg + ';cursor:default;' +
+                'transition:transform .1s,box-shadow .1s;flex-shrink:0" ' +
+                'title="' + (rowLabels[ri2] || ri2) + ' / ' + (colLabels[ci3] || ci3) +
+                ': ' + val + '" ' +
+                'onmouseover="this.style.transform=\'scale(1.25)\';this.style.boxShadow=\'0 2px 8px rgba(0,0,0,.3)\'" ' +
+                'onmouseout="this.style.transform=\'\';this.style.boxShadow=\'\'">' +
+                fmt + '</div>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+    el.innerHTML = html;
+    return el;
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1375,7 +1479,8 @@ CONSOLE_JS = r"""
     buildFlowGraph: buildFlowGraph,
     buildSparkline: buildSparkline,
     buildTimeline: buildTimeline,
-    buildRiskBar: buildRiskBar
+    buildRiskBar: buildRiskBar,
+    buildHeatmap: buildHeatmap
   };
 })();
 """

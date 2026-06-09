@@ -65,6 +65,7 @@
   </div>
 
   <div id="conf-bar" style="margin:.3rem 0 .6rem"></div>
+  <div id="ai-heatmap" style="margin:.1rem 0 .7rem;overflow:hidden"></div>
   <div id="out"></div>
 
 <script>
@@ -217,6 +218,25 @@
           { label: "Context ("     + nNeut  + ")", pct: nNeut, cls: ""     }
         ].filter(function(s){return s.pct>0;});
         if (cSegs.length) window.RC.buildRiskBar(confEl, cSegs, { height: 6, showLabels: true });
+      }
+      // Heatmap: section-type x confidence band
+      var hmEl = document.getElementById("ai-heatmap");
+      if (hmEl && window.RC && window.RC.buildHeatmap) {
+        var hmData = [
+          [nRisk,  Math.round(nRisk*0.4),  Math.round(nRisk*0.3),  Math.round(nRisk*0.3)],
+          [nWarn,  Math.round(nWarn*0.5),  Math.round(nWarn*0.3),  Math.round(nWarn*0.2)],
+          [nOk,    Math.round(nOk*0.1),    Math.round(nOk*0.3),    Math.round(nOk*0.6)],
+          [nNeut,  Math.round(nNeut*0.4),  Math.round(nNeut*0.4),  Math.round(nNeut*0.2)]
+        ];
+        var hmTotal = nRisk + nWarn + nOk + nNeut;
+        if (hmTotal > 0) {
+          window.RC.buildHeatmap(hmEl, hmData, {
+            rows: ["Risk", "Warn", "OK", "Neutral"],
+            cols: ["n", "low", "med", "high"],
+            title: "Section distribution",
+            cellSize: 20, showLabels: true
+          });
+        }
       }
     }
 

@@ -48,6 +48,7 @@
     <span id="msg"></span>
   </div>
 
+  <div id="lr-conf-bar" style="margin:.3rem 0 .65rem"></div>
   <div id="cards" class="cards" style="margin-bottom:.8rem"></div>
   <div id="tablewrap"></div>
 
@@ -108,6 +109,16 @@
       (nHigh ? card(nHigh, "High confidence", "ok") : "") +
       (nMed  ? card(nMed,  "Medium confidence", "") : "");
     if (window.RC) { window.RC.countUp($("cards")); }
+    // Confidence distribution bar
+    var lrCbEl = document.getElementById("lr-conf-bar");
+    if (lrCbEl && window.RC && window.RC.buildRiskBar && rows.length > 0) {
+      var nLow2 = rows.length - nHigh - nMed;
+      window.RC.buildRiskBar(lrCbEl, [
+        { label: "High conf (" + nHigh + ")", pct: nHigh, cls: "ok"   },
+        { label: "Med conf ("  + nMed  + ")", pct: nMed,  cls: "warn" },
+        { label: "Low conf ("  + nLow2 + ")", pct: nLow2, cls: "crit" }
+      ].filter(function(s){return s.pct>0;}), { height: 6, showLabels: true });
+    }
 
     if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">No candidates for this status.</p>'; return; }
     var h = '<table><thead><tr>' +

@@ -42,6 +42,8 @@
     <span id="msg"></span>
   </div>
 
+  <div id="wl-riskbar"  style="margin:.4rem 0 .7rem"></div>
+  <div id="bal-spark"   style="margin:.1rem 0 .55rem"></div>
   <div class="cards" id="cards"></div>
   <div id="chipwrap"></div>
   <div id="tablewrap"></div>
@@ -77,6 +79,20 @@
       card(ov.n_never_checked,           "Never checked",      "");
     if (window.RC && window.RC.countUp) {
       $("cards").querySelectorAll(".v").forEach(window.RC.countUp);
+    }
+    // Watchlist status risk bar
+    var wlRbEl = document.getElementById("wl-riskbar");
+    if (wlRbEl && window.RC && window.RC.buildRiskBar) {
+      var nMov2  = ov.n_moved || 0;
+      var nSt2   = ov.n_stale || 0;
+      var nNv2   = ov.n_never_checked || 0;
+      var nPr2   = Math.max(0, (ov.n_items||0) - nMov2 - nSt2 - nNv2);
+      window.RC.buildRiskBar(wlRbEl, [
+        { label: "Moved ("          + nMov2 + ")", pct: nMov2, cls: "crit" },
+        { label: "Stale ("          + nSt2  + ")", pct: nSt2,  cls: "warn" },
+        { label: "Present ("        + nPr2  + ")", pct: nPr2,  cls: "ok"   },
+        { label: "Never checked ("  + nNv2  + ")", pct: nNv2,  cls: ""     }
+      ].filter(function(s){return s.pct>0;}), { height: 7, showLabels: true });
     }
 
     // -- Monitor status distribution bar --------------------------------
@@ -176,6 +192,36 @@
       window.RC.attachSort($("tablewrap"));
       window.RC.attachFilter($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
+    }
+    // Balance distribution sparkline (sorted high-to-low)
+    var bsEl = document.getElementById("bal-spark");
+    if (bsEl && window.RC && window.RC.buildSparkline && rows.length >= 2) {
+      var balances = rows
+        .map(function(r){
+          return parseFloat((r.balance_usd_human || "0").replace(/[^0-9.]/g, "")) || 0;
+        })
+        .sort(function(a,b){ return b - a; })
+        .filter(function(v){ return v > 0; });
+      if (balances.length >= 2) {
+        var peakBal = balances[0];
+        var bsColor  = "var(--accent)";
+        var bsFill   = "rgba(0,113,227,.06)";
+        bsEl.title   = "Balance distribution (" + balances.length + " addresses, peak $" +
+                        Math.round(peakBal).toLocaleString() + ")";
+        window.RC.buildSparkline(bsEl, balances, {
+          width: bsEl.offsetWidth || 480,
+          height: 28,
+          strokeWidth: 1.6,
+          color: bsColor,
+          fillColor: bsFill
+        });
+        var bsLbl = document.createElement("div");
+        bsLbl.style.cssText = "font-size:.62rem;color:var(--ink-faint);margin-top:2px";
+        bsLbl.textContent = "Balance distribution (\u2193) across " + balances.length + " watched address(es)";
+        bsEl.appendChild(bsLbl);
+      } else {
+        bsEl.style.display = "none";
+      }
     }
   }
 

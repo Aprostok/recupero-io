@@ -155,6 +155,11 @@ button:disabled { opacity: .5; cursor: default; transform: none; box-shadow: non
 .panel {
   background: var(--surface); border: 1px solid var(--hair);
   border-radius: var(--r); padding: 1rem 1.15rem; box-shadow: var(--shadow-sm);
+  transition: box-shadow .22s var(--ease), transform .18s var(--ease);
+}
+.panel:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
 }
 
 /* ── Tables ── */
@@ -294,7 +299,8 @@ td.age   { white-space: nowrap; font-size: .76rem; }
 
 /* ── .mono copy affordance ── */
 td.mono, div.mono { cursor: copy; }
-td.mono:hover, div.mono:hover { opacity: .82; }
+td.mono:hover { opacity: 1; color: var(--accent); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 2px; }
+div.mono:hover { opacity: .82; }
 
 /* ── Timeline cell (holds a buildTimeline SVG) ── */
 .rc-timeline-cell {
@@ -612,6 +618,7 @@ CONSOLE_JS = r"""
       row.style.animation =
         "rc-rowIn .3s cubic-bezier(.32,.72,0,1) " + (i * 16 + 25) + "ms both";
     });
+    attachCopyMono(root || document);
   }
 
   // ── Sort helpers ─────────────────────────────────────────────────────────
@@ -1496,6 +1503,48 @@ CONSOLE_JS = r"""
     return el;
   }
 
+
+  // ── attachCopyMono ────────────────────────────────────────────────────────
+  // Wire click-to-copy on every td.mono (address cells) inside container.
+  // Ignored when clipboard API is unavailable. Safe to call multiple times
+  // (guarded by data-cp attribute). Auto-called by staggerRows.
+  function attachCopyMono(container) {
+    if (!container) return;
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+    var root = container.querySelectorAll ? container : document;
+    root.querySelectorAll('td.mono').forEach(function(el) {
+      if (el.getAttribute('data-cp')) return;
+      el.setAttribute('data-cp', '1');
+      if (!el.title) el.title = 'Click to copy';
+      el.addEventListener('click', function(ev) {
+        // Do not intercept link/button clicks
+        var tgt = ev.target;
+        while (tgt && tgt !== el) {
+          if (tgt.tagName === 'A' || tgt.tagName === 'BUTTON') return;
+          tgt = tgt.parentElement;
+        }
+        var txt = (el.textContent || '').trim();
+        if (!txt || txt === '—' || txt.length < 4) return;
+        navigator.clipboard.writeText(txt).then(function() {
+          var disp = txt.length > 20 ? txt.slice(0, 10) + '…' + txt.slice(-5) : txt;
+          if (typeof toast === 'function') toast('✓ ' + disp, 'ok');
+          // Brief green flash
+          var origBg = el.style.background || '';
+          var origTr = el.style.transition || '';
+          el.style.transition = 'background .1s';
+          el.style.background = 'var(--ok-soft)';
+          setTimeout(function() {
+            el.style.transition = 'background .55s';
+            el.style.background = origBg;
+            setTimeout(function() {
+              el.style.transition = origTr;
+            }, 600);
+          }, 120);
+        }).catch(function() {});
+      });
+    });
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1514,7 +1563,8 @@ CONSOLE_JS = r"""
     buildSparkline: buildSparkline,
     buildTimeline: buildTimeline,
     buildRiskBar: buildRiskBar,
-    buildHeatmap: buildHeatmap
+    buildHeatmap: buildHeatmap,
+    attachCopyMono: attachCopyMono
   };
 })();
 """

@@ -396,6 +396,30 @@ def run_watch_tick(
     except Exception as _exc:  # noqa: BLE001 — persistence must never break the tick
         log.warning("watch-tick: recovery-alert persist failed (%s)", _exc)
 
+    # roadmap #3: auto-DRAFT freeze-actionable alerts into the human-review
+    # queue (status=awaiting_review) so the approve-to-send step is one click
+    # instead of a from-scratch draft. NEVER auto-sends — the dispatcher review
+    # gate still requires a human to approve. Best-effort + must never break the
+    # tick. Only freezable_inflow/outflow alerts that carry an originating case.
+    try:
+        if report.alerts:
+            import tempfile
+            from pathlib import Path as _Path
+
+            from recupero.monitoring.freeze_draft import enqueue_freeze_drafts
+            drafts = enqueue_freeze_drafts(
+                report.alerts,
+                out_dir=_Path(tempfile.mkdtemp(prefix="recupero-freeze-draft-")),
+                dsn=dsn,
+            )
+            if drafts:
+                log.info(
+                    "watch-tick: auto-drafted %d freeze request(s) into the "
+                    "human-review queue (awaiting_review)", len(drafts),
+                )
+    except Exception as _exc:  # noqa: BLE001 — auto-draft must never break the tick
+        log.warning("watch-tick: freeze auto-draft failed (%s)", _exc)
+
     report.finished_at = datetime.now(UTC)
     log.info(
         "watch-tick done: candidates=%d snapshotted=%d cooldown=%d "

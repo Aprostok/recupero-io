@@ -53,6 +53,10 @@ class RecoveryAlert:
     label_name: str | None
     message: str
     recommended_action: str
+    # v0.39 (roadmap #3): the originating case, threaded from the watchlist row
+    # so a freeze-actionable alert can be auto-drafted into the human-review
+    # queue for that case. Optional (None when the source row lacks it).
+    investigation_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -66,6 +70,7 @@ class RecoveryAlert:
             "label_name": self.label_name,
             "message": self.message,
             "recommended_action": self.recommended_action,
+            "investigation_id": self.investigation_id,
         }
 
 
@@ -182,10 +187,12 @@ def evaluate_recovery_alerts(
             # informational, not an interrupt. Skip to keep alerts high-signal.
             continue
 
+        _inv = getattr(ch, "investigation_id", None)
         alerts.append(RecoveryAlert(
             address=address, chain=chain, severity=severity, kind=kind,
             delta_usd=delta_str, dormant_days=dormant, role=role,
             label_name=label_name, message=message, recommended_action=action,
+            investigation_id=(str(_inv) if _inv else None),
         ))
 
     alerts.sort(

@@ -1508,6 +1508,90 @@ def _crosschain_max_bridge_hops() -> int:
     return 4 if _deep_reach_enabled() else 1
 
 
+def _dex_swap_max_rounds() -> int:
+    """How many ITERATIVE DEX-swap continuation rounds to follow (roadmap #8 —
+    A swaps USDT->WBTC, the WBTC recipient swaps WBTC->ETH, ...). The legacy
+    same-chain continuation collected swap-output recipients ONCE, so a chain of
+    3+ swaps dead-ended after the first. Each round re-collects swap-output seeds
+    from the prior round's new transfers and follows them — mirroring the
+    cross-chain multi-bridge recursion (``_crosschain_max_bridge_hops``).
+
+    ``RECUPERO_DEX_SWAP_MAX_ROUNDS`` wins when set, clamped to [1, 8]. DEFAULT 1
+    = the legacy single-pass behaviour (BYTE-IDENTICAL to pre-#8 traces). Raise
+    it to follow multi-swap chains; bounded by the per-round continuation-seed
+    cap + the ``visited`` dedup so it can't explode the budget or loop.
+    """
+    raw = os.environ.get("RECUPERO_DEX_SWAP_MAX_ROUNDS")
+    if raw is not None:
+        try:
+            return max(1, min(8, int(raw)))
+        except (TypeError, ValueError):
+            pass
+    return 1
+
+
+def _continue_dex_swap_chain(
+    prev_new_transfers: list[Transfer],
+    *,
+    chain: Chain,
+    adapter: ChainAdapter,
+    label_store: LabelStore,
+    price_client: CoinGeckoClient,
+    policy: TracePolicy,
+    incident_time: datetime,
+    config: RecuperoConfig,
+    evidence_dir: Path,
+    visited: set[str],
+    trace_concurrency: int,
+    max_rounds: int,
+) -> list[Transfer]:
+    """Iteratively follow a chain of same-chain DEX swaps (roadmap #8).
+
+    Round 1 (the swap-output recipients of the ORIGINAL trace) is run by the
+    caller; this picks up from there. Each subsequent round re-collects
+    swap-output seeds from the PREVIOUS round's new transfers (via
+    ``_collect_swap_output_seeds``, which dedups through ``visited``), runs one
+    shallow ``_process_wave``, and feeds its new transfers into the next round —
+    until no fresh swap output is found or ``max_rounds`` is reached. Returns the
+    transfers discovered in rounds 2..N (empty when ``max_rounds <= 1``).
+    """
+    extra: list[Transfer] = []
+    frontier = prev_new_transfers
+    rounds_left = max_rounds - 1  # round 1 already performed by the caller
+    max_cont = int(os.environ.get("RECUPERO_MAX_CONTINUATION_SEEDS", "25"))
+    while rounds_left > 0 and frontier:
+        rounds_left -= 1
+        seeds = _collect_swap_output_seeds(
+            frontier, chain=chain, adapter=adapter, visited=visited,
+        )
+        if not seeds:
+            break
+        wave = [(addr, 1) for addr in seeds[:max_cont]]
+        log.info(
+            "dex-swap-chain: following %d further swap output(s) on %s "
+            "(round, %d left)", len(wave), chain.value, rounds_left,
+        )
+        results = _process_wave(
+            wave,
+            adapter=adapter,
+            label_store=label_store,
+            price_client=price_client,
+            policy=policy,
+            incident_time=incident_time,
+            config=config,
+            evidence_dir=evidence_dir,
+            concurrency=trace_concurrency,
+        )
+        round_new: list[Transfer] = []
+        for _from_addr, _depth, hop_transfers, _is_service in results:
+            round_new.extend(hop_transfers)
+        if not round_new:
+            break
+        extra.extend(round_new)
+        frontier = round_new
+    return extra
+
+
 def _continue_past_dex_and_bridges(
     *,
     case: Case,
@@ -1973,6 +2057,20 @@ def _continue_past_dex_and_bridges(
     new_transfers: list[Transfer] = []
     for _from_addr, _depth, hop_transfers, _is_service in cont_results:
         new_transfers.extend(hop_transfers)
+
+    # roadmap #8: iterative multi-swap-chain continuation. The pass above
+    # followed the FIRST swap's output recipients; this follows a CHAIN of
+    # further swaps (USDT->WBTC->ETH->...) by re-collecting swap-output seeds
+    # from each round's new transfers. Opt-in via RECUPERO_DEX_SWAP_MAX_ROUNDS
+    # (default 1 ⇒ this block is a no-op ⇒ byte-identical to pre-#8 traces).
+    _swap_rounds = _dex_swap_max_rounds()
+    if _swap_rounds > 1 and new_transfers:
+        new_transfers.extend(_continue_dex_swap_chain(
+            new_transfers, chain=chain, adapter=adapter, label_store=label_store,
+            price_client=price_client, policy=policy, incident_time=incident_time,
+            config=config, evidence_dir=evidence_dir, visited=visited,
+            trace_concurrency=trace_concurrency, max_rounds=_swap_rounds,
+        ))
 
     # v0.16.13: cross-chain continuation pass. Each destination chain
     # needs its own adapter — group seeds by chain, instantiate one

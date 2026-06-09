@@ -63,6 +63,7 @@ their own section.
 | `RECUPERO_PIVOT_MIN_USD` | `50000` | Decimal | `>= 0` | v0.34 | Minimum inbound USD for an address to qualify as a pivot hub — avoids burning N-chain traces on a dust counterparty. |
 | `RECUPERO_MAX_CONTINUATION_SEEDS` | `25` | int | `>= 0` | v0.16.x | Cap on same-chain bridge / DEX continuation seeds per case. |
 | `RECUPERO_MAX_CROSS_CHAIN_SEEDS` | `10` | int | `>= 0` | v0.16.13 | Cap on cross-chain destination seeds across all chains. |
+| `RECUPERO_DEX_SWAP_MAX_ROUNDS` | `1` | int | `[1, 8]` | v0.39 | Iterative DEX-swap-chain continuation rounds (roadmap #8): follow a chain of consecutive same-chain swaps (USDT->WBTC->ETH->...) by re-collecting swap-output seeds each round. `1` = legacy single-pass (byte-identical). Bounded by `RECUPERO_MAX_CONTINUATION_SEEDS` per round + the visited dedup. |
 | `RECUPERO_DISABLE_PASS2` | unset | bool | `=1` to disable | v0.20.x | Kill switch for the perpetrator-trace pass-2 stage. |
 | `RECUPERO_PASS2_RATIO_THRESHOLD` | `100` | float | `> 0` | v0.20.x | Outflow/inflow ratio threshold for pass-2 candidate identification. |
 | `RECUPERO_GRAPH_EVENTS_BRIDGE` | unset (off) | bool | `{1,true,True}` to enable | v0.35 | Operator graph real-time (Phase 4.13). When enabled, the API starts a Postgres `LISTEN graph_events` bridge (daemon thread) on the first SSE connection, so the worker's watch-tick `NOTIFY`s reach operators streaming `/v1/operator/graph/{id}/stream`. Off by default so tests / non-streaming deploys don't open a DB listener. Requires `SUPABASE_DB_URL`. |

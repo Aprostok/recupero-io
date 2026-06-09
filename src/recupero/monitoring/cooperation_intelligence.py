@@ -54,6 +54,7 @@ import statistics
 import unicodedata
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -781,6 +782,74 @@ def recommend_legal_instrument(
     )
 
 
+# Instruments the informal freeze-letter EMAIL itself can reach. Anything
+# stronger means the email alone is unlikely to produce a freeze and the
+# operator should ESCALATE to a legal instrument (314b / MLAT / AUSA / grand
+# jury subpoena) rather than burn the window on another silent letter.
+_EMAIL_REACHABLE_INSTRUMENTS = frozenset({
+    INSTRUMENT_DIRECT_REQUEST,
+    INSTRUMENT_LE_BACKED,
+})
+
+
+def annotate_dispatch_with_cooperation(
+    plan: list[dict[str, Any]],
+    profiles: dict[str, IssuerCooperationProfile],
+    *,
+    ofac_exposed_issuers: set[str] | None = None,
+    jurisdiction_by_issuer: dict[str, str] | None = None,
+    ic3_case_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Annotate each freeze-letter dispatch entry with the cooperation-driven
+    recommended legal instrument — WITHOUT dropping any entry.
+
+    Roadmap-to-#1 v3 item #4: cooperation intelligence previously only
+    *annotated* the LE handoff; the dispatcher ignored it, so a known
+    black-hole / OFAC-exposed / chronically-silent issuer still received yet
+    another futile informal email instead of being routed to a subpoena.
+
+    For each entry (keyed by ``issuer``) this looks up the cross-case
+    cooperation profile (``profiles`` keyed by normalized issuer name, as
+    returned by :func:`build_all_profiles`) and runs
+    :func:`recommend_legal_instrument`, then adds three keys to a shallow copy
+    of the entry (inputs are never mutated):
+
+      * ``recommended_instrument`` — one of ``VALID_INSTRUMENTS``;
+      * ``recommendation_reason``  — the human-readable rationale;
+      * ``escalate_beyond_email``  — ``True`` when the recommended instrument is
+        stronger than the informal email channel.
+
+    The entry is ALWAYS kept — this is an explainable advisory the operator
+    acts on, never a silent drop of a freeze ask (INVARIANT: never drop a
+    freeze ask). Pure (no DB/network): an issuer with no profile degrades to a
+    standard direct request with ``escalate_beyond_email=False``.
+    """
+    ofac = {_normalize_issuer_name(x) for x in (ofac_exposed_issuers or set())}
+    jbi = {
+        _normalize_issuer_name(k): v
+        for k, v in (jurisdiction_by_issuer or {}).items()
+    }
+    out: list[dict[str, Any]] = []
+    for entry in plan:
+        e = dict(entry)
+        issuer = e.get("issuer") or ""
+        key = _normalize_issuer_name(issuer)
+        profile = profiles.get(key) or IssuerCooperationProfile(issuer=key or issuer)
+        rec = recommend_legal_instrument(
+            profile,
+            jurisdiction=jbi.get(key),
+            ofac_exposed=key in ofac,
+            ic3_case_id=ic3_case_id,
+        )
+        e["recommended_instrument"] = rec.instrument
+        e["recommendation_reason"] = rec.reason
+        e["escalate_beyond_email"] = (
+            rec.instrument not in _EMAIL_REACHABLE_INSTRUMENTS
+        )
+        out.append(e)
+    return out
+
+
 __all__ = (
     "IssuerCooperationProfile",
     "InstrumentRecommendation",
@@ -793,4 +862,5 @@ __all__ = (
     "build_cooperation_profile",
     "build_all_profiles",
     "recommend_legal_instrument",
+    "annotate_dispatch_with_cooperation",
 )

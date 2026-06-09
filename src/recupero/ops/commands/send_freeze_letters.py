@@ -397,6 +397,31 @@ def _build_dispatch_plan(
 
     if skip_count:
         print(f"({skip_count} issuer(s) skipped — already sent)")
+
+    # v0.39 (roadmap #4): annotate each entry with the cooperation-driven
+    # recommended legal instrument so a known black-hole / OFAC-exposed /
+    # chronically-silent issuer is FLAGGED for escalation (subpoena/MLAT/314b)
+    # instead of silently getting another futile email. Advisory only — the
+    # freeze ask is STILL dispatched (never drop a freeze ask). Best-effort:
+    # a profile-build failure (no DB, etc.) must never abort the send.
+    try:
+        from recupero.monitoring.cooperation_intelligence import (
+            annotate_dispatch_with_cooperation,
+            build_all_profiles,
+        )
+        profiles = build_all_profiles(dsn)
+        if profiles:
+            plan = annotate_dispatch_with_cooperation(plan, profiles)
+            for entry in plan:
+                if entry.get("escalate_beyond_email"):
+                    print(
+                        f"  ESCALATE  {entry['issuer']}: cooperation history "
+                        f"recommends '{entry['recommended_instrument']}' over an "
+                        f"informal freeze email. {entry.get('recommendation_reason', '')}"
+                    )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cooperation-intel dispatch annotation skipped: %s", exc)
+
     return plan
 
 

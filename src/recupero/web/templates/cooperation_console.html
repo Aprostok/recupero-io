@@ -34,6 +34,7 @@
   </div>
 
   <div class="cards" id="cards"></div>
+  <div id="coop-heatmap" style="margin:.3rem 0 .8rem;overflow:hidden"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -151,6 +152,36 @@
         ].filter(function(s){return s.pct>0;}), {height:7});
         $("tablewrap").insertBefore(barEl, $("tablewrap").firstChild);
       })();
+    }
+    // Issuer non-cooperation heatmap (high value = worse)
+    var hmCoop = document.getElementById("coop-heatmap");
+    if (hmCoop && window.RC && window.RC.buildHeatmap && rows.length > 0) {
+      var sortedIssuers = rows.slice()
+        .sort(function(a,b){ return (b.n_letters_sent||0)-(a.n_letters_sent||0); })
+        .slice(0,9);
+      var coopMx = sortedIssuers.map(function(r) {
+        return [
+          Math.round((1-(r.response_rate||0))*100),
+          Math.round((1-(r.full_freeze_rate||0))*100),
+          Math.round((1-(r.partial_freeze_rate||0))*100)
+        ];
+      });
+      var coopAny = coopMx.some(function(row){
+        return row.some(function(v){ return v > 0; });
+      });
+      if (coopAny) {
+        window.RC.buildHeatmap(hmCoop, coopMx, {
+          rows: sortedIssuers.map(function(r){
+            var nm = (r.issuer||"?"); return nm.length > 14 ? nm.slice(0,12)+".." : nm;
+          }),
+          cols: ["No-response", "No full-frz", "No partial"],
+          title: "Non-cooperation heat (higher = worse)",
+          cellSize: 24, showLabels: true
+        });
+      } else if (!coopAny && rows.length > 0) {
+        hmCoop.innerHTML = '<span style="font-size:.7rem;color:var(--ok);padding:.25rem 0;display:block">'
+          + '&#10003; All tracked issuers cooperating fully' + '</span>';
+      }
     }
   }
 

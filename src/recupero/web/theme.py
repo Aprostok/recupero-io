@@ -279,6 +279,10 @@ td.age   { white-space: nowrap; font-size: .76rem; }
 .pbar-fill.ok   { background: var(--ok);   }
 .pbar-fill.warn { background: var(--warn); }
 .pbar-fill.crit { background: var(--crit); }
+/* Sparkline wrapper */
+.rc-spark-wrap { position: relative; display: block; min-height: 34px; }
+.rc-spark-wrap svg { display: block; width: 100%; height: 32px; }
+.rc-spark-wrap:hover svg { opacity: .82; transition: opacity .2s; }
 
 /* ── Spark cell (table cell holding a buildSparkline SVG) ── */
 .spark-cell {
@@ -391,7 +395,8 @@ td.mono:hover, div.mono:hover { opacity: .82; }
   display: inline-block; width: 8px; height: 8px;
   background: var(--ok); border-radius: 50%;
   animation: rc-live-pulse 2.2s ease-in-out infinite;
-  vertical-align: middle; margin-right: .3rem;
+  vertical-align: middle; margin-right: .3rem;;
+  box-shadow: 0 0 0 2px rgba(29,138,78,.18), 0 0 8px rgba(29,138,78,.35);
 }
 
 /* ── Generic chips ── */

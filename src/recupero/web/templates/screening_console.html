@@ -72,6 +72,7 @@
   <div id="statsbox" class="stats"></div>
   <div id="risk-dist" class="risk-dist-panel"></div>
   <div id="risk-bar" style="margin:-.15rem 0 .55rem"></div>
+  <div id="score-spark" class="rc-spark-wrap" style="margin:.1rem 0 .6rem"></div>
   <div id="cards" class="cards" style="margin-top:1rem"></div>
   <div id="out"></div>
 
@@ -246,6 +247,36 @@
       xBtn.onclick = function() {
         if (window.RC && window.RC.exportTable) window.RC.exportTable($("out"), "screening-results.csv");
       };
+    }
+    // Score distribution sparkline (sorted high-to-low risk)
+    var spEl = document.getElementById("score-spark");
+    if (spEl && window.RC && window.RC.buildSparkline) {
+      var scores = rows.filter(function(r){ return !r.error && r.score != null; })
+                        .map(function(r){ return Number(r.score); })
+                        .sort(function(a,b){ return b - a; });
+      if (scores.length >= 2) {
+        var maxScore = scores[0];
+        var spColor = maxScore >= 8 ? "var(--crit)" : maxScore >= 4 ? "var(--warn)" : "var(--ok)";
+        var spFill  = maxScore >= 8 ? "rgba(215,0,21,.07)"
+                    : maxScore >= 4 ? "rgba(185,119,14,.07)"
+                    : "rgba(29,138,78,.07)";
+        spEl.title = "Risk scores (high to low) across " + scores.length + " address(es)";
+        window.RC.buildSparkline(spEl, scores, {
+          width: spEl.offsetWidth || 480,
+          height: 32,
+          strokeWidth: 1.8,
+          color: spColor,
+          fillColor: spFill
+        });
+        // Label overlay
+        var lbl = document.createElement("div");
+        lbl.style.cssText = "font-size:.62rem;color:var(--ink-faint);margin-top:2px";
+        lbl.textContent = "Risk score distribution (\u2193 sorted) \u2014 peak: " + maxScore
+          + " / " + scores.length + " addresses";
+        spEl.appendChild(lbl);
+      } else {
+        spEl.style.display = "none";
+      }
     }
   }
 

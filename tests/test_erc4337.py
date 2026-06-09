@@ -9,6 +9,8 @@ from __future__ import annotations
 from recupero.trace.erc4337 import (
     ENTRYPOINT_V06,
     ENTRYPOINT_V07,
+    EXECUTE_BATCH_SELECTOR,
+    EXECUTE_BATCH_VALUE_SELECTOR,
     EXECUTE_SELECTOR,
     EXECUTE_WITH_OP_SELECTOR,
     HANDLE_OPS_SELECTOR,
@@ -393,3 +395,82 @@ def test_full_handleops_to_execute_to_transfer_end_to_end() -> None:
     assert inner[0].to_address == _VICTIM_OUT
     assert inner[0].amount_raw == 7_000_000
     assert inner[0].from_address == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+
+# ---- v0.39: executeBatch unwrap ---- #
+
+
+def _enc_addr_array(addrs: list[str]) -> bytes:
+    return _u256(len(addrs)) + b"".join(_addr_word(a) for a in addrs)
+
+
+def _enc_uint_array(vals: list[int]) -> bytes:
+    return _u256(len(vals)) + b"".join(_u256(v) for v in vals)
+
+
+def _enc_bytes_array(items: list[bytes]) -> bytes:
+    """ABI dynamic bytes[] — [len][off0..][elem0..], offsets relative to the
+    slot after the length word (mirrors _read_bytes_array)."""
+    n = len(items)
+    encoded = [_encode_bytes_field(b) for b in items]
+    cursor = 32 * n
+    offs = b""
+    for enc in encoded:
+        offs += _u256(cursor)
+        cursor += len(enc)
+    return _u256(n) + offs + b"".join(encoded)
+
+
+def _execute_batch_value_cd(dests, values, datas) -> bytes:
+    da, va, ba = _enc_addr_array(dests), _enc_uint_array(values), _enc_bytes_array(datas)
+    off_dest = 96
+    off_value = off_dest + len(da)
+    off_data = off_value + len(va)
+    head = _u256(off_dest) + _u256(off_value) + _u256(off_data)
+    return bytes.fromhex(EXECUTE_BATCH_VALUE_SELECTOR[2:]) + head + da + va + ba
+
+
+def _execute_batch_novalue_cd(dests, datas) -> bytes:
+    da, ba = _enc_addr_array(dests), _enc_bytes_array(datas)
+    off_dest = 64
+    off_data = off_dest + len(da)
+    head = _u256(off_dest) + _u256(off_data)
+    return bytes.fromhex(EXECUTE_BATCH_SELECTOR[2:]) + head + da + ba
+
+
+def test_execute_batch_value_unwraps_each_call() -> None:
+    tok_a, tok_b = "0x" + "a1" * 20, "0x" + "b2" * 20
+    to_a, to_b = "0x" + "11" * 20, "0x" + "22" * 20
+    cd = _execute_batch_value_cd(
+        [tok_a, tok_b], [0, 0], [_transfer_cd(to_a, 10), _transfer_cd(to_b, 20)])
+    ts = extract_inner_transfers(_make_op(call_data=cd))
+    assert len(ts) == 2
+    assert ts[0].token == tok_a and ts[0].to_address == to_a and ts[0].amount_raw == 10
+    assert ts[1].token == tok_b and ts[1].amount_raw == 20
+
+
+def test_execute_batch_novalue_unwraps() -> None:
+    tok, to = "0x" + "a1" * 20, "0x" + "11" * 20
+    cd = _execute_batch_novalue_cd([tok], [_transfer_cd(to, 5)])
+    ts = extract_inner_transfers(_make_op(call_data=cd))
+    assert len(ts) == 1 and ts[0].token == tok and ts[0].amount_raw == 5
+
+
+def test_execute_batch_mixed_native_and_erc20() -> None:
+    tok, recipient, to = "0x" + "a1" * 20, "0x" + "cc" * 20, "0x" + "11" * 20
+    cd = _execute_batch_value_cd(
+        [tok, recipient], [0, 100], [_transfer_cd(to, 5), b""])
+    ts = extract_inner_transfers(_make_op(call_data=cd))
+    assert len(ts) == 2
+    assert ts[0].selector == "transfer" and ts[0].token == tok
+    assert ts[1].selector == "executeBatch" and ts[1].token == ""
+    assert ts[1].to_address == recipient and ts[1].amount_raw == 100
+
+
+def test_execute_batch_length_cap_is_safe() -> None:
+    """An adversarial batch claiming a huge array length decodes to [] (the cap
+    raises internally, caught) — no OOM / quadratic blowup."""
+    head = _u256(96) + _u256(128) + _u256(160)
+    payload = head + _u256(1000)  # dest array (at off 96) claims 1000 elements
+    cd = bytes.fromhex(EXECUTE_BATCH_VALUE_SELECTOR[2:]) + payload
+    assert extract_inner_transfers(_make_op(call_data=cd)) == []

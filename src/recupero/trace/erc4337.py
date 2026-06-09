@@ -58,6 +58,13 @@ EXECUTE_SELECTOR = "0xb61d27f6"
 #   decode dest/value/data; the uint8 at head word 3 is simply ignored.
 EXECUTE_WITH_OP_SELECTOR = "0x51945447"
 _EXECUTE_SINGLE_SELECTORS = frozenset({EXECUTE_SELECTOR, EXECUTE_WITH_OP_SELECTOR})
+#   executeBatch(address[],bytes[])            — SimpleAccount v0.6 batch form
+EXECUTE_BATCH_SELECTOR = "0x18dfb3c7"
+#   executeBatch(address[],uint256[],bytes[])  — SimpleAccount v0.7 batch form
+EXECUTE_BATCH_VALUE_SELECTOR = "0x47e1da2a"
+# Sanity cap on batch array length — real executeBatch arrays are < ~50; this
+# bounds OOM / quadratic-decode exposure from an adversarial bundler tx.
+_MAX_BATCH_CALLS = 256
 
 # Known smart-account factory addresses (lowercase). Best-effort —
 # AA factories proliferate quickly and these are the ones we've seen
@@ -170,6 +177,43 @@ def _read_bytes(data: bytes, head_offset: int, base_offset: int) -> bytes:
     if start + length > len(data):
         raise ValueError(f"OOB bytes read at {abs_off} len={length}")
     return data[start:start + length]
+
+
+def _read_uint_array(data: bytes, arr_off: int) -> list[int]:
+    """Read a ``uint256[]`` whose length+elements start at absolute ``arr_off``
+    ([len][e0][e1]...). Capped at ``_MAX_BATCH_CALLS``."""
+    n = _read_uint(data, arr_off)
+    if n > _MAX_BATCH_CALLS:
+        raise ValueError(f"uint[] len {n} exceeds cap {_MAX_BATCH_CALLS}")
+    return [_read_uint(data, arr_off + 32 + 32 * i) for i in range(n)]
+
+
+def _read_address_array(data: bytes, arr_off: int) -> list[str]:
+    """Read an ``address[]`` ([len][a0][a1]...). Capped at ``_MAX_BATCH_CALLS``."""
+    n = _read_uint(data, arr_off)
+    if n > _MAX_BATCH_CALLS:
+        raise ValueError(f"address[] len {n} exceeds cap {_MAX_BATCH_CALLS}")
+    return [_read_address(data, arr_off + 32 + 32 * i) for i in range(n)]
+
+
+def _read_bytes_array(data: bytes, arr_off: int) -> list[bytes]:
+    """Read a ``bytes[]`` dynamic array: ``arr_off`` → [len][off0][off1]...],
+    each ``off_i`` relative to the first element-offset slot, pointing at
+    [len_i][bytes_i]. Capped at ``_MAX_BATCH_CALLS``."""
+    n = _read_uint(data, arr_off)
+    if n > _MAX_BATCH_CALLS:
+        raise ValueError(f"bytes[] len {n} exceeds cap {_MAX_BATCH_CALLS}")
+    base = arr_off + 32  # element offsets are relative to here
+    out: list[bytes] = []
+    for i in range(n):
+        elem_rel = _read_uint(data, base + 32 * i)
+        abs_off = base + elem_rel
+        blen = _read_uint(data, abs_off)
+        start = abs_off + 32
+        if start + blen > len(data):
+            raise ValueError(f"OOB bytes[] elem {i} at {abs_off} len={blen}")
+        out.append(data[start:start + blen])
+    return out
 
 
 def _decode_one_user_op(data: bytes, op_base: int) -> UserOp:
@@ -311,6 +355,38 @@ def _decode_erc20_call(
     return None
 
 
+def _extract_execute_batch(
+    sender: str, payload: bytes, *, has_value: bool
+) -> list[InnerTransfer]:
+    """Unwrap ``executeBatch`` — ``(address[] dest, [uint256[] value,]
+    bytes[] data)`` — into per-call InnerTransfers (``token`` = each ``dest``).
+    For the value-bearing form, a per-element ``value > 0`` with no ERC-20 inner
+    call is a native transfer to that dest. Arrays are length-capped
+    (``_MAX_BATCH_CALLS``); a per-element decode that yields nothing is skipped
+    (conservative)."""
+    dests = _read_address_array(payload, _read_uint(payload, 0))
+    if has_value:
+        values = _read_uint_array(payload, _read_uint(payload, 32))
+        datas = _read_bytes_array(payload, _read_uint(payload, 64))
+    else:
+        values = []
+        datas = _read_bytes_array(payload, _read_uint(payload, 32))
+    out: list[InnerTransfer] = []
+    for i, target in enumerate(dests):
+        data = datas[i] if i < len(datas) else b""
+        it = _decode_erc20_call(sender, target, data)
+        if it is not None:
+            out.append(it)
+            continue
+        v = values[i] if i < len(values) else 0
+        if v > 0:
+            out.append(InnerTransfer(
+                from_address=sender, to_address=target, token="",
+                amount_raw=v, selector="executeBatch",
+            ))
+    return out
+
+
 def extract_inner_transfers(user_op: UserOp) -> list[InnerTransfer]:
     """Extract the value movement encoded in a UserOp's callData.
 
@@ -327,9 +403,10 @@ def extract_inner_transfers(user_op: UserOp) -> list[InnerTransfer]:
     Also still handles a *direct* ``transfer`` / ``transferFrom`` in callData
     (no wrapper) — token unknown at this layer, kept ``""`` (pre-v0.39 behavior).
 
-    NOT yet unwrapped: ``executeBatch`` (array form) and multicall/`execute`-of-
-    `execute` — tracked follow-ups; those callDatas yield ``[]`` rather than a
-    guess. Best-effort: any decode error → ``[]``.
+    ``executeBatch(address[],[uint256[],]bytes[])`` IS unwrapped (per-call, token
+    = each dest). NOT yet unwrapped: multicall / ``execute``-of-``execute``
+    nesting — tracked follow-up; those callDatas yield ``[]`` rather than a guess.
+    Best-effort: any decode error → ``[]``.
     """
     cd = user_op.call_data
     if not cd or len(cd) < 4:
@@ -356,6 +433,12 @@ def extract_inner_transfers(user_op: UserOp) -> list[InnerTransfer]:
                     amount_raw=value,
                     selector="execute",
                 ))
+        elif selector == EXECUTE_BATCH_VALUE_SELECTOR and len(payload) >= 96:
+            # executeBatch(address[] dest, uint256[] value, bytes[] data)
+            out.extend(_extract_execute_batch(user_op.sender, payload, has_value=True))
+        elif selector == EXECUTE_BATCH_SELECTOR and len(payload) >= 64:
+            # executeBatch(address[] dest, bytes[] data)
+            out.extend(_extract_execute_batch(user_op.sender, payload, has_value=False))
         elif selector in (ERC20_TRANSFER_SELECTOR, ERC20_TRANSFER_FROM_SELECTOR):
             # Direct ERC-20 call in callData (no execute wrapper) — the token
             # contract isn't named at this layer, so token stays "".

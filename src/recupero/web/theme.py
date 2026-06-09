@@ -171,6 +171,10 @@ tr.sev-critical td { background: var(--crit-soft); }
 tr.sev-high td     { background: var(--warn-soft); }
 tr.sev-critical td:first-child { border-left: 3px solid var(--crit); }
 tr.sev-high td:first-child     { border-left: 3px solid var(--warn); }
+tr.sev-critical:hover td { background: rgba(215,0,21,.13) !important; }
+@media (prefers-color-scheme: dark) {
+  tr.sev-critical:hover td { background: rgba(255,69,58,.18) !important; }
+}
 .right { text-align: right; }
 .mono { font-family: var(--mono); font-size: .77rem; word-break: break-all; }
 .action  { color: var(--ink-soft); font-size: .74rem; max-width: 24rem; }
@@ -300,9 +304,21 @@ td.mono:hover, div.mono:hover { opacity: .82; }
   border: 1px solid var(--hair); box-shadow: var(--shadow-sm);
   animation: rc-rise .4s var(--ease) both;
 }
-.verdict-hero.v-sanctioned, .verdict-hero.v-high { background: var(--crit-soft); border-color: var(--crit-border); }
-.verdict-hero.v-medium { background: var(--warn-soft); border-color: var(--warn-border); }
-.verdict-hero.v-low, .verdict-hero.v-clean { background: var(--ok-soft); border-color: var(--ok-border); }
+.verdict-hero.v-sanctioned, .verdict-hero.v-high {
+  background: linear-gradient(135deg, var(--crit-soft) 0%, rgba(215,0,21,.015) 100%);
+  border-color: var(--crit-border);
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--crit-border);
+}
+.verdict-hero.v-medium {
+  background: linear-gradient(135deg, var(--warn-soft) 0%, rgba(185,119,14,.015) 100%);
+  border-color: var(--warn-border);
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--warn-border);
+}
+.verdict-hero.v-low, .verdict-hero.v-clean {
+  background: linear-gradient(135deg, var(--ok-soft) 0%, rgba(29,138,78,.015) 100%);
+  border-color: var(--ok-border);
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--ok-border);
+}
 .vh-icon { font-size: 2.2rem; flex-shrink: 0; line-height: 1; }
 .vh-body { flex: 1; min-width: 0; }
 .vh-label { font-size: 1.3rem; font-weight: 800; letter-spacing: -0.025em; line-height: 1.1; }
@@ -465,9 +481,39 @@ mark.rc-hl { background: rgba(255,214,0,.38); color: inherit; border-radius: 2px
   font-size: .7rem; font-weight: 800; line-height: 1; color: var(--ink);
 }
 .score-ring.sm .ring-inner { top: 4px; right: 4px; bottom: 4px; left: 4px; font-size: .56rem; }
-.score-ring.r-crit { --ring-color: var(--crit); }
-.score-ring.r-high { --ring-color: var(--warn); }
-.score-ring.r-ok   { --ring-color: var(--ok);   }
+/* Score-ring risk glow */
+@keyframes rc-ring-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(215,0,21,.12), 0 0 14px rgba(215,0,21,.28); }
+  50%       { box-shadow: 0 0 0 3px rgba(215,0,21,.22), 0 0 26px rgba(215,0,21,.52); }
+}
+.score-ring { transition: box-shadow .3s var(--ease); }
+.score-ring.r-crit {
+  --ring-color: var(--crit);
+  box-shadow: 0 0 0 2px rgba(215,0,21,.12), 0 0 14px rgba(215,0,21,.28);
+  animation: rc-rise .55s var(--ease) both, rc-ring-pulse 2.8s ease-in-out 1s infinite;
+}
+.score-ring.r-high {
+  --ring-color: var(--warn);
+  box-shadow: 0 0 0 2px rgba(185,119,14,.12), 0 0 12px rgba(185,119,14,.22);
+}
+.score-ring.r-ok {
+  --ring-color: var(--ok);
+  box-shadow: 0 0 0 2px rgba(29,138,78,.10),  0 0 10px rgba(29,138,78,.18);
+}
+/* Ring-inner numeral tinted by risk level */
+.score-ring.r-crit .ring-inner { color: var(--crit); }
+.score-ring.r-high .ring-inner { color: var(--warn); }
+.score-ring.r-ok   .ring-inner { color: var(--ok);   }
+/* Dark-mode overrides — brighter glows on dark surfaces */
+@media (prefers-color-scheme: dark) {
+  @keyframes rc-ring-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(255,69,58,.22),  0 0 18px rgba(255,69,58,.42); }
+    50%       { box-shadow: 0 0 0 3px rgba(255,69,58,.40),  0 0 32px rgba(255,69,58,.68); }
+  }
+  .score-ring.r-crit { box-shadow: 0 0 0 2px rgba(255,69,58,.22),  0 0 18px rgba(255,69,58,.42); }
+  .score-ring.r-high { box-shadow: 0 0 0 2px rgba(255,214,10,.18), 0 0 16px rgba(255,214,10,.34); }
+  .score-ring.r-ok   { box-shadow: 0 0 0 2px rgba(48,209,88,.18),  0 0 14px rgba(48,209,88,.30); }
+}
 
 /* ── Toast notifications ── */
 .rc-toast-rack { position: fixed; bottom: 1.4rem; right: 1.4rem; z-index: 8000; display: flex; flex-direction: column-reverse; gap: .45rem; pointer-events: none; }
@@ -1291,7 +1337,10 @@ CONSOLE_JS = r"""
     segments.forEach(function(s) {
       var pct = Math.max(1, Math.round((s.pct || 0) / total * 100));
       var col = clsColor(s.cls);
-      html += '<div style="flex:' + pct + ';background:' + col + ';min-width:2px;transition:flex .6s" ' +
+      var xtra = s.cls === "crit"
+        ? ";box-shadow:inset 0 1px 0 rgba(255,255,255,.2),0 0 5px rgba(215,0,21,.35)"
+        : ";box-shadow:inset 0 1px 0 rgba(255,255,255,.15)";
+      html += '<div style="flex:' + pct + ';background:' + col + ';min-width:2px;transition:flex .6s' + xtra + '" ' +
               'title="' + (s.label || '') + ': ' + (s.pct || 0).toFixed(1) + '%"></div>';
     });
     html += '</div>';

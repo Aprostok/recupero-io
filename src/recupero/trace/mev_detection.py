@@ -14,19 +14,19 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
+# v0.39 (activation sweep): the builder-direct branch now reads the CANONICAL
+# ~14-entry registry in trace.mev_builders (Flashbots x2 / beaverbuild / Titan /
+# rsync / Builder0x69 / bloXroute x3 / eth-builder / payload.de / Manifold /
+# penguinbuild / Lightspeedbuilder) instead of the prior local 4-entry list.
+# The old four were a strict subset, so no coverage is lost — Reactor-parity
+# builder recognition means bundle-shaped txs from the other ten are flagged as
+# builder-direct (trace-continuity break) instead of mislabeled as regular flow.
+from recupero.trace.mev_builders import KNOWN_MEV_BUILDERS as _MEV_BUILDERS
+
 if TYPE_CHECKING:
     from recupero.models import Case
 
 log = logging.getLogger(__name__)
-
-# Known MEV builder addresses (lowercased). Verified May 2026 —
-# see docs/V031_MEV_DETECTION.md.
-_MEV_BUILDERS: dict[str, str] = {
-    "0xdafea492d9c6733ae3d56b7ed1adb60692c98bc5": "Flashbots: Builder",
-    "0x95222290dd7278aa3ddd389cc1e1d165cc4bafe5": "beaverbuild",
-    "0x4838b106fce9647bdf1e7877bf73ce8b0bad5f97": "Titan Builder",
-    "0x1f9090aae28b8a3dceadf281b0f12828e676c326": "rsync-builder",
-}
 
 # 1 gwei. Real bundle txs are exactly 0 wei; the buffer absorbs L1
 # system-tx edge cases.

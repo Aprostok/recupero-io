@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Recupero — Operator Console</title>
 <style>
-  /* ── Recupero design system (Apple-grade): typography, depth, motion ── */
+  /* -- Recupero design system (Apple-grade): typography, depth, motion -- */
   :root {
     --bg: #f5f5f7; --bg-grad-1: #eef1f6; --bg-grad-2: #f7f8fb;
     --surface: rgba(255,255,255,.72); --surface-solid: #ffffff;
@@ -144,7 +144,7 @@
   .cards .card, .grid .tile { animation: rise .5s var(--ease) both; }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-  /* ── Shared tokens (for score ring) ── */
+  /* -- Shared tokens (for score ring) -- */
   :root {
     --crit: #d70015; --crit-soft: rgba(215,0,21,.07); --crit-border: rgba(215,0,21,.22);
     --warn: #b9770e; --warn-soft: rgba(185,119,14,.10);
@@ -159,7 +159,7 @@
     }
   }
 
-  /* ── Score ring ── */
+  /* -- Score ring -- */
   .score-ring {
     --score: 0;
     display: inline-flex; align-items: center; justify-content: center;
@@ -173,11 +173,42 @@
     display: flex; align-items: center; justify-content: center;
     font-size: .72rem; font-weight: 800; line-height: 1; color: var(--ink);
   }
-  .score-ring.r-crit { --ring-color: var(--crit); }
-  .score-ring.r-high { --ring-color: var(--warn); }
-  .score-ring.r-ok   { --ring-color: var(--ok);   }
+  /* Score-ring risk glow (matching CONSOLE_CSS R28) */
+  @keyframes rc-ring-pulse {
+    0%, 100% { box-shadow: 0 0 0 2px rgba(215,0,21,.12), 0 0 14px rgba(215,0,21,.28); }
+    50%       { box-shadow: 0 0 0 3px rgba(215,0,21,.22), 0 0 26px rgba(215,0,21,.52); }
+  }
+  @media (prefers-color-scheme: dark) {
+    @keyframes rc-ring-pulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(255,69,58,.22),  0 0 18px rgba(255,69,58,.42); }
+      50%       { box-shadow: 0 0 0 3px rgba(255,69,58,.40),  0 0 32px rgba(255,69,58,.68); }
+    }
+  }
+  .score-ring { transition: box-shadow .3s var(--ease); }
+  .score-ring.r-crit {
+    --ring-color: var(--crit);
+    box-shadow: 0 0 0 2px rgba(215,0,21,.12), 0 0 14px rgba(215,0,21,.28);
+    animation: rise .5s var(--ease) both, rc-ring-pulse 2.8s ease-in-out 1s infinite;
+  }
+  .score-ring.r-high {
+    --ring-color: var(--warn);
+    box-shadow: 0 0 0 2px rgba(185,119,14,.12), 0 0 12px rgba(185,119,14,.22);
+  }
+  .score-ring.r-ok {
+    --ring-color: var(--ok);
+    box-shadow: 0 0 0 2px rgba(29,138,78,.10), 0 0 10px rgba(29,138,78,.18);
+  }
+  /* Ring-inner numeral tinted by risk level */
+  .score-ring.r-crit .ring-inner { color: var(--crit); }
+  .score-ring.r-high .ring-inner { color: var(--warn); }
+  .score-ring.r-ok   .ring-inner { color: var(--ok);   }
+  @media (prefers-color-scheme: dark) {
+    .score-ring.r-crit { box-shadow: 0 0 0 2px rgba(255,69,58,.22),  0 0 18px rgba(255,69,58,.42); }
+    .score-ring.r-high { box-shadow: 0 0 0 2px rgba(255,214,10,.18), 0 0 16px rgba(255,214,10,.34); }
+    .score-ring.r-ok   { box-shadow: 0 0 0 2px rgba(48,209,88,.18),  0 0 14px rgba(48,209,88,.30); }
+  }
 
-  /* ── Quick probe ── */
+  /* -- Quick probe -- */
   .qp-wrap { margin: 0 0 1.6rem; }
   .qp-bar { display: flex; flex-wrap: wrap; gap: .55rem; align-items: center; }
   .qp-bar input[type=text] {
@@ -211,13 +242,13 @@
   .qp-link { font-size: .8rem; color: var(--accent); text-decoration: none; flex-shrink: 0; font-weight: 590; }
   .qp-link:hover { text-decoration: underline; }
 
-  /* ── Metric card icon + sparkline + delta indicators ── */
+  /* -- Metric card icon + sparkline + delta indicators -- */
   .card .c-icon { font-size: .95rem; line-height: 1; margin-bottom: .3rem; opacity: .9; }
   .card .spark { width: 100%; height: 22px; margin-top: .42rem; opacity: .74; pointer-events: none; }
   .card .delta { font-size: .62rem; font-weight: 700; margin-top: .18rem; line-height: 1; }
   .card .delta.up   { color: var(--ok);   }
   .card .delta.down { color: var(--alert); }
-  /* ── Platform status strip ── */
+  /* -- Platform status strip -- */
   .plat-bar {
     display: flex; flex-wrap: wrap; gap: .3rem .88rem;
     align-items: center; margin: 0 0 1.4rem;
@@ -231,7 +262,7 @@
   .plat-dot.ok   { background: var(--ok); }
   .plat-dot.warn { background: var(--warn); animation: live-pulse 2.2s ease-in-out infinite; }
   .plat-dot.err  { background: var(--alert); animation: live-pulse 1.4s ease-in-out infinite; }
-  /* ── Console tile search bar ── */
+  /* -- Console tile search bar -- */
   .tile-search-wrap { position: relative; margin-bottom: .7rem; }
   .tile-search-ico { position: absolute; left: .85rem; top: 50%; transform: translateY(-50%); color: var(--ink-faint); pointer-events: none; font-size: .88rem; line-height: 1; }
   .tile-search {
@@ -309,7 +340,7 @@
     var dot = $("live-dot"); if (dot) dot.style.display = (cls === "ok") ? "inline-block" : "none";
   }
   function key() { return ($("key").value || "").trim(); }
-  function fmt(v) { return (v === null || v === undefined) ? "—" : esc(v); }
+  function fmt(v) { return (v === null || v === undefined) ? "\u2014" : esc(v); }
 
   // [key, label, isAlert, icon]
   var STATS = [
@@ -405,10 +436,10 @@
       groups[g].forEach(function (c) {
         var live = c.live !== false;
         var inner =
-          '<div class="ico">' + esc(c.emoji || "•") + '</div>' +
+          '<div class="ico">' + esc(c.emoji || "\u2022") + '</div>' +
           '<div class="body"><div class="t">' + esc(c.label) + (live ? "" : ' <span class="badge">soon</span>') + '</div>' +
           '<div class="d">' + esc(c.desc || "") + '</div></div>' +
-          (live ? '<span class="chev">›</span>' : '');
+          (live ? '<span class="chev">&#8250;</span>' : '');
         var style = ' style="animation-delay:' + (n++ * 28) + 'ms"';
         h += live ? '<a class="tile" href="' + esc(c.path) + '"' + style + '>' + inner + '</a>'
                   : '<div class="tile soon"' + style + '>' + inner + '</div>';
@@ -428,11 +459,11 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key to load live stats.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading...");
     if (window.RC) { $("cards").innerHTML = window.RC.skeletonCards(8); }
     fetch("/v1/console/stats", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 401) throw new Error("Unauthorized \u2014 check the key.");
         if (res.status === 503) throw new Error("Console disabled (set RECUPERO_ADMIN_KEY).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -445,7 +476,7 @@
       .catch(function (e) { setMsg(e.message, "err"); });
   }
 
-  // ── Quick probe ─────────────────────────────────────────────────────────
+  // -- Quick probe ---------------------------------------------------------
   (function () {
     var BAND_ICON = { sanctioned: "&#9940;", high: "&#128308;", medium: "&#128992;", low: "&#128993;", clean: "&#9989;" };
     function bandKey(rb) {
@@ -464,7 +495,7 @@
       if (!addr) return;
       var chain = ($("qp-chain").value || "ethereum");
       var qm = $("qp-msg");
-      qm.textContent = "Screening…"; qm.className = "";
+      qm.textContent = "Screening..."; qm.className = "";
       $("qp-go").disabled = true;
       $("qp-result").style.display = "none";
       try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
@@ -498,6 +529,23 @@
             '<a class="qp-link" href="' + esc(profileUrl) + '" target="_blank">Full profile &#8250;</a>';
           $("qp-result").style.display = "flex";
           qm.textContent = "";
+          // Animate the score ring that was just injected
+          if (window.RC) {
+            if (window.RC.animateRings) window.RC.animateRings($("qp-result"));
+            // Risk bar: score out of 10
+            var qpBar = document.createElement("div");
+            qpBar.style.cssText = "margin:.5rem 0 0;width:100%";
+            if (window.RC.buildRiskBar) {
+              var sc = Math.max(0, Math.min(10, score));
+              var scRem = 10 - sc;
+              var scCls = sc >= 8 ? "crit" : sc >= 4 ? "warn" : "ok";
+              window.RC.buildRiskBar(qpBar, [
+                { label: "Risk score " + sc + "/10", pct: sc,    cls: scCls },
+                { label: "Clean",                    pct: scRem, cls: scRem>=6?"ok":"" }
+              ].filter(function(s){return s.pct>0;}), { height: 5, showLabels: false });
+              $("qp-result").appendChild(qpBar);
+            }
+          }
         })
         .catch(function (e) { qm.textContent = e.message; qm.className = "err"; })
         .finally(function () { $("qp-go").disabled = false; });
@@ -510,7 +558,7 @@
   loadNav();
   if (key()) { loadStats(); }
 
-  // ── Console tile search/filter ────────────────────────────────────────────
+  // -- Console tile search/filter --------------------------------------------
   (function () {
     var inp = $("tile-search");
     var noMatch = $("tile-no-match");

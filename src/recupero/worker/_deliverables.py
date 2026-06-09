@@ -694,12 +694,16 @@ def build_all_deliverables(
         skip=skip_freeze_briefs,
     )
 
-    # TRACK 3 P0a — opt-in litigation-grade artifacts (court exhibit pack +
-    # signed Ed25519 chain-of-custody) over the finished deliverable set.
-    # Gated (default off) so existing pipelines / golden tests are unchanged;
-    # enable per-deploy with RECUPERO_AUTO_LITIGATION_ARTIFACTS=1 (and, for
-    # the signed chain, a custody key via RECUPERO_CUSTODY_KEY_PATH).
-    if os.environ.get("RECUPERO_AUTO_LITIGATION_ARTIFACTS", "").strip() == "1":
+    # TRACK 3 P0a — litigation-grade artifacts (court exhibit pack + SAR/STR +
+    # MLAT/314(b) + exchange-freeze letters + time-sensitivity advisory + signed
+    # Ed25519 chain-of-custody) over the finished deliverable set.
+    # v0.39 (Activation Sprint #7): DEFAULT-ON — a real case ships the full
+    # litigation pack automatically instead of only when an operator ran the
+    # manual CLI. Opt OUT with RECUPERO_AUTO_LITIGATION_ARTIFACTS=0 (fixture /
+    # golden / byte-identical determinism runs). The signed chain still needs a
+    # custody key (RECUPERO_CUSTODY_KEY_PATH or ~/.recupero/custody_key); absent
+    # a key that one step logs + skips (the unsigned SHA-256 manifests remain).
+    if _auto_litigation_enabled():
         _maybe_emit_litigation_artifacts(
             case=case,
             case_dir=case_dir,
@@ -800,6 +804,23 @@ def _write_case_manifest(
         )
     except Exception as e:  # noqa: BLE001
         log.warning("case manifest write failed (continuing): %s", e)
+
+
+def _auto_litigation_enabled() -> bool:
+    """v0.39 (Activation Sprint #7): litigation-grade artifacts are DEFAULT-ON.
+
+    A real case now ships the court-exhibit pack + SAR/STR + MLAT/314(b) +
+    exchange-freeze letters + time-sensitivity advisory automatically, instead
+    of only when an operator ran the manual ``recupero-ops`` CLI. Opt OUT with
+    ``RECUPERO_AUTO_LITIGATION_ARTIFACTS=0`` (used by fixture-build / golden /
+    byte-identical determinism tests that want a minimal output set). Mirrors
+    the ``trace.tracer._deep_reach_enabled`` default-on / opt-out-with-0
+    convention so "go deep + ship the full litigation pack" is the default
+    posture, not an operator opt-in that real cases silently miss.
+    """
+    return os.environ.get("RECUPERO_AUTO_LITIGATION_ARTIFACTS", "1").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 def _maybe_emit_litigation_artifacts(

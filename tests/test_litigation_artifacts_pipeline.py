@@ -4,13 +4,15 @@ Before this change the court-exhibit pack (`render_exhibit_pack`) and the signed
 Ed25519 chain-of-custody (`custody.create_attestation` + `append_to_chain`)
 existed ONLY as manual `recupero-ops` commands — so a real case never shipped
 them unless an operator ran them by hand (the pipeline wrote only an UNSIGNED
-SHA-256 manifest). `build_all_deliverables` now emits both, gated behind
-`RECUPERO_AUTO_LITIGATION_ARTIFACTS=1` (default OFF, so existing pipelines /
-golden tests are byte-for-byte unchanged), with the signed chain produced only
-when a custody key is configured.
+SHA-256 manifest). `build_all_deliverables` now emits both. As of v0.39
+(Activation Sprint #7) the litigation pack is DEFAULT-ON; opt OUT with
+`RECUPERO_AUTO_LITIGATION_ARTIFACTS=0` (fixture / golden / byte-identical
+determinism runs). The signed chain is produced only when a custody key is
+configured.
 
 These tests pin:
-  * OFF by default — no exhibit_pack/ or custody/ dirs appear.
+  * ON by default — exhibit_pack/ + SAR draft appear with no knob set.
+  * OFF when explicitly opted out (=0) — no litigation dirs appear.
   * ON + key configured — exhibit pack HTML renders AND a signed custody chain
     is appended that VERIFIES (zero critical findings).
   * ON + no key — exhibit pack still renders, custody signing is skipped
@@ -62,9 +64,37 @@ def _run(case_dir: Path) -> list[Path]:
     )
 
 
-def test_litigation_artifacts_off_by_default(tmp_path, monkeypatch) -> None:
-    """No knob → pipeline behavior is unchanged: no exhibit pack, no custody."""
+def test_litigation_artifacts_on_by_default(tmp_path, monkeypatch) -> None:
+    """v0.39 (#7): no knob → litigation pack ships by DEFAULT (exhibit pack +
+    SAR draft present). The signed custody chain still needs a key, so absent a
+    configured key there is no custody/ dir — but the document artifacts render."""
     monkeypatch.delenv("RECUPERO_AUTO_LITIGATION_ARTIFACTS", raising=False)
+    # Pin the custody key to a non-existent path so we never pick up a real
+    # ~/.recupero/custody_key on the dev box (custody signing then skips).
+    monkeypatch.setenv("RECUPERO_CUSTODY_KEY_PATH", str(tmp_path / "no_such_key"))
+    monkeypatch.setenv("RECUPERO_DISABLE_PDF_RENDER", "1")
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+
+    written = _run(case_dir)
+
+    assert written, "pipeline should emit its primary deliverables"
+    assert (case_dir / "exhibit_pack" / "exhibit_pack.html").exists(), (
+        "exhibit pack must ship by default as of v0.39 #7"
+    )
+    assert (case_dir / "regulatory_filing" / "us_fincen_sar.html").exists(), (
+        "SAR/STR draft must ship by default as of v0.39 #7"
+    )
+    # No custody key configured → signing skipped cleanly (no custody/ dir).
+    assert not (case_dir / "custody").exists(), (
+        "custody chain needs a configured signing key; absent one it skips"
+    )
+
+
+def test_litigation_artifacts_opt_out_with_zero(tmp_path, monkeypatch) -> None:
+    """Explicit opt-out (=0) → pipeline behavior is minimal: no litigation dirs.
+    This is the fixture/golden/determinism escape hatch."""
+    monkeypatch.setenv("RECUPERO_AUTO_LITIGATION_ARTIFACTS", "0")
     monkeypatch.setenv("RECUPERO_DISABLE_PDF_RENDER", "1")
     case_dir = tmp_path / "case"
     case_dir.mkdir()
@@ -73,16 +103,16 @@ def test_litigation_artifacts_off_by_default(tmp_path, monkeypatch) -> None:
 
     assert written, "pipeline should still emit its primary deliverables"
     assert not (case_dir / "exhibit_pack").exists(), (
-        "exhibit pack must NOT be produced unless the knob is set"
+        "exhibit pack must NOT be produced when opted out (=0)"
     )
     assert not (case_dir / "custody").exists(), (
-        "custody chain must NOT be produced unless the knob is set"
+        "custody chain must NOT be produced when opted out (=0)"
     )
     assert not (case_dir / "regulatory_filing").exists(), (
-        "SAR/STR draft must NOT be produced unless the knob is set"
+        "SAR/STR draft must NOT be produced when opted out (=0)"
     )
     assert not (case_dir / "legal_requests").exists(), (
-        "MLAT/314b drafts must NOT be produced unless the knob is set"
+        "MLAT/314b drafts must NOT be produced when opted out (=0)"
     )
 
 

@@ -7,7 +7,8 @@ who want Sentry + Prometheus the standard hooks they expect.
 
 Enable via:
   * SENTRY_DSN              — turn on Sentry event capture
-  * RECUPERO_METRICS_PORT   — turn on /metrics HTTP listener
+  * /metrics is served by the worker health server (no env var); for a
+    standalone listener call ``metrics.start_metrics_server(port=...)``.
 """
 
 from __future__ import annotations

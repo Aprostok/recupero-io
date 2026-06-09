@@ -22,9 +22,9 @@ see for a forensic-trace pipeline:
     * recupero_trace_transfers_count
     * recupero_brief_render_seconds
 
-Render at `/metrics` via the worker's existing health server when
-`RECUPERO_METRICS_PORT` is set (or, more commonly, the health server
-serves /metrics on its own port when configured to do so).
+Render at `/metrics` via the worker's existing health server — it serves
+/metrics on the health port. (There is NO separate `RECUPERO_METRICS_PORT`
+env var; embed via ``start_metrics_server(port=...)`` with an explicit port.)
 """
 
 from __future__ import annotations

@@ -1,7 +1,8 @@
 """Dual-backend client: prefer Alchemy, fall back to Etherscan.
 
-RIGOR-Jacob B: When the operator sets ``--prefer-alchemy`` (or
-``RECUPERO_PREFER_ALCHEMY=1``), the adapter uses this wrapper instead
+RIGOR-Jacob B: When the operator passes the ``--prefer-alchemy`` CLI flag
+(there is NO env-var equivalent; the control is the ``prefer_alchemy``
+constructor arg), the adapter uses this wrapper instead
 of the raw EtherscanClient. The wrapper routes account-transfer
 queries through Alchemy (higher quota, better pagination semantics
 on chatty wallets, consistent behavior across high-block-rate chains

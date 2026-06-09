@@ -79,7 +79,7 @@
       $("cards").querySelectorAll(".v").forEach(window.RC.countUp);
     }
 
-    // ── Monitor status distribution bar ────────────────────────────────
+    // -- Monitor status distribution bar --------------------------------
     var total = ov.n_items || 0;
     var distHtml = "";
     if (total > 0) {
@@ -108,7 +108,7 @@
       distHtml = '<div class="mon-dist-wrap">' + bar + lgd + '</div>';
     }
 
-    // Chip breakdowns — styled chip rows
+    // Chip breakdowns - styled chip rows
     var chipHtml = distHtml;
 
     var byStatus = ov.by_status || [];
@@ -151,7 +151,7 @@
       // Delta coloring
       var dv = r.last_delta_usd_human;
       var dvNum = parseFloat((dv || "").replace(/[^0-9.-]/g, ""));
-      var dvHtml = (dv == null || dv === "—" || dv === "") ? '<span style="color:var(--ink-faint)">&#8212;</span>'
+      var dvHtml = (dv == null || dv === "\u2014" || dv === "") ? '<span style="color:var(--ink-faint)">&#8212;</span>'
                  : (!isNaN(dvNum) && dvNum > 0) ? '<span class="delta-pos">' + esc(dv) + '</span>'
                  : (!isNaN(dvNum) && dvNum < 0) ? '<span class="delta-neg">' + esc(dv) + '</span>'
                  : esc(dv);
@@ -166,7 +166,7 @@
         '<td class="right">' + dvHtml + '</td>' +
         '<td class="age ' + (r.stale ? "stale" : "") + '" title="' + esc(r.last_checked_human) + '">' + esc(r.age_human) + '</td>' +
         '<td class="right">' + esc(r.days_watched) + '</td>' +
-        '<td>' + esc(r.issuer) + (r.label_name && r.label_name !== "&#8212;" && r.label_name !== "—" ? ' <span style="color:var(--ink-faint)">&middot;</span> ' + esc(r.label_name) : "") + '</td>' +
+        '<td>' + esc(r.issuer) + (r.label_name && r.label_name !== "&#8212;" && r.label_name !== "\u2014" ? ' <span style="color:var(--ink-faint)">&middot;</span> ' + esc(r.label_name) : "") + '</td>' +
         '</tr>';
     });
     h += '</tbody></table>';
@@ -185,7 +185,7 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading...");
     if (window.RC) {
       $("cards").innerHTML = window.RC.skeletonCards(4);
       $("tablewrap").innerHTML = window.RC.skeletonTable(6, 7);
@@ -194,7 +194,7 @@
     var url = "/v1/watchlist" + (inv ? "?investigation_id=" + encodeURIComponent(inv) : "");
     fetch(url, { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 401) throw new Error("Unauthorized - check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key / DB).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -202,7 +202,7 @@
       .then(function (ov) {
         render(ov);
         setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
-        if (window.RC) { window.RC.toast("Watchlist loaded ✓", "ok"); }
+        if (window.RC) { window.RC.toast("Watchlist loaded &#10003;", "ok"); }
       })
       .catch(function (e) {
         setMsg(e.message, "err");
@@ -213,7 +213,7 @@
   function runCheck() {
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
-    $("run").disabled = true; setMsg("Running re-check…");
+    $("run").disabled = true; setMsg("Running re-check...");
     fetch("/v1/watchlist/run", { method: "POST", headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) { if (!res.ok) throw new Error("HTTP " + res.status); return res.json(); })
       .then(function (r) {
@@ -233,7 +233,7 @@
     if (this.checked) {
       timer = setInterval(load, 60000);
       $("live-dot").style.display = "inline-block";
-      setMsg("Live · auto-refresh on", "ok");
+      setMsg("Live - auto-refresh on", "ok");
     }
   });
   if (key()) { load(); }

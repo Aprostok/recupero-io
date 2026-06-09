@@ -160,7 +160,7 @@
       .then(function (body) {
         render(body);
         var n = (body && typeof body.count === "number") ? body.count : ((body.candidates || []).length);
-        setMsg(n + " candidate(s) · updated " + new Date().toLocaleTimeString(), "ok");
+        setMsg(n + " candidate(s) - updated " + new Date().toLocaleTimeString(), "ok");
         if (window.RC) { window.RC.toast(n + " label candidate(s) loaded", "ok"); }
       })
       .catch(function (e) {

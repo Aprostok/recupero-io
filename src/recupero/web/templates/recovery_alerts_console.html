@@ -41,7 +41,7 @@
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
   function deltaCell(dv) {
-    var dvStr = (dv == null ? "—" : String(dv));
+    var dvStr = (dv == null ? "\u2014" : String(dv));
     var dvNum = parseFloat(dvStr.replace(/[^0-9.-]/g, ""));
     var cls = (!isNaN(dvNum) && dvNum > 0) ? "delta-pos" : (!isNaN(dvNum) && dvNum < 0) ? "delta-neg" : "";
     return '<td class="right mono ' + cls + '">' + esc(dvStr) + '</td>';
@@ -61,7 +61,12 @@
       card(nHigh,  "High",         nHigh ? "" : "ok")   +
       card(nMed,   "Medium",       "")                   +
       card(total,  "Total alerts", "");
-    if (window.RC) { window.RC.countUp($("cards")); }
+    if (window.RC) {
+      window.RC.countUp($("cards"));
+      window.RC.staggerRows($("out"));
+      window.RC.attachSort($("out"));
+      window.RC.attachFilter($("out"));
+    }
 
     // Severity histogram bar
     var hist = $("sev-hist");
@@ -142,7 +147,7 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     var sev = ($("sev").value || "").trim();
-    setMsg("Loading…");
+    setMsg("Loading...");
     if (window.RC) {
       $("cards").innerHTML = window.RC.skeletonCards(4);
       $("tablewrap").innerHTML = window.RC.skeletonTable(5, 8);
@@ -150,7 +155,7 @@
     fetch("/v1/recovery-alerts" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 401) throw new Error("Unauthorized - check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();

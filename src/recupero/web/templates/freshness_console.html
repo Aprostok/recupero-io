@@ -49,7 +49,7 @@
 
   // Freshness age bar: age / sla capped at 200% for visual range
   function ageBarCell(ageDays, slaDays) {
-    if (ageDays == null || slaDays == null || slaDays <= 0) return '<td class="right age-cell">—</td>';
+    if (ageDays == null || slaDays == null || slaDays <= 0) return '<td class="right age-cell">&#8212;</td>';
     var pct = Math.min(200, Math.round(ageDays / slaDays * 100));
     var barPct = Math.min(100, pct);
     var cls = pct >= 100 ? "crit" : pct >= 70 ? "warn" : "ok";
@@ -124,14 +124,14 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading&#8230;");
     if (window.RC) {
       $("cards").innerHTML = window.RC.skeletonCards(5);
       $("tablewrap").innerHTML = window.RC.skeletonTable(4, 6);
     }
     fetch("/v1/freshness", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();

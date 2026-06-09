@@ -107,7 +107,7 @@
   }
 
   function renderValue(v) {
-    if (v == null) return '<span class="empty">—</span>';
+    if (v == null) return '<span class="empty">&#8212;</span>';
     if (Array.isArray(v)) return renderList(v);
     if (typeof v === "object") return renderDict(v);
     return "<p>" + esc(v) + "</p>";
@@ -129,7 +129,7 @@
       cols.forEach(function (c) {
         var cell = r[c];
         if (cell != null && typeof cell === "object") { h += "<td>" + renderValue(cell) + "</td>"; }
-        else { h += "<td>" + (cell == null ? '<span class="empty">—</span>' : esc(cell)) + "</td>"; }
+        else { h += "<td>" + (cell == null ? '<span class="empty">&#8212;</span>' : esc(cell)) + "</td>"; }
       });
       h += "</tr>";
     });
@@ -182,7 +182,7 @@
       var lbl = negative ? "Estimated net cost if engaged" : "Projected net recovery to victim";
       var lo = est.expected_net_low_usd, hi = est.expected_net_high_usd;
       var rangeStr = (lo != null && lo !== "") || (hi != null && hi !== "")
-        ? "90% range: " + esc(lo == null ? "—" : lo) + " — " + esc(hi == null ? "—" : hi) : "";
+        ? "90% range: " + esc(lo == null ? "&#8212;" : lo) + " &#8212; " + esc(hi == null ? "&#8212;" : hi) : "";
       kpis += '<div class="kpi"><div class="k-label">' + esc(lbl) + '</div>' +
         '<div class="k-amount"' + (negative ? ' style="color:var(--crit)"' : '') + '>' + esc(net) + '</div>' +
         (rangeStr ? '<div class="k-sub">' + rangeStr + '</div>' : '') + '</div>';
@@ -233,6 +233,9 @@
       window.RC.animateRings($("out"));
       window.RC.animateGauges($("out"));
       window.RC.staggerRows($("out"));
+      window.RC.attachSort($("out"));
+      window.RC.attachFilter($("out"));
+      $("out").querySelectorAll(".k-amount").forEach(window.RC.countUp);
     }
   }
 
@@ -245,14 +248,14 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading&#8230;");
     clear();
     if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(3) + window.RC.skeletonTable(4, 5); }
     fetch("/v1/recovery-snapshot?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad case id — must be 1..128 non-blank characters.");
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
-        if (res.status === 404) throw new Error("No RECOVERY_ESTIMATE — run emit-brief first, or case not found.");
+        if (res.status === 400) throw new Error("Bad case id &#8212; must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
+        if (res.status === 404) throw new Error("No RECOVERY_ESTIMATE &#8212; run emit-brief first, or case not found.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -260,7 +263,7 @@
       .then(function (payload) {
         render(payload);
         setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
-        if (window.RC) { window.RC.toast("Recovery snapshot loaded ✓", "ok"); }
+        if (window.RC) { window.RC.toast("Recovery snapshot loaded &#10003;", "ok"); }
       })
       .catch(function (e) {
         setMsg(e.message, "err");

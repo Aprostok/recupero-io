@@ -11,7 +11,7 @@
   .card.sev-high::before     { background: var(--warn); transform: scaleY(1); }
   .card.sev-critical { border: 1px solid var(--crit-border); }
   .card.sev-high     { border: 1px solid var(--warn-border); }
-  /* plan cards are containers — remove default padding so table fills edge-to-edge */
+  /* plan cards are containers &#8212; remove default padding so table fills edge-to-edge */
   .plan-card { padding: 0; margin-bottom: 1rem; overflow: hidden; }
   .plan-card.sev-critical { border-left: 4px solid var(--crit); background: var(--surface); border: 1px solid var(--crit-border); border-radius: var(--r); box-shadow: var(--shadow-sm); }
   .plan-card.sev-high     { border-left: 4px solid var(--warn); background: var(--surface); border: 1px solid var(--warn-border); border-radius: var(--r); box-shadow: var(--shadow-sm); }
@@ -150,12 +150,12 @@
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
     var sev = ($("sev").value || "").trim();
-    setMsg("Loading…");
+    setMsg("Loading&#8230;");
     if (window.RC) { $("cards").innerHTML = window.RC.skeletonCards(4); }
     fetch("/v1/incident-plans" + (sev ? "?severity=" + encodeURIComponent(sev) : ""),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();

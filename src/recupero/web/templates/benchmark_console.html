@@ -57,7 +57,7 @@
     endpoint precision (were our flagged endpoints real?), and F1. This console never recomputes
     the trace and never fabricates numbers &#8212; it displays only the scored result.</div>
 
-  <!-- Ground-truth disclaimer — shared .ai-disclaimer style -->
+  <!-- Ground-truth disclaimer &#8212; shared .ai-disclaimer style -->
   <div class="ai-disclaimer">
     <div class="ai-disclaimer-icon">&#9888;&#65039;</div>
     <div class="ai-disclaimer-body">
@@ -89,7 +89,7 @@
   function clear() { $("out").innerHTML = ""; }
 
   function fmtPct(v) {
-    if (typeof v !== "number" || !isFinite(v)) return "—";
+    if (typeof v !== "number" || !isFinite(v)) return "&#8212;";
     return (v * 100).toFixed(1) + "%";
   }
 
@@ -188,14 +188,14 @@
     var cid = caseId();
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading&#8230;");
     clear();
     if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(3); }
     fetch("/v1/benchmark?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad input — invalid case id or malformed ground_truth.json.");
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
-        if (res.status === 404) throw new Error("No ground_truth.json — add an independently-verified ground-truth file, or case not found.");
+        if (res.status === 400) throw new Error("Bad input &#8212; invalid case id or malformed ground_truth.json.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
+        if (res.status === 404) throw new Error("No ground_truth.json &#8212; add an independently-verified ground-truth file, or case not found.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -203,7 +203,7 @@
       .then(function (score) {
         render(score);
         setMsg("Updated " + new Date().toLocaleTimeString(), "ok");
-        if (window.RC) { window.RC.toast("Benchmark loaded ✓", "ok"); }
+        if (window.RC) { window.RC.toast("Benchmark loaded &#10003;", "ok"); }
       })
       .catch(function (e) {
         setMsg(e.message, "err");

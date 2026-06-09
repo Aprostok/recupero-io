@@ -54,9 +54,9 @@
 
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
-  function hours(x) { return (x == null) ? "—" : (Math.round(x * 10) / 10) + "h"; }
+  function hours(x) { return (x == null) ? "&#8212;" : (Math.round(x * 10) / 10) + "h"; }
 
-  // Throughput timing cell: pbar (0–168h = 1 week) + numeric value
+  // Throughput timing cell: pbar (0&#8211;168h = 1 week) + numeric value
   function tpCell(h) {
     if (h == null) return '<td class="right"><span style="color:var(--ink-faint)">&#8212;</span></td>';
     var n = Number(h);
@@ -71,7 +71,7 @@
 
   // Parse a human USD string like "$1.2M" or "$450k" or "$12,345" back to a rough number
   function parseUSD(s) {
-    if (!s || s === "—" || s === "$0.00") return 0;
+    if (!s || s === "&#8212;" || s === "$0.00") return 0;
     var clean = String(s).replace(/[$,]/g, "");
     var m = clean.match(/^([\d.]+)([MKBmkb]?)$/);
     if (!m) return 0;
@@ -86,7 +86,7 @@
   // Recovery rate bar: frozen / total_loss (capped at 100%)
   function recBarCell(frozenStr, lossStr) {
     var frozen = parseUSD(frozenStr), loss = parseUSD(lossStr);
-    if (!loss) return '<td class="right rec-cell">—</td>';
+    if (!loss) return '<td class="right rec-cell">&#8212;</td>';
     var pct = Math.min(100, Math.round(frozen / loss * 100));
     var cls = pct >= 50 ? "" : pct >= 20 ? "warn" : "crit";
     return '<td class="right rec-cell" style="white-space:nowrap">' +
@@ -95,7 +95,7 @@
   }
 
   function issuersCell(list) {
-    if (!list || !list.length) return '—';
+    if (!list || !list.length) return '&#8212;';
     var chips = '<div class="issuers-chips">';
     list.forEach(function (it) {
       var resp = (it.cross_firm_response_rate_pct == null) ? "" :
@@ -163,10 +163,10 @@
       h += '<tr class="' + (active ? "" : "inactive") + '">' +
         '<td><span class="firmname">' + esc(r.firm_name) + '</span><br>' +
           '<span class="mono">' + esc(r.firm_slug) + '</span> ' + statusBadge + throughputFlag + '</td>' +
-        '<td class="right">' + esc(r.n_referred_cases == null ? "—" : r.n_referred_cases) + '</td>' +
-        '<td class="right">' + esc(r.n_completed_traces == null ? "—" : r.n_completed_traces) + '</td>' +
-        '<td class="right">' + esc(r.n_in_queue == null ? "—" : r.n_in_queue) + '</td>' +
-        '<td class="right">' + esc(r.n_with_letters_sent == null ? "—" : r.n_with_letters_sent) + '</td>' +
+        '<td class="right">' + esc(r.n_referred_cases == null ? "&#8212;" : r.n_referred_cases) + '</td>' +
+        '<td class="right">' + esc(r.n_completed_traces == null ? "&#8212;" : r.n_completed_traces) + '</td>' +
+        '<td class="right">' + esc(r.n_in_queue == null ? "&#8212;" : r.n_in_queue) + '</td>' +
+        '<td class="right">' + esc(r.n_with_letters_sent == null ? "&#8212;" : r.n_with_letters_sent) + '</td>' +
         '<td class="right">' + esc(r.total_loss_usd_human) + '</td>' +
         '<td class="right">' + esc(r.total_frozen_usd_human) + '</td>' +
         recBarCell(r.total_frozen_usd_human, r.total_loss_usd_human) +
@@ -191,14 +191,14 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading&#8230;");
     if (window.RC) {
       $("cards").innerHTML = window.RC.skeletonCards(5);
       $("tablewrap").innerHTML = window.RC.skeletonTable(6, 12);
     }
     fetch("/v1/law-firm", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();

@@ -1,9 +1,9 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Recupero â€” Cooperation Intelligence</title>
+<title>Recupero &#8212; Cooperation Intelligence</title>
 <link rel="stylesheet" href="/v1/console/app.css">
 <style>
   /* page-specific: cooperation intelligence */
@@ -16,7 +16,7 @@
 </style>
 </head>
 <body>
-  <h1>ðŸ¤ Cooperation Intelligence</h1>
+  <h1>&#129309; Cooperation Intelligence</h1>
   <div class="sub">Per-issuer cross-case cooperation profiles: how each exchange / token issuer responds to
     freeze letters (response &amp; freeze rates, response times), the recommended legal instrument for the next
     letter, and a "black hole" flag for issuers that never cooperate. Deployment-wide, sourced from the DB.
@@ -41,35 +41,35 @@
   "use strict";
   var $ = function (id) { return document.getElementById(id); };
   function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-  // Persist the key for the session only (not localStorage) â€” clears on tab close.
+  // Persist the key for the session only (not localStorage) &#8212; clears on tab close.
   try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
 
   function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
 
   function card(v, l, cls) { return '<div class="card ' + (cls||"") + '"><div class="v">' + esc(v) + '</div><div class="l">' + esc(l) + '</div></div>'; }
 
-  function pct(x) { return (x == null) ? “—“ : (Math.round(x * 1000) / 10) + “%”; }
+  function pct(x) { return (x == null) ? "&#8212;" : (Math.round(x * 1000) / 10) + "%"; }
 
-  // Overall cooperation score ring: avg of response, full_freeze, partial_freeze rates → 0-10
+  // Overall cooperation score ring: avg of response, full_freeze, partial_freeze rates &#8594; 0-10
   function coopRingCell(r) {
     if (r.is_black_hole) {
-      return '<td style=”text-align:center”><span class=”score-ring sm r-crit” style=”--score:0”><span class=”ring-inner”>0</span></span></td>';
+      return '<td style="text-align:center"><span class="score-ring sm r-crit" style="--score:0"><span class="ring-inner">0</span></span></td>';
     }
     var rates = [r.response_rate, r.full_freeze_rate, r.partial_freeze_rate].filter(function (v) { return v != null; });
-    if (!rates.length) return '<td style=”color:var(--ink-faint);text-align:center”>&#8212;</td>';
+    if (!rates.length) return '<td style="color:var(--ink-faint);text-align:center">&#8212;</td>';
     var avg = rates.reduce(function (s, v) { return s + v; }, 0) / rates.length;
     var score = Math.round(avg * 10);
-    var cls = score >= 7 ? “r-ok” : score >= 4 ? “r-high” : “r-crit”;
-    return '<td style=”text-align:center”><span class=”score-ring sm ' + cls + '” style=”--score:' + score + '”><span class=”ring-inner”>' + score + '</span></span></td>';
+    var cls = score >= 7 ? "r-ok" : score >= 4 ? "r-high" : "r-crit";
+    return '<td style="text-align:center"><span class="score-ring sm ' + cls + '" style="--score:' + score + '"><span class="ring-inner">' + score + '</span></span></td>';
   }
 
   function pctCell(x) {
-    if (x == null) return '<td class=”right”>—</td>';
+    if (x == null) return '<td class="right">&#8212;</td>';
     var p = Math.round(x * 1000) / 10;
     var w = Math.min(100, Math.max(0, x * 100));
-    var cls = w >= 60 ? “ok” : w >= 25 ? “” : “crit”;
-    return '<td class=”right” style=”white-space:nowrap”>' +
-      '<span class=”pbar”><span class=”pbar-fill ' + cls + '” style=”width:' + w + '%”></span></span>&nbsp;' +
+    var cls = w >= 60 ? "ok" : w >= 25 ? "" : "crit";
+    return '<td class="right" style="white-space:nowrap">' +
+      '<span class="pbar"><span class="pbar-fill ' + cls + '" style="width:' + w + '%"></span></span>&nbsp;' +
       p + '%</td>';
   }
 
@@ -90,7 +90,7 @@
       card(nBlackHoles, "Black holes", nBlackHoles ? "alert" : "ok");
     if (window.RC) { window.RC.countUp($("cards")); }
 
-    // Empty state â€” handles BOTH db_configured=false AND an empty list.
+    // Empty state &#8212; handles BOTH db_configured=false AND an empty list.
     if (!configured || !rows.length) {
       $("tablewrap").innerHTML =
         '<p class="sub">No cooperation data (no DB configured, or no freeze letters on file yet).</p>';
@@ -111,14 +111,14 @@
     rows.forEach(function (r) {
       var bh = !!r.is_black_hole;
       var flags = bh
-        ? '<span class="badge blackhole">BLACK HOLE â€” never cooperates</span>'
+        ? '<span class="badge blackhole">BLACK HOLE &#8212; never cooperates</span>'
         : (r.has_confident_profile ? '<span class="badge ok">profiled</span>'
                                    : '<span class="badge">low sample</span>');
       h += '<tr class="' + (bh ? "blackhole" : "") + '">' +
         coopRingCell(r) +
         '<td class="mono">' + esc(r.issuer) + '</td>' +
-        '<td class="right">' + esc(r.n_letters_sent == null ? "â€”" : r.n_letters_sent) + '</td>' +
-        '<td class="right">' + esc(r.n_responded == null ? "â€”" : r.n_responded) + '</td>' +
+        '<td class="right">' + esc(r.n_letters_sent == null ? "&#8212;" : r.n_letters_sent) + '</td>' +
+        '<td class="right">' + esc(r.n_responded == null ? "&#8212;" : r.n_responded) + '</td>' +
         pctCell(r.response_rate) +
         pctCell(r.full_freeze_rate) +
         pctCell(r.partial_freeze_rate) +
@@ -143,14 +143,14 @@
     var k = key();
     if (!k) { setMsg("Enter the admin key.", "err"); return; }
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Loading…");
+    setMsg("Loading&#8230;");
     if (window.RC) {
       $("cards").innerHTML = window.RC.skeletonCards(3);
       $("tablewrap").innerHTML = window.RC.skeletonTable(5, 9);
     }
     fetch("/v1/cooperation", { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 401) throw new Error("Unauthorized â€” check the key.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
         if (res.status === 503) throw new Error("API not configured (admin key).");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -174,7 +174,7 @@
     if (this.checked) {
       timer = setInterval(load, 60000);
       $("live-dot").style.display = "inline-block";
-      setMsg("Live · auto-refresh on", "ok");
+      setMsg("Live &middot; auto-refresh on", "ok");
     }
   });
   if (key()) { load(); }

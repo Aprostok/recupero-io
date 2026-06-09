@@ -103,7 +103,7 @@
 
     // Jurisdiction / form labels
     html += '<h2>&#127963;&thinsp;Filing regime</h2><div class="panel">' +
-      row("Report",         (labels.report_acronym || "") + " — " + (labels.report_name || "")) +
+      row("Report",         (labels.report_acronym || "") + " &#8212; " + (labels.report_name || "")) +
       row("Regulator",      labels.regulator) +
       row("Form reference", labels.form_reference) +
       row("Statute",        labels.statute) +
@@ -115,13 +115,13 @@
     html += '<h2>&#128202;&thinsp;Activity summary</h2><div class="cards" id="sar-cards">' +
       card(activity.amount_usd || ctx.total_loss_usd || "$0.00", "Amount (USD)") +
       card((ctx.subjects || []).length, "Subjects") +
-      card(activity.date_from || "—", "Activity from") +
-      card(activity.date_to   || "—", "Activity to")  +
+      card(activity.date_from || "&#8212;", "Activity from") +
+      card(activity.date_to   || "&#8212;", "Activity to")  +
       '</div>';
     html += '<div class="panel">' +
       row("Case id",         ctx.case_id) +
-      row("Incident date",   ctx.incident_date || "—") +
-      row("Incident type",   ctx.incident_type || "—") +
+      row("Incident date",   ctx.incident_date || "&#8212;") +
+      row("Incident type",   ctx.incident_type || "&#8212;") +
       row("Victim",          (victim.name || "") + " (" + (victim.jurisdiction || "") + ")") +
       row("Generated at",    ctx.generated_at) +
       row("Characterization", activity.characterization || labels.characterization) +
@@ -163,7 +163,7 @@
       var sarCards = document.getElementById("sar-cards");
       if (sarCards) { window.RC.countUp(sarCards); }
       var subjTable = document.getElementById("sar-subj-table");
-      if (subjTable) { window.RC.staggerRows(subjTable); window.RC.attachSort(subjTable); }
+      if (subjTable) { window.RC.staggerRows(subjTable); window.RC.attachSort(subjTable); window.RC.attachFilter(subjTable); }
     }
 
     // Narrative copy button
@@ -191,15 +191,15 @@
     if (!cid) { setMsg("Enter a case id.", "err"); return; }
     var j = jur();
     try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
-    setMsg("Generating…");
+    setMsg("Generating&#8230;");
     clear();
     if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(4) + window.RC.skeletonTable(4, 5); }
     fetch("/v1/sar-filing?case_id=" + encodeURIComponent(cid) + "&jurisdiction=" + encodeURIComponent(j),
           { headers: { "X-Recupero-Admin-Key": k } })
       .then(function (res) {
-        if (res.status === 400) throw new Error("Bad request — check the case id / jurisdiction.");
-        if (res.status === 401) throw new Error("Unauthorized — check the key.");
-        if (res.status === 404) throw new Error("Case not found (no freeze_brief.json — run emit-brief first).");
+        if (res.status === 400) throw new Error("Bad request &#8212; check the case id / jurisdiction.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
+        if (res.status === 404) throw new Error("Case not found (no freeze_brief.json &#8212; run emit-brief first).");
         if (res.status === 503) throw new Error("API not configured, or draft unavailable.");
         if (!res.ok) throw new Error("HTTP " + res.status);
         return res.json();
@@ -207,7 +207,7 @@
       .then(function (ctx) {
         render(ctx);
         setMsg("Drafted " + new Date().toLocaleTimeString(), "ok");
-        if (window.RC) { window.RC.toast("SAR draft ready ✓", "ok"); }
+        if (window.RC) { window.RC.toast("SAR draft ready &#10003;", "ok"); }
       })
       .catch(function (e) {
         setMsg(e.message, "err");

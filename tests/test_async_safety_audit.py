@@ -38,6 +38,13 @@ SRC = Path(__file__).resolve().parents[1] / "src" / "recupero"
 ALLOWED_ASYNC_MODULES = {
     "api/app.py",
     "api/auth.py",
+    # v0.39 (roadmap #5): the mempool pre-freeze watch. run_mempool_watch is a
+    # websockets subscription loop — a long-lived ws sub is inherently async and
+    # cannot be expressed synchronously. AUDITED non-blocking: it only awaits
+    # ws.send / `async for frame in ws` and calls json.loads + a pure classifier;
+    # no requests/time.sleep/psycopg/urlopen (see BLOCKING_SYNC_CALLS). Opt-in
+    # operator command, never auto-run.
+    "monitoring/mempool_watch.py",
 }
 
 # Sync calls that block the event loop if invoked from an async def.
@@ -123,8 +130,11 @@ def test_async_count_matches_baseline(parsed):
     # require_api_key + a sync env-read role lookup). Both non-blocking; covered
     # by test_no_blocking_io_inside_async_def.
     # v0.38 (UI): +1 — `root` (bare-domain → /v1/console RedirectResponse; pure).
-    assert total == 32, (
-        f"async def count drifted to {total} (was 32). Update baseline and "
+    # v0.39 (roadmap #5): +1 — monitoring/mempool_watch.run_mempool_watch, the
+    # websockets pending-tx subscription loop. AUDITED non-blocking (only awaits
+    # ws.send / `async for` + json.loads + a pure classifier; no blocking calls).
+    assert total == 33, (
+        f"async def count drifted to {total} (was 33). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

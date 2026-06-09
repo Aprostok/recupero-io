@@ -206,7 +206,58 @@ def _build_context(
         # produced a demix_leads.json for this case). Always present in the
         # context so the StrictUndefined template can `{% if demix_leads %}`.
         "demix_leads": demix_leads,
+        # v0.39 (dormant-capability sweep) — burn-sink destinations (funds sent
+        # to a provably-unspendable address). None when the trace has none, so
+        # the StrictUndefined template `{% if burn_sinks %}` omits the section.
+        "burn_sinks": _build_burn_sinks(case),
     }
+
+
+def _build_burn_sinks(case: Case) -> list[dict[str, Any]] | None:
+    """Burn-sink destinations in the trace (activation of the dormant
+    ``trace.burn_sinks`` registry). A burn sink is a provably-unspendable
+    address — the zero address, a canonical ``0xdEaD`` burn, or a chain
+    incinerator — so funds reaching it are UNRECOVERABLE by construction and
+    must NOT inflate the recoverable total.
+
+    Pure over ``case.transfers`` (no new fetch). Mixer pools (Tornado is in both
+    the burn and mixer registries) are EXCLUDED — a mixer is reported as a mixer
+    terminal, not a burn — so the two classifications never double-count. Returns
+    ``None`` when the trace has no burns (section omitted)."""
+    from recupero.trace.burn_sinks import burn_label
+    from recupero.trace.mixer_detection import is_mixer
+
+    agg: dict[tuple[str, str], dict[str, Any]] = {}
+    for t in case.transfers or []:
+        to = getattr(t, "to_address", None)
+        chain = getattr(getattr(t, "chain", None), "value", "") or ""
+        if not to:
+            continue
+        label = burn_label(str(to), chain)
+        if label is None:
+            continue
+        try:
+            if is_mixer(str(to), chain)[0]:
+                continue  # mixer terminal, not a burn
+        except Exception:  # noqa: BLE001 — is_mixer is best-effort here
+            pass
+        key = (str(to).lower(), chain)
+        rec = agg.get(key)
+        if rec is None:
+            rec = {"address": to, "chain": chain, "burn_type": label,
+                   "count": 0, "_usd": Decimal(0)}
+            agg[key] = rec
+        rec["count"] += 1
+        usd = getattr(t, "usd_value_at_tx", None)
+        if usd is not None and usd.is_finite():
+            rec["_usd"] += usd
+    if not agg:
+        return None
+    return [
+        {"address": r["address"], "chain": r["chain"], "burn_type": r["burn_type"],
+         "count": r["count"], "total_usd": _fmt_usd(r["_usd"])}
+        for r in sorted(agg.values(), key=lambda r: r["_usd"], reverse=True)
+    ]
 
 
 def _compute_stats(case: Case) -> dict[str, Any]:

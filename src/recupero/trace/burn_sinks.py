@@ -135,6 +135,27 @@ def is_burn_sink(address: Any, chain: Any) -> bool:
     return addr in sinks
 
 
+def burn_label(address: Any, chain: Any) -> str | None:
+    """Return the burn-sink classification (e.g. ``"zero-address"``,
+    ``"dead-address"``, ``"tron-burn"``) for a known burn sink on ``chain``,
+    else ``None``. Same case rules as :func:`is_burn_sink` (EVM
+    case-insensitive; Solana/Tron/Bitcoin case-sensitive). Lets a caller
+    surface *why* an address is a burn (the trace-report "Burned" panel) without
+    re-deriving the registry lookup."""
+    if not isinstance(address, str) or not isinstance(chain, str):
+        return None
+    addr = address.strip()
+    chain_key = chain.strip().lower()
+    if not addr or not chain_key:
+        return None
+    sinks = BURN_SINKS.get(chain_key)
+    if sinks is None:
+        return None
+    if chain_key in _EVM_CHAINS:
+        return sinks.get(addr.lower())
+    return sinks.get(addr)
+
+
 def classify_outflow(transfer: dict[str, Any] | None) -> str:
     """Classify the destination of a transfer as 'burn' or 'normal'.
 

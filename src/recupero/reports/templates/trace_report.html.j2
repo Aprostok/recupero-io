@@ -472,6 +472,37 @@ notification).</p>
 {% endfor %}
 {% endif %}
 
+{% if burn_sinks %}
+<h2>9. Burned / Provably-Destroyed Funds</h2>
+<p class="small"><em>Funds sent to a provably-unspendable address &mdash; the
+   zero address, a canonical <span class="mono">0xdEaD</span> burn, or a
+   chain incinerator. No private key exists, so these are UNRECOVERABLE by
+   construction; they are listed so the recoverable total is not overstated.
+   (Sanctioned mixer pools are reported as mixer terminals, not burns.)</em></p>
+<table>
+  <thead>
+    <tr>
+      <th>Burn address</th>
+      <th>Type</th>
+      <th>Chain</th>
+      <th>Transfers</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for b in burn_sinks %}
+    <tr>
+      <td class="mono">{{ b.address }}</td>
+      <td>{{ b.burn_type }}</td>
+      <td>{{ b.chain }}</td>
+      <td>{{ b.count }}</td>
+      <td>{{ b.total_usd }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>
   <div class="footer-meta">

@@ -204,6 +204,32 @@ def cli() -> None:
         help="Path to a file containing the reply body",
     )
 
+    # ----- mempool-watch ----- #
+    p_mempool = sub.add_parser(
+        "mempool-watch",
+        help="Watch the mempool for PENDING (pre-confirmation) txs touching "
+             "given addresses, to race a freeze before they land. Emits "
+             "UNCONFIRMED signals only (a pending tx may be dropped/replaced). "
+             "Requires ALCHEMY_API_KEY; ETH-mainnet / Sepolia / Polygon only.",
+    )
+    p_mempool.add_argument(
+        "--network", default="ethereum",
+        help="ethereum | sepolia | polygon (default ethereum)",
+    )
+    p_mempool.add_argument(
+        "--address", action="append", dest="addresses",
+        help="A watched address (repeatable). Funds arriving at / leaving it "
+             "while pending raise an alert.",
+    )
+    p_mempool.add_argument(
+        "--hashes-only", action="store_true", dest="hashes_only",
+        help="Subscribe in hashes-only mode (lower bandwidth; no from/to/value).",
+    )
+    p_mempool.add_argument(
+        "--max-messages", type=int, default=None, dest="max_messages",
+        help="Stop after N frames (default: run until disconnected).",
+    )
+
     # ----- send-le-handoff ----- #
     p_le = sub.add_parser(
         "send-le-handoff",
@@ -935,6 +961,38 @@ def cli() -> None:
             f"parsed outcome={c.outcome_type} confidence={c.confidence} "
             f"needs_human_review={c.needs_human_review} — {c.rationale}"
         )
+        sys.exit(0)
+
+    if args.command == "mempool-watch":
+        import asyncio as _asyncio
+
+        from recupero.monitoring.mempool_watch import run_mempool_watch
+        key = os.environ.get("ALCHEMY_API_KEY", "").strip()
+        if not key:
+            print("ALCHEMY_API_KEY is required for mempool-watch")
+            sys.exit(2)
+        addrs = [a for a in (args.addresses or []) if a and a.strip()]
+        if not addrs:
+            print("at least one --address is required")
+            sys.exit(2)
+
+        def _on_pending(alert) -> None:  # noqa: ANN001
+            print(
+                f"PENDING {alert.direction} {alert.address} "
+                f"tx={alert.tx_hash} value_wei={alert.value_wei} "
+                f"[UNCONFIRMED — may not land]"
+            )
+
+        try:
+            n = _asyncio.run(run_mempool_watch(
+                api_key=key, network=args.network, addresses=addrs,
+                on_alert=_on_pending, hashes_only=args.hashes_only,
+                max_messages=args.max_messages,
+            ))
+        except ValueError as exc:
+            print(f"mempool-watch: {exc}")
+            sys.exit(2)
+        print(f"mempool-watch: dispatched {n} pending alert(s)")
         sys.exit(0)
 
     if args.command == "send-le-handoff":

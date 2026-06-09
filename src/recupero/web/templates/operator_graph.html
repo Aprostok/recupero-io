@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="robots" content="noindex, nofollow">
-<title>Operator fund-flow graph — Recupero</title>
+<title>Operator fund-flow graph - Recupero</title>
 <style>
-/* ── Recupero Operator Graph — Apple-grade dark theme ── */
+/* -- Recupero Operator Graph - Apple-grade dark theme -- */
 :root {
   --bg: #07090f;  --bg2: #0b0e17;  --surface: #131620;  --surface-2: #1a1e2e;
   --border: rgba(255,255,255,.09);  --border-hi: rgba(255,255,255,.16);
@@ -24,7 +24,7 @@
 html { -webkit-font-smoothing: antialiased; }
 body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--ink); overflow: hidden; }
 
-/* ── Login / topbar ── */
+/* -- Login / topbar -- */
 #loginbar {
   display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
   padding: 10px 18px;
@@ -65,7 +65,7 @@ body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--
 #login-status.err { color: var(--crit); }
 #app { display: none; } #app.show { display: block; }
 
-/* ── Control bars ── */
+/* -- Control bars -- */
 .bar {
   display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
   padding: 8px 14px;
@@ -89,7 +89,7 @@ body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--
   font-size: 13px; background: var(--surface); color: var(--ink);
 }
 
-/* ── Buttons ── */
+/* -- Buttons -- */
 .btn {
   background: var(--surface); color: var(--ink);
   border: 1px solid var(--border); border-radius: var(--r);
@@ -104,7 +104,7 @@ body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--
   box-shadow: 0 0 14px var(--green-glow);
 }
 
-/* ── Segmented control ── */
+/* -- Segmented control -- */
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--r); overflow: hidden; }
 .seg button {
   border: 0; border-left: 1px solid var(--border); background: var(--surface);
@@ -116,7 +116,7 @@ body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--
 .seg button:hover:not(.on) { background: var(--surface-2); color: var(--ink); }
 .spacer { margin-left: auto; }
 
-/* ── Legend ── */
+/* -- Legend -- */
 #legend {
   display: flex; gap: 6px; flex-wrap: wrap;
   padding: 7px 14px;
@@ -136,7 +136,7 @@ body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--
   box-shadow: 0 0 5px currentColor; filter: brightness(1.3);
 }
 
-/* ── Scrubber ── */
+/* -- Scrubber -- */
 #scrubber {
   display: flex; gap: 10px; align-items: center;
   padding: 7px 14px; background: rgba(7,9,15,.80);
@@ -145,7 +145,7 @@ body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--
 }
 #scrubber input[type=range] { flex: 1; accent-color: var(--accent); }
 
-/* ── Graph canvas ── */
+/* -- Graph canvas -- */
 #graph-wrap { position: relative; }
 svg#map {
   width: 100vw; height: calc(100vh - 210px); display: block; cursor: grab; touch-action: none;
@@ -159,7 +159,7 @@ svg#map:active { cursor: grabbing; }
 canvas#cmap { position: absolute; top: 0; left: 0; display: none; background: var(--bg); cursor: grab; touch-action: none; }
 canvas#cmap:active { cursor: grabbing; }
 
-/* ── Edges ── */
+/* -- Edges -- */
 .edge { fill: none; }
 .edge.cross { stroke-dasharray: 6 4; }
 .edge.dim { opacity: .07; }
@@ -177,7 +177,7 @@ canvas#cmap:active { cursor: grabbing; }
   to   { stroke-dashoffset: 0; }
 }
 
-/* ── Nodes ── */
+/* -- Nodes -- */
 .node { cursor: pointer; }
 .node circle { stroke-width: 2; transition: filter .20s var(--ease); }
 .node text { font-size: 11px; fill: var(--ink-soft); pointer-events: none; font-weight: 500; }
@@ -197,14 +197,14 @@ canvas#cmap:active { cursor: grabbing; }
 .node.pick circle  { stroke: var(--warn) !important; stroke-width: 3.5; filter: drop-shadow(0 0 12px var(--warn-glow)); }
 .node.origin circle { filter: drop-shadow(0 0 9px var(--green-glow)); }
 
-/* ── Flow particles (JS-animated dots on path edges) ── */
+/* -- Flow particles (JS-animated dots on path edges) -- */
 .flow-dot { pointer-events: none; }
 
-/* ── Hop-number badges on path nodes ── */
+/* -- Hop-number badges on path nodes -- */
 .hop-badge-bg { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
 .hop-badge { pointer-events: none; font-size: 9px; font-weight: 800; fill: #fff; text-anchor: middle; dominant-baseline: central; }
 
-/* ── Tooltip ── */
+/* -- Tooltip -- */
 #tip {
   position: absolute; pointer-events: none; opacity: 0;
   transition: opacity .12s var(--ease);
@@ -222,7 +222,7 @@ canvas#cmap:active { cursor: grabbing; }
 #tip .tt-row { display: flex; justify-content: space-between; gap: 14px; color: var(--ink-soft); }
 #tip .tt-row span:last-child { color: var(--ink); font-weight: 600; }
 
-/* ── Side panel ── */
+/* -- Side panel -- */
 #panel {
   position: absolute; top: 12px; right: 12px;
   width: 304px; max-height: calc(100% - 24px); overflow: auto;
@@ -290,7 +290,7 @@ canvas#cmap:active { cursor: grabbing; }
 #panel a { color: var(--path-col); }
 #panel a:hover { color: var(--ink); }
 
-/* ── Mini-map ── */
+/* -- Mini-map -- */
 #mini {
   position: absolute; bottom: 12px; left: 12px;
   width: 178px; height: 112px;
@@ -332,7 +332,7 @@ canvas#cmap:active { cursor: grabbing; }
 
 <div id="app">
   <div class="bar">
-    <input type="text" id="search" placeholder="Search address or label…" autocomplete="off">
+    <input type="text" id="search" placeholder="Search address or label..." autocomplete="off">
     <label>Colour
       <select id="color-by"><option value="recoverability">Recoverability</option><option value="risk">Risk</option></select>
     </label>
@@ -352,7 +352,7 @@ canvas#cmap:active { cursor: grabbing; }
     <button type="button" class="btn" id="btn-csv">CSV</button>
     <select id="snap-list" title="Saved views"><option value="">Saved views…</option></select>
     <button type="button" class="btn" id="btn-save-view">Save view</button>
-    <button type="button" class="btn" id="btn-canvas" title="Canvas renderer — scales to large graphs">Canvas</button>
+    <button type="button" class="btn" id="btn-canvas" title="Canvas renderer - scales to large graphs">Canvas</button>
   </div>
   <div class="bar filters">
     <label>Min value <input type="range" id="f-min" min="0" max="100" value="0"><span id="f-min-lab" style="min-width:70px;">$0</span></label>
@@ -361,7 +361,7 @@ canvas#cmap:active { cursor: grabbing; }
   </div>
   <div id="risk-strip"></div>
   <div id="scrubber" hidden>
-    <button type="button" class="btn" id="tl-play">▶ Play</button>
+    <button type="button" class="btn" id="tl-play">&#9654; Play</button>
     <span id="tl-from"></span><input type="range" id="tl-range" min="0" max="100" value="100"><span id="tl-to"></span>
   </div>
   <div id="legend"></div>
@@ -389,15 +389,15 @@ canvas#cmap:active { cursor: grabbing; }
     const key = document.getElementById("key").value.trim();
     const inv = document.getElementById("inv").value.trim();
     if (!key || !inv) { setStatus("Enter admin key and investigation id.", true); return; }
-    setStatus("Loading…", false);
+    setStatus("Loading...", false);
     try {
       const resp = await fetch("/v1/operator/graph/" + encodeURIComponent(inv), { headers: { "X-Recupero-Admin-Key": key } });
-      if (resp.status === 401 || resp.status === 403) { setStatus("Unauthorized — check the admin key.", true); return; }
+      if (resp.status === 401 || resp.status === 403) { setStatus("Unauthorized - check the admin key.", true); return; }
       if (resp.status === 404) { setStatus("No case found for that investigation id.", true); return; }
       if (!resp.ok) { setStatus("Failed (" + resp.status + ").", true); return; }
       const data = await resp.json();
       sessionStorage.setItem("recupero.adminkey", key);
-      setStatus((data.meta.nodeCount || 0) + " nodes · " + (data.meta.edgeCount || 0) + " edges" + (data.meta.riskScored ? " · risk-scored" : ""), false);
+      setStatus((data.meta.nodeCount || 0) + " nodes - " + (data.meta.edgeCount || 0) + " edges" + (data.meta.riskScored ? " - risk-scored" : ""), false);
       document.getElementById("app").classList.add("show");
       initGraph(data, inv);
     } catch (e) { setStatus("Network error.", true); }
@@ -415,7 +415,7 @@ function initGraph(DATA, viewId) {
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.getElementById("map"), mini = document.getElementById("mini"), tip = document.getElementById("tip"), panel = document.getElementById("panel");
 
-  // ── SVG arrowhead markers ──
+  // -- SVG arrowhead markers --
   (function(){
     const defs = document.createElementNS(NS, "defs");
     // One marker; fill="context-stroke" inherits each edge's stroke colour automatically
@@ -486,7 +486,7 @@ function initGraph(DATA, viewId) {
     for (const e of DATA.edges) {
       const s = idOf.get(e.source), t = idOf.get(e.target);
       if (!s || !t || s === t) continue;
-      const k = s + "␟" + t; let a = agg.get(k);
+      const k = s + "|" + t; let a = agg.get(k);
       if (!a) { a = { id:k, source:s, target:t, usd:0, count:0, cross:false, assets:new Set(), first:null, last:null, transfers:[], txMore:0 }; agg.set(k,a); }
       a.usd += e.totalUsdNumeric||0; a.count += e.transferCount||0; a.cross = a.cross || !!e.isCrossChain;
       if (e.dominantSymbol) a.assets.add(e.dominantSymbol);
@@ -556,7 +556,7 @@ function initGraph(DATA, viewId) {
 
   let miniTick=0;
   function paint(){ const sankey=(layout==="value"); for (const ln of edgeEls){ const e=ln.__e,a=pos.get(e.source),b=pos.get(e.target); if(!a||!b)continue; const dx=b.x-a.x,dy=b.y-a.y,ed=Math.sqrt(dx*dx+dy*dy)||1; const shrink=Math.min((ln.__tN?radius(ln.__tN):9)+7, ed*0.88); const ex=b.x-(dx/ed)*shrink,ey=b.y-(dy/ed)*shrink; if(sankey){ const hdx=(ex-a.x)*0.5; ln.setAttribute("d",`M${a.x},${a.y} C${a.x+hdx},${a.y} ${ex-hdx},${ey} ${ex},${ey}`); } else { ln.setAttribute("d",`M${a.x},${a.y} L${ex},${ey}`); } } for (const g of nodeEls){ const p=pos.get(g.__n.id); g.setAttribute("transform",`translate(${p.x},${p.y})`);} if((miniTick=(miniTick+1)%12)===0) drawMini(); }
-  // ---- canvas renderer (4.11) — scales past what SVG handles ----
+  // ---- canvas renderer (4.11) - scales past what SVG handles ----
   const canvas = document.getElementById("cmap");
   const ctx = canvas.getContext("2d");
   const DPR = window.devicePixelRatio || 1;
@@ -626,7 +626,7 @@ function initGraph(DATA, viewId) {
 
   function loop(){
     step();
-    // ── Animate flow particles along path edges ──
+    // -- Animate flow particles along path edges --
     if (pathParticles.length){
       const t = (performance.now() / 850) % 1;
       for (const dot of pathParticles){
@@ -679,7 +679,7 @@ function initGraph(DATA, viewId) {
   function reapplyHighlights(){ if(selected&&selected.kind==="node"){isolate(selected.n.id);markSelected();} if(pathNodes.size)paintPath(); }
 
   function row(p,k,v){ const r=document.createElement("div");r.className="p-row";const a=document.createElement("span");a.className="k";a.textContent=k;const b=document.createElement("span");b.className="v";b.textContent=v;r.appendChild(a);r.appendChild(b);p.appendChild(r); }
-  function head(box,title,color,chip){ const c=document.createElement("button");c.className="p-close";c.textContent="×";c.onclick=clearSelection;box.appendChild(c);const h=document.createElement("h3");h.textContent=title;box.appendChild(h);const ch=document.createElement("span");ch.className="p-chip";ch.style.background=color;ch.textContent=chip;box.appendChild(ch); }
+  function head(box,title,color,chip){ const c=document.createElement("button");c.className="p-close";c.textContent="x";c.onclick=clearSelection;box.appendChild(c);const h=document.createElement("h3");h.textContent=title;box.appendChild(h);const ch=document.createElement("span");ch.className="p-chip";ch.style.background=color;ch.textContent=chip;box.appendChild(ch); }
   function arcPath(cx,cy,r0,r1,a0,a1){const P=(r,a)=>[cx+r*Math.cos(a),cy+r*Math.sin(a)];const large=(a1-a0)>Math.PI?1:0;const [x0,y0]=P(r1,a0),[x1,y1]=P(r1,a1),[x2,y2]=P(r0,a1),[x3,y3]=P(r0,a0);return `M${x0},${y0} A${r1},${r1} 0 ${large} 1 ${x1},${y1} L${x2},${y2} A${r0},${r0} 0 ${large} 0 ${x3},${y3} Z`;}
   function donut(cap,obj){ const wrap=document.createElement("div");wrap.style.textAlign="center"; const entries=Object.entries(obj||{}).filter(([,v])=>v>0).sort((a,b)=>b[1]-a[1]); const total=entries.reduce((s,[,v])=>s+v,0); const s=document.createElementNS(NS,"svg");s.setAttribute("width","82");s.setAttribute("height","82");s.setAttribute("viewBox","0 0 84 84"); if(total<=0){const t=document.createElementNS(NS,"circle");t.setAttribute("cx","42");t.setAttribute("cy","42");t.setAttribute("r","32");t.setAttribute("fill","#2a2d36");s.appendChild(t);} else { let a=-Math.PI/2; for(const [st,v] of entries){const a1=a+(v/total)*2*Math.PI;const p=document.createElementNS(NS,"path");p.setAttribute("d",arcPath(42,42,19,38,a,a1-0.01));p.setAttribute("fill",statusColor(st));const ttl=document.createElementNS(NS,"title");ttl.textContent=statusLabel(st)+" "+fmtUsd(v);p.appendChild(ttl);s.appendChild(p);a=a1;} } wrap.appendChild(s);const c=document.createElement("div");c.className="donut-cap";c.textContent=cap;wrap.appendChild(c);return wrap; }
   function showNodePanel(n){
@@ -709,23 +709,23 @@ function initGraph(DATA, viewId) {
     row(box,"Distance",(n.depth||0)+" hop"+((n.depth||0)===1?"":"s")+" from seed");
     row(box,"Connections",String(view.edges.filter(e=>e.source===n.id||e.target===n.id).length));
     if(n.kind==="cluster"){ row(box,"Addresses",String(n.size)); const btn=document.createElement("button");btn.className="btn";btn.style.marginTop="8px";btn.textContent=expanded.has(n.id)?"Close group":"Open group";btn.onclick=()=>{if(expanded.has(n.id))expanded.delete(n.id);else expanded.add(n.id);rebuild(true);clearSelection();};box.appendChild(btn); const ul=document.createElement("ul");ul.className="p-members";for(const m of (n.memberIds||[]).slice(0,80)){const li=document.createElement("li");li.textContent=m;ul.appendChild(li);}box.appendChild(ul); }
-    else if(n.explorerUrl&&/^https?:\/\//i.test(n.explorerUrl)){ const w=document.createElement("div");w.style.marginTop="8px";const a=document.createElement("a");a.setAttribute("href",n.explorerUrl);a.setAttribute("target","_blank");a.setAttribute("rel","noopener noreferrer");a.textContent="View on blockchain explorer →";w.appendChild(a);box.appendChild(w); }
-    // on-demand expansion — grow the graph from this node
+    else if(n.explorerUrl&&/^https?:\/\//i.test(n.explorerUrl)){ const w=document.createElement("div");w.style.marginTop="8px";const a=document.createElement("a");a.setAttribute("href",n.explorerUrl);a.setAttribute("target","_blank");a.setAttribute("rel","noopener noreferrer");a.textContent="View on blockchain explorer ->";w.appendChild(a);box.appendChild(w); }
+    // on-demand expansion - grow the graph from this node
     if (n.kind === "node") {
       const ex = document.createElement("div"); ex.style.marginTop = "10px";
       const lab = document.createElement("div"); lab.className = "donut-cap"; lab.style.textAlign = "left"; lab.textContent = "Expand counterparties"; ex.appendChild(lab);
-      const bOut = document.createElement("button"); bOut.className = "btn"; bOut.style.marginTop = "4px"; bOut.textContent = "Funds out ▸"; bOut.onclick = () => expandNode(n, "out", bOut);
-      const bIn = document.createElement("button"); bIn.className = "btn"; bIn.style.marginLeft = "6px"; bIn.textContent = "◂ Funds in"; bIn.onclick = () => expandNode(n, "in", bIn);
+      const bOut = document.createElement("button"); bOut.className = "btn"; bOut.style.marginTop = "4px"; bOut.textContent = "Funds out >"; bOut.onclick = () => expandNode(n, "out", bOut);
+      const bIn = document.createElement("button"); bIn.className = "btn"; bIn.style.marginLeft = "6px"; bIn.textContent = "< Funds in"; bIn.onclick = () => expandNode(n, "in", bIn);
       ex.appendChild(bOut); ex.appendChild(bIn);
       const bW = document.createElement("button"); bW.className = "btn"; bW.style.marginLeft = "6px"; bW.textContent = "👁 Watch"; bW.title = "Add to the monitoring watchlist"; bW.onclick = () => watchNode(n, bW);
       ex.appendChild(bW);
       box.appendChild(ex);
     }
-    // operator annotation — saved server-side (shared across operators
+    // operator annotation - saved server-side (shared across operators
     // with the admin key); falls back to device-local if the store is down.
     const noteKey = VK + ".note." + n.id;
     const ta=document.createElement("textarea");
-    ta.placeholder="Investigator note (saved to the case)…";
+    ta.placeholder="Investigator note (saved to the case)...";
     ta.value = (annotations[n.id] != null ? annotations[n.id] : (localStorage.getItem(noteKey)||""));
     let noteTimer=null;
     ta.addEventListener("input",()=>{ annotations[n.id]=ta.value; try{ if(ta.value)localStorage.setItem(noteKey,ta.value); else localStorage.removeItem(noteKey);}catch(e){} if(noteTimer)clearTimeout(noteTimer); noteTimer=setTimeout(()=>saveAnnotation(n.id, ta.value), 700); });
@@ -735,11 +735,11 @@ function initGraph(DATA, viewId) {
   function showEdgePanel(e){
     const box=document.createElement("div");
     head(box,fmtUsd(e.usd), e.cross?EDGE_CROSS:"#64748B", e.cross?"cross-chain transfer":"transfer");
-    const a=document.createElement("div");a.className="p-addr";a.textContent=nodeName(e.source)+"  →  "+nodeName(e.target);box.appendChild(a);
+    const a=document.createElement("div");a.className="p-addr";a.textContent=nodeName(e.source)+"  ->  "+nodeName(e.target);box.appendChild(a);
     row(box,"Transfers",String(e.count));
     if(e.assets&&e.assets.size)row(box,"Assets",[...e.assets].join(", "));
     if(e.first)row(box,"First",e.first); if(e.last)row(box,"Last",e.last);
-    if(e.transfers&&e.transfers.length){ const ul=document.createElement("ul");ul.className="p-tx"; for(const t of e.transfers){ const li=document.createElement("li"); const left=document.createElement("span");left.className="tx-d";left.textContent=(t.date||"")+(t.token?" · "+t.token:""); const right=document.createElement("span"); if(t.txUrl&&/^https?:\/\//i.test(t.txUrl)){const lnk=document.createElement("a");lnk.setAttribute("href",t.txUrl);lnk.setAttribute("target","_blank");lnk.setAttribute("rel","noopener noreferrer");lnk.textContent=t.usdLabel||fmtUsd(t.usd);right.appendChild(lnk);} else right.textContent=t.usdLabel||fmtUsd(t.usd); li.appendChild(left);li.appendChild(right);ul.appendChild(li);} box.appendChild(ul); if(e.txMore>0){const m=document.createElement("div");m.className="donut-cap";m.style.textAlign="left";m.style.marginTop="6px";m.textContent="+ "+e.txMore+" more transfer"+(e.txMore===1?"":"s");box.appendChild(m);} }
+    if(e.transfers&&e.transfers.length){ const ul=document.createElement("ul");ul.className="p-tx"; for(const t of e.transfers){ const li=document.createElement("li"); const left=document.createElement("span");left.className="tx-d";left.textContent=(t.date||"")+(t.token?" - "+t.token:""); const right=document.createElement("span"); if(t.txUrl&&/^https?:\/\//i.test(t.txUrl)){const lnk=document.createElement("a");lnk.setAttribute("href",t.txUrl);lnk.setAttribute("target","_blank");lnk.setAttribute("rel","noopener noreferrer");lnk.textContent=t.usdLabel||fmtUsd(t.usd);right.appendChild(lnk);} else right.textContent=t.usdLabel||fmtUsd(t.usd); li.appendChild(left);li.appendChild(right);ul.appendChild(li);} box.appendChild(ul); if(e.txMore>0){const m=document.createElement("div");m.className="donut-cap";m.style.textAlign="left";m.style.marginTop="6px";m.textContent="+ "+e.txMore+" more transfer"+(e.txMore===1?"":"s");box.appendChild(m);} }
     panel.replaceChildren(...box.childNodes); panel.classList.add("show");
   }
   function nodeName(id){ const n=view.nodes.find(x=>x.id===id); return n?(n.label||n.short||id):id; }
@@ -747,10 +747,10 @@ function initGraph(DATA, viewId) {
   // ---- on-demand hop expansion (TRM/Chainalysis "grow the graph") ----
   async function expandNode(n, direction, btn){
     const tag = n.id + "|" + direction;
-    if (expandedHops.has(tag)) { if(btn) btn.textContent = "✓ done"; return; }
+    if (expandedHops.has(tag)) { if(btn) btn.textContent = "ok done"; return; }
     const key = sessionStorage.getItem("recupero.adminkey") || "";
     const orig = btn ? btn.textContent : "";
-    if (btn) { btn.textContent = "…"; btn.disabled = true; }
+    if (btn) { btn.textContent = "..."; btn.disabled = true; }
     try {
       const url = "/v1/operator/expand?chain=" + encodeURIComponent(n.chain || "") +
         "&address=" + encodeURIComponent(n.id) + "&direction=" + direction + "&limit=40" +
@@ -765,7 +765,7 @@ function initGraph(DATA, viewId) {
   }
   async function watchNode(n, btn){
     const orig = btn ? btn.textContent : "";
-    if (btn) { btn.textContent = "…"; btn.disabled = true; }
+    if (btn) { btn.textContent = "..."; btn.disabled = true; }
     try {
       const r = await fetch(API + "/watch", { method: "POST",
         headers: { "X-Recupero-Admin-Key": adminKey(), "Content-Type": "application/json" },
@@ -785,7 +785,7 @@ function initGraph(DATA, viewId) {
       if (ex) { ex.totalUsdNumeric = (ex.totalUsdNumeric||0) + (ne.totalUsdNumeric||0); ex.transferCount = (ex.transferCount||0) + (ne.transferCount||0); }
       else { DATA.edges.push(ne); existing.set(k, ne); }
     }
-    document.getElementById("meta-stat").textContent = DATA.nodes.length + " nodes · " + DATA.edges.length + " edges (live)";
+    document.getElementById("meta-stat").textContent = DATA.nodes.length + " nodes - " + DATA.edges.length + " edges (live)";
     rebuild(true); selectNode(parent.id); buildRiskStrip();
   }
 
@@ -802,7 +802,7 @@ function initGraph(DATA, viewId) {
     for (const g of nodeEls) g.classList.toggle("path",pathNodes.has(g.__n.id));
     for (const ln of edgeEls) ln.classList.toggle("path",pathEdges.has(ln.__e.id));
     if (!pathNodeOrder.length) return;
-    // ── Hop-number badges ──
+    // -- Hop-number badges --
     const hopIdx = new Map(pathNodeOrder.map((id,i)=>[id,i+1]));
     for (const g of nodeEls){
       if (!pathNodes.has(g.__n.id)) continue;
@@ -815,7 +815,7 @@ function initGraph(DATA, viewId) {
       g.appendChild(bg); g.appendChild(tx);
       pathHopLabels.push(bg,tx);
     }
-    // ── Flow particles (2 per path edge, staggered) ──
+    // -- Flow particles (2 per path edge, staggered) --
     const pathEls = edgeEls.filter(ln=>pathEdges.has(ln.__e.id));
     pathEls.forEach((ln,i)=>{
       for (const off of [0, 0.5]){
@@ -883,7 +883,7 @@ function initGraph(DATA, viewId) {
           if (e){
             totalUsd+=e.usd||0;
             const detail=document.createElement("div"); detail.style.cssText="font-size:11px;color:var(--path-col);margin-top:2px;display:flex;gap:6px;align-items:center";
-            const arrow=document.createElement("span"); arrow.textContent="↓"; arrow.style.color="var(--ink-faint)"; detail.appendChild(arrow);
+            const arrow=document.createElement("span"); arrow.textContent="v"; arrow.style.color="var(--ink-faint)"; detail.appendChild(arrow);
             const amt=document.createElement("span"); amt.style.fontWeight="600"; amt.textContent=fmtUsd(e.usd||0); detail.appendChild(amt);
             if (e.assets&&e.assets.size){ const a=document.createElement("span"); a.style.cssText="font-size:10px;background:var(--accent-soft);color:var(--path-col);border-radius:4px;padding:1px 5px"; a.textContent=[...e.assets].slice(0,2).join("/"); detail.appendChild(a); }
             content.appendChild(detail);
@@ -904,7 +904,7 @@ function initGraph(DATA, viewId) {
 
   function ttRow(p,k,v){const r=document.createElement("div");r.className="tt-row";const a=document.createElement("span");a.textContent=k;const b=document.createElement("span");b.textContent=v;r.appendChild(a);r.appendChild(b);p.appendChild(r);}
   function place(ev){const r=svg.getBoundingClientRect();tip.style.left=(ev.clientX-r.left+14)+"px";tip.style.top=(ev.clientY-r.top+14)+"px";tip.style.opacity="1";}
-  function nodeTip(ev,n){const box=document.createElement("div");const t=document.createElement("div");t.className="tt-title";t.textContent=n.label||n.short||"";box.appendChild(t);const s=document.createElement("div");s.className="tt-sub";s.textContent=(n.kind==="cluster"?(n.statusLabel+" · "+n.size+" addresses"):n.statusLabel)+(n.risk?" · risk "+n.risk.verdict:"");box.appendChild(s);ttRow(box,"Received",n.inboundUsd);ttRow(box,"Sent on",n.outboundUsd);tip.replaceChildren(...box.childNodes);place(ev);}
+  function nodeTip(ev,n){const box=document.createElement("div");const t=document.createElement("div");t.className="tt-title";t.textContent=n.label||n.short||"";box.appendChild(t);const s=document.createElement("div");s.className="tt-sub";s.textContent=(n.kind==="cluster"?(n.statusLabel+" - "+n.size+" addresses"):n.statusLabel)+(n.risk?" - risk "+n.risk.verdict:"");box.appendChild(s);ttRow(box,"Received",n.inboundUsd);ttRow(box,"Sent on",n.outboundUsd);tip.replaceChildren(...box.childNodes);place(ev);}
   function edgeTip(ev,e){const box=document.createElement("div");const t=document.createElement("div");t.className="tt-title";t.textContent=fmtUsd(e.usd);box.appendChild(t);if(e.cross){const s=document.createElement("div");s.className="tt-sub";s.textContent="cross-chain";box.appendChild(s);}ttRow(box,"Transfers",String(e.count));tip.replaceChildren(...box.childNodes);place(ev);}
   function hideTip(){tip.style.opacity="0";}
 
@@ -955,7 +955,7 @@ function initGraph(DATA, viewId) {
   fasset.addEventListener("change",()=>{asset=fasset.value;applyFilters();saveState();});
 
   const trng=DATA.meta.timeRange;
-  if(trng&&trng.min&&trng.max&&trng.min!==trng.max){ const scrub=document.getElementById("scrubber");scrub.hidden=false; const d0=new Date(trng.min+"T00:00:00Z").getTime(),d1=new Date(trng.max+"T00:00:00Z").getTime(); document.getElementById("tl-from").textContent=trng.min; const slider=document.getElementById("tl-range"),toLab=document.getElementById("tl-to");toLab.textContent=trng.max; const setFrom=()=>{const f=slider.value/100;const iso=new Date(d0+f*(d1-d0)).toISOString().slice(0,10);timeCutoff=(+slider.value>=100)?null:iso;toLab.textContent=iso;applyFilters();}; slider.addEventListener("input",setFrom); let playing=null;const pb=document.getElementById("tl-play"); pb.onclick=()=>{if(playing){clearInterval(playing);playing=null;pb.textContent="▶ Play";return;}if(+slider.value>=100)slider.value=0;pb.textContent="❚❚ Pause";playing=setInterval(()=>{slider.value=Math.min(100,+slider.value+2);setFrom();if(+slider.value>=100){clearInterval(playing);playing=null;pb.textContent="▶ Play";}},120);}; }
+  if(trng&&trng.min&&trng.max&&trng.min!==trng.max){ const scrub=document.getElementById("scrubber");scrub.hidden=false; const d0=new Date(trng.min+"T00:00:00Z").getTime(),d1=new Date(trng.max+"T00:00:00Z").getTime(); document.getElementById("tl-from").textContent=trng.min; const slider=document.getElementById("tl-range"),toLab=document.getElementById("tl-to");toLab.textContent=trng.max; const setFrom=()=>{const f=slider.value/100;const iso=new Date(d0+f*(d1-d0)).toISOString().slice(0,10);timeCutoff=(+slider.value>=100)?null:iso;toLab.textContent=iso;applyFilters();}; slider.addEventListener("input",setFrom); let playing=null;const pb=document.getElementById("tl-play"); pb.onclick=()=>{if(playing){clearInterval(playing);playing=null;pb.textContent="> Play";return;}if(+slider.value>=100)slider.value=0;pb.textContent="|| Pause";playing=setInterval(()=>{slider.value=Math.min(100,+slider.value+2);setFrom();if(+slider.value>=100){clearInterval(playing);playing=null;pb.textContent="> Play";}},120);}; }
 
   function fit(){ if(!view.nodes.length)return; let a=Infinity,b=Infinity,c=-Infinity,d=-Infinity; for(const n of view.nodes){const p=pos.get(n.id);a=Math.min(a,p.x);b=Math.min(b,p.y);c=Math.max(c,p.x);d=Math.max(d,p.y);} const bw=(c-a)||1,bh=(d-b)||1,pad=70; scale=Math.max(.2,Math.min(2,Math.min((W-pad)/bw,(H-pad)/bh))); tx=W/2-((a+c)/2)*scale; ty=H/2-((b+d)/2)*scale; applyT(); }
   window.addEventListener("resize",()=>{W=svg.clientWidth||W;H=svg.clientHeight||H;computeRadial(view);if(useCanvas)sizeCanvas();});
@@ -983,7 +983,7 @@ function initGraph(DATA, viewId) {
     rebuild(true); saveState();
   }
   async function refreshSnapshots(){
-    try{ const r=await fetch(API+"/snapshots",{headers:{"X-Recupero-Admin-Key":adminKey()}}); if(!r.ok)return; const d=await r.json(); const sel=document.getElementById("snap-list"); sel.replaceChildren(); const o0=document.createElement("option");o0.value="";o0.textContent="Saved views…";sel.appendChild(o0); for(const s of (d.snapshots||[])){ const o=document.createElement("option");o.value=s.name;o.textContent=s.name;sel.appendChild(o);} }catch(e){}
+    try{ const r=await fetch(API+"/snapshots",{headers:{"X-Recupero-Admin-Key":adminKey()}}); if(!r.ok)return; const d=await r.json(); const sel=document.getElementById("snap-list"); sel.replaceChildren(); const o0=document.createElement("option");o0.value="";o0.textContent="Saved views...";sel.appendChild(o0); for(const s of (d.snapshots||[])){ const o=document.createElement("option");o.value=s.name;o.textContent=s.name;sel.appendChild(o);} }catch(e){}
   }
   document.getElementById("btn-save-view").onclick=async()=>{
     const name=(prompt("Save current view as:")||"").trim(); if(!name)return;
@@ -1001,7 +1001,7 @@ function initGraph(DATA, viewId) {
     const ek=e=>e.source+">"+e.target; const ex=new Map(DATA.edges.map(e=>[ek(e),e]));
     let edgeAdds=0;
     for(const ne of (data.edges||[])){ const k=ek(ne); const e=ex.get(k); if(e){ e.totalUsdNumeric=(e.totalUsdNumeric||0)+(ne.totalUsdNumeric||0); e.transferCount=(e.transferCount||0)+(ne.transferCount||0); } else { DATA.edges.push(ne); ex.set(k,ne); edgeAdds++; } }
-    if(added||edgeAdds){ document.getElementById("meta-stat").textContent = DATA.nodes.length+" nodes · "+DATA.edges.length+" edges (live)"; rebuild(true); }
+    if(added||edgeAdds){ document.getElementById("meta-stat").textContent = DATA.nodes.length+" nodes - "+DATA.edges.length+" edges (live)"; rebuild(true); }
   }
   function connectLiveStream(){
     if(typeof EventSource==="undefined")return;

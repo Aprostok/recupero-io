@@ -24,6 +24,7 @@
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
     <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
     <button id="load">Load</button>
+    <button id="export-csv" style="display:none">&#8595; Export</button>
     <span id="msg"></span>
   </div>
 
@@ -80,6 +81,14 @@
       window.RC.staggerRows($("tablewrap"));
       window.RC.attachSort($("tablewrap"));
       window.RC.attachFilter($("tablewrap"));
+      window.RC.animateRings($("cards"));
+      var xBtn = $("export-csv");
+      if (xBtn) {
+        xBtn.style.display = "";
+        xBtn.onclick = function() {
+          if (window.RC.exportTable) window.RC.exportTable($("tablewrap"), "exhibit-pack.csv");
+        };
+      }
     }
   }
 

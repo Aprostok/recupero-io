@@ -56,6 +56,7 @@
     <span id="msg"></span>
   </div>
 
+  <div id="prob-bar" style="margin:.3rem 0 .6rem"></div>
   <div id="out"></div>
 
 <script>
@@ -236,6 +237,17 @@
       window.RC.attachSort($("out"));
       window.RC.attachFilter($("out"));
       $("out").querySelectorAll(".k-amount").forEach(window.RC.countUp);
+      // Probability risk bar
+      var pbEl = document.getElementById("prob-bar");
+      if (pbEl && window.RC.buildRiskBar && typeof probRaw === "number" && isFinite(probRaw)) {
+        var pbPct = Math.round(Math.max(0, Math.min(1, probRaw)) * 100);
+        var pbRem = 100 - pbPct;
+        var pbCls = pbPct >= 60 ? "ok" : pbPct >= 30 ? "warn" : "crit";
+        window.RC.buildRiskBar(pbEl, [
+          { label: "Recovery probability " + pbPct + "%",  pct: pbPct, cls: pbCls },
+          { label: "At risk " + pbRem + "%",               pct: pbRem, cls: pbRem>70?"crit":"" }
+        ].filter(function(s){return s.pct>0;}), { height: 7, showLabels: true });
+      }
     }
   }
 

@@ -40,6 +40,7 @@
   </div>
 
   <div class="cards" id="cards"></div>
+  <div id="lf-bar" style="margin:-.3rem 0 .8rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -138,6 +139,8 @@
       return;
     }
 
+    var nActive=0,nInactive=0;
+    rows.forEach(function(r){if(r.firm_status==="active"){nActive++;}else{nInactive++;}});
     var h = '<table><thead><tr>' +
       '<th>Firm</th>' +
       '<th class="right">Referred</th>' +
@@ -182,6 +185,15 @@
       window.RC.staggerRows($("tablewrap"));
       window.RC.attachSort($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
+      window.RC.attachFilter($("tablewrap"));
+      // Portfolio health risk bar
+      var lfBarEl = document.getElementById("lf-bar");
+      if (lfBarEl && window.RC.buildRiskBar) {
+        window.RC.buildRiskBar(lfBarEl, [
+          { label: "Active",   pct: nActive,   cls: "ok"   },
+          { label: "Inactive", pct: nInactive, cls: "warn" }
+        ].filter(function(s){return s.pct>0;}), { height: 6, showLabels: true });
+      }
     }
   }
 

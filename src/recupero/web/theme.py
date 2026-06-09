@@ -50,7 +50,9 @@ body {
   font-family: var(--font); margin: 0; padding: 0 clamp(1rem, 4vw, 2.2rem) 3.5rem;
   color: var(--ink); letter-spacing: -0.011em; min-height: 100vh;
   background:
-    radial-gradient(1000px 520px at 88% -10%, var(--accent-soft), transparent 60%),
+    radial-gradient(ellipse 900px 500px at 85% -15%, var(--accent-soft) 0%, transparent 55%),
+    radial-gradient(ellipse 600px 380px at 12% 8%,   rgba(0,113,227,.04) 0%, transparent 50%),
+    radial-gradient(ellipse 700px 400px at 50% 105%, var(--ok-soft)      0%, transparent 45%),
     linear-gradient(180deg, var(--bg2), var(--bg) 360px);
   background-attachment: fixed;
 }
@@ -136,6 +138,9 @@ button:disabled { opacity: .5; cursor: default; transform: none; box-shadow: non
 .card:hover::before { transform: scaleY(1); }
 .card.alert::before { background: var(--crit); transform: scaleY(1); }
 .card.ok::before    { background: var(--ok);   transform: scaleY(1); }
+/* Risk-tinted card variants */
+.card.crit { border-top: 2px solid var(--crit); background: linear-gradient(160deg, var(--crit-soft) 0%, var(--surface) 60%); }
+.card.warn { border-top: 2px solid var(--warn); background: linear-gradient(160deg, var(--warn-soft) 0%, var(--surface) 60%); }
 .card .v {
   font-size: 1.7rem; font-weight: 700; letter-spacing: -0.03em;
   font-variant-numeric: tabular-nums; line-height: 1;
@@ -308,6 +313,17 @@ td.mono:hover, div.mono:hover { opacity: .82; }
   background: linear-gradient(135deg, var(--crit-soft) 0%, rgba(215,0,21,.015) 100%);
   border-color: var(--crit-border);
   box-shadow: var(--shadow-sm), 0 0 0 1px var(--crit-border);
+}
+@keyframes rc-hero-pulse {
+  0%, 100% { box-shadow: var(--shadow-sm), 0 0 0 1px var(--crit-border); }
+  50%       { box-shadow: var(--shadow-md), 0 0 0 2px var(--crit-border), 0 0 24px rgba(215,0,21,.18); }
+}
+.verdict-hero.v-sanctioned { animation: rc-rise .4s var(--ease) both, rc-hero-pulse 3.2s ease-in-out 1.2s infinite; }
+@media (prefers-color-scheme: dark) {
+  @keyframes rc-hero-pulse {
+    0%, 100% { box-shadow: var(--shadow-sm), 0 0 0 1px var(--crit-border); }
+    50%       { box-shadow: var(--shadow-md), 0 0 0 2px var(--crit-border), 0 0 28px rgba(255,69,58,.30); }
+  }
 }
 .verdict-hero.v-medium {
   background: linear-gradient(135deg, var(--warn-soft) 0%, rgba(185,119,14,.015) 100%);
@@ -486,7 +502,8 @@ mark.rc-hl { background: rgba(255,214,0,.38); color: inherit; border-radius: 2px
   0%, 100% { box-shadow: 0 0 0 2px rgba(215,0,21,.12), 0 0 14px rgba(215,0,21,.28); }
   50%       { box-shadow: 0 0 0 3px rgba(215,0,21,.22), 0 0 26px rgba(215,0,21,.52); }
 }
-.score-ring { transition: box-shadow .3s var(--ease); }
+.score-ring { transition: box-shadow .3s var(--ease), transform .2s var(--ease); cursor: default; }
+.score-ring:hover { transform: scale(1.08); }
 .score-ring.r-crit {
   --ring-color: var(--crit);
   box-shadow: 0 0 0 2px rgba(215,0,21,.12), 0 0 14px rgba(215,0,21,.28);

@@ -304,6 +304,19 @@ canvas#cmap:active { cursor: grabbing; }
 #mini .mini-vp { fill: rgba(59,130,246,.10); stroke: var(--accent); stroke-width: 1; }
 
 .note { font-size: 11px; color: var(--ink-soft); padding: 6px 14px; }
+/* -- Risk composition strip (graph-level risk bar) -- */
+#risk-strip { display:none; width:100%; overflow:hidden; flex-shrink:0; }
+#risk-strip .rs { flex-shrink:0; transition:flex .9s var(--ease); }
+/* Critical/sanctioned nodes pulse in risk mode */
+.node.risk-crit circle { animation:critPulse 2.4s ease-in-out infinite; }
+@keyframes critPulse {
+  0%,100% { filter:drop-shadow(0 0 4px rgba(185,28,28,.45)); }
+  50%      { filter:drop-shadow(0 0 15px rgba(185,28,28,.9)); }
+}
+/* Panel polish */
+#panel { scrollbar-width:thin; scrollbar-color:var(--border-hi) transparent; }
+.p-risk-row { display:flex; align-items:center; gap:12px; padding:10px 0; border-bottom:1px solid var(--border); margin-bottom:3px; }
+.p-tl { margin:8px 0 10px; padding:8px; background:rgba(255,255,255,.04); border-radius:7px; border:1px solid rgba(255,255,255,.07); overflow:hidden; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
 </head>
@@ -346,6 +359,7 @@ canvas#cmap:active { cursor: grabbing; }
     <label>Asset <select id="f-asset"><option value="">All assets</option></select></label>
     <span id="meta-stat" class="spacer" style="font-size:12px;color:#8a8f9a;"></span>
   </div>
+  <div id="risk-strip"></div>
   <div id="scrubber" hidden>
     <button type="button" class="btn" id="tl-play">▶ Play</button>
     <span id="tl-from"></span><input type="range" id="tl-range" min="0" max="100" value="100"><span id="tl-to"></span>
@@ -521,9 +535,25 @@ function initGraph(DATA, viewId) {
     gE.replaceChildren(); gN.replaceChildren(); edgeEls=[]; nodeEls=[];
     for (const e of view.edges){ const ln=document.createElementNS(NS,"path"); ln.setAttribute("class","edge"+(e.cross?" cross":"")); ln.setAttribute("stroke",e.cross?EDGE_CROSS:EDGE_COL); ln.setAttribute("stroke-width",String(Math.max(1.2,Math.min(6,Math.log10((e.usd||0)+1)*.9)))); ln.setAttribute("marker-end","url(#arr)"); ln.__e=e; ln.__tN=view.nodes.find(n=>n.id===e.target)||null; ln.addEventListener("mouseenter",ev=>edgeTip(ev,e)); ln.addEventListener("mouseleave",hideTip); ln.addEventListener("click",ev=>{ev.stopPropagation();selectEdge(e);}); gE.appendChild(ln); edgeEls.push(ln); }
     for (const n of view.nodes){ const g=document.createElementNS(NS,"g"); g.setAttribute("class","node "+n.status); const c=document.createElementNS(NS,"circle"); const r=radius(n); c.setAttribute("r",String(r)); c.setAttribute("fill",nodeFill(n)); c.setAttribute("stroke",n.kind==="cluster"?"#fff":(n.chainColor||"#94A3B8")); g.appendChild(c); if(n.kind==="cluster"){ const t=document.createElementNS(NS,"text"); t.setAttribute("class","count"); t.setAttribute("text-anchor","middle"); t.setAttribute("dy","3.5"); t.setAttribute("fill","#fff"); t.textContent=String(n.size); g.appendChild(t);} const lbl=document.createElementNS(NS,"text"); lbl.setAttribute("text-anchor","middle"); lbl.setAttribute("dy",String(r+13)); lbl.setAttribute("fill","#e6e7eb"); lbl.textContent=(n.label||n.short||"").slice(0,28); g.appendChild(lbl); g.__n=n; g.addEventListener("mouseenter",ev=>nodeTip(ev,n)); g.addEventListener("mouseleave",hideTip); g.addEventListener("dblclick",ev=>{ev.stopPropagation();onDbl(n);}); attachDrag(g,n); gN.appendChild(g); nodeEls.push(g); }
-    applyFilters(); buildLegend(); reapplyHighlights();
+    applyFilters(); buildLegend(); reapplyHighlights(); buildRiskStrip();
   }
   function recolor(){ for (const g of nodeEls){ const ci=g.querySelector("circle"); if(ci) ci.setAttribute("fill", nodeFill(g.__n)); } buildLegend(); }
+
+  function buildRiskStrip(){
+    const strip=document.getElementById("risk-strip"); if(!strip)return;
+    const SVER=["SANCTIONED","CRITICAL","HIGH-RISK","MODERATE","CLEAN"];
+    const SCOL={"SANCTIONED":"#7f1d1d","CRITICAL":"#b91c1c","HIGH-RISK":"#ea580c","MODERATE":"#ca8a04","CLEAN":"#15803d"};
+    const cnt={}; for(const v of SVER)cnt[v]=0;
+    for(const sn of DATA.nodes){const sv=(sn.risk&&sn.risk.verdict)||"CLEAN";if(sv in cnt)cnt[sv]++;}
+    strip.innerHTML=""; let any=false;
+    for(const v of SVER){if(!cnt[v])continue;any=true;
+      const seg=document.createElement("div");seg.className="rs";
+      seg.style.cssText="flex:"+cnt[v]+";background:"+SCOL[v]+";height:5px";
+      seg.title=(RISK_LABEL[v]||v)+": "+cnt[v]+" nodes";strip.appendChild(seg);}
+    strip.style.display=any?"flex":"none";
+    for(const sg of nodeEls){const sv2=(sg.__n.risk&&sg.__n.risk.verdict)||"";sg.classList.toggle("risk-crit",sv2==="SANCTIONED"||sv2==="CRITICAL");}
+  }
+
   let miniTick=0;
   function paint(){ const sankey=(layout==="value"); for (const ln of edgeEls){ const e=ln.__e,a=pos.get(e.source),b=pos.get(e.target); if(!a||!b)continue; const dx=b.x-a.x,dy=b.y-a.y,ed=Math.sqrt(dx*dx+dy*dy)||1; const shrink=Math.min((ln.__tN?radius(ln.__tN):9)+7, ed*0.88); const ex=b.x-(dx/ed)*shrink,ey=b.y-(dy/ed)*shrink; if(sankey){ const hdx=(ex-a.x)*0.5; ln.setAttribute("d",`M${a.x},${a.y} C${a.x+hdx},${a.y} ${ex-hdx},${ey} ${ex},${ey}`); } else { ln.setAttribute("d",`M${a.x},${a.y} L${ex},${ey}`); } } for (const g of nodeEls){ const p=pos.get(g.__n.id); g.setAttribute("transform",`translate(${p.x},${p.y})`);} if((miniTick=(miniTick+1)%12)===0) drawMini(); }
   // ---- canvas renderer (4.11) — scales past what SVG handles ----
@@ -656,8 +686,25 @@ function initGraph(DATA, viewId) {
     const box=document.createElement("div");
     head(box, n.label||n.short||"Point", colorBy==="risk"?(n.riskColor||"#64748B"):n.color, n.statusLabel);
     if(n.kind==="node"){const a=document.createElement("div");a.className="p-addr";a.textContent=n.id;box.appendChild(a);}
-    if(n.risk){ row(box,"Risk", (RISK_LABEL[n.risk.verdict]||n.risk.verdict)+" ("+n.risk.score+")"); }
-    if(n.indirectExposureUsd>0){ row(box,"Indirect exposure", fmtUsd(n.indirectExposureUsd)); }
+    if(n.risk){
+      const rv=n.risk.verdict||"CLEAN",rs=+(n.risk.score)||0;
+      const rVCOL={"SANCTIONED":"#7f1d1d","CRITICAL":"#b91c1c","HIGH-RISK":"#ea580c","MODERATE":"#ca8a04","CLEAN":"#15803d"};
+      const rVGLOW={"SANCTIONED":"rgba(185,28,28,.55)","CRITICAL":"rgba(185,28,28,.45)","HIGH-RISK":"rgba(234,88,12,.45)","MODERATE":"rgba(202,138,4,.38)","CLEAN":"rgba(21,128,61,.32)"};
+      const rcol=rVCOL[rv]||"#64748B",rglow=rVGLOW[rv]||"transparent",rpct=Math.round(rs*10);
+      const rrw=document.createElement("div"); rrw.className="p-risk-row";
+      const rring=document.createElement("div");
+      rring.style.cssText="width:46px;height:46px;border-radius:50%;display:grid;place-items:center;font-size:15px;font-weight:800;color:#fff;flex-shrink:0;"+
+        "background:conic-gradient("+rcol+" "+rpct+"%, rgba(255,255,255,.06) 0%);"+
+        "box-shadow:0 0 0 3px rgba(255,255,255,.08),0 0 14px "+rglow+";";
+      rring.textContent=String(rs);
+      const rinfo=document.createElement("div"); rinfo.style.cssText="flex:1;min-width:0";
+      const rvLbl=document.createElement("div"); rvLbl.style.cssText="font-weight:700;font-size:13px;color:"+rcol; rvLbl.textContent=RISK_LABEL[rv]||rv;
+      const rvSub=document.createElement("div"); rvSub.style.cssText="font-size:11px;color:var(--ink-soft);margin-top:2px"; rvSub.textContent="Risk score "+rs+" / 10";
+      rinfo.appendChild(rvLbl); rinfo.appendChild(rvSub);
+      if(n.indirectExposureUsd>0){const rvExp=document.createElement("div");rvExp.style.cssText="font-size:11px;color:var(--warn);margin-top:3px";rvExp.textContent="Indirect: "+fmtUsd(n.indirectExposureUsd);rinfo.appendChild(rvExp);}
+      rrw.appendChild(rring); rrw.appendChild(rinfo); box.appendChild(rrw);
+    }
+    if(!n.risk&&n.indirectExposureUsd>0){ row(box,"Indirect exposure", fmtUsd(n.indirectExposureUsd)); }
     const d=document.createElement("div");d.className="donuts";d.appendChild(donut("Received "+n.inboundUsd,n.inByCategory));d.appendChild(donut("Sent "+n.outboundUsd,n.outByCategory));box.appendChild(d);
     row(box,"Distance",(n.depth||0)+" hop"+((n.depth||0)===1?"":"s")+" from seed");
     row(box,"Connections",String(view.edges.filter(e=>e.source===n.id||e.target===n.id).length));
@@ -739,7 +786,7 @@ function initGraph(DATA, viewId) {
       else { DATA.edges.push(ne); existing.set(k, ne); }
     }
     document.getElementById("meta-stat").textContent = DATA.nodes.length + " nodes · " + DATA.edges.length + " edges (live)";
-    rebuild(true); selectNode(parent.id);
+    rebuild(true); selectNode(parent.id); buildRiskStrip();
   }
 
   function onPathPick(n){ if(!pickA){pickA=n.id;markPick();return;} if(n.id===pickA){pickA=null;markPick();return;} const p=findPath(pickA,n.id); pathNodes.clear();pathEdges.clear();pathNodeOrder=[];pathEdgeOrder=[]; if(p){for(const id of p.nodes){pathNodes.add(id);pathNodeOrder.push(id);} for(const k of p.edges){pathEdges.add(k);pathEdgeOrder.push(k);}} pickA=null;markPick();paintPath();showPathPanel(p); }
@@ -799,6 +846,24 @@ function initGraph(DATA, viewId) {
     } else {
       const hops=p.nodes.length-1;
       head(box,"Fund flow path","#1D4ED8",hops+" hop"+(hops===1?"":"s"));
+      // Mini hop timeline
+      if(p.nodes.length>1){
+        const tlEl=document.createElement("div"); tlEl.className="p-tl";
+        const TLW=266,TLH=40,TLN=p.nodes.length,TLS=TLN>1?(TLW-16)/(TLN-1):0;
+        let tlsvg='<svg width="'+TLW+'" height="'+TLH+'" style="display:block;overflow:visible">';
+        tlsvg+='<line x1="8" y1="24" x2="'+(TLW-8)+'" y2="24" stroke="rgba(255,255,255,.12)" stroke-width="1.5"/>';
+        p.nodes.forEach(function(tlnid,tli){
+          const tlx=(8+tli*TLS).toFixed(1);
+          const tlnd=view.nodes.find(function(nn){return nn.id===tlnid;});
+          const tlcol=tlnd?nodeFill(tlnd):"#64748B";
+          tlsvg+='<circle cx="'+tlx+'" cy="24" r="5.5" fill="'+tlcol+'" stroke="#07090f" stroke-width="1.5"/>';
+          const tllbl=(tlnd?(tlnd.label||tlnd.short||tlnid):tlnid).slice(0,9).replace(/</g,"&lt;").replace(/>/g,"&gt;");
+          tlsvg+='<text x="'+tlx+'" y="'+(tli%2===0?13:6)+'" font-size="7.5" fill="rgba(255,255,255,.5)" text-anchor="middle" font-family="monospace">'+tllbl+'</text>';
+        });
+        tlsvg+='</svg>';
+        tlEl.innerHTML=tlsvg;
+        box.appendChild(tlEl);
+      }
       // Build edge lookup for amounts
       const eLookup=new Map(view.edges.map(e=>[e.source+">"+e.target,e]));
       let totalUsd=0;

@@ -46,6 +46,19 @@ HANDLE_OPS_SELECTOR = "0x1fad948c"
 ERC20_TRANSFER_SELECTOR = "0xa9059cbb"
 ERC20_TRANSFER_FROM_SELECTOR = "0x23b872dd"
 
+# Smart-account ``execute`` wrappers. A UserOp's callData is almost never a raw
+# ERC-20 transfer — the smart account calls ``execute(target, value, data)`` and
+# the real ERC-20 ``transfer`` lives inside ``data``, with the token = ``target``.
+# Selectors are keccak[:4] of the canonical ABI (verified against the ERC-20
+# selectors above, whose keccak we know): see scripts / the commit message.
+#   execute(address,uint256,bytes)        — SimpleAccount / LightAccount / most
+EXECUTE_SELECTOR = "0xb61d27f6"
+#   execute(address,uint256,bytes,uint8)  — Kernel / ZeroDev (trailing Operation
+#   enum). The first three head words match execute(), so the SAME offsets
+#   decode dest/value/data; the uint8 at head word 3 is simply ignored.
+EXECUTE_WITH_OP_SELECTOR = "0x51945447"
+_EXECUTE_SINGLE_SELECTORS = frozenset({EXECUTE_SELECTOR, EXECUTE_WITH_OP_SELECTOR})
+
 # Known smart-account factory addresses (lowercase). Best-effort —
 # AA factories proliferate quickly and these are the ones we've seen
 # in real recovery cases through Q2 2026.
@@ -263,59 +276,92 @@ def decompose_user_ops(
         return []
 
 
+def _decode_erc20_call(
+    sender: str, target: str, data: bytes
+) -> InnerTransfer | None:
+    """Decode a single ``transfer`` / ``transferFrom`` call (``data``) made by
+    ``sender`` on contract ``target`` → an :class:`InnerTransfer` whose ``token``
+    is ``target`` (the contract called). Returns ``None`` for empty/short data or
+    any non-ERC-20-transfer selector (conservative — better no row than a wrong
+    one). For ``transfer`` the mover is ``sender`` (the smart account); for
+    ``transferFrom`` it is the decoded first arg."""
+    if not data or len(data) < 4:
+        return None
+    selector = _selector_hex(data)
+    payload = data[4:]
+    try:
+        if selector == ERC20_TRANSFER_SELECTOR and len(payload) >= 64:
+            return InnerTransfer(
+                from_address=sender,
+                to_address=_read_address(payload, 0),
+                token=target,
+                amount_raw=_read_uint(payload, 32),
+                selector="transfer",
+            )
+        if selector == ERC20_TRANSFER_FROM_SELECTOR and len(payload) >= 96:
+            return InnerTransfer(
+                from_address=_read_address(payload, 0),
+                to_address=_read_address(payload, 32),
+                token=target,
+                amount_raw=_read_uint(payload, 64),
+                selector="transferFrom",
+            )
+    except (ValueError, IndexError) as exc:
+        log.debug("erc4337._decode_erc20_call: decode error: %s", exc)
+    return None
+
+
 def extract_inner_transfers(user_op: UserOp) -> list[InnerTransfer]:
-    """Extract ERC-20 transfers from a UserOp's callData.
+    """Extract the value movement encoded in a UserOp's callData.
 
-    Looks for direct top-level `transfer(address,uint256)` or
-    `transferFrom(address,address,uint256)` calls. Does NOT recurse
-    into multicall / execute() wrappers — that's a v0.33+ goal.
+    The common, real-world case (SimpleAccount / LightAccount / Biconomy /
+    Kernel) is a ``execute(address target, uint256 value, bytes data)`` wrapper:
+    the smart account calls ``target`` with ``data``. We unwrap it and, when
+    ``data`` is an ERC-20 ``transfer`` / ``transferFrom``, emit an InnerTransfer
+    whose ``token`` is the unwrapped ``target`` (this is what makes the result
+    actually followable — pre-v0.39 the decoder only handled a *direct* transfer
+    in callData and left ``token`` blank). When ``data`` carries no ERC-20
+    transfer but ``value > 0``, the execute is a NATIVE transfer of ``value`` wei
+    to ``target`` (``token=""``, ``selector="execute"``).
 
-    For `transfer`, `from_address` is the UserOp.sender (the smart
-    account itself). For `transferFrom`, `from_address` is the first
-    decoded arg.
+    Also still handles a *direct* ``transfer`` / ``transferFrom`` in callData
+    (no wrapper) — token unknown at this layer, kept ``""`` (pre-v0.39 behavior).
 
-    The `token` field is the target the smart account would call,
-    which we don't have inside a UserOp directly — the convention
-    is to derive it from the caller's `execute(target, value, data)`
-    wrapper. Since we only see `call_data` raw here, we mark
-    `token` as the UserOp's sender (for `transfer`) or empty —
-    the BFS integration will join with the `execute` target.
+    NOT yet unwrapped: ``executeBatch`` (array form) and multicall/`execute`-of-
+    `execute` — tracked follow-ups; those callDatas yield ``[]`` rather than a
+    guess. Best-effort: any decode error → ``[]``.
     """
-    out: list[InnerTransfer] = []
-
     cd = user_op.call_data
     if not cd or len(cd) < 4:
-        return out
+        return []
 
     selector = _selector_hex(cd)
     payload = cd[4:]
-
+    out: list[InnerTransfer] = []
     try:
-        if selector == ERC20_TRANSFER_SELECTOR and len(payload) >= 64:
-            to = _read_address(payload, 0)
-            amount = _read_uint(payload, 32)
-            out.append(
-                InnerTransfer(
+        if selector in _EXECUTE_SINGLE_SELECTORS and len(payload) >= 96:
+            # execute(address target, uint256 value, bytes data[, uint8 op])
+            target = _read_address(payload, 0)
+            value = _read_uint(payload, 32)
+            inner = _read_bytes(payload, 64, 0)
+            it = _decode_erc20_call(user_op.sender, target, inner)
+            if it is not None:
+                out.append(it)
+            elif value > 0:
+                # Native-asset transfer (no ERC-20 inner call): sender → target.
+                out.append(InnerTransfer(
                     from_address=user_op.sender,
-                    to_address=to,
-                    token="",  # Filled by BFS layer from execute() wrapper.
-                    amount_raw=amount,
-                    selector="transfer",
-                )
-            )
-        elif selector == ERC20_TRANSFER_FROM_SELECTOR and len(payload) >= 96:
-            frm = _read_address(payload, 0)
-            to = _read_address(payload, 32)
-            amount = _read_uint(payload, 64)
-            out.append(
-                InnerTransfer(
-                    from_address=frm,
-                    to_address=to,
-                    token="",
-                    amount_raw=amount,
-                    selector="transferFrom",
-                )
-            )
+                    to_address=target,
+                    token="",                 # native asset (ETH / chain coin)
+                    amount_raw=value,
+                    selector="execute",
+                ))
+        elif selector in (ERC20_TRANSFER_SELECTOR, ERC20_TRANSFER_FROM_SELECTOR):
+            # Direct ERC-20 call in callData (no execute wrapper) — the token
+            # contract isn't named at this layer, so token stays "".
+            it = _decode_erc20_call(user_op.sender, "", cd)
+            if it is not None:
+                out.append(it)
     except (ValueError, IndexError) as exc:
         log.debug("erc4337.extract: decode error: %s", exc)
 

@@ -9,6 +9,8 @@ from __future__ import annotations
 from recupero.trace.erc4337 import (
     ENTRYPOINT_V06,
     ENTRYPOINT_V07,
+    EXECUTE_SELECTOR,
+    EXECUTE_WITH_OP_SELECTOR,
     HANDLE_OPS_SELECTOR,
     KNOWN_AA_FACTORIES,
     UserOp,
@@ -275,3 +277,119 @@ def test_is_aa_wallet_garbage_input() -> None:
 
     assert is_aa_wallet(None, FakeAdapter()) is False  # type: ignore[arg-type]
     assert is_aa_wallet("", FakeAdapter()) is False
+
+
+# ---- v0.39: execute() wrapper unwrap (the real-world AA path) ---- #
+
+
+def _transfer_cd(to: str, amount: int) -> bytes:
+    return bytes.fromhex("a9059cbb") + _addr_word(to) + _u256(amount)
+
+
+def _transfer_from_cd(frm: str, to: str, amount: int) -> bytes:
+    return bytes.fromhex("23b872dd") + _addr_word(frm) + _addr_word(to) + _u256(amount)
+
+
+def _execute_cd(target: str, value: int, inner: bytes, *,
+                selector: str = EXECUTE_SELECTOR, op: int | None = None) -> bytes:
+    """ABI-encode execute(address,uint256,bytes[,uint8]). When ``op`` is given
+    (Kernel's execute(...,uint8)), the head has 4 words and the bytes offset is
+    0x80; otherwise 3 words and 0x60."""
+    if op is None:
+        head = _addr_word(target) + _u256(value) + _u256(0x60)
+    else:
+        head = _addr_word(target) + _u256(value) + _u256(0x80) + _u256(op)
+    return bytes.fromhex(selector[2:]) + head + _encode_bytes_field(inner)
+
+
+_TOKEN = "0xdac17f958d2ee523a2206206994597c13d831ec7"   # USDT-like
+_VICTIM_OUT = "0x2222222222222222222222222222222222222222"
+
+
+def test_execute_unwraps_erc20_transfer_and_sets_token() -> None:
+    """THE key v0.39 capability: execute(token, 0, transfer(to, amt)) →
+    InnerTransfer with token = the unwrapped target (was blank pre-v0.39)."""
+    op = _make_op(call_data=_execute_cd(_TOKEN, 0, _transfer_cd(_VICTIM_OUT, 5_000_000)))
+    transfers = extract_inner_transfers(op)
+    assert len(transfers) == 1
+    t = transfers[0]
+    assert t.selector == "transfer"
+    assert t.token == _TOKEN          # <-- the smart account's execute target
+    assert t.to_address == _VICTIM_OUT
+    assert t.amount_raw == 5_000_000
+    assert t.from_address == op.sender
+
+
+def test_execute_unwraps_transfer_from() -> None:
+    op = _make_op(call_data=_execute_cd(
+        _TOKEN, 0, _transfer_from_cd(
+            "0x3333333333333333333333333333333333333333", _VICTIM_OUT, 42)))
+    transfers = extract_inner_transfers(op)
+    assert len(transfers) == 1
+    assert transfers[0].selector == "transferFrom"
+    assert transfers[0].token == _TOKEN
+    assert transfers[0].from_address == "0x3333333333333333333333333333333333333333"
+    assert transfers[0].to_address == _VICTIM_OUT
+
+
+def test_execute_native_value_transfer() -> None:
+    """execute(recipient, value>0, empty) → a NATIVE transfer to recipient."""
+    recipient = "0x4444444444444444444444444444444444444444"
+    op = _make_op(call_data=_execute_cd(recipient, 5 * 10**18, b""))
+    transfers = extract_inner_transfers(op)
+    assert len(transfers) == 1
+    t = transfers[0]
+    assert t.selector == "execute"
+    assert t.token == ""              # native asset
+    assert t.to_address == recipient
+    assert t.amount_raw == 5 * 10**18
+    assert t.from_address == op.sender
+
+
+def test_kernel_execute_with_op_selector_unwraps() -> None:
+    """Kernel/ZeroDev execute(address,uint256,bytes,uint8) (0x51945447) unwraps
+    via the same head offsets."""
+    op = _make_op(call_data=_execute_cd(
+        _TOKEN, 0, _transfer_cd(_VICTIM_OUT, 999),
+        selector=EXECUTE_WITH_OP_SELECTOR, op=0))
+    transfers = extract_inner_transfers(op)
+    assert len(transfers) == 1
+    assert transfers[0].token == _TOKEN
+    assert transfers[0].amount_raw == 999
+
+
+def test_execute_unknown_inner_no_value_is_empty() -> None:
+    """execute(dest, 0, <non-transfer calldata>) → [] (conservative; no guess)."""
+    op = _make_op(call_data=_execute_cd(
+        _TOKEN, 0, bytes.fromhex("deadbeef") + b"\x00" * 64))
+    assert extract_inner_transfers(op) == []
+
+
+def test_execute_unknown_inner_with_value_is_native() -> None:
+    """execute(dest, value>0, <non-transfer calldata>) → native transfer of the
+    attached value to dest (a real movement even though the inner call is opaque)."""
+    op = _make_op(call_data=_execute_cd(
+        _TOKEN, 100, bytes.fromhex("deadbeef") + b"\x00" * 64))
+    transfers = extract_inner_transfers(op)
+    assert len(transfers) == 1
+    assert transfers[0].selector == "execute"
+    assert transfers[0].amount_raw == 100
+    assert transfers[0].to_address == _TOKEN
+
+
+def test_full_handleops_to_execute_to_transfer_end_to_end() -> None:
+    """Bundler tx → handleOps → UserOp(execute(token, 0, transfer)) →
+    decompose → extract recovers the token-set inner transfer end to end."""
+    op = _make_op(
+        sender="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        call_data=_execute_cd(_TOKEN, 0, _transfer_cd(_VICTIM_OUT, 7_000_000)),
+    )
+    cd = _build_handle_ops_calldata([op], beneficiary="0x" + "fe" * 20)
+    decoded = decompose_user_ops(cd, ENTRYPOINT_V06)
+    assert len(decoded) == 1
+    inner = extract_inner_transfers(decoded[0])
+    assert len(inner) == 1
+    assert inner[0].token == _TOKEN
+    assert inner[0].to_address == _VICTIM_OUT
+    assert inner[0].amount_raw == 7_000_000
+    assert inner[0].from_address == "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

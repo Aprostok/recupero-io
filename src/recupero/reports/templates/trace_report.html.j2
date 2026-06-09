@@ -436,6 +436,42 @@ notification).</p>
 <p>Flow diagram unavailable for this trace.</p>
 {% endif %}
 
+{% if demix_leads %}
+<h2>8. Mixer-Demixing Leads</h2>
+<p class="small"><em>Probabilistic LEADS only &mdash; never proof. A mixer
+   cryptographically severs the deposit&harr;withdrawal link; the rows below
+   are same-pool withdrawals that share a behavioral signal (address reuse /
+   relayer / gas / FIFO timing) with a mixer deposit observed in this trace.
+   They are investigative leads for manual review (e.g. a subpoena to the
+   relayer, or a watch on the withdrawal address), NEVER a followed
+   destination, and are reported at LOW confidence.</em></p>
+{% for dep in demix_leads.deposits %}
+<p class="small mono">Pool / deposit: {{ dep.key }}</p>
+<table>
+  <thead>
+    <tr>
+      <th>Candidate withdrawal address</th>
+      <th>Pool</th>
+      <th>Signals</th>
+      <th>Score</th>
+      <th>Confidence</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ld in dep.leads %}
+    <tr>
+      <td class="mono">{{ ld.withdrawal_address }}</td>
+      <td>{{ ld.pool }}</td>
+      <td>{{ ld.signals | join(', ') }}</td>
+      <td>{{ ld.score }}</td>
+      <td>{{ ld.confidence }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endfor %}
+{% endif %}
+
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>
   <div class="footer-meta">

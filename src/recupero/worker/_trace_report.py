@@ -84,12 +84,30 @@ def render_trace_report(
         report_id = hashlib.sha256(seed.encode("utf-8")).hexdigest()[:8]
         report_path = briefs_dir / f"trace_report_{report_id}.html"
 
+        # v0.39 (Activation Sprint #4b): surface mixer-demixing leads as a
+        # trace-report section. demix_leads.json is written into the case dir
+        # by the worker pipeline ONLY when RECUPERO_DEMIX_LEADS is on; on the
+        # default (gated-off) path the file is absent and the section simply
+        # doesn't render. briefs_dir is <case_dir>/briefs, so the artifact lives
+        # one level up. Best-effort: a malformed file is ignored.
+        demix_leads = None
+        try:
+            import json as _json
+            _demix_path = briefs_dir.parent / "demix_leads.json"
+            if _demix_path.is_file():
+                _doc = _json.loads(_demix_path.read_text(encoding="utf-8-sig"))
+                if isinstance(_doc, dict) and _doc.get("deposits"):
+                    demix_leads = _doc
+        except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
+            log.debug("trace report: demix_leads load skipped: %s", _exc)
+
         ctx = _build_context(
             case=case,
             freeze_brief=freeze_brief,
             flow_filename=flow_filename,
             investigation_id=investigation_id or case.case_id,
             label=label,
+            demix_leads=demix_leads,
         )
 
         env = Environment(
@@ -121,6 +139,7 @@ def _build_context(
     flow_filename: str | None,
     investigation_id: str,
     label: str | None,
+    demix_leads: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     chain_str = case.chain.value
     # v0.16.10 (round-9 output LOW): include explicit "Z" UTC suffix.
@@ -183,6 +202,10 @@ def _build_context(
         "entity_clusters": entity_clusters,
         "risk_assessment": risk_assessment,
         "flow_filename": flow_filename,
+        # v0.39 (#4b) — mixer-demixing leads (None unless RECUPERO_DEMIX_LEADS
+        # produced a demix_leads.json for this case). Always present in the
+        # context so the StrictUndefined template can `{% if demix_leads %}`.
+        "demix_leads": demix_leads,
     }
 
 

@@ -584,6 +584,65 @@ def _run_one_inner(
 # ----- Stages ----- #
 
 
+def _maybe_write_demix_leads(
+    case: Case,
+    case_dir: Path,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+) -> None:
+    """Mixer-demixing leads over the finished trace (Activation Sprint #4b).
+
+    Wires the ``demix_runner`` (Sprint #4) into the live worker pipeline so a
+    real case carries its same-pool withdrawal candidates instead of them being
+    reachable only via the ``recupero-ops demix-leads`` CLI.
+
+    Opt-in via ``RECUPERO_DEMIX_LEADS`` (default OFF). When off this is a no-op
+    with ZERO cost — no adapter is constructed and no ``getLogs`` is issued.
+    When on, for each transfer INTO a known Tornado pool we fetch that pool's
+    ``Withdrawal`` events after the deposit and score them into ranked leads,
+    written to ``demix_leads.json`` in the case dir (uploaded with the case).
+
+    Forensic doctrine: a mixer cryptographically severs deposit<->withdrawal,
+    so these are same-pool BEHAVIORAL candidates (address-reuse / relayer / gas
+    / FIFO timing) for manual review — e.g. a subpoena target — ALWAYS
+    low-confidence and NEVER a followed destination. Best-effort: any failure
+    logs and the trace pipeline continues (a demixing nicety must never block a
+    freeze letter).
+    """
+    from recupero.trace.demix_runner import demix_enabled
+
+    if not demix_enabled():
+        return  # default off → zero cost (no adapter, no getLogs)
+    try:
+        from recupero._common import atomic_write_text
+        from recupero.chains.base import ChainAdapter
+        from recupero.trace.demix_runner import leads_to_json, run_demix_leads
+
+        adapter = ChainAdapter.for_chain(case.chain, (config, env))
+        try:
+            results = run_demix_leads(
+                transfers=case.transfers,
+                adapter=adapter,
+                default_chain=case.chain.value,
+            )
+        finally:
+            adapter.close()
+        if not results:
+            return
+        doc = leads_to_json(results)
+        atomic_write_text(
+            case_dir / "demix_leads.json",
+            json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False),
+        )
+        n_leads = sum(len(v) for v in results.values())
+        log.info(
+            "demix: wrote demix_leads.json (%d pool(s), %d lead(s)) for case %s",
+            len(results), n_leads, getattr(case, "case_id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, never block the trace
+        log.warning("demix: lead generation failed (non-fatal): %s", exc)
+
+
 def _stage_trace(
     inv: Investigation,
     case_id_str: str,
@@ -646,6 +705,14 @@ def _stage_trace(
             env=env,
             case_dir=case_dir,
         )
+
+    # v0.39 (Activation Sprint #4b): auto-run mixer-demixing leads over the
+    # finished trace and persist demix_leads.json into the case dir (uploaded
+    # below with the rest of the case). Gated by RECUPERO_DEMIX_LEADS — default
+    # OFF means zero cost (no adapter, no getLogs); on means same-pool
+    # withdrawal candidates ride along for a reviewer to triage into subpoena
+    # targets. Best-effort: never blocks the trace pipeline.
+    _maybe_write_demix_leads(case, case_dir, config, env)
 
     local_store.write_case(case)
     upload_case_dir(case_dir, bucket)

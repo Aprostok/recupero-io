@@ -140,6 +140,7 @@ button:disabled { opacity: .5; cursor: default; transform: none; box-shadow: non
 .card.ok::before    { background: var(--ok);   transform: scaleY(1); }
 /* Risk-tinted card variants */
 .card.crit { border-top: 2px solid var(--crit); background: linear-gradient(160deg, var(--crit-soft) 0%, var(--surface) 60%); }
+.card.alert { border-top: 2px solid var(--crit); background: linear-gradient(160deg, var(--crit-soft) 0%, var(--surface) 65%); }
 .card.warn { border-top: 2px solid var(--warn); background: linear-gradient(160deg, var(--warn-soft) 0%, var(--surface) 60%); }
 .card .v {
   font-size: 1.7rem; font-weight: 700; letter-spacing: -0.03em;
@@ -1420,9 +1421,17 @@ CONSOLE_JS = r"""
     });
 
     // Risk-colour ramp (4 bands)
+    var invertColors = !!opts.invertColors;
     var cellColor = function (v) {
       var p = Math.max(0, Math.min(1, v / maxVal));
-      if (p === 0)   return 'var(--surface-2)';
+      if (p === 0) return 'var(--surface-2)';
+      if (invertColors) {
+        // high value = good: green above 80%, red below 25%
+        if (p >= 0.80) return 'var(--ok)';
+        if (p >= 0.50) return 'var(--ok-soft)';
+        if (p >= 0.25) return 'var(--warn)';
+        return 'var(--crit)';
+      }
       if (p < 0.25)  return 'var(--ok-soft)';
       if (p < 0.50)  return 'var(--warn-soft)';
       if (p < 0.80)  return 'var(--warn)';
@@ -1430,6 +1439,9 @@ CONSOLE_JS = r"""
     };
     var textColor = function (v) {
       var p = v / maxVal;
+      if (invertColors) {
+        return p >= 0.60 ? 'rgba(255,255,255,.88)' : 'var(--ink-soft)';
+      }
       return p >= 0.50 ? 'rgba(255,255,255,.88)' : 'var(--ink-soft)';
     };
 

@@ -28,6 +28,8 @@
     <span id="msg"></span>
   </div>
 
+  <div id="ep-timeline" style="margin:.3rem 0 .65rem"></div>
+  <div id="ep-spark"    style="margin:.1rem 0 .55rem"></div>
   <div class="cards" id="cards"></div>
   <div id="tablewrap"></div>
 
@@ -88,6 +90,36 @@
         xBtn.onclick = function() {
           if (window.RC.exportTable) window.RC.exportTable($("tablewrap"), "exhibit-pack.csv");
         };
+      }
+      // Exhibit chain timeline
+      var epTl = document.getElementById("ep-timeline");
+      if (epTl && window.RC.buildTimeline && entries.length > 1) {
+        var tlEvs = entries.slice(0, 14).map(function(e) {
+          return { label: (e.exhibit_label || "").replace("Exhibit ", ""), type: "ok" };
+        });
+        window.RC.buildTimeline(epTl, tlEvs, { height: 46 });
+      }
+      // File-size distribution sparkline
+      var epSp = document.getElementById("ep-spark");
+      if (epSp && window.RC.buildSparkline && entries.length >= 2) {
+        var sizes = entries
+          .map(function(e){ return e.size_bytes || 0; })
+          .sort(function(a,b){ return b - a; });
+        if (sizes[0] > 0) {
+          window.RC.buildSparkline(epSp, sizes, {
+            width: epSp.offsetWidth || 480,
+            height: 28,
+            strokeWidth: 1.5,
+            color: "var(--accent)",
+            fillColor: "rgba(0,113,227,.06)"
+          });
+          var epLbl = document.createElement("div");
+          epLbl.style.cssText = "font-size:.62rem;color:var(--ink-faint);margin-top:2px";
+          epLbl.textContent = "Exhibit file sizes (\u2193 largest to smallest) \u2014 " + entries.length + " exhibits";
+          epSp.appendChild(epLbl);
+        } else {
+          epSp.style.display = "none";
+        }
       }
     }
   }

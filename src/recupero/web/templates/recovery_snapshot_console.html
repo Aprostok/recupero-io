@@ -56,6 +56,7 @@
     <span id="msg"></span>
   </div>
 
+  <div id="issuer-heatmap" style="margin:.3rem 0 .7rem;overflow:hidden"></div>
   <div id="prob-bar" style="margin:.3rem 0 .6rem"></div>
   <div id="out"></div>
 
@@ -247,6 +248,37 @@
           { label: "Recovery probability " + pbPct + "%",  pct: pbPct, cls: pbCls },
           { label: "At risk " + pbRem + "%",               pct: pbRem, cls: pbRem>70?"crit":"" }
         ].filter(function(s){return s.pct>0;}), { height: 7, showLabels: true });
+      }
+      // Per-issuer freeze-probability heatmap (higher = more recoverable)
+      var hmIss = document.getElementById("issuer-heatmap");
+      var piRows = est.per_issuer;
+      if (hmIss && window.RC && window.RC.buildHeatmap && Array.isArray(piRows) && piRows.length > 0) {
+        function parsePct(s) {
+          var n = parseInt((s || "0").replace(/[^0-9]/g, ""), 10);
+          return isNaN(n) ? 0 : Math.max(0, Math.min(100, n));
+        }
+        var topPI = piRows.slice(0, 8);
+        var piMx  = topPI.map(function(r) {
+          return [
+            parsePct(r.base_prior_pct),
+            parsePct(r.effective_prior_pct),
+            parsePct(r.evidence_discount_pct)
+          ];
+        });
+        var piAny = piMx.some(function(row){ return row.some(function(v){ return v > 0; }); });
+        if (piAny) {
+          window.RC.buildHeatmap(hmIss, piMx, {
+            rows: topPI.map(function(r){
+              var nm = r.issuer || "?"; return nm.length > 14 ? nm.slice(0,12)+".." : nm;
+            }),
+            cols: ["Base prior", "Eff. prior", "Evid. disc."],
+            title: "Issuer freeze-probability matrix (higher % = more recoverable)",
+            cellSize: 24,
+            showLabels: true,
+            maxVal: 100,
+            invertColors: true
+          });
+        }
       }
     }
   }

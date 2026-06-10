@@ -403,13 +403,17 @@ def run_watch_tick(
     # tick. Only freezable_inflow/outflow alerts that carry an originating case.
     try:
         if report.alerts:
-            import tempfile
             from pathlib import Path as _Path
 
             from recupero.monitoring.freeze_draft import enqueue_freeze_drafts
+            # roadmap-v4 #4: drafts live under the DURABLE data dir, not a
+            # per-tick tempfile.mkdtemp() — the brief_reviews row stores this
+            # path, and a temp dir leaks + dangles on restart, leaving the
+            # human-gate review pointing at an artifact that no longer opens.
             drafts = enqueue_freeze_drafts(
                 report.alerts,
-                out_dir=_Path(tempfile.mkdtemp(prefix="recupero-freeze-draft-")),
+                out_dir=_Path(os.environ.get("RECUPERO_DATA_DIR", "./data"))
+                / "freeze_drafts",
                 dsn=dsn,
             )
             if drafts:

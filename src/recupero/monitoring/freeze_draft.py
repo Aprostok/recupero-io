@@ -150,7 +150,14 @@ def enqueue_freeze_drafts(
         draft = draft_freeze_from_alert(alert)
         if draft is None:
             continue
-        fname = f"freeze_request_draft_{_safe_addr_segment(draft.address)}_{draft.kind}.html"
+        # The investigation id is part of the filename: two CASES watching the
+        # SAME address must not overwrite each other's draft (each review row
+        # references its own artifact carrying its own case id).
+        inv_seg = _safe_addr_segment(draft.investigation_id)[:8]
+        fname = (
+            f"freeze_request_draft_{_safe_addr_segment(draft.address)}"
+            f"_{draft.kind}_{inv_seg}.html"
+        )
         path = out_dir / fname
         try:
             path.write_text(draft.body, encoding="utf-8")

@@ -76,6 +76,23 @@ def test_enqueue_writes_drafts_only_for_actionable(tmp_path) -> None:
         assert "AWAITING HUMAN APPROVAL" in p.read_text(encoding="utf-8")
 
 
+def test_enqueue_two_cases_same_address_get_distinct_drafts(tmp_path) -> None:
+    # roadmap-v4 #4 collision fix: two CASES watching the SAME address must
+    # produce two distinct artifacts — previously the filename keyed only on
+    # (address, kind), so the second draft overwrote the first and BOTH review
+    # rows pointed at one file carrying only the second case's id.
+    alerts = [
+        _alert("freezable_inflow", inv="case-aaaa"),
+        _alert("freezable_inflow", inv="case-bbbb"),
+    ]
+    written = enqueue_freeze_drafts(alerts, out_dir=tmp_path, dsn=None)
+    assert len(written) == 2
+    assert len({p.name for p in written}) == 2          # distinct filenames
+    bodies = {p.name: p.read_text(encoding="utf-8") for p in written}
+    assert sum("case-aaaa" in b for b in bodies.values()) == 1
+    assert sum("case-bbbb" in b for b in bodies.values()) == 1
+
+
 def test_evaluate_recovery_alerts_threads_investigation_id() -> None:
     change = SimpleNamespace(
         address=_ADDR, chain="ethereum", role="current_holder",

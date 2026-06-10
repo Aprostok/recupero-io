@@ -84,6 +84,25 @@ h2::before {
   font-size: .64rem; text-transform: uppercase; letter-spacing: .08em;
   color: var(--ink-faint); font-weight: 700; margin: 1.1rem 0 .35rem;
 }
+/* Gauge row — horizontal strip of labeled mini-gauges */
+.gauge-row {
+  display: flex; flex-wrap: wrap; gap: .6rem 1.2rem;
+  background: var(--surface); border: 1px solid var(--hair);
+  border-radius: var(--r); padding: .75rem 1rem;
+  box-shadow: var(--shadow-sm); margin: .5rem 0;
+}
+.gauge-item {
+  display: flex; flex-direction: column; align-items: center; gap: .22rem;
+  min-width: 52px;
+}
+.gauge-item .gauge-label {
+  font-size: .61rem; color: var(--ink-faint); font-weight: 600;
+  text-align: center; white-space: nowrap; max-width: 72px;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.gauge-item .gauge-sub {
+  font-size: .55rem; color: var(--ink-faint); text-align: center;
+}
 a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
 
 /* ── Control bar ── */
@@ -191,6 +210,13 @@ th {
   background: var(--surface-2); font-size: .66rem; text-transform: uppercase;
   letter-spacing: .05em; color: var(--ink-faint); font-weight: 700;
   position: sticky; top: 0; z-index: 1;
+  box-shadow: 0 1px 0 var(--hair-strong);
+}
+/* Scroll-shadow that appears below the sticky header when table is scrolled */
+th::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 4px;
+  background: linear-gradient(to bottom, var(--hair), transparent);
+  pointer-events: none;
 }
 tbody tr { transition: background .12s var(--ease); }
 tbody tr:hover td { background: var(--accent-soft); }
@@ -260,6 +286,9 @@ td.age   { white-space: nowrap; font-size: .76rem; }
   color: var(--ink-faint); font-weight: 700;
 }
 .section-rule::after { content: ""; height: 1px; flex: 1; background: var(--hair); }
+/* Table scroll container: horizontal scroll with contained border-radius */
+.table-scroll { overflow-x: auto; border-radius: var(--r); margin-bottom: 1rem; }
+.table-scroll > table { margin-bottom: 0; }
 
 /* ── Sticky glassmorphism topbar (opt-in) ── */
 .bar-top {
@@ -1634,6 +1663,71 @@ CONSOLE_JS = r"""
     });
   };
 
+
+  // ── buildGaugeRow ─────────────────────────────────────────────────────────
+  // Builds a horizontal panel of labeled mini-gauge arcs.
+  // el:      target DOM element
+  // metrics: [{label, value, sub?, color?}]  value = 0-100
+  // opts:    { size?, title? }
+  function buildGaugeRow(el, metrics, opts) {
+    if (!el || !metrics || !metrics.length) return null;
+    opts = opts || {};
+    var sz = opts.size || 44;
+    var sw = opts.strokeWidth || 4;
+    if (opts.title) {
+      var hdr = document.createElement('div');
+      hdr.className = 'section-label';
+      hdr.textContent = opts.title;
+      el.appendChild(hdr);
+    }
+    var row = document.createElement('div');
+    row.className = 'gauge-row';
+    metrics.forEach(function(m) {
+      var val = Math.max(0, Math.min(100, +m.value || 0));
+      var colKey = m.color ||
+        (val >= 70 ? 'ok' : val >= 40 ? 'warn' : 'crit');
+      var colMap = { ok:'var(--ok)', warn:'var(--warn)', crit:'var(--crit)', accent:'var(--accent)' };
+      var col = colMap[colKey] || colMap['accent'];
+      var r2   = (sz / 2) - sw;
+      var circ = 2 * Math.PI * r2;
+      var dash0 = '0 ' + circ.toFixed(2);
+      var dashF = (circ * val / 100).toFixed(2) + ' ' + circ.toFixed(2);
+      var cx   = sz / 2;
+      var item = document.createElement('div');
+      item.className = 'gauge-item';
+      item.innerHTML =
+        '<svg width="' + sz + '" height="' + sz + '"' +
+        ' viewBox="0 0 ' + sz + ' ' + sz + '"' +
+        ' style="display:block;overflow:visible" aria-label="' + Math.round(val) + '%">' +
+        '<circle cx="' + cx + '" cy="' + cx + '" r="' + r2 + '"' +
+        ' fill="none" stroke="var(--hair-strong)" stroke-width="' + sw + '"/>' +
+        '<circle class="rc-gauge-arc"' +
+        ' cx="' + cx + '" cy="' + cx + '" r="' + r2 + '"' +
+        ' fill="none" stroke="' + col + '" stroke-width="' + sw + '"' +
+        ' stroke-linecap="round"' +
+        ' stroke-dasharray="' + dash0 + '"' +
+        ' data-full="' + dashF + '"' +
+        ' transform="rotate(-90 ' + cx + ' ' + cx + ')"' +
+        ' style="transition:stroke-dasharray .72s cubic-bezier(.32,.72,0,1)"/>' +
+        '<text x="' + cx + '" y="' + (cx + sz * 0.12) + '"' +
+        ' text-anchor="middle" font-family="var(--mono)"' +
+        ' font-size="' + (sz * 0.26) + 'px" font-weight="700" fill="' + col + '">' +
+        Math.round(val) + '</text>' +
+        '</svg>' +
+        '<span class="gauge-label">' + (m.label || '') + '</span>' +
+        (m.sub ? '<span class="gauge-sub">' + m.sub + '</span>' : '');
+      row.appendChild(item);
+    });
+    el.appendChild(row);
+    // Animate arcs on next frame
+    row.querySelectorAll('.rc-gauge-arc').forEach(function(arc) {
+      requestAnimationFrame(function() {
+        arc.setAttribute('stroke-dasharray', arc.getAttribute('data-full'));
+      });
+    });
+    return row;
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1654,7 +1748,8 @@ CONSOLE_JS = r"""
     buildRiskBar: buildRiskBar,
     buildHeatmap: buildHeatmap,
     attachCopyMono: attachCopyMono,
-    buildMiniGauge: buildMiniGauge
+    buildMiniGauge: buildMiniGauge,
+    buildGaugeRow: buildGaugeRow
   };
 })();
 """

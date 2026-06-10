@@ -56,7 +56,8 @@
     <span id="msg"></span>
   </div>
 
-  <div id="issuer-heatmap" style="margin:.3rem 0 .7rem;overflow:hidden"></div>
+  <div id="issuer-gauges" style="margin:.3rem 0 .4rem"></div>
+  <div id="issuer-heatmap" style="margin:.1rem 0 .7rem;overflow:hidden"></div>
   <div id="prob-bar" style="margin:.3rem 0 .6rem"></div>
   <div id="out"></div>
 
@@ -248,6 +249,19 @@
           { label: "Recovery probability " + pbPct + "%",  pct: pbPct, cls: pbCls },
           { label: "At risk " + pbRem + "%",               pct: pbRem, cls: pbRem>70?"crit":"" }
         ].filter(function(s){return s.pct>0;}), { height: 7, showLabels: true });
+      }
+      // Per-issuer mini-gauge row (top 4 issuers, effective prior %)
+      var igEl = document.getElementById("issuer-gauges");
+      var _piRows = est.per_issuer;
+      if (igEl && window.RC && window.RC.buildGaugeRow && Array.isArray(_piRows) && _piRows.length > 0) {
+        function _parsePctIG(s) { var n = parseInt((s||"0").replace(/[^0-9]/g,""),10); return isNaN(n)?0:Math.max(0,Math.min(100,n)); }
+        var igTop = _piRows.slice(0, 5);
+        var igMetrics = igTop.map(function(r) {
+          var v = _parsePctIG(r.effective_prior_pct);
+          var nm = (r.issuer || "?"); if (nm.length > 12) { nm = nm.slice(0, 10) + ".."; }
+          return { label: nm, value: v, sub: v + "%" };
+        });
+        window.RC.buildGaugeRow(igEl, igMetrics, { size: 46, title: "Issuer effective recovery probability" });
       }
       // Per-issuer freeze-probability heatmap (higher = more recoverable)
       var hmIss = document.getElementById("issuer-heatmap");

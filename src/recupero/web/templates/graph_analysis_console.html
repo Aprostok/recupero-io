@@ -302,7 +302,7 @@
 
       card(sum.n_value_cycles, "Value Cycles", sum.n_value_cycles ? "alert" : "");
     if (window.RC) { $("cards").querySelectorAll(".v").forEach(window.RC.countUp); }
-    // Graph summary risk bar — hubs + cycles + depth signal
+    // Graph summary risk bar -- hubs + cycles + depth signal
     var gaRbEl = document.getElementById("ga-riskbar");
     if (gaRbEl && window.RC && window.RC.buildRiskBar) {
       var nHub = sum.n_consolidation_hubs || 0;
@@ -354,7 +354,7 @@
     }
 
     $("hubswrap").innerHTML = hh;
-    if (window.RC) { window.RC.staggerRows($("hubswrap")); window.RC.attachSort($("hubswrap")); }
+    if (window.RC) { window.RC.staggerRows($("hubswrap")); window.RC.attachSort($("hubswrap")); window.RC.attachFilter($("hubswrap")); }
     // Hub inbound-value sparkline
     var gaSpEl = document.getElementById("ga-spark");
     if (gaSpEl && window.RC && window.RC.buildSparkline && hubs.length >= 2) {
@@ -460,7 +460,7 @@
     }
 
     $("cycleswrap").innerHTML = ch;
-    if (window.RC) { window.RC.staggerRows($("cycleswrap")); window.RC.attachSort($("cycleswrap")); }
+    if (window.RC) { window.RC.staggerRows($("cycleswrap")); window.RC.attachSort($("cycleswrap")); window.RC.attachFilter($("cycleswrap")); }
 
     renderGraph(rep);
 

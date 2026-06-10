@@ -74,6 +74,16 @@ _LEGITIMATE_VARIATION_PATTERNS = [
     re.compile(
         r'(?:[A-Za-z]:\\\\|/)[^"]*?vcfi01_det_[A-Za-z0-9_]+'
     ),
+    # Relative-time phrases derived from the CURRENT wall-clock — e.g. the
+    # time-sensitivity artifact's "30 days remaining" / "3 hours since the
+    # theft". A time-sensitivity document is LEGITIMATELY wall-clock-relative,
+    # so two generations separated by a real gap (a paused CI/dev machine — a
+    # 6h sleep was observed once mid-run) differ on this count even though the
+    # case inputs are identical. The raw timestamp it's derived from is already
+    # scrubbed above; scrub the derived delta too. A genuine non-determinism bug
+    # surfaces as address/dict ORDERING, not an "N days/hours" count, so this
+    # stays high-signal.
+    re.compile(r'\b\d+\s+(?:days?|hours?|minutes?|weeks?)\b', re.IGNORECASE),
 ]
 
 

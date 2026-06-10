@@ -352,6 +352,124 @@ def test_last_synced_utc_field_set_on_successful_sync() -> None:
     assert meta["schema_version"] == 1
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 6b. Anti-mass-delist guard (audit 2026-06)
+#
+# _merge_with_previous marks every previous entry absent from the new
+# feed as removed. Without a guard, a 200-OK *well-formed* document
+# that extracts to zero (Treasury schema drift, maintenance placeholder)
+# or a collapsed fraction of the prior live set would delist the entire
+# OFAC universe in one sync with success=True — and every sanctioned
+# address would screen clean.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Well-formed SDN XML with sdnEntry rows but ZERO crypto addresses —
+# parses cleanly, extracts to [].
+_FIXTURE_NO_CRYPTO = b"""<?xml version="1.0" encoding="UTF-8"?>
+<sdnList>
+  <sdnEntry>
+    <uid>44444</uid>
+    <firstName>SOMEONE</firstName>
+    <lastName>WITHOUT-CRYPTO</lastName>
+    <idList>
+      <id>
+        <uid>44445</uid>
+        <idType>Passport</idType>
+        <idNumber>P1234567</idNumber>
+      </id>
+    </idList>
+  </sdnEntry>
+</sdnList>
+"""
+
+
+def _write_live_csv(path: Path, n: int) -> None:
+    """Write a previous-sync CSV with ``n`` live (non-removed) entries."""
+    rows = ["address,chain,sdn_entry_name,sdn_entry_id,listing_date,removed_at_utc"]
+    for i in range(n):
+        rows.append(f"0x{i:040x},ethereum,ENTITY-{i},{1000 + i},2022-01-01,")
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
+def test_zero_entry_feed_refused_and_csv_preserved() -> None:
+    """A well-formed feed that extracts to ZERO crypto entries must be
+    refused — accepting it would mark every existing entry removed and
+    every sanctioned address would screen clean."""
+    with TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "ofac.csv"
+        _write_live_csv(out_path, 12)
+        original = out_path.read_bytes()
+        with patch(
+            "recupero.trace.ofac_sync.urllib.request.urlopen",
+            return_value=_FakeResponse(_FIXTURE_NO_CRYPTO),
+        ):
+            result = sync_ofac_sdn(output_path=out_path)
+        assert result.success is False
+        assert "zero" in (result.error_message or "").lower()
+        assert out_path.read_bytes() == original
+
+
+def test_zero_entry_feed_raises_in_strict_mode() -> None:
+    """Cron path: the zero-entry refusal must surface as OFACSyncError
+    so operators get paged instead of a silent success=False."""
+    with TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "ofac.csv"
+        with patch(
+            "recupero.trace.ofac_sync.urllib.request.urlopen",
+            return_value=_FakeResponse(_FIXTURE_NO_CRYPTO),
+        ), pytest.raises(OFACSyncError):
+            sync_ofac_sdn(output_path=out_path, strict=True)
+
+
+def test_collapsed_feed_refused_and_csv_preserved() -> None:
+    """A feed that collapses to under half the previous live population
+    is a suspected partial/drifted document — refuse and keep the CSV."""
+    with TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "ofac.csv"
+        _write_live_csv(out_path, 12)
+        original = out_path.read_bytes()
+        with patch(
+            "recupero.trace.ofac_sync.urllib.request.urlopen",
+            return_value=_FakeResponse(_FIXTURE_FIVE_ENTRIES),  # 3 live
+        ):
+            result = sync_ofac_sdn(output_path=out_path)
+        assert result.success is False
+        assert "collapsed" in (result.error_message or "").lower()
+        assert out_path.read_bytes() == original
+
+
+def test_collapse_guard_inactive_below_min_population() -> None:
+    """The collapse guard only engages once the previous CSV has a real
+    population (>= 10 live) — small fixtures and early syncs must keep
+    the legacy removed-tracking behavior."""
+    with TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "ofac.csv"
+        _write_live_csv(out_path, 8)  # below _MASS_DELIST_MIN_PREV_LIVE
+        with patch(
+            "recupero.trace.ofac_sync.urllib.request.urlopen",
+            return_value=_FakeResponse(_FIXTURE_FIVE_ENTRIES),  # 3 live
+        ):
+            result = sync_ofac_sdn(output_path=out_path)
+        assert result.success is True
+        assert result.entries_written == 3
+
+
+def test_mass_delist_override_env_accepts_collapse(monkeypatch) -> None:
+    """RECUPERO_OFAC_ALLOW_MASS_DELIST=1 lets an operator accept a
+    deliberate upstream contraction."""
+    monkeypatch.setenv("RECUPERO_OFAC_ALLOW_MASS_DELIST", "1")
+    with TemporaryDirectory() as tmp:
+        out_path = Path(tmp) / "ofac.csv"
+        _write_live_csv(out_path, 12)
+        with patch(
+            "recupero.trace.ofac_sync.urllib.request.urlopen",
+            return_value=_FakeResponse(_FIXTURE_FIVE_ENTRIES),
+        ):
+            result = sync_ofac_sdn(output_path=out_path)
+        assert result.success is True
+        assert result.entries_written == 3  # 3 live, 12 marked removed
+
+
 def test_meta_sidecar_absent_when_sync_fails() -> None:
     """A failed sync MUST NOT write a sidecar — otherwise the
     freshness timestamp would advance on every failure and the

@@ -106,6 +106,16 @@ DEFAULT_OFAC_CSV_PATH = (
     Path(__file__).parent.parent / "labels" / "seeds" / "ofac_crypto_live.csv"
 )
 
+# Anti-mass-delist guard thresholds (audit 2026-06). A sync whose
+# extracted live set collapses below FLOOR_FRACTION of the previous live
+# count is refused as a suspected partial/schema-drifted feed — marking
+# the absent majority `removed_at_utc` would make every sanctioned
+# address screen clean. The guard only engages once the previous CSV
+# has a real population (MIN_PREV_LIVE) so small test fixtures and
+# first-ever syncs are unaffected.
+_MASS_DELIST_FLOOR_FRACTION = 0.5
+_MASS_DELIST_MIN_PREV_LIVE = 10
+
 # RIGOR-2a hardening: cap fetched response body. Treasury's full feed
 # is ~50MB; we allow ~3x headroom (150 MiB) and reject above that.
 # A hostile or compromised endpoint streaming gigabytes would otherwise
@@ -386,6 +396,49 @@ def sync_ofac_sdn(
     except Exception as exc:  # noqa: BLE001
         log.warning("ofac sync: XML parse failed (%s)", exc)
         return _fail(f"parse failed: {exc}")
+
+    # Anti-mass-delist guard (audit 2026-06): _merge_with_previous marks
+    # every previous entry absent from `new_entries` as removed, so a
+    # 200-OK *well-formed* document that extracts to zero — or a collapsed
+    # fraction — of the prior live set (Treasury schema drift, maintenance
+    # placeholder, truncated body) would delist the entire OFAC universe
+    # in one sync with success=True, and every sanctioned address would
+    # screen clean from the next load_high_risk_db() on. Genuine
+    # single-sync mass delistings do not happen; refuse and keep the
+    # previous CSV. A deliberate upstream contraction can be accepted
+    # with RECUPERO_OFAC_ALLOW_MASS_DELIST=1.
+    if not new_entries:
+        log.error(
+            "ofac sync: feed parsed to ZERO crypto entries — refusing to "
+            "mass-delist the existing OFAC set (schema drift or "
+            "placeholder document?)"
+        )
+        return _fail(
+            "feed parsed to zero crypto entries — refusing to mass-delist"
+        )
+    prev_live = sum(
+        1 for e in load_ofac_csv(out_path, staleness_warn_days=0)
+        if not e.removed_at_utc
+    )
+    allow_mass_delist = os.environ.get(
+        "RECUPERO_OFAC_ALLOW_MASS_DELIST", ""
+    ).strip() in ("1", "true", "True")
+    if (
+        prev_live >= _MASS_DELIST_MIN_PREV_LIVE
+        and not allow_mass_delist
+        and len(new_entries) < prev_live * _MASS_DELIST_FLOOR_FRACTION
+    ):
+        log.error(
+            "ofac sync: feed collapsed to %d crypto entries from %d live — "
+            "refusing suspected partial/drifted feed. Set "
+            "RECUPERO_OFAC_ALLOW_MASS_DELIST=1 to accept a deliberate "
+            "upstream contraction.",
+            len(new_entries), prev_live,
+        )
+        return _fail(
+            f"feed collapsed to {len(new_entries)} entries from "
+            f"{prev_live} live — refusing suspected partial feed"
+        )
 
     # v0.31.5: merge with the previous CSV so that addresses which
     # WERE listed but have since been removed from the upstream feed

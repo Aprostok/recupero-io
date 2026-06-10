@@ -247,10 +247,13 @@ def test_sync_default_https_url_still_accepted() -> None:
             return_value=_R(),
         ):
             result = sync_ofac_sdn(output_path=out, timeout_sec=2)
-    # success may be True (empty list) — what we care about is that
-    # the URL was NOT rejected by the scheme check.
-    assert result.success is True
-    assert result.error_message is None
+    # What we care about is that the URL was NOT rejected by the
+    # scheme/host allowlist. (Since the 2026-06 anti-mass-delist guard,
+    # an empty sdnList is itself refused — with a *content* error, not
+    # a URL refusal — so we assert on the refusal class, not success.)
+    assert "refused scheme" not in (result.error_message or "")
+    assert "refused host" not in (result.error_message or "")
+    assert "zero crypto entries" in (result.error_message or "")
 
 
 # ----- 8. UTF-7 encoding spoof ----- #

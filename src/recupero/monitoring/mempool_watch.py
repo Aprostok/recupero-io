@@ -314,6 +314,46 @@ async def run_mempool_watch(
             await backoff_sleep(wait)
 
 
+# Mempool-supported network → the watchlist `chain` value to pull addresses for.
+# (Sepolia is a testnet with no real case watchlist, so it maps to nothing.)
+_MEMPOOL_CHAIN_FOR_NETWORK: dict[str, str] = {
+    "ethereum": "ethereum",
+    "eth-mainnet": "ethereum",
+    "polygon": "polygon",
+    "polygon-mainnet": "polygon",
+}
+
+
+def load_freezable_watchlist_addresses(dsn: str | None, *, network: str) -> list[str]:
+    """Active, FREEZABLE watchlist addresses on the chain matching ``network`` —
+    so ``mempool-watch --from-watchlist`` races a freeze on the wallets a freeze
+    can actually reach, without the operator hand-typing them.
+
+    Best-effort: returns ``[]`` on no DSN / unsupported network / missing driver
+    / DB error (never raises). Mirrors the freeze-target definition used by the
+    watchlist populate path (``is_freezeable=True``)."""
+    chain = _MEMPOOL_CHAIN_FOR_NETWORK.get((network or "").strip().lower())
+    if not dsn or not chain:
+        return []
+    try:
+        import psycopg  # noqa: F401
+    except ImportError:  # pragma: no cover
+        return []
+    from recupero._common import db_connect
+    try:
+        with db_connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT address FROM public.watchlist "
+                "WHERE COALESCE(status, 'active') NOT IN ('closed', 'archived') "
+                "AND is_freezeable = TRUE AND lower(chain) = %s",
+                (chain,),
+            )
+            return [r[0] for r in cur.fetchall() if r and r[0]]
+    except Exception as exc:  # noqa: BLE001
+        log.warning("mempool-watch: watchlist address load failed: %s", exc)
+        return []
+
+
 __all__ = (
     "PendingFreezeAlert",
     "alchemy_pending_ws_url",
@@ -321,4 +361,5 @@ __all__ = (
     "classify_pending_notification",
     "iter_pending_alerts",
     "run_mempool_watch",
+    "load_freezable_watchlist_addresses",
 )

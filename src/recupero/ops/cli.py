@@ -234,6 +234,11 @@ def cli() -> None:
         help="Reconnect attempts on a dropped socket (default 10; 0 disables). "
              "A dropped watch = a missed pending tx = a missed freeze.",
     )
+    p_mempool.add_argument(
+        "--from-watchlist", action="store_true", dest="from_watchlist",
+        help="Also watch every active FREEZABLE address from the case watchlist "
+             "for the chosen network (needs SUPABASE_DB_URL) — no hand-typing.",
+    )
 
     # ----- send-le-handoff ----- #
     p_le = sub.add_parser(
@@ -971,14 +976,24 @@ def cli() -> None:
     if args.command == "mempool-watch":
         import asyncio as _asyncio
 
-        from recupero.monitoring.mempool_watch import run_mempool_watch
+        from recupero.monitoring.mempool_watch import (
+            load_freezable_watchlist_addresses,
+            run_mempool_watch,
+        )
         key = os.environ.get("ALCHEMY_API_KEY", "").strip()
         if not key:
             print("ALCHEMY_API_KEY is required for mempool-watch")
             sys.exit(2)
         addrs = [a for a in (args.addresses or []) if a and a.strip()]
+        if args.from_watchlist:
+            _dsn = os.environ.get("SUPABASE_DB_URL", "").strip()
+            _wl = load_freezable_watchlist_addresses(_dsn, network=args.network)
+            print(f"mempool-watch: loaded {len(_wl)} freezable watchlist "
+                  f"address(es) for {args.network}")
+            addrs = list(dict.fromkeys(addrs + _wl))  # dedup, preserve order
         if not addrs:
-            print("at least one --address is required")
+            print("at least one --address (or --from-watchlist with matches) "
+                  "is required")
             sys.exit(2)
 
         def _on_pending(alert) -> None:  # noqa: ANN001

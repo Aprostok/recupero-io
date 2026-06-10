@@ -18,6 +18,7 @@ from recupero.monitoring.mempool_watch import (
     build_pending_subscribe_request,
     classify_pending_notification,
     iter_pending_alerts,
+    load_freezable_watchlist_addresses,
     run_mempool_watch,
 )
 
@@ -175,3 +176,12 @@ async def test_run_mempool_watch_raises_when_reconnects_exhausted() -> None:
             on_alert=lambda a: None, connect=_always_fail,
             reconnect_attempts=2, backoff_sleep=_no_sleep,
         )
+
+
+def test_load_freezable_watchlist_addresses_guards() -> None:
+    # No DSN → [] (never raises). Unsupported network (Solana — no mempool sub,
+    # no watchlist chain mapping) → [] even with a DSN present.
+    assert load_freezable_watchlist_addresses(None, network="ethereum") == []
+    assert load_freezable_watchlist_addresses("", network="ethereum") == []
+    assert load_freezable_watchlist_addresses("postgresql://x", network="solana") == []
+    assert load_freezable_watchlist_addresses("postgresql://x", network="bogus") == []

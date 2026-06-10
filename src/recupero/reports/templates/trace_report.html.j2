@@ -539,6 +539,43 @@ notification).</p>
 </table>
 {% endif %}
 
+{% if lp_leads %}
+<h2>11. LP Park-and-Withdraw Leads (Uniswap V3)</h2>
+<p class="small"><em>A traced wallet deposited value into a Uniswap V3
+   position; the rows below are the later <span class="mono">Collect</span>
+   exits on the <strong>same position tokenId</strong> &mdash; protocol
+   identity, so the position link is HIGH confidence. Actor attribution is
+   HIGH only when the exit recipient IS the parking wallet; otherwise MEDIUM
+   (the position NFT may have changed hands &mdash; review the NFT ownership
+   trail). Amounts are raw per-pool-token units (never priced here); leads
+   are for review, NEVER a followed destination, and the recoverable total
+   is unchanged.</em></p>
+<table>
+  <thead>
+    <tr>
+      <th>Parking wallet</th>
+      <th>Position</th>
+      <th>Exit recipient</th>
+      <th>Same owner</th>
+      <th>Position link</th>
+      <th>Actor attribution</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ld in lp_leads.leads %}
+    <tr>
+      <td class="mono">{{ ld.parker | short_address(prefix=10, suffix=4) }}</td>
+      <td class="mono">#{{ ld.position_token_id }}</td>
+      <td class="mono">{{ ld.exit_recipient | short_address(prefix=10, suffix=4) }}</td>
+      <td>{{ "yes" if ld.recipient_is_parker else "no" }}</td>
+      <td>{{ ld.position_link_confidence }}</td>
+      <td>{{ ld.actor_attribution_confidence }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>
   <div class="footer-meta">

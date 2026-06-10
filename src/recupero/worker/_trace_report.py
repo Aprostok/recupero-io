@@ -115,6 +115,19 @@ def render_trace_report(
         except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
             log.debug("trace report: nft_flows load skipped: %s", _exc)
 
+        # roadmap-v4 #7 (slice 1): Uniswap V3 park-and-withdraw leads, same
+        # gated-artifact pattern (RECUPERO_LP_LEADS; absent file → no section).
+        lp_leads = None
+        try:
+            import json as _json
+            _lp_path = briefs_dir.parent / "lp_leads.json"
+            if _lp_path.is_file():
+                _doc = _json.loads(_lp_path.read_text(encoding="utf-8-sig"))
+                if isinstance(_doc, dict) and _doc.get("leads"):
+                    lp_leads = _doc
+        except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
+            log.debug("trace report: lp_leads load skipped: %s", _exc)
+
         ctx = _build_context(
             case=case,
             freeze_brief=freeze_brief,
@@ -123,6 +136,7 @@ def render_trace_report(
             label=label,
             demix_leads=demix_leads,
             nft_flows=nft_flows,
+            lp_leads=lp_leads,
         )
 
         env = Environment(
@@ -156,6 +170,7 @@ def _build_context(
     label: str | None,
     demix_leads: dict[str, Any] | None = None,
     nft_flows: dict[str, Any] | None = None,
+    lp_leads: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     chain_str = case.chain.value
     # v0.16.10 (round-9 output LOW): include explicit "Z" UTC suffix.
@@ -230,6 +245,9 @@ def _build_context(
         # RECUPERO_NFT_FLOWS produced an nft_flows.json for this case).
         # Always present so StrictUndefined can `{% if nft_flows %}`.
         "nft_flows": nft_flows,
+        # roadmap-v4 #7 (slice 1) — Uniswap V3 park-and-withdraw leads
+        # (None unless RECUPERO_LP_LEADS produced an lp_leads.json).
+        "lp_leads": lp_leads,
     }
 
 

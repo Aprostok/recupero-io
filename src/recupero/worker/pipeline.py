@@ -691,6 +691,57 @@ def _maybe_write_nft_flows(
         log.warning("nft-flows: collection failed (non-fatal): %s", exc)
 
 
+def _maybe_write_lp_leads(
+    case: Case,
+    case_dir: Path,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+) -> None:
+    """Uniswap V3 park-and-withdraw leads over the finished trace
+    (roadmap-v4 #7 slice 1).
+
+    Opt-in via ``RECUPERO_LP_LEADS`` (default OFF → zero cost). When on, each
+    traced-wallet deposit into the verified NonfungiblePositionManager is
+    resolved to its position tokenId (deposit receipt), and every later
+    ``Collect`` on that SAME position — where the parked value actually
+    exited — becomes a lead in ``lp_leads.json``. Position link = protocol
+    identity (high); actor attribution medium unless the exit recipient is
+    the parking wallet. Leads only — never a followed destination, the
+    recoverable total untouched. Best-effort: never blocks the trace pipeline.
+    """
+    from recupero.trace.lp_runner import lp_leads_enabled
+
+    if not lp_leads_enabled():
+        return  # default off → zero cost
+    try:
+        from recupero._common import atomic_write_text
+        from recupero.chains.base import ChainAdapter
+        from recupero.trace.lp_runner import leads_to_json, run_lp_leads
+
+        adapter = ChainAdapter.for_chain(case.chain, (config, env))
+        try:
+            leads = run_lp_leads(
+                transfers=case.transfers,
+                adapter=adapter,
+                default_chain=case.chain.value,
+            )
+        finally:
+            adapter.close()
+        if not leads:
+            return
+        doc = leads_to_json(leads)
+        atomic_write_text(
+            case_dir / "lp_leads.json",
+            json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False),
+        )
+        log.info(
+            "lp-leads: wrote lp_leads.json (%d lead(s)) for case %s",
+            len(leads), getattr(case, "case_id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, never block the trace
+        log.warning("lp-leads: lead generation failed (non-fatal): %s", exc)
+
+
 def _stage_trace(
     inv: Investigation,
     case_id_str: str,
@@ -767,6 +818,13 @@ def _stage_trace(
     # wallet's ERC-721/1155 transfers ride along as nft_flows.json —
     # observations only, no value claims, recoverable total untouched.
     _maybe_write_nft_flows(case, case_dir, config, env)
+
+    # roadmap-v4 #7 (slice 1): Uniswap V3 park-and-withdraw leads. Gated by
+    # RECUPERO_LP_LEADS (default off = zero cost); on means NPM deposits
+    # resolve to position tokenIds and later Collect exits on the SAME
+    # position ride along as lp_leads.json — position link is protocol
+    # identity, leads never followed, recoverable total untouched.
+    _maybe_write_lp_leads(case, case_dir, config, env)
 
     local_store.write_case(case)
     upload_case_dir(case_dir, bucket)

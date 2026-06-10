@@ -25,7 +25,8 @@
   </div>
 
   <div id="cards" class="cards" style="margin-bottom:.5rem"></div>
-  <div id="sev-hist" class="sev-hist-wrap"></div>
+  <div id="sev-hist" style="margin:.2rem 0 .4rem"></div>
+  <div id="alert-spark" class="rc-spark-wrap" style="margin:.1rem 0 .55rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -68,30 +69,18 @@
       window.RC.attachFilter($("out"));
     }
 
-    // Severity histogram bar
+    // Severity distribution — RC risk bar
     var hist = $("sev-hist");
     if (hist) {
-      if (!total) {
+      if (!total || !window.RC || !window.RC.buildRiskBar) {
         hist.innerHTML = "";
       } else {
-        var segs = [
-          { n: nCrit, color: "var(--crit)", label: "Critical" },
-          { n: nHigh, color: "var(--warn)", label: "High" },
-          { n: nMed,  color: "#f59e0b",     label: "Medium" },
-          { n: nLow,  color: "var(--ok)",   label: "Low" }
-        ];
-        var bar = '<div class="sev-hist-bar">';
-        segs.forEach(function(s) {
-          if (!s.n) return;
-          bar += '<div class="sev-hist-seg" style="width:' + Math.round(s.n / total * 100) + '%;background:' + s.color + '" title="' + s.label + ': ' + s.n + '"></div>';
-        });
-        bar += '</div><div class="sev-hist-legend">';
-        segs.forEach(function(s) {
-          if (!s.n) return;
-          bar += '<div class="sev-hist-item"><span class="sev-hist-dot" style="background:' + s.color + '"></span>' + esc(s.label) + ' &middot; ' + esc(s.n) + '</div>';
-        });
-        bar += '</div>';
-        hist.innerHTML = bar;
+        window.RC.buildRiskBar(hist, [
+          { label: "Critical (" + nCrit + ")", pct: nCrit, cls: "crit" },
+          { label: "High ("    + nHigh + ")", pct: nHigh, cls: "warn" },
+          { label: "Medium ("  + nMed  + ")", pct: nMed,  cls: "" },
+          { label: "Low ("     + nLow  + ")", pct: nLow,  cls: "ok" }
+        ].filter(function(s){return s.pct>0;}), { height: 8, showLabels: true });
       }
     }
 
@@ -137,6 +126,32 @@
     if (window.RC) {
       window.RC.staggerRows($("tablewrap"));
       window.RC.attachSort($("tablewrap"));
+    }
+    // Delta USD sparkline — severity-weighted absolute values
+    var asEl = document.getElementById("alert-spark");
+    if (asEl && window.RC && window.RC.buildSparkline && rows.length >= 2) {
+      var aDeltas = rows
+        .map(function(rr) { return Math.abs(parseFloat((String(rr.delta_usd || "0")).replace(/[^0-9.]/g, "")) || 0); })
+        .filter(function(v) { return v > 0; })
+        .sort(function(a, b) { return b - a; });
+      if (aDeltas.length >= 2) {
+        var aPeak = aDeltas[0];
+        asEl.title = "Alert delta-USD distribution (" + aDeltas.length + " alerts, peak $" +
+          Math.round(aPeak).toLocaleString() + ")";
+        window.RC.buildSparkline(asEl, aDeltas, {
+          width: asEl.offsetWidth || 480, height: 28,
+          strokeWidth: 1.6,
+          color: nCrit ? "var(--crit)" : "var(--warn)",
+          fillColor: nCrit ? "rgba(215,0,21,.06)" : "rgba(185,119,14,.06)"
+        });
+        var asLbl = document.createElement("div");
+        asLbl.style.cssText = "font-size:.62rem;color:var(--ink-faint);margin-top:2px";
+        asLbl.textContent = "Alert delta-USD (\u2193 sorted) \u2014 " + aDeltas.length + " active alert" +
+          (aDeltas.length === 1 ? "" : "s");
+        asEl.appendChild(asLbl);
+      } else {
+        asEl.style.display = "none";
+      }
     }
   }
 

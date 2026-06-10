@@ -68,6 +68,8 @@
 
 
 
+  <div id="ga-riskbar" style="margin:.4rem 0 .65rem"></div>
+  <div id="ga-spark" class="rc-spark-wrap" style="margin:.1rem 0 .5rem"></div>
   <div class="cards" id="cards"></div>
 
 
@@ -300,6 +302,22 @@
 
       card(sum.n_value_cycles, "Value Cycles", sum.n_value_cycles ? "alert" : "");
     if (window.RC) { $("cards").querySelectorAll(".v").forEach(window.RC.countUp); }
+    // Graph summary risk bar — hubs + cycles + depth signal
+    var gaRbEl = document.getElementById("ga-riskbar");
+    if (gaRbEl && window.RC && window.RC.buildRiskBar) {
+      var nHub = sum.n_consolidation_hubs || 0;
+      var nCyc = sum.n_value_cycles || 0;
+      var nNode = rep.node_count || 0;
+      var nEdge = rep.edge_count || 0;
+      if (nHub || nCyc || nNode) {
+        window.RC.buildRiskBar(gaRbEl, [
+          { label: "Hubs (" + nHub + ")",   pct: nHub  * 10, cls: nHub  ? "crit" : "ok" },
+          { label: "Cycles (" + nCyc + ")", pct: nCyc  * 8,  cls: nCyc  ? "warn" : "ok" },
+          { label: "Nodes (" + nNode + ")", pct: nNode,       cls: "" },
+          { label: "Edges (" + nEdge + ")", pct: nEdge,       cls: "" }
+        ].filter(function(s){return s.pct>0;}), { height: 7, showLabels: true });
+      }
+    }
 
 
 
@@ -337,6 +355,27 @@
 
     $("hubswrap").innerHTML = hh;
     if (window.RC) { window.RC.staggerRows($("hubswrap")); window.RC.attachSort($("hubswrap")); }
+    // Hub inbound-value sparkline
+    var gaSpEl = document.getElementById("ga-spark");
+    if (gaSpEl && window.RC && window.RC.buildSparkline && hubs.length >= 2) {
+      var hubVals = hubs
+        .map(function(h){ return parseFloat((String(h.inbound_usd || "0")).replace(/[^0-9.]/g, "")) || 0; })
+        .sort(function(a,b){ return b - a; })
+        .filter(function(v){ return v > 0; });
+      if (hubVals.length >= 2) {
+        gaSpEl.title = "Hub inbound USD distribution (" + hubVals.length + " hubs)";
+        window.RC.buildSparkline(gaSpEl, hubVals, {
+          width: gaSpEl.offsetWidth || 480, height: 28,
+          strokeWidth: 1.6, color: "var(--crit)", fillColor: "rgba(215,0,21,.06)"
+        });
+        var gaLbl = document.createElement("div");
+        gaLbl.style.cssText = "font-size:.62rem;color:var(--ink-faint);margin-top:2px";
+        gaLbl.textContent = "Hub inbound-value distribution (" + hubVals.length + " consolidation hub" +
+          (hubVals.length === 1 ? "" : "s") + ")";
+        gaSpEl.appendChild(gaLbl);
+      } else { gaSpEl.style.display = "none"; }
+    }
+
 
 
 

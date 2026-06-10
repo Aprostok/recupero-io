@@ -66,6 +66,41 @@ def diff_ofac_additions(prev_keys: set[str], current_keys: set[str]) -> set[str]
     return current_keys - prev_keys
 
 
+# roadmap-v4 #3: the recommended_action carried on each persisted console row.
+_RESCREEN_RECOMMENDED_ACTION = (
+    "OFAC just listed this watched wallet — exchanges/issuers will block it "
+    "imminently. Re-screen the case and race the freeze ask / SAR NOW. "
+    "Point-in-time: do NOT rewrite the brief's historical label."
+)
+
+
+def alerts_to_recovery_rows(
+    alerts: Iterable[OFACDeltaAlert],
+) -> list[dict[str, str]]:
+    """Map OFAC-delta alerts onto ``recovery_alerts``-row dicts so the cron can
+    persist them via ``recovery_alerts_store.persist_alerts`` and the operator
+    console's act-now queue (``/v1/recovery-alerts``) surfaces them between
+    runs — previously they lived only in the cron log. Pure.
+
+    ``kind='ofac_delta_listing'`` distinguishes them from watch-tick movement
+    alerts; ``severity='high'`` ('critical' stays reserved for freezable funds
+    in motion). The SDN entry name rides in ``label_name``; the case id is in
+    the message (the table has no investigation_id column)."""
+    rows: list[dict[str, str]] = []
+    for a in alerts or []:
+        rows.append({
+            "address": a.address,
+            "chain": a.chain or "?",
+            "severity": "high",
+            "kind": "ofac_delta_listing",
+            "role": a.watch_role,
+            "label_name": a.sdn_entry_name,
+            "message": a.message,
+            "recommended_action": _RESCREEN_RECOMMENDED_ACTION,
+        })
+    return rows
+
+
 def build_watch_index(rows: Iterable[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """Index active-watchlist rows by canonical address key. Each row should
     carry ``address`` / ``chain`` / ``investigation_id`` / ``role``."""
@@ -260,6 +295,7 @@ def screen_ofac_additions(
 
 __all__ = (
     "OFACDeltaAlert",
+    "alerts_to_recovery_rows",
     "diff_ofac_additions",
     "build_watch_index",
     "match_additions_to_watchlist",

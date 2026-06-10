@@ -792,12 +792,39 @@ def _job_ofac_sync() -> None:
     try:
         dsn = _supabase_dsn()
         if dsn:
-            from recupero.monitoring.ofac_delta_rescreen import screen_ofac_additions
+            from recupero.monitoring.ofac_delta_rescreen import (
+                alerts_to_recovery_rows,
+                screen_ofac_additions,
+            )
             alerts = screen_ofac_additions(dsn=dsn)
             log.info(
                 "cron: OFAC-delta rescreen — %d open-case watchlist match(es)",
                 len(alerts),
             )
+            # roadmap-v4 #3: persist matches into recovery_alerts so the
+            # operator console's act-now queue (/v1/recovery-alerts) surfaces
+            # the "race the freeze" prompt — previously these alerts existed
+            # only in this log line. Inner-guarded: a persist failure (e.g.
+            # migration 033 not applied) never voids the rescreen itself.
+            if alerts:
+                try:
+                    from recupero.monitoring.recovery_alerts_store import (
+                        persist_alerts,
+                    )
+                    n = persist_alerts(
+                        dsn,
+                        alerts_to_recovery_rows(alerts),
+                        tick_started_at=datetime.now(UTC),
+                    )
+                    log.info(
+                        "cron: persisted %d OFAC-delta alert(s) to the "
+                        "operator console queue", n,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    log.warning(
+                        "cron: OFAC-delta alert persist failed "
+                        "(alerts remain in the log): %s", exc,
+                    )
         else:
             log.info("cron: OFAC-delta rescreen skipped — SUPABASE_DB_URL unset")
     except Exception as exc:  # noqa: BLE001

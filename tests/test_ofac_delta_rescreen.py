@@ -13,6 +13,7 @@ from types import SimpleNamespace
 import recupero.monitoring.ofac_delta_rescreen as mod
 from recupero.monitoring.ofac_delta_rescreen import (
     OFACDeltaAlert,
+    alerts_to_recovery_rows,
     build_watch_index,
     diff_ofac_additions,
     load_snapshot,
@@ -83,6 +84,42 @@ def test_match_emits_one_alert_per_watching_case() -> None:
     ])
     alerts = match_additions_to_watchlist([_entry(_A)], idx)
     assert {a.investigation_id for a in alerts} == {"inv-1", "inv-2"}
+
+
+# ---- roadmap-v4 #3: persistence mapping ----------------------------------
+def test_alerts_to_recovery_rows_maps_console_fields() -> None:
+    # The mapper turns OFACDeltaAlerts into recovery_alerts-row dicts so the
+    # cron can persist them and /v1/recovery-alerts surfaces them (previously
+    # the alerts existed only in the cron log).
+    idx = build_watch_index([
+        {"address": _B, "chain": "ethereum", "investigation_id": "inv-7",
+         "role": "current_holder"},
+    ])
+    alerts = match_additions_to_watchlist(
+        [_entry(_B, sdn_entry_name="LAZARUS GROUP")], idx)
+    rows = alerts_to_recovery_rows(alerts)
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["address"] == _B
+    assert r["chain"] == "ethereum"
+    assert r["severity"] == "high"           # 'critical' reserved for funds in motion
+    assert r["kind"] == "ofac_delta_listing"
+    assert r["role"] == "current_holder"
+    assert r["label_name"] == "LAZARUS GROUP"
+    assert "inv-7" in r["message"]           # case id rides in the message
+    assert "race the freeze" in r["recommended_action"]
+    # point-in-time discipline restated on the actionable row
+    assert "do NOT rewrite" in r["recommended_action"]
+
+
+def test_alerts_to_recovery_rows_empty_and_unknown_chain() -> None:
+    assert alerts_to_recovery_rows([]) == []
+    a = OFACDeltaAlert(
+        address="bc1qxyz", chain="", sdn_entry_name="X", listing_date="d",
+        investigation_id="i", watch_role="hop", message="m",
+    )
+    rows = alerts_to_recovery_rows([a])
+    assert rows[0]["chain"] == "?"           # table column is NOT NULL
 
 
 # ---- snapshot IO ---------------------------------------------------------

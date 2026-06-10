@@ -128,6 +128,19 @@ def render_trace_report(
         except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
             log.debug("trace report: lp_leads load skipped: %s", _exc)
 
+        # roadmap-v4 #11 (slice 1): Aave V3 cross-address withdrawal leads,
+        # same gated-artifact pattern (RECUPERO_LENDING_LEADS).
+        lending_leads = None
+        try:
+            import json as _json
+            _lend_path = briefs_dir.parent / "lending_leads.json"
+            if _lend_path.is_file():
+                _doc = _json.loads(_lend_path.read_text(encoding="utf-8-sig"))
+                if isinstance(_doc, dict) and _doc.get("leads"):
+                    lending_leads = _doc
+        except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
+            log.debug("trace report: lending_leads load skipped: %s", _exc)
+
         ctx = _build_context(
             case=case,
             freeze_brief=freeze_brief,
@@ -137,6 +150,7 @@ def render_trace_report(
             demix_leads=demix_leads,
             nft_flows=nft_flows,
             lp_leads=lp_leads,
+            lending_leads=lending_leads,
         )
 
         env = Environment(
@@ -171,6 +185,7 @@ def _build_context(
     demix_leads: dict[str, Any] | None = None,
     nft_flows: dict[str, Any] | None = None,
     lp_leads: dict[str, Any] | None = None,
+    lending_leads: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     chain_str = case.chain.value
     # v0.16.10 (round-9 output LOW): include explicit "Z" UTC suffix.
@@ -248,6 +263,9 @@ def _build_context(
         # roadmap-v4 #7 (slice 1) — Uniswap V3 park-and-withdraw leads
         # (None unless RECUPERO_LP_LEADS produced an lp_leads.json).
         "lp_leads": lp_leads,
+        # roadmap-v4 #11 (slice 1) — Aave V3 cross-address withdrawal
+        # leads (None unless RECUPERO_LENDING_LEADS produced the artifact).
+        "lending_leads": lending_leads,
     }
 
 

@@ -742,6 +742,56 @@ def _maybe_write_lp_leads(
         log.warning("lp-leads: lead generation failed (non-fatal): %s", exc)
 
 
+def _maybe_write_lending_leads(
+    case: Case,
+    case_dir: Path,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+) -> None:
+    """Aave V3 cross-address withdrawal leads over the finished trace
+    (roadmap-v4 #11 slice 1).
+
+    Opt-in via ``RECUPERO_LENDING_LEADS`` (default OFF -> zero cost). When on,
+    each traced wallet's Aave V3 Pool ``Withdraw`` events are fetched
+    (indexed-user topic filter) and every CROSS-ADDRESS withdrawal -- the exit
+    sent by the aToken contract, invisible to outflow enumeration -- becomes a
+    lead in ``lending_leads.json``. Both addresses protocol-stamped (high).
+    Leads only -- never a followed destination, the recoverable total
+    untouched. Best-effort: never blocks the trace pipeline.
+    """
+    from recupero.trace.lending_runner import lending_leads_enabled
+
+    if not lending_leads_enabled():
+        return  # default off -> zero cost
+    try:
+        from recupero._common import atomic_write_text
+        from recupero.chains.base import ChainAdapter
+        from recupero.trace.lending_runner import leads_to_json, run_lending_leads
+
+        adapter = ChainAdapter.for_chain(case.chain, (config, env))
+        try:
+            leads = run_lending_leads(
+                transfers=case.transfers,
+                adapter=adapter,
+                default_chain=case.chain.value,
+            )
+        finally:
+            adapter.close()
+        if not leads:
+            return
+        doc = leads_to_json(leads)
+        atomic_write_text(
+            case_dir / "lending_leads.json",
+            json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False),
+        )
+        log.info(
+            "lending-leads: wrote lending_leads.json (%d lead(s)) for case %s",
+            len(leads), getattr(case, "case_id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never block the trace
+        log.warning("lending-leads: lead generation failed (non-fatal): %s", exc)
+
+
 def _stage_trace(
     inv: Investigation,
     case_id_str: str,
@@ -825,6 +875,12 @@ def _stage_trace(
     # position ride along as lp_leads.json — position link is protocol
     # identity, leads never followed, recoverable total untouched.
     _maybe_write_lp_leads(case, case_dir, config, env)
+
+    # roadmap-v4 #11 (slice 1): Aave V3 cross-address withdrawal leads.
+    # Gated by RECUPERO_LENDING_LEADS (default off = zero cost); on means
+    # traced wallets' Pool.withdraw(asset, amount, to!=self) exits ride
+    # along as lending_leads.json -- protocol-stamped, never followed.
+    _maybe_write_lending_leads(case, case_dir, config, env)
 
     local_store.write_case(case)
     upload_case_dir(case_dir, bucket)

@@ -576,6 +576,41 @@ notification).</p>
 </table>
 {% endif %}
 
+{% if lending_leads %}
+<h2>12. Lending Cross-Address Withdrawals (Aave V3)</h2>
+<p class="small"><em>A traced wallet withdrew supplied funds from the Aave V3
+   Pool <strong>directly to a different address</strong> &mdash; an exit sent
+   by the aToken contract and therefore invisible to outflow enumeration.
+   Both the initiating wallet and the exit recipient are protocol-stamped
+   indexed topics on the Pool's <span class="mono">Withdraw</span> event
+   (HIGH confidence). Withdrawals back to the traced wallet itself are not
+   listed (those funds re-enter normal tracing). Amounts are raw reserve
+   units; leads are for review, NEVER a followed destination, and the
+   recoverable total is unchanged.</em></p>
+<table>
+  <thead>
+    <tr>
+      <th>Traced wallet (user)</th>
+      <th>Exit recipient</th>
+      <th>Reserve</th>
+      <th>Amount (raw)</th>
+      <th>Confidence</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ld in lending_leads.leads %}
+    <tr>
+      <td class="mono">{{ ld.user | short_address(prefix=10, suffix=4) }}</td>
+      <td class="mono">{{ ld.exit_recipient | short_address(prefix=10, suffix=4) }}</td>
+      <td class="mono">{{ ld.reserve | short_address(prefix=10, suffix=4) }}</td>
+      <td class="mono">{{ ld.amount_raw }}</td>
+      <td>{{ ld.confidence }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>
   <div class="footer-meta">

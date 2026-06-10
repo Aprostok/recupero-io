@@ -126,6 +126,7 @@
         <input id="case-search" class="rc-filter-input" type="text" placeholder="Search cases&#8230;" autocomplete="off" spellcheck="false">
         <span class="rc-filter-count" id="case-count"></span>
       </div>
+      <div id="ci-riskbar" style="margin:.2rem 0 .55rem;min-height:0"></div>
       <div id="cases"><div class="empty">Enter the key and Load.</div></div>
     </div>
     <div class="col">
@@ -222,6 +223,18 @@
     // Clear search on reload
     var inp = $("case-search"); if (inp && inp.value) { inp.value = ""; }
     if (window.RC) { window.RC.animateRings($("cases")); }
+    // Deliverable completeness summary bar
+    var ciRbEl = document.getElementById("ci-riskbar");
+    if (ciRbEl && window.RC && window.RC.buildRiskBar && rows.length > 0) {
+      var nFull = rows.filter(function(rr){ return [rr.has_brief,rr.has_ai_triage,rr.has_exhibit_pack,rr.has_graph].filter(Boolean).length===4; }).length;
+      var nPart = rows.filter(function(rr){ var c=[rr.has_brief,rr.has_ai_triage,rr.has_exhibit_pack,rr.has_graph].filter(Boolean).length; return c>=1&&c<4; }).length;
+      var nNone = rows.length - nFull - nPart;
+      window.RC.buildRiskBar(ciRbEl, [
+        { label: "Complete ("  + nFull + ")", pct: nFull, cls: "ok"   },
+        { label: "Partial ("   + nPart + ")", pct: nPart, cls: "warn" },
+        { label: "No outputs ("+ nNone + ")", pct: nNone, cls: "crit" }
+      ].filter(function(s){return s.pct>0;}), { height: 6, showLabels: true });
+    }
   }
 
   function openCase(cid){

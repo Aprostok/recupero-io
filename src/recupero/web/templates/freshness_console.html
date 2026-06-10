@@ -34,6 +34,7 @@
   <div id="alarm"></div>
   <div class="cards" id="cards"></div>
   <div id="fresh-bar" style="margin:-.3rem 0 .8rem"></div>
+  <div id="fresh-spark" class="rc-spark-wrap" style="margin:.1rem 0 .55rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -129,6 +130,31 @@
       window.RC.attachSort($("tablewrap"));
       window.RC.attachFilter($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
+    }
+    // Age/SLA ratio sparkline -- sorted high-to-low (worst first)
+    var fsEl = document.getElementById("fresh-spark");
+    if (fsEl && window.RC && window.RC.buildSparkline && rows.length >= 2) {
+      var ratios = rows
+        .map(function(rr) {
+          var a = rr.age_days == null ? 0 : +rr.age_days || 0;
+          var s = rr.sla_days == null || rr.sla_days <= 0 ? 1 : +rr.sla_days;
+          return a / s;
+        })
+        .sort(function(a, b) { return b - a; });
+      var worst = ratios[0] || 0;
+      if (worst > 0) {
+        fsEl.title = "Age/SLA ratio per source (\u2193 worst first, 1.0 = at SLA limit)";
+        window.RC.buildSparkline(fsEl, ratios, {
+          width: fsEl.offsetWidth || 480, height: 28, strokeWidth: 1.6,
+          color: worst >= 1 ? "var(--crit)" : worst >= 0.7 ? "var(--warn)" : "var(--ok)",
+          fillColor: worst >= 1 ? "rgba(215,0,21,.06)" : "rgba(29,138,78,.06)"
+        });
+        var fsLbl = document.createElement("div");
+        fsLbl.style.cssText = "font-size:.62rem;color:var(--ink-faint);margin-top:2px";
+        fsLbl.textContent = "Age/SLA ratio (" + rows.length + " source" +
+          (rows.length === 1 ? "" : "s") + "; worst = " + worst.toFixed(2) + "x SLA)";
+        fsEl.appendChild(fsLbl);
+      } else { fsEl.style.display = "none"; }
     }
   }
 

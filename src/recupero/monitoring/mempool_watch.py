@@ -217,34 +217,19 @@ def iter_pending_alerts(
             yield alert
 
 
-async def run_mempool_watch(
+async def _drain_once(
     *,
-    api_key: str,
-    network: str,
-    addresses: Iterable[str],
+    url: str,
+    sub_req: dict[str, Any],
+    watched: set[str],
+    chain: str,
     on_alert: Any,
-    hashes_only: bool = False,
-    connect: Any = None,
-    max_messages: int | None = None,
+    connect: Any,
+    max_messages: int | None,
 ) -> int:
-    """Open the Alchemy pending-tx websocket, subscribe to the watched
-    addresses, and invoke ``on_alert(PendingFreezeAlert)`` for each hit.
-
-    ``connect`` is an async-context-manager factory (defaults to
-    ``websockets.connect``); inject a fake for testing. ``max_messages`` bounds
-    the read loop (tests / one-shot drains). Returns the number of alerts
-    dispatched. Best-effort: a malformed frame is skipped; the watched address
-    set is sent server-side so only relevant pending txs arrive.
-    """
-    url = alchemy_pending_ws_url(network, api_key)
-    sub_req = build_pending_subscribe_request(addresses, hashes_only=hashes_only)
-    watched = {_ck(a) for a in addresses}
-    chain = (network or "").strip().lower()
-
-    if connect is None:  # pragma: no cover - live transport
-        import websockets
-        connect = websockets.connect
-
+    """One connect → subscribe → read-until-close cycle. Returns the number of
+    alerts dispatched. Propagates any transport error so the caller can decide
+    whether to reconnect."""
     dispatched = 0
     seen = 0
     async with connect(url) as ws:
@@ -266,6 +251,67 @@ async def run_mempool_watch(
             if max_messages is not None and seen >= max_messages:
                 break
     return dispatched
+
+
+async def run_mempool_watch(
+    *,
+    api_key: str,
+    network: str,
+    addresses: Iterable[str],
+    on_alert: Any,
+    hashes_only: bool = False,
+    connect: Any = None,
+    max_messages: int | None = None,
+    reconnect_attempts: int = 0,
+    backoff_sleep: Any = None,
+) -> int:
+    """Open the Alchemy pending-tx websocket, subscribe to the watched
+    addresses, and invoke ``on_alert(PendingFreezeAlert)`` for each hit.
+
+    ``connect`` is an async-context-manager factory (defaults to
+    ``websockets.connect``); inject a fake for testing. ``max_messages`` bounds
+    the read loop (tests / one-shot drains). Returns the number of alerts
+    dispatched.
+
+    Reconnect: a long-lived race watch must survive a dropped socket (a missed
+    pending tx is a missed freeze). On a TRANSPORT ERROR (not a clean close) the
+    loop reconnects + re-subscribes up to ``reconnect_attempts`` times with
+    exponential backoff (capped 30s; ``backoff_sleep`` is injectable for tests).
+    Default 0 ⇒ no reconnect (a clean close always returns — only errors retry),
+    so a one-shot / bounded drain is unchanged. A clean close (server ended the
+    stream / ``max_messages`` reached) always returns without reconnecting.
+    """
+    url = alchemy_pending_ws_url(network, api_key)
+    sub_req = build_pending_subscribe_request(addresses, hashes_only=hashes_only)
+    watched = {_ck(a) for a in addresses}
+    chain = (network or "").strip().lower()
+
+    if connect is None:  # pragma: no cover - live transport
+        import websockets
+        connect = websockets.connect
+    if backoff_sleep is None:  # pragma: no cover - real timer
+        import asyncio
+        backoff_sleep = asyncio.sleep
+
+    dispatched = 0
+    attempt = 0
+    while True:
+        try:
+            dispatched += await _drain_once(
+                url=url, sub_req=sub_req, watched=watched, chain=chain,
+                on_alert=on_alert, connect=connect, max_messages=max_messages,
+            )
+            return dispatched  # clean close — never reconnect on a graceful end
+        except Exception as exc:  # noqa: BLE001 — any transport error is retryable
+            if attempt >= reconnect_attempts:
+                raise
+            attempt += 1
+            wait = min(30.0, 2.0 ** attempt)
+            log.warning(
+                "mempool-watch: connection error (%s); reconnecting %d/%d in "
+                "%.0fs", exc, attempt, reconnect_attempts, wait,
+            )
+            await backoff_sleep(wait)
 
 
 __all__ = (

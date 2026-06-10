@@ -133,8 +133,12 @@ def test_async_count_matches_baseline(parsed):
     # v0.39 (roadmap #5): +1 — monitoring/mempool_watch.run_mempool_watch, the
     # websockets pending-tx subscription loop. AUDITED non-blocking (only awaits
     # ws.send / `async for` + json.loads + a pure classifier; no blocking calls).
-    assert total == 33, (
-        f"async def count drifted to {total} (was 33). Update baseline and "
+    # v0.39 (roadmap #5 reconnect): +1 — monitoring/mempool_watch._drain_once, the
+    # single connect→subscribe→read cycle extracted from run_mempool_watch for the
+    # reconnect loop. Same audited-non-blocking shape (await ws.send / `async for`
+    # + json.loads + pure classifier); same already-allowed module.
+    assert total == 34, (
+        f"async def count drifted to {total} (was 34). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

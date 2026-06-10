@@ -229,6 +229,11 @@ def cli() -> None:
         "--max-messages", type=int, default=None, dest="max_messages",
         help="Stop after N frames (default: run until disconnected).",
     )
+    p_mempool.add_argument(
+        "--reconnect", type=int, default=10, dest="reconnect_attempts",
+        help="Reconnect attempts on a dropped socket (default 10; 0 disables). "
+             "A dropped watch = a missed pending tx = a missed freeze.",
+    )
 
     # ----- send-le-handoff ----- #
     p_le = sub.add_parser(
@@ -988,6 +993,7 @@ def cli() -> None:
                 api_key=key, network=args.network, addresses=addrs,
                 on_alert=_on_pending, hashes_only=args.hashes_only,
                 max_messages=args.max_messages,
+                reconnect_attempts=args.reconnect_attempts,
             ))
         except ValueError as exc:
             print(f"mempool-watch: {exc}")

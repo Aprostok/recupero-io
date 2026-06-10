@@ -127,3 +127,51 @@ async def test_run_mempool_watch_dispatches_only_matches() -> None:
     assert len(got) == 1 and got[0].address == _WATCHED
     # the subscribe request was actually sent on the socket
     assert any("alchemy_pendingTransactions" in s for s in fake.sent)
+
+
+@pytest.mark.asyncio
+async def test_run_mempool_watch_reconnects_on_transport_error() -> None:
+    # A dropped socket (transport error) must reconnect + re-subscribe — a
+    # missed pending tx is a missed freeze. First connect raises; second works.
+    frames = [json.dumps({"method": "eth_subscription", "params": {
+        "subscription": "0xs",
+        "result": {"hash": "0xA", "from": _OTHER, "to": _WATCHED, "value": "0x1"}}})]
+    calls = {"connect": 0}
+    fake = _FakeWS(frames)
+
+    def _connect(url):
+        calls["connect"] += 1
+        if calls["connect"] == 1:
+            raise ConnectionError("simulated drop")
+        return fake
+
+    sleeps: list[float] = []
+
+    async def _no_sleep(s):
+        sleeps.append(s)
+
+    got: list[PendingFreezeAlert] = []
+    n = await run_mempool_watch(
+        api_key="KEY", network="ethereum", addresses=[_WATCHED],
+        on_alert=got.append, connect=_connect, reconnect_attempts=3,
+        backoff_sleep=_no_sleep,
+    )
+    assert n == 1                       # alert dispatched after the reconnect
+    assert calls["connect"] == 2        # reconnected exactly once
+    assert sleeps == [2.0]              # one exponential-backoff wait
+
+
+@pytest.mark.asyncio
+async def test_run_mempool_watch_raises_when_reconnects_exhausted() -> None:
+    def _always_fail(url):
+        raise ConnectionError("down")
+
+    async def _no_sleep(s):
+        pass
+
+    with pytest.raises(ConnectionError):
+        await run_mempool_watch(
+            api_key="KEY", network="ethereum", addresses=[_WATCHED],
+            on_alert=lambda a: None, connect=_always_fail,
+            reconnect_attempts=2, backoff_sleep=_no_sleep,
+        )

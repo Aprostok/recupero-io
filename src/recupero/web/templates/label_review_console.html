@@ -49,6 +49,7 @@
   </div>
 
   <div id="lr-conf-bar" style="margin:.3rem 0 .65rem"></div>
+  <div id="lr-cat-donut" style="margin:.1rem 0 .55rem"></div>
   <div id="cards" class="cards" style="margin-bottom:.8rem"></div>
   <div id="tablewrap"></div>
 
@@ -118,6 +119,27 @@
         { label: "Med conf ("  + nMed  + ")", pct: nMed,  cls: "warn" },
         { label: "Low conf ("  + nLow2 + ")", pct: nLow2, cls: "crit" }
       ].filter(function(s){return s.pct>0;}), { height: 6, showLabels: true });
+    }
+    // Proposed-category donut (real candidate categories)
+    var lrCd = document.getElementById("lr-cat-donut");
+    if (lrCd && window.RC && window.RC.buildDonut && rows.length >= 2) {
+      lrCd.innerHTML = "";
+      var byCat = {};
+      rows.forEach(function(r) {
+        var c = r.proposed_category || "unknown";
+        byCat[c] = (byCat[c] || 0) + 1;
+      });
+      var lrSegs = Object.keys(byCat)
+        .map(function(c) { return { label: c, value: byCat[c], valueLabel: String(byCat[c]) }; })
+        .sort(function(a, b) { return b.value - a.value; })
+        .slice(0, 8);
+      if (lrSegs.length >= 2) {
+        window.RC.buildDonut(lrCd, lrSegs, {
+          size: 104, strokeWidth: 11,
+          centerLabel: rows.length, centerSub: "candidates",
+          title: "Candidates by category"
+        });
+      }
     }
 
     if (!rows.length) { $("tablewrap").innerHTML = '<p class="sub">No candidates for this status.</p>'; return; }

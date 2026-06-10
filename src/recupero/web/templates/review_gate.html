@@ -91,6 +91,8 @@
   </div>
 
   <div class="cards" id="rg-summary" style="display:none;margin-bottom:.8rem"></div>
+  <div id="rg-statusbar" style="margin:.35rem 0 .55rem"></div>
+  <div id="rg-kind-donut" style="margin:.1rem 0 .6rem"></div>
   <div id="queue-container">
     <p class="empty">Paste your admin key and click <strong>Reload queue</strong>.</p>
   </div>
@@ -207,6 +209,38 @@
           '</div><div class="l">Rejected</div></div>';
         sumDiv.style.display = "";
         if (window.RC) window.RC.countUp(sumDiv);
+        // Status distribution bar (real queue statuses)
+        var rgSb = document.getElementById("rg-statusbar");
+        if (rgSb && window.RC && window.RC.buildRiskBar) {
+          rgSb.innerHTML = "";
+          var rgSegs = [
+            { label: "Awaiting (" + nAw  + ")", pct: nAw,  cls: "warn" },
+            { label: "Approved (" + nAp  + ")", pct: nAp,  cls: "ok"   },
+            { label: "Rejected (" + nRej + ")", pct: nRej, cls: "crit" }
+          ].filter(function(s){return s.pct>0;});
+          if (rgSegs.length) window.RC.buildRiskBar(rgSb, rgSegs, { height: 6, showLabels: true });
+        }
+        // Artifact-kind donut (real kinds from the queue)
+        var rgKd = document.getElementById("rg-kind-donut");
+        if (rgKd && window.RC && window.RC.buildDonut && rows.length >= 2) {
+          rgKd.innerHTML = "";
+          var byKind = {};
+          rows.forEach(function(r) {
+            var k = r.artifact_kind || "unknown";
+            byKind[k] = (byKind[k] || 0) + 1;
+          });
+          var kdSegs = Object.keys(byKind)
+            .map(function(k) { return { label: k, value: byKind[k], valueLabel: String(byKind[k]) }; })
+            .sort(function(a, b) { return b.value - a.value; })
+            .slice(0, 8);
+          if (kdSegs.length >= 2) {
+            window.RC.buildDonut(rgKd, kdSegs, {
+              size: 104, strokeWidth: 11,
+              centerLabel: rows.length, centerSub: "briefs",
+              title: "Queue by artifact kind"
+            });
+          }
+        }
       }
 
       container.querySelectorAll("button[data-action]").forEach(btn => {

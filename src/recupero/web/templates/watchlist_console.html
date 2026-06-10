@@ -44,6 +44,7 @@
 
   <div id="wl-riskbar"  style="margin:.4rem 0 .7rem"></div>
   <div id="bal-spark"   style="margin:.1rem 0 .55rem"></div>
+  <div id="wl-donut"    style="margin:.1rem 0 .55rem"></div>
   <div class="cards" id="cards"></div>
   <div id="chipwrap"></div>
   <div id="tablewrap"></div>
@@ -192,6 +193,30 @@
       window.RC.attachSort($("tablewrap"));
       window.RC.attachFilter($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
+    }
+    // Per-chain USD-under-watch donut
+    var wdEl = document.getElementById("wl-donut");
+    if (wdEl && window.RC && window.RC.buildDonut && rows.length >= 2) {
+      wdEl.innerHTML = "";
+      var byChain = {};
+      rows.forEach(function(r) {
+        var ch = (r.chain || "unknown");
+        var bv = parseFloat((r.balance_usd_human || "0").replace(/[^0-9.]/g, "")) || 0;
+        byChain[ch] = (byChain[ch] || 0) + bv;
+      });
+      var wdSegs = Object.keys(byChain)
+        .map(function(ch) { return { label: ch, value: byChain[ch],
+          valueLabel: "$" + Math.round(byChain[ch]).toLocaleString() }; })
+        .sort(function(a, b) { return b.value - a.value; })
+        .slice(0, 8);
+      var wdTotal = wdSegs.reduce(function(a, s) { return a + s.value; }, 0);
+      if (wdTotal > 0 && wdSegs.length >= 2) {
+        window.RC.buildDonut(wdEl, wdSegs, {
+          size: 116, strokeWidth: 13,
+          centerLabel: wdSegs.length, centerSub: "chains",
+          title: "Value under watch by chain"
+        });
+      }
     }
     // Balance distribution sparkline (sorted high-to-low)
     var bsEl = document.getElementById("bal-spark");

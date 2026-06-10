@@ -103,6 +103,24 @@ h2::before {
 .gauge-item .gauge-sub {
   font-size: .55rem; color: var(--ink-faint); text-align: center;
 }
+/* Donut chart -- SVG ring + legend side by side */
+.rc-donut-wrap {
+  display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--hair);
+  border-radius: var(--r); padding: .8rem 1.05rem;
+  box-shadow: var(--shadow-sm); margin: .5rem 0;
+}
+.rc-donut-legend { display: flex; flex-direction: column; gap: .28rem; min-width: 130px; }
+.rc-donut-legend .dl-row {
+  display: flex; align-items: center; gap: .42rem; font-size: .68rem; color: var(--ink-soft);
+}
+.rc-donut-legend .dl-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex: none;
+}
+.rc-donut-legend .dl-val {
+  margin-left: auto; font-family: var(--mono); font-size: .64rem;
+  color: var(--ink-faint); font-weight: 600;
+}
 a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
 
 /* ── Control bar ── */
@@ -1728,6 +1746,83 @@ CONSOLE_JS = r"""
     return row;
   }
 
+
+  // -- buildDonut ------------------------------------------------------------
+  // Animated SVG donut chart with a legend.
+  // el:       target DOM element
+  // segments: [{label, value, color?, valueLabel?}]  value = raw number (shares computed)
+  //           color: CSS color string OR one of ok|warn|crit|accent (palette cycles otherwise)
+  // opts:     { size?, strokeWidth?, centerLabel?, centerSub?, title? }
+  function buildDonut(el, segments, opts) {
+    if (!el || !segments) return null;
+    segments = segments.filter(function(s) { return s && (+s.value || 0) > 0; });
+    if (!segments.length) return null;
+    opts = opts || {};
+    var sz  = opts.size || 120;
+    var sw  = opts.strokeWidth || 14;
+    var pal = ['var(--accent)', 'var(--ok)', 'var(--warn)', 'var(--crit)',
+               '#9d5cff', '#00b4d8', '#f4a261', '#6d6d72'];
+    var named = { ok:'var(--ok)', warn:'var(--warn)', crit:'var(--crit)', accent:'var(--accent)' };
+    var total = segments.reduce(function(a, s) { return a + (+s.value || 0); }, 0);
+    if (total <= 0) return null;
+    if (opts.title) {
+      var hdr = document.createElement('div');
+      hdr.className = 'section-label';
+      hdr.textContent = opts.title;
+      el.appendChild(hdr);
+    }
+    var wrap = document.createElement('div');
+    wrap.className = 'rc-donut-wrap';
+    var r2   = (sz / 2) - (sw / 2) - 1;
+    var circ = 2 * Math.PI * r2;
+    var cx   = sz / 2;
+    var svg  = '<svg width="' + sz + '" height="' + sz + '" viewBox="0 0 ' + sz + ' ' + sz + '" style="flex:none">';
+    svg += '<circle cx="' + cx + '" cy="' + cx + '" r="' + r2 + '" fill="none"'
+        +  ' stroke="var(--hair-strong)" stroke-width="' + sw + '"/>';
+    var offset = 0;
+    segments.forEach(function(s, i) {
+      var frac = (+s.value || 0) / total;
+      var col  = named[s.color] || s.color || pal[i % pal.length];
+      var seg  = Math.max(0, frac * circ - 1.5); // 1.5px gap between segments
+      svg += '<circle class="rc-donut-seg" cx="' + cx + '" cy="' + cx + '" r="' + r2 + '"'
+          +  ' fill="none" stroke="' + col + '" stroke-width="' + sw + '"'
+          +  ' stroke-dasharray="0 ' + circ.toFixed(2) + '"'
+          +  ' data-full="' + seg.toFixed(2) + ' ' + (circ - seg).toFixed(2) + '"'
+          +  ' stroke-dashoffset="' + (-offset).toFixed(2) + '"'
+          +  ' transform="rotate(-90 ' + cx + ' ' + cx + ')"'
+          +  ' style="transition:stroke-dasharray .8s cubic-bezier(.32,.72,0,1)">'
+          +  '<title>' + (s.label || '') + ': ' + Math.round(frac * 100) + '%</title></circle>';
+      offset += frac * circ;
+    });
+    var cLbl = opts.centerLabel != null ? String(opts.centerLabel) : String(segments.length);
+    var cFs  = cLbl.length > 7 ? sz * 0.115 : cLbl.length > 4 ? sz * 0.15 : sz * 0.2;
+    svg += '<text x="' + cx + '" y="' + (cx + (opts.centerSub ? -2 : cFs * 0.35)) + '"'
+        +  ' text-anchor="middle" font-family="var(--mono)" font-weight="700"'
+        +  ' font-size="' + cFs + 'px" fill="var(--ink)">' + cLbl + '</text>';
+    if (opts.centerSub) {
+      svg += '<text x="' + cx + '" y="' + (cx + sz * 0.13) + '" text-anchor="middle"'
+          +  ' font-size="' + (sz * 0.082) + 'px" fill="var(--ink-faint)">' + opts.centerSub + '</text>';
+    }
+    svg += '</svg>';
+    var lgd = '<div class="rc-donut-legend">';
+    segments.forEach(function(s, i) {
+      var frac = (+s.value || 0) / total;
+      var col  = named[s.color] || s.color || pal[i % pal.length];
+      lgd += '<div class="dl-row"><span class="dl-dot" style="background:' + col + '"></span>'
+          +  '<span>' + (s.label || '') + '</span>'
+          +  '<span class="dl-val">' + (s.valueLabel != null ? s.valueLabel : Math.round(frac * 100) + '%') + '</span></div>';
+    });
+    lgd += '</div>';
+    wrap.innerHTML = svg + lgd;
+    el.appendChild(wrap);
+    wrap.querySelectorAll('.rc-donut-seg').forEach(function(seg) {
+      requestAnimationFrame(function() {
+        seg.setAttribute('stroke-dasharray', seg.getAttribute('data-full'));
+      });
+    });
+    return wrap;
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1749,7 +1844,8 @@ CONSOLE_JS = r"""
     buildHeatmap: buildHeatmap,
     attachCopyMono: attachCopyMono,
     buildMiniGauge: buildMiniGauge,
-    buildGaugeRow: buildGaugeRow
+    buildGaugeRow: buildGaugeRow,
+    buildDonut: buildDonut
   };
 })();
 """

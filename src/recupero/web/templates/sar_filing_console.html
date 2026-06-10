@@ -129,6 +129,7 @@
 
     // Subjects table
     html += '<h2>&#128100;&thinsp;Subjects</h2>';
+    html += '<div id="sar-role-bar" style="margin:.15rem 0 .5rem"></div>';
     var subjects = ctx.subjects || [];
     if (!subjects.length) {
       html += '<p class="empty">No subjects derived from this brief.</p>';
@@ -173,6 +174,23 @@
       if (sarCards) { window.RC.countUp(sarCards); window.RC.animateRings(sarCards); }
       var subjTable = document.getElementById("sar-subj-table");
       if (subjTable) { window.RC.staggerRows(subjTable); window.RC.attachSort(subjTable); window.RC.attachFilter(subjTable); }
+      // Subject role distribution risk bar
+      var sarRbEl = document.getElementById("sar-role-bar");
+      if (sarRbEl && window.RC.buildRiskBar && subjects.length > 0) {
+        var nPerp=0, nMule=0, nOther=0;
+        subjects.forEach(function(s) {
+          var ro = (s.role || "").toLowerCase();
+          if (ro.indexOf("perpetrator") >= 0) { nPerp++; }
+          else if (ro.indexOf("mule") >= 0 || ro.indexOf("intermediar") >= 0) { nMule++; }
+          else { nOther++; }
+        });
+        var sarRsegs = [
+          { label: "Perpetrator (" + nPerp  + ")", pct: nPerp,  cls: "crit" },
+          { label: "Mule ("        + nMule  + ")", pct: nMule,  cls: "warn" },
+          { label: "Other ("       + nOther + ")", pct: nOther, cls: "" }
+        ].filter(function(s){return s.pct>0;});
+        if (sarRsegs.length) window.RC.buildRiskBar(sarRbEl, sarRsegs, { height: 7, showLabels: true });
+      }
       var sarTl = document.getElementById("sar-tl");
       if (sarTl && window.RC.buildTimeline && _tlEvs.length > 1) {
         window.RC.buildTimeline(sarTl, _tlEvs, { height: 52 });

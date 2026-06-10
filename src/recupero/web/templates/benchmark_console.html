@@ -75,7 +75,8 @@
     <span id="msg"></span>
   </div>
 
-  <div id="metric-bar" style="margin:.3rem 0 .6rem"></div>
+  <div id="metric-gauges" style="margin:.3rem 0 .2rem"></div>
+  <div id="metric-bar" style="margin:.1rem 0 .4rem"></div>
   <div id="metric-sparkline" style="height:32px;margin:.2rem 0 .7rem"></div>
   <div id="out"></div>
 
@@ -194,6 +195,20 @@
           { label: "F1 "        + (f*100).toFixed(1)+"%", pct: Math.round(f*100),  cls: f>=.7?"ok":f>=.5?"warn":"crit" }
         ];
         window.RC.buildRiskBar(mbarEl, msegs, { height: 7, showLabels: true });
+      }
+      // Animated arc gauge row for Recall / Precision / F1
+      var mgEl = document.getElementById("metric-gauges");
+      if (mgEl && window.RC.buildGaugeRow && typeof score.recall === "number") {
+        var _r=score.recall, _p=score.endpoint_precision, _f=score.f1;
+        var mgMetrics = [
+          { label: "Recall",    value: Math.round(_r*100), color: _r>=.7?"ok":_r>=.5?"warn":"crit",
+            sub: (_r*100).toFixed(1)+"%" },
+          { label: "Precision", value: Math.round(_p*100), color: _p>=.7?"ok":_p>=.5?"warn":"crit",
+            sub: (_p*100).toFixed(1)+"%" },
+          { label: "F1",        value: Math.round(_f*100), color: _f>=.7?"ok":_f>=.5?"warn":"crit",
+            sub: (_f*100).toFixed(1)+"%" }
+        ];
+        window.RC.buildGaugeRow(mgEl, mgMetrics, { size: 52, title: "Accuracy metrics" });
       }
       // Sparkline: [recall, precision, f1] trend
       var spkEl = document.getElementById("metric-sparkline");

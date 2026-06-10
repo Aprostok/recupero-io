@@ -41,6 +41,7 @@
 
   <div class="cards" id="cards"></div>
   <div id="lf-bar" style="margin:-.3rem 0 .8rem"></div>
+  <div id="lf-spark" class="rc-spark-wrap" style="margin:.1rem 0 .5rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -89,10 +90,32 @@
     var frozen = parseUSD(frozenStr), loss = parseUSD(lossStr);
     if (!loss) return '<td class="right rec-cell">&#8212;</td>';
     var pct = Math.min(100, Math.round(frozen / loss * 100));
-    var cls = pct >= 50 ? "" : pct >= 20 ? "warn" : "crit";
-    return '<td class="right rec-cell" style="white-space:nowrap">' +
-      '<span class="rec-bar"><span class="rec-bar-fill ' + cls + '" style="width:' + pct + '%"></span></span>&nbsp;' +
-      pct + '%</td>';
+    var cls = pct >= 50 ? "ok" : pct >= 20 ? "warn" : "crit";
+    var colMap = { ok:"var(--ok)", warn:"var(--warn)", crit:"var(--crit)" };
+    var col = colMap[cls] || "var(--accent)";
+    // Inline SVG mini-gauge arc (animated by animateGauges via rc-gauge-arc)
+    var sz = 36, sw = 3.2;
+    var r2 = (sz / 2) - sw;
+    var circ = 2 * Math.PI * r2;
+    var dashFull = (circ * (pct / 100)).toFixed(2) + " " + circ.toFixed(2);
+    var cx = sz / 2;
+    var gauge =
+      '<svg width="' + sz + '" height="' + sz + '" viewBox="0 0 ' + sz + ' ' + sz + '"' +
+      ' style="display:inline-block;vertical-align:middle;overflow:visible" aria-label="' + pct + '%">' +
+      '<circle cx="' + cx + '" cy="' + cx + '" r="' + r2 + '"' +
+      ' fill="none" stroke="var(--hair-strong)" stroke-width="' + sw + '"/>' +
+      '<circle class="rc-gauge-arc" cx="' + cx + '" cy="' + cx + '" r="' + r2 + '"' +
+      ' fill="none" stroke="' + col + '" stroke-width="' + sw + '"' +
+      ' stroke-linecap="round"' +
+      ' stroke-dasharray="0 ' + circ.toFixed(2) + '"' +
+      ' data-full="' + dashFull + '"' +
+      ' transform="rotate(-90 ' + cx + ' ' + cx + ')"' +
+      ' style="transition:stroke-dasharray .72s cubic-bezier(.32,.72,0,1)"/>' +
+      '<text x="' + cx + '" y="' + (cx + 4) + '" text-anchor="middle"' +
+      ' font-family="var(--mono)" font-size="8.5px" font-weight="700" fill="' + col + '"' +
+      ' style="pointer-events:none">' + pct + '</text>' +
+      '</svg>';
+    return '<td class="right rec-cell" style="vertical-align:middle;padding:.3rem .75rem">' + gauge + '</td>';
   }
 
   function issuersCell(list) {
@@ -186,6 +209,32 @@
       window.RC.attachSort($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
       window.RC.attachFilter($("tablewrap"));
+      // Recovery % sparkline -- sorted best-first
+      var lfSpEl = document.getElementById("lf-spark");
+      if (lfSpEl && window.RC.buildSparkline && rows.length >= 2) {
+        var recPcts = rows
+          .map(function(rr){
+            var fr = parseUSD(rr.total_frozen_usd_human);
+            var lo = parseUSD(rr.total_loss_usd_human);
+            return (lo > 0) ? Math.min(100, Math.round(fr / lo * 100)) : 0;
+          })
+          .filter(function(v){ return v > 0; })
+          .sort(function(a,b){ return b - a; });
+        if (recPcts.length >= 2) {
+          var bestRec = recPcts[0];
+          lfSpEl.title = "Recovery % per firm (\u2193 best first, " + recPcts.length + " firm(s))";
+          window.RC.buildSparkline(lfSpEl, recPcts, {
+            width: lfSpEl.offsetWidth || 480, height: 28, strokeWidth: 1.6,
+            color: bestRec >= 50 ? "var(--ok)" : "var(--warn)",
+            fillColor: bestRec >= 50 ? "rgba(29,138,78,.06)" : "rgba(185,119,14,.06)"
+          });
+          var lfLbl = document.createElement("div");
+          lfLbl.style.cssText = "font-size:.62rem;color:var(--ink-faint);margin-top:2px";
+          lfLbl.textContent = "Recovery % across " + recPcts.length + " firm" +
+            (recPcts.length === 1 ? "" : "s") + " (peak: " + bestRec + "%)";
+          lfSpEl.appendChild(lfLbl);
+        } else { lfSpEl.style.display = "none"; }
+      }
       // Portfolio health risk bar
       var lfBarEl = document.getElementById("lf-bar");
       if (lfBarEl && window.RC.buildRiskBar) {

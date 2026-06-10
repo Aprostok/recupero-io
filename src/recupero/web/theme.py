@@ -66,8 +66,24 @@ body {
 
 /* ── Typography ── */
 h1 { font-size: clamp(1.5rem, 3vw, 1.9rem); font-weight: 700; letter-spacing: -0.025em; margin: 1.6rem 0 .25rem; }
-h2 { font-size: 1.15rem; font-weight: 640; letter-spacing: -0.02em; margin: 1.4rem 0 .5rem; }
+h2 {
+  font-size: 1.15rem; font-weight: 640; letter-spacing: -0.02em; margin: 1.4rem 0 .5rem;
+  display: flex; align-items: center; gap: .45rem;
+}
+h2::before {
+  content: ""; flex-shrink: 0;
+  width: 3px; height: 1.1em; border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--ok) 100%);
+  opacity: .72;
+}
+/* Suppress the accent bar when h2 is inside a section card (which has its own left border) */
+.section h2::before, .panel h2::before { display: none; }
+.section h2 { gap: .35rem; }
 .sub { color: var(--ink-soft); font-size: .85rem; line-height: 1.5; margin: 0 0 1.2rem; max-width: 76ch; }
+.section-label {
+  font-size: .64rem; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--ink-faint); font-weight: 700; margin: 1.1rem 0 .35rem;
+}
 a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
 
 /* ── Control bar ── */
@@ -187,6 +203,8 @@ tr.sev-critical:hover td { background: rgba(215,0,21,.13) !important; }
   tr.sev-critical:hover td { background: rgba(255,69,58,.18) !important; }
 }
 .right { text-align: right; }
+/* Long-text cells: truncate with ellipsis (opt-in via .trunc class) */
+td.trunc { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mono { font-family: var(--mono); font-size: .77rem; word-break: break-all; }
 .action  { color: var(--ink-soft); font-size: .74rem; max-width: 24rem; }
 .msgcell { max-width: 28rem; font-size: .8rem; }
@@ -229,7 +247,10 @@ td.age   { white-space: nowrap; font-size: .76rem; }
 .empty {
   color: var(--ink-faint); font-size: .85rem;
   padding: 2.5rem 1rem; text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: .4rem;
+  opacity: .78;
 }
+.empty::before { content: "\26AA"; font-size: 1.25rem; font-style: normal; opacity: .4; }
 
 /* ── Section rule ── */
 .section-rule {
@@ -1545,6 +1566,74 @@ CONSOLE_JS = r"""
     });
   }
 
+
+  // ── buildMiniGauge ────────────────────────────────────────────────────────
+  // Tiny animated SVG arc gauge for table cells / standalone use.
+  // buildMiniGauge(el, value, opts?)
+  //   value: 0-100 (percentage)
+  //   opts:  { size, strokeWidth, color:'ok'|'warn'|'crit'|'accent', label }
+  // Returns el. Animates via CSS stroke-dasharray transition on mount.
+  function buildMiniGauge(el, value, opts) {
+    if (!el) return null;
+    opts = opts || {};
+    var size  = opts.size        || 40;
+    var sw    = opts.strokeWidth || 4;
+    var val   = Math.max(0, Math.min(100, value == null ? 0 : +value || 0));
+    var colMap = {
+      crit: 'var(--crit)', warn: 'var(--warn)', ok: 'var(--ok)', accent: 'var(--accent)'
+    };
+    var col = colMap[opts.color] ||
+      (val >= 70 ? 'var(--ok)' : val >= 40 ? 'var(--warn)' : 'var(--crit)');
+    var r    = (size / 2) - sw;
+    var circ = 2 * Math.PI * r;
+    var pct0 = circ * 0 + ' ' + circ;      // Start collapsed for animation
+    var pct1 = circ * (val / 100) + ' ' + circ;
+    var cx   = size / 2, cy = size / 2;
+    var svg  =
+      '<svg width="' + size + '" height="' + size + '"' +
+      ' viewBox="0 0 ' + size + ' ' + size + '"' +
+      ' style="display:block;overflow:visible" aria-label="' + Math.round(val) + '%">' +
+      // Track
+      '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '"' +
+      ' fill="none" stroke="var(--hair-strong)" stroke-width="' + sw + '"/>' +
+      // Filled arc (starts from 12 o-clock via rotate(-90))
+      '<circle class="rc-gauge-arc" cx="' + cx + '" cy="' + cy + '" r="' + r + '"' +
+      ' fill="none" stroke="' + col + '" stroke-width="' + sw + '"' +
+      ' stroke-linecap="round"' +
+      ' stroke-dasharray="' + pct0 + '"' +
+      ' data-full="' + pct1 + '"' +
+      ' transform="rotate(-90 ' + cx + ' ' + cy + ')"' +
+      ' style="transition:stroke-dasharray .72s cubic-bezier(.32,.72,0,1)"/>';
+    if (opts.label !== false) {
+      svg += '<text x="' + cx + '" y="' + (cy + size * 0.12) + '"' +
+        ' text-anchor="middle" font-family="var(--mono)"' +
+        ' font-size="' + (size * 0.265) + 'px" font-weight="700" fill="' + col + '">' +
+        Math.round(val) + '</text>';
+    }
+    svg += '</svg>';
+    el.innerHTML = svg;
+    // Trigger animation on next frame
+    var arc = el.querySelector('.rc-gauge-arc');
+    if (arc) {
+      requestAnimationFrame(function() {
+        arc.setAttribute('stroke-dasharray', arc.getAttribute('data-full'));
+      });
+    }
+    return el;
+  }
+
+  // animateGauges override: also animate rc-gauge-arc elements
+  var _origAnimateGauges = animateGauges;
+  animateGauges = function(root) {
+    _origAnimateGauges(root);
+    (root || document).querySelectorAll('.rc-gauge-arc').forEach(function(arc) {
+      var full = arc.getAttribute('data-full');
+      if (full && arc.getAttribute('stroke-dasharray') !== full) {
+        requestAnimationFrame(function() { arc.setAttribute('stroke-dasharray', full); });
+      }
+    });
+  };
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1564,7 +1653,8 @@ CONSOLE_JS = r"""
     buildTimeline: buildTimeline,
     buildRiskBar: buildRiskBar,
     buildHeatmap: buildHeatmap,
-    attachCopyMono: attachCopyMono
+    attachCopyMono: attachCopyMono,
+    buildMiniGauge: buildMiniGauge
   };
 })();
 """

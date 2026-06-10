@@ -643,6 +643,54 @@ def _maybe_write_demix_leads(
         log.warning("demix: lead generation failed (non-fatal): %s", exc)
 
 
+def _maybe_write_nft_flows(
+    case: Case,
+    case_dir: Path,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+) -> None:
+    """Observed-NFT-flow artifact over the finished trace (roadmap-v4 #6 A).
+
+    Opt-in via ``RECUPERO_NFT_FLOWS`` (default OFF → zero cost, no adapter).
+    When on, each traced wallet's ERC-721/1155 transfers are fetched and
+    written to ``nft_flows.json`` (uploaded with the case) so NFT-sale
+    laundering / mint-and-flip moves stop vanishing from the case record.
+    OBSERVATIONS only — no value claims, no followed recipients, recoverable
+    total untouched. Best-effort: never blocks the trace pipeline.
+    """
+    from recupero.trace.nft_runner import nft_flows_enabled
+
+    if not nft_flows_enabled():
+        return  # default off → zero cost
+    try:
+        from recupero._common import atomic_write_text
+        from recupero.chains.base import ChainAdapter
+        from recupero.trace.nft_runner import collect_nft_flows, flows_to_json
+
+        adapter = ChainAdapter.for_chain(case.chain, (config, env))
+        try:
+            flows = collect_nft_flows(
+                transfers=case.transfers,
+                adapter=adapter,
+                chain=case.chain.value,
+            )
+        finally:
+            adapter.close()
+        if not flows:
+            return
+        doc = flows_to_json(flows)
+        atomic_write_text(
+            case_dir / "nft_flows.json",
+            json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False),
+        )
+        log.info(
+            "nft-flows: wrote nft_flows.json (%d flow(s)) for case %s",
+            len(flows), getattr(case, "case_id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort, never block the trace
+        log.warning("nft-flows: collection failed (non-fatal): %s", exc)
+
+
 def _stage_trace(
     inv: Investigation,
     case_id_str: str,
@@ -713,6 +761,12 @@ def _stage_trace(
     # withdrawal candidates ride along for a reviewer to triage into subpoena
     # targets. Best-effort: never blocks the trace pipeline.
     _maybe_write_demix_leads(case, case_dir, config, env)
+
+    # roadmap-v4 #6 (phase A): observed-NFT-flow artifact. Gated by
+    # RECUPERO_NFT_FLOWS (default off = zero cost); on means each traced
+    # wallet's ERC-721/1155 transfers ride along as nft_flows.json —
+    # observations only, no value claims, recoverable total untouched.
+    _maybe_write_nft_flows(case, case_dir, config, env)
 
     local_store.write_case(case)
     upload_case_dir(case_dir, bucket)

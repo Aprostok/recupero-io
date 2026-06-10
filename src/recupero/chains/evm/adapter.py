@@ -626,6 +626,44 @@ class EvmAdapter(ChainAdapter):
             return []
         return [lg for lg in result if isinstance(lg, dict)]
 
+    def fetch_nft_transfers_raw(
+        self,
+        address: str,
+        chain: str,  # noqa: ARG002 — the client is already chain-bound (chainid)
+        start_block: int,
+        end_block: int = 99_999_999,
+        *,
+        max_results: int | None = 500,
+    ) -> list[dict[str, Any]]:
+        """Raw ERC-721 + ERC-1155 transfer rows for ``address`` (both
+        directions), for ``trace.nft_transfers.fetch_nft_transfers``.
+
+        Endpoint knowledge lives HERE: Etherscan's token1155tx rows carry no
+        ``category`` field and put the transfer quantity in ``tokenValue``
+        (both LIVE-VERIFIED 2026-06), so rows from that endpoint are tagged
+        ``category="erc1155"`` before handoff to the chain-agnostic parser;
+        tokennfttx rows are ERC-721 by endpoint contract (the parser's
+        default). Best-effort: a backing client without the NFT endpoints
+        (or any fetch error) yields ``[]``.
+        """
+        addr = to_checksum_address(address)
+        out: list[dict[str, Any]] = []
+        get721 = getattr(self.client, "get_nft_transfers", None)
+        if callable(get721):
+            out.extend(get721(
+                addr, start_block=start_block, end_block=end_block,
+                max_results=max_results,
+            ))
+        get1155 = getattr(self.client, "get_erc1155_transfers", None)
+        if callable(get1155):
+            for row in get1155(
+                addr, start_block=start_block, end_block=end_block,
+                max_results=max_results,
+            ):
+                if isinstance(row, dict):
+                    out.append({**row, "category": "erc1155"})
+        return out
+
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
         raw_tx = self.client.get_transaction_by_hash(tx_hash)
         raw_receipt = self.client.get_transaction_receipt(tx_hash)

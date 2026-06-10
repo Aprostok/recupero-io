@@ -339,6 +339,48 @@ class EtherscanClient:
             max_results=max_results,
         )
 
+    def get_nft_transfers(
+        self, address: str, start_block: int, end_block: int = 99_999_999,
+        page: int = 1, offset: int = 1000,
+        *, max_results: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Module=account, action=tokennfttx (ERC-721 transfers).
+
+        Row shape LIVE-VERIFIED against api.etherscan.io v2 (2026-06): rows
+        carry ``from``/``to``/``hash``/``contractAddress``/``tokenID``/
+        ``timeStamp``/``tokenName`` — no ``category`` field (the endpoint is
+        ERC-721-only by contract)."""
+        return self._paginate_account_action(
+            action="tokennfttx",
+            address=address,
+            start_block=start_block,
+            end_block=end_block,
+            page=page,
+            offset=offset,
+            max_results=max_results,
+        )
+
+    def get_erc1155_transfers(
+        self, address: str, start_block: int, end_block: int = 99_999_999,
+        page: int = 1, offset: int = 1000,
+        *, max_results: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Module=account, action=token1155tx (ERC-1155 transfers).
+
+        Row shape LIVE-VERIFIED against api.etherscan.io v2 (2026-06): same
+        fields as tokennfttx plus ``tokenValue`` (the transfer QUANTITY — not
+        ``value``), and again no ``category`` field; callers must tag rows
+        from this endpoint as erc1155 themselves."""
+        return self._paginate_account_action(
+            action="token1155tx",
+            address=address,
+            start_block=start_block,
+            end_block=end_block,
+            page=page,
+            offset=offset,
+            max_results=max_results,
+        )
+
     def get_transaction_by_hash(self, tx_hash: str) -> dict[str, Any]:
         data = self._call(module="proxy", action="eth_getTransactionByHash", txhash=tx_hash)
         return data.get("result") or {}

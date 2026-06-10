@@ -101,6 +101,20 @@ def render_trace_report(
         except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
             log.debug("trace report: demix_leads load skipped: %s", _exc)
 
+        # roadmap-v4 #6 (phase A): observed NFT flows, same gated-artifact
+        # pattern — nft_flows.json exists only when RECUPERO_NFT_FLOWS was on
+        # for the trace; absent file → no section, byte-identical output.
+        nft_flows = None
+        try:
+            import json as _json
+            _nft_path = briefs_dir.parent / "nft_flows.json"
+            if _nft_path.is_file():
+                _doc = _json.loads(_nft_path.read_text(encoding="utf-8-sig"))
+                if isinstance(_doc, dict) and _doc.get("flows"):
+                    nft_flows = _doc
+        except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
+            log.debug("trace report: nft_flows load skipped: %s", _exc)
+
         ctx = _build_context(
             case=case,
             freeze_brief=freeze_brief,
@@ -108,6 +122,7 @@ def render_trace_report(
             investigation_id=investigation_id or case.case_id,
             label=label,
             demix_leads=demix_leads,
+            nft_flows=nft_flows,
         )
 
         env = Environment(
@@ -140,6 +155,7 @@ def _build_context(
     investigation_id: str,
     label: str | None,
     demix_leads: dict[str, Any] | None = None,
+    nft_flows: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     chain_str = case.chain.value
     # v0.16.10 (round-9 output LOW): include explicit "Z" UTC suffix.
@@ -210,6 +226,10 @@ def _build_context(
         # to a provably-unspendable address). None when the trace has none, so
         # the StrictUndefined template `{% if burn_sinks %}` omits the section.
         "burn_sinks": _build_burn_sinks(case),
+        # roadmap-v4 #6 (phase A) — observed NFT flows (None unless
+        # RECUPERO_NFT_FLOWS produced an nft_flows.json for this case).
+        # Always present so StrictUndefined can `{% if nft_flows %}`.
+        "nft_flows": nft_flows,
     }
 
 

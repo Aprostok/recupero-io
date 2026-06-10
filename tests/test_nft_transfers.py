@@ -192,3 +192,95 @@ def test_etherscan_shape_works() -> None:
     assert out[0].token_id == "99"
     assert out[0].token_standard == "erc721"
     assert out[0].block_time == 1716000123
+
+
+# ---- roadmap-v4 #6: LIVE-VERIFIED Etherscan v2 shapes (2026-06) ----------
+
+
+def test_etherscan_token1155tx_shape_tokenvalue_and_category_tag() -> None:
+    """A REAL token1155tx row (live-verified 2026-06): quantity rides in
+    ``tokenValue`` (not ``value``), the token id is ``tokenID`` (Etherscan
+    casing), and the row has no category field — the EVM adapter tags it
+    erc1155 by endpoint. Without the tag + tokenValue support this row was
+    misclassified erc721 with qty=1."""
+    rows = [
+        {
+            # trimmed real row from api.etherscan.io v2 token1155tx
+            "blockNumber": "8404139",
+            "timeStamp": "1566531158",
+            "hash": "0x01e854b967d76d383e3ccaaa5d5e79c5f4a234f3ddcfe4b0070e818b1bb5df60",
+            "contractAddress": "0xfaafdc07907ff5120a76b34b731b278c38d6043c",
+            "from": "0xaaa40c2180b84db849ade830806b4a3576926094",
+            "to": "0xd387a6e4e84a6c86bd90c158c6028a58cc8ac459",
+            "tokenID": "50885195465617476130364524454612758401242002731102529075193460287108347330626",
+            "tokenValue": "3",
+            "tokenName": "Enjin",
+            "category": "erc1155",  # the adapter's per-endpoint tag
+        }
+    ]
+    out = fetch_nft_transfers("0xABCD", "ethereum", 1, 100, _StubAdapter(rows))
+    assert len(out) == 1
+    t = out[0]
+    assert t.token_standard == "erc1155"
+    assert t.value_count == 3                       # tokenValue, NOT default 1
+    assert t.token_id.endswith("347330626")         # huge id kept as str
+    assert t.collection_name == "Enjin"
+    assert t.block_time == 1566531158
+
+
+def test_etherscan_tokennfttx_real_row_collection_name() -> None:
+    """A REAL tokennfttx row (live-verified 2026-06) parses as erc721 and
+    carries the display-only collection name."""
+    rows = [
+        {
+            "blockNumber": "4684994",
+            "timeStamp": "1512559743",
+            "hash": "0x46bfbac4aab21f6c557952b529bb9de1ef2ae75f7d9453b4f5354a8b614e5e40",
+            "from": "0x0d41f957181e584db82d2e316837b2de1738c477",
+            "contractAddress": "0x06012c8cf97bead5deae237070f9587f8e7a266d",
+            "to": "0xd387a6e4e84a6c86bd90c158c6028a58cc8ac459",
+            "tokenID": "109130",
+            "tokenName": "CryptoKitties",
+        }
+    ]
+    out = fetch_nft_transfers("0xABCD", "ethereum", 1, 100, _StubAdapter(rows))
+    assert len(out) == 1
+    t = out[0]
+    assert t.token_standard == "erc721"
+    assert t.token_id == "109130"
+    assert t.value_count == 1
+    assert t.collection_name == "CryptoKitties"
+
+
+def test_adapter_tags_erc1155_rows(monkeypatch) -> None:
+    """EvmAdapter.fetch_nft_transfers_raw tags token1155tx rows with
+    category=erc1155 and leaves tokennfttx rows untagged (erc721 default)."""
+    from recupero.chains.evm.adapter import EvmAdapter
+
+    class _Client:
+        def get_nft_transfers(self, addr, *, start_block, end_block, max_results):
+            return [{"hash": "0x721", "from": "0xa", "to": "0xb"}]
+
+        def get_erc1155_transfers(self, addr, *, start_block, end_block, max_results):
+            return [{"hash": "0x1155", "from": "0xa", "to": "0xb"}]
+
+    adapter = EvmAdapter.__new__(EvmAdapter)  # no network ctor
+    adapter.client = _Client()
+    rows = adapter.fetch_nft_transfers_raw(
+        "0x" + "ab" * 20, "ethereum", 0, 99_999_999,
+    )
+    by_hash = {r["hash"]: r for r in rows}
+    assert "category" not in by_hash["0x721"]
+    assert by_hash["0x1155"]["category"] == "erc1155"
+
+
+def test_adapter_without_nft_endpoints_yields_empty() -> None:
+    """A backing client lacking the NFT endpoints (e.g. a bare Alchemy-only
+    client) degrades to [] instead of raising."""
+    from recupero.chains.evm.adapter import EvmAdapter
+
+    adapter = EvmAdapter.__new__(EvmAdapter)
+    adapter.client = object()
+    assert adapter.fetch_nft_transfers_raw(
+        "0x" + "ab" * 20, "ethereum", 0,
+    ) == []

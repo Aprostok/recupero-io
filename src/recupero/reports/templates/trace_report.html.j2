@@ -503,6 +503,42 @@ notification).</p>
 </table>
 {% endif %}
 
+{% if nft_flows %}
+<h2>10. Observed NFT Transfers</h2>
+<p class="small"><em>On-chain ERC-721 / ERC-1155 transfers involving traced
+   wallets &mdash; OBSERVATIONS only. NFT-sale laundering and mint-and-flip
+   moves are listed so they do not silently vanish from the case record; no
+   USD value is claimed unless the data provider supplied one, NFT recipients
+   are NOT followed, and the recoverable total is unchanged. Matching an NFT
+   exit to its marketplace-sale proceeds requires separate manual review.</em></p>
+<table>
+  <thead>
+    <tr>
+      <th>Traced wallet</th>
+      <th>Dir</th>
+      <th>Counterparty</th>
+      <th>Collection / contract</th>
+      <th>Token</th>
+      <th>Std</th>
+      <th>Qty</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for f in nft_flows.flows %}
+    <tr>
+      <td class="mono">{{ f.traced_wallet | short_address(prefix=10, suffix=4) }}</td>
+      <td>{{ f.direction }}</td>
+      <td class="mono">{{ f.counterparty | short_address(prefix=10, suffix=4) }}</td>
+      <td>{% if f.collection_name %}{{ f.collection_name }}<br/>{% endif %}<span class="mono small">{{ f.contract_address | short_address(prefix=10, suffix=4) }}</span></td>
+      <td class="mono">#{{ f.token_id | truncate(16, True, '…') }}</td>
+      <td>{{ f.token_standard }}</td>
+      <td>{{ f.value_count }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>
   <div class="footer-meta">

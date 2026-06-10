@@ -47,6 +47,10 @@ class NFTTransfer:
     value_count: int  # ERC-1155 quantity; 1 for ERC-721.
     block_time: int | None
     value_at_transfer_usd: Decimal | None
+    # Collection display name when the provider supplies one (Etherscan's
+    # ``tokenName``, e.g. "CryptoKitties"). Display-only — never used for
+    # identity or value claims (an attacker controls their token's name).
+    collection_name: str | None = None
 
 
 def _canon_addr(addr: Any) -> str:
@@ -184,6 +188,10 @@ def _parse_one_row(row: dict[str, Any]) -> list[NFTTransfer]:
 
     usd = _to_decimal(row.get("valueAtTransferUsd"))
 
+    # Collection display name (Etherscan tokenName) — display-only.
+    name_raw = row.get("tokenName")
+    collection = name_raw.strip() if isinstance(name_raw, str) and name_raw.strip() else None
+
     out: list[NFTTransfer] = []
 
     if category == "erc1155":
@@ -219,15 +227,22 @@ def _parse_one_row(row: dict[str, Any]) -> list[NFTTransfer]:
                         value_count=qty,
                         block_time=block_time,
                         value_at_transfer_usd=usd,
+                        collection_name=collection,
                     )
                 )
             return out
         # Non-batch ERC-1155 single transfer.
-        tid = _normalize_token_id(row.get("tokenId"))
+        # Token id: Alchemy uses ``tokenId``; Etherscan token1155tx uses
+        # ``tokenID`` (LIVE-VERIFIED 2026-06, same casing as tokennfttx).
+        tid = _normalize_token_id(row.get("tokenId") or row.get("tokenID"))
         if tid is None:
             log.debug("nft_transfers: ERC-1155 single missing tokenId, skipping")
             return []
-        qty = _to_int(row.get("value")) or 1
+        # Quantity: Etherscan's token1155tx puts it in ``tokenValue``
+        # (LIVE-VERIFIED 2026-06); Alchemy-shaped rows use ``value``.
+        qty = _to_int(row.get("tokenValue"))
+        if qty is None:
+            qty = _to_int(row.get("value")) or 1
         if qty < 1:
             qty = 1
         out.append(
@@ -241,6 +256,7 @@ def _parse_one_row(row: dict[str, Any]) -> list[NFTTransfer]:
                 value_count=qty,
                 block_time=block_time,
                 value_at_transfer_usd=usd,
+                collection_name=collection,
             )
         )
         return out
@@ -261,6 +277,7 @@ def _parse_one_row(row: dict[str, Any]) -> list[NFTTransfer]:
             value_count=1,
             block_time=block_time,
             value_at_transfer_usd=usd,
+            collection_name=collection,
         )
     )
     return out

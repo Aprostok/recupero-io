@@ -46,8 +46,10 @@
     <span id="msg"></span>
   </div>
 
+  <div id="cron-riskbar"  style="margin:.4rem 0 .7rem"></div>
   <div class="cards" id="cards"></div>
   <div id="health-strip" class="health-strip"></div>
+  <div id="cron-timeline" style="margin:.3rem 0 .65rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -97,6 +99,15 @@
       card(nOk, "Healthy", nOk && !nDown ? "ok" : "") +
       card(nStale, "Stale", nStale ? "alert" : "") +
       card(nDown, "Down", nDown ? "alert" : "");
+    // Job health risk bar
+    var cronRbEl = document.getElementById("cron-riskbar");
+    if (cronRbEl && window.RC && window.RC.buildRiskBar && names.length > 0) {
+      window.RC.buildRiskBar(cronRbEl, [
+        { label: "Down ("    + nDown  + ")", pct: nDown,  cls: "crit" },
+        { label: "Stale ("   + nStale + ")", pct: nStale, cls: "warn" },
+        { label: "Healthy (" + nOk    + ")", pct: nOk,    cls: "ok"   }
+      ].filter(function(s){return s.pct>0;}), { height: 7, showLabels: true });
+    }
 
     // Health overview strip
     var hs = $("health-strip");
@@ -147,6 +158,18 @@
       window.RC.attachFilter($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
       window.RC.countUp($("cards"));
+      // Job status timeline
+      var cronTlEl = document.getElementById("cron-timeline");
+      if (cronTlEl && window.RC.buildTimeline && names.length > 1) {
+        var tlJobs = names.slice(0, 14).map(function(n) {
+          var st = (jobs[n] && jobs[n].status) || "ok";
+          return {
+            label: n.replace(/_/g, " ").slice(0, 12),
+            type: st === "ok" ? "ok" : st === "stale" ? "warn" : "crit"
+          };
+        });
+        window.RC.buildTimeline(cronTlEl, tlJobs, { height: 50 });
+      }
     }
   }
 

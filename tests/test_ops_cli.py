@@ -260,6 +260,83 @@ def test_send_freeze_letters_issuer_filter_no_match_returns_1() -> None:
     assert result == 1
 
 
+# ---- roadmap-v4 #1: verified freeze-contacts reach the dispatch plan ---- #
+
+
+def _stub_dispatch_helpers(monkeypatch) -> None:
+    """Stub the bucket / idempotency / cooperation-intel side effects so
+    ``_build_dispatch_plan`` exercises only the verified-contact resolution."""
+    from recupero.ops.commands import send_freeze_letters as sfl
+    monkeypatch.setattr(sfl, "_list_bucket_briefs",
+                        lambda *, investigation_id: [])
+    monkeypatch.setattr(sfl, "_find_latest_brief",
+                        lambda files, *, slug: f"freeze_request_{slug}_x.html")
+    monkeypatch.setattr(sfl, "_already_sent_to", lambda **k: False)
+    # cooperation-intel annotation must not hit a DB in the unit test
+    monkeypatch.setattr(
+        "recupero.monitoring.cooperation_intelligence.build_all_profiles",
+        lambda dsn: {},
+    )
+
+
+def test_dispatch_plan_routes_portal_only_verified_to_portal(monkeypatch, capsys) -> None:
+    """A portal-only VERIFIED major (Binance: compliance_email=null, verified
+    Kodex LE portal) must NOT be silently SKIPPED for "missing contact" and must
+    NOT be emailed at the unverified compliance@ guess — it routes to a manual
+    portal-submission prompt and produces NO emailable plan entry."""
+    from recupero.ops.commands import send_freeze_letters as sfl
+    _stub_dispatch_helpers(monkeypatch)
+    freezable = [
+        {"issuer": "Binance", "token": "USDT", "total_usd": "$5000",
+         "contact_email": "compliance@binance.com"},  # an UNVERIFIED guess
+    ]
+    plan = sfl._build_dispatch_plan(
+        investigation_id=uuid4(), freezable=freezable, dsn="fake-dsn",
+    )
+    assert plan == []                                   # not emailable → no entry
+    out = capsys.readouterr().out
+    assert "PORTAL" in out and "Binance" in out
+    assert "kodexglobal" in out                         # verified portal URL surfaced
+    # the unverified guess was NOT turned into a dispatch
+    assert "compliance@binance.com" not in str(plan)
+
+
+def test_dispatch_plan_prefers_verified_email_over_unverified_guess(monkeypatch) -> None:
+    """Coinbase has a VERIFIED LE email (subpoenas@coinbase.com); it REPLACES the
+    brief's unverified compliance@ guess in the dispatch plan, and the entry is
+    flagged verified_channel=True."""
+    from recupero.ops.commands import send_freeze_letters as sfl
+    _stub_dispatch_helpers(monkeypatch)
+    freezable = [
+        {"issuer": "Coinbase", "token": "USDC", "total_usd": "$9000",
+         "contact_email": "compliance@coinbase.com"},  # an UNVERIFIED guess
+    ]
+    plan = sfl._build_dispatch_plan(
+        investigation_id=uuid4(), freezable=freezable, dsn="fake-dsn",
+    )
+    assert len(plan) == 1
+    assert plan[0]["contact_email"] == "subpoenas@coinbase.com"  # verified wins
+    assert plan[0]["verified_channel"] is True
+
+
+def test_dispatch_plan_keeps_brief_contact_when_no_verified_override(monkeypatch) -> None:
+    """An issuer with no verified override keeps the brief's contact (the existing
+    unverified-fallback behavior, unchanged) and is flagged verified_channel=False
+    so it is never presented as authoritative."""
+    from recupero.ops.commands import send_freeze_letters as sfl
+    _stub_dispatch_helpers(monkeypatch)
+    freezable = [
+        {"issuer": "Totally Unknown Exchange ZZZ", "token": "USDT",
+         "total_usd": "$1000", "contact_email": "ops@unknown-zzz.example"},
+    ]
+    plan = sfl._build_dispatch_plan(
+        investigation_id=uuid4(), freezable=freezable, dsn="fake-dsn",
+    )
+    assert len(plan) == 1
+    assert plan[0]["contact_email"] == "ops@unknown-zzz.example"
+    assert plan[0]["verified_channel"] is False
+
+
 # ---- followup-now command ---- #
 
 

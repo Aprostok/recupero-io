@@ -357,15 +357,45 @@ def _build_dispatch_plan(
     bucket_files = _list_bucket_briefs(investigation_id=investigation_id)
     plan: list[dict[str, Any]] = []
     skip_count = 0
+    portal_count = 0
 
     for entry in freezable:
         issuer = entry.get("issuer")
         contact = entry.get("contact_email")
         token = entry.get("token", "?")
         total = entry.get("total_usd", "$0")
+
+        # roadmap-v4 #1: prefer the VERIFIED freeze-contact channel over the
+        # issuer-DB's unverified compliance@<exchange> guess. Two effects:
+        #   * a verified LE email REPLACES the guess (don't send to a pattern);
+        #   * a portal-only major (Binance/Coinbase/Crypto.com — verified Kodex
+        #     LE portal, no email) used to SKIP for "missing contact_email";
+        #     instead surface a manual-portal submission so the verified channel
+        #     is acted on. We do NOT email an unverified guess for an exchange
+        #     whose verified channel is a portal.
+        verified_channel = False
+        if issuer:
+            from recupero.freeze.exchange_contacts import (
+                resolve_exchange_freeze_contact,
+            )
+            _vc = resolve_exchange_freeze_contact(issuer)
+            if _vc is not None and _vc.verified:
+                if _vc.compliance_email:
+                    contact = _vc.compliance_email
+                    verified_channel = True
+                elif _vc.le_portal_url:
+                    print(
+                        f"  PORTAL  {issuer}: verified LE channel is a PORTAL "
+                        f"({_vc.le_portal_url}) — not auto-emailable. Submit the "
+                        "rendered freeze letter via the portal (agency login "
+                        "required)."
+                    )
+                    portal_count += 1
+                    continue
+
         if not issuer or not contact:
-            print(f"  SKIP  {issuer or '(no issuer)'}: missing contact_email "
-                  "(was not in the freeze_brief)")
+            print(f"  SKIP  {issuer or '(no issuer)'}: no verified channel and "
+                  "no contact_email in the freeze_brief")
             continue
 
         # Per-issuer-per-investigation-per-recipient idempotency check
@@ -393,10 +423,14 @@ def _build_dispatch_plan(
             "total_usd": total,
             "contact_email": contact,
             "letter_filename": latest,
+            "verified_channel": verified_channel,
         })
 
     if skip_count:
         print(f"({skip_count} issuer(s) skipped — already sent)")
+    if portal_count:
+        print(f"({portal_count} issuer(s) routed to a manual LE portal — "
+              "submit the rendered letter via the portal, not email)")
 
     # v0.39 (roadmap #4): annotate each entry with the cooperation-driven
     # recommended legal instrument so a known black-hole / OFAC-exposed /

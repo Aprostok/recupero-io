@@ -34,6 +34,7 @@
   </div>
 
   <div class="cards" id="cards"></div>
+  <div id="coop-donut" style="margin:.1rem 0 .55rem"></div>
   <div id="coop-heatmap" style="margin:.3rem 0 .8rem;overflow:hidden"></div>
   <div id="tablewrap"></div>
 
@@ -152,6 +153,28 @@
         ].filter(function(s){return s.pct>0;}), {height:7});
         $("tablewrap").insertBefore(barEl, $("tablewrap").firstChild);
       })();
+    }
+    // Freeze letters per issuer donut (real letter counts)
+    var cdEl = document.getElementById("coop-donut");
+    if (cdEl && window.RC && window.RC.buildDonut && rows.length >= 2) {
+      cdEl.innerHTML = "";
+      var cdSegs = rows.slice()
+        .filter(function(r) { return (r.n_letters_sent || 0) > 0; })
+        .sort(function(a, b) { return (b.n_letters_sent||0) - (a.n_letters_sent||0); })
+        .slice(0, 8)
+        .map(function(r) {
+          return { label: r.issuer || "?", value: r.n_letters_sent || 0,
+                   valueLabel: String(r.n_letters_sent || 0),
+                   color: r.is_black_hole ? "crit" : undefined };
+        });
+      var cdTotal = cdSegs.reduce(function(a, s) { return a + s.value; }, 0);
+      if (cdTotal > 0 && cdSegs.length >= 2) {
+        window.RC.buildDonut(cdEl, cdSegs, {
+          size: 112, strokeWidth: 12,
+          centerLabel: cdTotal, centerSub: "letters",
+          title: "Freeze letters by issuer"
+        });
+      }
     }
     // Issuer non-cooperation heatmap (high value = worse)
     var hmCoop = document.getElementById("coop-heatmap");

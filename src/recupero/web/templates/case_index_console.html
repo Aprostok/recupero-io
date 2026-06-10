@@ -127,6 +127,7 @@
         <span class="rc-filter-count" id="case-count"></span>
       </div>
       <div id="ci-riskbar" style="margin:.2rem 0 .55rem;min-height:0"></div>
+  <div id="ci-donut" style="margin:.1rem 0 .5rem"></div>
       <div id="cases"><div class="empty">Enter the key and Load.</div></div>
     </div>
     <div class="col">
@@ -234,6 +235,28 @@
         { label: "Partial ("   + nPart + ")", pct: nPart, cls: "warn" },
         { label: "No outputs ("+ nNone + ")", pct: nNone, cls: "crit" }
       ].filter(function(s){return s.pct>0;}), { height: 6, showLabels: true });
+    }
+    // Per-deliverable coverage donut (how many cases have each output)
+    var ciDn = document.getElementById("ci-donut");
+    if (ciDn && window.RC && window.RC.buildDonut && rows.length >= 2) {
+      ciDn.innerHTML = "";
+      var nBrief = rows.filter(function(rr){ return rr.has_brief; }).length;
+      var nTri   = rows.filter(function(rr){ return rr.has_ai_triage; }).length;
+      var nExh   = rows.filter(function(rr){ return rr.has_exhibit_pack; }).length;
+      var nGra   = rows.filter(function(rr){ return rr.has_graph; }).length;
+      var ciSegs = [
+        { label: "Brief",        value: nBrief, valueLabel: nBrief + "/" + rows.length, color: "accent" },
+        { label: "AI triage",    value: nTri,   valueLabel: nTri   + "/" + rows.length, color: "ok"     },
+        { label: "Exhibit pack", value: nExh,   valueLabel: nExh   + "/" + rows.length, color: "warn"   },
+        { label: "Graph",        value: nGra,   valueLabel: nGra   + "/" + rows.length, color: "#9d5cff" }
+      ];
+      if (ciSegs.some(function(s){ return s.value > 0; })) {
+        window.RC.buildDonut(ciDn, ciSegs, {
+          size: 100, strokeWidth: 11,
+          centerLabel: rows.length, centerSub: "cases",
+          title: "Deliverable coverage"
+        });
+      }
     }
   }
 

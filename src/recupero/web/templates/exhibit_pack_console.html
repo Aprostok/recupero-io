@@ -30,6 +30,7 @@
 
   <div id="ep-timeline" style="margin:.3rem 0 .65rem"></div>
   <div id="ep-spark"    style="margin:.1rem 0 .55rem"></div>
+  <div id="ep-bars"     style="margin:.1rem 0 .55rem"></div>
   <div class="cards" id="cards"></div>
   <div id="tablewrap"></div>
 
@@ -98,6 +99,24 @@
           return { label: (e.exhibit_label || "").replace("Exhibit ", ""), type: "ok" };
         });
         window.RC.buildTimeline(epTl, tlEvs, { height: 46 });
+      }
+      // Largest exhibits bar chart (real size_bytes + size_human)
+      var epBars = document.getElementById("ep-bars");
+      if (epBars && window.RC.buildBarChart && entries.length >= 2) {
+        epBars.innerHTML = "";
+        var epItems = entries.slice()
+          .filter(function(e2) { return (e2.size_bytes || 0) > 0; })
+          .sort(function(a, b) { return (b.size_bytes||0) - (a.size_bytes||0); })
+          .slice(0, 6)
+          .map(function(e2) {
+            var fn = String(e2.filename || e2.exhibit_label || "?");
+            if (fn.length > 22) { fn = fn.slice(0, 14) + ".." + fn.slice(-6); }
+            return { label: fn, value: e2.size_bytes || 0,
+                     valueLabel: e2.size_human || String(e2.size_bytes) };
+          });
+        if (epItems.length >= 2) {
+          window.RC.buildBarChart(epBars, epItems, { title: "Largest exhibits" });
+        }
       }
       // File-size distribution sparkline
       var epSp = document.getElementById("ep-spark");

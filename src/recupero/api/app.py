@@ -2366,20 +2366,87 @@ async def operator_watch_address(
     return JSONResponse(content={"ok": True})
 
 
+# ---- short-lived SSE stream tokens (Phase 4.13 hardening) -------------------
+# A browser EventSource cannot set custom headers, but putting the long-lived
+# RECUPERO_ADMIN_KEY in a query string leaks it into edge/proxy access logs and
+# Referer headers (the exact leak _health_server.py removed). Instead the
+# console mints a short-lived, investigation-scoped random token via a
+# header-authenticated POST and passes THAT in the stream URL.
+import threading as _threading
+
+_STREAM_TOKEN_TTL_SECONDS = 600.0
+_STREAM_TOKENS_MAX = 512
+_STREAM_TOKENS: dict[str, tuple[str, float]] = {}  # token -> (inv, expires_at)
+_STREAM_TOKENS_LOCK = _threading.Lock()
+
+
+def _mint_stream_token(inv: str) -> str:
+    import secrets
+    import time
+    token = secrets.token_urlsafe(32)
+    now = time.time()
+    with _STREAM_TOKENS_LOCK:
+        expired = [t for t, (_, exp) in _STREAM_TOKENS.items() if exp <= now]
+        for t in expired:
+            del _STREAM_TOKENS[t]
+        # Hard cap: a stuck client minting in a loop must not grow memory.
+        while len(_STREAM_TOKENS) >= _STREAM_TOKENS_MAX:
+            del _STREAM_TOKENS[next(iter(_STREAM_TOKENS))]
+        _STREAM_TOKENS[token] = (inv, now + _STREAM_TOKEN_TTL_SECONDS)
+    return token
+
+
+def _stream_token_valid(token: str, inv: str) -> bool:
+    import hmac
+    import time
+    now = time.time()
+    with _STREAM_TOKENS_LOCK:
+        entry = _STREAM_TOKENS.get(token)
+        if entry is None:
+            return False
+        tok_inv, expires_at = entry
+        if expires_at <= now:
+            del _STREAM_TOKENS[token]
+            return False
+    return hmac.compare_digest(tok_inv, inv)
+
+
+@app.post("/v1/operator/graph/{investigation_id}/stream-token", tags=["ops"])
+async def operator_graph_stream_token(
+    investigation_id: str,
+    x_recupero_admin_key: str | None = Header(default=None),
+) -> JSONResponse:
+    """Mint a short-lived, investigation-scoped token for the SSE stream.
+    Header-authenticated only — never put the admin key in a URL."""
+    from recupero.dispatcher.review_api import _require_admin_auth
+    _require_admin_auth(x_recupero_admin_key)
+    inv = _valid_inv(investigation_id)
+    return JSONResponse(content={
+        "token": _mint_stream_token(inv),
+        "expires_in": int(_STREAM_TOKEN_TTL_SECONDS),
+    })
+
+
 @app.get("/v1/operator/graph/{investigation_id}/stream", tags=["ops"])
 async def operator_graph_stream(
     investigation_id: str,
-    key: str | None = None,
+    token: str | None = None,
     x_recupero_admin_key: str | None = Header(default=None),
 ):
     """Server-Sent-Events stream of live graph deltas for an investigation
-    (Phase 4.13). A browser ``EventSource`` cannot set custom headers, so the
-    admin key is accepted as the ``key`` query param (over HTTPS, operator-
-    internal) as well as the header for curl."""
+    (Phase 4.13). Auth: the admin-key header (curl), or a short-lived
+    ``?token=`` minted by POST .../stream-token (browser EventSource, which
+    cannot set headers). The long-lived admin key is deliberately NOT accepted
+    in the query string — query strings end up in proxy logs and Referers."""
     from fastapi.responses import StreamingResponse
     from recupero.dispatcher.review_api import _require_admin_auth
-    _require_admin_auth(x_recupero_admin_key or key)
-    inv = _valid_inv(investigation_id)
+    if token and not x_recupero_admin_key:
+        inv = _valid_inv(investigation_id)
+        if not _stream_token_valid(token, inv):
+            raise HTTPException(status_code=401, detail="invalid or expired stream token")
+    else:
+        _require_admin_auth(x_recupero_admin_key)
+        inv = _valid_inv(investigation_id)
 
     import asyncio
     import os

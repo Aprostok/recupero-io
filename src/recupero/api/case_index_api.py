@@ -285,6 +285,24 @@ _MEDIA_BY_EXT = {
 }
 
 
+def _artifact_response_headers(media: str, name: str) -> dict[str, str]:
+    """Defense-in-depth headers for served case artifacts.
+
+    HTML/SVG artifacts render inline (interactive trace reports need their own
+    JS), but MUST NOT execute in the admin console's origin — a planted or
+    un-escaped artifact could otherwise read the operator's admin key and
+    pivot to every admin endpoint. ``CSP: sandbox allow-scripts`` forces a
+    unique opaque origin: the artifact's own scripts run, but it has no access
+    to the console's storage, cookies, or same-origin endpoints.
+    """
+    headers = {"X-Content-Type-Options": "nosniff"}
+    if media == "application/octet-stream":
+        headers["Content-Disposition"] = f'attachment; filename="{name}"'
+    elif media.startswith(("text/html", "image/svg")):
+        headers["Content-Security-Policy"] = "sandbox allow-scripts"
+    return headers
+
+
 def _classify_artifact(rel_posix: str) -> str:
     """Bucket a case-relative artifact path into a display category."""
     low = rel_posix.lower()
@@ -429,9 +447,7 @@ def get_case_artifact(
         name = norm.rsplit("/", 1)[-1]
         ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
         media = _MEDIA_BY_EXT.get(ext, "application/octet-stream")
-        headers = {"X-Content-Type-Options": "nosniff"}
-        if media == "application/octet-stream":
-            headers["Content-Disposition"] = f'attachment; filename="{name}"'
+        headers = _artifact_response_headers(media, name)
         return Response(content=content, media_type=media, headers=headers)
 
     case_dir = _resolve_case_dir(case_id)
@@ -459,9 +475,7 @@ def get_case_artifact(
         )
     ext = target.suffix.lower()
     media = _MEDIA_BY_EXT.get(ext, "application/octet-stream")
-    headers = {"X-Content-Type-Options": "nosniff"}
-    if media == "application/octet-stream":
-        headers["Content-Disposition"] = f'attachment; filename="{target.name}"'
+    headers = _artifact_response_headers(media, target.name)
     return Response(content=target.read_bytes(), media_type=media, headers=headers)
 
 

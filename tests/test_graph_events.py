@@ -97,14 +97,65 @@ def _client():
 
 
 def test_stream_requires_admin_key() -> None:
-    # No key (header or query) → 401.
+    # No header and no token → 401.
     r = _client().get(f"/v1/operator/graph/{INV}/stream")
     assert r.status_code == 401
 
 
 def test_stream_rejects_bad_uuid() -> None:
-    r = _client().get("/v1/operator/graph/not-a-uuid/stream?key=testkey123")
+    r = _client().get(
+        "/v1/operator/graph/not-a-uuid/stream",
+        headers={"X-Recupero-Admin-Key": "testkey123"},
+    )
     assert r.status_code == 400
+
+
+def test_stream_no_longer_accepts_admin_key_in_query() -> None:
+    """The long-lived admin key must NOT authenticate via the query
+    string — query strings land in proxy access logs and Referer
+    headers (the leak _health_server.py removed). EventSource clients
+    use the short-lived ?token= minted by POST .../stream-token."""
+    r = _client().get(f"/v1/operator/graph/{INV}/stream?key=testkey123")
+    assert r.status_code == 401
+
+
+def test_stream_token_mint_requires_admin_header() -> None:
+    c = _client()
+    r = c.post(f"/v1/operator/graph/{INV}/stream-token")
+    assert r.status_code == 401
+    r = c.post(
+        f"/v1/operator/graph/{INV}/stream-token",
+        headers={"X-Recupero-Admin-Key": "testkey123"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert isinstance(body["token"], str) and len(body["token"]) >= 32
+    assert body["expires_in"] > 0
+
+
+def test_stream_token_validation_is_investigation_scoped() -> None:
+    from recupero.api import app as app_mod
+
+    tok = app_mod._mint_stream_token(INV)
+    assert app_mod._stream_token_valid(tok, INV) is True
+    # Wrong investigation → invalid.
+    assert app_mod._stream_token_valid(tok, "33333333-3333-3333-3333-333333333333") is False
+    # Unknown token → invalid.
+    assert app_mod._stream_token_valid("nope", INV) is False
+
+
+def test_stream_token_expires() -> None:
+    import time as _time
+    from unittest.mock import patch as _patch
+
+    from recupero.api import app as app_mod
+
+    tok = app_mod._mint_stream_token(INV)
+    real_time = _time.time()
+    with _patch("time.time", return_value=real_time + app_mod._STREAM_TOKEN_TTL_SECONDS + 1):
+        assert app_mod._stream_token_valid(tok, INV) is False
+    # Expired token was evicted from the store.
+    assert tok not in app_mod._STREAM_TOKENS
 
 
 # ---- LISTEN bridge (cross-process) ---- #

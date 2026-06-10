@@ -166,6 +166,36 @@ def test_run_lp_leads_same_owner_is_high() -> None:
     assert leads[0]["actor_attribution_confidence"] == "high"
 
 
+def test_collect_recipient_uppercase_hex_is_normalized() -> None:
+    # Adversarial-review HIGH: a provider returning checksum/uppercase hex in
+    # the Collect recipient data word must not break the same-owner comparison.
+    upper = dict(_REAL_COLLECT_LOG)
+    upper["data"] = (
+        "0x000000000000000000000000BA7A03A37C0799A4182D1C4CA3BF3321F8BA3329"
+        + _REAL_COLLECT_LOG["data"][66:]
+    )
+    exits = collect_exits_from_logs([upper])
+    assert len(exits) == 1
+    assert exits[0]["recipient"] == "0xba7a03a37c0799a4182d1c4ca3bf3321f8ba3329"
+
+
+def test_uppercase_recipient_same_owner_still_high() -> None:
+    # End-to-end: an uppercase-hex recipient that IS the parker still yields a
+    # high same-owner round-trip (not a silent medium downgrade).
+    tid_hex = "0x" + format(7, "064x")
+    collect = dict(_REAL_COLLECT_LOG)
+    collect["topics"] = [NPM_COLLECT_TOPIC0, tid_hex]
+    collect["data"] = ("0x" + "0" * 24 + _PARKER[2:].upper()
+                       + _REAL_COLLECT_LOG["data"][66:])
+    adapter = _StubAdapter(
+        receipt_logs=[_increase_log(tid_hex)], collect_logs=[collect],
+    )
+    leads = run_lp_leads(transfers=[_transfer(_NPM)], adapter=adapter, force=True)
+    assert len(leads) == 1
+    assert leads[0]["recipient_is_parker"] is True
+    assert leads[0]["actor_attribution_confidence"] == "high"
+
+
 def test_leads_to_json_artifact_shape() -> None:
     doc = leads_to_json([{"x": 1}])
     assert doc["kind"] == "recupero_lp_leads"

@@ -163,7 +163,11 @@ def collect_exits_from_logs(logs: Iterable[Any]) -> list[dict[str, Any]]:
         data = data[2:] if data.startswith("0x") else data
         if len(data) < 192:  # 3 words
             continue
-        recipient = "0x" + data[0:64][24:]
+        # Lowercase: the recipient is compared against the (lowercased) parking
+        # wallet to set same-owner confidence; a provider returning checksum/
+        # uppercase hex in the data word must not silently downgrade a true
+        # same-owner round-trip from high to medium.
+        recipient = ("0x" + data[0:64][24:]).lower()
         # 20-byte address left-padded with 12 zero bytes — anything else is
         # not an address-shaped word (same guard as the bridge decoders).
         if data[0:24] != "0" * 24 or recipient == "0x" + "0" * 40:

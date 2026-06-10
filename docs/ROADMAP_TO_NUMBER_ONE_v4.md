@@ -21,26 +21,54 @@ Real forensic-correctness defects found + fixed (with tests):
 Verified CLEAN by the same review: `move_address`, `freeze_draft` rendering (XSS-safe,
 no auto-send path), `_continue_dex_swap_chain` (byte-identical no-op at default).
 
+## SHIPPED in v0.41 (this cycle — all FF-pushed to main, prod-deployed)
+The "dormant capability → wire into the act path" theme paid off: every
+S/M-effort Tier-1 item and the strongest pure-code Tier-2 builds are live.
+- **#1** verified freeze-contacts reach dispatch (`ba66eea`) — verified LE email
+  replaces the unverified guess; portal-only majors → a manual-portal prompt.
+- **#2** dispatch ESCALATE advisory points at the rendered MLAT/314b/subpoena
+  artifact in `legal_requests/`, or prints the render command (`38ceb7b`).
+- **#3** OFAC-delta alerts persist to the `/v1/recovery-alerts` console queue
+  (`84257b6`, `alerts_to_recovery_rows` → `persist_alerts`).
+- **#4** freeze drafts to the durable `RECUPERO_DATA_DIR` + per-case filename
+  (no more dangling review-gate path) (`5cd7dc0`).
+- **#6** NFT-transfer coverage activated as a gated artifact (`a4059fe`,
+  `RECUPERO_NFT_FLOWS`) — live-verified tokennfttx/token1155tx shapes.
+- **#7** Uniswap V3 LP park-and-withdraw via position-id continuity (`53d9b88`,
+  `RECUPERO_LP_LEADS`) — 6 NPM addresses chain-verified.
+- **#11** DeFi lending/vault park-and-withdraw — Aave V3 (`36d52a7`,
+  `RECUPERO_LENDING_LEADS`) + ERC-4626 vaults (`18ea621`, `RECUPERO_VAULT_LEADS`,
+  protocol-agnostic via the indexed owner-topic).
+- **DeFi-reach pack is operator-accessible on-demand**: `recupero-ops defi-leads
+  --case <id> [--only nft,lp,lending,vault]` runs all four runners against a
+  finished case without a worker re-run. Every lead is review-only, never a
+  followed destination; the recoverable total is never touched.
+
+The proven RUNNER RECIPE (4×): keccak topic0 → live-log layout check →
+per-chain address verification via the Etherscan v2 multichain API → runner
+module → gated pipeline hook → artifact + guarded trace-report section →
+ENV row → real-log-fixture tests → full regression → FF-push.
+
 ## Tier 1 — highest recovery value, mostly CODE, buildable now
 
 | # | Gap | Why it matters | Effort | Notes |
 |---|-----|----------------|:--:|---|
-| 1 | **Verified freeze-contacts are DORMANT in the send path** | `send_freeze_letters._build_dispatch_plan` dispatches to the issuer-DB's *unverified* `compliance@` guess, NOT `resolve_exchange_freeze_contact`. Portal-only majors (Binance/Coinbase/Crypto.com, `compliance_email: null`) hit `SKIP: missing contact_email` → the verified channel never reaches dispatch. **This silently defeats the v3 freeze-contact DB.** | **S–M** | Resolve each issuer through the verified resolver; portal-only → a "submit via Kodex <url>" plan item instead of SKIP. THE top fix. |
-| 2 | **Black-hole recommendation doesn't auto-GENERATE the escalation artifact** | `cooperation_intelligence` flags `escalate_beyond_email`/`recommended_instrument` (subpoena/MLAT/314b) and `silence_14d` advises it — but nothing renders the named instrument; the operator triggers it by hand. | **M** | Recommendation → auto-render the subpoena/MLAT/314(b) deliverable, still human-gated by the dispatcher. |
-| 3 | **OFAC-delta alerts are log-only** | `screen_ofac_additions` returns alerts but the cron discards them (logs the count); the "race a freeze" prompt lives only in Railway logs. | **S** | Persist via `recovery_alerts_store.persist_alerts` (or a table) + surface in the operator console. |
-| 4 | **Freeze-draft artifacts written to `tempfile.mkdtemp()`** | `watch_tick` auto-draft writes to a per-tick temp dir; the `brief_reviews` row stores that path → leaks + dangles on restart, so the human-gate artifact can't be opened. | **S** | Write under the case's durable deliverables dir (or store the draft body in the DB). |
+| 1 | ✅ SHIPPED (`ba66eea`) — **Verified freeze-contacts are DORMANT in the send path** | `send_freeze_letters._build_dispatch_plan` dispatches to the issuer-DB's *unverified* `compliance@` guess, NOT `resolve_exchange_freeze_contact`. Portal-only majors (Binance/Coinbase/Crypto.com, `compliance_email: null`) hit `SKIP: missing contact_email` → the verified channel never reaches dispatch. **This silently defeats the v3 freeze-contact DB.** | **S–M** | Resolve each issuer through the verified resolver; portal-only → a "submit via Kodex <url>" plan item instead of SKIP. THE top fix. |
+| 2 | ✅ SHIPPED (`38ceb7b`) — **Black-hole recommendation doesn't auto-GENERATE the escalation artifact** | `cooperation_intelligence` flags `escalate_beyond_email`/`recommended_instrument` (subpoena/MLAT/314b) and `silence_14d` advises it — but nothing renders the named instrument; the operator triggers it by hand. | **M** | Recommendation → auto-render the subpoena/MLAT/314(b) deliverable, still human-gated by the dispatcher. |
+| 3 | ✅ SHIPPED (`84257b6`) — **OFAC-delta alerts are log-only** | `screen_ofac_additions` returns alerts but the cron discards them (logs the count); the "race a freeze" prompt lives only in Railway logs. | **S** | Persist via `recovery_alerts_store.persist_alerts` (or a table) + surface in the operator console. |
+| 4 | ✅ SHIPPED (`5cd7dc0`) — **Freeze-draft artifacts written to `tempfile.mkdtemp()`** | `watch_tick` auto-draft writes to a per-tick temp dir; the `brief_reviews` row stores that path → leaks + dangles on restart, so the human-gate artifact can't be opened. | **S** | Write under the case's durable deliverables dir (or store the draft body in the DB). |
 | 5 | **MistTrack attribution enrichment is fully DORMANT** | `labels/providers/misttrack.py` is a complete by-address enrichment provider; `attribution_coverage.py` computes prioritized labeling targets — but NOTHING calls the provider (zero call sites). Attribution still depends on manual research (the #1 gap vs Chainalysis). | **M** (code) + **DATA** (API key) | Wire the provider on the top-N coverage targets → candidate→review→promote. Needs a MistTrack key (procurement). |
 
 ## Tier 2 — net-new tracer moat (verified "decoded/exists-but-not-continued" gaps)
 
 | # | Gap | Why | Effort | Confidence constraint |
 |---|-----|-----|:--:|---|
-| 6 | **NFT-transfer hops never followed in BFS** — `nft_transfers.py` parses+prices ERC-721/1155 but is wired into no BFS path (`TODO(wave-4)` live) | NFT-sale laundering / mint-and-flip value vanishes from the recoverable total | M | follow the fungible *proceeds* at high; NFT→identity inference ≤medium |
-| 7 | **DEX LP-provision laundering** — no `addLiquidity`/`removeLiquidity`/V3 `mint` handling (`dex_swaps` is swaps only) | deposit→pool→later-remove-to-fresh-wallet dead-ends at the router/PositionManager | M | same-owner add→remove via position-id = high; V2 LP-token share ≤medium |
+| 6 | ✅ SHIPPED (`a4059fe`) — **NFT-transfer hops never followed in BFS** — `nft_transfers.py` parses+prices ERC-721/1155 but is wired into no BFS path (`TODO(wave-4)` live) | NFT-sale laundering / mint-and-flip value vanishes from the recoverable total | M | follow the fungible *proceeds* at high; NFT→identity inference ≤medium |
+| 7 | ✅ SHIPPED (`53d9b88`) — **DEX LP-provision laundering** — no `addLiquidity`/`removeLiquidity`/V3 `mint` handling (`dex_swaps` is swaps only) | deposit→pool→later-remove-to-fresh-wallet dead-ends at the router/PositionManager | M | same-owner add→remove via position-id = high; V2 LP-token share ≤medium |
 | 8 | **Cosmos IBC continuation OUT of a zone** — `MsgRecvPacket`/`MsgTransfer` decode absent | Osmosis/Noble-USDC (Circle-freezable) routing dead-ends at the first IBC hop | M | packet seq+src/dst-channel matched both sides = high; denom-hash-only ≤medium |
 | 9 | **BTC (and other no-log chains) pool-bridge inbound** — `BitcoinAdapter` has no `fetch_native_inflows`/`fetch_logs` | THORChain/Maya EVM→BTC pool disbursements (non-memo) lose the BTC leg | M | amount+time on a no-log chain = low (INVESTIGATE lead, never auto-proof) |
 | 10 | **Settled-tx freeze-race watcher for Tron/BTC** — mempool watch is ETH/Polygon-only; watch_tick is once-nightly balance-delta | Tron is half of USDT laundering; no near-real-time outbound alert there | M–L | settled-outbound detection = high; "heading to a freezable CEX" ≤medium |
-| 11 | **DeFi lending/vault park-and-withdraw** — no Aave/Compound/ERC-4626 `supply`/`withdraw`/`redeem` following | deposit→withdraw-to-fresh-wallet is clean parking; dead-ends at the pool | M | same-owner via receipt-token (aToken/share) = high; pooled inference ≤medium |
+| 11 | ✅ SHIPPED (`36d52a7`+`18ea621`) — **DeFi lending/vault park-and-withdraw** — no Aave/Compound/ERC-4626 `supply`/`withdraw`/`redeem` following | deposit→withdraw-to-fresh-wallet is clean parking; dead-ends at the pool | M | same-owner via receipt-token (aToken/share) = high; pooled inference ≤medium |
 | 12 | **Hyperliquid as a native venue** — currently synthetic-Arbitrum-USDC bridge edges only; no `for_chain` | top perps venue; internal routing invisible, weakening withdrawal attribution | S–M | in/out USDC edges high; internal HL ledger ≤medium |
 | 13 | **Lightning-gateway dead-end labels empty** — `KNOWN_LIGHTNING_GATEWAYS` purged; `detect_lightning_exit`→None | BTC→Lightning custodial gateway is unrecoverable on-chain; mislabel wastes effort | S | DATA: a checksum-verified maintained gateway list (anti-fabrication) |
 

@@ -401,6 +401,28 @@ def cli() -> None:
         help="Withdrawal window after each deposit in hours (0 = unbounded).",
     )
 
+    # ----- defi-leads (v0.41 roadmap-v4 #6/#7/#11) ----- #
+    p_defi = sub.add_parser(
+        "defi-leads",
+        help="Run the DeFi-reach LEAD pack on a finished case on-demand "
+             "(no worker re-run / env flags needed): observed NFT flows, "
+             "Uniswap V3 LP park-and-withdraw, Aave V3 + ERC-4626 vault "
+             "cross-address withdrawals. Each closes a laundering rail that "
+             "dead-ends outflow enumeration. Leads are for review, NEVER a "
+             "followed destination, and the recoverable total is unchanged. "
+             "Writes nft_flows.json / lp_leads.json / lending_leads.json / "
+             "vault_leads.json into the case dir.",
+    )
+    p_defi.add_argument(
+        "--case", dest="defi_case", required=True,
+        help="Case id (dir name under data/cases) to analyze.",
+    )
+    p_defi.add_argument(
+        "--only", dest="defi_only", default=None,
+        help="Comma-separated subset of {nft,lp,lending,vault} to run "
+             "(default: all four).",
+    )
+
     # ----- benchmark (v0.35.12 / J1) ----- #
     p_bench = sub.add_parser(
         "benchmark",
@@ -1296,6 +1318,91 @@ def cli() -> None:
             f"Demix: {len(deposits)} mixer deposit(s); {total} lead(s) across "
             f"{len(results)} pool(s) -> {out_path} (probabilistic, low-confidence)"
         )
+        sys.exit(0)
+
+    if args.command == "defi-leads":
+        import json as _json
+        import os as _os
+
+        from recupero.chains.base import ChainAdapter
+        from recupero.config import load_config
+        from recupero.storage.case_store import CaseStore
+        from recupero.trace import (
+            lending_runner,
+            lp_runner,
+            nft_runner,
+            vault_runner,
+        )
+        cfg, _ = load_config()
+        store = CaseStore(cfg)
+        try:
+            case = store.read_case(args.defi_case)
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: could not load case {args.defi_case!r}: {exc}",
+                  file=sys.stderr)
+            sys.exit(2)
+        try:
+            adapter = ChainAdapter.for_chain(case.chain, (cfg, _os.environ))
+        except Exception as exc:  # noqa: BLE001
+            print(f"ERROR: no adapter for chain {case.chain}: {exc}",
+                  file=sys.stderr)
+            sys.exit(2)
+        chain = case.chain.value
+        # explicit CLI invocation IS the opt-in → force=True on each runner.
+        # Each runner is a (name, filename, callable -> JSON-able doc) row.
+        all_runners = {
+            "nft": (
+                "nft_flows.json",
+                lambda: nft_runner.flows_to_json(nft_runner.collect_nft_flows(
+                    transfers=case.transfers, adapter=adapter, chain=chain,
+                    force=True)),
+            ),
+            "lp": (
+                "lp_leads.json",
+                lambda: lp_runner.leads_to_json(lp_runner.run_lp_leads(
+                    transfers=case.transfers, adapter=adapter,
+                    default_chain=chain, force=True)),
+            ),
+            "lending": (
+                "lending_leads.json",
+                lambda: lending_runner.leads_to_json(
+                    lending_runner.run_lending_leads(
+                        transfers=case.transfers, adapter=adapter,
+                        default_chain=chain, force=True)),
+            ),
+            "vault": (
+                "vault_leads.json",
+                lambda: vault_runner.leads_to_json(
+                    vault_runner.run_vault_leads(
+                        transfers=case.transfers, adapter=adapter,
+                        default_chain=chain, force=True)),
+            ),
+        }
+        if args.defi_only:
+            want = {s.strip().lower() for s in args.defi_only.split(",") if s.strip()}
+            unknown = want - set(all_runners)
+            if unknown:
+                print(f"ERROR: unknown --only value(s): {sorted(unknown)}; "
+                      f"valid: {sorted(all_runners)}", file=sys.stderr)
+                sys.exit(2)
+            selected = {k: v for k, v in all_runners.items() if k in want}
+        else:
+            selected = all_runners
+        case_dir = store.cases_root / args.defi_case
+        for name, (fname, fn) in selected.items():
+            try:
+                doc = fn()
+            except Exception as exc:  # noqa: BLE001 — one runner failing
+                print(f"  {name}: ERROR ({exc}) — skipped", file=sys.stderr)
+                continue
+            count = doc.get("lead_count", doc.get("flow_count", 0))
+            (case_dir / fname).write_text(
+                _json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False),
+                encoding="utf-8",
+            )
+            print(f"  {name}: {count} -> {case_dir / fname}")
+        print("DeFi-reach leads written (review-only, never a followed "
+              "destination; recoverable total unchanged).")
         sys.exit(0)
 
     if args.command == "benchmark":

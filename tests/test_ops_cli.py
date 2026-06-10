@@ -260,6 +260,67 @@ def test_send_freeze_letters_issuer_filter_no_match_returns_1() -> None:
     assert result == 1
 
 
+# ---- roadmap-v4 #6/#7/#11: defi-leads CLI runs the DeFi-reach pack ---- #
+
+
+def _run_defi_leads_cli(monkeypatch, tmp_path, argv_only=None, *, transfers=None):
+    """Drive `recupero-ops defi-leads` against a stubbed case with no
+    transfers (so no network is touched), returning the case dir."""
+    import sys
+    from types import SimpleNamespace
+
+    from recupero.ops import cli as ops_cli
+
+    case = SimpleNamespace(
+        chain=SimpleNamespace(value="ethereum"), transfers=transfers or [],
+    )
+    fake_store = SimpleNamespace(
+        read_case=lambda _cid: case, cases_root=tmp_path,
+    )
+    (tmp_path / "c1").mkdir(exist_ok=True)
+    monkeypatch.setattr("recupero.config.load_config", lambda: (object(), None))
+    monkeypatch.setattr("recupero.storage.case_store.CaseStore",
+                        lambda _cfg: fake_store)
+    monkeypatch.setattr(
+        "recupero.chains.base.ChainAdapter.for_chain",
+        classmethod(lambda cls, chain, cfg: SimpleNamespace(close=lambda: None)),
+    )
+    argv = ["recupero-ops", "defi-leads", "--case", "c1"]
+    if argv_only is not None:
+        argv += ["--only", argv_only]
+    monkeypatch.setattr(sys, "argv", argv)
+    with pytest.raises(SystemExit) as exc:
+        ops_cli.cli()
+    return exc.value.code, tmp_path / "c1"
+
+
+def test_defi_leads_only_nft_empty_case_writes_artifact(monkeypatch, tmp_path) -> None:
+    import json as _json
+    code, case_dir = _run_defi_leads_cli(monkeypatch, tmp_path, "nft")
+    assert code == 0
+    art = case_dir / "nft_flows.json"
+    assert art.is_file()
+    doc = _json.loads(art.read_text(encoding="utf-8"))
+    assert doc["kind"] == "recupero_nft_flows"
+    assert doc["flow_count"] == 0           # empty trace → empty (no network)
+    # --only nft must NOT write the other artifacts
+    assert not (case_dir / "vault_leads.json").exists()
+    assert not (case_dir / "lp_leads.json").exists()
+
+
+def test_defi_leads_unknown_only_exits_2(monkeypatch, tmp_path) -> None:
+    code, _ = _run_defi_leads_cli(monkeypatch, tmp_path, "bogus")
+    assert code == 2
+
+
+def test_defi_leads_all_four_run(monkeypatch, tmp_path) -> None:
+    code, case_dir = _run_defi_leads_cli(monkeypatch, tmp_path, None)
+    assert code == 0
+    for fname in ("nft_flows.json", "lp_leads.json",
+                  "lending_leads.json", "vault_leads.json"):
+        assert (case_dir / fname).is_file(), fname
+
+
 # ---- roadmap-v4 #1: verified freeze-contacts reach the dispatch plan ---- #
 
 

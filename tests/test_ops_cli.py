@@ -268,7 +268,7 @@ def _stub_dispatch_helpers(monkeypatch) -> None:
     ``_build_dispatch_plan`` exercises only the verified-contact resolution."""
     from recupero.ops.commands import send_freeze_letters as sfl
     monkeypatch.setattr(sfl, "_list_bucket_briefs",
-                        lambda *, investigation_id: [])
+                        lambda *, investigation_id, subdir="briefs": [])
     monkeypatch.setattr(sfl, "_find_latest_brief",
                         lambda files, *, slug: f"freeze_request_{slug}_x.html")
     monkeypatch.setattr(sfl, "_already_sent_to", lambda **k: False)
@@ -335,6 +335,48 @@ def test_dispatch_plan_keeps_brief_contact_when_no_verified_override(monkeypatch
     assert len(plan) == 1
     assert plan[0]["contact_email"] == "ops@unknown-zzz.example"
     assert plan[0]["verified_channel"] is False
+
+
+# ---- roadmap-v4 #2: ESCALATE advisory points at the rendered artifact ---- #
+
+
+def test_escalation_hint_finds_rendered_mlat_draft() -> None:
+    from recupero.ops.commands.send_freeze_letters import _escalation_artifact_hint
+    hint = _escalation_artifact_hint(
+        instrument="mlat_routed", issuer="Binance",
+        legal_files=[{"name": "mlat_Binance.html"}, {"name": "314b_Binance.html"}],
+    )
+    assert "legal_requests/mlat_Binance.html" in hint
+    assert "ready" in hint
+
+
+def test_escalation_hint_subpoena_matches_exchange_subpoena_file() -> None:
+    from recupero.ops.commands.send_freeze_letters import _escalation_artifact_hint
+    hint = _escalation_artifact_hint(
+        instrument="subpoena", issuer="KuCoin",
+        legal_files=[{"name": "exchange_subpoena_KuCoin.html"}],
+    )
+    assert "legal_requests/exchange_subpoena_KuCoin.html" in hint
+
+
+def test_escalation_hint_missing_artifact_gives_render_command() -> None:
+    from recupero.ops.commands.send_freeze_letters import _escalation_artifact_hint
+    # An artifact for a DIFFERENT exchange must not satisfy this issuer.
+    hint = _escalation_artifact_hint(
+        instrument="314b", issuer="Binance",
+        legal_files=[{"name": "314b_Coinbase.html"}],
+    )
+    assert "no rendered" in hint
+    assert "recupero legal-request --type 314b" in hint
+
+
+def test_escalation_hint_ausa_signed_is_workflow_advisory() -> None:
+    from recupero.ops.commands.send_freeze_letters import _escalation_artifact_hint
+    hint = _escalation_artifact_hint(
+        instrument="ausa_signed", issuer="Binance", legal_files=[],
+    )
+    assert "AUSA" in hint
+    assert "no rendered artifact" in hint
 
 
 # ---- followup-now command ---- #

@@ -446,6 +446,7 @@ def _build_dispatch_plan(
         profiles = build_all_profiles(dsn)
         if profiles:
             plan = annotate_dispatch_with_cooperation(plan, profiles)
+            legal_files: list[dict[str, Any]] | None = None
             for entry in plan:
                 if entry.get("escalate_beyond_email"):
                     print(
@@ -453,21 +454,40 @@ def _build_dispatch_plan(
                         f"recommends '{entry['recommended_instrument']}' over an "
                         f"informal freeze email. {entry.get('recommendation_reason', '')}"
                     )
+                    # roadmap-v4 #2: point at the already-rendered instrument
+                    # artifact (auto-litigation renders MLAT/314b/subpoena
+                    # drafts at case build) so the operator acts on the named
+                    # instrument instead of just reading the advisory. The
+                    # legal_requests/ listing is fetched once, lazily.
+                    if legal_files is None:
+                        legal_files = _list_bucket_briefs(
+                            investigation_id=investigation_id,
+                            subdir="legal_requests",
+                        )
+                    print("            " + _escalation_artifact_hint(
+                        instrument=str(entry["recommended_instrument"]),
+                        issuer=str(entry["issuer"]),
+                        legal_files=legal_files,
+                    ))
     except Exception as exc:  # noqa: BLE001
         log.warning("cooperation-intel dispatch annotation skipped: %s", exc)
 
     return plan
 
 
-def _list_bucket_briefs(*, investigation_id: UUID) -> list[dict[str, Any]]:
-    """List the bucket's briefs/ subdir contents."""
+def _list_bucket_briefs(
+    *, investigation_id: UUID, subdir: str = "briefs"
+) -> list[dict[str, Any]]:
+    """List a case-bucket subdir's contents (briefs/ by default; the worker
+    mirrors every deliverable subdir — legal_requests/, exhibit_pack/, … —
+    verbatim under the same prefix)."""
     sb = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
     url = f"{sb}/storage/v1/object/list/investigation-files"
     req = urllib.request.Request(
         url,
         data=json.dumps({
-            "prefix": f"investigations/{investigation_id}/briefs/",
+            "prefix": f"investigations/{investigation_id}/{subdir}/",
             "limit": 200,
             "offset": 0,
         }, separators=(",", ":"), allow_nan=False).encode(),
@@ -481,8 +501,46 @@ def _list_bucket_briefs(*, investigation_id: UUID) -> list[dict[str, Any]]:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read())
     except Exception as e:  # noqa: BLE001
-        log.warning("briefs/ list failed: %s", e)
+        log.warning("%s/ list failed: %s", subdir, e)
         return []
+
+
+# roadmap-v4 #2: instrument -> the rendered-artifact filename prefix(es) the
+# auto-litigation pass (build_all_deliverables, default-on) writes under
+# legal_requests/. ausa_signed is a co-signature workflow, not a document.
+_INSTRUMENT_ARTIFACT_PREFIXES: dict[str, tuple[str, ...]] = {
+    "mlat_routed": ("mlat_",),
+    "314b": ("314b_",),
+    "subpoena": ("exchange_subpoena_", "subpoena_"),
+}
+
+
+def _escalation_artifact_hint(
+    *, instrument: str, issuer: str, legal_files: list[dict[str, Any]]
+) -> str:
+    """One actionable line tying the cooperation-intel ESCALATE advisory to
+    the case's already-rendered legal_requests/ artifact (or to the exact
+    render command when the artifact is missing). Pure."""
+    if instrument == "ausa_signed":
+        return ("escalation path: have an AUSA co-sign the freeze request "
+                "(workflow, no rendered artifact).")
+    prefixes = _INSTRUMENT_ARTIFACT_PREFIXES.get(instrument)
+    if not prefixes:
+        return f"escalation path: {instrument} (no rendered artifact mapping)."
+    issuer_token = (issuer.split()[0].split("/")[0]).lower()
+    for f in legal_files:
+        name = str(f.get("name", ""))
+        low = name.lower()
+        for p in prefixes:
+            if low.startswith(p) and issuer_token in low and low.endswith(".html"):
+                return (f"rendered {instrument} draft ready: "
+                        f"legal_requests/{name} — review + route it instead "
+                        "of (not after) another informal email.")
+    cli_type = {"mlat_routed": "mlat", "314b": "314b", "subpoena": "subpoena"}[
+        instrument
+    ]
+    return (f"no rendered {instrument} draft found for this case — render "
+            f"one with: recupero legal-request --type {cli_type}")
 
 
 def _find_latest_brief(files: list[dict], *, slug: str) -> str | None:

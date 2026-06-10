@@ -121,6 +121,33 @@ h2::before {
   margin-left: auto; font-family: var(--mono); font-size: .64rem;
   color: var(--ink-faint); font-weight: 600;
 }
+/* Bar chart -- horizontal labeled value bars (top-entities style) */
+.rc-bars {
+  background: var(--surface); border: 1px solid var(--hair);
+  border-radius: var(--r); padding: .7rem 1rem .55rem;
+  box-shadow: var(--shadow-sm); margin: .5rem 0;
+}
+.rc-bar-row {
+  display: flex; align-items: center; gap: .6rem; margin-bottom: .42rem;
+}
+.rc-bar-row:last-child { margin-bottom: 0; }
+.rc-bar-label {
+  width: 148px; flex: none; font-family: var(--mono); font-size: .67rem;
+  color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rc-bar-track {
+  flex: 1; height: 9px; background: var(--surface-2);
+  border-radius: 5px; overflow: hidden;
+}
+.rc-bar-fill {
+  height: 100%; border-radius: 5px; width: 0;
+  transition: width .7s cubic-bezier(.32,.72,0,1);
+}
+.rc-bar-val {
+  width: 86px; flex: none; text-align: right; font-family: var(--mono);
+  font-size: .65rem; color: var(--ink-faint); font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
 
 /* ── Control bar ── */
@@ -1823,6 +1850,60 @@ CONSOLE_JS = r"""
     return wrap;
   }
 
+
+  // -- buildBarChart -----------------------------------------------------------
+  // Horizontal labeled value bars (TRM-style "top entities").
+  // el:    target DOM element
+  // items: [{label, value, valueLabel?, color?}]  value = raw number
+  //        color: CSS color string OR ok|warn|crit|accent (default accent)
+  // opts:  { title?, maxValue? }
+  // Built via DOM + textContent => labels are injection-safe.
+  function buildBarChart(el, items, opts) {
+    if (!el || !items) return null;
+    items = items.filter(function(i) { return i && (+i.value || 0) > 0; });
+    if (!items.length) return null;
+    opts = opts || {};
+    var named = { ok:'var(--ok)', warn:'var(--warn)', crit:'var(--crit)', accent:'var(--accent)' };
+    var maxV = opts.maxValue || items.reduce(function(m, i) { return Math.max(m, +i.value || 0); }, 0);
+    if (maxV <= 0) return null;
+    if (opts.title) {
+      var hdr = document.createElement('div');
+      hdr.className = 'section-label';
+      hdr.textContent = opts.title;
+      el.appendChild(hdr);
+    }
+    var box = document.createElement('div');
+    box.className = 'rc-bars';
+    var fills = [];
+    items.forEach(function(it) {
+      var col = named[it.color] || it.color || 'var(--accent)';
+      var row = document.createElement('div');
+      row.className = 'rc-bar-row';
+      var lbl = document.createElement('span');
+      lbl.className = 'rc-bar-label';
+      lbl.textContent = it.label == null ? '' : String(it.label);
+      lbl.title = lbl.textContent;
+      var track = document.createElement('span');
+      track.className = 'rc-bar-track';
+      var fill = document.createElement('span');
+      fill.className = 'rc-bar-fill';
+      fill.style.background = col;
+      fill.dataset.pct = Math.max(2, Math.round((+it.value || 0) / maxV * 100));
+      track.appendChild(fill);
+      var val = document.createElement('span');
+      val.className = 'rc-bar-val';
+      val.textContent = it.valueLabel != null ? String(it.valueLabel) : String(it.value);
+      row.appendChild(lbl); row.appendChild(track); row.appendChild(val);
+      box.appendChild(row);
+      fills.push(fill);
+    });
+    el.appendChild(box);
+    requestAnimationFrame(function() {
+      fills.forEach(function(f) { f.style.width = f.dataset.pct + '%'; });
+    });
+    return box;
+  }
+
   // Public API
   window.RC = {
     countUp: countUp,
@@ -1845,7 +1926,8 @@ CONSOLE_JS = r"""
     attachCopyMono: attachCopyMono,
     buildMiniGauge: buildMiniGauge,
     buildGaugeRow: buildGaugeRow,
-    buildDonut: buildDonut
+    buildDonut: buildDonut,
+    buildBarChart: buildBarChart
   };
 })();
 """

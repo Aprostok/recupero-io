@@ -27,6 +27,7 @@
   <div id="cards" class="cards" style="margin-bottom:.5rem"></div>
   <div id="sev-hist" style="margin:.2rem 0 .4rem"></div>
   <div id="alert-spark" class="rc-spark-wrap" style="margin:.1rem 0 .55rem"></div>
+  <div id="alert-bars" style="margin:.1rem 0 .55rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -69,7 +70,7 @@
       window.RC.attachFilter($("out"));
     }
 
-    // Severity distribution — RC risk bar
+    // Severity distribution -- RC risk bar
     var hist = $("sev-hist");
     if (hist) {
       if (!total || !window.RC || !window.RC.buildRiskBar) {
@@ -126,8 +127,31 @@
     if (window.RC) {
       window.RC.staggerRows($("tablewrap"));
       window.RC.attachSort($("tablewrap"));
+      window.RC.attachFilter($("tablewrap"));
     }
-    // Delta USD sparkline — severity-weighted absolute values
+    // Top movers bar chart (real |delta USD| per address)
+    var abEl = document.getElementById("alert-bars");
+    if (abEl && window.RC && window.RC.buildBarChart && rows.length >= 2) {
+      abEl.innerHTML = "";
+      var mvItems = rows.slice()
+        .map(function(rr2) {
+          var dv2 = Math.abs(parseFloat((String(rr2.delta_usd || "0")).replace(/[^0-9.]/g, "")) || 0);
+          var ad2 = String(rr2.address || "");
+          var lb2 = ad2.length > 16 ? ad2.slice(0, 10) + ".." + ad2.slice(-4) : ad2;
+          var sv2 = (rr2.severity == null ? "" : String(rr2.severity));
+          return { label: lb2, value: dv2,
+                   valueLabel: "$" + Math.round(dv2).toLocaleString(),
+                   color: (sv2 === "critical" || sv2 === "high") ? "crit"
+                        : sv2 === "medium" ? "warn" : "accent" };
+        })
+        .filter(function(it) { return it.value > 0; })
+        .sort(function(a, b) { return b.value - a.value; })
+        .slice(0, 6);
+      if (mvItems.length >= 2) {
+        window.RC.buildBarChart(abEl, mvItems, { title: "Top movers by delta USD" });
+      }
+    }
+    // Delta USD sparkline -- severity-weighted absolute values
     var asEl = document.getElementById("alert-spark");
     if (asEl && window.RC && window.RC.buildSparkline && rows.length >= 2) {
       var aDeltas = rows

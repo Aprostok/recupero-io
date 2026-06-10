@@ -85,6 +85,39 @@ def test_ingest_records_parsed_outcome_at_high_confidence(monkeypatch) -> None:
     assert captured["response_text"].startswith("We have frozen")
 
 
+def test_negated_return_is_not_recovery() -> None:
+    # Adversarial: a reply stating NOTHING was recovered must NEVER record
+    # returned_to_victim (it would falsely update priors + the case record).
+    for txt in (
+        "No funds were returned to the victim.",
+        "The funds have not been returned to the victim yet.",
+        "We have not yet returned anything to the victim.",
+        "Unfortunately we were unable to return the funds.",
+    ):
+        c = classify_reply(txt)
+        assert c.outcome_type != "returned_to_victim", txt
+        assert c.returned_usd is None, txt
+
+
+def test_mixed_freeze_and_refusal_is_partial_not_declined() -> None:
+    # "froze some but can't freeze the rest" is a PARTIAL recovery, not a refusal.
+    c = classify_reply("We have frozen $50,000 but cannot freeze the remaining funds.")
+    assert c.outcome_type == "partial_freeze"
+    assert c.frozen_usd == Decimal("50000")
+
+
+def test_amount_attaches_to_the_frozen_figure_not_the_theft_figure() -> None:
+    # The first $ is the LOSS; the frozen figure is the second — attach the right one.
+    c = classify_reply("Of the $300,000 stolen, we have frozen $5,000.")
+    assert c.outcome_type == "full_freeze"
+    assert c.frozen_usd == Decimal("5000")
+
+
+def test_will_not_freeze_is_declined() -> None:
+    c = classify_reply("We will not freeze the account without a court order.")
+    assert c.outcome_type == "declined"
+
+
 def test_ingest_downgrades_ambiguous_to_acknowledged(monkeypatch) -> None:
     captured = {}
     monkeypatch.setattr(recorder_mod, "record_outcome_by_target",

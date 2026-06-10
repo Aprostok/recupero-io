@@ -146,6 +146,34 @@ def test_removed_listings_excluded_from_current_set(tmp_path, monkeypatch) -> No
     assert screen_ofac_additions(dsn="dsn", snapshot_path=snap) == []
 
 
+def test_empty_csv_does_not_clobber_baseline(tmp_path, monkeypatch) -> None:
+    # Adversarial: an empty/corrupt CSV (load_ofac_csv → []) must NOT advance the
+    # baseline to ∅ — otherwise the next healthy run flags every OFAC address.
+    from recupero.monitoring.ofac_delta_rescreen import write_snapshot
+    snap = tmp_path / "seen.json"
+    write_snapshot(snap, {_A, _B})
+    before = load_snapshot(snap)
+    monkeypatch.setattr("recupero.trace.ofac_sync.load_ofac_csv", lambda *a, **k: [])
+    monkeypatch.setattr(mod, "_query_active_watchlist", lambda dsn: [])
+    out = screen_ofac_additions(dsn="dsn", snapshot_path=snap)
+    assert out == []
+    assert load_snapshot(snap) == before  # baseline untouched
+
+
+def test_collapsed_csv_does_not_clobber_baseline(tmp_path, monkeypatch) -> None:
+    from recupero.monitoring.ofac_delta_rescreen import write_snapshot
+    snap = tmp_path / "seen.json"
+    baseline = {f"0x{i:040x}" for i in range(10)}
+    write_snapshot(snap, baseline)
+    before = load_snapshot(snap)
+    # CSV parses to 1 entry — far below half the 10-key baseline → suspicious.
+    monkeypatch.setattr("recupero.trace.ofac_sync.load_ofac_csv",
+                        lambda *a, **k: [_entry(_A)])
+    monkeypatch.setattr(mod, "_query_active_watchlist", lambda dsn: [])
+    screen_ofac_additions(dsn="dsn", snapshot_path=snap)
+    assert load_snapshot(snap) == before  # baseline NOT advanced to the collapsed set
+
+
 def test_dsn_none_still_advances_baseline_without_query(tmp_path, monkeypatch) -> None:
     snap = tmp_path / "seen.json"
     monkeypatch.setattr("recupero.trace.ofac_sync.load_ofac_csv",

@@ -226,31 +226,40 @@ async def _drain_once(
     on_alert: Any,
     connect: Any,
     max_messages: int | None,
-) -> int:
-    """One connect → subscribe → read-until-close cycle. Returns the number of
-    alerts dispatched. Propagates any transport error so the caller can decide
-    whether to reconnect."""
+) -> tuple[int, bool, bool]:
+    """One connect → subscribe → read-until-close cycle.
+
+    Returns ``(dispatched, clean_close, saw_any_frame)``. A transport error is
+    caught HERE and reported as ``clean_close=False`` (so the caller can
+    reconnect); ``clean_close=True`` means the server ended the stream or
+    ``max_messages`` was reached. ``saw_any_frame`` lets the caller tell a
+    healthy-then-dropped connection (reset the consecutive-failure counter)
+    from a connect that never worked."""
     dispatched = 0
     seen = 0
-    async with connect(url) as ws:
-        await ws.send(json.dumps(sub_req))
-        async for frame in ws:
-            seen += 1
-            try:
-                text = frame.decode("utf-8") if isinstance(frame, bytes) else frame
-                msg = json.loads(text)
-            except (ValueError, AttributeError, UnicodeDecodeError):
+    try:
+        async with connect(url) as ws:
+            await ws.send(json.dumps(sub_req))
+            async for frame in ws:
+                seen += 1
+                try:
+                    text = frame.decode("utf-8") if isinstance(frame, bytes) else frame
+                    msg = json.loads(text)
+                except (ValueError, AttributeError, UnicodeDecodeError):
+                    if max_messages is not None and seen >= max_messages:
+                        break
+                    continue
+                alert = classify_pending_notification(msg, watched=watched, chain=chain)
+                if alert is not None:
+                    log.warning("mempool-watch ALERT (%s): %s", alert.direction, alert.caveat)
+                    on_alert(alert)
+                    dispatched += 1
                 if max_messages is not None and seen >= max_messages:
                     break
-                continue
-            alert = classify_pending_notification(msg, watched=watched, chain=chain)
-            if alert is not None:
-                log.warning("mempool-watch ALERT (%s): %s", alert.direction, alert.caveat)
-                on_alert(alert)
-                dispatched += 1
-            if max_messages is not None and seen >= max_messages:
-                break
-    return dispatched
+        return dispatched, True, seen > 0
+    except Exception as exc:  # noqa: BLE001 — transport error → reconnectable
+        log.warning("mempool-watch: drain error (%s)", exc)
+        return dispatched, False, seen > 0
 
 
 async def run_mempool_watch(
@@ -275,11 +284,13 @@ async def run_mempool_watch(
 
     Reconnect: a long-lived race watch must survive a dropped socket (a missed
     pending tx is a missed freeze). On a TRANSPORT ERROR (not a clean close) the
-    loop reconnects + re-subscribes up to ``reconnect_attempts`` times with
-    exponential backoff (capped 30s; ``backoff_sleep`` is injectable for tests).
-    Default 0 ⇒ no reconnect (a clean close always returns — only errors retry),
-    so a one-shot / bounded drain is unchanged. A clean close (server ended the
-    stream / ``max_messages`` reached) always returns without reconnecting.
+    loop reconnects + re-subscribes with exponential backoff (capped 30s;
+    ``backoff_sleep`` injectable for tests). ``reconnect_attempts`` is a cap on
+    CONSECUTIVE failures — a healthy drain (one that received any frame) RESETS
+    the counter, so a watch running for days survives sporadic drops and only
+    gives up after `reconnect_attempts` failures in a row. Default 0 ⇒ no
+    reconnect, so a one-shot / bounded drain is unchanged. A clean close (server
+    ended the stream / ``max_messages`` reached) always returns.
     """
     url = alchemy_pending_ws_url(network, api_key)
     sub_req = build_pending_subscribe_request(addresses, hashes_only=hashes_only)
@@ -296,22 +307,28 @@ async def run_mempool_watch(
     dispatched = 0
     attempt = 0
     while True:
-        try:
-            dispatched += await _drain_once(
-                url=url, sub_req=sub_req, watched=watched, chain=chain,
-                on_alert=on_alert, connect=connect, max_messages=max_messages,
+        n, clean, healthy = await _drain_once(
+            url=url, sub_req=sub_req, watched=watched, chain=chain,
+            on_alert=on_alert, connect=connect, max_messages=max_messages,
+        )
+        dispatched += n
+        if clean:
+            return dispatched  # graceful end — never reconnect on a clean close
+        # Transport error. A drain that received frames was a HEALTHY connection
+        # that later dropped → reset the consecutive-failure counter.
+        if healthy:
+            attempt = 0
+        if attempt >= reconnect_attempts:
+            raise ConnectionError(
+                f"mempool-watch: reconnect attempts exhausted ({reconnect_attempts})"
             )
-            return dispatched  # clean close — never reconnect on a graceful end
-        except Exception as exc:  # noqa: BLE001 — any transport error is retryable
-            if attempt >= reconnect_attempts:
-                raise
-            attempt += 1
-            wait = min(30.0, 2.0 ** attempt)
-            log.warning(
-                "mempool-watch: connection error (%s); reconnecting %d/%d in "
-                "%.0fs", exc, attempt, reconnect_attempts, wait,
-            )
-            await backoff_sleep(wait)
+        attempt += 1
+        wait = min(30.0, 2.0 ** attempt)
+        log.warning(
+            "mempool-watch: connection dropped; reconnecting %d/%d in %.0fs",
+            attempt, reconnect_attempts, wait,
+        )
+        await backoff_sleep(wait)
 
 
 # Mempool-supported network → the watchlist `chain` value to pull addresses for.

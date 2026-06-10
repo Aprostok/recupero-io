@@ -954,23 +954,39 @@ def cli() -> None:
     if args.command == "parse-freeze-reply":
         from pathlib import Path as _Path
 
-        from recupero.freeze_learning.reply_parser import ingest_reply
+        from recupero.freeze_learning.reply_parser import (
+            classify_reply,
+            ingest_reply,
+        )
         reply_text = (
             _Path(args.reply_file).read_text(encoding="utf-8")
             if args.reply_file else (args.reply or "")
         )
-        c = ingest_reply(
-            case_id=_parse_uuid(args.case_id, field_name="case_id"),
-            issuer=args.issuer,
-            target_address=args.target_address,
-            reply_text=reply_text,
-            asset_symbol=args.asset_symbol,
-            dsn=_require_dsn(),
-        )
+        # Show the parse (pure, never fails) BEFORE recording, so a recoverable
+        # recording miss (e.g. no prior freeze letter) doesn't discard it.
+        c = classify_reply(reply_text)
         print(
             f"parsed outcome={c.outcome_type} confidence={c.confidence} "
             f"needs_human_review={c.needs_human_review} — {c.rationale}"
         )
+        try:
+            ingest_reply(
+                case_id=_parse_uuid(args.case_id, field_name="case_id"),
+                issuer=args.issuer,
+                target_address=args.target_address,
+                reply_text=reply_text,
+                asset_symbol=args.asset_symbol,
+                dsn=_require_dsn(),
+            )
+        except Exception as exc:  # noqa: BLE001 — surface a clear operator error
+            print(
+                f"NOT recorded: {exc}\n"
+                "(If no matching freeze letter exists for this case+issuer+target, "
+                "record/send the freeze letter first, then re-run — the parse above "
+                "is unaffected.)"
+            )
+            sys.exit(1)
+        print("recorded.")
         sys.exit(0)
 
     if args.command == "mempool-watch":

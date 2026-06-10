@@ -205,6 +205,18 @@ def screen_ofac_additions(
     }
     cur_keys = set(cur_index)
 
+    # Adversarial-review fix: an EMPTY current set means the CSV is absent /
+    # empty / corrupt (load_ofac_csv returns [] there) — NOT that every SDN
+    # wallet was delisted. Advancing the baseline to ∅ would make the next
+    # healthy run diff (∅ → ALL) and flag every active OFAC address (an alert
+    # flood). Treat empty as "no data this run": skip, baseline UNTOUCHED.
+    if not cur_keys:
+        log.warning(
+            "ofac-rescreen: current OFAC set is EMPTY (CSV absent/empty/corrupt) "
+            "— skipping; baseline NOT advanced (avoids a next-run alert flood).",
+        )
+        return []
+
     snap_path = snapshot_path or _default_snapshot_path()
     prev = load_snapshot(snap_path)
     if prev is None:
@@ -223,7 +235,18 @@ def screen_ofac_additions(
         added_entries = [cur_index[k] for k in added]
         alerts = match_additions_to_watchlist(added_entries, watch_index)
 
-    # Advance the baseline regardless (so the same addition isn't re-alerted).
+    # Adversarial-review fix: guard a SUSPICIOUS COLLAPSE (a partial/corrupt CSV
+    # that parsed to far fewer rows than last run). Advancing the baseline to a
+    # shrunken set would re-flag the dropped-then-restored addresses next run.
+    if len(cur_keys) < len(prev) // 2:
+        log.warning(
+            "ofac-rescreen: current OFAC set (%d) collapsed below half the prior "
+            "baseline (%d) — likely a partial sync; baseline NOT advanced.",
+            len(cur_keys), len(prev),
+        )
+        return alerts
+
+    # Advance the baseline (so the same addition isn't re-alerted).
     write_snapshot(snap_path, cur_keys)
 
     for a in alerts:

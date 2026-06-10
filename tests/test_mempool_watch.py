@@ -178,6 +178,63 @@ async def test_run_mempool_watch_raises_when_reconnects_exhausted() -> None:
         )
 
 
+class _DropWS:
+    """Yields its frames, then RAISES on the next read — simulates a healthy
+    connection that later drops mid-stream (vs a clean server close)."""
+    def __init__(self, frames):
+        self.frames = frames
+        self.sent: list[str] = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def send(self, data):
+        self.sent.append(data)
+
+    def __aiter__(self):
+        self._it = iter(self.frames)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise ConnectionError("simulated mid-stream drop") from None
+
+
+@pytest.mark.asyncio
+async def test_reconnect_counter_is_consecutive_not_cumulative() -> None:
+    # A HEALTHY drain (received frames) must reset the failure counter, so a
+    # long-lived watch survives MORE than reconnect_attempts *total* drops as
+    # long as they're not consecutive. With reconnect_attempts=1 and two
+    # healthy-then-drop connections before a clean one, a cumulative counter
+    # would die after the 2nd drop; a consecutive counter survives.
+    frame = json.dumps({"params": {"result": {"hash": "0xA", "from": _OTHER,
+                                              "to": _WATCHED}}})
+    seq = [_DropWS([frame]), _DropWS([frame]), _FakeWS([frame])]
+    calls = {"n": 0}
+
+    def _connect(url):
+        ws = seq[calls["n"]]
+        calls["n"] += 1
+        return ws
+
+    async def _no_sleep(s):
+        pass
+
+    got: list[PendingFreezeAlert] = []
+    n = await run_mempool_watch(
+        api_key="KEY", network="ethereum", addresses=[_WATCHED],
+        on_alert=got.append, connect=_connect, reconnect_attempts=1,
+        backoff_sleep=_no_sleep,
+    )
+    assert calls["n"] == 3          # survived 2 non-consecutive drops, reached clean
+    assert n == 3                   # one alert per connection (2 drops + 1 clean)
+
+
 def test_load_freezable_watchlist_addresses_guards() -> None:
     # No DSN → [] (never raises). Unsupported network (Solana — no mempool sub,
     # no watchlist chain mapping) → [] even with a DSN present.

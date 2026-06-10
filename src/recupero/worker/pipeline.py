@@ -792,6 +792,56 @@ def _maybe_write_lending_leads(
         log.warning("lending-leads: lead generation failed (non-fatal): %s", exc)
 
 
+def _maybe_write_vault_leads(
+    case: Case,
+    case_dir: Path,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+) -> None:
+    """ERC-4626 vault park-and-withdraw leads over the finished trace
+    (roadmap-v4 #11 slice 2).
+
+    Opt-in via ``RECUPERO_VAULT_LEADS`` (default OFF -> zero cost). When on,
+    each traced wallet's ERC-4626 ``Withdraw`` events (owner = the wallet,
+    across ALL vaults via one address-less owner-topic getLogs) where the
+    receiver differs become leads in ``vault_leads.json``; a second getLogs
+    for the wallet's Deposits confirms round-trips (-> high, else medium).
+    Leads only -- never a followed destination, recoverable total untouched.
+    Best-effort: never blocks the trace pipeline.
+    """
+    from recupero.trace.vault_runner import vault_leads_enabled
+
+    if not vault_leads_enabled():
+        return  # default off -> zero cost
+    try:
+        from recupero._common import atomic_write_text
+        from recupero.chains.base import ChainAdapter
+        from recupero.trace.vault_runner import leads_to_json, run_vault_leads
+
+        adapter = ChainAdapter.for_chain(case.chain, (config, env))
+        try:
+            leads = run_vault_leads(
+                transfers=case.transfers,
+                adapter=adapter,
+                default_chain=case.chain.value,
+            )
+        finally:
+            adapter.close()
+        if not leads:
+            return
+        doc = leads_to_json(leads)
+        atomic_write_text(
+            case_dir / "vault_leads.json",
+            json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False),
+        )
+        log.info(
+            "vault-leads: wrote vault_leads.json (%d lead(s)) for case %s",
+            len(leads), getattr(case, "case_id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never block the trace
+        log.warning("vault-leads: lead generation failed (non-fatal): %s", exc)
+
+
 def _stage_trace(
     inv: Investigation,
     case_id_str: str,
@@ -881,6 +931,11 @@ def _stage_trace(
     # traced wallets' Pool.withdraw(asset, amount, to!=self) exits ride
     # along as lending_leads.json -- protocol-stamped, never followed.
     _maybe_write_lending_leads(case, case_dir, config, env)
+
+    # roadmap-v4 #11 (slice 2): ERC-4626 vault cross-address
+    # withdrawal leads (Morpho/Yearn/Spark/any vault) -- gated by
+    # RECUPERO_VAULT_LEADS (default off = zero cost).
+    _maybe_write_vault_leads(case, case_dir, config, env)
 
     local_store.write_case(case)
     upload_case_dir(case_dir, bucket)

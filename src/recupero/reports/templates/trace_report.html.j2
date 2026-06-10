@@ -611,6 +611,44 @@ notification).</p>
 </table>
 {% endif %}
 
+{% if vault_leads %}
+<h2>13. ERC-4626 Vault Cross-Address Withdrawals</h2>
+<p class="small"><em>A traced wallet redeemed ERC-4626 vault shares
+   (Morpho / Yearn / Spark / any compliant vault) with the underlying assets
+   sent to a <strong>different receiver</strong> &mdash; an exit emitted by
+   the vault, invisible to outflow enumeration. Owner and receiver are
+   protocol-stamped indexed topics. <strong>HIGH</strong> confidence marks a
+   confirmed deposit&rarr;withdraw round-trip on a vault the wallet actually
+   funded; <strong>MEDIUM</strong> means no deposit was observed &mdash;
+   confirm the emitting vault is legitimate (an address-less query does not
+   pre-verify it). Amounts are raw; leads are for review, NEVER a followed
+   destination, and the recoverable total is unchanged.</em></p>
+<table>
+  <thead>
+    <tr>
+      <th>Owner (traced)</th>
+      <th>Exit recipient</th>
+      <th>Vault</th>
+      <th>Assets (raw)</th>
+      <th>Round-trip</th>
+      <th>Confidence</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ld in vault_leads.leads %}
+    <tr>
+      <td class="mono">{{ ld.owner | short_address(prefix=10, suffix=4) }}</td>
+      <td class="mono">{{ ld.exit_recipient | short_address(prefix=10, suffix=4) }}</td>
+      <td class="mono">{{ ld.vault | short_address(prefix=10, suffix=4) }}</td>
+      <td class="mono">{{ ld.assets_raw }}</td>
+      <td>{{ "yes" if ld.round_trip_confirmed else "no" }}</td>
+      <td>{{ ld.confidence }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>
   <div class="footer-meta">

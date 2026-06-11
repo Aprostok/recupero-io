@@ -1278,7 +1278,6 @@ def cli() -> None:
 
     if args.command == "demix-leads":
         import json as _json
-        import os as _os
 
         from recupero.chains.base import ChainAdapter
         from recupero.config import load_config
@@ -1288,7 +1287,7 @@ def cli() -> None:
             leads_to_json,
             run_demix_leads,
         )
-        cfg, _ = load_config()
+        cfg, env = load_config()
         store = CaseStore(cfg)
         try:
             case = store.read_case(args.demix_case)
@@ -1301,7 +1300,9 @@ def cli() -> None:
             print("No mixer deposits found in this case — nothing to demix.")
             sys.exit(0)
         try:
-            adapter = ChainAdapter.for_chain(case.chain, (cfg, _os.environ))
+            # for_chain wants (RecuperoConfig, RecuperoEnv) — the adapter reads
+            # env.ETHERSCAN_API_KEY off the 2nd element, NOT raw os.environ.
+            adapter = ChainAdapter.for_chain(case.chain, (cfg, env))
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: no adapter for chain {case.chain}: {exc}", file=sys.stderr)
             sys.exit(2)
@@ -1322,7 +1323,6 @@ def cli() -> None:
 
     if args.command == "defi-leads":
         import json as _json
-        import os as _os
 
         from recupero.chains.base import ChainAdapter
         from recupero.config import load_config
@@ -1333,7 +1333,7 @@ def cli() -> None:
             nft_runner,
             vault_runner,
         )
-        cfg, _ = load_config()
+        cfg, env = load_config()
         store = CaseStore(cfg)
         try:
             case = store.read_case(args.defi_case)
@@ -1342,7 +1342,9 @@ def cli() -> None:
                   file=sys.stderr)
             sys.exit(2)
         try:
-            adapter = ChainAdapter.for_chain(case.chain, (cfg, _os.environ))
+            # for_chain wants (RecuperoConfig, RecuperoEnv) — the adapter reads
+            # env.ETHERSCAN_API_KEY off the 2nd element, NOT raw os.environ.
+            adapter = ChainAdapter.for_chain(case.chain, (cfg, env))
         except Exception as exc:  # noqa: BLE001
             print(f"ERROR: no adapter for chain {case.chain}: {exc}",
                   file=sys.stderr)

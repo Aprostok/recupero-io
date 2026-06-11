@@ -265,7 +265,10 @@ def test_send_freeze_letters_issuer_filter_no_match_returns_1() -> None:
 
 def _run_defi_leads_cli(monkeypatch, tmp_path, argv_only=None, *, transfers=None):
     """Drive `recupero-ops defi-leads` against a stubbed case with no
-    transfers (so no network is touched), returning the case dir."""
+    transfers (so no network is touched). Returns (exit_code, case_dir,
+    captured_for_chain_config) — the captured config is the 2nd positional
+    `for_chain` receives, used to lock the (RecuperoConfig, RecuperoEnv)
+    contract (NOT raw os.environ)."""
     import sys
     from types import SimpleNamespace
 
@@ -278,25 +281,34 @@ def _run_defi_leads_cli(monkeypatch, tmp_path, argv_only=None, *, transfers=None
         read_case=lambda _cid: case, cases_root=tmp_path,
     )
     (tmp_path / "c1").mkdir(exist_ok=True)
-    monkeypatch.setattr("recupero.config.load_config", lambda: (object(), None))
+    # load_config returns (RecuperoConfig, RecuperoEnv); use distinct sentinels
+    # so the test can prove the handler forwards the ENV (2nd element), not
+    # os.environ, to for_chain.
+    cfg_sentinel = object()
+    env_sentinel = SimpleNamespace(_marker="recupero-env")
+    captured: dict[str, object] = {}
+    monkeypatch.setattr("recupero.config.load_config",
+                        lambda: (cfg_sentinel, env_sentinel))
     monkeypatch.setattr("recupero.storage.case_store.CaseStore",
                         lambda _cfg: fake_store)
-    monkeypatch.setattr(
-        "recupero.chains.base.ChainAdapter.for_chain",
-        classmethod(lambda cls, chain, cfg: SimpleNamespace(close=lambda: None)),
-    )
+
+    def _for_chain(cls, chain, cfg):
+        captured["cfg_arg"] = cfg
+        return SimpleNamespace(close=lambda: None)
+    monkeypatch.setattr("recupero.chains.base.ChainAdapter.for_chain",
+                        classmethod(_for_chain))
     argv = ["recupero-ops", "defi-leads", "--case", "c1"]
     if argv_only is not None:
         argv += ["--only", argv_only]
     monkeypatch.setattr(sys, "argv", argv)
     with pytest.raises(SystemExit) as exc:
         ops_cli.cli()
-    return exc.value.code, tmp_path / "c1"
+    return exc.value.code, tmp_path / "c1", captured.get("cfg_arg")
 
 
 def test_defi_leads_only_nft_empty_case_writes_artifact(monkeypatch, tmp_path) -> None:
     import json as _json
-    code, case_dir = _run_defi_leads_cli(monkeypatch, tmp_path, "nft")
+    code, case_dir, _cfg = _run_defi_leads_cli(monkeypatch, tmp_path, "nft")
     assert code == 0
     art = case_dir / "nft_flows.json"
     assert art.is_file()
@@ -309,16 +321,31 @@ def test_defi_leads_only_nft_empty_case_writes_artifact(monkeypatch, tmp_path) -
 
 
 def test_defi_leads_unknown_only_exits_2(monkeypatch, tmp_path) -> None:
-    code, _ = _run_defi_leads_cli(monkeypatch, tmp_path, "bogus")
+    code, _dir, _cfg = _run_defi_leads_cli(monkeypatch, tmp_path, "bogus")
     assert code == 2
 
 
 def test_defi_leads_all_four_run(monkeypatch, tmp_path) -> None:
-    code, case_dir = _run_defi_leads_cli(monkeypatch, tmp_path, None)
+    code, case_dir, _cfg = _run_defi_leads_cli(monkeypatch, tmp_path, None)
     assert code == 0
     for fname in ("nft_flows.json", "lp_leads.json",
                   "lending_leads.json", "vault_leads.json"):
         assert (case_dir / fname).is_file(), fname
+
+
+def test_defi_leads_passes_recupero_env_not_os_environ(monkeypatch, tmp_path) -> None:
+    # Regression: the handler must forward load_config()'s RecuperoEnv (2nd
+    # element) to ChainAdapter.for_chain as (cfg, env) — NOT raw os.environ,
+    # which lacks the .ETHERSCAN_API_KEY attribute the adapter reads (the bug
+    # this test pins shut: a live run failed with "'_Environ' object has no
+    # attribute 'ETHERSCAN_API_KEY'").
+    code, _dir, cfg_arg = _run_defi_leads_cli(monkeypatch, tmp_path, "nft")
+    assert code == 0
+    assert isinstance(cfg_arg, tuple) and len(cfg_arg) == 2
+    # 2nd element is the env sentinel load_config returned, not os.environ.
+    assert getattr(cfg_arg[1], "_marker", None) == "recupero-env"
+    import os as _os
+    assert cfg_arg[1] is not _os.environ
 
 
 # ---- roadmap-v4 #1: verified freeze-contacts reach the dispatch plan ---- #

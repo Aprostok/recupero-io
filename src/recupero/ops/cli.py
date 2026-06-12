@@ -411,7 +411,7 @@ def cli() -> None:
              "dead-ends outflow enumeration. Leads are for review, NEVER a "
              "followed destination, and the recoverable total is unchanged. "
              "Writes nft_flows.json / lp_leads.json / lending_leads.json / "
-             "vault_leads.json into the case dir.",
+             "vault_leads.json (+ ibc_leads.json for Cosmos) into the case dir.",
     )
     p_defi.add_argument(
         "--case", dest="defi_case", required=True,
@@ -419,8 +419,8 @@ def cli() -> None:
     )
     p_defi.add_argument(
         "--only", dest="defi_only", default=None,
-        help="Comma-separated subset of {nft,lp,lending,vault} to run "
-             "(default: all four).",
+        help="Comma-separated subset of {nft,lp,lending,vault,ibc} to run "
+             "(default: all). ibc is Cosmos-only (IBC continuation-out).",
     )
 
     # ----- benchmark (v0.35.12 / J1) ----- #
@@ -1328,6 +1328,7 @@ def cli() -> None:
         from recupero.config import load_config
         from recupero.storage.case_store import CaseStore
         from recupero.trace import (
+            ibc_runner,
             lending_runner,
             lp_runner,
             nft_runner,
@@ -1378,6 +1379,14 @@ def cli() -> None:
                     vault_runner.run_vault_leads(
                         transfers=case.transfers, adapter=adapter,
                         default_chain=chain, force=True)),
+            ),
+            # IBC continuation-out (Cosmos only): uses the cosmos LCD client,
+            # not fetch_logs. No-op for EVM cases (no fetch_all_txs_by_sender).
+            "ibc": (
+                "ibc_leads.json",
+                lambda: ibc_runner.leads_to_json(ibc_runner.run_ibc_leads(
+                    transfers=case.transfers,
+                    client=getattr(adapter, "client", None), force=True)),
             ),
         }
         if args.defi_only:

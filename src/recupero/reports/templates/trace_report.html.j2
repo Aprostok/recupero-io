@@ -650,6 +650,44 @@ notification).</p>
 </table>
 {% endif %}
 
+{% if ibc_leads %}
+<h2>14. IBC Continuation-Out (Cosmos)</h2>
+<p class="small"><em>The traced wallet sent funds OUT of its Cosmos zone via an
+   IBC (ICS-20) <span class="mono">send_packet</span> &mdash; the hop the trace
+   previously died at. Each row is an on-chain protocol fact (HIGH confidence;
+   the <span class="mono">(src_channel, dst_channel, sequence)</span> tuple
+   confirms it end-to-end against the destination zone's
+   <span class="mono">recv_packet</span>). The destination chain comes from a
+   pinned, verified channel registry (unknown channels show &ldquo;?&rdquo;).
+   Rows flagged <strong>Circle (USDC)</strong> are freezable at the issuer.
+   Amounts are raw micro-units; leads are for review, NEVER a followed
+   destination, and the recoverable total is unchanged.</em></p>
+<table>
+  <thead>
+    <tr>
+      <th>Sender (traced)</th>
+      <th>Receiver (dest)</th>
+      <th>Dest chain</th>
+      <th>Denom</th>
+      <th>Amount (raw)</th>
+      <th>Freezable</th>
+    </tr>
+  </thead>
+  <tbody>
+  {% for ld in ibc_leads.leads %}
+    <tr>
+      <td class="mono">{{ ld.sender | short_address(prefix=12, suffix=6) }}</td>
+      <td class="mono">{{ ld.receiver | short_address(prefix=12, suffix=6) }}</td>
+      <td>{{ ld.dest_chain or "? (" ~ ld.dst_channel ~ ")" }}</td>
+      <td class="mono">{{ ld.base_denom }}</td>
+      <td class="mono">{{ ld.amount_raw }}</td>
+      <td>{% if ld.freezable_issuer %}{{ ld.freezable_issuer }}{% else %}&mdash;{% endif %}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
 <footer class="brief-footer">
   <div class="footer-brand">Recupero · Investigation Services</div>
   <div class="footer-meta">

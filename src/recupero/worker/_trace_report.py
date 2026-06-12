@@ -154,6 +154,19 @@ def render_trace_report(
         except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
             log.debug("trace report: vault_leads load skipped: %s", _exc)
 
+        # roadmap-v4 #8: IBC continuation-out leads (Cosmos), same gated-
+        # artifact pattern (RECUPERO_IBC_LEADS; absent file -> no section).
+        ibc_leads = None
+        try:
+            import json as _json
+            _ibc_path = briefs_dir.parent / "ibc_leads.json"
+            if _ibc_path.is_file():
+                _doc = _json.loads(_ibc_path.read_text(encoding="utf-8-sig"))
+                if isinstance(_doc, dict) and _doc.get("leads"):
+                    ibc_leads = _doc
+        except Exception as _exc:  # noqa: BLE001 — surfacing is best-effort
+            log.debug("trace report: ibc_leads load skipped: %s", _exc)
+
         ctx = _build_context(
             case=case,
             freeze_brief=freeze_brief,
@@ -165,6 +178,7 @@ def render_trace_report(
             lp_leads=lp_leads,
             lending_leads=lending_leads,
             vault_leads=vault_leads,
+            ibc_leads=ibc_leads,
         )
 
         env = Environment(
@@ -201,6 +215,7 @@ def _build_context(
     lp_leads: dict[str, Any] | None = None,
     lending_leads: dict[str, Any] | None = None,
     vault_leads: dict[str, Any] | None = None,
+    ibc_leads: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     chain_str = case.chain.value
     # v0.16.10 (round-9 output LOW): include explicit "Z" UTC suffix.
@@ -284,6 +299,9 @@ def _build_context(
         # roadmap-v4 #11 (slice 2) — ERC-4626 vault cross-address
         # withdrawal leads (None unless RECUPERO_VAULT_LEADS produced it).
         "vault_leads": vault_leads,
+        # roadmap-v4 #8 — IBC continuation-out leads (Cosmos; None
+        # unless RECUPERO_IBC_LEADS produced ibc_leads.json).
+        "ibc_leads": ibc_leads,
     }
 
 

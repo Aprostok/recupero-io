@@ -843,6 +843,58 @@ def _maybe_write_vault_leads(
         log.warning("vault-leads: lead generation failed (non-fatal): %s", exc)
 
 
+def _maybe_write_ibc_leads(
+    case: Case,
+    case_dir: Path,
+    config: RecuperoConfig,
+    env: RecuperoEnv,
+) -> None:
+    """IBC (ICS-20) continuation-out leads over a finished Cosmos-zone trace
+    (roadmap-v4 #8).
+
+    Opt-in via ``RECUPERO_IBC_LEADS`` (default OFF -> zero cost). Cosmos-only:
+    for each traced wallet, decodes its outbound ``send_packet`` events into
+    ibc_leads.json -- where funds LEFT the zone (dest chain + receiver + denom),
+    the hop the BFS died at. Osmosis/Noble USDC exits are flagged
+    Circle-freezable. The decoded hop is a protocol fact (high); the dest chain
+    name comes from a pinned channel registry. Leads only -- never a followed
+    destination, recoverable total untouched. Best-effort.
+    """
+    from recupero.trace.ibc_runner import ibc_leads_enabled
+
+    if not ibc_leads_enabled():
+        return  # default off -> zero cost
+    from recupero.models import Chain
+    if case.chain != Chain.cosmos:
+        return  # IBC continuation is a Cosmos-zone concern only
+    try:
+        from recupero._common import atomic_write_text
+        from recupero.chains.base import ChainAdapter
+        from recupero.trace.ibc_runner import leads_to_json, run_ibc_leads
+
+        adapter = ChainAdapter.for_chain(case.chain, (config, env))
+        try:
+            leads = run_ibc_leads(
+                transfers=case.transfers,
+                client=getattr(adapter, "client", None),
+            )
+        finally:
+            adapter.close()
+        if not leads:
+            return
+        doc = leads_to_json(leads)
+        atomic_write_text(
+            case_dir / "ibc_leads.json",
+            json.dumps(doc, indent=2, ensure_ascii=False, allow_nan=False),
+        )
+        log.info(
+            "ibc-leads: wrote ibc_leads.json (%d lead(s)) for case %s",
+            len(leads), getattr(case, "case_id", "?"),
+        )
+    except Exception as exc:  # noqa: BLE001 -- best-effort, never block the trace
+        log.warning("ibc-leads: lead generation failed (non-fatal): %s", exc)
+
+
 def _stage_trace(
     inv: Investigation,
     case_id_str: str,
@@ -937,6 +989,11 @@ def _stage_trace(
     # withdrawal leads (Morpho/Yearn/Spark/any vault) -- gated by
     # RECUPERO_VAULT_LEADS (default off = zero cost).
     _maybe_write_vault_leads(case, case_dir, config, env)
+
+    # roadmap-v4 #8: IBC continuation-out leads (Cosmos zones only). Gated by
+    # RECUPERO_IBC_LEADS (default off = zero cost); surfaces outbound ICS-20
+    # sends (e.g. Osmosis->Noble USDC, Circle-freezable) the BFS died at.
+    _maybe_write_ibc_leads(case, case_dir, config, env)
 
     local_store.write_case(case)
     upload_case_dir(case_dir, bucket)

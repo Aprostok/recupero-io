@@ -244,7 +244,19 @@
 
   /* -- Metric card icon + sparkline + delta indicators -- */
   .card .c-icon { font-size: .95rem; line-height: 1; margin-bottom: .3rem; opacity: .9; }
-  .card .spark { width: 100%; height: 22px; margin-top: .42rem; opacity: .74; pointer-events: none; }
+  /* Pipeline bars (subset of shared .rc-bars -- hub is standalone, no app.css) */
+  .rc-bars { background: var(--surface); border: 1px solid var(--hair);
+    border-radius: var(--r); padding: .7rem 1rem .55rem; box-shadow: var(--shadow-sm); margin: .5rem 0; }
+  .rc-bar-row { display: flex; align-items: center; gap: .6rem; margin-bottom: .42rem; }
+  .rc-bar-row:last-child { margin-bottom: 0; }
+  .rc-bar-label { width: 148px; flex: none; font-family: var(--mono); font-size: .67rem;
+    color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rc-bar-track { flex: 1; height: 9px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+  .rc-bar-fill { height: 100%; border-radius: 5px; width: 0; transition: width .7s cubic-bezier(.32,.72,0,1); }
+  .rc-bar-val { width: 86px; flex: none; text-align: right; font-family: var(--mono);
+    font-size: .65rem; color: var(--ink-faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .section-label { font-size: .64rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--ink-faint); font-weight: 700; margin: 1.1rem 0 .35rem; }
   .card .delta { font-size: .62rem; font-weight: 700; margin-top: .18rem; line-height: 1; }
   .card .delta.up   { color: var(--ok);   }
   .card .delta.down { color: var(--alert); }
@@ -319,6 +331,7 @@
     </div>
 
     <div class="cards" id="cards"></div>
+    <div id="hub-pipeline" style="margin:.15rem 0 .4rem"></div>
 
     <!-- Console search -->
     <div class="tile-search-wrap">
@@ -354,22 +367,9 @@
     ["label_candidates_pending", "Label candidates",   false, "&#127991;"]
   ];
 
-  // Synthetic 7-point trend ending at finalVal (visual only, not historical data)
-  function _trendData(finalVal, n) {
-    n = n || 7;
-    if (!finalVal || finalVal < 1) return [];
-    var data = [], v = finalVal * (0.62 + Math.random() * 0.18);
-    for (var i = 0; i < n - 1; i++) {
-      v = v + (finalVal - v) * 0.30 + (Math.random() - 0.38) * finalVal * 0.13;
-      data.push(Math.max(0, Math.round(v)));
-    }
-    data.push(finalVal);
-    return data;
-  }
-
   function renderStats(s) {
     s = s || {};
-    // Delta vs previous load (sessionStorage only — clears on tab close)
+    // Delta vs previous load (sessionStorage only -- clears on tab close)
     var prev = {};
     try { prev = JSON.parse(sessionStorage.getItem("rk_stats_prev") || "{}"); } catch (e) {}
 
@@ -388,7 +388,6 @@
              '<div class="v">' + fmt(v) + '</div>' +
              '<div class="l">' + esc(d[1]) + '</div>' +
              deltaHtml +
-             '<div class="spark" data-key="' + esc(d[0]) + '"></div>' +
              '</div>';
     }).join("");
 
@@ -400,18 +399,25 @@
 
     if (window.RC && window.RC.countUp) { window.RC.countUp($("cards")); }
 
-    // Wire sparkline trend on each card (after RC is loaded)
-    if (window.RC && window.RC.buildSparkline) {
-      $("cards").querySelectorAll(".spark[data-key]").forEach(function (el) {
-        var val = s[el.getAttribute("data-key")];
-        if (typeof val !== "number" || val < 2) return;
-        var isAlert = !!el.closest(".card.alert");
-        window.RC.buildSparkline(el, _trendData(val, 7), {
-          height: 22,
-          color: isAlert ? "var(--alert)" : "var(--accent)",
-          fillColor: isAlert ? "var(--alert)" : "var(--accent)"
+    // Case-pipeline bars -- REAL counts from /v1/console/stats (no synthetic trends)
+    var hpEl = $("hub-pipeline");
+    if (hpEl && window.RC && window.RC.buildBarChart && typeof s.cases_total === "number" && s.cases_total > 0) {
+      hpEl.innerHTML = "";
+      var hpItems = [
+        { label: "Traced cases",  value: s.cases_total,        color: "accent" },
+        { label: "Freeze briefs", value: s.cases_with_brief,   color: "ok"     },
+        { label: "AI-triaged",    value: s.cases_triaged,      color: "ok"     },
+        { label: "Exhibit packs", value: s.cases_with_exhibit, color: "warn"   }
+      ].filter(function(it) { return typeof it.value === "number" && it.value > 0; })
+       .map(function(it) {
+         it.valueLabel = it.value + " / " + s.cases_total;
+         return it;
+       });
+      if (hpItems.length >= 2) {
+        window.RC.buildBarChart(hpEl, hpItems, {
+          title: "Case pipeline (live)", maxValue: s.cases_total
         });
-      });
+      }
     }
 
     // Update platform strip with live counts

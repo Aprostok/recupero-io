@@ -35,6 +35,7 @@
   <div class="cards" id="cards"></div>
   <div id="fresh-bar" style="margin:-.3rem 0 .8rem"></div>
   <div id="fresh-spark" class="rc-spark-wrap" style="margin:.1rem 0 .55rem"></div>
+  <div id="fresh-bars" style="margin:.1rem 0 .55rem"></div>
   <div id="tablewrap"></div>
 
 <script>
@@ -130,6 +131,25 @@
       window.RC.attachSort($("tablewrap"));
       window.RC.attachFilter($("tablewrap"));
       window.RC.animateGauges($("tablewrap"));
+    }
+    // Most-stale sources bar chart (real age/SLA ratios, worst first)
+    var fbEl = document.getElementById("fresh-bars");
+    if (fbEl && window.RC && window.RC.buildBarChart && rows.length >= 2) {
+      fbEl.innerHTML = "";
+      var fbItems = rows.slice()
+        .filter(function(rr) { return rr.age_days != null && rr.sla_days != null && rr.sla_days > 0; })
+        .map(function(rr) {
+          var ratio = (+rr.age_days || 0) / +rr.sla_days;
+          return { label: String(rr.name || "?"), value: ratio,
+                   valueLabel: rr.age_days + "d / " + rr.sla_days + "d",
+                   color: ratio >= 1 ? "crit" : ratio >= 0.7 ? "warn" : "ok" };
+        })
+        .filter(function(it) { return it.value > 0; })
+        .sort(function(a, b) { return b.value - a.value; })
+        .slice(0, 6);
+      if (fbItems.length >= 2) {
+        window.RC.buildBarChart(fbEl, fbItems, { title: "Most stale vs SLA" });
+      }
     }
     // Age/SLA ratio sparkline -- sorted high-to-low (worst first)
     var fsEl = document.getElementById("fresh-spark");

@@ -100,19 +100,26 @@ then built on already-verified on-chain shapes (no fabrication):
 - **IMAP/webhook reply auto-ingest**: `reply_parser.ingest_reply` exists; no inbound channel feeds it (operator pastes each reply). An SES-inbound/IMAP poller → `ingest_reply` accelerates the learned-prior moat.
 - **Richer victim intake**: `portal/intake.py` collects only wallet/name/email/chain — add scam-type, counterparty platform, loss timeline, IC3/police report #; + proactive cross-victim cluster outreach.
 
-## Sui / Aptos LIVE adapters (deferred — needs live RPC verification)
-The address-codec foundation shipped (`chains/move_address.py`). The live transfer
-adapters are deferred because they require verifying decimals + event shapes against
-REAL RPC responses (hardcoding unverified decimals into the evidence core = fabrication
-risk). Build plan for a session with RPC access:
-- **Sui**: httpx client → `suix_queryTransactionBlocks` (filter `FromAddress`/`ToAddress`,
-  query BOTH) with `showBalanceChanges`; parse `balanceChanges[]` (owner/coinType/amount);
-  decimals from `suix_getCoinMetadata` (native `0x2::sui::SUI`=9). `for_chain(sui)`.
-- **Aptos**: REST `/v1/accounts/{addr}/transactions` (sender-side; use the Indexer for
-  inbound); parse BOTH coin `Withdraw/DepositEvent` AND fungible-asset events (the
-  store-object→owner resolution is the key correctness trap); decimals from FA metadata
+## Sui / Aptos LIVE adapters
+The address-codec foundation shipped (`chains/move_address.py`). These were deferred
+because the live transfer adapters require verifying decimals + event shapes against REAL
+RPC responses (hardcoding unverified decimals into the evidence core = fabrication risk).
+
+- **Sui** — ✅ SHIPPED (`8064a7a`). `chains/sui/{client,adapter}.py`: keyless full-node
+  JSON-RPC `suix_queryTransactionBlocks` (From/ToAddress, `showBalanceChanges` +
+  `showInput`) + cached `suix_getCoinMetadata`. Sui has no per-transfer event; the adapter
+  reconstructs honest from→to edges from the NET per-owner per-coin `balanceChanges` delta
+  (sender's negative ↔ other AddressOwners' positive of the SAME coinType). A DEX swap
+  (coin → a pool OBJECT, not an address) emits NO edge — correct, it's not a transfer.
+  Decimals from LIVE-VERIFIED pinned coins (SUI=9, USDC=6, USDT=6) or a real metadata
+  lookup; unresolvable coins are skipped, never guessed. Wired `for_chain(sui)` + CoinGecko
+  platform `"sui"` + Suiscan explorer. 15 tests on the live shape; live end-to-end verified
+  (reconstructed a real 0.228 SUI transfer edge). Sui-native USDC/USDT are issuer-freezable.
+- **Aptos** — still deferred. REST `/v1/accounts/{addr}/transactions` (sender-side; the
+  Indexer for inbound); parse BOTH coin `Withdraw/DepositEvent` AND fungible-asset events
+  (the store-object→owner resolution is the key correctness trap); decimals from FA metadata
   (native `0x1::aptos_coin::AptosCoin`=8). `for_chain(aptos)`. Verify against ≥1 real tx
-  per chain before trusting in evidence.
+  before trusting in evidence — the same live-shape discipline that unblocked Sui.
 
 ## Themes
 - **The cheapest highest-value wins are "dormant capability → wire into the act path"**

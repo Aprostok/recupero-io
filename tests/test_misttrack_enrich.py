@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import pytest
 
+from recupero.labels.internal_blacklist import AddressObservation
 from recupero.labels.misttrack_enrich import (
     EnrichmentResult,
     _dedup_clean,
     resolve_targets,
     run_misttrack_enrichment,
+    select_attribution_targets,
+    targets_from_case,
 )
 
 _KEY = "test-misttrack-key"
@@ -201,3 +204,67 @@ def test_run_resolved_zero_skips_persist(monkeypatch):
     assert res.enabled is True
     assert res.resolved == 0
     assert res.persisted == 0
+
+
+# --------------------------------------------------------------------------- #
+# select_attribution_targets (pure) + targets_from_case (guarded I/O)
+# --------------------------------------------------------------------------- #
+def _obs(address, *, chain="ethereum", role="hop", label_category=None,
+         label_name=None, case_is_test=False):
+    return AddressObservation(
+        address=address, chain=chain, role=role,
+        label_category=label_category, label_name=label_name,
+        investigation_id="inv-test", case_is_test=case_is_test,
+    )
+
+
+def test_select_targets_keeps_only_unlabeled():
+    obs = [
+        _obs("0xUNKNOWN1"),                                   # keep (unlabeled hop)
+        _obs("0xKNOWN", label_category="exchange_deposit",
+             label_name="Binance"),                           # drop (attributed)
+        _obs("0xNAMED", label_name="Some Service"),           # drop (named)
+        _obs("0xUNKNOWN2", role="unlabeled"),                 # keep
+    ]
+    addrs, chain = select_attribution_targets(obs)
+    assert addrs == ["0xUNKNOWN1", "0xUNKNOWN2"]
+    assert chain == "ethereum"
+
+
+def test_select_targets_dedups_canonically():
+    # canonical_address_key lower-cases valid 0x+40hex addrs; mixed-case
+    # variants of the SAME address must collapse to one target.
+    mixed = "0x" + "aB" * 20          # 40 hex chars, mixed case
+    obs = [_obs(mixed), _obs(mixed.lower()),
+           _obs("0x" + "Ab" * 20)]
+    addrs, chain = select_attribution_targets(obs)
+    assert len(addrs) == 1            # canonical-key dedup (EVM case-insensitive)
+    assert chain == "ethereum"
+
+
+def test_select_targets_excludes_test_fixtures_by_default():
+    obs = [_obs("0xFIXTURE", case_is_test=True), _obs("0xREAL")]
+    addrs, _ = select_attribution_targets(obs)
+    assert addrs == ["0xREAL"]
+    addrs_all, _ = select_attribution_targets(obs, include_test=True)
+    assert set(addrs_all) == {"0xFIXTURE", "0xREAL"}
+
+
+def test_select_targets_empty_returns_none_chain():
+    assert select_attribution_targets([]) == ([], None)
+    # a case of only-labeled addresses yields no targets
+    only_labeled = [_obs("0xX", label_category="exchange_deposit")]
+    assert select_attribution_targets(only_labeled) == ([], None)
+
+
+def test_select_targets_carries_non_evm_chain():
+    obs = [_obs("Txxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", chain="tron")]
+    addrs, chain = select_attribution_targets(obs)
+    assert chain == "tron"
+    assert len(addrs) == 1
+
+
+def test_targets_from_case_guarded_when_supabase_disabled(monkeypatch):
+    import recupero.api._supabase_case_source as sb
+    monkeypatch.setattr(sb, "enabled", lambda: False)
+    assert targets_from_case("some-case-id") == ([], None)

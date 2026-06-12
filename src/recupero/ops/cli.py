@@ -387,8 +387,15 @@ def cli() -> None:
              "lines starting with # are ignored).",
     )
     p_mt.add_argument(
-        "--chain", dest="mt_chain", default="ethereum",
-        help="Chain for the address batch (default: ethereum; e.g. tron, bsc).",
+        "--case", dest="mt_case", default=None,
+        help="Pull this case's UNLABELED counterparty addresses as targets "
+             "from the Supabase corpus (combines with --address). The case's "
+             "chain is used unless --chain is given.",
+    )
+    p_mt.add_argument(
+        "--chain", dest="mt_chain", default=None,
+        help="Chain for the address batch (default: ethereum, or the case's "
+             "chain when --case is used; e.g. tron, bsc).",
     )
     p_mt.add_argument(
         "--limit", dest="mt_limit", type=int, default=None,
@@ -1300,12 +1307,22 @@ def cli() -> None:
                 t = line.strip()
                 if t and not t.startswith("#"):
                     addrs.append(t)
+        case_chain = None
+        if args.mt_case:
+            from recupero.labels.misttrack_enrich import targets_from_case
+            case_addrs, case_chain = targets_from_case(args.mt_case)
+            addrs.extend(case_addrs)
+            print(
+                f"  case {args.mt_case}: {len(case_addrs)} unlabeled "
+                f"target(s)" + (f" on {case_chain}" if case_chain else "")
+            )
         if not addrs:
-            print("ERROR: provide --address (repeatable) and/or "
-                  "--addresses-file.", file=sys.stderr)
+            print("ERROR: provide --address (repeatable), --addresses-file, "
+                  "and/or --case.", file=sys.stderr)
             sys.exit(2)
+        effective_chain = args.mt_chain or case_chain or "ethereum"
         res = run_misttrack_enrichment(
-            addrs, chain=args.mt_chain, limit=args.mt_limit,
+            addrs, chain=effective_chain, limit=args.mt_limit,
         )
         if not res.enabled:
             print(

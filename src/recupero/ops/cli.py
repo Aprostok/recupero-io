@@ -367,6 +367,34 @@ def cli() -> None:
              "(default: attribution_feed).",
     )
 
+    # ----- misttrack-enrich (v4 #5: wire the dormant MistTrack provider) ----- #
+    p_mt = sub.add_parser(
+        "misttrack-enrich",
+        help="Resolve a batch of addresses through the MistTrack (SlowMist) "
+             "paid attribution API into the label candidate review queue "
+             "(Tron/USDT + scam/drainer coverage -- the #1 gap vs Chainalysis). "
+             "Rows land pending_review at LOW confidence (external inference, "
+             "never auto-promoted). INERT with no MISTTRACK_API_KEY set: zero "
+             "network calls, zero DB writes.",
+    )
+    p_mt.add_argument(
+        "--address", dest="mt_addresses", action="append", default=[],
+        metavar="ADDR", help="An address to attribute (repeatable).",
+    )
+    p_mt.add_argument(
+        "--addresses-file", dest="mt_addresses_file", default=None,
+        help="Path to a file of addresses, one per line (blank lines and "
+             "lines starting with # are ignored).",
+    )
+    p_mt.add_argument(
+        "--chain", dest="mt_chain", default="ethereum",
+        help="Chain for the address batch (default: ethereum; e.g. tron, bsc).",
+    )
+    p_mt.add_argument(
+        "--limit", dest="mt_limit", type=int, default=None,
+        help="Cap the number of PAID upstream queries (cost control).",
+    )
+
     # ----- harvest-blacklist (v0.39) ----- #
     p_bl = sub.add_parser(
         "harvest-blacklist",
@@ -1256,6 +1284,42 @@ def cli() -> None:
             sys.exit(2)
         n = import_opensanctions_file(src)
         print(f"Imported {n} intl-sanctioned crypto wallet(s) → risk-scoring CSV.")
+        sys.exit(0)
+
+    if args.command == "misttrack-enrich":
+        from pathlib import Path as _Path
+
+        from recupero.labels.misttrack_enrich import run_misttrack_enrichment
+        addrs = list(args.mt_addresses or [])
+        if args.mt_addresses_file:
+            fp = _Path(args.mt_addresses_file)
+            if not fp.exists():
+                print(f"ERROR: file not found: {fp}", file=sys.stderr)
+                sys.exit(2)
+            for line in fp.read_text(encoding="utf-8").splitlines():
+                t = line.strip()
+                if t and not t.startswith("#"):
+                    addrs.append(t)
+        if not addrs:
+            print("ERROR: provide --address (repeatable) and/or "
+                  "--addresses-file.", file=sys.stderr)
+            sys.exit(2)
+        res = run_misttrack_enrichment(
+            addrs, chain=args.mt_chain, limit=args.mt_limit,
+        )
+        if not res.enabled:
+            print(
+                f"MistTrack enrichment INERT -- MISTTRACK_API_KEY unset. "
+                f"{res.targets} unique target(s) would have been queried. "
+                "Set the key to enable paid attribution."
+            )
+            sys.exit(0)
+        print(
+            f"MistTrack enrichment: {res.queried} queried, "
+            f"{res.resolved} resolved -> {res.persisted} new candidate(s) "
+            "persisted (pending_review). Promote via the labels API after "
+            "review."
+        )
         sys.exit(0)
 
     if args.command == "import-attribution":

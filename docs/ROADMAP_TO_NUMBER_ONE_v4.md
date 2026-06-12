@@ -49,6 +49,27 @@ per-chain address verification via the Etherscan v2 multichain API → runner
 module → gated pipeline hook → artifact + guarded trace-report section →
 ENV row → real-log-fixture tests → full regression → FF-push.
 
+### Non-EVM trace-coverage gaps closed this cycle (the three keyless builds)
+All three were unblocked by live-probing the public endpoints (TronGrid,
+Cosmos LCD, Hyperliquid info API are keyless/reachable — no procurement),
+then built on already-verified on-chain shapes (no fabrication):
+- **#8 Cosmos IBC-out** (`05de15c`) — `trace/ibc_decode.py` + `ibc_runner.py`:
+  ICS-20 `send_packet` decode, denom-prefix strip, channel→zone registry,
+  `(src_channel,dst_channel,sequence)` pair-id; Circle-USDC sends flagged
+  freezable. Gated `RECUPERO_IBC_LEADS`. (Public Osmosis LCD 500s on the
+  `message.sender` tx-search — a pre-existing fetch-layer limit the Cosmos
+  trace already shares; decoder verified vs a real captured packet.)
+- **#12 Hyperliquid `for_chain`** (`9fd07f3`) — `chains/hyperliquid/adapter.py`:
+  `HyperliquidAdapter` exposes withdraw/deposit ledger events as Transfer-shaped
+  rows so a bridge-IN continuation no longer dead-ends; reuses the proven
+  scraper's `get_non_funding_ledger_updates` + ARBITRUM_USDC mapping; no
+  per-event receipt → `fetch_evidence_receipt` raises rather than fabricate.
+- **#10 Tron freeze-race watcher** (`3f96e1c`) — `monitoring/tron_watch.py` +
+  `recupero-ops tron-watch`: polls watched wallets' recently-SETTLED outbound
+  USDT-TRC20; flags FREEZABLE when the destination resolves to a known exchange
+  label. Base58check is CASE-SENSITIVE (never lowercased). Gated
+  `RECUPERO_TRON_WATCH`. Live path verified end-to-end against TronGrid.
+
 ## Tier 1 — highest recovery value, mostly CODE, buildable now
 
 | # | Gap | Why it matters | Effort | Notes |
@@ -65,11 +86,11 @@ ENV row → real-log-fixture tests → full regression → FF-push.
 |---|-----|-----|:--:|---|
 | 6 | ✅ SHIPPED (`a4059fe`) — **NFT-transfer hops never followed in BFS** — `nft_transfers.py` parses+prices ERC-721/1155 but is wired into no BFS path (`TODO(wave-4)` live) | NFT-sale laundering / mint-and-flip value vanishes from the recoverable total | M | follow the fungible *proceeds* at high; NFT→identity inference ≤medium |
 | 7 | ✅ SHIPPED (`53d9b88`) — **DEX LP-provision laundering** — no `addLiquidity`/`removeLiquidity`/V3 `mint` handling (`dex_swaps` is swaps only) | deposit→pool→later-remove-to-fresh-wallet dead-ends at the router/PositionManager | M | same-owner add→remove via position-id = high; V2 LP-token share ≤medium |
-| 8 | **Cosmos IBC continuation OUT of a zone** — `MsgRecvPacket`/`MsgTransfer` decode absent | Osmosis/Noble-USDC (Circle-freezable) routing dead-ends at the first IBC hop | M | packet seq+src/dst-channel matched both sides = high; denom-hash-only ≤medium |
+| 8 | ✅ SHIPPED (`05de15c`) — **Cosmos IBC continuation OUT of a zone** — `MsgRecvPacket`/`MsgTransfer` decode absent | Osmosis/Noble-USDC (Circle-freezable) routing dead-ends at the first IBC hop | M | packet seq+src/dst-channel matched both sides = high; denom-hash-only ≤medium |
 | 9 | **BTC (and other no-log chains) pool-bridge inbound** — `BitcoinAdapter` has no `fetch_native_inflows`/`fetch_logs` | THORChain/Maya EVM→BTC pool disbursements (non-memo) lose the BTC leg | M | amount+time on a no-log chain = low (INVESTIGATE lead, never auto-proof) |
-| 10 | **Settled-tx freeze-race watcher for Tron/BTC** — mempool watch is ETH/Polygon-only; watch_tick is once-nightly balance-delta | Tron is half of USDT laundering; no near-real-time outbound alert there | M–L | settled-outbound detection = high; "heading to a freezable CEX" ≤medium |
+| 10 | ✅ SHIPPED (`3f96e1c`, Tron) — **Settled-tx freeze-race watcher for Tron/BTC** — mempool watch is ETH/Polygon-only; watch_tick is once-nightly balance-delta | Tron is half of USDT laundering; no near-real-time outbound alert there | M–L | settled-outbound detection = high; "heading to a freezable CEX" ≤medium. _BTC half deferred (no-log chain, see #9)._ |
 | 11 | ✅ SHIPPED (`36d52a7`+`18ea621`) — **DeFi lending/vault park-and-withdraw** — no Aave/Compound/ERC-4626 `supply`/`withdraw`/`redeem` following | deposit→withdraw-to-fresh-wallet is clean parking; dead-ends at the pool | M | same-owner via receipt-token (aToken/share) = high; pooled inference ≤medium |
-| 12 | **Hyperliquid as a native venue** — currently synthetic-Arbitrum-USDC bridge edges only; no `for_chain` | top perps venue; internal routing invisible, weakening withdrawal attribution | S–M | in/out USDC edges high; internal HL ledger ≤medium |
+| 12 | ✅ SHIPPED (`9fd07f3`) — **Hyperliquid as a native venue** — currently synthetic-Arbitrum-USDC bridge edges only; no `for_chain` | top perps venue; internal routing invisible, weakening withdrawal attribution | S–M | in/out USDC edges high; internal HL ledger ≤medium |
 | 13 | **Lightning-gateway dead-end labels empty** — `KNOWN_LIGHTNING_GATEWAYS` purged; `detect_lightning_exit`→None | BTC→Lightning custodial gateway is unrecoverable on-chain; mislabel wastes effort | S | DATA: a checksum-verified maintained gateway list (anti-fabrication) |
 
 ## Tier 3 — data scale (operator/procurement, not code)
@@ -100,5 +121,10 @@ risk). Build plan for a session with RPC access:
   outcome history. Mostly procurement/operator work, not engineering.
 - Tier-2 tracer gaps are genuine value leaks on chains we already cover; #6 (NFT) and
   #7 (LP) are the strongest pure-code, can-reach-high-confidence builds.
+- **Tier-2 is now nearly clear**: #6, #7, #11 (EVM runners) + #8, #10, #12 (the three
+  keyless non-EVM builds) all shipped. Remaining Tier-2 are DATA/limit-bound, not new
+  architecture: #9 BTC/no-log pool-bridge inbound (amount+time = INVESTIGATE-only on a
+  no-log chain) and #13 Lightning gateways (needs a checksum-verified maintained list —
+  anti-fabrication). #5 (MistTrack) is the last Tier-1, gated on an API key (procurement).
 
 _Successor to ROADMAP_TO_NUMBER_ONE_v3.md; v3's items are shipped (see top)._

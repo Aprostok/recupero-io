@@ -889,6 +889,7 @@ that uses the corresponding integration. They are also surveyed by
 | `ETHERSCAN_API_KEY` | `worker/watch_tick.py`, `chains/ethereum/etherscan.py` | Etherscan v2 multichain key. |
 | `HELIUS_API_KEY` | `worker/watch_tick.py`, `chains/solana/helius.py` | Helius (Solana) API key. |
 | `TRON_PRO_API_KEY` | `chains/tron/adapter.py` | TronGrid API key. |
+| `RECUPERO_TRON_WATCH` | unset (off) | bool | `1`/`true`/`yes`/`on` | v0.41 | Opt-in gate for any AUTO-SCHEDULED Tron settled-outbound freeze-race scan (`monitoring.tron_watch`). Tron carries ~half of USDT laundering but had no near-real-time outbound watch (mempool_watch is EVM-only; Tron has no public pending mempool). When on, scheduled scans poll watched Tron wallets' recently-confirmed outbound USDT-TRC20 and flag transfers to a known exchange deposit as FREEZABLE (race a freeze). The `recupero-ops tron-watch --address ...` CLI runs regardless (explicit invocation). Public TronGrid API, no key required (TRON_PRO_API_KEY lifts rate limits). Default off. |
 | `TONCENTER_API_KEY` | `chains/ton/client.py` | TON Center API key (optional; lifts the free-tier rate limit for TON native + Jetton fetches). |
 | `MISTTRACK_API_KEY` | `labels/providers/misttrack.py` | MistTrack (SlowMist) API key (optional; enables paid by-address attribution enrichment — Tron/USDT/scam coverage. Inert when unset). |
 | `COINGECKO_API_KEY` | `pricing/coingecko.py` (required in `_REQUIRED_ENV_VARS`) | CoinGecko Pro API key. |

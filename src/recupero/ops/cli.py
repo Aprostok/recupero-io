@@ -240,6 +240,30 @@ def cli() -> None:
              "for the chosen network (needs SUPABASE_DB_URL) — no hand-typing.",
     )
 
+    # ----- tron-watch (v0.41 roadmap-v4 #10) ----- #
+    p_tron = sub.add_parser(
+        "tron-watch",
+        help="Settled-outbound freeze-race watch for Tron: poll watched Tron "
+             "wallets' recently-confirmed outbound USDT-TRC20 transfers and "
+             "flag any heading to a known exchange deposit (race a freeze). "
+             "Tron has no pending mempool — these are SETTLED txs, surfaced "
+             "near-real-time by frequent polling. Uses the public TronGrid API "
+             "(no key required; TRON_PRO_API_KEY lifts rate limits).",
+    )
+    p_tron.add_argument(
+        "--address", action="append", dest="tron_addresses",
+        help="A watched Tron base58 address (repeatable).",
+    )
+    p_tron.add_argument(
+        "--since-hours", type=float, default=24.0, dest="tron_since_hours",
+        help="Look back this many hours for settled outbound transfers "
+             "(default 24).",
+    )
+    p_tron.add_argument(
+        "--all-tokens", action="store_true", dest="tron_all_tokens",
+        help="Surface all TRC-20 outbound, not just USDT (default USDT-only).",
+    )
+
     # ----- send-le-handoff ----- #
     p_le = sub.add_parser(
         "send-le-handoff",
@@ -1052,6 +1076,41 @@ def cli() -> None:
             print(f"mempool-watch: {exc}")
             sys.exit(2)
         print(f"mempool-watch: dispatched {n} pending alert(s)")
+        sys.exit(0)
+
+    if args.command == "tron-watch":
+        import time as _time
+
+        from recupero.chains.tron.client import TronGridClient
+        from recupero.monitoring.tron_watch import (
+            default_cex_lookup,
+            scan_tron_outbound,
+        )
+        addrs = [a for a in (args.tron_addresses or []) if a and a.strip()]
+        if not addrs:
+            print("at least one --address is required")
+            sys.exit(2)
+        since_ms = int((_time.time() - args.tron_since_hours * 3600) * 1000)
+        cex_lookup = default_cex_lookup()
+        client = TronGridClient()
+        try:
+            alerts = scan_tron_outbound(
+                addresses=addrs, client=client, since_ms=since_ms,
+                cex_lookup=cex_lookup, usdt_only=not args.tron_all_tokens,
+            )
+        finally:
+            client.close()
+        freezable = 0
+        for a in alerts:
+            tag = (f"FREEZABLE -> {a.cex_name}" if a.freezable
+                   else "tracked (unlabeled dest)")
+            if a.freezable:
+                freezable += 1
+            print(f"  {a.from_address} -> {a.to_address} "
+                  f"{a.amount_human} {a.token_symbol} [{tag}] tx={a.tx_id}")
+        print(f"tron-watch: {len(alerts)} settled outbound transfer(s), "
+              f"{freezable} to a known exchange (race a freeze). Settled facts — "
+              "confirm before filing.")
         sys.exit(0)
 
     if args.command == "send-le-handoff":

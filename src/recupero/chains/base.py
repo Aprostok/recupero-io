@@ -109,6 +109,16 @@ class ChainAdapter(ABC):
                 follow_redirects=True,
             )
             return CosmosAdapter(client=CosmosLCDClient(http_client=httpx_client))
+        if chain == Chain.hyperliquid:
+            # roadmap-v4 #12: Hyperliquid is a perps/spot venue (not a block
+            # chain) with an Ethereum-format address space and its own USDC
+            # ledger over the public info API (no auth). Like Tron/TON the
+            # adapter resolves its own client. Before this branch a trace that
+            # bridged INTO Hyperliquid dead-ended here (NotImplementedError,
+            # swallowed by the continuation block); now the BFS follows the
+            # HL wallet's USDC withdrawals to their Arbitrum destination.
+            from recupero.chains.hyperliquid.adapter import HyperliquidAdapter
+            return HyperliquidAdapter()
         raise NotImplementedError(f"No adapter for chain {chain}")
 
     # --- block / time ---

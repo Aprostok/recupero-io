@@ -748,14 +748,15 @@ def _maybe_write_lending_leads(
     config: RecuperoConfig,
     env: RecuperoEnv,
 ) -> None:
-    """Aave V3 cross-address withdrawal leads over the finished trace
-    (roadmap-v4 #11 slice 1).
+    """Lending cross-address withdrawal leads over the finished trace
+    (roadmap-v4 #11) -- Aave V3 + Compound III (Comet).
 
     Opt-in via ``RECUPERO_LENDING_LEADS`` (default OFF -> zero cost). When on,
-    each traced wallet's Aave V3 Pool ``Withdraw`` events are fetched
-    (indexed-user topic filter) and every CROSS-ADDRESS withdrawal -- the exit
-    sent by the aToken contract, invisible to outflow enumeration -- becomes a
-    lead in ``lending_leads.json``. Both addresses protocol-stamped (high).
+    each traced wallet's Aave V3 (indexed-user) + Compound III Comet
+    (indexed-src, pinned markets) ``Withdraw`` events are fetched and every
+    CROSS-ADDRESS withdrawal -- the exit sent by the protocol contract,
+    invisible to outflow enumeration -- becomes a lead in
+    ``lending_leads.json``. Both addresses protocol-stamped (high).
     Leads only -- never a followed destination, the recoverable total
     untouched. Best-effort: never blocks the trace pipeline.
     """

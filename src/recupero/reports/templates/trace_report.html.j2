@@ -577,16 +577,17 @@ notification).</p>
 {% endif %}
 
 {% if lending_leads %}
-<h2>12. Lending Cross-Address Withdrawals (Aave V3)</h2>
-<p class="small"><em>A traced wallet withdrew supplied funds from the Aave V3
-   Pool <strong>directly to a different address</strong> &mdash; an exit sent
-   by the aToken contract and therefore invisible to outflow enumeration.
-   Both the initiating wallet and the exit recipient are protocol-stamped
-   indexed topics on the Pool's <span class="mono">Withdraw</span> event
-   (HIGH confidence). Withdrawals back to the traced wallet itself are not
-   listed (those funds re-enter normal tracing). Amounts are raw reserve
-   units; leads are for review, NEVER a followed destination, and the
-   recoverable total is unchanged.</em></p>
+<h2>12. Lending Cross-Address Withdrawals (Aave V3 / Compound III)</h2>
+<p class="small"><em>A traced wallet withdrew supplied funds from a lending
+   protocol (Aave V3 or Compound III / Comet) <strong>directly to a different
+   address</strong> &mdash; an exit sent by the protocol contract and therefore
+   invisible to outflow enumeration. Both the initiating wallet and the exit
+   recipient are protocol-stamped indexed topics on the
+   <span class="mono">Withdraw</span> event (HIGH confidence; Comet is queried
+   only against pinned, verified markets). Withdrawals back to the traced
+   wallet itself are not listed (those funds re-enter normal tracing). Amounts
+   are raw reserve / base-asset units; leads are for review, NEVER a followed
+   destination, and the recoverable total is unchanged.</em></p>
 <table>
   <thead>
     <tr>

@@ -13,6 +13,9 @@ from typing import Any
 from recupero.trace.lending_runner import (
     AAVE_V3_POOL_BY_CHAIN,
     AAVE_V3_WITHDRAW_TOPIC0,
+    COMPOUND_V3_COMETS_BY_CHAIN,
+    COMPOUND_V3_WITHDRAW_TOPIC0,
+    comet_withdraws_from_logs,
     leads_to_json,
     lending_leads_enabled,
     run_lending_leads,
@@ -62,12 +65,15 @@ def _transfer(frm):
 
 
 class _StubAdapter:
-    def __init__(self, logs):
-        self.logs = logs
+    def __init__(self, logs, comet_logs=None):
+        self.logs = logs                       # Aave Withdraw logs
+        self.comet_logs = comet_logs or []     # Comet Withdraw logs
         self.calls: list[dict[str, Any]] = []
 
     def fetch_logs(self, address, topic0, *, from_block, to_block, topics=None):
-        self.calls.append({"address": address, "topics": topics})
+        self.calls.append({"address": address, "topic0": topic0, "topics": topics})
+        if topic0 == COMPOUND_V3_WITHDRAW_TOPIC0:
+            return self.comet_logs
         return self.logs
 
 
@@ -144,9 +150,77 @@ def test_unsupported_chain_yields_empty() -> None:
     assert adapter.calls == []  # no pool → no fetch
 
 
+# ---- Compound III (Comet) ---- #
+
+_COMET = COMPOUND_V3_COMETS_BY_CHAIN["ethereum"][0]  # cUSDCv3
+
+
+def _comet_log(*, market, src, to, amount="0x1dcd6500", tx="0xcomet"):
+    # Comet Withdraw(src indexed, to indexed, amount): topics=[t0, src, to];
+    # data = one word (raw base-asset amount).
+    return {
+        "address": market,
+        "topics": [COMPOUND_V3_WITHDRAW_TOPIC0, _topic_addr(src), _topic_addr(to)],
+        "data": "0x" + amount[2:].rjust(64, "0"),
+        "transactionHash": tx,
+    }
+
+
+def test_comet_withdraws_parse() -> None:
+    rows = comet_withdraws_from_logs(
+        [_comet_log(market=_COMET, src=_USER, to=_FRESH)])
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["src"] == _USER
+    assert r["to"] == _FRESH
+    assert r["comet"] == _COMET
+    assert r["amount_raw"] == str(0x1DCD6500)   # 500 USDC (6dp) raw
+
+
+def test_comet_cross_address_is_a_high_lead() -> None:
+    adapter = _StubAdapter(
+        [],   # no Aave logs
+        comet_logs=[
+            _comet_log(market=_COMET, src=_USER, to=_USER, tx="0xself"),   # context
+            _comet_log(market=_COMET, src=_USER, to=_FRESH, tx="0xexit"),  # exit
+        ],
+    )
+    leads = run_lending_leads(
+        transfers=[_transfer(_USER)], adapter=adapter, force=True,
+    )
+    # one cross-address comet lead (back-to-self excluded). Comet markets are
+    # queried per-market with src on topic1.
+    comet_leads = [x for x in leads if x["protocol"] == "compound_v3"]
+    assert len(comet_leads) == 1
+    ld = comet_leads[0]
+    assert ld["user"] == _USER
+    assert ld["exit_recipient"] == _FRESH
+    assert ld["reserve"] == _COMET
+    assert ld["confidence"] == "high"
+    # the Comet getLogs filtered src on topic1
+    comet_call = next(c for c in adapter.calls
+                      if c["topic0"] == COMPOUND_V3_WITHDRAW_TOPIC0)
+    assert comet_call["topics"] == [_topic_addr(_USER)]
+    assert comet_call["address"] == _COMET
+
+
+def test_comet_foreign_market_emitter_dropped() -> None:
+    # Defense-in-depth: a row whose emitter isn't the pinned market (a server
+    # ignoring the address filter) must not become a lead.
+    rogue = "0x" + "ab" * 20
+    adapter = _StubAdapter(
+        [], comet_logs=[_comet_log(market=rogue, src=_USER, to=_FRESH)],
+    )
+    leads = run_lending_leads(
+        transfers=[_transfer(_USER)], adapter=adapter, force=True,
+    )
+    assert [x for x in leads if x["protocol"] == "compound_v3"] == []
+
+
 def test_leads_to_json_artifact_shape() -> None:
     doc = leads_to_json([{"x": 1}])
     assert doc["kind"] == "recupero_lending_leads"
     assert doc["lead_count"] == 1
     assert "never a followed destination" in doc["disclaimer"]
     assert "protocol identity" in doc["disclaimer"]
+    assert "Compound III" in doc["disclaimer"]

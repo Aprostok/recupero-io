@@ -98,6 +98,7 @@ ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "tron":        "https://tronscan.org/#/address/",
     "ton":         "https://tonviewer.com/",
     "stellar":     "https://stellar.expert/explorer/public/account/",
+    "sui":         "https://suiscan.xyz/mainnet/account/",
     # v0.20.0 (round-13 chain-coverage research): EVM-trivial wins —
     # each chain reuses the existing EVM adapter via a chainid wire-up
     # in worker/watch_tick._CHAIN_ID_BY_NAME + chains/evm/adapter.
@@ -144,6 +145,7 @@ EXPLORER_NAME_BY_CHAIN: dict[str, str] = {
     "tron":        "Tronscan",
     "ton":         "Tonviewer",
     "stellar":     "Stellar.Expert",
+    "sui":         "Suiscan",
     "optimism":    "Optimistic Etherscan",
     "avalanche":   "Snowtrace",
     "linea":       "LineaScan",

@@ -64,6 +64,10 @@ _CHAIN_TO_CG_PLATFORM: dict[Chain, str] = {
     # v0.38 (#9): Stellar. Native XLM coingecko_id is "stellar"; issued-asset
     # pricing uses the adapter's per-code map (USDC→usd-coin, USDT→tether).
     Chain.stellar:   "stellar",
+    # roadmap-v4: Sui. CoinGecko platform id is "sui" — enables coinType→USD
+    # resolution for Sui coins. Native SUI's coingecko_id is also "sui"; the
+    # adapter pins USDC→usd-coin / USDT→tether on the freeze-relevant stablecoins.
+    Chain.sui:       "sui",
 }
 
 

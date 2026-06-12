@@ -86,6 +86,15 @@ class ChainAdapter(ABC):
             # adapter resolves its own config.
             from recupero.chains.stellar.adapter import StellarAdapter
             return StellarAdapter()
+        if chain == Chain.sui:
+            # roadmap-v4: Sui mainnet via the public keyless fullnode JSON-RPC.
+            # Like Tron/TON/Stellar the adapter resolves its own client. Before
+            # this branch a trace that bridged INTO Sui dead-ended here
+            # (NotImplementedError, swallowed by the continuation block); now the
+            # BFS follows the Sui wallet's coin movements (native SUI + USDC/USDT)
+            # to their next address via the tx balanceChanges.
+            from recupero.chains.sui.adapter import SuiAdapter
+            return SuiAdapter()
         if chain == Chain.cosmos:
             # v0.39 (Activation Sprint #5): Cosmos / IBC zones (Cosmos Hub,
             # Osmosis, Injective, Juno, Stargaze, Axelar, Secret, Kava,

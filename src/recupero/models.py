@@ -121,6 +121,13 @@ class Chain(str, Enum):
     # Stablecoin off-ramp with issuer-freezable assets. Wired into for_chain via
     # StellarAdapter (Horizon backend: classic payment operations).
     stellar = "stellar"
+    # roadmap-v4: Sui — Move-VM L1 with native Circle USDC + Tether USDT
+    # (issuer-freezable). Wired into for_chain via SuiAdapter (public keyless
+    # fullnode JSON-RPC: suix_queryTransactionBlocks + balanceChanges). The
+    # address codec (chains/move_address.py) shipped earlier; this is the live
+    # transfer layer. The deferral was lifting once the decimals + balanceChange
+    # shapes were verified against real RPC (no hardcoded unverified constants).
+    sui = "sui"
 
 
 class LabelCategory(str, Enum):

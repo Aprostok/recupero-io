@@ -256,20 +256,40 @@ class SuiAdapter(ChainAdapter):
 
     @staticmethod
     def _attribute_source(sender: Any, focus: str, by_addr: dict[str, int]) -> str:
-        """Best honest 'from' for an inbound edge: the tx sender if it's a real
-        address other than focus; else the largest decreaser of this coin; else a
-        non-fabricated placeholder."""
-        if isinstance(sender, str) and is_valid_sui_address(sender):
-            norm = normalize_sui_address(sender)
-            if norm != focus:
-                return norm
+        """Best honest 'from' for an inbound edge.
+
+        The on-chain coin source is whoever's balance of THIS coin decreased — NOT
+        necessarily the tx signer. A DEX router / relayer / sponsor commonly signs
+        a tx in which the funds actually move from a different wallet, so trusting
+        ``sender`` mis-attributes the source. We therefore prefer a single
+        unambiguous non-focus decreaser (the real payer) over ``sender`` — mirroring
+        the outflow pairing and the Aptos inbound rule (single non-focus
+        withdrawer). The signer is a fallback only when the payer is ambiguous, and
+        a non-fabricated placeholder is the last resort."""
         decreasers = sorted(
             ((a, amt) for a, amt in by_addr.items() if a != focus and amt < 0),
-            key=lambda kv: kv[1],
+            key=lambda kv: kv[1],  # most-negative (largest payer) first
         )
-        if decreasers:
+        # Unambiguous on-chain payer wins over the signer.
+        if len(decreasers) == 1:
             return decreasers[0][0]
-        return "sui:unknown_source"
+
+        norm_sender: str | None = None
+        if isinstance(sender, str) and is_valid_sui_address(sender):
+            n = normalize_sui_address(sender)
+            if n != focus:
+                norm_sender = n
+
+        if not decreasers:
+            # Coin arrived from a pool / object / mint (no AddressOwner payer):
+            # the signer is the best available attribution, else unknown (never
+            # a fabricated address).
+            return norm_sender or "sui:unknown_source"
+        # Multiple payers: the signer, if it's actually one of them, is the most
+        # specific honest pick; otherwise fall back to the largest payer.
+        if norm_sender is not None and any(a == norm_sender for a, _ in decreasers):
+            return norm_sender
+        return decreasers[0][0]
 
     def _edge(
         self, digest: str, block_time: datetime, frm: str, to: str,

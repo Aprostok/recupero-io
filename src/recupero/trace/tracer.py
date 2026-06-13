@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 import os
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import wait as _futures_wait
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -653,6 +654,7 @@ def run_trace(
                 evidence_dir=case_dir / "tx_evidence",
                 concurrency=trace_concurrency,
                 value_trace=_value_trace_enabled,
+                deadline=trace_deadline,
             )
         except BudgetExceededError as exc:
             # v0.32 — per-case API budget tripped mid-wave. Same
@@ -2722,6 +2724,7 @@ def _process_wave(
     evidence_dir: Path,
     concurrency: int,
     value_trace: bool = False,
+    deadline: datetime | None = None,
 ) -> list[tuple[Address, int, list[Transfer], bool]]:
     """Run ``_trace_one_hop`` on every address in the wave, returning the
     aggregated results. Internal errors per-address are caught and
@@ -2733,6 +2736,16 @@ def _process_wave(
     threads sharing the clients are safe — global throughput is capped
     at the per-key rate regardless of thread count. Higher concurrency
     just hides per-call latency behind concurrent in-flight requests.
+
+    ``deadline`` (v0.41.1, #253) bounds the wave to the trace's wall-clock
+    budget. The between-wave deadline check (``run_trace``) only refuses to
+    START a new wave — but a single wave over a large, expensive frontier (the
+    real Lazarus/Ronin case: dozens of high-fan-out $-consolidation nodes
+    against a rate-limited API) can itself run far past the budget, so the trace
+    never returns. Here we stop collecting once the deadline elapses, cancel the
+    not-yet-started nodes, and return the partial wave. The caller then trips
+    ``timeout_hit`` and writes a partial-trace case (the existing graceful-
+    degradation contract) instead of hanging forever.
     """
     if not wave:
         return []
@@ -2760,18 +2773,37 @@ def _process_wave(
             )
             return (addr, depth, [], False)
 
+    def _past_deadline() -> bool:
+        return deadline is not None and utcnow() >= deadline
+
     # Single-threaded path for trivial waves or when concurrency is off.
     # Preserves test determinism + avoids ThreadPoolExecutor overhead
-    # for tiny cases.
+    # for tiny cases. The deadline is checked before each node so the
+    # serial path is bounded too (a tiny-wave whale node can't run forever).
     if concurrency <= 1 or len(wave) == 1:
-        return [_one(addr, depth) for addr, depth in wave]
+        serial: list[tuple[Address, int, list[Transfer], bool]] = []
+        for addr, depth in wave:
+            if _past_deadline():
+                log.warning(
+                    "trace wave deadline: skipping %d remaining node(s) (serial)",
+                    len(wave) - len(serial),
+                )
+                break
+            serial.append(_one(addr, depth))
+        return serial
 
     results: list[tuple[Address, int, list[Transfer], bool]] = []
-    with ThreadPoolExecutor(
-        max_workers=concurrency, thread_name_prefix="trace"
-    ) as pool:
+    pool = ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="trace")
+    try:
         futures = {pool.submit(_one, addr, depth): (addr, depth) for addr, depth in wave}
-        for fut in as_completed(futures):
+        # Bounded wait: return as soon as all nodes finish OR the trace
+        # wall-clock deadline elapses, whichever comes first. ``timeout=None``
+        # (no deadline) waits for all — identical to the old behavior.
+        timeout = None
+        if deadline is not None:
+            timeout = max(0.0, (deadline - utcnow()).total_seconds())
+        done, not_done = _futures_wait(set(futures), timeout=timeout)
+        for fut in done:
             try:
                 results.append(fut.result())
             except Exception as e:  # noqa: BLE001
@@ -2781,6 +2813,21 @@ def _process_wave(
                 addr, depth = futures[fut]
                 log.warning("trace wave worker crashed for %s: %s", addr, e)
                 results.append((addr, depth, [], False))
+        if not_done:
+            # Deadline elapsed mid-wave: cancel the queued nodes (running ones
+            # can't be interrupted — at most ``concurrency`` finish in the
+            # background) and return the partial wave so the caller degrades
+            # gracefully instead of blocking on the whole frontier.
+            log.warning(
+                "trace wave deadline: cancelling %d of %d node(s) still in flight",
+                len(not_done), len(futures),
+            )
+            for fut in not_done:
+                fut.cancel()
+    finally:
+        # wait=False so we don't block on the (≤concurrency) running nodes;
+        # cancel_futures drops anything still queued.
+        pool.shutdown(wait=False, cancel_futures=True)
     return results
 
 

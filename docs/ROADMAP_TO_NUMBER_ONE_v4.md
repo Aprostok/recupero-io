@@ -100,10 +100,11 @@ then built on already-verified on-chain shapes (no fabrication):
 - **IMAP/webhook reply auto-ingest**: `reply_parser.ingest_reply` exists; no inbound channel feeds it (operator pastes each reply). An SES-inbound/IMAP poller → `ingest_reply` accelerates the learned-prior moat.
 - **Richer victim intake**: `portal/intake.py` collects only wallet/name/email/chain — add scam-type, counterparty platform, loss timeline, IC3/police report #; + proactive cross-victim cluster outreach.
 
-## Sui / Aptos LIVE adapters
+## Sui / Aptos LIVE adapters — ✅ BOTH SHIPPED
 The address-codec foundation shipped (`chains/move_address.py`). These were deferred
 because the live transfer adapters require verifying decimals + event shapes against REAL
 RPC responses (hardcoding unverified decimals into the evidence core = fabrication risk).
+Both are now live — the deferral lifted by live-probing the keyless endpoints first.
 
 - **Sui** — ✅ SHIPPED (`8064a7a`). `chains/sui/{client,adapter}.py`: keyless full-node
   JSON-RPC `suix_queryTransactionBlocks` (From/ToAddress, `showBalanceChanges` +
@@ -115,11 +116,18 @@ RPC responses (hardcoding unverified decimals into the evidence core = fabricati
   lookup; unresolvable coins are skipped, never guessed. Wired `for_chain(sui)` + CoinGecko
   platform `"sui"` + Suiscan explorer. 15 tests on the live shape; live end-to-end verified
   (reconstructed a real 0.228 SUI transfer edge). Sui-native USDC/USDT are issuer-freezable.
-- **Aptos** — still deferred. REST `/v1/accounts/{addr}/transactions` (sender-side; the
-  Indexer for inbound); parse BOTH coin `Withdraw/DepositEvent` AND fungible-asset events
-  (the store-object→owner resolution is the key correctness trap); decimals from FA metadata
-  (native `0x1::aptos_coin::AptosCoin`=8). `for_chain(aptos)`. Verify against ≥1 real tx
-  before trusting in evidence — the same live-shape discipline that unblocked Sui.
+- **Aptos** — ✅ SHIPPED (`9debdc5`). `chains/aptos/{client,adapter}.py`: built on the
+  public keyless Indexer GraphQL `fungible_asset_activities`, which sidesteps the
+  store-object→owner trap entirely — the Indexer resolves each FA store back to its OWNER
+  and unifies the legacy Coin standard (`token_standard "v1"`) with FA (`"v2"`) into one
+  owner-keyed activity row. A transfer A→B is a Withdraw owned by A + a Deposit owned by B;
+  the adapter pairs them per (version, asset_type) under a **single-withdrawer guard** (a
+  multi-sender aggregation is skipped, never mis-attributed). Decimals from LIVE-VERIFIED
+  pinned canonical assets — APT (coin + FA `@0xa`) + Circle USDC — pinned BY ADDRESS, never
+  by symbol (the FA metadata table is full of symbol-spoof "USDT"/"APT" fakes); other assets
+  resolve via real `fungible_asset_metadata` or are skipped. Wired `for_chain(aptos)` +
+  CoinGecko platform `"aptos"` + Aptos Explorer. 15 tests; live e2e verified (reconstructed a
+  real 50.005204 USDC edge). Aptos-native USDC is issuer-freezable.
 
 ## Themes
 - **The cheapest highest-value wins are "dormant capability → wire into the act path"**
@@ -128,10 +136,14 @@ RPC responses (hardcoding unverified decimals into the evidence core = fabricati
   outcome history. Mostly procurement/operator work, not engineering.
 - Tier-2 tracer gaps are genuine value leaks on chains we already cover; #6 (NFT) and
   #7 (LP) are the strongest pure-code, can-reach-high-confidence builds.
-- **Tier-2 is now nearly clear**: #6, #7, #11 (EVM runners) + #8, #10, #12 (the three
-  keyless non-EVM builds) all shipped. Remaining Tier-2 are DATA/limit-bound, not new
+- **The CODE roadmap is essentially clear.** Shipped: all Tier-1 (incl. #5 MistTrack
+  wiring), the EVM DeFi runners (#6/#7/#11), the three keyless non-EVM builds (#8 Cosmos
+  IBC / #10 Tron freeze-race / #12 Hyperliquid), AND both Move-VM chains (Sui `8064a7a`,
+  Aptos `9debdc5`). Chain coverage now spans EVM + Solana + Tron + Bitcoin + TON + Stellar +
+  Cosmos + Hyperliquid + **Sui + Aptos**. What remains is DATA/limit-bound, not new
   architecture: #9 BTC/no-log pool-bridge inbound (amount+time = INVESTIGATE-only on a
-  no-log chain) and #13 Lightning gateways (needs a checksum-verified maintained list —
-  anti-fabrication). #5 (MistTrack) is the last Tier-1, gated on an API key (procurement).
+  no-log chain), #13 Lightning gateways (needs a checksum-verified maintained list —
+  anti-fabrication), MistTrack/OpenSanctions DATA (API keys/licence), exchange LE-channel
+  breadth, and #253 (a full no-answer-key trace on a fresh real case — validation, not a build).
 
 _Successor to ROADMAP_TO_NUMBER_ONE_v3.md; v3's items are shipped (see top)._

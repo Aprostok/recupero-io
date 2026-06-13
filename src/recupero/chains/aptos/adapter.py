@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -66,14 +67,29 @@ _EXPLORER_TX = "https://explorer.aptoslabs.com/txn/"
 _EXPLORER_ADDR = "https://explorer.aptoslabs.com/account/"
 _EXPLORER_NET = "?network=mainnet"
 
-# The Aptos Indexer hard-caps a single query at 100 rows regardless of the
-# requested ``limit`` (verified live: limit 1000/5000/20000 all return 100). This
-# adapter issues ONE query per fetch (no cursor pagination yet), so a focus with
-# more activity than this cap is truncated to its most-recent rows. We can't make
-# that silent — a trace presented as complete must not be quietly partial — so we
-# WARN on saturation. Version-cursor pagination (transaction_version _lt cursor,
-# loop until < cap or budget) is the deeper follow-up that removes the cap.
-_INDEXER_PAGE_CAP = 100
+# Per-address activity budget. The Indexer hard-caps a single query at 100 rows,
+# but the client now PAGINATES (compound version+event_index cursor), so the only
+# remaining bound is this budget — mirroring the project standard
+# (config.trace.max_transfers_per_address = 50_000, env-overridable) so Aptos
+# isn't a silent outlier. A fetch that actually hits the budget is WARNED (real
+# truncation), never silent.
+_DEFAULT_MAX_TRANSFERS_PER_ADDRESS = 50_000
+_HARD_ROW_CEILING = 250_000  # runaway backstop for a "disabled"/garbage budget.
+
+
+def _resolve_budget() -> int:
+    """RECUPERO_MAX_TRANSFERS_PER_ADDRESS as a row budget (default 50_000).
+    ``<= 0`` (disabled/unbounded) → the hard ceiling; clamped to it otherwise."""
+    raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if raw is not None:
+        try:
+            budget = int(raw)
+        except (TypeError, ValueError):
+            budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if budget <= 0:
+        return _HARD_ROW_CEILING
+    return min(budget, _HARD_ROW_CEILING)
 
 # LIVE-VERIFIED canonical assets: asset_type -> (symbol, decimals, coingecko_id).
 # Pinned by ADDRESS (not symbol) — the metadata table has many symbol-spoof fakes.
@@ -116,8 +132,13 @@ class AptosAdapter(ChainAdapter):
     chain = Chain.aptos
 
     def __init__(self, *, client: AptosIndexerClient | None = None,
-                 max_legs: int = 100) -> None:
+                 max_legs: int | None = None) -> None:
         self.client = client or AptosIndexerClient()
+        # max_legs=None (default) → the project transfer budget
+        # (RECUPERO_MAX_TRANSFERS_PER_ADDRESS, default 50_000). The client now
+        # paginates, so this is a real total-row budget, not the 100-row cap.
+        if max_legs is None:
+            max_legs = _resolve_budget()
         self._max_legs = max(1, max_legs)
 
     def close(self) -> None:
@@ -182,12 +203,12 @@ class AptosAdapter(ChainAdapter):
             log.warning("aptos: activity fetch failed for %s: %s", focus, exc)
             return []
 
-        if len(legs_raw) >= _INDEXER_PAGE_CAP:
+        if len(legs_raw) >= self._max_legs:
             log.warning(
-                "aptos: %s activity fetch for %s saturated the Indexer's "
-                "%d-row cap — older activity NOT seen, trace may be INCOMPLETE "
-                "(this adapter does not yet paginate the activity feed).",
-                "outflow" if outflow else "inflow", focus, _INDEXER_PAGE_CAP,
+                "aptos: %s activity fetch for %s hit the %d-row budget — older "
+                "activity NOT seen, trace may be INCOMPLETE; raise "
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                "outflow" if outflow else "inflow", focus, self._max_legs,
             )
 
         # focus's own legs of interest: {(version, asset): (amount, block_time)}
@@ -209,17 +230,21 @@ class AptosAdapter(ChainAdapter):
 
         versions = sorted({v for (v, _a) in focus_legs})
         try:
-            all_rows = self.client.activities_at_versions(versions)
+            # Counterparties can outnumber the focus's own legs (several parties
+            # per version) — give the (chunked, paginated) fetch room up to the
+            # same per-address budget so they aren't truncated below it.
+            all_rows = self.client.activities_at_versions(
+                versions, limit=self._max_legs,
+            )
         except AptosIndexerError as exc:
             log.warning("aptos: counterparty fetch failed for %s: %s", focus, exc)
             return []
-
-        if len(all_rows) >= _INDEXER_PAGE_CAP:
+        if len(all_rows) >= self._max_legs:
             log.warning(
-                "aptos: counterparty fetch for %s saturated the Indexer's "
-                "%d-row cap across %d version(s) — some counterparties NOT seen, "
-                "edges may be INCOMPLETE (counterparty fetch is not yet batched).",
-                focus, _INDEXER_PAGE_CAP, len(versions),
+                "aptos: counterparty fetch for %s hit the %d-row budget across "
+                "%d version(s) — some counterparties NOT seen, edges may be "
+                "INCOMPLETE; raise RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                focus, self._max_legs, len(versions),
             )
 
         # group counterparty activities by (version, asset)

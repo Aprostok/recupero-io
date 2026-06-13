@@ -30,36 +30,52 @@ log = logging.getLogger(__name__)
 _APTOS_HOST = "api.mainnet.aptoslabs.com"
 APTOS_INDEXER_URL = f"https://{_APTOS_HOST}/v1/graphql"
 
-# Activities a focus address SENT (its own withdrawals; gas excluded).
+# The Aptos Indexer hard-caps a single query at 100 rows regardless of the
+# requested limit (verified live: limit 1000/5000/20000 all return 100). To fetch
+# a complete history we paginate with a COMPOUND cursor
+# (transaction_version desc, event_index desc): one tx emits many activities that
+# share a single transaction_version, so a version-only cursor would skip/dup rows
+# at a page boundary — the (version, event_index) cursor is stable (verified live).
+_PAGE_SIZE = 100
+_MAX_BIGINT = 9223372036854775807  # initial cursor: `_lt MAX` matches everything.
+
+# Activities a focus address SENT (its own withdrawals; gas excluded). Paginated
+# via the compound cursor ($v,$e); $page is the per-request page size.
 _Q_WITHDRAWS = """
-query($owner:String!,$limit:Int!){
+query($owner:String!,$page:Int!,$v:bigint!,$e:bigint!){
   fungible_asset_activities(
     where:{owner_address:{_eq:$owner}, type:{_ilike:"%Withdraw%"},
-           is_gas_fee:{_eq:false}, is_transaction_success:{_eq:true}},
-    order_by:{transaction_version:desc}, limit:$limit
-  ){ owner_address amount asset_type type transaction_version transaction_timestamp }
+           is_gas_fee:{_eq:false}, is_transaction_success:{_eq:true},
+           _or:[{transaction_version:{_lt:$v}},
+                {transaction_version:{_eq:$v}, event_index:{_lt:$e}}]},
+    order_by:[{transaction_version:desc},{event_index:desc}], limit:$page
+  ){ owner_address amount asset_type type transaction_version transaction_timestamp event_index }
 }
 """
 
 # Activities a focus address RECEIVED (its own deposits).
 _Q_DEPOSITS = """
-query($owner:String!,$limit:Int!){
+query($owner:String!,$page:Int!,$v:bigint!,$e:bigint!){
   fungible_asset_activities(
     where:{owner_address:{_eq:$owner}, type:{_ilike:"%Deposit%"},
-           is_gas_fee:{_eq:false}, is_transaction_success:{_eq:true}},
-    order_by:{transaction_version:desc}, limit:$limit
-  ){ owner_address amount asset_type type transaction_version transaction_timestamp }
+           is_gas_fee:{_eq:false}, is_transaction_success:{_eq:true},
+           _or:[{transaction_version:{_lt:$v}},
+                {transaction_version:{_eq:$v}, event_index:{_lt:$e}}]},
+    order_by:[{transaction_version:desc},{event_index:desc}], limit:$page
+  ){ owner_address amount asset_type type transaction_version transaction_timestamp event_index }
 }
 """
 
 # ALL non-gas activities at a set of transaction versions (to find counterparties).
 _Q_AT_VERSIONS = """
-query($versions:[bigint!],$limit:Int!){
+query($versions:[bigint!],$page:Int!,$v:bigint!,$e:bigint!){
   fungible_asset_activities(
     where:{transaction_version:{_in:$versions}, is_gas_fee:{_eq:false},
-           is_transaction_success:{_eq:true}},
-    order_by:{transaction_version:desc}, limit:$limit
-  ){ owner_address amount asset_type type transaction_version }
+           is_transaction_success:{_eq:true},
+           _or:[{transaction_version:{_lt:$v}},
+                {transaction_version:{_eq:$v}, event_index:{_lt:$e}}]},
+    order_by:[{transaction_version:desc},{event_index:desc}], limit:$page
+  ){ owner_address amount asset_type type transaction_version event_index }
 }
 """
 
@@ -77,6 +93,14 @@ query($v:bigint!){
     transaction_version transaction_timestamp }
 }
 """
+
+
+def _as_int(value: Any) -> int | None:
+    """Parse a Hasura bigint (int or string) to int, or None when unparseable."""
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 class AptosIndexerError(RuntimeError):
@@ -162,23 +186,86 @@ class AptosIndexerClient:
         rows = data.get(key)
         return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
 
+    # ----- pagination -----
+
+    def _paginate(
+        self, query: str, base_vars: dict[str, Any], *, limit: int,
+    ) -> list[dict[str, Any]]:
+        """Compound-cursor pagination (transaction_version desc, event_index desc)
+        over ``query``, accumulating up to ``limit`` rows total. The Indexer caps a
+        single query at 100 rows; this walks pages until a short page, the budget,
+        or a stuck cursor (a buggy/echoing mirror can't loop forever). The
+        (version, event_index) cursor is stable across the many activities a single
+        tx emits at one version — no boundary skip/dup."""
+        out: list[dict[str, Any]] = []
+        v, e = _MAX_BIGINT, _MAX_BIGINT
+        last_cursor: tuple[int, int] | None = None
+        while len(out) < limit:
+            page = min(_PAGE_SIZE, limit - len(out))
+            try:
+                data = self._gql(query, {**base_vars, "page": page, "v": v, "e": e})
+            except AptosIndexerError:
+                # Mid-pagination failure (e.g. the public indexer's 10s timeout on
+                # a very-high-volume address): keep the pages already collected
+                # rather than losing them. A page-1 failure (no rows yet) still
+                # propagates so the caller logs + degrades to no-transfers.
+                if out:
+                    log.warning(
+                        "aptos: pagination stopped early after %d row(s) — "
+                        "returning partial results.", len(out),
+                    )
+                    break
+                raise
+            rows = self._rows(data, "fungible_asset_activities")
+            if not rows:
+                break
+            tail = rows[-1]
+            nv = _as_int(tail.get("transaction_version"))
+            ne = _as_int(tail.get("event_index"))
+            cursor = (nv, ne) if nv is not None and ne is not None else None
+            # Stuck-cursor guard: a buggy/echoing mirror returns the same tail →
+            # break BEFORE re-adding the duplicate page (no dup rows, no loop).
+            if cursor is not None and cursor == last_cursor:
+                break
+            out.extend(rows)
+            if cursor is None:
+                break  # can't advance the cursor safely → stop (no fabrication)
+            last_cursor = cursor
+            v, e = cursor
+            if len(rows) < page:  # short page → exhausted
+                break
+        return out[:limit]
+
     # ----- activity queries -----
 
     def withdraw_activities(self, owner: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        data = self._gql(_Q_WITHDRAWS, {"owner": owner, "limit": limit})
-        return self._rows(data, "fungible_asset_activities")
+        """All of ``owner``'s withdrawal activities (gas excluded), newest-first,
+        paginated up to ``limit`` total rows (no longer the 100-row indexer cap)."""
+        return self._paginate(_Q_WITHDRAWS, {"owner": owner}, limit=limit)
 
     def deposit_activities(self, owner: str, *, limit: int = 100) -> list[dict[str, Any]]:
-        data = self._gql(_Q_DEPOSITS, {"owner": owner, "limit": limit})
-        return self._rows(data, "fungible_asset_activities")
+        """All of ``owner``'s deposit activities, paginated up to ``limit``."""
+        return self._paginate(_Q_DEPOSITS, {"owner": owner}, limit=limit)
 
     def activities_at_versions(
         self, versions: list[int], *, limit: int = 1000,
     ) -> list[dict[str, Any]]:
+        """All non-gas activities at ``versions`` (counterparty discovery). Versions
+        are chunked so each ``_in`` query stays small, and each chunk is paginated
+        with the compound cursor — so a version with many parties isn't truncated at
+        the 100-row indexer cap."""
         if not versions:
             return []
-        data = self._gql(_Q_AT_VERSIONS, {"versions": versions, "limit": limit})
-        return self._rows(data, "fungible_asset_activities")
+        out: list[dict[str, Any]] = []
+        chunk = 50
+        for i in range(0, len(versions), chunk):
+            if len(out) >= limit:
+                break
+            batch = versions[i:i + chunk]
+            out.extend(self._paginate(
+                _Q_AT_VERSIONS, {"versions": batch}, limit=limit - len(out),
+            ))
+        return out[:limit]
 
     def transaction_meta(self, version: int) -> dict[str, Any] | None:
         """Return ``{transaction_version, transaction_timestamp}`` for ``version``

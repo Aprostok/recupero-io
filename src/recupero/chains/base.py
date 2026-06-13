@@ -128,6 +128,14 @@ class ChainAdapter(ABC):
             # HL wallet's USDC withdrawals to their Arbitrum destination.
             from recupero.chains.hyperliquid.adapter import HyperliquidAdapter
             return HyperliquidAdapter()
+        if chain == Chain.aptos:
+            # roadmap-v4: Aptos mainnet via the public keyless Indexer GraphQL.
+            # Like Tron/TON/Stellar/Sui the adapter resolves its own client. The
+            # Indexer's fungible_asset_activities feed resolves the FA
+            # store-object→owner and unifies the legacy Coin + Fungible Asset
+            # standards, so a trace that bridged INTO Aptos no longer dead-ends.
+            from recupero.chains.aptos.adapter import AptosAdapter
+            return AptosAdapter()
         raise NotImplementedError(f"No adapter for chain {chain}")
 
     # --- block / time ---

@@ -68,6 +68,11 @@ _CHAIN_TO_CG_PLATFORM: dict[Chain, str] = {
     # resolution for Sui coins. Native SUI's coingecko_id is also "sui"; the
     # adapter pins USDC→usd-coin / USDT→tether on the freeze-relevant stablecoins.
     Chain.sui:       "sui",
+    # roadmap-v4: Aptos. CoinGecko platform id is "aptos" — enables asset_type→USD
+    # resolution. Native APT's coingecko_id is also "aptos"; the adapter pins
+    # APT (coin + FA @0xa) and Circle USDC by VERIFIED ADDRESS (never by symbol —
+    # the Aptos FA metadata table is full of symbol-spoof "USDT"/"APT" fakes).
+    Chain.aptos:     "aptos",
 }
 
 

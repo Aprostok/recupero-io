@@ -99,6 +99,7 @@ ADDRESS_EXPLORER_BY_CHAIN: dict[str, str] = {
     "ton":         "https://tonviewer.com/",
     "stellar":     "https://stellar.expert/explorer/public/account/",
     "sui":         "https://suiscan.xyz/mainnet/account/",
+    "aptos":       "https://explorer.aptoslabs.com/account/",
     # v0.20.0 (round-13 chain-coverage research): EVM-trivial wins —
     # each chain reuses the existing EVM adapter via a chainid wire-up
     # in worker/watch_tick._CHAIN_ID_BY_NAME + chains/evm/adapter.
@@ -146,6 +147,7 @@ EXPLORER_NAME_BY_CHAIN: dict[str, str] = {
     "ton":         "Tonviewer",
     "stellar":     "Stellar.Expert",
     "sui":         "Suiscan",
+    "aptos":       "Aptos Explorer",
     "optimism":    "Optimistic Etherscan",
     "avalanche":   "Snowtrace",
     "linea":       "LineaScan",

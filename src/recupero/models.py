@@ -128,6 +128,13 @@ class Chain(str, Enum):
     # transfer layer. The deferral was lifting once the decimals + balanceChange
     # shapes were verified against real RPC (no hardcoded unverified constants).
     sui = "sui"
+    # roadmap-v4: Aptos — Move-VM L1 with native Circle USDC (issuer-freezable).
+    # Wired into for_chain via AptosAdapter (public keyless Indexer GraphQL:
+    # fungible_asset_activities, which resolves the FA store-object→owner and
+    # unifies the legacy Coin + Fungible Asset standards). Shares the
+    # chains/move_address.py codec with Sui; live transfer layer verified against
+    # real Indexer responses before trusting decimals.
+    aptos = "aptos"
 
 
 class LabelCategory(str, Enum):

@@ -287,15 +287,34 @@ class AptosAdapter(ChainAdapter):
     # ----- evidence + explorer -----
 
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
-        """The Indexer activity is owner-resolved but carries no full block; the
-        ledger version + explorer pointer is the verifiable record. raw_* empty
-        (not captured) rather than fabricated."""
+        """Anchor the receipt to the REAL block time. The Indexer carries
+        ``transaction_timestamp`` per ledger version, so the chain-of-custody
+        record gets a true block time instead of a placeholder. Best-effort: a
+        transport/GraphQL failure (or an un-indexed version) falls back to the
+        unknown-time sentinel (epoch 0, raw_* empty) rather than raising — a
+        transient blip never breaks evidence writing, and we never fabricate a
+        time we couldn't fetch. ``tx_hash`` is the ledger version (Aptos txs are
+        addressed by version)."""
+        version = _to_int(tx_hash)
+        block_time = datetime.fromtimestamp(0, tz=UTC)
+        raw: dict[str, Any] = {}
+        if version is not None:
+            try:
+                meta = self.client.transaction_meta(version)
+            except AptosIndexerError as exc:
+                log.warning("aptos: evidence ts fetch failed for v%s: %s", version, exc)
+                meta = None
+            if isinstance(meta, dict):
+                bt = _parse_ts(meta.get("transaction_timestamp"))
+                if int(bt.timestamp()) > 0:  # real time fetched (not epoch-0 fallback)
+                    block_time = bt
+                raw = meta
         return EvidenceReceipt(
             chain=Chain.aptos,
             tx_hash=tx_hash,
-            block_number=_to_int(tx_hash) or 0,
-            block_time=datetime.fromtimestamp(0, tz=UTC),
-            raw_transaction={},
+            block_number=version or 0,
+            block_time=block_time,
+            raw_transaction=raw,
             raw_receipt={},
             raw_block_header={},
             fetched_at=datetime.now(UTC),

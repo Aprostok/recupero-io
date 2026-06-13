@@ -161,5 +161,23 @@ class SuiRPCClient:
         self._meta_cache[coin_type] = meta
         return meta
 
+    # ----- single tx (for evidence anchoring) -----
+
+    def get_transaction_block(self, digest: str) -> dict[str, Any] | None:
+        """Return the full tx block for ``digest`` — ``showInput`` + ``showEffects``
+        so it carries the REAL ``timestampMs`` + ``checkpoint`` + ``transaction`` +
+        ``effects`` (all verified present live). ``None`` if the result isn't an
+        object. Raises ``SuiRPCError`` on a transport / RPC-error response (the
+        caller degrades to the unknown-time sentinel rather than fabricating)."""
+        result = self._rpc(
+            "sui_getTransactionBlock",
+            [digest, {
+                "showInput": True, "showEffects": True,
+                "showBalanceChanges": False, "showEvents": False,
+                "showObjectChanges": False,
+            }],
+        )
+        return result if isinstance(result, dict) else None
+
 
 __all__ = ("SuiRPCClient", "SuiRPCError", "SUI_RPC_URL")

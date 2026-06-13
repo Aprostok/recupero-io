@@ -338,16 +338,41 @@ class SuiAdapter(ChainAdapter):
     # ----- evidence + explorer -----
 
     def fetch_evidence_receipt(self, tx_hash: str) -> EvidenceReceipt:
-        """Sui exposes the tx by digest, but anchoring full block data here is a
-        separate fetch; the digest + explorer pointer is the verifiable record.
-        raw_* are empty (not captured) rather than fabricated."""
+        """Anchor the receipt to the REAL on-chain time. ``sui_getTransactionBlock``
+        returns ``timestampMs`` + ``checkpoint`` (+ the tx input/effects) in a single
+        call, so the chain-of-custody record carries a true block time instead of a
+        placeholder. Best-effort: a transport/RPC failure falls back to the
+        unknown-time sentinel (epoch 0, raw_* empty) rather than raising — a
+        transient RPC blip never breaks evidence writing, and we never fabricate a
+        time we couldn't fetch."""
+        block_time = datetime.fromtimestamp(0, tz=UTC)
+        block_number = 0
+        raw_tx: dict[str, Any] = {}
+        raw_effects: dict[str, Any] = {}
+        try:
+            tb = self.client.get_transaction_block(tx_hash)
+        except SuiRPCError as exc:
+            log.warning("sui: evidence block fetch failed for %s: %s", tx_hash, exc)
+            tb = None
+        if isinstance(tb, dict):
+            bt = _block_time(tb.get("timestampMs"))
+            if int(bt.timestamp()) > 0:  # real time fetched (not the epoch-0 fallback)
+                block_time = bt
+            try:
+                block_number = int(tb.get("checkpoint"))
+            except (TypeError, ValueError):
+                block_number = 0
+            if isinstance(tb.get("transaction"), dict):
+                raw_tx = tb["transaction"]
+            if isinstance(tb.get("effects"), dict):
+                raw_effects = tb["effects"]
         return EvidenceReceipt(
             chain=Chain.sui,
             tx_hash=tx_hash,
-            block_number=0,
-            block_time=datetime.fromtimestamp(0, tz=UTC),
-            raw_transaction={},
-            raw_receipt={},
+            block_number=block_number,
+            block_time=block_time,
+            raw_transaction=raw_tx,
+            raw_receipt=raw_effects,
             raw_block_header={},
             fetched_at=datetime.now(UTC),
             fetched_from=self.client.base_url,

@@ -69,6 +69,15 @@ query($assets:[String!]){
 }
 """
 
+# The REAL block time for a ledger version (one activity row) — anchors the
+# evidence receipt instead of a placeholder epoch-0 time.
+_Q_TX_AT_VERSION = """
+query($v:bigint!){
+  fungible_asset_activities(where:{transaction_version:{_eq:$v}}, limit:1){
+    transaction_version transaction_timestamp }
+}
+"""
+
 
 class AptosIndexerError(RuntimeError):
     """Raised on a non-2xx, GraphQL errors payload, or malformed Indexer response."""
@@ -170,6 +179,16 @@ class AptosIndexerClient:
             return []
         data = self._gql(_Q_AT_VERSIONS, {"versions": versions, "limit": limit})
         return self._rows(data, "fungible_asset_activities")
+
+    def transaction_meta(self, version: int) -> dict[str, Any] | None:
+        """Return ``{transaction_version, transaction_timestamp}`` for ``version``
+        (one activity row), or ``None`` if the version has no indexed activity.
+        Used to anchor the evidence receipt to the REAL block time. Raises
+        ``AptosIndexerError`` on a transport / GraphQL-error response (the caller
+        degrades to the unknown-time sentinel rather than fabricating)."""
+        data = self._gql(_Q_TX_AT_VERSION, {"v": int(version)})
+        rows = self._rows(data, "fungible_asset_activities")
+        return rows[0] if rows else None
 
     # ----- asset metadata (decimals/symbol) -----
 

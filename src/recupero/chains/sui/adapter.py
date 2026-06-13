@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -72,6 +73,37 @@ _PINNED_COINS: dict[str, tuple[str, int, str | None]] = {
 }
 
 
+# Per-address fetch budget. Mirrors the project standard
+# (config.trace.max_transfers_per_address = 50_000, env-overridable) so a Sui
+# trace through a busy address isn't silently capped far below every other
+# chain. Pre-this the adapter hardcoded max_pages=3 (150 txs) and truncated
+# SILENTLY; now the cap is budget-derived + a truncation is WARNED, never silent.
+_DEFAULT_MAX_TRANSFERS_PER_ADDRESS = 50_000
+_HARD_PAGE_CEILING = 5_000  # 5_000 pages x 50 = 250k txs — a runaway backstop.
+
+
+def _resolve_max_pages(budget: int | None, page_size: int) -> int:
+    """Translate a per-address transfer budget into a page cap.
+    ``budget <= 0`` means disabled/unbounded → the hard ceiling; otherwise
+    ceil(budget / page_size) clamped to ``[1, _HARD_PAGE_CEILING]``."""
+    cap = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS if budget is None else budget
+    if cap <= 0:
+        return _HARD_PAGE_CEILING
+    pages = -(-cap // max(1, page_size))  # ceil, no float
+    return max(1, min(_HARD_PAGE_CEILING, pages))
+
+
+def _env_transfer_budget() -> int | None:
+    """RECUPERO_MAX_TRANSFERS_PER_ADDRESS as an int, or None when unset/garbage."""
+    raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def _owner_address(owner: Any) -> str | None:
     """Extract the AddressOwner from a balanceChange ``owner``. Object/Shared/
     Immutable owners (and anything malformed) -> None (not an address node)."""
@@ -95,10 +127,15 @@ class SuiAdapter(ChainAdapter):
     chain = Chain.sui
 
     def __init__(self, *, client: SuiRPCClient | None = None,
-                 max_pages: int = 3, page_size: int = 50) -> None:
+                 max_pages: int | None = None, page_size: int = 50) -> None:
         self.client = client or SuiRPCClient()
-        self._max_pages = max(1, max_pages)
         self._page_size = max(1, min(page_size, 50))
+        # max_pages=None (default) → derive from the project transfer budget
+        # (RECUPERO_MAX_TRANSFERS_PER_ADDRESS, default 50_000). An explicit
+        # int still overrides (tests / a caller that wants a tight cap).
+        if max_pages is None:
+            max_pages = _resolve_max_pages(_env_transfer_budget(), self._page_size)
+        self._max_pages = max(1, max_pages)
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
@@ -285,6 +322,15 @@ class SuiAdapter(ChainAdapter):
             cursor = page.get("nextCursor")
             if not cursor:
                 break
+        else:
+            # Loop ran the full page cap while more pages remained → truncated.
+            log.warning(
+                "sui: %s trace hit the %d-page cap (~%d txs) for %s with more "
+                "pages available — trace may be INCOMPLETE; raise "
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                "outflow" if outflow else "inflow", self._max_pages,
+                self._max_pages * self._page_size, focus,
+            )
         return out
 
     def fetch_native_outflows(
@@ -333,6 +379,13 @@ class SuiAdapter(ChainAdapter):
             cursor = page.get("nextCursor")
             if not cursor:
                 break
+        else:
+            log.warning(
+                "sui: inflow (coin) trace hit the %d-page cap (~%d txs) for %s "
+                "with more pages available — trace may be INCOMPLETE; raise "
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                self._max_pages, self._max_pages * self._page_size, focus,
+            )
         return out
 
     # ----- evidence + explorer -----

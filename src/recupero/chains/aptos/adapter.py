@@ -66,6 +66,15 @@ _EXPLORER_TX = "https://explorer.aptoslabs.com/txn/"
 _EXPLORER_ADDR = "https://explorer.aptoslabs.com/account/"
 _EXPLORER_NET = "?network=mainnet"
 
+# The Aptos Indexer hard-caps a single query at 100 rows regardless of the
+# requested ``limit`` (verified live: limit 1000/5000/20000 all return 100). This
+# adapter issues ONE query per fetch (no cursor pagination yet), so a focus with
+# more activity than this cap is truncated to its most-recent rows. We can't make
+# that silent — a trace presented as complete must not be quietly partial — so we
+# WARN on saturation. Version-cursor pagination (transaction_version _lt cursor,
+# loop until < cap or budget) is the deeper follow-up that removes the cap.
+_INDEXER_PAGE_CAP = 100
+
 # LIVE-VERIFIED canonical assets: asset_type -> (symbol, decimals, coingecko_id).
 # Pinned by ADDRESS (not symbol) — the metadata table has many symbol-spoof fakes.
 _PINNED_ASSETS: dict[str, tuple[str, int, str | None]] = {
@@ -173,6 +182,14 @@ class AptosAdapter(ChainAdapter):
             log.warning("aptos: activity fetch failed for %s: %s", focus, exc)
             return []
 
+        if len(legs_raw) >= _INDEXER_PAGE_CAP:
+            log.warning(
+                "aptos: %s activity fetch for %s saturated the Indexer's "
+                "%d-row cap — older activity NOT seen, trace may be INCOMPLETE "
+                "(this adapter does not yet paginate the activity feed).",
+                "outflow" if outflow else "inflow", focus, _INDEXER_PAGE_CAP,
+            )
+
         # focus's own legs of interest: {(version, asset): (amount, block_time)}
         focus_legs: dict[tuple[int, str], tuple[int, datetime]] = {}
         for r in legs_raw:
@@ -196,6 +213,14 @@ class AptosAdapter(ChainAdapter):
         except AptosIndexerError as exc:
             log.warning("aptos: counterparty fetch failed for %s: %s", focus, exc)
             return []
+
+        if len(all_rows) >= _INDEXER_PAGE_CAP:
+            log.warning(
+                "aptos: counterparty fetch for %s saturated the Indexer's "
+                "%d-row cap across %d version(s) — some counterparties NOT seen, "
+                "edges may be INCOMPLETE (counterparty fetch is not yet batched).",
+                focus, _INDEXER_PAGE_CAP, len(versions),
+            )
 
         # group counterparty activities by (version, asset)
         groups: dict[tuple[int, str], dict[str, list[tuple[str, int]]]] = {}

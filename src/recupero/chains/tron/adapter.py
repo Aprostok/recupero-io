@@ -89,6 +89,33 @@ TRX_SYMBOL = "TRX"
 TRX_DECIMALS = 6
 TRX_COINGECKO_ID = "tron"
 
+# Per-address fetch budget. The TronGrid client paginates + already WARNS on a
+# max_pages exhaustion, but the adapter never threaded a config-derived cap — so
+# both the TRC-20 and native-TRX paths used the client default (50 pages ~ 10k
+# events), a silent ~5x truncation below the project standard
+# (config.trace.max_transfers_per_address = 50_000) on Tron — the chain that
+# carries ~half of all USDT laundering. Now the cap derives from
+# RECUPERO_MAX_TRANSFERS_PER_ADDRESS (TronGrid returns up to 200 events/page).
+_TRON_PAGE_SIZE = 200
+_DEFAULT_MAX_TRANSFERS_PER_ADDRESS = 50_000
+_HARD_PAGE_CEILING = 5_000  # runaway backstop (5_000 x 200 = 1M events).
+
+
+def _resolve_tron_max_pages() -> int:
+    """RECUPERO_MAX_TRANSFERS_PER_ADDRESS → a TronGrid page cap. ``<= 0``
+    (disabled/unbounded) → the hard ceiling; else ceil(budget / 200) clamped."""
+    raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if raw is not None:
+        try:
+            budget = int(raw)
+        except (TypeError, ValueError):
+            budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if budget <= 0:
+        return _HARD_PAGE_CEILING
+    pages = -(-budget // _TRON_PAGE_SIZE)  # ceil, no float
+    return max(1, min(_HARD_PAGE_CEILING, pages))
+
 
 class TronAdapter(ChainAdapter):
     """Tron mainnet adapter (USDT-TRC20 + other TRC-20 tokens)."""
@@ -115,6 +142,8 @@ class TronAdapter(ChainAdapter):
         resolved_key = api_key or os.environ.get("TRON_PRO_API_KEY") or ""
         self.client = client or TronGridClient(api_key=resolved_key)
         self._is_contract_cache: dict[str, bool] = {}
+        # Budget-derived pagination cap (was the client's hardcoded 50).
+        self._max_pages = _resolve_tron_max_pages()
 
     # ---------- Required interface ---------- #
 
@@ -209,6 +238,7 @@ class TronAdapter(ChainAdapter):
         try:
             raw = self.client.get_native_transactions(
                 addr, only_from=True, min_timestamp=min_timestamp_ms,
+                max_pages=self._max_pages,
             )
         except TronGridError as e:
             log.warning("trx native fetch failed for %s: %s", addr, e)
@@ -256,6 +286,7 @@ class TronAdapter(ChainAdapter):
         try:
             raw = self.client.get_trc20_transfers(
                 addr, only_from=True, min_timestamp=min_timestamp_ms,
+                max_pages=self._max_pages,
             )
         except TronGridError as e:
             log.warning("trc20 outflow fetch failed for %s: %s", addr, e)

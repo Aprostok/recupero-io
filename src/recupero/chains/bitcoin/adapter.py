@@ -51,6 +51,7 @@ know the trace's reliability ceiling for Bitcoin cases.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from datetime import UTC, datetime
 from typing import Any
@@ -61,6 +62,31 @@ from recupero.chains.bitcoin.esplora import EsploraClient, EsploraError
 from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 
 log = logging.getLogger(__name__)
+
+# Per-address fetch budget. Esplora is cursor-paginated (last_seen_txid) and the
+# client already WARNS on max_pages exhaustion, but the adapter never threaded a
+# config-derived cap — so it used the client default (50 pages ~ 2500 txs), below
+# the project standard (config.trace.max_transfers_per_address = 50_000). Now the
+# cap derives from RECUPERO_MAX_TRANSFERS_PER_ADDRESS (Esplora pages ~25 txs).
+_BTC_PAGE_SIZE = 25
+_DEFAULT_MAX_TRANSFERS_PER_ADDRESS = 50_000
+_HARD_PAGE_CEILING = 5_000  # runaway backstop (5_000 x 25 = 125k txs).
+
+
+def _resolve_btc_max_pages() -> int:
+    """RECUPERO_MAX_TRANSFERS_PER_ADDRESS → an Esplora page cap. ``<= 0``
+    (disabled/unbounded) → the hard ceiling; else ceil(budget / 25) clamped."""
+    raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if raw is not None:
+        try:
+            budget = int(raw)
+        except (TypeError, ValueError):
+            budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if budget <= 0:
+        return _HARD_PAGE_CEILING
+    pages = -(-budget // _BTC_PAGE_SIZE)  # ceil, no float
+    return max(1, min(_HARD_PAGE_CEILING, pages))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,6 +244,8 @@ class BitcoinAdapter(ChainAdapter):
     def __init__(self, *, client: EsploraClient | None = None) -> None:
         self.client = client or EsploraClient()
         self._is_contract_cache: dict[str, bool] = {}
+        # Budget-derived pagination cap (was the client's hardcoded 50).
+        self._max_pages = _resolve_btc_max_pages()
 
     # ---------- Required interface ---------- #
 
@@ -313,7 +341,7 @@ class BitcoinAdapter(ChainAdapter):
             log.warning("invalid bitcoin address %r: %s", from_address, e)
             return []
         try:
-            txs = self.client.get_address_txs(addr)
+            txs = self.client.get_address_txs(addr, max_pages=self._max_pages)
         except EsploraError as e:
             log.warning("esplora address fetch failed for %s: %s", addr, e)
             return []

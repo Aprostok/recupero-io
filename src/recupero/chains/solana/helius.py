@@ -144,6 +144,14 @@ class HeliusClient:
             else:
                 stuck_count = 0
             cursor = next_cursor
+        else:
+            # Ran the full page cap without a natural stop → more history remains.
+            # Don't let an incomplete trace look complete (no silent caps).
+            log.warning(
+                "helius pagination: hit max_pages=%d for %s (~%d txs); results "
+                "may be INCOMPLETE — raise RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                max_pages, address, max_pages * limit,
+            )
         return all_txs
 
     def get_current_slot(self) -> int:

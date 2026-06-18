@@ -31,6 +31,25 @@ from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 
 log = logging.getLogger(__name__)
 
+# Per-address fetch budget. Helius is cursor-paginated, but the adapter left
+# get_parsed_transactions on the client's hardcoded max_pages=50 default
+# (~5_000 txs at 100/page) — a silent truncation below the project standard
+# (config.trace.max_transfers_per_address = 50_000). The adapter already receives
+# the config bundle, so the cap derives from it directly (no env needed).
+_SOL_PAGE_SIZE = 100
+_HARD_PAGE_CEILING = 5_000  # runaway backstop (5_000 x 100 = 500k txs).
+
+
+def _resolve_sol_max_pages(budget: int | None) -> int:
+    """Translate the per-address transfer budget into a Helius page cap.
+    ``budget <= 0`` (disabled/unbounded) → the hard ceiling; else
+    ceil(budget / 100) clamped to ``[1, _HARD_PAGE_CEILING]``."""
+    cap = 50_000 if budget is None else budget
+    if cap <= 0:
+        return _HARD_PAGE_CEILING
+    pages = -(-cap // _SOL_PAGE_SIZE)  # ceil, no float
+    return max(1, min(_HARD_PAGE_CEILING, pages))
+
 
 def _safe_unix_to_datetime(ts: Any) -> datetime:
     """Convert an untrusted unix-seconds value to a UTC datetime.
@@ -90,6 +109,10 @@ class SolanaAdapter(ChainAdapter):
             )
         self.client = HeliusClient(api_key=env.HELIUS_API_KEY)
         self._is_program_cache: dict[str, bool] = {}
+        # Budget-derived pagination cap (was the client's hardcoded 50).
+        self._max_pages = _resolve_sol_max_pages(
+            getattr(cfg.trace, "max_transfers_per_address", None)
+        )
 
     # ---------- Required interface ----------
 
@@ -290,7 +313,8 @@ class SolanaAdapter(ChainAdapter):
         if key in cache:
             return cache[key]
         txs = self.client.get_parsed_transactions(
-            address, limit=100, stop_if_older_than=cutoff_unix,
+            address, limit=_SOL_PAGE_SIZE, stop_if_older_than=cutoff_unix,
+            max_pages=self._max_pages,
         )
         cache[key] = txs
         return txs

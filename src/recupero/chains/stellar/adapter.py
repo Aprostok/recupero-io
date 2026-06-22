@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -26,6 +27,31 @@ from recupero.chains.stellar.client import HorizonClient, HorizonError
 from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 
 log = logging.getLogger(__name__)
+
+# Per-address fetch budget. Pre-this the adapter made a SINGLE get_payments call
+# (limit=100) and never paginated — a hard 100-payment cap that silently
+# truncated any active Stellar account (a stablecoin off-ramp). Now it cursor-
+# paginates (Horizon paging_token) up to a budget from
+# RECUPERO_MAX_TRANSFERS_PER_ADDRESS (Horizon's max page size is 200).
+_STELLAR_PAGE_SIZE = 200
+_DEFAULT_MAX_TRANSFERS_PER_ADDRESS = 50_000
+_HARD_PAGE_CEILING = 5_000  # runaway backstop (5_000 x 200 = 1M payments).
+
+
+def _resolve_stellar_max_pages() -> int:
+    """RECUPERO_MAX_TRANSFERS_PER_ADDRESS → a Horizon page cap. ``<= 0``
+    (disabled/unbounded) → the hard ceiling; else ceil(budget / 200) clamped."""
+    raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if raw is not None:
+        try:
+            budget = int(raw)
+        except (TypeError, ValueError):
+            budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if budget <= 0:
+        return _HARD_PAGE_CEILING
+    pages = -(-budget // _STELLAR_PAGE_SIZE)  # ceil, no float
+    return max(1, min(_HARD_PAGE_CEILING, pages))
 
 XLM_SYMBOL = "XLM"
 XLM_DECIMALS = 7
@@ -63,6 +89,8 @@ class StellarAdapter(ChainAdapter):
 
     def __init__(self, *, client: HorizonClient | None = None) -> None:
         self.client = client or HorizonClient()
+        # Budget-derived pagination cap (was a single un-paginated 100-payment call).
+        self._max_pages = _resolve_stellar_max_pages()
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
@@ -98,17 +126,48 @@ class StellarAdapter(ChainAdapter):
             account = normalize_stellar_address(from_address)
         except ValueError:
             return []
-        try:
-            records = self.client.get_payments(account, limit=100)
-        except HorizonError as exc:
-            log.warning("stellar payments fetch failed for %s: %s", account, exc)
-            return []
 
         out: list[dict[str, Any]] = []
-        for rec in records:
-            norm = self._normalize_payment(rec, account, start_block, native=native)
-            if norm is not None:
-                out.append(norm)
+        cursor: str | None = None
+        for _page in range(self._max_pages):
+            try:
+                batch = self.client.get_payments(
+                    account, limit=_STELLAR_PAGE_SIZE, cursor=cursor,
+                )
+            except HorizonError as exc:
+                if out:
+                    # Mid-pagination failure: keep what we collected (partial >
+                    # nothing), don't lose it.
+                    log.warning("stellar: pagination stopped early for %s after "
+                                "%d row(s): %s", account, len(out), exc)
+                    break
+                log.warning("stellar payments fetch failed for %s: %s", account, exc)
+                return []
+            if not batch:
+                break
+            for rec in batch:
+                norm = self._normalize_payment(
+                    rec, account, start_block, native=native,
+                )
+                if norm is not None:
+                    out.append(norm)
+            # Records are newest-first; once a page's OLDEST record predates the
+            # start cutoff, every later page is older too — stop paginating.
+            if start_block > 0:
+                oldest = batch[-1]
+                if int(_parse_created_at(oldest.get("created_at")).timestamp()) < start_block:
+                    break
+            if len(batch) < _STELLAR_PAGE_SIZE:  # short page → exhausted
+                break
+            cursor = batch[-1].get("paging_token")
+            if not cursor:
+                break
+        else:
+            log.warning(
+                "stellar: hit the %d-page cap for %s with more history available "
+                "— trace may be INCOMPLETE; raise RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                self._max_pages, account,
+            )
         return out
 
     def _normalize_payment(

@@ -320,3 +320,113 @@ def detect_poisoning_attempts(
         seen_addresses.add(to)
 
     return events
+
+
+# -----------------------------------------------------------------------------
+# Airdrop-spam token poisoning (a SECOND poisoning primitive) — #253
+# -----------------------------------------------------------------------------
+# Distinct from the look-alike *address* poisoning above. Here a spam CONTRACT
+# broadcasts many tiny, UNPRICEABLE token Transfer events that spoof ``from`` as
+# a famous (often OFAC-sanctioned) address — a real no-answer-key trace of the
+# Ronin exploiter found ONE contract ("Dream Cash"/CASH) accounting for 5,980 of
+# 6,000 sampled outflow rows. These are not transfers the address actually made;
+# recording them bloats the case (an 11 MB case.json), counts against the
+# per-case transfer cap, and — worst — enqueues thousands of junk recipients as
+# next-wave nodes, starving the trace budget before it reaches the laundering
+# path.
+#
+# A contract is flagged as airdrop spam when it is an UNPRICEABLE ERC-20 (a
+# non-native token with NO coingecko id) AND either:
+#   * it contributes >= ``min_count`` transfers for this address — a broadcaster;
+#     no one launders stolen funds via dozens of identical same-token sends; or
+#   * its symbol carries a phishing marker (a dotted URL or claim/airdrop wording).
+#
+# CRITICAL — the forensic doctrine "follow the largest UNPRICED leg" (real stolen
+# funds sometimes arrive as an unpriced token, e.g. msyrupUSDp) is PRESERVED: a
+# genuine unpriced stolen leg appears a handful of times with a plain symbol, so
+# both the volume gate and the plain-symbol check spare it. Only HIGH-VOLUME or
+# overtly-phishing unpriceable tokens are dropped. Priced tokens (USDC/WETH/…) are
+# never even considered.
+
+SPAM_TOKEN_MIN_TRANSFERS = 25
+
+# Markers that only ever appear in phishing-airdrop token symbols (checked on the
+# symbol of an UNPRICEABLE token only, so a real priced "COMP" is never reached).
+_PHISH_SYMBOL_MARKERS = (
+    "http", "www.", "t.me", "claim", "airdrop", "reward", "voucher", "visit ",
+    ".com", ".net", ".org", ".io", ".xyz", ".app", ".vip", ".cc", ".finance",
+)
+
+
+def _token_attr(transfer: Any, attr: str) -> Any:
+    """Read ``transfer.token.<attr>`` (Transfer model) or
+    ``transfer['token'][attr]`` (dict), tolerant of either shape."""
+    token = _get_field(transfer, "token")
+    if token is None:
+        # Some flattened shapes carry token_contract / token_symbol directly.
+        return _get_field(transfer, f"token_{attr}")
+    if hasattr(token, attr):
+        return getattr(token, attr)
+    if isinstance(token, dict):
+        return token.get(attr)
+    return None
+
+
+def _token_contract(transfer: Any) -> str | None:
+    c = _token_attr(transfer, "contract")
+    return c.lower() if isinstance(c, str) and c else None
+
+
+def _is_unpriceable_erc20(transfer: Any) -> bool:
+    """An ERC-20 (non-native: has a contract) with NO coingecko id — the
+    necessary precondition for the airdrop-spam classification. Native-asset
+    legs (ETH/SUI/…) have no contract and are never spam-classified."""
+    if _token_contract(transfer) is None:
+        return False
+    return not _token_attr(transfer, "coingecko_id")
+
+
+def _phishing_symbol(symbol: Any) -> bool:
+    if not isinstance(symbol, str) or not symbol:
+        return False
+    s = symbol.lower()
+    return any(m in s for m in _PHISH_SYMBOL_MARKERS)
+
+
+def classify_airdrop_spam_contracts(
+    transfers: list[Any], *, min_count: int = SPAM_TOKEN_MIN_TRANSFERS,
+) -> set[str]:
+    """Return the set of lowercased contract addresses that look like
+    airdrop-spam broadcasters across ``transfers`` (one address's outflow set).
+    Volume OR phishing-symbol, considered only over unpriceable ERC-20s."""
+    counts: dict[str, int] = {}
+    phishing: set[str] = set()
+    for t in transfers:
+        if not _is_unpriceable_erc20(t):
+            continue
+        c = _token_contract(t)
+        if c is None:
+            continue
+        counts[c] = counts.get(c, 0) + 1
+        if _phishing_symbol(_token_attr(t, "symbol")):
+            phishing.add(c)
+    threshold = max(2, min_count)
+    spam = {c for c, n in counts.items() if n >= threshold}
+    spam |= phishing
+    return spam
+
+
+def prune_airdrop_spam(
+    transfers: list[Any], *, min_count: int = SPAM_TOKEN_MIN_TRANSFERS,
+) -> tuple[list[Any], list[Any]]:
+    """Split ``transfers`` into ``(kept, dropped)`` — dropped = transfers on a
+    contract classified as airdrop spam. Pure; never raises on odd shapes."""
+    spam = classify_airdrop_spam_contracts(transfers, min_count=min_count)
+    if not spam:
+        return list(transfers), []
+    kept: list[Any] = []
+    dropped: list[Any] = []
+    for t in transfers:
+        c = _token_contract(t)
+        (dropped if (c is not None and c in spam) else kept).append(t)
+    return kept, dropped

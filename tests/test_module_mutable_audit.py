@@ -155,6 +155,15 @@ ALLOWED: dict[tuple[str, str], str] = {
     # all waves join — no concurrent read-during-write.
     ("trace/tracer.py", "_POISON_PRUNED"):
         "GIL-atomic appends; cleared pre-wave + read post-join, no read-during-write",
+
+    # #253 trace/tracer.py: per-case accumulator of airdrop-spam token edges
+    # dropped at wave aggregation. STRONGER contract than _POISON_PRUNED above:
+    # appended ONLY in the main-thread wave-aggregation loop (never inside the
+    # ThreadPoolExecutor _one workers), cleared by _clear_coverage_truncations()
+    # before any wave is submitted, and read once at case assembly after all
+    # waves join — single-threaded by lifetime, no concurrent access at all.
+    ("trace/tracer.py", "_SPAM_PRUNED"):
+        "main-thread-only appends (wave aggregation); cleared pre-wave + read post-join",
 }
 
 

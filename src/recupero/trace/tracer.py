@@ -41,6 +41,7 @@ from recupero.observability.api_budget import (
     CaseBudget,
 )
 from recupero.pricing.coingecko import CoinGeckoClient, PriceResult
+from recupero.trace.address_poisoning import prune_airdrop_spam
 from recupero.trace.evidence import write_evidence_receipt
 from recupero.trace.policies import TracePolicy
 
@@ -134,10 +135,20 @@ _COVERAGE_TRUNCATIONS: list[dict[str, Any]] = []
 # start of every ``run_trace`` like the other module-level registries.
 _POISON_PRUNED: list[dict[str, Any]] = []
 
+# #253 (real Ronin trace): per-case accumulator of airdrop-spam token edges
+# dropped at the wave-aggregation seam (address-poisoning *token* broadcasters —
+# a single unpriceable contract spoofing thousands of tiny Transfers from a
+# famous address; "Dream Cash"/CASH was 5,980 of 6,000 of the Ronin exploiter's
+# sampled rows). NOISE removal, not coverage reduction: these are not transfers
+# the address made, so dropping them never hides a real onward hop. Surfaced as
+# an INFORMATIONAL ``coverage.airdrop_spam_pruned`` count. Cleared per run.
+_SPAM_PRUNED: list[dict[str, Any]] = []
+
 
 def _clear_coverage_truncations() -> None:
     _COVERAGE_TRUNCATIONS.clear()
     _POISON_PRUNED.clear()
+    _SPAM_PRUNED.clear()
 
 
 def run_trace(
@@ -372,6 +383,32 @@ def run_trace(
                     "keeping %d", _sw_env,
                     policy.service_wallet_outflow_threshold,
                 )
+
+    # #253 (real Ronin trace) — airdrop-spam token filter. A famous/sanctioned
+    # seed is flooded with unpriceable spam-token Transfers spoofing `from` (the
+    # Ronin exploiter: 99% of recorded transfers were one "CASH" broadcaster).
+    # They bypass the zero-value poison prune (non-zero amount) AND the USD dust
+    # filter (usd=None can't be compared to a $ threshold), so they bloat the
+    # case + starve the trace budget. Default ON; RECUPERO_SPAM_TOKEN_FILTER=0
+    # disables it; RECUPERO_SPAM_TOKEN_MIN_TRANSFERS tunes the per-contract
+    # broadcaster threshold (an unpriceable ERC-20 appearing >= this many times
+    # from one address is spam). Dropping is forensically correct (these aren't
+    # transfers the address made) and preserves the follow-largest-unpriced-leg
+    # doctrine — a real unpriced leg appears a handful of times, far below it.
+    _spam_filter_enabled = (
+        os.environ.get("RECUPERO_SPAM_TOKEN_FILTER", "1").strip().lower()
+        not in ("0", "false", "no", "off")
+    )
+    _spam_min_count = 25
+    _spam_env = os.environ.get("RECUPERO_SPAM_TOKEN_MIN_TRANSFERS")
+    if _spam_env is not None and _spam_env.strip():
+        try:
+            _spam_min_count = max(2, int(_spam_env))
+        except (TypeError, ValueError):
+            log.warning(
+                "RECUPERO_SPAM_TOKEN_MIN_TRANSFERS=%r is not an int; keeping %d",
+                _spam_env, _spam_min_count,
+            )
 
     # v0.34.5 — "never fully skip the money path." A high-fan-out node used to be
     # SKIPPED entirely (no recursion) to avoid BFS explosion — but that dead-ends
@@ -673,6 +710,29 @@ def run_trace(
         # --- Aggregate results + build next wave (single-threaded) ---
         for from_addr, depth, hop_transfers, is_service_wallet in wave_results:
             addresses_processed += 1
+
+            # #253: drop address-poisoning airdrop-spam token edges BEFORE they
+            # are recorded / value-matched / enqueued. A single unpriceable spam
+            # contract can spoof thousands of tiny Transfers from a famous seed
+            # (Ronin: 99% of rows were one "CASH" broadcaster); leaving them in
+            # bloats the case, burns the per-case transfer cap, and floods the
+            # next wave with junk recipients before the real path is reached.
+            # These are not transfers the address made, so this is noise removal,
+            # not coverage loss; a real unpriced stolen leg appears too few times
+            # to trip the per-contract threshold (follow-unpriced doctrine intact).
+            if _spam_filter_enabled and hop_transfers:
+                hop_transfers, _spam_dropped = prune_airdrop_spam(
+                    hop_transfers, min_count=_spam_min_count,
+                )
+                if _spam_dropped:
+                    _SPAM_PRUNED.append(
+                        {"address": from_addr, "depth": depth,
+                         "pruned": len(_spam_dropped)}
+                    )
+                    log.info(
+                        "airdrop-spam: pruned %d unpriced spam-token edge(s) from "
+                        "%s (depth %d)", len(_spam_dropped), from_addr, depth,
+                    )
 
             # v0.34 value-directed tracing ("follow the money"). When
             # RECUPERO_VALUE_TRACE is on, EVERY non-origin node (one reached via
@@ -1153,6 +1213,11 @@ def run_trace(
             # fetch-cap truncations above, which can hide a real onward hop.
             "poison_edges_pruned": sum(p.get("pruned", 0) for p in _poison_pruned),
             "poison_pruned_addresses": len(_poison_pruned),
+            # #253: airdrop-spam token edges dropped at wave aggregation. Like
+            # poison_edges_pruned this is NOISE removal (spoofed broadcasts the
+            # address never made), so it does NOT flip ``complete``.
+            "airdrop_spam_pruned": sum(p.get("pruned", 0) for p in _SPAM_PRUNED),
+            "airdrop_spam_pruned_addresses": len(_SPAM_PRUNED),
             # Value-directed onward hops followed through high-fan-out nodes
             # (RECUPERO_VALUE_TRACE). Each carries calibrated confidence
             # (medium/low — never high) + the match basis, so the deliverable

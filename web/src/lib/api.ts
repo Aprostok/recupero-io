@@ -1,0 +1,211 @@
+/**
+ * Typed client for the Recupero `/v2` SaaS API.
+ *
+ * Every call attaches the Bearer session token (see `auth.tsx`) and normalises
+ * errors into `ApiError` (carrying the HTTP status + server `detail`). The base
+ * URL comes from `NEXT_PUBLIC_API_BASE_URL` so the frontend can be deployed on a
+ * different origin than the API.
+ */
+
+const BASE_URL = (
+  process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000"
+).replace(/\/$/, "");
+
+export class ApiError extends Error {
+  status: number;
+  detail: string;
+  constructor(status: number, detail: string) {
+    super(`${status}: ${detail}`);
+    this.name = "ApiError";
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+// ---- response shapes (mirror platform/router.py) ---- //
+
+export interface TokenOut {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  org_id: string;
+}
+
+export interface Me {
+  org_id: string;
+  role: string;
+  user_id: string | null;
+  plan: string;
+  status: string;
+  usage: {
+    traces_used: number;
+    traces_remaining: number;
+    rate_limit_per_min: number;
+  };
+}
+
+export interface TraceSummary {
+  investigation_id: string;
+  status: string;
+  case_id: string | null;
+  chain: string;
+  created_at: string;
+}
+
+export interface TraceDetail extends TraceSummary {
+  seed_address: string;
+  updated_at: string;
+}
+
+export interface SubmitTraceResult {
+  investigation_id: string;
+  status: string;
+  case_id: string;
+  idempotent_replay: boolean;
+  poll: string;
+  quota_remaining: number;
+  submitted_at: string;
+}
+
+export interface ApiKeySummary {
+  id: string;
+  name: string;
+  last4: string;
+  created_at: string;
+  last_used_at: string | null;
+  revoked: boolean;
+}
+
+export interface NewApiKey {
+  api_key: string;
+  last4: string;
+  warning: string;
+}
+
+export interface BillingUsage {
+  plan: string;
+  status: string;
+  period_start: string;
+  plan_renews_at: string | null;
+  traces_used: number;
+  traces_included: number;
+  traces_remaining: number;
+  rate_limit_per_min: number;
+  seats: { used: number; max: number };
+  billing_configured: boolean;
+}
+
+// ---- low-level request helper ---- //
+
+interface RequestOpts {
+  method?: string;
+  body?: unknown;
+  token?: string | null;
+  headers?: Record<string, string>;
+}
+
+async function request<T>(path: string, opts: RequestOpts = {}): Promise<T> {
+  const headers: Record<string, string> = { ...(opts.headers || {}) };
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  if (opts.token) headers["Authorization"] = `Bearer ${opts.token}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      method: opts.method || "GET",
+      headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "network error — is the API reachable?");
+  }
+
+  if (res.status === 204) return undefined as T;
+
+  let data: unknown = null;
+  const text = await res.text();
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { detail: text };
+    }
+  }
+
+  if (!res.ok) {
+    const detail =
+      (data as { detail?: unknown })?.detail != null
+        ? String((data as { detail?: unknown }).detail)
+        : res.statusText;
+    throw new ApiError(res.status, detail);
+  }
+  return data as T;
+}
+
+// ---- API surface ---- //
+
+export const api = {
+  signup: (email: string, password: string, org_name: string) =>
+    request<TokenOut>("/v2/auth/signup", {
+      method: "POST",
+      body: { email, password, org_name },
+    }),
+
+  login: (email: string, password: string) =>
+    request<TokenOut>("/v2/auth/login", {
+      method: "POST",
+      body: { email, password },
+    }),
+
+  me: (token: string) => request<Me>("/v2/me", { token }),
+
+  listTraces: (token: string, limit = 50) =>
+    request<{ traces: TraceSummary[] }>(`/v2/traces?limit=${limit}`, { token }),
+
+  getTrace: (token: string, id: string) =>
+    request<TraceDetail>(`/v2/traces/${encodeURIComponent(id)}`, { token }),
+
+  submitTrace: (
+    token: string,
+    payload: {
+      chain: string;
+      seed_address: string;
+      incident_time: string;
+      case_id?: string;
+    },
+    idempotencyKey?: string,
+  ) =>
+    request<SubmitTraceResult>("/v2/traces", {
+      method: "POST",
+      token,
+      body: payload,
+      headers: idempotencyKey ? { "Idempotency-Key": idempotencyKey } : {},
+    }),
+
+  listKeys: (token: string) =>
+    request<{ keys: ApiKeySummary[] }>("/v2/api-keys", { token }),
+
+  createKey: (token: string, name: string) =>
+    request<NewApiKey>("/v2/api-keys", {
+      method: "POST",
+      token,
+      body: { name },
+    }),
+
+  revokeKey: (token: string, id: string) =>
+    request<void>(`/v2/api-keys/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      token,
+    }),
+
+  billingUsage: (token: string) =>
+    request<BillingUsage>("/v2/billing/usage", { token }),
+
+  checkout: (token: string, plan: string) =>
+    request<{ checkout_url: string }>("/v2/billing/checkout", {
+      method: "POST",
+      token,
+      body: { plan },
+    }),
+};

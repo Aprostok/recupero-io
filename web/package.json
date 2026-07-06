@@ -1,0 +1,27 @@
+{
+  "name": "recupero-web",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Recupero customer dashboard — Next.js App Router frontend for the /v2 SaaS API.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "20.14.10",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "typescript": "5.5.3"
+  },
+  "engines": {
+    "node": ">=18.17"
+  }
+}

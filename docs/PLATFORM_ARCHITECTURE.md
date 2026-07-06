@@ -156,8 +156,16 @@ Screening, token-risk, monitoring, operator consoles. New signups get `/v2` keys
 
 ## 5. UI architecture (customer web app)
 
-**Stack:** Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + TanStack
-Query, deployed to Vercel/Cloudflare. Talks only to `/v2`.
+**✅ Scaffold SHIPPED in `web/`** — a lean Next.js (App Router) + TypeScript app:
+`web/src/lib/api.ts` (typed client for every `/v2` endpoint), `web/src/lib/auth.tsx`
+(`AuthProvider`/`useAuth`), and pages for login / signup / dashboard (submit +
+recent traces) / API keys / billing. Zero-dependency styling (`globals.css`) to
+keep the scaffold minimal; see `web/README.md`. The fuller target below
+(shadcn/TanStack/D3 flow graph, trace detail, member management, SSE live
+status) is the next layer on top of this working base.
+
+**Stack (target):** Next.js (App Router) + TypeScript + Tailwind + shadcn/ui +
+TanStack Query, deployed to Vercel/Cloudflare. Talks only to `/v2`.
 
 ```
 web/app/

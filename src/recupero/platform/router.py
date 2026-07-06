@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from recupero.platform import audit, billing, deps, objectstore, store, tenancy
+from recupero.platform import audit, billing, deps, keycache, objectstore, store, tenancy
 
 router = APIRouter(prefix="/v2", tags=["platform"])
 
@@ -201,8 +201,11 @@ def revoke_key(
     principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
     conn: Any = Depends(deps.db_conn),
 ) -> None:
-    if not store.revoke_api_key(conn, org_id=principal.org_id, key_id=key_id):
+    revoked_hash = store.revoke_api_key(conn, org_id=principal.org_id, key_id=key_id)
+    if revoked_hash is None:
         raise HTTPException(status_code=404, detail="key not found")
+    # Drop any cached resolution so the revoked key stops authenticating at once.
+    keycache.invalidate(revoked_hash)
     audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "api-key",
                  action="apikey.revoked", target=key_id, target_kind="api_key")
 

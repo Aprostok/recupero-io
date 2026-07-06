@@ -166,14 +166,18 @@ def list_api_keys(conn: Any, org_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def revoke_api_key(conn: Any, *, org_id: str, key_id: str) -> bool:
+def revoke_api_key(conn: Any, *, org_id: str, key_id: str) -> str | None:
+    """Revoke a key; return its ``key_hash`` (so the caller can invalidate any
+    cached resolution) or None if no matching live key was found."""
     with conn.cursor() as cur:
         cur.execute(
             "UPDATE public.org_api_keys SET revoked_at = now() "
-            "WHERE id = %s AND org_id = %s AND revoked_at IS NULL",
+            "WHERE id = %s AND org_id = %s AND revoked_at IS NULL "
+            "RETURNING key_hash",
             (key_id, org_id),
         )
-        return cur.rowcount > 0
+        row = cur.fetchone()
+        return row[0] if row else None
 
 
 # --------------------------------------------------------------------------- #

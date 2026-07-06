@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi import Depends, Header, HTTPException, status
 
-from recupero.platform import store, tenancy
+from recupero.platform import keycache, store, tenancy
 from recupero.platform.ratelimit import get_rate_limiter
 
 
@@ -77,10 +77,19 @@ def current_principal(
             user_id=str(claims.get("sub")),
             role=str(claims.get("role", "member")),
         )
-    # 2) Org API key
+    # 2) Org API key. Check the optional short-TTL cache first (positive-only,
+    # fails open to the DB); only active resolutions are ever cached.
     if x_api_key and x_api_key.startswith(tenancy.API_KEY_PREFIX):
+        key_hash = tenancy.hash_api_key(x_api_key)
+        cached = keycache.get(key_hash)
+        if cached is not None:
+            return store.OrgContext(
+                org_id=str(cached["org_id"]), plan=str(cached.get("plan", tenancy.DEFAULT_PLAN)),
+                user_id=None, role="service",
+            )
         ctx = store.resolve_api_key(conn, x_api_key)
         if ctx is not None:
+            keycache.put(key_hash, {"org_id": ctx.org_id, "plan": ctx.plan})
             return ctx
         raise HTTPException(status_code=401, detail="invalid API key")
     raise HTTPException(

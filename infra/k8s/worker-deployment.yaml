@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recupero-worker
+  namespace: recupero
+  labels: { app: recupero-worker }
+spec:
+  # replicas is managed by the KEDA ScaledObject (worker-scaledobject.yaml);
+  # it scales 0→N on investigations queue depth. Workers drain the queue via
+  # FOR UPDATE SKIP LOCKED, so any count is safe.
+  selector:
+    matchLabels: { app: recupero-worker }
+  template:
+    metadata:
+      labels: { app: recupero-worker }
+    spec:
+      terminationGracePeriodSeconds: 600   # let an in-flight trace finish
+      containers:
+        - name: worker
+          image: ghcr.io/recupero/recupero-worker@sha256:REPLACE_WITH_DIGEST
+          command: ["python", "-m", "recupero.worker"]
+          envFrom:
+            - secretRef: { name: recupero-app }
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits: { cpu: "2", memory: "3Gi" }

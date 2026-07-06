@@ -1,0 +1,26 @@
+# TLS + WAF/DDoS + edge rate-limit terminate here (managed by the ingress
+# controller / cloud LB); the app-level per-org rate limiter is the tenant-fair
+# second layer. Adjust annotations for your controller (nginx/ALB/Traefik).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: recupero-api
+  namespace: recupero
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"   # matches RECUPERO_MAX_REQUEST_BYTES headroom
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: ["api.recupero.io"]
+      secretName: recupero-api-tls
+  rules:
+    - host: api.recupero.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: recupero-api
+                port: { number: 80 }

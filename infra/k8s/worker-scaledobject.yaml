@@ -1,0 +1,36 @@
+# KEDA scales the worker Deployment on INVESTIGATIONS QUEUE DEPTH — the metric
+# that actually matters for a job-queue workload. Scales to zero when the queue
+# is empty (cost) and up to 20 under backlog. Requires KEDA installed + a
+# TriggerAuthentication providing the Postgres connection string.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: recupero-worker
+  namespace: recupero
+spec:
+  scaleTargetRef:
+    name: recupero-worker
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  cooldownPeriod: 300
+  pollingInterval: 15
+  triggers:
+    - type: postgresql
+      metadata:
+        # One replica per ~5 queued investigations (targetQueryValue),
+        # capped by maxReplicaCount above.
+        targetQueryValue: "5"
+        query: "SELECT count(*) FROM public.investigations WHERE status = 'queued'"
+      authenticationRef:
+        name: recupero-pg-auth
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: recupero-pg-auth
+  namespace: recupero
+spec:
+  secretTargetRef:
+    - parameter: connection
+      name: recupero-app
+      key: RECUPERO_DATABASE_URL

@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recupero-scheduler
+  namespace: recupero
+  labels: { app: recupero-scheduler }
+spec:
+  # 2 replicas for availability; the DB leader-lock (migration 029) guarantees
+  # each cron job fires exactly once even with both running.
+  replicas: 2
+  selector:
+    matchLabels: { app: recupero-scheduler }
+  template:
+    metadata:
+      labels: { app: recupero-scheduler }
+    spec:
+      containers:
+        - name: scheduler
+          image: ghcr.io/recupero/recupero-worker@sha256:REPLACE_WITH_DIGEST
+          command: ["python", "-m", "recupero.worker.cron_scheduler"]
+          envFrom:
+            - secretRef: { name: recupero-app }
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }

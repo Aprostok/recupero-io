@@ -1,0 +1,33 @@
+# Scale the stateless API on CPU + requests-per-second. The RPS metric requires
+# a metrics adapter (Prometheus Adapter scraping GET /v2/metrics, or the managed
+# equivalent); drop the Pods metric block if only CPU autoscaling is available.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: recupero-api
+  namespace: recupero
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: recupero-api
+  minReplicas: 2
+  maxReplicas: 30
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 65 }
+    - type: Pods
+      pods:
+        metric: { name: http_requests_per_second }
+        target: { type: AverageValue, averageValue: "50" }
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - { type: Percent, value: 100, periodSeconds: 30 }
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - { type: Percent, value: 50, periodSeconds: 60 }

@@ -1068,6 +1068,29 @@ def confirm_bridge_destination(
             spec, source_receipt, spec.source_emitter_topic
         )
 
+    # False-positive guard for the composite-key shape. A composite-key protocol's
+    # id is a SMALL, non-globally-unique value (e.g. Across's ``depositId``) that is
+    # only disambiguated by the origin-chain-id topic. If we cannot compute/verify
+    # that qualifier (``source_chain`` missing or not in the chain-id map) AND the
+    # spec carries no other unique tiebreak (emitter / source-tx-hash), an id-only
+    # match could be a colliding deposit from a DIFFERENT source chain — so we
+    # decline rather than emit a false 'high'. Protocols with a unique tiebreak
+    # (Wormhole's emitter) or a globally-unique hash id (dest_id_topic is None)
+    # are unaffected.
+    if (
+        spec.dest_origin_chain_topic is not None
+        and want_origin is None
+        and want_emitter is None
+        and spec.dest_source_txhash_word is None
+    ):
+        log.info(
+            "confirm: %s is a composite-key protocol but the origin-chain-id "
+            "qualifier is unavailable (source_chain=%r) and there is no other "
+            "unique tiebreak — declining id-only match to avoid a false 'high'.",
+            spec.protocol, source_chain,
+        )
+        return None
+
     # A protocol may emit the fill under several event signatures (Synapse
     # TokenMint/TokenWithdraw/…). Query each; first id-match wins.
     for dest_t0 in _dest_topic0s(spec):
@@ -1166,7 +1189,7 @@ def confirm_bridge_destination(
                     f"source event and the destination fill ({dest_t0[:10]}…)"
                     + (
                         f" with origin-chain-id == {source_chain}"
-                        if spec.dest_origin_chain_topic is not None else ""
+                        if want_origin is not None else ""
                     )
                     + " — cryptographic match"
                 ),

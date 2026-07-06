@@ -1452,3 +1452,45 @@ def test_axelar_tampered_payloadhash_returns_none() -> None:
         order_id=AX_PAYLOAD_HASH,
     )
     assert out is None
+
+
+# ===== composite-key false-positive guard (Across depositId is not unique) =====
+# Across's id is a small depositId, disambiguated ONLY by the origin-chain-id
+# topic. If that qualifier can't be verified (source_chain missing/unmapped) and
+# there's no other unique tiebreak, an id-only match could be a colliding deposit
+# from a DIFFERENT source chain — so confirm must decline rather than emit 'high'.
+
+
+def test_across_declines_when_source_chain_missing() -> None:
+    # A fill with THIS depositId exists — but from a different origin (137). With
+    # no source_chain we cannot verify the origin qualifier → must NOT confirm.
+    adapter = _FakeAcrossAdapter([_across_fill_log(origin_chain_id=137)])
+    out = confirm_bridge_destination(
+        protocol="Across", destination_chain="ethereum",
+        source_receipt=_across_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 10, 9, tzinfo=UTC), source_chain=None,
+    )
+    assert out is None
+
+
+def test_across_declines_when_source_chain_unmapped() -> None:
+    adapter = _FakeAcrossAdapter([_across_fill_log()])
+    out = confirm_bridge_destination(
+        protocol="Across", destination_chain="ethereum",
+        source_receipt=_across_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 10, 9, tzinfo=UTC),
+        source_chain="fantom",  # not in _REAL_CHAIN_ID → origin qualifier unverifiable
+    )
+    assert out is None
+
+
+def test_across_basis_claims_origin_only_when_enforced() -> None:
+    # Mapped source_chain → origin qualifier IS enforced → basis states it.
+    adapter = _FakeAcrossAdapter([_across_fill_log(origin_chain_id=8453)])
+    out = confirm_bridge_destination(
+        protocol="Across", destination_chain="ethereum",
+        source_receipt=_across_source_receipt(), dst_adapter=adapter,
+        src_block_time=datetime(2025, 10, 9, tzinfo=UTC), source_chain="base",
+    )
+    assert out is not None and out.confidence == "high"
+    assert "origin-chain-id == base" in out.basis

@@ -57,6 +57,61 @@ def test_presign_custom_endpoint() -> None:
     assert url.startswith("https://minio.local:9000/b/k?")
 
 
+def test_presign_put_is_valid_and_method_specific() -> None:
+    kw = {
+        "bucket": "b", "key": "k.pdf", "region": "us-east-1",
+        "access_key": "AK", "secret_key": "SK", "now": datetime(2026, 1, 1, tzinfo=UTC),
+    }
+    put_url = objectstore.presign_put(**kw)
+    get_url = objectstore.presign_get(**kw)
+    assert put_url.startswith("https://b.s3.amazonaws.com/k.pdf?")
+    assert "X-Amz-Signature=" in put_url
+    # PUT canonical request differs from GET → different signature.
+    assert put_url.split("X-Amz-Signature=")[1] != get_url.split("X-Amz-Signature=")[1]
+
+
+def test_upload_bytes_puts_to_presigned_url(monkeypatch) -> None:
+    monkeypatch.setenv("RECUPERO_ARTIFACT_BUCKET", "b")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AK")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "SK")
+    seen = {}
+
+    class _Resp:
+        status_code = 200
+
+    import httpx
+    monkeypatch.setattr(
+        httpx, "put",
+        lambda url, content=None, timeout=None: seen.update(url=url, content=content) or _Resp(),
+    )
+    ok = objectstore.upload_bytes("orgs/o/investigations/i/brief.pdf", b"PDF",
+                                  now=datetime(2026, 1, 1, tzinfo=UTC))
+    assert ok is True
+    assert seen["content"] == b"PDF"
+    assert "brief.pdf?X-Amz-Algorithm=" in seen["url"]
+
+
+def test_upload_bytes_noop_when_unconfigured(monkeypatch) -> None:
+    monkeypatch.delenv("RECUPERO_ARTIFACT_BUCKET", raising=False)
+    assert objectstore.upload_bytes("k", b"x", now=datetime(2026, 1, 1, tzinfo=UTC)) is False
+
+
+def test_upload_case_artifacts_walks_dir(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("RECUPERO_ARTIFACT_BUCKET", "b")
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AK")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "SK")
+    (tmp_path / "brief.pdf").write_bytes(b"a")
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "transfers.csv").write_bytes(b"b")
+    keys: list[str] = []
+    monkeypatch.setattr(objectstore, "upload_bytes", lambda key, data, now: keys.append(key) or True)
+    n = objectstore.upload_case_artifacts("org1", "inv1", tmp_path,
+                                          now=datetime(2026, 1, 1, tzinfo=UTC))
+    assert n == 2
+    assert "orgs/org1/investigations/inv1/brief.pdf" in keys
+    assert "orgs/org1/investigations/inv1/sub/transfers.csv" in keys
+
+
 def test_artifact_key_is_org_prefixed() -> None:
     assert objectstore.artifact_key("org1", "inv9", "brief.pdf") == \
         "orgs/org1/investigations/inv9/brief.pdf"

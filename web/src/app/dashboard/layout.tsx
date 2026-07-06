@@ -45,6 +45,7 @@ export default function DashboardLayout({
         <span className="brand">Recupero</span>
         {tab("/dashboard", "Traces")}
         {tab("/dashboard/keys", "API Keys")}
+        {tab("/dashboard/members", "Members")}
         {tab("/dashboard/billing", "Billing")}
         <span className="spacer" />
         <button

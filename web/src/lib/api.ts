@@ -82,6 +82,32 @@ export interface NewApiKey {
   warning: string;
 }
 
+export interface Member {
+  user_id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  joined_at: string;
+}
+
+export interface Invite {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface NewInvite {
+  invite_id: string;
+  email: string;
+  role: string;
+  invite_token: string;
+  accept_url: string;
+  expires_at: string;
+  warning: string;
+}
+
 export interface BillingUsage {
   plan: string;
   status: string;
@@ -207,5 +233,45 @@ export const api = {
       method: "POST",
       token,
       body: { plan },
+    }),
+
+  // ---- team: members + invites ---- //
+
+  listMembers: (token: string) =>
+    request<{ members: Member[] }>("/v2/members", { token }),
+
+  setMemberRole: (token: string, userId: string, role: string) =>
+    request<{ user_id: string; role: string }>(
+      `/v2/members/${encodeURIComponent(userId)}`,
+      { method: "PATCH", token, body: { role } },
+    ),
+
+  removeMember: (token: string, userId: string) =>
+    request<void>(`/v2/members/${encodeURIComponent(userId)}`, {
+      method: "DELETE",
+      token,
+    }),
+
+  listInvites: (token: string) =>
+    request<{ invites: Invite[] }>("/v2/members/invites", { token }),
+
+  createInvite: (token: string, email: string, role: string) =>
+    request<NewInvite>("/v2/members/invites", {
+      method: "POST",
+      token,
+      body: { email, role },
+    }),
+
+  revokeInvite: (token: string, inviteId: string) =>
+    request<void>(`/v2/members/invites/${encodeURIComponent(inviteId)}`, {
+      method: "DELETE",
+      token,
+    }),
+
+  // Public — the invite token is the proof; no Bearer session required.
+  acceptInvite: (inviteToken: string, password?: string, name?: string) =>
+    request<TokenOut>("/v2/members/invites/accept", {
+      method: "POST",
+      body: { token: inviteToken, password, name },
     }),
 };

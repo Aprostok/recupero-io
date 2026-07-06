@@ -356,6 +356,147 @@ def list_traces(conn: Any, *, org_id: str, limit: int = 50) -> list[dict[str, An
     ]
 
 
+# --------------------------------------------------------------------------- #
+# Team: members + invites
+# --------------------------------------------------------------------------- #
+
+
+def add_membership(conn: Any, *, org_id: str, user_id: str, role: str) -> None:
+    """Add (or re-role) a user in an org. Idempotent on (org_id, user_id)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.memberships (org_id, user_id, role) "
+            "VALUES (%s, %s, %s) "
+            "ON CONFLICT (org_id, user_id) DO UPDATE SET role = EXCLUDED.role",
+            (org_id, user_id, role),
+        )
+
+
+def list_members(conn: Any, org_id: str) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT u.id::text, u.email, u.name, m.role, m.created_at "
+            "FROM public.memberships m JOIN public.users u ON u.id = m.user_id "
+            "WHERE m.org_id = %s ORDER BY m.created_at ASC",
+            (org_id,),
+        )
+        rows = cur.fetchall()
+    return [
+        {"user_id": r[0], "email": r[1], "name": r[2], "role": r[3], "joined_at": r[4]}
+        for r in rows
+    ]
+
+
+def count_owners(conn: Any, org_id: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM public.memberships WHERE org_id = %s AND role = 'owner'",
+            (org_id,),
+        )
+        return int(cur.fetchone()[0])
+
+
+def update_member_role(conn: Any, *, org_id: str, user_id: str, role: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.memberships SET role = %s WHERE org_id = %s AND user_id = %s",
+            (role, org_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def remove_member(conn: Any, *, org_id: str, user_id: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM public.memberships WHERE org_id = %s AND user_id = %s",
+            (org_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def count_pending_invites(conn: Any, org_id: str) -> int:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM public.org_invites "
+            "WHERE org_id = %s AND accepted_at IS NULL",
+            (org_id,),
+        )
+        return int(cur.fetchone()[0])
+
+
+def create_invite(
+    conn: Any, *, org_id: str, email: str, role: str, invited_by: str | None,
+    token_hash: str, expires_at: Any,
+) -> str:
+    """Create (or replace) a pending invite for ``(org, email)``. A prior pending
+    invite for the same email is cleared first so re-inviting rotates the token
+    rather than colliding on the partial-unique index."""
+    norm = email.strip().lower()
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM public.org_invites "
+            "WHERE org_id = %s AND email = %s AND accepted_at IS NULL",
+            (org_id, norm),
+        )
+        cur.execute(
+            "INSERT INTO public.org_invites "
+            "(org_id, email, role, token_hash, invited_by, expires_at) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id::text",
+            (org_id, norm, role, token_hash, invited_by, expires_at),
+        )
+        return cur.fetchone()[0]
+
+
+def list_invites(conn: Any, org_id: str) -> list[dict[str, Any]]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id::text, email, role, created_at, expires_at "
+            "FROM public.org_invites WHERE org_id = %s AND accepted_at IS NULL "
+            "ORDER BY created_at DESC",
+            (org_id,),
+        )
+        rows = cur.fetchall()
+    return [
+        {"id": r[0], "email": r[1], "role": r[2], "created_at": r[3], "expires_at": r[4]}
+        for r in rows
+    ]
+
+
+def revoke_invite(conn: Any, *, org_id: str, invite_id: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM public.org_invites "
+            "WHERE id = %s AND org_id = %s AND accepted_at IS NULL",
+            (invite_id, org_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_invite_by_token(conn: Any, token_hash: str) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id::text, org_id::text, email, role, expires_at, accepted_at "
+            "FROM public.org_invites WHERE token_hash = %s",
+            (token_hash,),
+        )
+        row = cur.fetchone()
+    if not row:
+        return None
+    return {
+        "id": row[0], "org_id": row[1], "email": row[2], "role": row[3],
+        "expires_at": row[4], "accepted_at": row[5],
+    }
+
+
+def mark_invite_accepted(conn: Any, *, invite_id: str, user_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.org_invites SET accepted_at = now(), accepted_by = %s "
+            "WHERE id = %s AND accepted_at IS NULL",
+            (user_id, invite_id),
+        )
+
+
 __all__ = (
     "OrgContext",
     "create_user", "get_user_by_email",
@@ -363,4 +504,7 @@ __all__ = (
     "create_api_key", "resolve_api_key", "list_api_keys", "revoke_api_key",
     "traces_used_this_period", "record_usage",
     "enqueue_trace", "get_trace_status", "list_traces",
+    "add_membership", "list_members", "count_owners", "update_member_role",
+    "remove_member", "count_pending_invites", "create_invite", "list_invites",
+    "revoke_invite", "get_invite_by_token", "mark_invite_accepted",
 )

@@ -27,6 +27,8 @@ interface AuthState {
   ready: boolean;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, orgName: string) => Promise<void>;
+  /** Store a session obtained out-of-band (e.g. accepting an invite). */
+  setSession: (token: string, orgId: string) => void;
   logout: () => void;
 }
 
@@ -75,8 +77,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo<AuthState>(
-    () => ({ token, orgId, ready, login, signup, logout }),
-    [token, orgId, ready, login, signup, logout],
+    () => ({ token, orgId, ready, login, signup, setSession: persist, logout }),
+    [token, orgId, ready, login, signup, persist, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

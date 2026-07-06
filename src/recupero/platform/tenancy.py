@@ -116,6 +116,25 @@ def verify_api_key(plaintext: str, stored_hash: str) -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Invite tokens — single-use org-invite links; only a hash is stored
+# --------------------------------------------------------------------------- #
+
+INVITE_TOKEN_TTL_SEC = 7 * 24 * 3600  # 7 days
+
+
+def generate_invite_token() -> tuple[str, str]:
+    """Return ``(plaintext, sha256_hash)``. The plaintext goes in the invite
+    link (emailed once); only the hash is stored — same hash-only posture as API
+    keys, so a leaked DB yields no usable invite links."""
+    token = secrets.token_urlsafe(32)
+    return token, hash_invite_token(token)
+
+
+def hash_invite_token(plaintext: str) -> str:
+    return hashlib.sha256((plaintext or "").encode("utf-8")).hexdigest()
+
+
+# --------------------------------------------------------------------------- #
 # Session tokens — minimal HS256 JWT (stdlib only)
 # --------------------------------------------------------------------------- #
 
@@ -240,6 +259,7 @@ __all__ = (
     "TokenError",
     "hash_password", "verify_password",
     "generate_api_key", "hash_api_key", "verify_api_key",
+    "INVITE_TOKEN_TTL_SEC", "generate_invite_token", "hash_invite_token",
     "mint_jwt", "verify_jwt",
     "get_plan", "check_trace_quota", "check_seat_quota",
 )

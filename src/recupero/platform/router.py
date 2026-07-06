@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
@@ -35,6 +35,18 @@ def _session_ttl() -> int:
         return int(os.environ.get("RECUPERO_PLATFORM_JWT_TTL_SEC", "3600"))
     except (TypeError, ValueError):
         return 3600
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """Treat a naive datetime as UTC (psycopg returns tz-aware timestamptz;
+    this only guards a test/edge that hands us a naive value)."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+# Roles an owner/admin may hand out. 'owner' is intentionally excluded from
+# invites (ownership is granted at org creation or via an explicit role change).
+_ASSIGNABLE_ROLES = ("admin", "member", "viewer")
+_ALL_ROLES = ("owner", "admin", "member", "viewer")
 
 
 # ---- request/response models ---- #
@@ -184,6 +196,170 @@ def revoke_key(
 ) -> None:
     if not store.revoke_api_key(conn, org_id=principal.org_id, key_id=key_id):
         raise HTTPException(status_code=404, detail="key not found")
+
+
+# ---- team: members + invites ---- #
+
+
+class InviteIn(BaseModel):
+    email: str = Field(max_length=254)
+    role: str = Field(default="member")
+
+    @field_validator("email")
+    @classmethod
+    def _email_ok(cls, v: str) -> str:
+        if not _EMAIL_RE.match(v or ""):
+            raise ValueError("invalid email")
+        return v.strip().lower()
+
+    @field_validator("role")
+    @classmethod
+    def _role_ok(cls, v: str) -> str:
+        r = (v or "").strip().lower()
+        if r not in _ASSIGNABLE_ROLES:
+            raise ValueError(f"role must be one of {list(_ASSIGNABLE_ROLES)}")
+        return r
+
+
+class RoleIn(BaseModel):
+    role: str
+
+
+class AcceptInviteIn(BaseModel):
+    token: str = Field(min_length=8, max_length=256)
+    password: str | None = Field(default=None, max_length=256)
+    name: str | None = Field(default=None, max_length=120)
+
+
+@router.get("/members")
+def list_org_members(
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    return {"members": store.list_members(conn, principal.org_id)}
+
+
+# NOTE: the literal `/members/invites*` routes are declared BEFORE the
+# `/members/{user_id}` param routes so they are matched first.
+@router.post("/members/invites", status_code=201)
+def invite_member(
+    body: InviteIn,
+    principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    org = store.get_org(conn, principal.org_id) or {}
+    # Count seats already used PLUS pending invites so we can't over-commit.
+    committed = store.count_seats(conn, principal.org_id) + store.count_pending_invites(
+        conn, principal.org_id,
+    )
+    quota = tenancy.check_seat_quota(plan_name=org.get("plan"), current_seats=committed)
+    if not quota.allowed:
+        raise HTTPException(status_code=402, detail=quota.reason)  # seat limit reached
+    token, token_hash = tenancy.generate_invite_token()
+    expires = datetime.now(UTC) + timedelta(seconds=tenancy.INVITE_TOKEN_TTL_SEC)
+    invite_id = store.create_invite(
+        conn, org_id=principal.org_id, email=body.email, role=body.role,
+        invited_by=principal.user_id, token_hash=token_hash, expires_at=expires,
+    )
+    base = os.environ.get("RECUPERO_APP_BASE_URL", "https://app.recupero.io")
+    # The token is returned ONCE (email delivery is a separate, gated concern).
+    return {
+        "invite_id": invite_id, "email": body.email, "role": body.role,
+        "invite_token": token, "accept_url": f"{base}/invite?token={token}",
+        "expires_at": expires.isoformat(),
+        "warning": "share this link with the invitee — the token is shown once",
+    }
+
+
+@router.get("/members/invites")
+def list_member_invites(
+    principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    return {"invites": store.list_invites(conn, principal.org_id)}
+
+
+@router.delete("/members/invites/{invite_id}", status_code=204)
+def revoke_member_invite(
+    invite_id: str,
+    principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    conn: Any = Depends(deps.db_conn),
+) -> None:
+    if not store.revoke_invite(conn, org_id=principal.org_id, invite_id=invite_id):
+        raise HTTPException(status_code=404, detail="invite not found")
+
+
+@router.post("/members/invites/accept", response_model=TokenOut)
+def accept_member_invite(
+    body: AcceptInviteIn, conn: Any = Depends(deps.db_conn),
+) -> TokenOut:
+    """Public (no auth): the single-use token IS the proof the invitee received
+    the emailed link. Adds an existing user to the org, or creates the account
+    (password required) — then returns a session token so they're signed in."""
+    invite = store.get_invite_by_token(conn, tenancy.hash_invite_token(body.token))
+    if invite is None or invite["accepted_at"] is not None:
+        raise HTTPException(status_code=404, detail="invite not found or already used")
+    if invite["expires_at"] is not None and _as_utc(invite["expires_at"]) < datetime.now(UTC):
+        raise HTTPException(status_code=410, detail="invite expired")
+
+    org_id, email, role = invite["org_id"], invite["email"], invite["role"]
+    user = store.get_user_by_email(conn, email)
+    if user is None:
+        if not body.password or len(body.password) < 10:
+            raise HTTPException(status_code=422, detail="new account requires a password (10+ chars)")
+        user_id = store.create_user(conn, email=email, password=body.password, name=body.name)
+    else:
+        user_id = user["id"]
+
+    org = store.get_org(conn, org_id) or {}
+    already_member = store.get_membership(conn, org_id=org_id, user_id=user_id) is not None
+    if not already_member:
+        seats = store.count_seats(conn, org_id)
+        quota = tenancy.check_seat_quota(plan_name=org.get("plan"), current_seats=seats)
+        if not quota.allowed:
+            raise HTTPException(status_code=402, detail=quota.reason)
+
+    store.add_membership(conn, org_id=org_id, user_id=user_id, role=role)
+    store.mark_invite_accepted(conn, invite_id=invite["id"], user_id=user_id)
+    ttl = _session_ttl()
+    token = tenancy.mint_jwt(
+        secret=deps._jwt_secret(), subject=user_id, org_id=org_id, role=role,
+        ttl_seconds=ttl, extra={"plan": org.get("plan", tenancy.DEFAULT_PLAN)},
+    )
+    return TokenOut(access_token=token, expires_in=ttl, org_id=org_id)
+
+
+@router.patch("/members/{user_id}")
+def set_member_role(
+    user_id: str, body: RoleIn,
+    principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    role = (body.role or "").strip().lower()
+    if role not in _ALL_ROLES:
+        raise HTTPException(status_code=422, detail=f"role must be one of {list(_ALL_ROLES)}")
+    target = store.get_membership(conn, org_id=principal.org_id, user_id=user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="member not found")
+    # Never leave an org without an owner.
+    if target["role"] == "owner" and role != "owner" and store.count_owners(conn, principal.org_id) <= 1:
+        raise HTTPException(status_code=409, detail="cannot demote the last owner")
+    store.update_member_role(conn, org_id=principal.org_id, user_id=user_id, role=role)
+    return {"user_id": user_id, "role": role}
+
+
+@router.delete("/members/{user_id}", status_code=204)
+def remove_org_member(
+    user_id: str,
+    principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    conn: Any = Depends(deps.db_conn),
+) -> None:
+    target = store.get_membership(conn, org_id=principal.org_id, user_id=user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="member not found")
+    if target["role"] == "owner" and store.count_owners(conn, principal.org_id) <= 1:
+        raise HTTPException(status_code=409, detail="cannot remove the last owner")
+    store.remove_member(conn, org_id=principal.org_id, user_id=user_id)
 
 
 # ---- traces (async, tenant-scoped, quota-gated) ---- #

@@ -379,3 +379,92 @@ def test_approval_event_dataclass_constructs_cleanly() -> None:
     # frozen dataclass — assignment raises.
     import dataclasses
     assert dataclasses.is_dataclass(ApprovalEvent)
+
+
+# ---- W7 prefetch: no-silent-caps observability ---- #
+
+
+class _StubOutflowAdapter:
+    """Fake adapter whose erc20-outflow method returns a fixed number of rows
+    so the prefetch cap can be exercised; native outflows are empty."""
+
+    def __init__(self, n_rows: int) -> None:
+        self._n = n_rows
+
+    def fetch_erc20_outflows(self, contract, start_block):  # noqa: ANN001
+        return [
+            {
+                "block_number": 100,
+                "to": f"0x{i:040x}",
+                "token": {"symbol": "USDC", "contract": USDC_CONTRACT,
+                          "decimals": 6},
+                "amount_raw": "1000000",
+                "tx_hash": "0x" + str(i).zfill(64),
+            }
+            for i in range(self._n)
+        ]
+
+    def fetch_native_outflows(self, contract, start_block):  # noqa: ANN001
+        return []
+
+
+def test_prefetch_outflows_warns_when_cap_hit(caplog) -> None:
+    """No silent caps: filling the max_outflows budget means a drain
+    destination beyond it could be missed by signal-2 — so warn."""
+    import logging
+
+    from recupero.trace.drainer_detection import _prefetch_contract_outflows
+
+    with caplog.at_level(logging.WARNING):
+        out = _prefetch_contract_outflows(
+            adapter=_StubOutflowAdapter(5),
+            contract_addr="0x" + "c" * 40,
+            anchor_block=100,
+            window_blocks=5,
+            max_outflows=3,
+        )
+    assert len(out) == 3
+    assert "max_outflows cap" in caplog.text
+
+
+def test_prefetch_outflows_no_warn_below_cap(caplog) -> None:
+    import logging
+
+    from recupero.trace.drainer_detection import _prefetch_contract_outflows
+
+    with caplog.at_level(logging.WARNING):
+        out = _prefetch_contract_outflows(
+            adapter=_StubOutflowAdapter(2),
+            contract_addr="0x" + "c" * 40,
+            anchor_block=100,
+            window_blocks=5,
+            max_outflows=10,
+        )
+    assert len(out) == 2
+    assert "max_outflows cap" not in caplog.text
+
+
+def test_probe_contract_cap_warns_once(caplog) -> None:
+    """No silent caps: once the per-case contract-probe budget is spent,
+    remaining un-enumerated contracts aren't probed — warn exactly once."""
+    import logging
+
+    class _EmptyAdapter:
+        def fetch_erc20_outflows(self, contract, start_block):  # noqa: ANN001
+            return []
+
+        def fetch_native_outflows(self, contract, start_block):  # noqa: ANN001
+            return []
+
+    # 19 distinct un-enumerated contracts > the default cap of 16.
+    transfers = [
+        _mk_transfer(
+            from_addr=VICTIM, to_addr=f"0x{i:040x}", is_contract=True,
+            block_number=100 + i, tx_hash="0x" + str(i).zfill(64),
+        )
+        for i in range(1, 20)
+    ]
+    case = _mk_case(transfers)
+    with caplog.at_level(logging.WARNING):
+        detect_drainer_pattern(case, high_risk_db={}, adapter=_EmptyAdapter())
+    assert caplog.text.count("max_contracts_to_probe cap") == 1

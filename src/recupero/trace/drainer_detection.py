@@ -233,6 +233,18 @@ def _prefetch_contract_outflows(
         if len(fetched) >= max_outflows:
             break
 
+    # No silent caps: if we filled the budget, more outflows may exist beyond it
+    # — and signal-2 (approval-pull forwarding) matches the drain destination
+    # against these rows, so a true destination past the cap would be MISSED.
+    if len(fetched) >= max_outflows:
+        log.warning(
+            "W7 prefetch: contract %s hit the max_outflows cap of %d around "
+            "block %s — additional outbound transfers in the window were NOT "
+            "indexed, so signal-2 may miss a drain destination beyond the first "
+            "%d. Raise max_contract_outflows for a fuller sweep.",
+            contract_addr, max_outflows, anchor_block, max_outflows,
+        )
+
     out: list[Any] = []
     for row in fetched:
         try:
@@ -425,6 +437,7 @@ def detect_drainer_pattern(
 
     seen_drainer_contracts: set[str] = set()
     contracts_probed: set[str] = set()  # for W7 fetch-budget tracking
+    probe_cap_warned = False  # emit the max_contracts_to_probe cap warning once
     for t in case.transfers:
         if _ck(t.from_address) != seed:
             continue
@@ -483,6 +496,25 @@ def detect_drainer_pattern(
                     "fetched %d outflows around block %s",
                     contract_addr, len(fetched), t.block_number,
                 )
+        elif (
+            not contract_outflows
+            and adapter is not None
+            and contract_addr not in contracts_probed
+            and len(contracts_probed) >= max_contracts_to_probe
+            and not probe_cap_warned
+        ):
+            # No silent caps: we've hit the per-case probe budget, so remaining
+            # un-enumerated contracts won't be probed for outflows and signal-2
+            # can't fire for drainers routed through them. Warn once.
+            probe_cap_warned = True
+            log.warning(
+                "drainer signal-2 W7: reached the max_contracts_to_probe cap "
+                "(%d); further un-enumerated contracts in this case are NOT "
+                "being probed for outflows, so signal-2 (approval-pull "
+                "forwarding) may miss drainers routed through them. Raise "
+                "max_contracts_to_probe for a fuller sweep.",
+                max_contracts_to_probe,
+            )
         for f in contract_outflows:
             dst_eoa = _ck(f.to_address)
             if not dst_eoa or dst_eoa == seed:

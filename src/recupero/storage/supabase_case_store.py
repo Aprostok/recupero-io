@@ -356,13 +356,23 @@ class SupabaseCaseStore:
     # ----- Evidence subpath ----- #
 
     def write_evidence(self, tx_hash: str, payload: dict) -> None:
-        # RIGOR-Jacob Z19-5: tx_hash is concatenated into the storage
-        # URL; a regressed chain adapter producing ``"../../leak"``
-        # would write outside the investigation prefix. Reject early.
-        _validate_relpath(tx_hash, kind="tx_hash")
+        # A base64 tx hash (TON transaction_id.hash, alphabet A-Za-z0-9+/) contains
+        # forward slashes; concatenated raw into the storage key it would NEST the
+        # receipt into bucket sub-"folders" (evidence/<a>/<b>.json) that
+        # list_evidence() can't enumerate as flat ``*.json`` — or, on a ``//``,
+        # be rejected outright by _validate_relpath. So map '/' -> '_' for a FLAT,
+        # listable key that matches the local trace.evidence filename. '/' is not a
+        # traversal vector on its own; '..' / backslash / '//' / control chars are
+        # still rejected below (checked on the sanitized value). base64/hex/base58
+        # never contain '_', so the rename is deterministic + collision-free.
+        safe_tx = tx_hash.replace("/", "_") if isinstance(tx_hash, str) else tx_hash
+        # RIGOR-Jacob Z19-5: tx_hash is concatenated into the storage URL; a
+        # regressed chain adapter producing ``"../../leak"`` would write outside
+        # the investigation prefix. Reject early.
+        _validate_relpath(safe_tx, kind="tx_hash")
         opts = orjson.OPT_INDENT_2 if self._pretty else 0
         body = orjson.dumps(payload, option=opts)
-        path = self.storage_prefix + f"evidence/{tx_hash}.json"
+        path = self.storage_prefix + f"evidence/{safe_tx}.json"
         self._upload(path, body, "application/json")
 
     def list_evidence(self) -> list[str]:

@@ -364,6 +364,30 @@ def test_z19_5b_write_evidence_rejects_traversal_tx_hash(bad_tx) -> None:
     )
 
 
+def test_z19_5c_write_evidence_flattens_base64_ton_hash() -> None:
+    """A TON base64 tx hash (alphabet A-Za-z0-9+/) contains forward slashes.
+    write_evidence must map '/' -> '_' so the receipt lands at a FLAT, listable
+    key (matching the local trace.evidence filename) rather than nesting into
+    bucket sub-folders that list_evidence() can't enumerate."""
+    store = _make_stub_store()
+    store._upload = MagicMock()
+    ton_hash = "PYhAIaaa/kYNwK2v5tM50AB3N938MWdXeoXu4YXUMXE="
+    store.write_evidence(ton_hash, {"ok": True})
+    key = store._upload.call_args[0][0]
+    tail = key.split("evidence/", 1)[1]
+    assert "/" not in tail  # no accidental bucket nesting
+    assert tail == "PYhAIaaa_kYNwK2v5tM50AB3N938MWdXeoXu4YXUMXE=.json"
+
+
+def test_z19_5d_write_evidence_double_slash_base64_flattens_not_rejected() -> None:
+    """A base64 hash with adjacent slashes previously tripped the '//' forbid and
+    was rejected (TON evidence dropped); now it flattens to '__' and uploads."""
+    store = _make_stub_store()
+    store._upload = MagicMock()
+    store.write_evidence("AB//CD", {"ok": True})
+    assert store._upload.call_args[0][0].endswith("evidence/AB__CD.json")
+
+
 # =====================================================================
 # Z19-6: _list_page response-shape validation
 # =====================================================================

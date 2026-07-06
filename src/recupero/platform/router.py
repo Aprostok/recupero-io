@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from recupero.platform import audit, billing, deps, store, tenancy
+from recupero.platform import audit, billing, deps, objectstore, store, tenancy
 
 router = APIRouter(prefix="/v2", tags=["platform"])
 
@@ -554,6 +554,32 @@ def list_traces(
     conn: Any = Depends(deps.db_conn),
 ) -> dict[str, Any]:
     return {"traces": store.list_traces(conn, org_id=principal.org_id, limit=limit)}
+
+
+@router.get("/traces/{investigation_id}/artifacts/{name}")
+def trace_artifact_url(
+    investigation_id: str, name: str,
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Return a short-lived presigned download URL for one case artifact. The
+    object key is server-built from the tenant's org id (no traversal), and the
+    trace must belong to the caller's org. 501 when object storage is unset."""
+    if not objectstore.is_safe_name(name):
+        raise HTTPException(status_code=422, detail="invalid artifact name")
+    row = store.get_trace_status(
+        conn, org_id=principal.org_id, investigation_id=investigation_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    signed = objectstore.presign_artifact(
+        org_id=principal.org_id, investigation_id=investigation_id,
+        name=name, now=datetime.now(UTC),
+    )
+    if signed is None:
+        raise HTTPException(status_code=501, detail="artifact storage not configured")
+    url, ttl = signed
+    return {"artifact": name, "url": url, "expires_in": ttl}
 
 
 __all__ = ("router",)

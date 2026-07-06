@@ -67,7 +67,7 @@ PROPERTY_SETTINGS = settings(
 # decoder dispatch (not just the "unknown method → None" fast path).
 # ─────────────────────────────────────────────────────────────────────────────
 _METHOD_IDS_BY_PROTOCOL: dict[str, list[str]] = {
-    "Connext": ["0x4ff746f6", "0x0c884583"],
+    "Connext": ["0x8aac16ba"],
     "Axelar": ["0xb5417084", "0x26ef699d"],
     "LiFi": [
         "0xfbb73a4f", "0x6cf26d72", "0x42a2b1cd",
@@ -75,7 +75,7 @@ _METHOD_IDS_BY_PROTOCOL: dict[str, list[str]] = {
     ],
     "Hop": ["0xdeace8f5", "0xa6df7b8c"],
     "Squid": ["0x84d2bb4d", "0x32fb1360"],
-    "Celer": ["0xa5977fbb", "0xe957bf91"],
+    "Celer": ["0xa5977fbb", "0x3f2e5fc3"],
     "Synapse": ["0xfa9d8e22", "0xf1a64348"],
     "Symbiosis": ["0xa11b1198"],
 }

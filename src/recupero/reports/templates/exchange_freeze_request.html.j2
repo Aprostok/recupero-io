@@ -151,6 +151,17 @@ Each transaction is independently verifiable on the public blockchain.
   </tbody>
 </table>
 
+{# v0.41-audit C3: full untruncated deposit addresses for exact matching
+   (doctrine: never truncate addresses in legal docs). The table above
+   uses short form for readability; this appendix is authoritative. #}
+<p><strong>Full deposit address(es) referenced above</strong> (listed
+in full for exact matching against your records):</p>
+<ul style="font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 0.85em;">
+{% for flow in flows %}
+  <li>{{ flow.cex_address }}<span class="secondary"> · upstream {{ flow.upstream_address }} · {{ flow.token_symbol }}</span></li>
+{% endfor %}
+</ul>
+
 <h2>3. Transaction Hashes (for Verification)</h2>
 <ul style="font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 0.85em;">
 {% for flow in flows %}

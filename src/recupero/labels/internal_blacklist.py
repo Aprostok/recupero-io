@@ -41,6 +41,37 @@ NEVER_ARM_ROLES = frozenset({
     "defi_protocol", "staking", "hop", "unlabeled",
 })
 
+# H2 (service-veto): roles/label-categories that mark a SHARED SERVICE address.
+# A service can appear as a benign hop in one case (NEVER_ARM filters that on a
+# per-sighting basis) AND be hand-labeled current_holder/perpetrator in another
+# (a deposit-tracing artifact, or an analyst error). The per-sighting OR-arming
+# would then arm the service — wrongly freezing e.g. a Binance hot wallet that
+# thousands of innocent users share. So a service sighting is a HARD VETO over
+# the whole deduped address: if ANY sighting carries a service role or a
+# service label_category, the address can never be armed (manual review only).
+SERVICE_VETO_ROLES = frozenset({
+    "bridge", "exchange_hot_wallet", "exchange_deposit",
+    "defi_protocol", "staking",
+})
+# label_category substrings that indicate a shared service (matched
+# case-insensitively, substring — covers "exchange", "exchange_deposit",
+# "bridge", "defi_protocol", "staking_pool", "cex", "dex", etc.).
+_SERVICE_LABEL_CATEGORY_MARKERS = (
+    "exchange", "bridge", "defi", "staking", "cex", "dex", "custodian",
+    "service",
+)
+_SERVICE_VETO_REASON = "service-labeled; manual review required"
+
+
+def _is_service_sighting(role: str, label_category: str | None) -> bool:
+    """H2: True when a sighting marks the address as a shared service."""
+    if role in SERVICE_VETO_ROLES:
+        return True
+    lc = (label_category or "").strip().lower()
+    if lc and any(m in lc for m in _SERVICE_LABEL_CATEGORY_MARKERS):
+        return True
+    return False
+
 # Weakest → strongest, for picking the representative role of a deduped address.
 _ROLE_RANK: dict[str, int] = {
     "hop": 0,
@@ -154,6 +185,7 @@ def build_blacklist(observations: Iterable[AddressObservation]) -> list[Blacklis
                 "inv_ids": set(),
                 "real_ids": set(),
                 "armed": False,
+                "service_seen": False,
             }
             agg[key] = cur
         if o.investigation_id:
@@ -162,6 +194,9 @@ def build_blacklist(observations: Iterable[AddressObservation]) -> list[Blacklis
                 cur["real_ids"].add(o.investigation_id)
         if _observation_arms(o):
             cur["armed"] = True
+        # H2: a service sighting anywhere vetoes arming for the whole address.
+        if _is_service_sighting(o.role, o.label_category):
+            cur["service_seen"] = True
         new_rank = _ROLE_RANK.get(o.role, 0)
         if new_rank > cur["rank"]:
             cur["rank"] = new_rank
@@ -175,8 +210,15 @@ def build_blacklist(observations: Iterable[AddressObservation]) -> list[Blacklis
     for cur in agg.values():
         count = len(cur["inv_ids"])
         real = len(cur["real_ids"])
-        armed = bool(cur["armed"])
+        # H2 (service-veto): a service sighting anywhere forces disarm,
+        # overriding the per-sighting OR-arming.
+        service_vetoed = bool(cur["service_seen"])
+        armed = bool(cur["armed"]) and not service_vetoed
         confidence = ("high" if real >= 2 else "medium") if armed else "low"
+        if service_vetoed:
+            reason = _SERVICE_VETO_REASON
+        else:
+            reason = _reason_for(cur["role"], cur["label_name"], real, armed)
         entries.append(BlacklistEntry(
             address=cur["address"],
             chain=cur["chain"],
@@ -188,7 +230,7 @@ def build_blacklist(observations: Iterable[AddressObservation]) -> list[Blacklis
             real_case_count=real,
             alert_enabled=armed,
             confidence=confidence,
-            reason=_reason_for(cur["role"], cur["label_name"], real, armed),
+            reason=reason,
         ))
     # Armed first, then by how many real cases attest it (most-corroborated up).
     entries.sort(key=lambda e: (not e.alert_enabled, -e.real_case_count, e.address))
@@ -252,6 +294,17 @@ def armed_high_risk_entries(entries: Iterable[BlacklistEntry]) -> dict[str, Any]
     out: dict[str, Any] = {}
     for e in entries:
         if not e.alert_enabled:
+            continue
+        # H2 (service-veto), defense-in-depth: even an entry that arrives armed
+        # from disk (written before the build-time veto, or hand-edited) is
+        # dropped if its role/label_category marks a shared service — arming a
+        # service into the high-risk DB risks a wrongful freeze.
+        if _is_service_sighting(e.role, e.label_category):
+            log.warning(
+                "internal blacklist: refusing to arm service-labeled address "
+                "%s (role=%s, label_category=%s) — %s",
+                e.address, e.role, e.label_category, _SERVICE_VETO_REASON,
+            )
             continue
         key = _ck(e.address)
         if not key:

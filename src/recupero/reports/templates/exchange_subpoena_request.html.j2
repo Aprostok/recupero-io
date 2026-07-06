@@ -154,6 +154,19 @@ on the public blockchain.
   </tbody>
 </table>
 
+{# v0.41-audit C3: the flows table above renders addresses in short
+   form for readability, but a legal request MUST carry the FULL,
+   untruncated deposit addresses (doctrine: never 0x1234…abcd in legal
+   docs). This appendix lists each address in full so the recipient can
+   match it exactly against their records. #}
+<p><strong>Full deposit address(es) referenced above</strong> (listed
+in full for exact matching against your records):</p>
+<ul style="font-family: ui-monospace, 'JetBrains Mono', monospace; font-size: 0.85em;">
+{% for flow in flows %}
+  <li>{{ flow.cex_address }}<span class="secondary"> · upstream {{ flow.upstream_address }} · {{ flow.token_symbol }}</span></li>
+{% endfor %}
+</ul>
+
 <h2>3. Transaction Hashes (for Verification)</h2>
 <p>The flows above comprise the following on-chain transactions. Each
 hash is reproducible against any Ethereum mainnet node or block

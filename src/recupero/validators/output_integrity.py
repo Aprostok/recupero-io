@@ -1944,12 +1944,18 @@ def _check_unrecoverable_not_in_freezable(
                 addr = (holding.get("address") or "").lower()
                 if addr:
                     unrecoverable_addrs.add(addr)
-    # Also accept top-level UNRECOVERABLE_ITEMS if the brief uses
-    # that shape.
-    for item in freeze_brief.get("UNRECOVERABLE_ITEMS", []) or []:
-        addr = (item.get("address") or "").lower()
-        if addr:
-            unrecoverable_addrs.add(addr)
+    # Also accept top-level editorial UNRECOVERABLE items. v0.41-audit
+    # M1: emit_brief stores these under the key "UNRECOVERABLE" (the
+    # editorial source key is "UNRECOVERABLE_ITEMS"); read BOTH so a
+    # write-off carrying an `address` is honored regardless of which
+    # schema the brief was emitted with.
+    for key in ("UNRECOVERABLE", "UNRECOVERABLE_ITEMS"):
+        for item in freeze_brief.get(key, []) or []:
+            if not isinstance(item, dict):
+                continue
+            addr = (item.get("address") or "").lower()
+            if addr:
+                unrecoverable_addrs.add(addr)
     if not unrecoverable_addrs:
         return []
 
@@ -2971,11 +2977,21 @@ def _check_orphan_artifacts_on_disk(briefs_dir: Path) -> list[Violation]:
 def _check_unrecoverable_total_matches_holdings(
     freeze_brief: dict | None,
 ) -> list[Violation]:
-    """Jacob v0.21.x residual: ``TOTAL_UNRECOVERABLE_USD`` must roll up
-    every UNRECOVERABLE-status holding across ALL_ISSUER_HOLDINGS plus
-    every editorial UNRECOVERABLE_ITEMS entry. Pre-fix it only summed
-    the editorial list, leaving a $655K Sky-DAI hole when the perp hub
-    held UNRECOVERABLE tokens that weren't explicitly editorialized.
+    """``TOTAL_UNRECOVERABLE_USD`` must equal the single canonical
+    contract that ``emit_brief._compute_totals`` produces:
+
+        Σ (every UNRECOVERABLE-status holding in ALL_ISSUER_HOLDINGS)
+      + Σ (editorial UNRECOVERABLE_ITEMS whose (issuer,address) does NOT
+           match a counted holding)
+
+    v0.41-audit H3: pre-fix this validator summed ONLY
+    ALL_ISSUER_HOLDINGS, so any editorial UNRECOVERABLE_ITEMS entry that
+    legitimately has no per-issuer holding counterpart (a mixer / burn /
+    bridge-out write-off like "3.2 ETH → Tornado") made the declared
+    total exceed the holdings sum and the check fired a FALSE high. The
+    producer counts both sources (de-duped via the new optional
+    issuer+address fields on editorial items); the validator now mirrors
+    that exactly.
 
     Tolerance: $1 (rounding noise from per-issuer aggregation).
     """
@@ -2988,21 +3004,48 @@ def _check_unrecoverable_total_matches_holdings(
         declared_num = _parse_usd_string(declared)
     except (InvalidOperation, ValueError, TypeError):
         return []
-    # Sum every UNRECOVERABLE holding across ALL_ISSUER_HOLDINGS.
-    holdings_total = Decimal("0")
+    # 1. Sum every UNRECOVERABLE holding across ALL_ISSUER_HOLDINGS;
+    #    record (issuer,address) keys so editorial dedup can fire.
+    expected_total = Decimal("0")
+    seen_keys: set[tuple[str, str]] = set()
     for entry in freeze_brief.get("ALL_ISSUER_HOLDINGS") or []:
         if not isinstance(entry, dict):
             continue
+        issuer_name = str(entry.get("issuer", ""))
         for h in entry.get("holdings") or []:
             if not isinstance(h, dict):
                 continue
             if h.get("status") != "UNRECOVERABLE":
                 continue
+            addr = str(h.get("address", ""))
+            key = (issuer_name, addr)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
             try:
-                holdings_total += _parse_usd_string(h.get("usd"))
+                expected_total += _parse_usd_string(h.get("usd"))
             except (InvalidOperation, ValueError, TypeError):
                 pass
-    diff = abs(declared_num - holdings_total)
+    # 2. Add editorial UNRECOVERABLE_ITEMS not already counted as a
+    #    holding (matched by the optional issuer+address fields).
+    for u in freeze_brief.get("UNRECOVERABLE") or []:
+        if not isinstance(u, dict):
+            continue
+        key = (str(u.get("issuer", "")), str(u.get("address", "")))
+        if key != ("", "") and key in seen_keys:
+            continue
+        asset = u.get("asset", "") or ""
+        if not isinstance(asset, str):
+            continue
+        m = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
+        if m:
+            try:
+                expected_total += Decimal(m.group(1).replace(",", ""))
+                if key != ("", ""):
+                    seen_keys.add(key)
+            except (InvalidOperation, ArithmeticError):
+                pass
+    diff = abs(declared_num - expected_total)
     if diff <= Decimal("1.00"):
         return []
     return [Violation(
@@ -3010,10 +3053,12 @@ def _check_unrecoverable_total_matches_holdings(
         severity="high",
         file="freeze_brief.json",
         detail=(
-            f"TOTAL_UNRECOVERABLE_USD={declared} disagrees with the sum "
-            f"of UNRECOVERABLE-status holdings in ALL_ISSUER_HOLDINGS "
-            f"(${holdings_total}). Rollup is dropping non-editorialized "
-            "UNRECOVERABLE holdings (Jacob v0.21.x audit shape)."
+            f"TOTAL_UNRECOVERABLE_USD={declared} disagrees with the "
+            f"canonical contract sum (UNRECOVERABLE holdings in "
+            f"ALL_ISSUER_HOLDINGS + non-duplicate editorial "
+            f"UNRECOVERABLE_ITEMS) of ${expected_total}. The rollup and "
+            "the validator must implement one identical contract "
+            "(v0.41-audit H3)."
         ),
     )]
 
@@ -3728,8 +3773,20 @@ def _check_perpetrator_holdings_reconcile(
     # + UNRECOVERABLE per-holding amounts + editorial UNRECOVERABLE
     # entries (regex-extracted from `asset` strings, mirroring
     # _compute_perpetrator_holdings semantics).
+    #
+    # v0.41-audit H2: walk ALL_ISSUER_HOLDINGS (the complete per-issuer
+    # view) rather than FREEZABLE (the letter-facing list, which v0.16.8
+    # drops all-UNRECOVERABLE issuers like Sky/DAI from). The producer
+    # (_compute_perpetrator_holdings) now sums over all_issuer_holdings;
+    # the validator must mirror that or it false-flags a reconcile diff.
+    # Fall back to FREEZABLE for legacy briefs that lack the key.
+    issuer_view = (
+        freeze_brief.get("ALL_ISSUER_HOLDINGS")
+        or freeze_brief.get("FREEZABLE")
+        or []
+    )
     freezable_total = Decimal("0")
-    for f in freeze_brief.get("FREEZABLE") or []:
+    for f in issuer_view:
         if not isinstance(f, dict):
             continue
         amt = _parse_usd_decimal(f.get("total_usd"))
@@ -3752,7 +3809,7 @@ def _check_perpetrator_holdings_reconcile(
                 seen_unrec_keys.add(key)
             except (InvalidOperation, ArithmeticError):
                 pass
-    for f in freeze_brief.get("FREEZABLE") or []:
+    for f in issuer_view:
         if not isinstance(f, dict):
             continue
         issuer_name = str(f.get("issuer", ""))
@@ -3953,7 +4010,22 @@ def _check_subpoena_targets_cover_non_freezable(
     # `\$([0-9,]+...)` regex skipped no-$-prefix amounts silently.
     re_usd_with_dollar = re.compile(r"\$([0-9,]+(?:\.[0-9]+)?)")
     re_usd_bare = re.compile(r"^([0-9,]+(?:\.[0-9]+)?)$")
-    for f in freeze_brief.get("FREEZABLE") or []:
+    # v0.41-audit H4: scan ALL_ISSUER_HOLDINGS, NOT FREEZABLE. The
+    # freeze_capability="no"/"low" issuers this invariant exists to
+    # catch (Sky / DAI permissionless) are removed from FREEZABLE
+    # pre-write by the v0.16.8 actionable-totals filter — so scanning
+    # FREEZABLE made INVARIANT C dead on exactly the case it was built
+    # for. ALL_ISSUER_HOLDINGS keeps them. We also include TRACKED
+    # holdings (identified, non-freezable-today, still holding value):
+    # those are precisely the positions that need a subpoena pivot or a
+    # documented "why not" rationale. Fall back to FREEZABLE for legacy
+    # briefs lacking the key.
+    issuer_view = (
+        freeze_brief.get("ALL_ISSUER_HOLDINGS")
+        or freeze_brief.get("FREEZABLE")
+        or []
+    )
+    for f in issuer_view:
         if not isinstance(f, dict):
             continue
         cap = (f.get("freeze_capability") or "").strip().lower()
@@ -3961,6 +4033,13 @@ def _check_subpoena_targets_cover_non_freezable(
             continue
         for h in f.get("holdings") or []:
             if not isinstance(h, dict):
+                continue
+            # Only positions that still hold value need accounting:
+            # UNRECOVERABLE (write-off acknowledgment) or TRACKED
+            # (subpoena/monitoring pivot). Skip FREEZABLE/INVESTIGATE/
+            # EXCHANGE/TRANSIT rows here.
+            status = (h.get("status") or "").upper()
+            if status not in ("UNRECOVERABLE", "TRACKED"):
                 continue
             addr = (h.get("address") or "").lower()
             if not addr:

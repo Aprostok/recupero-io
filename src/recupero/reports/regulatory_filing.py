@@ -163,31 +163,74 @@ def _build_subjects(brief: dict[str, Any]) -> list[dict[str, str]]:
             "amount_usd": f"${_amount_to_float(usd):,.2f}",
         })
 
+    # v0.41-audit C2: EXCHANGES entries are per-exchange with a nested
+    # ``deposits`` list (emit_brief._extract_exchanges) — there is no
+    # flat ex["address"]. Walk each deposit so every VASP deposit
+    # address becomes its own SAR subject (one address = one row).
     for ex in (brief.get("EXCHANGES") or []):
-        if isinstance(ex, dict):
+        if not isinstance(ex, dict):
+            continue
+        venue = ex.get("exchange") or ex.get("exchange_name") or ""
+        deposits = ex.get("deposits")
+        if isinstance(deposits, list) and deposits:
+            for dep in deposits:
+                if not isinstance(dep, dict):
+                    continue
+                _add(
+                    dep.get("address"),
+                    role="VASP deposit address (proceeds destination)",
+                    venue=venue,
+                    usd=dep.get("usd"),
+                    chain=dep.get("chain"),
+                )
+        else:  # legacy/flat back-compat
             _add(
                 ex.get("address"),
                 role="VASP deposit address (proceeds destination)",
-                venue=ex.get("exchange") or ex.get("exchange_name") or "",
+                venue=venue,
                 usd=ex.get("total_received_usd") or ex.get("usd"),
                 chain=ex.get("chain"),
             )
+    # v0.41-audit C2: FREEZABLE entries are per-issuer with nested
+    # ``holdings`` (emit_brief._extract_freezable) — d["address"]/d["usd"]
+    # don't exist at the entry level, so every holder was silently
+    # omitted. Walk each holding so each freezable holder address is a
+    # subject. The issuer is the venue.
     for d in (brief.get("FREEZABLE") or []):
-        if isinstance(d, dict):
+        if not isinstance(d, dict):
+            continue
+        venue = d.get("issuer") or d.get("token") or ""
+        holdings = d.get("holdings")
+        if isinstance(holdings, list) and holdings:
+            for h in holdings:
+                if not isinstance(h, dict):
+                    continue
+                _add(
+                    h.get("address"),
+                    role="current holder of suspected proceeds (freezable)",
+                    venue=venue,
+                    usd=h.get("usd"),
+                    chain=h.get("chain"),
+                )
+        else:  # legacy/flat back-compat
             _add(
                 d.get("address"),
                 role="current holder of suspected proceeds (freezable)",
-                venue=d.get("issuer") or d.get("token") or "",
+                venue=venue,
                 usd=d.get("usd") or d.get("usd_value"),
                 chain=d.get("chain"),
             )
+    # v0.41-audit C2: DESTINATIONS rows carry usd_holding_now /
+    # usd_received_in_trace / role / status (emit_brief._extract_destinations)
+    # — NOT total_usd/usd/label/category. Map the real fields: prefer the
+    # current holding, fall back to trace-received; venue from role.
     for d in (brief.get("DESTINATIONS") or []):
         if isinstance(d, dict):
             _add(
                 d.get("address"),
                 role="downstream destination of suspected proceeds",
-                venue=d.get("label") or d.get("category") or "",
-                usd=d.get("total_usd") or d.get("usd"),
+                venue=d.get("role") or d.get("status") or "",
+                usd=d.get("usd_holding_now") or d.get("usd_received_in_trace"),
                 chain=d.get("chain"),
             )
     return subjects

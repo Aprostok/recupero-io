@@ -501,21 +501,22 @@ class BitcoinAdapter(ChainAdapter):
         )
         _register_btc_inputs(tx_id, input_addresses)
 
-        # CoinJoin detection + probabilistic unwrap (v0.14.6).
+        # CoinJoin detection (v0.14.6; HIGH-1 fix v0.48 audit).
         # Pre-v0.14.6 we dropped CoinJoin txs entirely — the trace
-        # dead-ended at Wasabi / Whirlpool / JoinMarket. Now we:
-        #   1. Detect CoinJoin via the same heuristic (>= 4 inputs +
-        #      3+ equal-value outputs).
-        #   2. Call unwrap_coinjoin() to enumerate participant
-        #      hypotheses with confidence scores.
-        #   3. For HIGH-confidence hypotheses where expected_from
-        #      is in the input set, emit synthetic Transfer records
-        #      to the hypothesis's output addresses — the trace
-        #      CONTINUES past the CoinJoin to the unwrapped
-        #      destination.
-        #   4. Medium/low-confidence hypotheses are logged at INFO
-        #      for the operator to review manually (we don't pollute
-        #      the trace with speculative continuations).
+        # dead-ended at Wasabi / Whirlpool / JoinMarket. v0.14.6–v0.47
+        # then OVER-corrected: it injected synthetic, BFS-FOLLOWABLE
+        # Transfer records to arbitrary "high-confidence" output
+        # addresses — but in a standard CoinJoin round NO participant is
+        # ever genuinely high-confidence (every participant contributes
+        # the same round amount, anonymity set > 1), so those followable
+        # transfers were fabricated destinations.
+        #
+        # HIGH-1 fix: the trace STOPS at the CoinJoin boundary. We record
+        # the participant hypotheses as a LOW-confidence LEAD artifact
+        # (via the synthetic-coinjoin registry, so the brief / LE renderer
+        # can surface them) but inject ZERO followable transfers into the
+        # BFS. unwrap_coinjoin() never grants "high" in a real round, so
+        # no destination is auto-followed as confirmed flow.
         if len(vin) >= 4:
             from collections import Counter
             output_values = [
@@ -525,13 +526,14 @@ class BitcoinAdapter(ChainAdapter):
             if output_values:
                 most_common = Counter(output_values).most_common(1)
                 if most_common and most_common[0][1] >= 3:
-                    return self._unwrap_coinjoin_to_transfers(
+                    self._record_coinjoin_lead(
                         tx=tx,
                         expected_from=expected_from,
                         tx_id=tx_id,
-                        block_height=block_height,
-                        block_time=block_time,
                     )
+                    # Trace terminates at the mixing boundary — no
+                    # followable continuation.
+                    return []
 
         # Peel-chain classification:
         #   send outputs: address NOT in input_set
@@ -625,27 +627,27 @@ class BitcoinAdapter(ChainAdapter):
             })
         return out
 
-    def _unwrap_coinjoin_to_transfers(
+    def _record_coinjoin_lead(
         self,
         *,
         tx: dict[str, Any],
         expected_from: str,
         tx_id: str,
-        block_height: int,
-        block_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """Run unwrap_coinjoin() over a detected-CoinJoin tx and
-        emit synthetic Transfer records for HIGH-confidence
-        hypotheses that include ``expected_from`` in their input
-        addresses.
+    ) -> None:
+        """Run unwrap_coinjoin() over a detected-CoinJoin tx and record
+        the participant hypotheses as a LOW-confidence LEAD artifact.
 
-        Medium/low confidence hypotheses are logged at INFO for
-        operator review but DO NOT enter the trace — too noisy to
-        confidently follow.
+        HIGH-1 fix (v0.48 audit): this method NO LONGER returns
+        BFS-followable Transfer records. A standard CoinJoin round has
+        anonymity set > 1 for every participant, so unwrap_coinjoin()
+        never grants "high" — there is no confirmed flow to follow. The
+        trace terminates at the CoinJoin boundary; the candidate
+        destinations are surfaced only as a lead (the WHOLE round-output
+        set, never an arbitrary subset) via the synthetic-coinjoin
+        registry, which the brief / LE renderer reads to enumerate
+        "post-mix candidate outputs (lead only, not proven flow)".
 
-        Returns the list of synthetic Transfer dicts (possibly
-        empty if no high-confidence unwrap involved
-        ``expected_from``).
+        Returns ``None`` — the caller injects nothing into the BFS.
         """
         # Local import to avoid loading the unwrap module on
         # adapters that never see Bitcoin traffic.
@@ -684,59 +686,19 @@ class BitcoinAdapter(ChainAdapter):
         )
         if result is None:
             log.debug("tx %s: unwrap returned None (not CoinJoin-shaped)", tx_id)
-            return []
+            return
 
-        # Find hypotheses that include our expected_from address
-        # AND are high-confidence. Those become synthetic Transfers.
-        token = TokenRef(
-            chain=Chain.bitcoin,
-            contract=None,
-            symbol=BTC_SYMBOL,
-            decimals=BTC_DECIMALS,
-            coingecko_id=BTC_COINGECKO_ID,
-        )
-        transfers: list[dict[str, Any]] = []
-        actionable_hypotheses = [
+        # Record candidate destinations as a LEAD only. We register the
+        # round-output addresses our participant's hypotheses point at
+        # (the whole set — never an arbitrary slice), so the brief / LE
+        # renderer can enumerate them tagged "[CoinJoin unwrap heuristic,
+        # not on-chain transfer]". NOTHING enters the BFS.
+        relevant = [
             h for h in result.hypotheses
             if expected_from in h.input_addresses
-            and h.confidence == "high"
         ]
-        for hyp in actionable_hypotheses:
-            # Emit one synthetic Transfer per output address in the
-            # hypothesis. Amount split evenly across outputs (we don't
-            # know which specific output each $1 went to — that's
-            # the whole point of CoinJoin obfuscation).
+        for hyp in relevant:
             for out_addr in hyp.output_addresses:
-                transfers.append({
-                    "chain": Chain.bitcoin,
-                    "tx_hash": tx_id,
-                    "block_number": block_height,
-                    "block_time": block_time,
-                    "log_index": None,
-                    "from": expected_from,
-                    "to": out_addr,
-                    "token": token,
-                    "amount_raw": hyp.total_output_value_sats // len(hyp.output_addresses),
-                    "explorer_url": self.explorer_tx_url(tx_id),
-                    # Mark synthetic so downstream consumers can
-                    # tell it apart from direct on-chain evidence.
-                    # The brief surfaces this as "unwrap-derived".
-                    "_synthetic_coinjoin_unwrap": True,
-                    "_unwrap_confidence_score": hyp.confidence_score,
-                    "_unwrap_rationale": hyp.rationale,
-                })
-                # v0.32.1 round-2 CRIT-NEW-3: persist the synthetic
-                # provenance to the module-level registry. The dict
-                # keys above (``_synthetic_coinjoin_unwrap`` etc.) are
-                # stripped by ``tracer._build_transfer`` because the
-                # ``Transfer`` model has ``extra="forbid"`` and only a
-                # whitelisted set of keys is read. The registry
-                # survives the strip; brief / LE renderers consult it
-                # via ``is_synthetic_coinjoin(tx_hash, to_address)`` to
-                # tag the row with "[CoinJoin unwrap heuristic, not
-                # on-chain transfer]" so the LE reader does not mistake
-                # a probabilistic unwrap for confident on-chain
-                # evidence.
                 mark_synthetic_coinjoin(
                     tx_id,
                     out_addr,
@@ -744,37 +706,12 @@ class BitcoinAdapter(ChainAdapter):
                     rationale=hyp.rationale,
                 )
 
-        # Log non-actionable hypotheses for operator review.
-        non_actionable = [
-            h for h in result.hypotheses
-            if expected_from in h.input_addresses
-            and h.confidence != "high"
-        ]
-        if non_actionable:
-            log.info(
-                "tx %s CoinJoin (%s): %d high-confidence hypothesis(es) "
-                "actioned; %d medium/low not actioned (logged for review).",
-                tx_id, result.detected_pattern,
-                len(actionable_hypotheses), len(non_actionable),
-            )
-            for h in non_actionable:
-                log.info(
-                    "  unwrap %s: %s → %s — %s",
-                    h.confidence, list(h.input_addresses)[:2],
-                    list(h.output_addresses)[:2], h.rationale,
-                )
-        elif actionable_hypotheses:
-            log.info(
-                "tx %s CoinJoin (%s): %d high-confidence hypothesis(es) "
-                "unwrapped into trace.",
-                tx_id, result.detected_pattern, len(actionable_hypotheses),
-            )
-        else:
-            log.debug(
-                "tx %s CoinJoin: no hypotheses involved %s; trace skips tx.",
-                tx_id, expected_from,
-            )
-        return transfers
+        log.info(
+            "tx %s CoinJoin (%s): trace terminates at mixing boundary; "
+            "%d participant hypothesis(es) involving %s recorded as "
+            "post-mix LEADS (not followed).",
+            tx_id, result.detected_pattern, len(relevant), expected_from,
+        )
 
 
 __all__ = (

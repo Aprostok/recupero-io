@@ -63,6 +63,10 @@ class ScreeningResult:
     is_mixer: bool
     is_ransomware: bool
     is_drainer: bool
+    # M3: sanctioned by a NON-OFAC authority (EU/UK/UN/…) via OpenSanctions.
+    # Severity-4 / SANCTIONED-class exposure, but verdict stays "high" — only
+    # a CURRENT OFAC SDN hit yields a "sanctioned" verdict.
+    is_intl_sanctioned: bool = False
     labels: list[ScreeningLabel] = field(default_factory=list)
     correlation: ScreeningCorrelation = field(default_factory=ScreeningCorrelation)
     investigator_note: str = ""
@@ -190,12 +194,17 @@ def screen_address(
     is_mixer_sanctioned = False
     is_ransomware = False
     is_drainer = False
+    is_intl_sanctioned = False
 
     entry = db.get(addr_norm)
     if entry is not None:
         cat = (entry.risk_category or "").lower()
         if cat.startswith("ofac"):
             is_ofac = True
+        # M3: intl_sanctioned is a non-OFAC sanctions hit — flag it, but it
+        # must NOT set is_ofac (that would mis-route an OFAC freeze letter).
+        if cat == "intl_sanctioned":
+            is_intl_sanctioned = True
         if "mixer" in cat:
             is_mixer = True
         # Only a CURRENTLY OFAC-sanctioned mixer (mixer_sanctioned, e.g.
@@ -245,6 +254,7 @@ def screen_address(
         is_mixer_sanctioned=is_mixer_sanctioned,
         is_ransomware=is_ransomware,
         is_drainer=is_drainer,
+        is_intl_sanctioned=is_intl_sanctioned,
         score=score,
         correlation=correlation,
     )
@@ -254,6 +264,7 @@ def screen_address(
         correlation=correlation, is_ofac=is_ofac, is_mixer=is_mixer,
         is_mixer_sanctioned=is_mixer_sanctioned,
         is_ransomware=is_ransomware, is_drainer=is_drainer,
+        is_intl_sanctioned=is_intl_sanctioned,
     )
 
     return ScreeningResult(
@@ -265,6 +276,7 @@ def screen_address(
         is_mixer=is_mixer,
         is_ransomware=is_ransomware,
         is_drainer=is_drainer,
+        is_intl_sanctioned=is_intl_sanctioned,
         labels=labels,
         correlation=correlation,
         investigator_note=note,
@@ -339,6 +351,9 @@ def _normalize_for_lookup(address: str, *, chain: str) -> str:
 def _source_for_category(cat_lower: str) -> str:
     if cat_lower.startswith("ofac"):
         return "ofac"
+    # M3: distinct provenance string for non-OFAC (OpenSanctions) sanctions.
+    if cat_lower == "intl_sanctioned":
+        return "intl_sanctions"
     if "ransomware" in cat_lower:
         return "ransomware_seed"
     if "mixer" in cat_lower:
@@ -460,6 +475,7 @@ def _verdict_for(
     score: int,
     correlation: ScreeningCorrelation,
     is_mixer_sanctioned: bool = False,
+    is_intl_sanctioned: bool = False,
 ) -> str:
     """Map (flags + score) to a verdict string.
 
@@ -475,7 +491,10 @@ def _verdict_for(
     """
     if is_ofac or is_mixer_sanctioned:
         return "sanctioned"
-    if is_ransomware or is_mixer or is_drainer:
+    # M3: a non-OFAC sanctions hit is SANCTIONED-class but maps to "high", NOT
+    # "sanctioned" — "sanctioned" is reserved for a CURRENT OFAC SDN hit so the
+    # verdict never asserts a non-existent OFAC designation.
+    if is_ransomware or is_mixer or is_drainer or is_intl_sanctioned:
         return "high"
     if score >= 6 or correlation.prior_ofac_exposed_count > 0:
         return "high"
@@ -497,6 +516,7 @@ def _build_investigator_note(
     is_ransomware: bool,
     is_drainer: bool,
     is_mixer_sanctioned: bool = False,
+    is_intl_sanctioned: bool = False,
 ) -> str:
     """One-sentence human-readable verdict."""
     if is_ofac:
@@ -518,6 +538,16 @@ def _build_investigator_note(
             f"SANCTIONED — OFAC-sanctioned mixer{listing}: "
             f"{entry.name if entry else 'unknown'}. "
             "Funds passing through here lose recoverability."
+        )
+    if is_intl_sanctioned:
+        # M3: non-OFAC sanctions — high-risk, NOT an OFAC designation. Carry the
+        # regime (in the entry notes) so the operator routes via the right
+        # authority rather than an OFAC SDN letter.
+        return (
+            f"HIGH-RISK — non-OFAC sanctions hit: "
+            f"{entry.name if entry else 'sanctioned wallet'}. "
+            f"{entry.notes or 'Sanctioned by a non-OFAC authority (EU/UK/UN/…).'} "
+            "Route via the matching authority — NOT an OFAC SDN freeze letter."
         )
     if is_ransomware:
         return (

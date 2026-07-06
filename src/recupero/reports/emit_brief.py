@@ -57,6 +57,7 @@ from recupero._common import (
     investigator_defaults as _investigator_defaults,
 )
 from recupero.models import Case, LabelCategory
+from recupero.reports._money import format_usd_trim, parse_usd_lenient
 from recupero.reports.brief import BRIEF_SCHEMA_VERSION as _BRIEF_SCHEMA_VERSION
 from recupero.reports.victim import VictimInfo, load_victim
 from recupero.storage.case_store import CaseStore
@@ -121,7 +122,18 @@ _EDITORIAL_TEMPLATE_STATIC: dict[str, Any] = {
     "UNRECOVERABLE_ITEMS": [
         {
             "asset": "TODO: e.g. '3.2 ETH (~$6,780)'",
-            "reason": "TODO: e.g. 'Sent to Tornado Cash. Mixed. Not traceable post-mixing with current techniques.'"
+            "reason": "TODO: e.g. 'Sent to Tornado Cash. Mixed. Not traceable post-mixing with current techniques.'",
+            # v0.41-audit H3: OPTIONAL. When this editorial write-off
+            # refers to the SAME on-chain position already surfaced as a
+            # per-issuer holding (e.g. dormant DAI at the perp hub), set
+            # issuer + address to that holding's (issuer, address) so the
+            # TOTAL_UNRECOVERABLE_USD rollup de-dups it instead of
+            # double-counting. Leave both EMPTY for off-issuer write-offs
+            # (mixer / burn / bridge-out) that have no per-issuer holding
+            # row — those are always counted as distinct unrecoverable
+            # value.
+            "issuer": "",
+            "address": ""
         }
     ],
     # v0.17.3: INVESTIGATOR_* fields populated by _editorial_template()
@@ -167,12 +179,12 @@ def _now_utc_iso_seconds() -> str:
 
 
 def _parse_usd_string(s: str) -> Decimal:
-    """Parse '$47,840.12' -> Decimal('47840.12'). Returns Decimal('0') on failure."""
-    s = str(s).replace("$", "").replace(",", "").strip()
-    try:
-        return Decimal(s)
-    except Exception:
-        return Decimal("0")
+    """Parse '$47,840.12' -> Decimal('47840.12'). Returns Decimal('0') on failure.
+
+    Lenient parse (negative / non-finite pass through); canonical
+    implementation lives in :mod:`recupero.reports._money`.
+    """
+    return parse_usd_lenient(s)
 
 
 def usd(v: Decimal | float | int | None) -> str:
@@ -182,19 +194,9 @@ def usd(v: Decimal | float | int | None) -> str:
     poisoned upstream Decimal (e.g., from a cluster aggregate of a
     poisoned member case) doesn't propagate the literal "$NaN" /
     "$Infinity" into freeze_brief.json and every downstream renderer.
+    Canonical implementation lives in :mod:`recupero.reports._money`.
     """
-    if v is None:
-        return "$0"
-    try:
-        d = Decimal(str(v))
-    except Exception:  # noqa: BLE001
-        return "$0"
-    if not d.is_finite():
-        return "$0"
-    # Strip trailing zeros after decimal if it's a round number
-    if d == d.to_integral_value():
-        return f"${int(d):,}"
-    return f"${d:,.2f}"
+    return format_usd_trim(v)
 
 
 def _extract_primary_chain(case: Case) -> str:
@@ -1054,6 +1056,8 @@ def _compute_total_drained(case: Case) -> Decimal:
 def _compute_perpetrator_holdings(
     freezable: list[dict[str, Any]],
     unrecoverable: list[dict[str, Any]],
+    *,
+    all_issuer_holdings: list[dict[str, Any]] | None = None,
 ) -> Decimal:
     """Sum the **current balances** at every identified perpetrator-
     controlled destination — across FREEZABLE + UNRECOVERABLE
@@ -1098,8 +1102,21 @@ def _compute_perpetrator_holdings(
     # INVESTIGATE-only, total_excluded_usd is UNRECOVERABLE/EXCHANGE/
     # TRANSIT/UNKNOWN — all mutually exclusive per _extract_freezable's
     # if/elif/else block.
+    # v0.41-audit H2/H3: walk the COMPLETE per-issuer view when
+    # available. `freezable` is the letter-facing list — v0.16.8 drops
+    # all-UNRECOVERABLE issuers (Sky / DAI) from it because there's no
+    # actionable freeze target. But those holdings ARE perpetrator-
+    # controlled, and the UNRECOVERABLE rollup (_compute_totals) walks
+    # `all_issuer_holdings`. Summing only `freezable` here made
+    # TOTAL_PERPETRATOR_HOLDINGS_USD < FREEZABLE + UNRECOVERABLE — the
+    # cover headline silently under-reported by the dropped issuers'
+    # balances. Use all_issuer_holdings for both the FREEZABLE-status
+    # total (filtered-out entries carry total_usd=$0, so this is
+    # numerically identical for the kept ones) AND the per-holding
+    # UNRECOVERABLE walk below.
+    issuer_view = all_issuer_holdings if all_issuer_holdings is not None else freezable
     total = Decimal("0")
-    for f in freezable:
+    for f in issuer_view:
         freezable_amt = _parse_usd_string(f.get("total_usd", "0"))
         total += freezable_amt
     # Add UNRECOVERABLE addresses: dormant addresses holding
@@ -1127,7 +1144,7 @@ def _compute_perpetrator_holdings(
     # specifically — not EXCHANGE/TRANSIT. Iterate per-holding so we
     # can filter precisely without over-counting EXCLUDED-status
     # holdings that aren't perpetrator-controlled.
-    for f in freezable:
+    for f in issuer_view:
         issuer_name = str(f.get("issuer", ""))
         for h in (f.get("holdings") or []):
             if not isinstance(h, dict):
@@ -1195,23 +1212,31 @@ def _compute_totals(
     #      emit but freeze_capability='no').
     # De-dup by (issuer, address) so a holding flagged in BOTH sources
     # only counts once.
+    # v0.41-audit H3: ONE contract, implemented identically in the
+    # producer and the validator
+    # (output_integrity._check_unrecoverable_total_matches_holdings):
+    #
+    #   TOTAL_UNRECOVERABLE_USD =
+    #       Σ (every UNRECOVERABLE-status holding in ALL_ISSUER_HOLDINGS)
+    #     + Σ (editorial UNRECOVERABLE_ITEMS whose (issuer,address) does
+    #          NOT match a holding already counted)
+    #
+    # Holdings are counted FIRST so they own the (issuer,address) key.
+    # Editorial items that carry issuer+address (new schema, v0.41-audit)
+    # are de-duped against the holdings; editorial items WITHOUT them
+    # (mixer / burn / off-chain write-offs that have no per-issuer
+    # holding row, e.g. "3.2 ETH to Tornado") are always counted — they
+    # represent genuinely distinct unrecoverable value the holdings walk
+    # never sees. Pre-fix the editorial-first ordering + ("","") dedup
+    # key could never fire (editorial schema lacked issuer/address), so
+    # DAI present in BOTH a holding and an editorial item double-counted,
+    # AND the validator (holdings-only) false-HIGH'd on any mixer item.
     total_unrecoverable = Decimal("0")
     seen_unrecoverable_keys: set[tuple[str, str]] = set()
-    for u in unrecoverable:
-        asset = u.get("asset", "")
-        m = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
-        if m:
-            try:
-                total_unrecoverable += Decimal(m.group(1).replace(",", ""))
-                key = (str(u.get("issuer", "")), str(u.get("address", "")))
-                if key != ("", ""):
-                    seen_unrecoverable_keys.add(key)
-            except Exception:
-                pass
-    # Walk the FULL all_issuer_holdings list — `freezable` filters
-    # UNRECOVERABLE-only issuers out (Sky Protocol / DAI gets dropped
-    # from the letter list because there's no actionable freeze-target).
-    # The rollup needs the complete picture, not the filtered one.
+    # 1. Per-holding UNRECOVERABLE across the FULL all_issuer_holdings
+    #    list — `freezable` filters UNRECOVERABLE-only issuers out (Sky /
+    #    DAI dropped from the letter list); the rollup needs the complete
+    #    picture, not the filtered one.
     for entry in (all_issuer_holdings or freezable):
         issuer_name = str(entry.get("issuer", ""))
         for h in entry.get("holdings", []):
@@ -1220,10 +1245,25 @@ def _compute_totals(
             addr = str(h.get("address", ""))
             key = (issuer_name, addr)
             if key in seen_unrecoverable_keys:
-                continue  # already counted via editorial list
+                continue
             seen_unrecoverable_keys.add(key)
             try:
                 total_unrecoverable += _parse_usd_string(h.get("usd", "0"))
+            except Exception:
+                pass
+    # 2. Editorial UNRECOVERABLE_ITEMS not already represented by a
+    #    counted holding (matched by the optional issuer+address fields).
+    for u in unrecoverable:
+        key = (str(u.get("issuer", "")), str(u.get("address", "")))
+        if key != ("", "") and key in seen_unrecoverable_keys:
+            continue  # this DAI position was already counted as a holding
+        asset = u.get("asset", "")
+        m = re.search(r"\$([0-9,]+(?:\.[0-9]+)?)", asset)
+        if m:
+            try:
+                total_unrecoverable += Decimal(m.group(1).replace(",", ""))
+                if key != ("", ""):
+                    seen_unrecoverable_keys.add(key)
             except Exception:
                 pass
 
@@ -1256,6 +1296,7 @@ def _compute_totals(
     # see leading the brief.
     total_perpetrator_holdings = _compute_perpetrator_holdings(
         freezable, unrecoverable,
+        all_issuer_holdings=all_issuer_holdings,
     )
 
     return {

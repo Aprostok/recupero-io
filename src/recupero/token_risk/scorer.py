@@ -18,18 +18,34 @@ log = logging.getLogger(__name__)
 # case-insensitively. NOT a definitive proof on their own
 # (sometimes legitimate contracts use the same patterns), but
 # strongly suggestive when combined.
-_HONEYPOT_BYTECODE_PATTERNS: dict[str, str] = {
-    # 4-byte selector for `setBuyTax(uint256)` — tax rugs.
-    "ed8e84e3": "setBuyTax mutator present",
-    # Selector for `setSellTax(uint256)`.
-    "31fb0ad7": "setSellTax mutator present",
-    # `setMaxTxAmount(uint256)` — choke transfers post-launch.
-    "1694505e": "setMaxTxAmount mutator present",
-    # `addToBlacklist(address)` — buy-only token blacklist.
-    "9d3bf8b3": "blacklist mutator present",
-    # `_isExcludedFromFee` storage slot pattern (excluded list often
-    # signals tax rug where insiders bypass).
-    "5d098b38": "exclude-from-fee gate present",
+#
+# v0.41 (M5 token-risk audit): selectors are DERIVED from the function
+# signature at import via keccak256 — they are never hand-typed. The pre-fix
+# dict hard-coded ``1694505e`` for ``setMaxTxAmount(uint256)``, but that hex is
+# actually ``uniswapV2Router()`` — a getter present on EVERY standard token —
+# so every legit Uniswap-listed token was flagged with a phantom "setMaxTxAmount
+# mutator". Deriving from the signature makes a typo impossible by construction.
+#   signature → human description
+_HONEYPOT_SELECTOR_SIGNATURES: dict[str, str] = {
+    "setBuyTax(uint256)": "setBuyTax mutator present",
+    "setSellTax(uint256)": "setSellTax mutator present",
+    "setMaxTxAmount(uint256)": "setMaxTxAmount mutator present",
+    "addToBlacklist(address)": "blacklist mutator present",
+    "isExcludedFromFee(address)": "exclude-from-fee gate present",
+}
+
+
+def _selector_for(signature: str) -> str:
+    """First 4 bytes of keccak256(signature), as 8 lowercase hex chars."""
+    from eth_utils import keccak
+    return keccak(text=signature).hex()[:8]
+
+
+# ``{selector_hex: (function_signature, description)}`` — built from the
+# signatures above so the selector always matches its signature.
+_HONEYPOT_BYTECODE_PATTERNS: dict[str, tuple[str, str]] = {
+    _selector_for(sig): (sig, desc)
+    for sig, desc in _HONEYPOT_SELECTOR_SIGNATURES.items()
 }
 
 
@@ -131,13 +147,13 @@ def _score_bytecode(bytecode: str) -> list[TokenRiskSignal]:
     # would become "1f4...", silently dropping leading-zero selectors that
     # honeypot detectors look for. `removeprefix` strips only the literal "0x".
     bc = bytecode.lower().removeprefix("0x")
-    for selector, description in _HONEYPOT_BYTECODE_PATTERNS.items():
+    for selector, (signature, description) in _HONEYPOT_BYTECODE_PATTERNS.items():
         if selector in bc:
             out.append(TokenRiskSignal(
                 kind="bytecode_pattern",
                 severity=2,
                 description=description,
-                evidence=f"selector={selector}",
+                evidence=f"selector={selector} ({signature})",
             ))
     return out
 

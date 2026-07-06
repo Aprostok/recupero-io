@@ -146,7 +146,11 @@ def parse_opensanctions_crypto(
                          or "(sanctioned wallet)"),
             regime=regime,
             source_dataset=", ".join(str(d) for d in datasets) or "opensanctions",
-            listing_date=_first(props.get("createdAt")),
+            # M4: prefer the entity's sanction startDate (the actual listing
+            # date) over createdAt (when the OpenSanctions record was created,
+            # which can post-date the real listing by years).
+            listing_date=(_first(props.get("startDate"))
+                          or _first(props.get("createdAt"))),
         ))
     return out
 
@@ -223,16 +227,75 @@ def load_intl_sanctions_csv(
         return []
 
 
+def _merge_with_previous(
+    out_path: Path,
+    new_entries: list[IntlSanctionEntry],
+    fetched_at: str,
+) -> list[IntlSanctionEntry]:
+    """M4 (mirror ofac_sync): merge ``new_entries`` with the prior CSV so an
+    address that WAS listed but is now absent from the import gets a
+    ``removed_at_utc`` stamp rather than silently vanishing — preserving the
+    historical record for a "was this ever sanctioned?" audit. A previously-
+    removed entry that REAPPEARS in the new import is re-activated (its
+    ``removed_at_utc`` cleared)."""
+    new_keys = {(e.address, e.chain) for e in new_entries}
+    merged: list[IntlSanctionEntry] = list(new_entries)
+    try:
+        prev = load_intl_sanctions_csv(out_path)
+    except Exception:  # noqa: BLE001
+        prev = []
+    for old in prev:
+        if (old.address, old.chain) in new_keys:
+            continue  # still present — the fresh row supersedes it
+        # Absent from the new import: keep it, stamped removed (only the first
+        # time it goes absent, so the original removal date is preserved).
+        merged.append(IntlSanctionEntry(
+            address=old.address,
+            chain=old.chain,
+            entity_name=old.entity_name,
+            regime=old.regime,
+            source_dataset=old.source_dataset,
+            listing_date=old.listing_date,
+            removed_at_utc=old.removed_at_utc or fetched_at,
+        ))
+    return merged
+
+
 def import_opensanctions_file(
     in_path: Path, out_path: Path | None = None,
 ) -> int:
     """Parse an OpenSanctions crypto bulk file → write the intl-sanctions CSV.
-    Returns the number of entries written."""
+    Returns the number of LIVE (non-removed) entries written.
+
+    M4 (mirror ofac_sync): refuses a zero-entry import (a parse that yields no
+    sanctioned wallets — schema drift / wrong file — would otherwise mass-delist
+    the whole intl-sanctions set) and merges with the previous CSV so removed
+    entries are tombstoned (``removed_at_utc``) rather than vanishing."""
+    from datetime import UTC, datetime
+
     out = out_path or DEFAULT_INTL_SANCTIONS_CSV
     entries = parse_opensanctions_crypto(_iter_records(in_path))
-    write_intl_sanctions_csv(out, entries)
-    log.info("imported %d intl-sanctioned wallets → %s", len(entries), out)
-    return len(entries)
+    if not entries:
+        # Refuse: never let an empty/drifted import wipe the existing set.
+        log.error(
+            "intl-sanctions import: file parsed to ZERO crypto wallets — "
+            "refusing to mass-delist the existing set (wrong file / schema "
+            "drift?). Existing CSV left untouched (%s).", out,
+        )
+        raise ValueError(
+            "OpenSanctions file parsed to zero crypto wallets — refusing to "
+            "overwrite the existing intl-sanctions set"
+        )
+    fetched_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+    merged = _merge_with_previous(out, entries, fetched_at)
+    write_intl_sanctions_csv(out, merged)
+    live = sum(1 for e in merged if not e.removed_at_utc)
+    removed = len(merged) - live
+    log.info(
+        "imported %d intl-sanctioned wallets (%d live, %d removed-from-feed) → %s",
+        len(merged), live, removed, out,
+    )
+    return live
 
 
 __all__ = (

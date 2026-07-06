@@ -141,7 +141,9 @@ def _calldata_destination_confidence(have_chain: object, have_recipient: object)
 
 _WORMHOLE_METHODS = {
     "0x0f5287b0": ("Wormhole", "transferTokens"),
-    "0xc6878519": ("Wormhole", "transferTokensWithPayload"),
+    # keccak("transferTokensWithPayload(address,uint256,uint16,bytes32,uint32,bytes)")[:4]
+    # = 0xc5a5ebda. The prior 0xc6878519 was wrong (audit 2026-06 H7).
+    "0xc5a5ebda": ("Wormhole", "transferTokensWithPayload"),
     "0x9981509f": ("Wormhole", "wrapAndTransferETH"),
 }
 
@@ -227,8 +229,12 @@ _1INCH_METHODS = {
 # The first uint32 is Connext's "domain ID" — their own chain ID
 # mapping (not EVM chainID, not Wormhole, not LayerZero).
 _CONNEXT_METHODS = {
-    "0x4ff746f6": ("Connext", "xcall"),
-    "0x0c884583": ("Connext", "xcallIntoLocal"),
+    # keccak("xcall(uint32,address,address,address,uint256,uint256,bytes)")[:4]
+    # = 0x8aac16ba — the selector live Connext diamonds receive. The prior
+    # 0x4ff746f6/0x0c884583 were wrong and the decoder never fired on a real
+    # tx (audit 2026-06 H3). xcallIntoLocal was deprecated; dropped until a
+    # real-tx fixture pins its selector.
+    "0x8aac16ba": ("Connext", "xcall"),
 }
 
 # v0.31.0 — Axelar Gateway `callContractWithToken` + sendToken.
@@ -281,7 +287,10 @@ _AXELAR_CHAIN_NAMES: dict[str, str] = {
 # Wormhole), so `_EVM_CHAIN_BY_ID` is the right lookup.
 _CELER_METHODS = {
     "0xa5977fbb": ("Celer", "send"),
-    "0xe957bf91": ("Celer", "sendNative"),
+    # keccak("sendNative(address,uint256,uint64,uint64,uint32)")[:4] = 0x3f2e5fc3.
+    # The prior 0xe957bf91 was wrong; native cBridge sends never decoded
+    # (audit 2026-06 H5).
+    "0x3f2e5fc3": ("Celer", "sendNative"),
 }
 
 # v0.37.3 (deep-reach #4): THORChain Router. The cross-chain destination —
@@ -430,13 +439,21 @@ _WORMHOLE_CHAIN_IDS = {
     16: "moonbeam",
     23: "arbitrum",
     24: "optimism",
+    25: "gnosis",
     30: "base",
-    # v0.17.5 (round-10 forensic HIGH): Tron + Bitcoin coverage.
-    # Tron (chain 18) and Bitcoin (chain 21) handoffs were silently
-    # dropped pre-v0.17.5 because their Wormhole IDs weren't mapped;
-    # adapter exists for both now.
-    18: "tron",
-    21: "bitcoin",
+    # Audit 2026-06 (H1): chain 18 is Terra2 and 21 is Sui per Wormhole's
+    # own registry — Wormhole has NEVER supported Tron or Bitcoin as
+    # token-bridge destinations. The prior 18:"tron"/21:"bitcoin" mapping
+    # fabricated syntactically-valid-but-wrong Tron T-addresses (~1/256 of
+    # Terra2 transfers, whose recipient byte[11]==0x41) that the continuation
+    # BFS then traced, and reported every Wormhole→Sui transfer as Bitcoin.
+    # These chains have no EVM-decodable recipient, so the decoder leaves
+    # dest_address None and the result drops to medium (chain known, address
+    # untrusted) — never a fabricated high-confidence destination.
+    18: "terra2",
+    19: "injective",
+    21: "sui",
+    22: "aptos",
 }
 
 # LayerZero chain IDs (Stargate v1 + LayerZero v1 OApp endpoints).
@@ -500,7 +517,10 @@ _CCIP_CHAIN_SELECTORS: dict[int, str] = {
 # Selectors verified via 4byte directory.
 _LAYERZERO_METHODS: dict[str, tuple[str, str]] = {
     "0xc5803100": ("LayerZero", "send_v1"),
-    "0x1bb3a8fd": ("LayerZero", "send_v2"),
+    # keccak("send((uint32,bytes32,bytes,bytes,bool),address)")[:4] = 0x2637a450
+    # (EndpointV2). The prior 0x1bb3a8fd was wrong; all v2 raw sends fell to
+    # None (audit 2026-06 H4).
+    "0x2637a450": ("LayerZero", "send_v2"),
 }
 
 # v0.31.4 — Chainlink CCIP Router. ccipSend(uint64 destinationChainSelector,
@@ -519,8 +539,10 @@ _CCIP_METHODS: dict[str, tuple[str, str]] = {
 #   anySwapOutUnderlying(address token, address to, uint256 amount, uint256 toChainID)
 #   anySwapOut(address token, address to, uint256 amount, uint256 toChainID)
 _MULTICHAIN_METHODS: dict[str, tuple[str, str]] = {
-    "0xa5e56571": ("Multichain", "anySwapOutUnderlying"),
-    "0xa5e3deeb": ("Multichain", "anySwapOut"),
+    # keccak[:4] of the canonical Anyswap signatures. The prior
+    # 0xa5e56571/0xa5e3deeb were wrong; the decoder was dead (audit 2026-06 H6).
+    "0xedbdf5e2": ("Multichain", "anySwapOutUnderlying"),  # (address,address,uint256,uint256)
+    "0x241dc2df": ("Multichain", "anySwapOut"),            # (address,address,uint256,uint256)
 }
 
 # v0.31.4 — Stargate v2 entry point. The Pool contract exposes
@@ -790,23 +812,6 @@ def _decode_wormhole(
                     and pubkey_bytes != bytes(32)
                     and pubkey_bytes[:12] != bytes(12)):
                 dest_address = _b58encode_no_checksum(pubkey_bytes)
-        elif dest_chain == "tron":
-            # v0.17.5 (round-10 forensic CRIT): Wormhole→Tron encodes the
-            # 21-byte payload (0x41 prefix + 20 addr bytes) right-padded into
-            # the bytes32 — the last 21 bytes are the payload. v0.32.1
-            # (forensic-audit cycle-2): a valid Tron MAINNET payload MUST
-            # start with the 0x41 version byte. A garbage / EVM-shaped
-            # bytes32 still base58check-encodes to a syntactically valid but
-            # WRONG T-address; require 0x41 so we never emit a fabricated
-            # destination at high confidence.
-            try:
-                payload = bytes.fromhex(recipient_hex[-42:])
-            except ValueError:
-                payload = b""
-            if len(payload) == 21 and payload[0] == 0x41:
-                import hashlib as _hl
-                checksum = _hl.sha256(_hl.sha256(payload).digest()).digest()[:4]
-                dest_address = _b58encode_no_checksum(payload + checksum)
         elif dest_chain is not None:
             # Known EVM destination: the address is right-aligned in the
             # bytes32 (top 12 bytes zero, last 20 bytes the address). v0.34
@@ -960,19 +965,31 @@ def _decode_stargate(
          lzTxObj, bytes to, bytes payload)
 
     'to' is a dynamic-bytes field encoding the destination address.
-    Layout in calldata:
-      [0..32]   dstChainId (LayerZero chain ID)
-      [32..64]  srcPoolId
-      [64..96]  dstPoolId
-      [96..128] refundAddress
-      [128..160] amountLD
-      [160..192] minAmountLD
-      [192..256] lzTxObj struct
-      [256..288] offset to 'to' bytes
-      [288..320] offset to 'payload' bytes
+    lzTxObj is `(uint256 dstGasForCall, uint256 dstNativeAmount, bytes
+    dstNativeAddr)` — because it CONTAINS a `bytes`, it is itself a
+    DYNAMIC tuple, so its head occupies ONE offset slot (slot 6), not an
+    inline 64-byte struct. The head layout is therefore:
+      slot 0  [0..32]    dstChainId (LayerZero chain ID)
+      slot 1  [32..64]   srcPoolId
+      slot 2  [64..96]   dstPoolId
+      slot 3  [96..128]  refundAddress
+      slot 4  [128..160] amountLD
+      slot 5  [160..192] minAmountLD
+      slot 6  [192..224] offset to lzTxObj
+      slot 7  [224..256] offset to 'to' bytes     ← recipient
+      slot 8  [256..288] offset to 'payload' bytes
       then [to_offset..] = (32-byte length) + (actual bytes data,
         zero-padded to 32-byte boundary). For EVM destinations,
         'to' is 20 bytes containing the address.
+
+    Audit 2026-06 (H2): the prior code read the 'to' offset from slot 8
+    (the PAYLOAD offset) — on real calldata payload is usually empty so
+    the recipient was silently dropped on Stargate's highest-volume
+    legacy rail, and a non-empty payload surfaced a fabricated recipient.
+
+    swapETH(uint16 dstChainId, address payable refundAddress,
+            bytes toAddress, uint256 amountLD, uint256 minAmountLD)
+    has its 'to' offset at slot 2 [64..96].
 
     We extract dstChainId (always at slot 0) and the 'to' field
     via the offset pointer.
@@ -994,13 +1011,18 @@ def _decode_stargate(
         lz_chain_id = int(lz_chain_id_hex, 16)
         dest_chain = _LZ_CHAIN_IDS.get(lz_chain_id)
 
-        # 'to' offset is at slot [256..288] in 'swap'.
-        # For 'swapETH' the layout is shifted (one less arg).
-        # Try the swap layout first.
+        # 'to' offset slot: swap → slot 7 [224..256] (lzTxObj is a dynamic
+        # tuple occupying a single offset slot at 6); swapETH → slot 2
+        # [64..96]. (Audit 2026-06 H2: was wrongly reading slot 8 = payload.)
         dest_address = None
-        if method_name == "swap" and len(args_blob) >= 320 * 2:
+        to_slot_hex: tuple[int, int] | None = None
+        if method_name == "swap" and len(args_blob) >= 288 * 2:
+            to_slot_hex = (224 * 2, 256 * 2)
+        elif method_name == "swapETH" and len(args_blob) >= 160 * 2:
+            to_slot_hex = (64 * 2, 96 * 2)
+        if to_slot_hex is not None:
             try:
-                to_offset_hex = args_blob[256*2:288*2]
+                to_offset_hex = args_blob[to_slot_hex[0]:to_slot_hex[1]]
                 to_offset = int(to_offset_hex, 16) * 2  # convert byte offset to hex offset
                 # 'to' = length (32 bytes) then bytes (padded)
                 if to_offset + 32*2 <= len(args_blob):

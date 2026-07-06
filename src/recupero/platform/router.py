@@ -12,10 +12,10 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from recupero.platform import deps, store, tenancy
+from recupero.platform import billing, deps, store, tenancy
 
 router = APIRouter(prefix="/v2", tags=["platform"])
 
@@ -194,6 +194,7 @@ def submit_trace(
     body: TraceIn,
     principal: store.OrgContext = Depends(deps.rate_limit),
     conn: Any = Depends(deps.db_conn),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict[str, Any]:
     # validate incident_time up front (fail fast, before enqueue)
     try:
@@ -211,17 +212,118 @@ def submit_trace(
         raise HTTPException(status_code=402, detail=quota.reason)  # 402 Payment Required
 
     case_id = body.case_id or f"CASE-{uuid.uuid4().hex[:12]}"
-    investigation_id = store.enqueue_trace(
+    # Idempotent: a retry with the same Idempotency-Key replays the original job
+    # (no double-enqueue, no double-metering). ``created`` is False on replay.
+    investigation_id, created = store.enqueue_trace(
         conn, org_id=principal.org_id, submitted_by=principal.user_id,
         chain=body.chain, seed_address=body.seed_address,
         incident_time=body.incident_time, case_id=case_id,
+        idempotency_key=(idempotency_key or None),
     )
     return {
-        "investigation_id": investigation_id, "status": "queued", "case_id": case_id,
+        "investigation_id": investigation_id,
+        "status": "queued" if created else "already_submitted",
+        "case_id": case_id,
+        "idempotent_replay": not created,
         "poll": f"/v2/traces/{investigation_id}",
-        "quota_remaining": max(0, quota.remaining - 1) if quota.remaining >= 0 else -1,
+        "quota_remaining": (
+            max(0, quota.remaining - 1) if (quota.remaining >= 0 and created)
+            else quota.remaining
+        ),
         "submitted_at": datetime.now(UTC).isoformat(),
     }
+
+
+# ---- billing ---- #
+
+
+@router.get("/billing/usage")
+def billing_usage(
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    org = store.get_org(conn, principal.org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="organization not found")
+    used = store.traces_used_this_period(conn, principal.org_id)
+    quota = tenancy.check_trace_quota(plan_name=org["plan"], used_this_period=used)
+    plan = tenancy.get_plan(org["plan"])
+    return {
+        "plan": org["plan"], "status": org["status"],
+        "period_start": org["period_start"], "plan_renews_at": org["plan_renews_at"],
+        "traces_used": used, "traces_included": plan.monthly_trace_quota,
+        "traces_remaining": quota.remaining,
+        "rate_limit_per_min": plan.rate_limit_per_min,
+        "seats": {"used": store.count_seats(conn, principal.org_id), "max": plan.max_seats},
+        "billing_configured": bool(org["stripe_customer_id"]),
+    }
+
+
+@router.post("/billing/checkout", status_code=201)
+def billing_checkout(
+    plan: str = Body(embed=True),
+    principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Create a Stripe Checkout Session for an upgrade. Requires Stripe to be
+    configured (RECUPERO_STRIPE_SECRET_KEY + a price id for the plan); returns
+    501 otherwise. The actual plan flip happens on the webhook, not here."""
+    price_id = os.environ.get(f"RECUPERO_STRIPE_PRICE_{plan.upper()}")
+    secret_key = os.environ.get("RECUPERO_STRIPE_SECRET_KEY")
+    if not secret_key or not price_id:
+        raise HTTPException(
+            status_code=501,
+            detail="billing not configured (set RECUPERO_STRIPE_SECRET_KEY + "
+                   f"RECUPERO_STRIPE_PRICE_{plan.upper()})",
+        )
+    try:
+        import stripe  # optional extra; only needed when billing is enabled
+    except ImportError as exc:  # pragma: no cover - env-dependent
+        raise HTTPException(status_code=501, detail="stripe SDK not installed") from exc
+    stripe.api_key = secret_key
+    org = store.get_org(conn, principal.org_id) or {}
+    customer_id = org.get("stripe_customer_id")
+    if not customer_id:  # pragma: no cover - needs live Stripe
+        customer = stripe.Customer.create(metadata={"org_id": principal.org_id})
+        customer_id = customer["id"]
+        store.link_stripe_customer(conn, org_id=principal.org_id, customer_id=customer_id)
+    base = os.environ.get("RECUPERO_APP_BASE_URL", "https://app.recupero.io")
+    session = stripe.checkout.Session.create(  # pragma: no cover - needs live Stripe
+        mode="subscription", customer=customer_id,
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=f"{base}/billing?status=success",
+        cancel_url=f"{base}/billing?status=cancelled",
+    )
+    return {"checkout_url": session["url"]}
+
+
+@router.post("/webhooks/stripe", include_in_schema=False)
+def stripe_webhook(
+    payload: bytes = Body(default=b""),
+    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Stripe webhook: verify the signature over the RAW body, map the event to a
+    tenant state change, and apply it. Unhandled events are acked (200) so Stripe
+    stops retrying. Never trusts the body without a valid signature.
+
+    Sync handler taking the raw body via ``bytes = Body()`` (FastAPI passes the
+    UNMODIFIED bytes Stripe signed) so blocking psycopg runs safely in the
+    threadpool — no async event-loop blocking."""
+    import json as _json
+
+    secret = os.environ.get("RECUPERO_STRIPE_WEBHOOK_SECRET", "")
+    try:
+        billing.verify_stripe_signature(payload, stripe_signature, secret)
+    except billing.StripeSignatureError as exc:
+        raise HTTPException(status_code=400, detail=f"signature: {exc}") from exc
+    try:
+        event = _json.loads(payload.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="invalid JSON body") from exc
+    change = billing.apply_webhook_event(event, price_to_plan=billing.price_plan_map())
+    applied = store.apply_billing_change(conn, change) if change else False
+    return {"received": True, "applied": applied, "type": event.get("type")}
 
 
 @router.get("/traces/{investigation_id}")

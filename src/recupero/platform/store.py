@@ -78,7 +78,8 @@ def create_organization(
 def get_org(conn: Any, org_id: str) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id::text, name, slug, plan, status, trace_used_period, period_start "
+            "SELECT id::text, name, slug, plan, status, trace_used_period, "
+            "       period_start, stripe_customer_id, plan_renews_at "
             "FROM public.organizations WHERE id = %s",
             (org_id,),
         )
@@ -88,6 +89,7 @@ def get_org(conn: Any, org_id: str) -> dict[str, Any] | None:
     return {
         "id": row[0], "name": row[1], "slug": row[2], "plan": row[3],
         "status": row[4], "trace_used_period": row[5], "period_start": row[6],
+        "stripe_customer_id": row[7], "plan_renews_at": row[8],
     }
 
 
@@ -210,25 +212,114 @@ def record_usage(
 def enqueue_trace(
     conn: Any, *, org_id: str, submitted_by: str | None,
     chain: str, seed_address: str, incident_time: str, case_id: str,
-) -> str:
+    idempotency_key: str | None = None,
+) -> tuple[str, bool]:
     """Insert a tenant-scoped job into the existing worker queue and meter it,
-    atomically. Returns the new investigation id. The worker (multi-process,
-    FOR UPDATE SKIP LOCKED) picks it up; nothing here runs the trace inline."""
+    atomically. Returns ``(investigation_id, created)``. The worker (multi-
+    process, FOR UPDATE SKIP LOCKED) picks it up; nothing here runs the trace
+    inline.
+
+    Idempotent: with an ``idempotency_key`` a client retry conflicts on the
+    UNIQUE(org_id, idempotency_key) index → we REPLAY the original job id and
+    do NOT enqueue or meter a second time (``created=False``)."""
     investigation_id = str(uuid.uuid4())
     with conn.cursor() as cur:
         cur.execute(
             "INSERT INTO public.investigations "
-            "(id, org_id, submitted_by, chain, seed_address, incident_time, case_id, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued')",
+            "(id, org_id, submitted_by, chain, seed_address, incident_time, "
+            " case_id, status, idempotency_key) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s) "
+            "ON CONFLICT (org_id, idempotency_key) WHERE idempotency_key IS NOT NULL "
+            "DO NOTHING RETURNING id::text",
             (investigation_id, org_id, submitted_by, chain, seed_address,
-             incident_time, case_id),
+             incident_time, case_id, idempotency_key),
         )
+        row = cur.fetchone()
+        if row is None:
+            # Conflict: this (org, key) already enqueued — replay the original.
+            cur.execute(
+                "SELECT id::text FROM public.investigations "
+                "WHERE org_id = %s AND idempotency_key = %s",
+                (org_id, idempotency_key),
+            )
+            existing = cur.fetchone()
+            return (existing[0] if existing else investigation_id, False)
         cur.execute(
             "INSERT INTO public.usage_events (org_id, kind, quantity, investigation_id) "
             "VALUES (%s, 'trace_submitted', 1, %s)",
-            (org_id, investigation_id),
+            (org_id, row[0]),
         )
-    return investigation_id
+    return (row[0], True)
+
+
+# --------------------------------------------------------------------------- #
+# Billing (Stripe linkage + webhook-driven state)
+# --------------------------------------------------------------------------- #
+
+
+def link_stripe_customer(conn: Any, *, org_id: str, customer_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.organizations SET stripe_customer_id = %s, updated_at = now() "
+            "WHERE id = %s",
+            (customer_id, org_id),
+        )
+
+
+def org_id_by_stripe_customer(conn: Any, customer_id: str) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id::text FROM public.organizations WHERE stripe_customer_id = %s",
+            (customer_id,),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def apply_billing_change(conn: Any, change: Any) -> bool:
+    """Apply a ``billing.BillingChange`` to the org located by its Stripe
+    customer id. Only non-None fields are written; ``reset_period`` zeroes the
+    usage window. Returns False if no org matches (unknown customer)."""
+    if not getattr(change, "customer_id", None):
+        return False
+    org_id = org_id_by_stripe_customer(conn, change.customer_id)
+    if org_id is None:
+        return False
+    # STATIC SQL (no dynamic column list): each optional field is a CASE guarded
+    # by a boolean "set_X" flag, so a field is written only when the change
+    # carries it. Fully parameterized — no user/Stripe string is ever formatted
+    # into the query text.
+    renews = change.plan_renews_at
+    params = {
+        "org_id": org_id,
+        "plan": change.plan, "set_plan": change.plan is not None,
+        "status": change.status, "set_status": change.status is not None,
+        "sub": change.stripe_subscription_id,
+        "set_sub": change.stripe_subscription_id is not None,
+        "price": change.stripe_price_id,
+        "set_price": change.stripe_price_id is not None,
+        "renews": int(renews) if renews is not None else None,
+        "set_renews": renews is not None,
+        "reset": bool(change.reset_period),
+    }
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.organizations SET "
+            "  plan = CASE WHEN %(set_plan)s THEN %(plan)s ELSE plan END, "
+            "  status = CASE WHEN %(set_status)s THEN %(status)s ELSE status END, "
+            "  stripe_subscription_id = CASE WHEN %(set_sub)s THEN %(sub)s "
+            "      ELSE stripe_subscription_id END, "
+            "  stripe_price_id = CASE WHEN %(set_price)s THEN %(price)s "
+            "      ELSE stripe_price_id END, "
+            "  plan_renews_at = CASE WHEN %(set_renews)s THEN to_timestamp(%(renews)s) "
+            "      ELSE plan_renews_at END, "
+            "  period_start = CASE WHEN %(reset)s THEN now() ELSE period_start END, "
+            "  trace_used_period = CASE WHEN %(reset)s THEN 0 ELSE trace_used_period END, "
+            "  updated_at = now() "
+            "WHERE id = %(org_id)s",
+            params,
+        )
+        return cur.rowcount > 0
 
 
 def get_trace_status(conn: Any, *, org_id: str, investigation_id: str) -> dict[str, Any] | None:

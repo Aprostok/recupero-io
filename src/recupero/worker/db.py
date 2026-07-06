@@ -720,6 +720,20 @@ class WorkerDB:
             op="mark_built_package",
         )
 
+    def org_id_for(self, investigation_id: UUID) -> str | None:
+        """The owning org (migration 037 ``org_id``) for an investigation, or
+        None. Used to key mirrored case artifacts under the tenant's
+        object-storage prefix. Read-only; safe outside a transaction."""
+        with psycopg.connect(
+            self._dsn, autocommit=True, **self._PSYCOPG_KW,
+        ) as conn, conn.cursor() as cur:
+            cur.execute(
+                f"SELECT org_id::text FROM {T_INV} WHERE {COL_ID} = %(id)s",
+                {"id": str(investigation_id)},
+            )
+            row = cur.fetchone()
+        return row[0] if row and row[0] else None
+
     def mark_completed(self, investigation_id: UUID) -> None:
         """Final transition: status → complete, set completed_at = now().
 

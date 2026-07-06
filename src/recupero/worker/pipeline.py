@@ -230,6 +230,31 @@ def _is_obvious_placeholder_address(addr: str) -> bool:
     return bool(len(addr) >= 25 and len(set(addr)) <= 2)
 
 
+def _maybe_mirror_artifacts_to_s3(db: Any, investigation_id: Any, case_dir: Any) -> None:
+    """Best-effort mirror of the completed case dir to object storage so the SaaS
+    ``GET /v2/traces/{id}/artifacts/{name}`` can serve presigned downloads.
+
+    No-op unless ``RECUPERO_ARTIFACT_BUCKET`` + AWS creds are set (the
+    ``is_configured`` check short-circuits before any DB/S3 work, so it's
+    zero-cost by default). NEVER raises — the primary case store (Supabase
+    bucket) already holds the artifacts; this is an additive tenant-scoped copy.
+    """
+    try:
+        from recupero.platform import objectstore
+        if not objectstore.is_configured():
+            return
+        org_id = db.org_id_for(investigation_id)
+        if not org_id:
+            return
+        from datetime import UTC, datetime
+        n = objectstore.upload_case_artifacts(
+            org_id, str(investigation_id), case_dir, now=datetime.now(UTC),
+        )
+        log.info("mirrored %d artifact(s) to object storage for %s", n, investigation_id)
+    except Exception as exc:  # noqa: BLE001 — telemetry/mirror must never break completion
+        log.warning("s3 artifact mirror skipped for %s: %s", investigation_id, exc)
+
+
 # ----- Public entry point ----- #
 
 
@@ -562,6 +587,7 @@ def _run_one_inner(
             )
             db.mark_completed(inv.id)
             log.info("investigation %s completed", inv.id)
+            _maybe_mirror_artifacts_to_s3(db, inv.id, case_dir)
 
     except _StageFailure as exc:
         log.exception("investigation %s failed at %s", inv.id, exc.stage)

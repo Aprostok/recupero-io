@@ -19,7 +19,11 @@ from pydantic import BaseModel, Field, field_validator
 from recupero.observability import metrics as obs_metrics
 from recupero.platform import audit, billing, deps, keycache, objectstore, store, tenancy
 
-router = APIRouter(prefix="/v2", tags=["platform"])
+router = APIRouter(
+    prefix="/v2", tags=["platform"],
+    # Router-wide DoS guard: reject oversized bodies (413) before handlers run.
+    dependencies=[Depends(deps.max_request_body)],
+)
 
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
 # Pragmatic email shape check (avoids the email-validator dependency that
@@ -125,6 +129,12 @@ def login(body: LoginIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
     stored_hash = user["password_hash"] if user else "scrypt$1$1$1$AA$AA"
     if not tenancy.verify_password(body.password, stored_hash) or not user:
         raise HTTPException(status_code=401, detail="invalid credentials")
+    # Rehash-on-login: transparently upgrade an outdated hash (e.g. scrypt →
+    # argon2id once enabled) now that we hold the plaintext + a valid match.
+    if tenancy.needs_rehash(stored_hash):
+        store.update_password_hash(
+            conn, user_id=user["id"], password_hash=tenancy.hash_password(body.password),
+        )
     membership = _primary_membership(conn, user["id"])
     if membership is None:
         raise HTTPException(status_code=403, detail="user has no organization")

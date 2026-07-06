@@ -44,6 +44,16 @@ def create_user(conn: Any, *, email: str, password: str, name: str | None) -> st
         return cur.fetchone()[0]
 
 
+def update_password_hash(conn: Any, *, user_id: str, password_hash: str) -> None:
+    """Overwrite a user's stored password hash (used for rehash-on-login upgrade
+    and password reset)."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.users SET password_hash = %s WHERE id = %s",
+            (password_hash, user_id),
+        )
+
+
 def get_user_by_email(conn: Any, email: str) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(

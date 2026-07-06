@@ -25,9 +25,11 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import secrets
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 # --------------------------------------------------------------------------- #
@@ -54,11 +56,34 @@ _SCRYPT_P = 1
 _SCRYPT_DKLEN = 32
 
 
+@lru_cache(maxsize=1)
+def _argon2_hasher() -> Any | None:
+    """Return an argon2id ``PasswordHasher`` if ``argon2-cffi`` is installed, else
+    None. Optional dependency — memoized (returns an object, so the
+    lru_cache-side-effect audit doesn't flag it)."""
+    try:
+        from argon2 import PasswordHasher  # optional: pip install argon2-cffi
+    except Exception:
+        return None
+    return PasswordHasher()
+
+
+def _argon2_enabled() -> bool:
+    """argon2id is used for NEW hashes only when explicitly opted in AND the
+    library is present — so the default install stays dependency-free (scrypt)."""
+    flag = (os.environ.get("RECUPERO_PASSWORD_ARGON2") or "").strip().lower()
+    return flag in ("1", "true", "yes", "on") and _argon2_hasher() is not None
+
+
 def hash_password(password: str) -> str:
-    """Return ``scrypt$N$r$p$<salt_b64u>$<dk_b64u>`` — self-describing so the
-    verifier needs no external params and future cost bumps stay compatible."""
+    """Hash a password. Default: scrypt (self-describing ``scrypt$N$r$p$salt$dk``,
+    no dependency). When ``RECUPERO_PASSWORD_ARGON2`` is enabled and argon2-cffi
+    is installed, uses argon2id (``$argon2id$…``). ``verify_password`` reads both
+    formats, so this is a safe drop-in with rehash-on-login (``needs_rehash``)."""
     if not isinstance(password, str) or not password:
         raise ValueError("password must be a non-empty string")
+    if _argon2_enabled():
+        return str(_argon2_hasher().hash(password))
     salt = secrets.token_bytes(16)
     dk = hashlib.scrypt(
         password.encode("utf-8"), salt=salt,
@@ -68,8 +93,17 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Constant-time verify against a ``hash_password`` string. Never raises on a
-    malformed stored value — returns False (an attacker can't probe via errors)."""
+    """Constant-time verify against a ``hash_password`` string (scrypt OR argon2).
+    Never raises on a malformed stored value — returns False (an attacker can't
+    probe via errors)."""
+    if isinstance(stored, str) and stored.startswith("$argon2"):
+        hasher = _argon2_hasher()
+        if hasher is None:
+            return False  # argon2 hash but library unavailable → fail closed
+        try:
+            return bool(hasher.verify(stored, password))
+        except Exception:
+            return False
     try:
         scheme, n_s, r_s, p_s, salt_b64, dk_b64 = stored.split("$")
         if scheme != "scrypt":
@@ -81,6 +115,22 @@ def verify_password(password: str, stored: str) -> bool:
         return hmac.compare_digest(dk, _b64u_decode(dk_b64))
     except (ValueError, TypeError, AttributeError):
         return False
+
+
+def needs_rehash(stored: str) -> bool:
+    """True if ``stored`` should be re-hashed on the next successful login — i.e.
+    argon2id is the configured target but the stored hash is still scrypt (or an
+    argon2 hash whose parameters are now stale). Enables a zero-downtime upgrade."""
+    if not isinstance(stored, str):
+        return False
+    if stored.startswith("$argon2"):
+        hasher = _argon2_hasher()
+        try:
+            return bool(hasher and hasher.check_needs_rehash(stored))
+        except Exception:
+            return False
+    # scrypt stored → rehash iff argon2id is now enabled.
+    return _argon2_enabled()
 
 
 # --------------------------------------------------------------------------- #
@@ -257,7 +307,7 @@ def check_seat_quota(*, plan_name: str | None, current_seats: int) -> QuotaDecis
 __all__ = (
     "API_KEY_PREFIX", "NewApiKey", "Plan", "PLANS", "DEFAULT_PLAN", "QuotaDecision",
     "TokenError",
-    "hash_password", "verify_password",
+    "hash_password", "verify_password", "needs_rehash",
     "generate_api_key", "hash_api_key", "verify_api_key",
     "INVITE_TOKEN_TTL_SEC", "generate_invite_token", "hash_invite_token",
     "mint_jwt", "verify_jwt",

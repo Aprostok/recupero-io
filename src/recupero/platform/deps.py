@@ -30,6 +30,32 @@ def _jwt_secret() -> str:
     return secret
 
 
+def _max_body_bytes() -> int:
+    try:
+        return max(1024, int(os.environ.get("RECUPERO_MAX_REQUEST_BYTES", "262144")))
+    except (TypeError, ValueError):
+        return 262144
+
+
+def max_request_body(content_length: str | None = Header(default=None)) -> None:
+    """Reject oversized request bodies (413) as a cheap first-line DoS guard,
+    applied as a router-level dependency to every /v2 route. Uses the
+    Content-Length header (a chunked request without one bypasses this — the ASGI
+    server's own limits are the backstop). Cap: ``RECUPERO_MAX_REQUEST_BYTES``
+    (default 256 KiB — generous for JSON + Stripe webhooks)."""
+    if content_length:
+        try:
+            declared = int(content_length)
+        except (TypeError, ValueError):
+            return
+        limit = _max_body_bytes()
+        if declared > limit:
+            raise HTTPException(
+                status_code=413,
+                detail=f"request body too large (max {limit} bytes)",
+            )
+
+
 def _dsn() -> str:
     dsn = os.environ.get("RECUPERO_DATABASE_URL") or os.environ.get("DATABASE_URL")
     if not dsn:

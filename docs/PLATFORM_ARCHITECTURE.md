@@ -1,0 +1,212 @@
+# Recupero — Production SaaS Architecture
+
+> How the battle-tested forensic **engine** becomes a multi-tenant SaaS that
+> scales to millions of users. This document is the target design; the
+> **minimal scalable slice** (the multi-tenant `/v2` API) is built in
+> `src/recupero/platform/` + `migrations/037_multitenancy.sql`.
+
+## 0. Reality check (what already exists — do NOT rebuild)
+
+Recupero is **not** greenfield. The following are built, tested (6,300+ tests),
+and production-shaped — they are *dependencies*, not work items:
+
+| Layer | Status | Where |
+|---|---|---|
+| Forensic **engine** (BFS value-tracer, 10 chain adapters, bridge oracle, spam/poison prune) | ✅ mature | `src/recupero/trace`, `src/recupero/chains` |
+| Freeze artifacts + legal deliverables (LE handoff, SAR/STR, exhibit pack) | ✅ | `src/recupero/reports`, `worker/_deliverables.py` |
+| **Async job queue** — `investigations` table drained by workers via `FOR UPDATE SKIP LOCKED` (multi-worker safe) | ✅ | `src/recupero/worker` |
+| REST API framework (FastAPI, 30+ endpoints, OpenAPI) | ✅ `/v1` | `src/recupero/api/app.py` |
+| DB migrations (raw SQL, numbered) on Supabase Postgres | ✅ 001–037 | `migrations/` |
+| Deploy (Railway, `$PORT`, `/healthz`) | ✅ | `railway.json`, `Dockerfile` |
+
+**The gap** for a millions-user SaaS is the **product/tenancy layer**: auth today
+is a flat set of named API keys (`require_api_key` → a name), not org-scoped;
+there is no self-serve signup, no per-tenant quotas/billing, no customer web app,
+no edge rate-limiting. That is what this design + the `/v2` slice add — **in
+stack** (FastAPI + psycopg + SQL migrations), reusing the queue and engine.
+
+---
+
+## 1. System architecture
+
+```
+                    ┌────────────────────────────────────────────────────┐
+   Browser  ─────►  │  CDN / Edge (Cloudflare)                            │
+   (Next.js app)    │   • TLS, WAF, DDoS, static assets, edge rate-limit  │
+                    └───────────────┬────────────────────────────────────┘
+   API clients ─────────────────────┤ (X-API-Key: rk_live_…)
+   (exchanges,                       ▼
+    attorneys)      ┌────────────────────────────────────────────────────┐
+                    │  API tier — FastAPI (stateless, N replicas)         │
+                    │   /v2  multi-tenant  (this build)                   │
+                    │   /v1  legacy flat-key (back-compat)                │
+                    │   auth: JWT (web) | org API key (machine)           │
+                    │   per-org quota + rate limit + usage metering       │
+                    └───────┬───────────────────────────┬────────────────┘
+             enqueue (row)  │                            │ read (org-scoped)
+                            ▼                            ▼
+             ┌──────────────────────────┐   ┌───────────────────────────────┐
+             │  Postgres (primary + RRs)│   │  Redis (cache, rate-limit,     │
+             │   organizations, users,  │   │  pub/sub for job SSE)          │
+             │   memberships, api_keys, │   └───────────────────────────────┘
+             │   usage_events,          │
+             │   investigations (queue) │◄─── FOR UPDATE SKIP LOCKED
+             └──────────┬───────────────┘
+                        │ claim job
+                        ▼
+             ┌──────────────────────────────────────────────────────────┐
+             │  Worker fleet (K replicas, autoscaled on queue depth)     │
+             │   • runs recupero engine (run_trace, build_deliverables)  │
+             │   • wall-clock bounded (#253), spam-pruned, deep-reach     │
+             │   • writes case artifacts → object storage                │
+             └──────────┬───────────────────────────────────────────────┘
+                        ▼
+             ┌──────────────────────────┐   ┌───────────────────────────────┐
+             │  Object storage (S3/GCS/ │   │  External RPC/data providers   │
+             │  Supabase Storage):      │   │  Etherscan v2, Helius, TronGrid,│
+             │  case.json, PDFs, CSVs   │   │  Sui/Aptos/Cosmos, CoinGecko,   │
+             └──────────────────────────┘   │  OFAC/OpenSanctions, MistTrack  │
+                                            └───────────────────────────────┘
+
+Cross-cutting: OpenTelemetry traces + Prometheus metrics + structured logs;
+Stripe (billing); SES/Resend (email); cron scheduler (label sync, freeze follow-up).
+```
+
+**Why this scales to millions:**
+- **Stateless API tier** → scale horizontally behind a load balancer; sessions are
+  JWTs (no server session store).
+- **Work is never done in the request.** A trace is minutes-long; the API only
+  *enqueues* a row and returns `202`. Throughput is decoupled from worker speed.
+- **Queue is the shock absorber.** `SKIP LOCKED` lets an arbitrary number of
+  workers drain safely; autoscale workers on queue depth, API on RPS.
+- **Reads scale on read-replicas + Redis cache**; writes are small (enqueue + meter).
+- **Per-tenant isolation** by `org_id` on every row (+ RLS defense-in-depth),
+  and **quotas/rate-limits** protect shared infra from any one tenant.
+
+---
+
+## 2. File structure (target)
+
+```
+recupero/
+├── src/recupero/
+│   ├── trace/  chains/  reports/  labels/  screen/   # ENGINE (exists)
+│   ├── worker/                                        # queue consumer (exists)
+│   ├── api/app.py                                     # /v1 flat-key API (exists)
+│   └── platform/                                      # ◄── SaaS layer (this build)
+│       ├── tenancy.py     # pure crypto + plan/quota (stdlib, no new deps)
+│       ├── store.py       # psycopg DAO, org-scoped
+│       ├── deps.py        # FastAPI auth (JWT + API key) + rate limit
+│       ├── router.py      # /v2 endpoints
+│       └── billing.py     # Stripe webhooks → plan/status (NEXT)
+├── migrations/037_multitenancy.sql                    # ◄── tenancy schema (this build)
+├── web/                                               # ◄── customer app (Next.js — §5)
+│   ├── app/(marketing)/  app/(dashboard)/
+│   ├── components/  lib/api-client.ts  lib/auth.ts
+│   └── package.json
+├── infra/                                             # IaC (Terraform) + k8s/Helm (NEXT)
+└── docs/PLATFORM_ARCHITECTURE.md                      # this file
+```
+
+---
+
+## 3. Database schema (multi-tenant core)
+
+`migrations/037_multitenancy.sql` (shipped). All tenant rows carry `org_id`;
+RLS enabled as defense-in-depth (workers use the service role / `BYPASSRLS`).
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `organizations` | the tenant | `id`, `slug` (unique), `plan`, `stripe_customer_id`, `period_start`, `trace_used_period`, `status` |
+| `users` | global identity | `id`, `email` (citext unique), `password_hash` (scrypt), `email_verified_at` |
+| `memberships` | user ↔ org + role | PK `(org_id,user_id)`, `role` = owner/admin/member/viewer |
+| `org_api_keys` | machine access | `key_hash` (sha256, unique), `last4`, `revoked_at` (plaintext never stored) |
+| `usage_events` | append-only metering | `org_id`, `kind`, `quantity`, `investigation_id` → drives billing + quota |
+| `investigations` (existing) | the job queue | **+`org_id`, +`submitted_by`** (added; legacy rows backfilled to a system org) |
+
+**Scaling notes:** partition `usage_events` by month once it's large; `investigations`
+gets a partial index on `status='queued'` for the claim query; move closed cases to
+cold storage after `plan.retention_days`.
+
+---
+
+## 4. API endpoints
+
+### `/v2` — multi-tenant (this build)
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| POST | `/v2/auth/signup` | — | create user+org+owner, return JWT |
+| POST | `/v2/auth/login` | — | email+password → JWT |
+| GET | `/v2/me` | JWT/key | principal, plan, usage/quota remaining |
+| POST | `/v2/api-keys` | JWT (owner/admin) | mint org API key (**shown once**) |
+| GET | `/v2/api-keys` | JWT/key | list keys (metadata only) |
+| DELETE | `/v2/api-keys/{id}` | JWT (owner/admin) | revoke |
+| POST | `/v2/traces` | JWT/key + rate-limit + quota | **enqueue** a trace → `202 {investigation_id}` |
+| GET | `/v2/traces/{id}` | JWT/key | tenant-scoped status |
+| GET | `/v2/traces` | JWT/key | list this org's traces |
+
+**Conventions:** `202 Accepted` for async submit (never block on the trace);
+`402 Payment Required` on quota exhaustion; `429` on rate limit; cursor pagination
+on list endpoints; idempotency-key header on POST (NEXT); OpenAPI at `/docs`.
+
+### `/v1` — legacy flat-key (unchanged, back-compat)
+Screening, token-risk, monitoring, operator consoles. New signups get `/v2` keys.
+
+---
+
+## 5. UI architecture (customer web app)
+
+**Stack:** Next.js (App Router) + TypeScript + Tailwind + shadcn/ui + TanStack
+Query, deployed to Vercel/Cloudflare. Talks only to `/v2`.
+
+```
+web/app/
+  (marketing)/            # public: landing, pricing, docs
+  (auth)/login  /signup   # posts to /v2/auth/*; stores JWT (httpOnly cookie)
+  (dashboard)/
+    layout.tsx            # org switcher, nav, auth guard
+    page.tsx              # overview: quota gauge, recent traces, alerts
+    traces/
+      page.tsx            # list (TanStack Query, polling/SSE on status)
+      new/page.tsx        # submit form → POST /v2/traces
+      [id]/page.tsx       # trace detail: status, flow graph, freezable holdings
+    keys/page.tsx         # API-key management (create → one-time reveal modal)
+    billing/page.tsx      # plan, usage, Stripe portal link
+    settings/members      # invite/role management
+components/  ui/ (shadcn), TraceGraph (D3, reuse engine's graph JSON),
+             QuotaGauge, StatusBadge
+lib/  api-client.ts (typed fetch, injects Bearer), auth.ts, hooks/useTrace.ts
+```
+
+**Patterns:** server components for first paint + auth guard in `layout`; client
+components for interactive (graph, live status via SSE from `/v2/traces/{id}/stream`,
+NEXT); optimistic UI on submit; the D3 flow graph reuses the engine's existing
+graph-JSON (no new backend). Accessibility + dark mode via shadcn tokens.
+
+---
+
+## 6. What needs to change / update (prioritized)
+
+**Shipped in this slice**
+1. `migrations/037_multitenancy.sql` — orgs/users/memberships/api_keys/usage + `org_id` on the queue + RLS.
+2. `src/recupero/platform/*` — tenancy crypto, DAO, auth deps, `/v2` router.
+3. `api/app.py` — mounts `/v2` (guarded include).
+4. Unit tests for the security-critical primitives (`tests/test_platform_tenancy.py`).
+
+**Next (to reach a billable GA), in order**
+1. **Worker: honor `org_id`** — on job completion write `usage_events(kind='trace_completed')` and stamp artifacts with `org_id`; enforce `plan.retention_days` in the cleanup cron.
+2. **Billing** — `platform/billing.py`: Stripe checkout + webhook → set `organizations.plan/status/stripe_customer_id`; reset `period_start`/`trace_used_period` monthly.
+3. **Object storage for artifacts** — case outputs to S3/GCS with per-org prefixes + signed URLs (today they're on the case dir / bucket); serve via `/v2/traces/{id}/artifacts`.
+4. **Redis** — move the in-process rate limiter (`deps._allow`) to a shared Redis token bucket (required once API runs >1 replica) and cache `resolve_api_key`.
+5. **Email verification + password reset + org invites** (memberships flow).
+6. **Observability** — OpenTelemetry middleware on the API, Prometheus `/metrics`, per-tenant dashboards; structured request logs with `org_id`.
+7. **Config/secrets** — `RECUPERO_PLATFORM_JWT_SECRET` (rotate; move to asymmetric ES256), `RECUPERO_DATABASE_URL`; load from a secret manager.
+8. **Hardening** — argon2id passwords (drop-in via the versioned hash format), idempotency keys on POST, per-endpoint request-size caps, audit-log every auth event (reuse `migrations/034_audit_log.sql`).
+9. **Infra** — containerize API + worker separately; Terraform for Postgres (primary+replica), Redis, object storage; k8s HPA: API on RPS, workers on queue depth.
+
+## 7. Environment variables (new)
+| Var | Purpose |
+|---|---|
+| `RECUPERO_PLATFORM_JWT_SECRET` | HS256 signing secret for session tokens (required for `/v2` auth) |
+| `RECUPERO_PLATFORM_JWT_TTL_SEC` | session lifetime (default 3600) |
+| `RECUPERO_DATABASE_URL` | Postgres DSN for the platform DAO (falls back to `DATABASE_URL`) |

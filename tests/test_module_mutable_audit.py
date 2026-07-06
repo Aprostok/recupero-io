@@ -164,6 +164,14 @@ ALLOWED: dict[tuple[str, str], str] = {
     # waves join — single-threaded by lifetime, no concurrent access at all.
     ("trace/tracer.py", "_SPAM_PRUNED"):
         "main-thread-only appends (wave aggregation); cleared pre-wave + read post-join",
+
+    # SaaS platform/deps.py: per-org rate-limit token buckets. Every read AND
+    # mutation is inside `with _bucket_lock:` (a module-level threading.Lock), so
+    # concurrent API worker threads are serialized. This is the in-process
+    # default; prod with >1 API replica moves it to Redis (see
+    # PLATFORM_ARCHITECTURE.md §6), at which point this module state disappears.
+    ("platform/deps.py", "_buckets"):
+        "lock-guarded by _bucket_lock (every read+mutation under it); single-replica default, Redis in prod",
 }
 
 

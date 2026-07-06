@@ -107,6 +107,18 @@ except Exception as _exc:  # noqa: BLE001
         "label-candidates API not registered (import failed): %s", _exc,
     )
 
+# SaaS multi-tenant surface (self-serve signup/login, org API keys, quota-gated
+# async trace submission) under /v2. The existing flat-API-key endpoints stay at
+# /v1 for back-compat. Same import-guard shape: a platform import/config failure
+# leaves /v1 fully working (the /v2/* surface just 404s until configured).
+try:
+    from recupero.platform.router import router as _platform_router
+    app.include_router(_platform_router)
+except Exception as _exc:  # noqa: BLE001
+    log.warning(
+        "platform (/v2 multi-tenant) API not registered (import failed): %s", _exc,
+    )
+
 # v0.32.1 HIGH-5 — admin-gated /v1/cron/jobs endpoint. Public
 # /cron/healthz strips last_error_message; admins use this endpoint
 # to retrieve the full payload including the redacted error text.

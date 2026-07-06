@@ -165,6 +165,8 @@ ignore = ["E501"]   # line length handled by formatter
 "src/recupero/ops/cli.py" = ["B008"]
 "src/recupero/ops/commands/*.py" = ["B008"]
 "src/recupero/api/app.py" = ["B008"]   # FastAPI uses the same pattern (Depends, Query, etc.)
+"src/recupero/platform/router.py" = ["B008"]  # FastAPI Depends()-in-defaults (SaaS /v2 API)
+"src/recupero/platform/deps.py" = ["B008"]    # FastAPI dependency chain (current_principal, rate_limit)
 # Tests pre-date several modern conventions; allow specific exceptions
 # rather than churn 800+ tests.
 "tests/test_v7.py" = ["N802"]   # test_ethereum_DOES_*: deliberate uppercase to mirror the

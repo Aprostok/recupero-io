@@ -46,6 +46,7 @@ export default function DashboardLayout({
         {tab("/dashboard", "Traces")}
         {tab("/dashboard/keys", "API Keys")}
         {tab("/dashboard/members", "Members")}
+        {tab("/dashboard/activity", "Activity")}
         {tab("/dashboard/billing", "Billing")}
         <span className="spacer" />
         <button

@@ -15,7 +15,7 @@ from typing import Any
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
-from recupero.platform import billing, deps, store, tenancy
+from recupero.platform import audit, billing, deps, store, tenancy
 
 router = APIRouter(prefix="/v2", tags=["platform"])
 
@@ -110,6 +110,8 @@ def signup(body: SignupIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
         secret=deps._jwt_secret(), subject=user_id, org_id=org_id,
         role="owner", ttl_seconds=ttl, extra={"plan": tenancy.DEFAULT_PLAN},
     )
+    audit.record(conn, org_id=org_id, actor=user_id, action="org.created",
+                 target=org_id, target_kind="org", metadata={"email": body.email})
     return TokenOut(access_token=token, expires_in=ttl, org_id=org_id)
 
 
@@ -130,6 +132,8 @@ def login(body: LoginIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
         secret=deps._jwt_secret(), subject=user["id"], org_id=org_id,
         role=role, ttl_seconds=ttl, extra={"plan": org.get("plan", tenancy.DEFAULT_PLAN)},
     )
+    audit.record(conn, org_id=org_id, actor=user["id"], action="auth.login",
+                 target=user["id"], target_kind="user")
     return TokenOut(access_token=token, expires_in=ttl, org_id=org_id)
 
 
@@ -175,6 +179,9 @@ def create_key(
     key = store.create_api_key(
         conn, org_id=principal.org_id, name=name, created_by=principal.user_id,
     )
+    audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "api-key",
+                 action="apikey.created", target=name, target_kind="api_key",
+                 metadata={"last4": key.last4})
     # plaintext is returned exactly ONCE
     return {"api_key": key.plaintext, "last4": key.last4,
             "warning": "store this now — it will not be shown again"}
@@ -196,6 +203,8 @@ def revoke_key(
 ) -> None:
     if not store.revoke_api_key(conn, org_id=principal.org_id, key_id=key_id):
         raise HTTPException(status_code=404, detail="key not found")
+    audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "api-key",
+                 action="apikey.revoked", target=key_id, target_kind="api_key")
 
 
 # ---- team: members + invites ---- #
@@ -239,6 +248,16 @@ def list_org_members(
     return {"members": store.list_members(conn, principal.org_id)}
 
 
+@router.get("/audit")
+def list_audit(
+    limit: int = 100,
+    principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Recent security-relevant events for THIS org (SOC 2 CC6/CC7)."""
+    return {"events": audit.list_events(conn, org_id=principal.org_id, limit=limit)}
+
+
 # NOTE: the literal `/members/invites*` routes are declared BEFORE the
 # `/members/{user_id}` param routes so they are matched first.
 @router.post("/members/invites", status_code=201)
@@ -261,6 +280,9 @@ def invite_member(
         conn, org_id=principal.org_id, email=body.email, role=body.role,
         invited_by=principal.user_id, token_hash=token_hash, expires_at=expires,
     )
+    audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "system",
+                 action="member.invited", target=body.email, target_kind="invite",
+                 metadata={"role": body.role})
     base = os.environ.get("RECUPERO_APP_BASE_URL", "https://app.recupero.io")
     # The token is returned ONCE (email delivery is a separate, gated concern).
     return {
@@ -287,6 +309,8 @@ def revoke_member_invite(
 ) -> None:
     if not store.revoke_invite(conn, org_id=principal.org_id, invite_id=invite_id):
         raise HTTPException(status_code=404, detail="invite not found")
+    audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "system",
+                 action="invite.revoked", target=invite_id, target_kind="invite")
 
 
 @router.post("/members/invites/accept", response_model=TokenOut)
@@ -321,6 +345,8 @@ def accept_member_invite(
 
     store.add_membership(conn, org_id=org_id, user_id=user_id, role=role)
     store.mark_invite_accepted(conn, invite_id=invite["id"], user_id=user_id)
+    audit.record(conn, org_id=org_id, actor=user_id, action="invite.accepted",
+                 target=email, target_kind="member", metadata={"role": role})
     ttl = _session_ttl()
     token = tenancy.mint_jwt(
         secret=deps._jwt_secret(), subject=user_id, org_id=org_id, role=role,
@@ -345,6 +371,9 @@ def set_member_role(
     if target["role"] == "owner" and role != "owner" and store.count_owners(conn, principal.org_id) <= 1:
         raise HTTPException(status_code=409, detail="cannot demote the last owner")
     store.update_member_role(conn, org_id=principal.org_id, user_id=user_id, role=role)
+    audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "system",
+                 action="member.role_changed", target=user_id, target_kind="member",
+                 metadata={"role": role})
     return {"user_id": user_id, "role": role}
 
 
@@ -360,6 +389,8 @@ def remove_org_member(
     if target["role"] == "owner" and store.count_owners(conn, principal.org_id) <= 1:
         raise HTTPException(status_code=409, detail="cannot remove the last owner")
     store.remove_member(conn, org_id=principal.org_id, user_id=user_id)
+    audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "system",
+                 action="member.removed", target=user_id, target_kind="member")
 
 
 # ---- traces (async, tenant-scoped, quota-gated) ---- #

@@ -108,6 +108,17 @@ export interface NewInvite {
   warning: string;
 }
 
+export interface AuditEvent {
+  id: number;
+  occurred_at: string | null;
+  actor: string;
+  action: string;
+  target: string | null;
+  target_kind: string | null;
+  outcome: string;
+  metadata: Record<string, unknown>;
+}
+
 export interface BillingUsage {
   plan: string;
   status: string;
@@ -274,4 +285,7 @@ export const api = {
       method: "POST",
       body: { token: inviteToken, password, name },
     }),
+
+  listAudit: (token: string, limit = 100) =>
+    request<{ events: AuditEvent[] }>(`/v2/audit?limit=${limit}`, { token }),
 };

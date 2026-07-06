@@ -664,3 +664,75 @@ def test_parity_groups_define_expected_chains() -> None:
     assert Chain.ethereum in BTC_PARITY_GROUPS
     assert "WBTC" in BTC_PARITY_GROUPS[Chain.ethereum]
     assert "CBBTC" in BTC_PARITY_GROUPS[Chain.ethereum]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# No silent caps — _MAX_LEADS_PER_CASE truncation observability
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_max_leads_cap_warns_when_candidates_dropped(caplog) -> None:
+    """More qualifying CEX deposits than the per-case lead budget must not be
+    silently truncated: reaching the cap with candidates still unprocessed
+    emits a warning naming the dropped count (no silent caps)."""
+    import logging
+
+    from recupero.trace.cex_continuity import _MAX_LEADS_PER_CASE
+
+    # Six distinct WBTC deposits to the same hot wallet, factor-2-spaced amounts
+    # so each matches exactly one outflow (well outside the ~2-3% tolerance).
+    amounts = [Decimal(a) for a in (5, 10, 20, 40, 80, 160)]
+    deposits = [
+        _mk_transfer(
+            from_addr=_PERP, to_addr=_BINANCE_HOT_ETH,
+            usd=Decimal(amt) * Decimal("50000"),
+            token_symbol="WBTC", decimals=8, amount_decimal=amt, log_index=i,
+        )
+        for i, amt in enumerate(amounts)
+    ]
+    case = _mk_case(deposits)
+
+    outflows = [
+        _mk_outflow_row(
+            to_addr=f"0x{(i + 1):040x}",
+            block_time=_INCIDENT_TIME + timedelta(hours=2),
+            token_symbol="WBTC", decimals=8,
+            amount_decimal=amt * Decimal("0.998"),  # within tolerance of its deposit
+        )
+        for i, amt in enumerate(amounts)
+    ]
+    adapter = MagicMock()
+    adapter.fetch_native_outflows.return_value = []
+    adapter.fetch_erc20_outflows.return_value = outflows
+
+    label_store = _mk_label_store((_BINANCE_HOT_ETH, "Binance Hot 14", "Binance"))
+    with caplog.at_level(logging.WARNING):
+        leads = identify_cex_continuity_leads(
+            case, adapter=adapter, label_store=label_store,
+        )
+    # Capped at the budget, and the truncation is reported.
+    assert len(leads) == _MAX_LEADS_PER_CASE
+    assert caplog.text.count("reached the _MAX_LEADS_PER_CASE cap") == 1
+    assert f"of {len(amounts)} candidate" in caplog.text
+
+
+def test_max_leads_cap_no_warn_when_all_processed(caplog) -> None:
+    """Fewer candidates than the cap → no truncation warning."""
+    import logging
+
+    deposit = _mk_transfer(
+        from_addr=_PERP, to_addr=_BINANCE_HOT_ETH, usd=Decimal("250000"),
+        token_symbol="WBTC", decimals=8, amount_decimal=Decimal("5"),
+    )
+    case = _mk_case([deposit])
+    outflow = _mk_outflow_row(
+        to_addr=_NEW_ADDR, block_time=_INCIDENT_TIME + timedelta(hours=2),
+        token_symbol="WBTC", decimals=8, amount_decimal=Decimal("4.99"),
+    )
+    adapter = MagicMock()
+    adapter.fetch_native_outflows.return_value = []
+    adapter.fetch_erc20_outflows.return_value = [outflow]
+    label_store = _mk_label_store((_BINANCE_HOT_ETH, "Binance Hot 14", "Binance"))
+    with caplog.at_level(logging.WARNING):
+        identify_cex_continuity_leads(case, adapter=adapter, label_store=label_store)
+    assert "reached the _MAX_LEADS_PER_CASE cap" not in caplog.text

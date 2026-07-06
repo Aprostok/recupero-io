@@ -400,8 +400,21 @@ def identify_cex_continuity_leads(
 
     leads: list[CexContinuityLead] = []
 
-    for deposit, cex_name, _category in candidate_deposits:
+    for _i, (deposit, cex_name, _category) in enumerate(candidate_deposits):
         if len(leads) >= _MAX_LEADS_PER_CASE:
+            # No silent caps: reaching the per-case lead budget here means at
+            # least one more candidate CEX deposit (a distinct off-ramp pathway)
+            # is being skipped — the case may have more continuity leads than the
+            # brief surfaces. Warn once with the dropped count.
+            log.warning(
+                "cex_continuity: reached the _MAX_LEADS_PER_CASE cap (%d) — %d "
+                "of %d candidate CEX deposit(s) were NOT processed, so "
+                "additional continuity leads may exist but are not surfaced in "
+                "the brief. Raise the cap for a fuller sweep.",
+                _MAX_LEADS_PER_CASE,
+                len(candidate_deposits) - _i,
+                len(candidate_deposits),
+            )
             break
 
         deposit_usd: Decimal = deposit.usd_value_at_tx  # validated above

@@ -31,7 +31,8 @@ class _FakeClient:
         self._jettons = jettons or {"jetton_transfers": []}
         self._decimals = decimals_by_master or {}
 
-    def get_transactions(self, address, *, limit=100, to_lt=None):  # noqa: ANN001
+    def get_transactions(self, address, *, limit=100, to_lt=None,  # noqa: ANN001
+                         lt=None, tx_hash=None):
         return self._txs
 
     def get_jetton_transfers(self, *, owner_address, limit=100, offset=0):  # noqa: ANN001

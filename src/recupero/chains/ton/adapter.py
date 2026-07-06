@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -27,6 +28,30 @@ from recupero.chains.ton.client import TonCenterClient, TonCenterError
 from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 
 log = logging.getLogger(__name__)
+
+# Per-address fetch budget. Pre-this BOTH fetch paths made a SINGLE limit=100 call
+# and never paginated — a hard 100-row cap that silently truncated any active TON
+# wallet (USDT-TON is THE dominant stablecoin off-ramp on TON). Now both paginate
+# up to a budget from RECUPERO_MAX_TRANSFERS_PER_ADDRESS (TON Center pages ~100).
+_TON_PAGE_SIZE = 100
+_DEFAULT_MAX_TRANSFERS_PER_ADDRESS = 50_000
+_HARD_PAGE_CEILING = 5_000  # runaway backstop (5_000 x 100 = 500k rows).
+
+
+def _resolve_ton_max_pages() -> int:
+    """RECUPERO_MAX_TRANSFERS_PER_ADDRESS → a TON Center page cap. ``<= 0``
+    (disabled/unbounded) → the hard ceiling; else ceil(budget / 100) clamped."""
+    raw = os.environ.get("RECUPERO_MAX_TRANSFERS_PER_ADDRESS")
+    budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if raw is not None:
+        try:
+            budget = int(raw)
+        except (TypeError, ValueError):
+            budget = _DEFAULT_MAX_TRANSFERS_PER_ADDRESS
+    if budget <= 0:
+        return _HARD_PAGE_CEILING
+    pages = -(-budget // _TON_PAGE_SIZE)  # ceil, no float
+    return max(1, min(_HARD_PAGE_CEILING, pages))
 
 TON_SYMBOL = "TON"
 TON_DECIMALS = 9
@@ -57,6 +82,8 @@ class TonAdapter(ChainAdapter):
         self, api_key: str | None = None, *, client: TonCenterClient | None = None,
     ) -> None:
         self.client = client or TonCenterClient(api_key=api_key)
+        # Budget-derived pagination cap (was a single un-paginated 100-row call).
+        self._max_pages = _resolve_ton_max_pages()
 
     def close(self) -> None:
         with contextlib.suppress(Exception):
@@ -93,11 +120,7 @@ class TonAdapter(ChainAdapter):
             return []
         # TON Center accepts raw or friendly; query with friendly bounceable.
         query_addr = raw_to_friendly(canonical_from)
-        try:
-            txs = self.client.get_transactions(query_addr, limit=100)
-        except TonCenterError as exc:
-            log.warning("ton native fetch failed for %s: %s", canonical_from, exc)
-            return []
+        txs = self._paginate_native(query_addr, canonical_from, start_block)
 
         out: list[dict[str, Any]] = []
         for tx in txs:
@@ -117,6 +140,60 @@ class TonAdapter(ChainAdapter):
                 )
                 if norm is not None:
                     out.append(norm)
+        return out
+
+    def _paginate_native(
+        self, query_addr: str, canonical_from: str, start_block: int,
+    ) -> list[dict[str, Any]]:
+        """Walk v2 getTransactions backward via the (lt, hash) cursor up to the
+        budget. Continuation pages re-include the cursor tx as row 0 (verified
+        live) → dropped. Stops on a short page, past the start cutoff, the budget,
+        or a stuck cursor; keeps partial results on a mid-pagination error."""
+        out: list[dict[str, Any]] = []
+        lt: str | None = None
+        cur_hash: str | None = None
+        for _page in range(self._max_pages):
+            try:
+                batch = self.client.get_transactions(
+                    query_addr, limit=_TON_PAGE_SIZE, lt=lt, tx_hash=cur_hash,
+                )
+            except TonCenterError as exc:
+                if out:
+                    log.warning("ton: native pagination stopped early for %s after "
+                                "%d tx(s): %s", canonical_from, len(out), exc)
+                    break
+                log.warning("ton native fetch failed for %s: %s", canonical_from, exc)
+                return []
+            if not isinstance(batch, list) or not batch:
+                break
+            raw_len = len(batch)
+            # Continuation pages re-include the cursor tx as the first row → drop.
+            if lt is not None and (batch[0].get("transaction_id") or {}).get("lt") == lt:
+                batch = batch[1:]
+            if not batch:
+                break  # only the boundary remained → exhausted
+            out.extend(batch)
+            # Early-stop: newest-first, so once a page's oldest tx predates the
+            # cutoff, every later page is older too.
+            if start_block > 0:
+                oldest = batch[-1].get("utime")
+                if isinstance(oldest, (int, float)) and int(oldest) < start_block:
+                    break
+            last_id = batch[-1].get("transaction_id") or {}
+            new_lt = last_id.get("lt")
+            new_hash = last_id.get("hash")
+            if not new_lt or not new_hash or new_lt == lt:
+                break  # can't advance / stuck cursor
+            lt, cur_hash = str(new_lt), str(new_hash)
+            if raw_len < _TON_PAGE_SIZE:
+                break  # last page (fewer than a full page fetched)
+        else:
+            log.warning(
+                "ton: native trace hit the %d-page cap for %s with more history "
+                "available — trace may be INCOMPLETE; raise "
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                self._max_pages, canonical_from,
+            )
         return out
 
     def _normalize_native_msg(
@@ -167,20 +244,48 @@ class TonAdapter(ChainAdapter):
         except ValueError:
             return []
         query_addr = raw_to_friendly(canonical_from)
-        try:
-            body = self.client.get_jetton_transfers(owner_address=query_addr, limit=100)
-        except TonCenterError as exc:
-            log.warning("ton jetton fetch failed for %s: %s", canonical_from, exc)
-            return []
+        transfers = self._paginate_jetton(query_addr, canonical_from)
 
-        transfers = body.get("jetton_transfers") if isinstance(body, dict) else None
-        if not isinstance(transfers, list):
-            return []
         out: list[dict[str, Any]] = []
         for tr in transfers:
             norm = self._normalize_jetton(tr, canonical_from, start_block)
             if norm is not None:
                 out.append(norm)
+        return out
+
+    def _paginate_jetton(
+        self, query_addr: str, canonical_from: str,
+    ) -> list[dict[str, Any]]:
+        """Walk v3 jetton/transfers via offset up to the budget. Stops on a short
+        page, the budget, or an error (partial results kept)."""
+        out: list[dict[str, Any]] = []
+        offset = 0
+        for _page in range(self._max_pages):
+            try:
+                body = self.client.get_jetton_transfers(
+                    owner_address=query_addr, limit=_TON_PAGE_SIZE, offset=offset,
+                )
+            except TonCenterError as exc:
+                if out:
+                    log.warning("ton: jetton pagination stopped early for %s after "
+                                "%d transfer(s): %s", canonical_from, len(out), exc)
+                    break
+                log.warning("ton jetton fetch failed for %s: %s", canonical_from, exc)
+                return []
+            batch = body.get("jetton_transfers") if isinstance(body, dict) else None
+            if not isinstance(batch, list) or not batch:
+                break
+            out.extend(batch)
+            if len(batch) < _TON_PAGE_SIZE:  # short page → exhausted
+                break
+            offset += _TON_PAGE_SIZE
+        else:
+            log.warning(
+                "ton: jetton trace hit the %d-page cap for %s with more transfers "
+                "available — trace may be INCOMPLETE; raise "
+                "RECUPERO_MAX_TRANSFERS_PER_ADDRESS.",
+                self._max_pages, canonical_from,
+            )
         return out
 
     def _resolve_jetton_meta(

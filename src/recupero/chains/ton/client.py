@@ -94,12 +94,22 @@ class TonCenterClient:
 
     def get_transactions(
         self, address: str, *, limit: int = 100, to_lt: int | None = None,
+        lt: int | str | None = None, tx_hash: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Native-TON transaction history (most-recent first). ``to_lt`` bounds
-        pagination by logical time."""
+        """Native-TON transaction history (most-recent first).
+
+        ``to_lt`` bounds pagination by logical time (lower bound). ``lt`` + ``tx_hash``
+        (the API's ``lt``/``hash``) are the BACKWARD cursor: they start the page AT
+        that transaction (re-including it as the first row) and return older ones —
+        the adapter pages by passing the oldest tx's ``transaction_id`` and dropping
+        the duplicate boundary row. Verified live against toncenter v2."""
         params: dict[str, Any] = {"address": address, "limit": limit}
         if to_lt is not None:
             params["to_lt"] = to_lt
+        if lt is not None:
+            params["lt"] = lt
+        if tx_hash is not None:
+            params["hash"] = tx_hash
         body = self._get("/api/v2/getTransactions", params)
         result = body.get("result")
         return result if isinstance(result, list) else []

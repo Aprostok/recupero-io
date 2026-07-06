@@ -160,9 +160,13 @@ Screening, token-risk, monitoring, operator consoles. New signups get `/v2` keys
 `web/src/lib/api.ts` (typed client for every `/v2` endpoint), `web/src/lib/auth.tsx`
 (`AuthProvider`/`useAuth`), and pages for login / signup / dashboard (submit +
 recent traces) / API keys / billing. Zero-dependency styling (`globals.css`) to
-keep the scaffold minimal; see `web/README.md`. The fuller target below
-(shadcn/TanStack/D3 flow graph, trace detail, member management, SSE live
-status) is the next layer on top of this working base.
+keep the scaffold minimal; see `web/README.md`. A **trace-detail page** (`/dashboard/traces/[id]`) is now shipped too — polls
+status while the trace is running and offers presigned artifact downloads
+(brief / transfers / trace report / exhibit pack). The remaining fuller target
+(shadcn/TanStack polish; a D3 flow graph — needs a `/v2` graph-data endpoint
+first; SSE live status — needs an async streaming endpoint, deliberately not
+added because it would expand the locked async-safety surface, polling covers
+it meanwhile) is the next layer on this working base.
 
 **Stack (target):** Next.js (App Router) + TypeScript + Tailwind + shadcn/ui +
 TanStack Query, deployed to Vercel/Cloudflare. Talks only to `/v2`.

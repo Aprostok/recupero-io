@@ -288,4 +288,10 @@ export const api = {
 
   listAudit: (token: string, limit = 100) =>
     request<{ events: AuditEvent[] }>(`/v2/audit?limit=${limit}`, { token }),
+
+  getArtifactUrl: (token: string, id: string, name: string) =>
+    request<{ artifact: string; url: string; expires_in: number }>(
+      `/v2/traces/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(name)}`,
+      { token },
+    ),
 };

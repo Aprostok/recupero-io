@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 import { ApiError, TraceSummary, api } from "@/lib/api";
 
@@ -164,7 +165,11 @@ export default function TracesPage() {
                       ? new Date(t.created_at).toLocaleString()
                       : "—"}
                   </td>
-                  <td className="mono">{t.investigation_id.slice(0, 8)}…</td>
+                  <td className="mono">
+                    <Link href={`/dashboard/traces/${t.investigation_id}`}>
+                      {t.investigation_id.slice(0, 8)}…
+                    </Link>
+                  </td>
                 </tr>
               ))}
             </tbody>

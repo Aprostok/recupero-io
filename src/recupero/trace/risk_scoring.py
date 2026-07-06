@@ -24,6 +24,7 @@ SANCTIONED regardless of numeric score); otherwise the numeric score sets the
 tier (see _verdict_for_score):
   any ofac_* exposure  "SANCTIONED — direct exposure to OFAC SDN List"
   any mixer_sanctioned "SANCTIONED — direct exposure to sanctioned mixer"
+  any intl_sanctioned  "SANCTIONED — direct exposure to a non-OFAC sanctions regime"
   score >= 8           "CRITICAL — extensive exposure to mixers / scam ops"
   score >= 3           "HIGH-RISK — significant exposure to mixers or scam ops"
   score >= 1           "MODERATE — limited high-risk exposure"
@@ -67,6 +68,7 @@ Output shape (consumed by emit_brief)
       "addresses_assessed": 5,
       "ofac_exposed_count": 2,
       "mixer_exposed_count": 1,
+      "intl_sanctioned_count": 0,
       "highest_score": 8,
       "highest_score_address": "0xabc..."
     }
@@ -569,6 +571,7 @@ def risk_scores_to_brief_section(
     """Serialize per-address risk scores to the brief JSON shape."""
     ofac_exposed = 0
     mixer_exposed = 0
+    intl_exposed = 0
     highest_score = 0
     highest_address = None
     addresses_payload: dict[str, Any] = {}
@@ -580,6 +583,12 @@ def risk_scores_to_brief_section(
             ofac_exposed += 1
         if any("mixer" in c for c in cats):
             mixer_exposed += 1
+        # v0.41: headline count for non-OFAC sanctions exposure (EU/UN/UK/…).
+        # Deliberately SEPARATE from ofac_exposed_count so the OFAC-only recovery
+        # multiplier / OFAC-licensed-counsel routing keyed off ofac_exposed_count
+        # is not mis-triggered by an international-regime hit.
+        if any(c == "intl_sanctioned" for c in cats):
+            intl_exposed += 1
         if score.score > highest_score:
             highest_score = score.score
             highest_address = addr
@@ -607,6 +616,7 @@ def risk_scores_to_brief_section(
             "addresses_assessed": len(scores),
             "ofac_exposed_count": ofac_exposed,
             "mixer_exposed_count": mixer_exposed,
+            "intl_sanctioned_count": intl_exposed,
             "highest_score": highest_score,
             "highest_score_address": highest_address,
         },
@@ -669,6 +679,20 @@ def _verdict_for_score(score: AddressRiskScore) -> str:
         return "SANCTIONED — direct exposure to OFAC SDN List"
     if any(c == "mixer_sanctioned" for c in cats):
         return "SANCTIONED — direct exposure to sanctioned mixer"
+    # v0.41 forensic-correctness: intl_sanctioned (EU / UK HMT-OFSI / UN / Israel
+    # NBCTF / Japan MoF / …, imported via `recupero-ops import-sanctions`) is a
+    # severity-4 SANCTIONED-class category — every OTHER consumer treats it as
+    # sanctioned (graph_ui colours it "sanctioned"; exposure_summary ranks it at
+    # priority 90). But the verdict fell through to the NUMERIC path, so an
+    # address whose only exposure was an EU/UN-sanctioned wallet was labelled
+    # "HIGH-RISK — significant exposure to mixers or scam ops" — factually wrong
+    # (it isn't a mixer/scam exposure) and it understated a formal sanctions hit.
+    # It is dispositive like OFAC, but worded NON-OFAC so the freeze letter is
+    # routed to the matching authority, not an OFAC SDN letter (the regime is in
+    # the entry notes). Kept DISTINCT from ofac_exposed_count so the OFAC-only
+    # recovery multiplier / OFAC-licensed-counsel routing is NOT mis-triggered.
+    if any(c == "intl_sanctioned" for c in cats):
+        return "SANCTIONED — direct exposure to a non-OFAC sanctions regime"
     if score.score >= 8:
         return "CRITICAL — extensive exposure to mixers / scam ops"
     if score.score >= 3:

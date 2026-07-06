@@ -376,6 +376,46 @@ def test_clean_verdict_when_no_exposures() -> None:
     assert _verdict_for_score(score).startswith("CLEAN")
 
 
+def test_intl_sanctioned_is_dispositive_but_not_ofac() -> None:
+    """A non-OFAC sanctions hit (EU/UN/UK/…) is SANCTIONED-class — it must NOT
+    fall through to the numeric "HIGH-RISK — exposure to mixers or scam ops"
+    verdict — but it must NOT be worded/counted as OFAC (that would mis-route
+    the freeze letter + trigger the OFAC-only recovery multiplier)."""
+    from recupero.trace.risk_scoring import AddressExposure, _verdict_for_score
+    score = AddressRiskScore(address="0x1", score=4, exposures=[
+        AddressExposure(
+            counterparty="0xfeed", counterparty_name="EU-sanctioned wallet",
+            risk_category="intl_sanctioned", severity=4,
+            direction="outflow", tx_count=1, total_usd=Decimal("1"),
+        ),
+    ])
+    verdict = _verdict_for_score(score)
+    assert verdict.startswith("SANCTIONED")
+    assert "non-OFAC" in verdict
+    assert "OFAC SDN" not in verdict  # not routed as an OFAC designation
+    assert "mixer" not in verdict.lower()  # the pre-fix wrong wording
+
+
+def test_intl_sanctioned_summary_count_separate_from_ofac() -> None:
+    """intl_sanctioned_count is a distinct headline count; it does NOT inflate
+    ofac_exposed_count (which drives OFAC-licensed-counsel routing)."""
+    eu = "0x" + "e" * 40
+    sender = "0x" + "1" * 40
+    fake_db = {eu: HighRiskEntry(
+        address=eu, name="EU-sanctioned wallet",
+        risk_category="intl_sanctioned", severity=4,
+    )}
+    case = _mk_case([
+        _mk_transfer(from_addr=sender, to_addr=eu, usd=Decimal("50000")),
+    ])
+    section = risk_scores_to_brief_section(score_addresses(case, high_risk_db=fake_db))
+    summary = section["summary"]
+    assert summary["intl_sanctioned_count"] == 1
+    assert summary["ofac_exposed_count"] == 0
+    assert summary["mixer_exposed_count"] == 0
+    assert section["addresses"][sender]["verdict"].startswith("SANCTIONED")
+
+
 # ---- Brief section ---- #
 
 

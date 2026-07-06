@@ -194,8 +194,8 @@ graph-JSON (no new backend). Accessibility + dark mode via shadcn tokens.
 4. Unit tests for the security-critical primitives (`tests/test_platform_tenancy.py`).
 
 **Next (to reach a billable GA), in order**
-1. **Worker: honor `org_id`** — on job completion write `usage_events(kind='trace_completed')` and stamp artifacts with `org_id`; enforce `plan.retention_days` in the cleanup cron.
-2. **Billing** — `platform/billing.py`: Stripe checkout + webhook → set `organizations.plan/status/stripe_customer_id`; reset `period_start`/`trace_used_period` monthly.
+1. ✅ **DONE (`26dd413`) — Billing** — `platform/billing.py`: Stripe checkout + webhook → set `organizations.plan/status/stripe_customer_id`; reset `period_start`/`trace_used_period` monthly. Idempotency keys on `POST /v2/traces`.
+2. ✅ **DONE — Metering + retention** — `platform/retention.py` + the `platform_maintenance` cron job (09:00 UTC): reconcile `usage_events(kind='trace_completed')` from the queue's terminal state (decoupled from the worker hot path, idempotent) and purge finished investigations older than the owning org's `plan.retention_days`.
 3. **Object storage for artifacts** — case outputs to S3/GCS with per-org prefixes + signed URLs (today they're on the case dir / bucket); serve via `/v2/traces/{id}/artifacts`.
 4. **Redis** — move the in-process rate limiter (`deps._allow`) to a shared Redis token bucket (required once API runs >1 replica) and cache `resolve_api_key`.
 5. **Email verification + password reset + org invites** (memberships flow).

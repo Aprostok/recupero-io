@@ -1004,6 +1004,29 @@ def _job_promote_confirmed_wins() -> None:
     log.info("cron: confirmed-win auto-arm done — %d address(es) armed", n)
 
 
+def _job_platform_maintenance() -> None:
+    """v0.42 SaaS GA — tenant maintenance for the ``/v2`` product layer:
+    (1) meter finished traces (append ``trace_completed`` usage_events for jobs
+    the worker completed but that were never metered — decoupled from the
+    worker hot path, idempotent), and (2) enforce per-plan case retention
+    (purge finished investigations older than the owning org's plan window).
+    Both are idempotent + tenant-scoped. DSN-less → skip."""
+    dsn = _supabase_dsn()
+    if not dsn:
+        log.info("cron: platform-maintenance skipped — SUPABASE_DB_URL unset")
+        return
+    from recupero._common import db_connect
+    from recupero.platform.retention import run_maintenance
+    with db_connect(dsn) as conn:
+        summary = run_maintenance(conn)
+        conn.commit()
+    log.info(
+        "cron: platform-maintenance metered %d completed trace(s), "
+        "purged %d expired case(s)",
+        summary["metered"], summary["purged"],
+    )
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Driver
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1079,6 +1102,15 @@ def _build_default_jobs() -> list[CronJob]:
             name="confirmed_win_autoarm",
             schedule_fn=_next_daily(hour_utc=8),
             run_fn=_job_promote_confirmed_wins,
+        ),
+        CronJob(
+            # v0.42 SaaS GA — tenant maintenance for the /v2 product layer:
+            # meter finished traces (trace_completed usage_events) + enforce
+            # per-plan case retention. 09:00 UTC, after the recovery/priors
+            # jobs so the day's completions are all captured.
+            name="platform_maintenance",
+            schedule_fn=_next_daily(hour_utc=9),
+            run_fn=_job_platform_maintenance,
         ),
     ]
 

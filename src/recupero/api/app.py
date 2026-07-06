@@ -119,6 +119,14 @@ except Exception as _exc:  # noqa: BLE001
         "platform (/v2 multi-tenant) API not registered (import failed): %s", _exc,
     )
 
+# OpenTelemetry tracing — no-op unless RECUPERO_OTEL_ENABLED + the [otel] extra
+# are both present (never raises; base install carries no otel dependency).
+try:
+    from recupero.platform.tracing import init_tracing
+    init_tracing(app)
+except Exception as _exc:  # noqa: BLE001
+    log.warning("otel: init_tracing skipped (%s)", _exc)
+
 # v0.32.1 HIGH-5 — admin-gated /v1/cron/jobs endpoint. Public
 # /cron/healthz strips last_error_message; admins use this endpoint
 # to retrieve the full payload including the redacted error text.

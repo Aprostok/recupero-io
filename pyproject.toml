@@ -114,6 +114,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# argon2id password hashing (opt in via RECUPERO_PASSWORD_ARGON2 + this extra;
+# tenancy falls back to stdlib scrypt when absent, so the base install is lean).
+argon2 = ["argon2-cffi>=23.0,<24.0"]
+# OpenTelemetry tracing for the API (enable via RECUPERO_OTEL_ENABLED + this
+# extra; platform.tracing is a no-op when the packages are absent).
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
+    "opentelemetry-instrumentation-fastapi>=0.41b0",
+]
 dev = [
     "pytest>=8.0,<9.0",
     "pytest-asyncio>=0.23,<1.0",

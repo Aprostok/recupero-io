@@ -45,11 +45,16 @@ _MAX_ETHERSCAN_RPS = 50.0
 
 # Etherscan's logs/getLogs returns at most this many records per call and gives
 # NO signal when a range holds more — the extras are silently dropped. When a
-# fetch comes back at this cap we WARN so a truncated range can't masquerade as a
-# complete one (a missed dest fill = a bridge-confirmation false-negative; missed
-# Tornado withdrawals = incomplete demix leads). Proper fix (follow-up): recurse
-# by splitting the block range on a cap-hit.
+# fetch comes back at this cap the range is likely truncated (a missed dest fill
+# = a bridge-confirmation false-negative; missed Tornado withdrawals = incomplete
+# demix leads), so ``fetch_logs`` bisects the block range and re-fetches each
+# half until every sub-range returns under the cap.
 _ETHERSCAN_GETLOGS_MAX = 1000
+# Upper bound on getLogs calls a single ``fetch_logs`` may make while bisecting a
+# truncated range. Bounds cost/rate-limit blast for a pathologically dense range;
+# realistic bridge-confirmation windows (~24h) complete far under it. If the
+# budget is exhausted with sub-ranges still pending we WARN (never a silent cap).
+_ETHERSCAN_GETLOGS_PAGE_BUDGET = 128
 
 
 def _resolve_etherscan_rps() -> float:
@@ -580,21 +585,20 @@ class EvmAdapter(ChainAdapter):
                 continue
         return out
 
-    def fetch_logs(
+    def _getlogs_once(
         self,
         address: Address,
         topic0: str,
-        *,
-        from_block: int,
-        to_block: int | str = "latest",
-        topics: list[str | None] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Etherscan v2 ``eth_getLogs`` for ``address`` + ``topic0`` over a block
-        range, with optional additional indexed topic filters. Used by the
-        bridge source↔destination pairing engine to find a destination fill
-        event by its protocol order-id. Best-effort: any error / malformed body
-        yields ``[]`` (the pairing then reports "unconfirmed" rather than
-        raising).
+        from_block: int | str,
+        to_block: int | str,
+        topics: list[str | None] | None,
+    ) -> list[dict[str, Any]] | None:
+        """One Etherscan ``logs/getLogs`` call over a single block range.
+
+        Returns the list of log dicts (possibly empty), or ``None`` if the call
+        errored — the caller distinguishes "no logs here" (``[]``) from "this
+        sub-range failed" (``None``) so pagination can note incompleteness
+        rather than silently treating a failed sub-range as empty.
         """
         def _blk(b: int | str) -> str:
             # Etherscan's logs/getLogs uses DECIMAL block numbers (not hex);
@@ -625,23 +629,145 @@ class EvmAdapter(ChainAdapter):
         try:
             data = self.client._call(**params)
         except Exception as exc:  # noqa: BLE001 — pairing is best-effort
-            log.warning("fetch_logs getLogs failed for %s: %s", address, exc)
-            return []
+            log.warning(
+                "fetch_logs getLogs failed for %s over [%s..%s]: %s",
+                address or "*", from_block, to_block, exc,
+            )
+            return None
         # _call normalizes "No records found" to {"result": []}; a real error
         # raised above. result is the list of log dicts.
         result = data.get("result") if isinstance(data, dict) else None
         if not isinstance(result, list):
             return []
-        logs = [lg for lg in result if isinstance(lg, dict)]
-        if len(logs) >= _ETHERSCAN_GETLOGS_MAX:
+        return [lg for lg in result if isinstance(lg, dict)]
+
+    def _resolve_tip_block(self) -> int | None:
+        """Concrete current chain-tip block number, so a ``"latest"`` upper
+        bound can be turned into an integer we can bisect. Best-effort: any
+        failure yields ``None`` (the caller then can't paginate and warns)."""
+        try:
+            now_unix = int(datetime.now(UTC).timestamp())
+            return int(self.client.get_block_number_by_time(now_unix, closest="before"))
+        except Exception as exc:  # noqa: BLE001 — tip lookup is best-effort
+            log.warning("fetch_logs: could not resolve chain tip block: %s", exc)
+            return None
+
+    def fetch_logs(
+        self,
+        address: Address,
+        topic0: str,
+        *,
+        from_block: int,
+        to_block: int | str = "latest",
+        topics: list[str | None] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Etherscan v2 ``eth_getLogs`` for ``address`` + ``topic0`` over a block
+        range, with optional additional indexed topic filters. Used by the
+        bridge source↔destination pairing engine to find a destination fill
+        event by its protocol order-id, and by the demix / DeFi runners. Best-
+        effort: any error / malformed body yields ``[]`` (the pairing then
+        reports "unconfirmed" rather than raising).
+
+        Etherscan caps ``getLogs`` at ``_ETHERSCAN_GETLOGS_MAX`` (1000) records
+        per call and gives NO signal when a range holds more — a silent drop
+        that means a missed destination fill (bridge false-negative) or missed
+        Tornado withdrawals (incomplete demix leads). When a single call comes
+        back AT the cap, the range is likely truncated, so we bisect it by block
+        number and re-fetch each half, recursing until every sub-range returns
+        under the cap (complete) or the call budget is exhausted (warned — never
+        a silent cap). The common case — a range under the cap — is a SINGLE
+        call, identical to the un-paginated path.
+        """
+        first = self._getlogs_once(address, topic0, from_block, to_block, topics)
+        if first is None:
+            return []
+        if len(first) < _ETHERSCAN_GETLOGS_MAX:
+            # Complete in one call — the overwhelmingly common path (e.g. a
+            # bridge dest-fill lookup over a ~24h window, filtered by a unique
+            # id topic). No tip lookup, no extra calls.
+            return first
+
+        # At the cap → likely truncated. Resolve a concrete upper bound so the
+        # range can be bisected; "latest" must become a real tip block first.
+        lo = int(from_block)
+        hi = int(to_block) if isinstance(to_block, int) else self._resolve_tip_block()
+        if hi is None or lo >= hi:
+            # Can't bisect (unresolvable tip, or already a single block). Return
+            # the truncated page but make the incompleteness loud.
             log.warning(
-                "fetch_logs: getLogs returned %d results for address=%s topic0=%s "
-                "over [%s..%s] — Etherscan's per-call cap, so the range is likely "
-                "TRUNCATED and matching logs may be MISSED (bridge-confirmation "
-                "false-negative / incomplete demix leads). Narrow the block range.",
-                len(logs), address or "*", topic0[:12], from_block, to_block,
+                "fetch_logs: getLogs hit the %d-record cap for address=%s "
+                "topic0=%s over [%s..%s] and the range is NOT splittable "
+                "(single block or unresolvable tip) — results are TRUNCATED "
+                "and matching logs may be MISSED (bridge false-negative / "
+                "incomplete demix leads).",
+                _ETHERSCAN_GETLOGS_MAX, address or "*", topic0[:12],
+                from_block, to_block,
             )
-        return logs
+            return first
+        return self._fetch_logs_paginated(address, topic0, lo, hi, topics)
+
+    def _fetch_logs_paginated(
+        self,
+        address: Address,
+        topic0: str,
+        lo: int,
+        hi: int,
+        topics: list[str | None] | None,
+    ) -> list[dict[str, Any]]:
+        """Bisect ``[lo, hi]`` by block number, re-fetching each half until every
+        sub-range returns under the cap, so the full set of matching logs is
+        recovered rather than silently truncated at 1000. Bounded by a call
+        budget; deduped by ``(transactionHash, logIndex)`` (halves are disjoint,
+        so this is belt-and-suspenders). ``[lo, hi]`` is only ever entered here
+        after the caller already saw it hit the cap, so we seed the work stack
+        pre-bisected (``lo < hi`` is guaranteed by the caller) rather than
+        re-fetching the whole known-truncated range."""
+        mid0 = (lo + hi) // 2
+        out: dict[tuple[str | None, str | None], dict[str, Any]] = {}
+        stack: list[tuple[int, int]] = [(lo, mid0), (mid0 + 1, hi)]
+        calls = 0
+        unsplittable_truncation = False
+        while stack and calls < _ETHERSCAN_GETLOGS_PAGE_BUDGET:
+            a, b = stack.pop()
+            page = self._getlogs_once(address, topic0, a, b, topics)
+            calls += 1
+            if page is None:
+                # This sub-range failed. Best-effort: keep what we have from the
+                # rest but note the range is incomplete.
+                log.warning(
+                    "fetch_logs: sub-range [%d..%d] failed during pagination; "
+                    "results may be incomplete.", a, b,
+                )
+                continue
+            if len(page) >= _ETHERSCAN_GETLOGS_MAX and a < b:
+                # Still truncated and splittable — bisect. Discard this page;
+                # the two disjoint halves re-cover [a, b] completely.
+                mid = (a + b) // 2
+                stack.append((a, mid))
+                stack.append((mid + 1, b))
+                continue
+            if len(page) >= _ETHERSCAN_GETLOGS_MAX:  # a == b, can't split further
+                unsplittable_truncation = True
+            for lg in page:
+                key = (lg.get("transactionHash"), lg.get("logIndex"))
+                out[key] = lg
+
+        if stack:
+            log.warning(
+                "fetch_logs: block-range pagination hit the %d-call budget over "
+                "[%d..%d] for address=%s topic0=%s; %d sub-range(s) left "
+                "unfetched — results may be INCOMPLETE (bridge false-negative / "
+                "incomplete demix leads). Narrow the block range.",
+                _ETHERSCAN_GETLOGS_PAGE_BUDGET, lo, hi, address or "*",
+                topic0[:12], len(stack),
+            )
+        if unsplittable_truncation:
+            log.warning(
+                "fetch_logs: a single block within [%d..%d] holds >= %d logs "
+                "(unsplittable); that block's logs are TRUNCATED.",
+                lo, hi, _ETHERSCAN_GETLOGS_MAX,
+            )
+        return list(out.values())
 
     def fetch_nft_transfers_raw(
         self,

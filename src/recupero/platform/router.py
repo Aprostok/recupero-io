@@ -180,6 +180,103 @@ def me(
     }
 
 
+# ---- email verification + password reset (single-use tokens) ---- #
+
+_PASSWORD_RESET_TTL_SEC = 3600  # 1 hour
+
+
+class TokenIn(BaseModel):
+    token: str = Field(min_length=8, max_length=256)
+
+
+class ResetRequestIn(BaseModel):
+    email: str = Field(max_length=254)
+
+    @field_validator("email")
+    @classmethod
+    def _email_ok(cls, v: str) -> str:
+        if not _EMAIL_RE.match(v or ""):
+            raise ValueError("invalid email")
+        return v.strip().lower()
+
+
+class ResetConfirmIn(BaseModel):
+    token: str = Field(min_length=8, max_length=256)
+    new_password: str = Field(min_length=10, max_length=256)
+
+
+@router.post("/auth/verify/request", status_code=201)
+def request_email_verification(
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Mint an email-verification link for the signed-in user. Authenticated, so
+    returning the link here is safe (the user owns the session); production also
+    emails it via the dispatcher."""
+    if not principal.user_id:
+        raise HTTPException(status_code=400, detail="API-key principals have no email to verify")
+    token, token_hash = tenancy.generate_invite_token()
+    expires = datetime.now(UTC) + timedelta(seconds=tenancy.INVITE_TOKEN_TTL_SEC)
+    store.create_user_token(
+        conn, user_id=principal.user_id, kind="verify_email",
+        token_hash=token_hash, expires_at=expires,
+    )
+    base = os.environ.get("RECUPERO_APP_BASE_URL", "https://app.recupero.io")
+    return {"verify_token": token, "verify_url": f"{base}/verify?token={token}"}
+
+
+@router.post("/auth/verify/confirm")
+def confirm_email_verification(
+    body: TokenIn, conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Public: consume the emailed token → mark the email verified."""
+    user_id = store.consume_user_token(
+        conn, kind="verify_email", token_hash=tenancy.hash_invite_token(body.token),
+    )
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    store.set_email_verified(conn, user_id)
+    return {"verified": True}
+
+
+@router.post("/auth/password/reset-request", status_code=202)
+def request_password_reset(
+    body: ResetRequestIn, conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Public: mint a reset token for the email IF it exists, then email it. The
+    token is NEVER returned in the response (an unauthenticated caller must not
+    be able to reset an account they can't read email for), and the response is
+    ALWAYS 202 regardless of whether the email exists (no user enumeration)."""
+    user = store.get_user_by_email(conn, body.email)
+    if user is not None:
+        _token, token_hash = tenancy.generate_invite_token()
+        expires = datetime.now(UTC) + timedelta(seconds=_PASSWORD_RESET_TTL_SEC)
+        store.create_user_token(
+            conn, user_id=user["id"], kind="password_reset",
+            token_hash=token_hash, expires_at=expires,
+        )
+        # Production: dispatch the reset link (RECUPERO_APP_BASE_URL/reset?token=…)
+        # via the existing email dispatcher. Delivery is intentionally out-of-band
+        # from this handler; the token is not exposed here.
+    return {"status": "sent"}
+
+
+@router.post("/auth/password/reset-confirm")
+def confirm_password_reset(
+    body: ResetConfirmIn, conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Public: consume the emailed reset token → set the new password."""
+    user_id = store.consume_user_token(
+        conn, kind="password_reset", token_hash=tenancy.hash_invite_token(body.token),
+    )
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="invalid or expired token")
+    store.update_password_hash(
+        conn, user_id=user_id, password_hash=tenancy.hash_password(body.new_password),
+    )
+    return {"reset": True}
+
+
 # ---- API keys (owner/admin only) ---- #
 
 

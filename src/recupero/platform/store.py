@@ -54,6 +54,41 @@ def update_password_hash(conn: Any, *, user_id: str, password_hash: str) -> None
         )
 
 
+def create_user_token(
+    conn: Any, *, user_id: str, kind: str, token_hash: str, expires_at: Any,
+) -> None:
+    """Store a single-use email token (verification / password reset). Only the
+    hash is persisted — the plaintext lives in the emailed link."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.user_tokens (user_id, kind, token_hash, expires_at) "
+            "VALUES (%s, %s, %s, %s)",
+            (user_id, kind, token_hash, expires_at),
+        )
+
+
+def consume_user_token(conn: Any, *, kind: str, token_hash: str) -> str | None:
+    """Atomically consume a token: valid + unused + unexpired → mark used_at and
+    return its user_id; otherwise None. Single UPDATE, so a token works once."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.user_tokens SET used_at = now() "
+            "WHERE token_hash = %s AND kind = %s AND used_at IS NULL "
+            "AND expires_at > now() RETURNING user_id::text",
+            (token_hash, kind),
+        )
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def set_email_verified(conn: Any, user_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE public.users SET email_verified_at = now() WHERE id = %s",
+            (user_id,),
+        )
+
+
 def get_user_by_email(conn: Any, email: str) -> dict[str, Any] | None:
     with conn.cursor() as cur:
         cur.execute(
@@ -521,4 +556,6 @@ __all__ = (
     "add_membership", "list_members", "count_owners", "update_member_role",
     "remove_member", "count_pending_invites", "create_invite", "list_invites",
     "revoke_invite", "get_invite_by_token", "mark_invite_accepted",
+    "update_password_hash", "create_user_token", "consume_user_token",
+    "set_email_verified",
 )

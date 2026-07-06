@@ -13,8 +13,10 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field, field_validator
 
+from recupero.observability import metrics as obs_metrics
 from recupero.platform import audit, billing, deps, keycache, objectstore, store, tenancy
 
 router = APIRouter(prefix="/v2", tags=["platform"])
@@ -112,6 +114,7 @@ def signup(body: SignupIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
     )
     audit.record(conn, org_id=org_id, actor=user_id, action="org.created",
                  target=org_id, target_kind="org", metadata={"email": body.email})
+    obs_metrics.record_signup()
     return TokenOut(access_token=token, expires_in=ttl, org_id=org_id)
 
 
@@ -249,6 +252,17 @@ def list_org_members(
     conn: Any = Depends(deps.db_conn),
 ) -> dict[str, Any]:
     return {"members": store.list_members(conn, principal.org_id)}
+
+
+@router.get("/metrics", response_class=PlainTextResponse, include_in_schema=False)
+def prometheus_metrics() -> PlainTextResponse:
+    """Prometheus exposition for the API process (unauthenticated — restrict at
+    the network layer; contains only aggregate counts, never secrets). The
+    worker process exposes its own /metrics on the health port."""
+    return PlainTextResponse(
+        obs_metrics.metrics_endpoint_text(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @router.get("/audit")
@@ -421,6 +435,7 @@ def submit_trace(
     if not quota.allowed:
         raise HTTPException(status_code=402, detail=quota.reason)  # 402 Payment Required
 
+    obs_metrics.record_platform_request("submit_trace", org.get("plan", "unknown"))
     case_id = body.case_id or f"CASE-{uuid.uuid4().hex[:12]}"
     # Idempotent: a retry with the same Idempotency-Key replays the original job
     # (no double-enqueue, no double-metering). ``created`` is False on replay.

@@ -213,6 +213,16 @@ class _MetricsRegistry:
             "recupero_alerts_fired_total",
             "Number of monitoring alerts fired, by trigger type.",
         )
+        # SaaS /v2 API process counters (the API runs in its own process; its
+        # registry is scraped independently of the worker's).
+        self.platform_requests_total = _Counter(
+            "recupero_platform_requests_total",
+            "Number of /v2 platform requests, by endpoint and plan.",
+        )
+        self.platform_signups_total = _Counter(
+            "recupero_platform_signups_total",
+            "Number of self-serve org signups.",
+        )
         self.stage_duration = _Histogram(
             "recupero_stage_duration_seconds",
             "Time spent in each pipeline stage.",
@@ -242,6 +252,15 @@ def record_claim(outcome: str) -> None:
 def record_stage_duration(stage: str, seconds: float, outcome: str = "ok") -> None:
     METRICS.stage_runs_total.inc(stage=stage, outcome=outcome)
     METRICS.stage_duration.observe(seconds, stage=stage)
+
+
+def record_platform_request(endpoint: str, plan: str = "unknown") -> None:
+    """Count one /v2 platform request (by endpoint + org plan)."""
+    METRICS.platform_requests_total.inc(endpoint=endpoint, plan=plan)
+
+
+def record_signup() -> None:
+    METRICS.platform_signups_total.inc()
 
 
 # --- Text-format renderer ---
@@ -279,6 +298,7 @@ def metrics_endpoint_text() -> str:
     for counter in (
         METRICS.claims_total, METRICS.stage_runs_total,
         METRICS.freeze_letters_total, METRICS.alerts_fired_total,
+        METRICS.platform_requests_total, METRICS.platform_signups_total,
     ):
         snap = counter.snapshot()
         if not snap:
@@ -381,6 +401,8 @@ __all__ = (
     "METRICS",
     "record_claim",
     "record_stage_duration",
+    "record_platform_request",
+    "record_signup",
     "metrics_endpoint_text",
     "start_metrics_server",
 )

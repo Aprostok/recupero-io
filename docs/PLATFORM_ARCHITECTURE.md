@@ -197,7 +197,7 @@ graph-JSON (no new backend). Accessibility + dark mode via shadcn tokens.
 1. ✅ **DONE (`26dd413`) — Billing** — `platform/billing.py`: Stripe checkout + webhook → set `organizations.plan/status/stripe_customer_id`; reset `period_start`/`trace_used_period` monthly. Idempotency keys on `POST /v2/traces`.
 2. ✅ **DONE — Metering + retention** — `platform/retention.py` + the `platform_maintenance` cron job (09:00 UTC): reconcile `usage_events(kind='trace_completed')` from the queue's terminal state (decoupled from the worker hot path, idempotent) and purge finished investigations older than the owning org's `plan.retention_days`.
 3. **Object storage for artifacts** — case outputs to S3/GCS with per-org prefixes + signed URLs (today they're on the case dir / bucket); serve via `/v2/traces/{id}/artifacts`.
-4. **Redis** — move the in-process rate limiter (`deps._allow`) to a shared Redis token bucket (required once API runs >1 replica) and cache `resolve_api_key`.
+4. ✅ **DONE — Redis rate limiter** — `platform/ratelimit.py`: `RateLimiter` protocol with an in-process default and a shared **Redis** token bucket (atomic server-side Lua) selected by `RECUPERO_REDIS_URL`; fails open to in-process if Redis is missing/unreachable. Required once the API runs >1 replica. (Still TODO: cache `resolve_api_key` in Redis.)
 5. **Email verification + password reset + org invites** (memberships flow).
 6. **Observability** — OpenTelemetry middleware on the API, Prometheus `/metrics`, per-tenant dashboards; structured request logs with `org_id`.
 7. **Config/secrets** — `RECUPERO_PLATFORM_JWT_SECRET` (rotate; move to asymmetric ES256), `RECUPERO_DATABASE_URL`; load from a secret manager.

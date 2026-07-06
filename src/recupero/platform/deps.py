@@ -10,14 +10,13 @@ Redis/edge limiter when you run >1 API replica — see PLATFORM_ARCHITECTURE.md)
 from __future__ import annotations
 
 import os
-import threading
-import time
 from collections.abc import Iterator
 from typing import Any
 
 from fastapi import Depends, Header, HTTPException, status
 
 from recupero.platform import store, tenancy
+from recupero.platform.ratelimit import get_rate_limiter
 
 
 def _jwt_secret() -> str:
@@ -106,34 +105,17 @@ def require_role(*roles: str):
 
 
 # --------------------------------------------------------------------------- #
-# Per-org rate limiter (in-process token bucket — correct for a single replica)
+# Per-org rate limiter
 # --------------------------------------------------------------------------- #
-
-_buckets: dict[str, tuple[float, float]] = {}   # org_id -> (tokens, last_refill)
-_bucket_lock = threading.Lock()
-
-
-def _allow(org_id: str, rate_per_min: int, *, now: float | None = None) -> bool:
-    if rate_per_min <= 0:
-        return True
-    now = time.monotonic() if now is None else now
-    capacity = float(rate_per_min)
-    refill_per_sec = rate_per_min / 60.0
-    with _bucket_lock:
-        tokens, last = _buckets.get(org_id, (capacity, now))
-        tokens = min(capacity, tokens + (now - last) * refill_per_sec)
-        if tokens < 1.0:
-            _buckets[org_id] = (tokens, now)
-            return False
-        _buckets[org_id] = (tokens - 1.0, now)
-        return True
 
 
 def rate_limit(principal: store.OrgContext = Depends(current_principal)) -> store.OrgContext:
-    """Enforce the org's plan rate limit. NOTE: in-process — for multiple API
-    replicas move this to a shared Redis token bucket or the API gateway edge."""
+    """Enforce the org's plan rate limit via the process-wide limiter (in-process
+    token bucket by default; a shared Redis bucket when ``RECUPERO_REDIS_URL`` is
+    set, so the limit holds across multiple API replicas — see
+    ``platform.ratelimit``)."""
     plan = tenancy.get_plan(principal.plan)
-    if not _allow(principal.org_id, plan.rate_limit_per_min):
+    if not get_rate_limiter().allow(principal.org_id, plan.rate_limit_per_min):
         raise HTTPException(
             status_code=429,
             detail=f"rate limit exceeded ({plan.rate_limit_per_min}/min for plan '{plan.name}')",

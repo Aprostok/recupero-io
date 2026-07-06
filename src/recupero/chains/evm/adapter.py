@@ -43,6 +43,14 @@ log = logging.getLogger(__name__)
 _DEFAULT_ETHERSCAN_RPS = 4.0
 _MAX_ETHERSCAN_RPS = 50.0
 
+# Etherscan's logs/getLogs returns at most this many records per call and gives
+# NO signal when a range holds more — the extras are silently dropped. When a
+# fetch comes back at this cap we WARN so a truncated range can't masquerade as a
+# complete one (a missed dest fill = a bridge-confirmation false-negative; missed
+# Tornado withdrawals = incomplete demix leads). Proper fix (follow-up): recurse
+# by splitting the block range on a cap-hit.
+_ETHERSCAN_GETLOGS_MAX = 1000
+
 
 def _resolve_etherscan_rps() -> float:
     """Resolve the Etherscan rps from ``RECUPERO_ETHERSCAN_RPS`` (float),
@@ -624,7 +632,16 @@ class EvmAdapter(ChainAdapter):
         result = data.get("result") if isinstance(data, dict) else None
         if not isinstance(result, list):
             return []
-        return [lg for lg in result if isinstance(lg, dict)]
+        logs = [lg for lg in result if isinstance(lg, dict)]
+        if len(logs) >= _ETHERSCAN_GETLOGS_MAX:
+            log.warning(
+                "fetch_logs: getLogs returned %d results for address=%s topic0=%s "
+                "over [%s..%s] — Etherscan's per-call cap, so the range is likely "
+                "TRUNCATED and matching logs may be MISSED (bridge-confirmation "
+                "false-negative / incomplete demix leads). Narrow the block range.",
+                len(logs), address or "*", topic0[:12], from_block, to_block,
+            )
+        return logs
 
     def fetch_nft_transfers_raw(
         self,

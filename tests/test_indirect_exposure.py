@@ -415,10 +415,14 @@ def test_brief_section_shape() -> None:
     assert "weighted_amount_usd" in p
 
 
-def test_brief_section_caps_paths_per_address() -> None:
+def test_brief_section_caps_paths_per_address(caplog) -> None:
     """Each address shows at most 10 paths to keep the brief
     focused. A perpetrator interacting with many sanctioned
-    sources would otherwise produce a wall of paths."""
+    sources would otherwise produce a wall of paths. The drop
+    MUST be logged (no silent caps) — a hidden 11th path could be
+    the link proving a sanctioned funding chain."""
+    import logging
+
     # We can't easily synthesize > 10 high-risk sources, but we
     # can verify the cap by setting up 12 in the result.
     addr = "0x" + "1" * 40
@@ -435,5 +439,72 @@ def test_brief_section_caps_paths_per_address() -> None:
             path_addresses=(),
         ))
         fake_result.total_indirect_usd += Decimal(str(100 - i))
-    section = indirect_exposure_to_brief_section({addr: fake_result})
+    with caplog.at_level(logging.WARNING):
+        section = indirect_exposure_to_brief_section({addr: fake_result})
     assert len(section["addresses"][addr]["paths"]) == 10
+    # No silent cap: the 2 dropped paths are reported.
+    assert "2 lower-ranked" in caplog.text or "omitted from the brief" in caplog.text
+
+
+def test_brief_section_no_warn_at_or_below_cap(caplog) -> None:
+    """Exactly 10 paths (or fewer) → no truncation warning."""
+    import logging
+
+    from recupero.trace.indirect_exposure import IndirectPath
+    addr = "0x" + "2" * 40
+    fake_result = IndirectExposureResult(address=addr)
+    for i in range(10):
+        fake_result.paths.append(IndirectPath(
+            source_address=f"0x{i:040x}", source_name=f"S{i}",
+            risk_category="ofac_sanctioned", severity=4,
+            weighted_amount_usd=Decimal("10"), hop_count=1, path_addresses=(),
+        ))
+        fake_result.total_indirect_usd += Decimal("10")
+    with caplog.at_level(logging.WARNING):
+        indirect_exposure_to_brief_section({addr: fake_result})
+    assert "omitted from the brief" not in caplog.text
+
+
+def test_brief_section_nonfinite_total_is_skipped_not_crashed(caplog) -> None:
+    """A NaN total must NOT crash the builder. Decimal ordered comparison
+    against NaN RAISES InvalidOperation, so a NaN total reaching the
+    `< _MIN_EXPOSURE_USD` filter would take down brief generation for EVERY
+    address. The corrupt row is skipped + warned instead."""
+    import logging
+
+    from recupero.trace.indirect_exposure import IndirectPath
+    good = "0x" + "9" * 40
+    bad = "0x" + "3" * 40
+    good_result = IndirectExposureResult(address=good)
+    good_result.total_indirect_usd = Decimal("500")
+    good_result.paths.append(IndirectPath(
+        source_address="0x" + "b" * 40, source_name="Good", risk_category="ofac_x",
+        severity=4, weighted_amount_usd=Decimal("500"), hop_count=1, path_addresses=(),
+    ))
+    bad_result = IndirectExposureResult(address=bad)
+    bad_result.total_indirect_usd = Decimal("NaN")
+    with caplog.at_level(logging.WARNING):
+        section = indirect_exposure_to_brief_section({bad: bad_result, good: good_result})
+    # Builder survived; the good row is present, the NaN row is dropped + warned.
+    assert good in section["addresses"]
+    assert bad not in section["addresses"]
+    assert "non-finite total" in caplog.text
+
+
+def test_brief_section_nonfinite_path_amount_renders_safely() -> None:
+    """A finite total but a single poisoned path amount → the path renders
+    "$0.00", never "$nan", in a court-facing brief."""
+    from recupero.trace.indirect_exposure import IndirectPath
+    addr = "0x" + "4" * 40
+    fake_result = IndirectExposureResult(address=addr)
+    fake_result.total_indirect_usd = Decimal("1000")
+    fake_result.paths.append(IndirectPath(
+        source_address="0x" + "a" * 40, source_name="Src",
+        risk_category="ofac_sanctioned", severity=4,
+        weighted_amount_usd=Decimal("Infinity"), hop_count=1, path_addresses=(),
+    ))
+    section = indirect_exposure_to_brief_section({addr: fake_result})
+    entry = section["addresses"][addr]
+    assert entry["total_indirect_usd"] == "$1,000.00"
+    assert entry["paths"][0]["weighted_amount_usd"] == "$0.00"
+    assert "nan" not in entry["paths"][0]["weighted_amount_usd"].lower()

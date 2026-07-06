@@ -108,6 +108,13 @@ _DEFAULT_DECAY_FACTOR = 0.5
 #: deeper explodes graph compute time + introduces noise.
 _DEFAULT_MAX_HOPS = 3
 
+#: The brief surfaces at most this many indirect-exposure paths per address
+#: (ranked by weighted USD). The full set stays on the IndirectExposureResult;
+#: this only bounds what the brief renders. When an address has MORE than this,
+#: the drop is logged (no silent caps) so a truncated exposure chain can't
+#: masquerade as complete in a court-facing brief.
+_MAX_BRIEF_PATHS_PER_ADDRESS = 10
+
 #: Minimum USD floor for a weighted exposure to count. Anything
 #: below $1 weighted is noise and gets dropped to keep the brief
 #: focused. Independent of trace dust_threshold_usd.
@@ -302,6 +309,18 @@ def indirect_exposure_to_brief_section(
     highest_indirect_address: str | None = None
 
     for addr, result in results.items():
+        # A non-finite total (poisoned NaN/Inf) must be handled BEFORE the
+        # `< _MIN_EXPOSURE_USD` compare: Decimal ordered comparison against NaN
+        # RAISES InvalidOperation (it does not return False), which would crash
+        # the whole brief builder. Skip the corrupt row + warn rather than emit
+        # a "$nan" figure or take down brief generation for every address.
+        if not result.total_indirect_usd.is_finite():
+            log.warning(
+                "indirect exposure: address %s has a non-finite total "
+                "(%s); skipping it from the brief.",
+                addr, result.total_indirect_usd,
+            )
+            continue
         if result.total_indirect_usd < _MIN_EXPOSURE_USD:
             continue
         total_addresses_with_indirect += 1
@@ -311,7 +330,20 @@ def indirect_exposure_to_brief_section(
         if result.total_indirect_usd > highest_indirect:
             highest_indirect = result.total_indirect_usd
             highest_indirect_address = addr
+        # No silent caps: the brief renders only the top-N paths, so warn when
+        # lower-ranked ones are dropped (a hidden path could be the link that
+        # proves a sanctioned funding chain). The full set stays on `result`.
+        if len(result.paths) > _MAX_BRIEF_PATHS_PER_ADDRESS:
+            log.warning(
+                "indirect exposure: address %s has %d exposure paths; the brief "
+                "surfaces only the top %d by weighted USD — %d lower-ranked "
+                "path(s) omitted from the brief (full set retained on the "
+                "IndirectExposureResult).",
+                addr, len(result.paths), _MAX_BRIEF_PATHS_PER_ADDRESS,
+                len(result.paths) - _MAX_BRIEF_PATHS_PER_ADDRESS,
+            )
         addresses_payload[addr] = {
+            # total is guaranteed finite here (non-finite rows are skipped above).
             "total_indirect_usd": f"${result.total_indirect_usd:,.2f}",
             "paths": [
                 {
@@ -319,11 +351,17 @@ def indirect_exposure_to_brief_section(
                     "source_name": p.source_name,
                     "risk_category": p.risk_category,
                     "severity": p.severity,
-                    "weighted_amount_usd": f"${p.weighted_amount_usd:,.2f}",
+                    # A single path's weighted amount can independently be
+                    # non-finite; guard it so a poisoned leg renders "$0.00"
+                    # rather than "$nan" in a court-facing brief.
+                    "weighted_amount_usd": (
+                        f"${p.weighted_amount_usd:,.2f}"
+                        if p.weighted_amount_usd.is_finite() else "$0.00"
+                    ),
                     "hop_count": p.hop_count,
                     "path_addresses": list(p.path_addresses),
                 }
-                for p in result.paths[:10]  # top 10 paths per address
+                for p in result.paths[:_MAX_BRIEF_PATHS_PER_ADDRESS]
             ],
         }
 

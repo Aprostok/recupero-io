@@ -110,6 +110,12 @@ ALLOWED: dict[tuple[str, str], str] = {
     ("api/app.py", "_intake_rl_state"):
         "best-effort rate limiter, documented at the declaration site",
 
+    # api/app.py: short-lived SSE stream-token map (token -> (inv, expiry)),
+    # minted by POST /stream-token so EventSource never carries the admin key
+    # in the URL. Every read/insert/expire/evict is under _STREAM_TOKENS_LOCK.
+    ("api/app.py", "_STREAM_TOKENS"):
+        "lock-guarded by _STREAM_TOKENS_LOCK",
+
     # worker/monitor_tick.py: per-tick adapter cache.
     # Single-threaded by lifetime: created + cleared inside a single
     # `run_monitor_tick()` invocation by `_reset_adapter_cache()`. The
@@ -346,9 +352,13 @@ def test_lock_guarded_modules_actually_declare_a_lock():
         # Pull the lock identifier out of the rationale.
         assert "by" in rationale, rationale
         lock_name = rationale.split("by", 1)[1].strip().split()[0]
+        # Accept both the bare `threading.Lock()` and an aliased import
+        # (e.g. api/app.py does `import threading as _threading`).
         assert (
             f"{lock_name} = threading.Lock()" in text
             or f"{lock_name}: threading.Lock = threading.Lock()" in text
+            or f"{lock_name} = _threading.Lock()" in text
+            or f"{lock_name}: threading.Lock = _threading.Lock()" in text
         ), (
             f"{rel_path}:{symbol} claims lock-guard by {lock_name!r} but "
             f"no `threading.Lock()` declaration of that name was found "

@@ -16,6 +16,8 @@ now``. Data shapes verified live against toncenter.com.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import contextlib
 import logging
 import os
@@ -36,6 +38,22 @@ log = logging.getLogger(__name__)
 _TON_PAGE_SIZE = 100
 _DEFAULT_MAX_TRANSFERS_PER_ADDRESS = 50_000
 _HARD_PAGE_CEILING = 5_000  # runaway backstop (5_000 x 100 = 500k rows).
+
+
+def _tx_hash_to_hex(tx_hash: str) -> str:
+    """TON's ``transaction_id.hash`` is standard base64 (contains '/', '+', '='),
+    which is unsafe in a URL path. Decode it to the canonical 64-char hex form
+    (URL-safe; resolves on tonviewer/tonapi). Falls back to the raw value if it
+    isn't valid 32-byte base64 (e.g. it's already hex) so the link degrades to
+    the input rather than crashing."""
+    if isinstance(tx_hash, str) and tx_hash:
+        try:
+            raw = base64.b64decode(tx_hash, validate=True)
+        except (binascii.Error, ValueError):
+            return tx_hash
+        if len(raw) == 32:
+            return raw.hex()
+    return tx_hash
 
 
 def _resolve_ton_max_pages() -> int:
@@ -390,7 +408,12 @@ class TonAdapter(ChainAdapter):
         )
 
     def explorer_tx_url(self, tx_hash: str) -> str:
-        return f"{_TONVIEWER_TX}{tx_hash}"
+        # TON's transaction_id.hash is standard base64 (alphabet A-Za-z0-9+/); a
+        # raw '/' would SPLIT the URL path → a broken LE-verification link for
+        # ~half of TON txs. Emit the canonical 64-char HEX form instead, which is
+        # URL-safe and resolves on tonviewer / tonapi (verified live: hex,
+        # base64url, and percent-encoded base64 all resolve; hex is the cleanest).
+        return f"{_TONVIEWER_TX}{_tx_hash_to_hex(tx_hash)}"
 
     def explorer_address_url(self, address: Address) -> str:
         try:

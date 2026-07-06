@@ -123,3 +123,24 @@ def test_jetton_budget_warning(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         ad._paginate_jetton("EQowner", _A)
     assert "INCOMPLETE" in caplog.text
+
+
+# --------------------------------------------------------------------------- #
+# explorer URL: base64 tx hash → URL-safe canonical hex (raw '/' broke the link)
+# --------------------------------------------------------------------------- #
+def test_explorer_tx_url_converts_base64_hash_to_hex():
+    import base64 as _b64
+
+    from recupero.chains.ton.adapter import _tx_hash_to_hex
+
+    ad = TonAdapter()
+    b64 = "VTqWb5pG+IktEzRFvnkH6SNP+nh5bU5SSvUiLoEE9m8="   # real-shaped, has '+' '/'
+    expected_hex = _b64.b64decode(b64).hex()
+    url = ad.explorer_tx_url(b64)
+    assert url == f"https://tonviewer.com/transaction/{expected_hex}"
+    assert "/" not in url.split("/transaction/", 1)[1]     # no path-splitting
+    assert "+" not in url and "=" not in url
+    # helper is idempotent on already-hex input (fallback path)
+    assert _tx_hash_to_hex(expected_hex) == expected_hex
+    # non-decodable junk falls back to the raw value (no crash)
+    assert _tx_hash_to_hex("not-base64-or-hex!!") == "not-base64-or-hex!!"

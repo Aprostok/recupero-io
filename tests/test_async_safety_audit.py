@@ -45,6 +45,14 @@ ALLOWED_ASYNC_MODULES = {
     # no requests/time.sleep/psycopg/urlopen (see BLOCKING_SYNC_CALLS). Opt-in
     # operator command, never auto-run.
     "monitoring/mempool_watch.py",
+    # SaaS /v2 live trace status (SSE). stream_trace_status + its nested async
+    # generator _events are the only async defs in platform/router.py (every
+    # other /v2 handler is sync). AUDITED non-blocking: the generator only awaits
+    # asyncio.to_thread(_poll_trace_status) — the DB read runs OFF the event loop
+    # in a threadpool — and asyncio.sleep; no requests/time.sleep/psycopg.connect
+    # is called directly in an async body (see BLOCKING_SYNC_CALLS). Bounded ticks
+    # + fresh per-tick connection so no connection is pinned for the stream.
+    "platform/router.py",
 }
 
 # Sync calls that block the event loop if invoked from an async def.
@@ -137,8 +145,13 @@ def test_async_count_matches_baseline(parsed):
     # single connect→subscribe→read cycle extracted from run_mempool_watch for the
     # reconnect loop. Same audited-non-blocking shape (await ws.send / `async for`
     # + json.loads + pure classifier); same already-allowed module.
-    assert total == 34, (
-        f"async def count drifted to {total} (was 34). Update baseline and "
+    # SaaS /v2 SSE (finish-everything wave): +2 in platform/router.py —
+    # stream_trace_status + its nested async generator _events (live trace
+    # status). AUDITED non-blocking: awaits asyncio.to_thread(_poll_trace_status)
+    # (DB read off the loop) + asyncio.sleep; no banned direct calls. See the
+    # ALLOWED_ASYNC_MODULES entry + test_no_blocking_io_inside_async_def.
+    assert total == 36, (
+        f"async def count drifted to {total} (was 36). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

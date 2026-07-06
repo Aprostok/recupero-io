@@ -164,9 +164,12 @@ keep the scaffold minimal; see `web/README.md`. A **trace-detail page** (`/dashb
 status while the trace is running and offers presigned artifact downloads
 (brief / transfers / trace report / exhibit pack). The remaining fuller target
 (shadcn/TanStack polish; a D3 flow graph — needs a `/v2` graph-data endpoint
-first; SSE live status — needs an async streaming endpoint, deliberately not
-added because it would expand the locked async-safety surface, polling covers
-it meanwhile) is the next layer on this working base.
+first; SSE live status — ✅ now shipped: `GET /v2/traces/{id}/stream` is an async
+Server-Sent-Events endpoint (JWT via `?token=` since EventSource can't set
+headers; polls the status off the event loop via `asyncio.to_thread` with a
+fresh short-lived connection per tick, emits on change until terminal; the
+async-safety audit allowlist + baseline were updated deliberately with an
+audited-non-blocking justification) is the next layer on this working base.
 
 **Stack (target):** Next.js (App Router) + TypeScript + Tailwind + shadcn/ui +
 TanStack Query, deployed to Vercel/Cloudflare. Talks only to `/v2`.

@@ -6,6 +6,7 @@ worker queue (never runs the long trace inline).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import re
 import uuid
@@ -13,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from recupero.observability import metrics as obs_metrics
@@ -679,6 +680,66 @@ def list_traces(
     conn: Any = Depends(deps.db_conn),
 ) -> dict[str, Any]:
     return {"traces": store.list_traces(conn, org_id=principal.org_id, limit=limit)}
+
+
+# ---- live trace status (Server-Sent Events) ---- #
+
+_SSE_INTERVAL_SEC = 3.0
+_SSE_MAX_TICKS = 100  # ~5 min ceiling; the browser EventSource auto-reconnects
+_TERMINAL_TRACE = ("complete", "failed")
+
+
+def _poll_trace_status(org_id: str, investigation_id: str) -> dict[str, Any] | None:
+    """One SSE tick's DB read — SYNC + short-lived (run via asyncio.to_thread so
+    it never blocks the event loop). A fresh connection per poll means no DB
+    connection is held for the stream's lifetime."""
+    import psycopg
+
+    dsn = os.environ.get("RECUPERO_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not dsn:
+        return None
+    with psycopg.connect(dsn) as conn:
+        return store.get_trace_status(
+            conn, org_id=org_id, investigation_id=investigation_id,
+        )
+
+
+@router.get("/traces/{investigation_id}/stream")
+async def stream_trace_status(
+    investigation_id: str, token: str,
+) -> StreamingResponse:
+    """Server-Sent Events live status for a trace. Auth is via a ``?token=`` query
+    param (a `/v2` session JWT) because a browser ``EventSource`` cannot set the
+    Authorization header. Emits the status on change every few seconds until a
+    terminal status or a bounded tick ceiling; opens a fresh short-lived DB
+    connection per tick OFF the event loop (``asyncio.to_thread``), so no
+    connection is pinned for the stream and the loop never blocks."""
+    try:
+        claims = tenancy.verify_jwt(token, secret=deps._jwt_secret())
+    except tenancy.TokenError as exc:
+        raise HTTPException(status_code=401, detail=f"invalid token: {exc}") from exc
+    org_id = str(claims.get("org"))
+
+    async def _events() -> Any:
+        import json as _json
+
+        last: str | None = None
+        for _ in range(_SSE_MAX_TICKS):
+            row = await asyncio.to_thread(_poll_trace_status, org_id, investigation_id)
+            if row is None:
+                yield 'event: error\ndata: {"detail": "trace not found"}\n\n'
+                return
+            status = str(row.get("status"))
+            if status != last:
+                yield "data: " + _json.dumps(
+                    {"status": status, "investigation_id": investigation_id},
+                ) + "\n\n"
+                last = status
+            if status in _TERMINAL_TRACE:
+                return
+            await asyncio.sleep(_SSE_INTERVAL_SEC)
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
 
 
 @router.get("/traces/{investigation_id}/artifacts/{name}")

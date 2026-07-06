@@ -36,11 +36,14 @@ def _validate_tx_hash_for_filename(tx_hash: str) -> str:
     """Reject tx_hashes that would write outside the evidence directory
     or produce ambiguous filenames.
 
-    Legitimate tx_hashes are hex (EVM, ``0x``-prefixed) or base58
-    (Solana / Bitcoin txid) — never contain ``/``, ``\\``, ``..``, null
-    bytes, or Windows reserved device names. Anything else is a
-    fingerprint of malformed adapter output, stale-cache replay of a
-    hostile case, or an outright traversal attempt.
+    Legitimate tx_hashes are hex (EVM, ``0x``-prefixed), base58 (Solana / Sui /
+    Bitcoin txid), or base64 (TON ``transaction_id.hash``). Traversal shapes
+    (``..``, backslash, null bytes, control chars, Windows reserved names) are
+    rejected. A base64 forward-slash is SANITIZED to ``_`` for the filename (it is
+    not a traversal vector on its own) rather than rejected — otherwise ~half of
+    TON evidence receipts would be dropped. The real tx_hash is preserved verbatim
+    inside the receipt JSON for explorer verification. Returns the sanitized,
+    filesystem-safe filename token.
     """
     if not isinstance(tx_hash, str):
         raise ValueError(
@@ -59,30 +62,40 @@ def _validate_tx_hash_for_filename(tx_hash: str) -> str:
     # (grep, logs, downstream LE handoff text fields).
     if any(ord(c) < 0x20 or ord(c) == 0x7F for c in tx_hash):
         raise ValueError("tx_hash contains a control character — invalid")
-    # Path separators or traversal segments. We check the raw string
-    # so we catch ``..`` even when it's not at a boundary; legitimate
-    # hex / base58 sigs cannot contain ``.``.
-    if "/" in tx_hash or "\\" in tx_hash:
+    # Backslash is the Windows path separator and never appears in a legitimate
+    # tx hash (hex / base58 / base64) — reject it (traversal defense).
+    if "\\" in tx_hash:
         raise ValueError(
-            f"tx_hash contains a path separator — invalid (traversal? got {tx_hash!r})"
+            f"tx_hash contains a backslash — invalid (traversal? got {tx_hash!r})"
         )
+    # Traversal segments. Checked on the raw string so we catch ``..`` anywhere;
+    # legitimate hex / base58 / base64 tx hashes never contain ``.``.
     if ".." in tx_hash:
         raise ValueError(
             f"tx_hash contains traversal segment '..' — invalid (got {tx_hash!r})"
         )
+    # A FORWARD slash appears in legitimate base64 tx hashes (TON's
+    # transaction_id.hash is base64, alphabet A-Za-z0-9+/). On its own it is NOT a
+    # traversal vector: ``..`` and backslash are rejected above, and the caller
+    # re-verifies the resolved path stays inside evidence_dir. So we map it to a
+    # filesystem-safe token instead of DROPPING valid TON evidence (~half of TON
+    # hashes contain '/'). base64/hex/base58 never contain '_', so this rename is
+    # deterministic and collision-free; the true tx_hash is preserved in the
+    # receipt JSON.
+    safe = tx_hash.replace("/", "_")
     # Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
     # cannot be used as filenames even with an extension. Belt-and-
-    # suspenders on a name we will write as ``{tx_hash}.json``.
+    # suspenders on a name we will write as ``{safe}.json``.
     _windows_reserved = {
         "CON", "PRN", "AUX", "NUL",
         *(f"COM{i}" for i in range(1, 10)),
         *(f"LPT{i}" for i in range(1, 10)),
     }
-    if tx_hash.upper() in _windows_reserved:
+    if safe.upper() in _windows_reserved:
         raise ValueError(
             f"tx_hash matches Windows reserved device name — invalid (got {tx_hash!r})"
         )
-    return tx_hash
+    return safe
 
 
 def write_evidence_receipt(adapter: ChainAdapter, tx_hash: str, evidence_dir: Path) -> Path:

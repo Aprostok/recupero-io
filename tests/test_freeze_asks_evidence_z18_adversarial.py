@@ -238,16 +238,42 @@ def test_write_evidence_receipt_rejects_backslash_in_tx_hash() -> None:
             write_evidence_receipt(_StubAdapter(), "..\\..\\escape", ev)
 
 
-def test_write_evidence_receipt_rejects_forward_slash_in_tx_hash() -> None:
-    """A tx_hash containing a forward slash is on its face invalid —
-    legitimate chain tx_hashes are hex or base58 with no separators.
-    Reject early so the resulting file lands deterministically in
-    evidence_dir.
+def test_write_evidence_receipt_sanitizes_forward_slash_to_flat_filename() -> None:
+    """A forward slash appears in legitimate base64 tx hashes (TON's
+    transaction_id.hash). On its own it is NOT a traversal vector (``..`` and
+    backslash are still rejected, and containment is re-verified), so it is
+    SANITIZED to ``_`` and the receipt is written FLAT inside evidence_dir —
+    never dropped, never escaping. Pre-fix this raised and ~half of TON evidence
+    receipts were lost.
     """
     with tempfile.TemporaryDirectory() as td:
         ev = Path(td) / "evidence"
-        with pytest.raises(ValueError, match="(traversal|invalid|tx_hash|separator|reserved)"):
-            write_evidence_receipt(_StubAdapter(), "abc/def", ev)
+        out = write_evidence_receipt(_StubAdapter(), "abc/def", ev)
+        assert out == ev / "abc_def.json"
+        assert out.exists()
+        assert out.resolve().parent == ev.resolve()  # stayed inside evidence_dir
+
+
+def test_write_evidence_receipt_ton_base64_hash_persists() -> None:
+    """A real-shaped TON base64 hash (contains '/', '+', '=') persists rather
+    than being rejected — the concrete bug the sanitization fixes."""
+    with tempfile.TemporaryDirectory() as td:
+        ev = Path(td) / "evidence"
+        ton_hash = "PYhAIaaa/kYNwK2v5tM50AB3N938MWdXeoXu4YXUMXE="
+        out = write_evidence_receipt(_StubAdapter(), ton_hash, ev)
+        assert out.exists()
+        assert "/" not in out.name
+        assert out.resolve().parent == ev.resolve()
+
+
+def test_write_evidence_receipt_slash_hash_cannot_escape_evidence_dir() -> None:
+    """The containment guarantee holds even for a hostile slash-laden tx_hash
+    (no ``..``): it writes a FLAT file INSIDE evidence_dir, never /etc/passwd."""
+    with tempfile.TemporaryDirectory() as td:
+        ev = Path(td) / "evidence"
+        out = write_evidence_receipt(_StubAdapter(), "etc/passwd", ev)
+        assert out.name == "etc_passwd.json"
+        assert out.resolve().parent == ev.resolve()
 
 
 def test_write_evidence_receipt_rejects_null_byte_in_tx_hash() -> None:

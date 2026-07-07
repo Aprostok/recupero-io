@@ -394,3 +394,43 @@ def test_address_observation_is_frozen_dataclass() -> None:
     import pytest
     with pytest.raises(dataclasses.FrozenInstanceError):
         obs.address = "0xdef"  # type: ignore[misc]
+
+
+# ---- no silent caps: observation-cap observability ---- #
+
+
+def test_observation_cap_warns_once(monkeypatch, caplog) -> None:
+    """No silent caps: when the per-case observation budget is hit, further
+    addresses are dropped from the cross-case correlation index — a later case
+    would then falsely show 'no prior history'. That drop must be warned once."""
+    import logging
+
+    import recupero.trace.correlation as corr
+
+    monkeypatch.setattr(corr, "_MAX_OBSERVATIONS_PER_CASE", 3)
+    seed = "0x" + "a" * 40
+    transfers = [
+        _mk_transfer(
+            from_addr=seed, to_addr=f"0x{i:040x}",
+            tx_hash="0x" + str(i).zfill(64),
+        )
+        for i in range(1, 9)  # 8 distinct destinations >> the patched cap of 3
+    ]
+    case = _mk_case(transfers, seed=seed)
+    with caplog.at_level(logging.WARNING):
+        obs = build_observations(case, case_id=uuid4())
+    assert len(obs) == 3  # capped
+    assert caplog.text.count("_MAX_OBSERVATIONS_PER_CASE cap") == 1  # warned once
+
+
+def test_observation_cap_no_warn_under_budget(caplog) -> None:
+    """A small case well under the cap emits no truncation warning."""
+    import logging
+
+    seed = "0x" + "a" * 40
+    case = _mk_case(
+        [_mk_transfer(from_addr=seed, to_addr="0x" + "b" * 40)], seed=seed,
+    )
+    with caplog.at_level(logging.WARNING):
+        build_observations(case, case_id=uuid4())
+    assert "_MAX_OBSERVATIONS_PER_CASE cap" not in caplog.text

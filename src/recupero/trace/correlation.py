@@ -228,6 +228,7 @@ def build_observations(
 
     observations: list[AddressObservation] = []
     seen_role_per_addr: set[tuple[str, str]] = set()  # dedupe (addr, role)
+    cap_warned: list[bool] = []  # warn-once sentinel for the observation cap
 
     def _emit(addr: str, role: str, label_cat: str | None = None,
               label_name: str | None = None) -> None:
@@ -238,6 +239,20 @@ def build_observations(
         if key in seen_role_per_addr:
             return
         if len(observations) >= _MAX_OBSERVATIONS_PER_CASE:
+            # No silent caps: further addresses are NOT recorded to the
+            # cross-case correlation index, so a LATER case querying one of the
+            # dropped addresses would falsely show "no prior history" — the exact
+            # compounding-moat capability this module exists for. Warn once.
+            if not cap_warned:
+                cap_warned.append(True)
+                log.warning(
+                    "correlation: reached the _MAX_OBSERVATIONS_PER_CASE cap "
+                    "(%d) for case %s — further addresses are NOT recorded to "
+                    "the cross-case correlation index, so later cases may show "
+                    "'no prior history' for addresses this case actually "
+                    "touched. Raise the cap for full cross-case coverage.",
+                    _MAX_OBSERVATIONS_PER_CASE, case_id,
+                )
             return
         seen_role_per_addr.add(key)
 

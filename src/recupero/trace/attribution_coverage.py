@@ -24,12 +24,15 @@ Returns ``None`` on an empty / valueless case.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from decimal import Decimal
 from typing import Any
 
 from recupero._common import canonical_address_key as _ck
 from recupero.models import Case
+
+log = logging.getLogger(__name__)
 
 
 def _usd(amount: Decimal) -> str:
@@ -120,6 +123,17 @@ def compute_attribution_coverage(
     total_addrs = len(inbound_count)
     # Highest-value unlabeled counterparties = the prioritized labeling targets.
     unlabeled.sort(key=lambda x: (-x[1], -x[2]))
+    # No silent caps: the targets list is trimmed to the top top_n, but these ARE
+    # the addresses worth an operator's research time — so if we drop any, say how
+    # many (the headline already carries the true total, but the targets section
+    # itself must not read as the complete worklist).
+    if len(unlabeled) > max(0, top_n):
+        log.warning(
+            "attribution_coverage: %d unlabeled counterparties; the labeling-"
+            "targets list surfaces only the top %d by traced inflow — %d "
+            "lower-value target(s) omitted. Raise top_n to research more.",
+            len(unlabeled), max(0, top_n), len(unlabeled) - max(0, top_n),
+        )
     targets = [
         {
             "address": addr,

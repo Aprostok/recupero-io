@@ -103,3 +103,26 @@ def test_provenance_shape_flags_probabilistic():
     assert prov["pool"] == "100 ETH"
     assert prov["leads"][0]["confidence"] == "low"
     assert "not proof" in prov["note"].lower()
+
+
+def test_demix_cap_warns_when_leads_dropped(caplog):
+    """No silent caps: dropping scored leads at max_leads is warned — a lower-
+    ranked lead can still be the true withdrawal, and the reviewer must know the
+    list was trimmed."""
+    import logging
+    dep = _dep(gas=50)
+    wds = [_wd(f"0xw{i}", mins=i + 1, gas=50) for i in range(7)]  # 7 gas-matches
+    with caplog.at_level(logging.WARNING):
+        leads = demix_candidates(dep, wds)
+    assert len(leads) == 5  # DEFAULT_MAX_LEADS
+    assert "lower-ranked lead" in caplog.text
+
+
+def test_demix_cap_no_warn_under_max(caplog):
+    import logging
+    dep = _dep(gas=50)
+    wds = [_wd(f"0xw{i}", mins=i + 1, gas=50) for i in range(3)]
+    with caplog.at_level(logging.WARNING):
+        leads = demix_candidates(dep, wds)
+    assert len(leads) == 3
+    assert "lower-ranked lead" not in caplog.text

@@ -28,11 +28,14 @@ that it is a CEX, precisely so the perp's hub is never mislabeled.
 from __future__ import annotations
 
 import contextlib
+import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Literal
 
 from recupero._common import canonical_address_key as _ck
+
+log = logging.getLogger(__name__)
 
 __all__ = [
     "EndpointDiversity",
@@ -241,12 +244,23 @@ def infer_infrastructure_endpoints(
         chain_by_key.setdefault(key, tchain)
 
     # Rank by inflow, keep those above the floor + on the adapter's chain.
-    ranked = sorted(
+    qualified = sorted(
         (k for k in inflow if inflow[k] >= min_inflow_usd
          and chain_by_key.get(k) == adapter_chain),
         key=lambda k: inflow[k],
         reverse=True,
-    )[:max_probe]
+    )
+    # No silent caps: only the top max_probe qualifying endpoints are probed for
+    # infrastructure classification; the rest stay "unlabeled" in the brief. Warn
+    # when we drop any so the coverage gap isn't invisible.
+    if len(qualified) > max_probe:
+        log.warning(
+            "infer_infrastructure_endpoints: %d endpoints qualify for probing; "
+            "probing only the top %d by inflow — %d lower-inflow endpoint(s) "
+            "left unprobed (still 'unlabeled'). Raise max_probe to cover more.",
+            len(qualified), max_probe, len(qualified) - max_probe,
+        )
+    ranked = qualified[:max_probe]
 
     out: list[dict[str, Any]] = []
     for key in ranked:

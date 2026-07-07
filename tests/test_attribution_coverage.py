@@ -125,3 +125,24 @@ def test_full_coverage_when_all_labeled() -> None:
     out = compute_attribution_coverage(case, _store(), high_risk_db=_db())
     assert out["coverage_pct_by_value"] == 100.0
     assert out["labeling_targets"] == []
+
+
+def test_labeling_targets_cap_warns_when_dropped(caplog) -> None:
+    """No silent caps: the labeling-targets list is trimmed to top_n, but these
+    are the addresses worth research time — dropping any is warned."""
+    import logging
+    unl = [f"0x{i:040x}" for i in range(1, 6)]  # 5 unlabeled > top_n=2
+    case = _case([_t(a, "1000", str(i)) for i, a in enumerate(unl, 1)])
+    with caplog.at_level(logging.WARNING):
+        out = compute_attribution_coverage(case, _store(), top_n=2)
+    assert out is not None
+    assert len(out["labeling_targets"]) == 2
+    assert "lower-value target" in caplog.text
+
+
+def test_labeling_targets_no_warn_under_top_n(caplog) -> None:
+    import logging
+    case = _case([_t(UNL1, "1000", "d"), _t(UNL2, "500", "e")])
+    with caplog.at_level(logging.WARNING):
+        compute_attribution_coverage(case, _store(), top_n=10)
+    assert "lower-value target" not in caplog.text

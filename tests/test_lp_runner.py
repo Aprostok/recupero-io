@@ -202,3 +202,23 @@ def test_leads_to_json_artifact_shape() -> None:
     assert doc["lead_count"] == 1
     assert "never a followed destination" in doc["disclaimer"]
     assert "protocol identity" in doc["disclaimer"]
+
+
+def test_lp_park_cap_warns_when_reached(caplog) -> None:
+    """No silent caps: reaching the park cap stops querying further LP
+    positions — must WARN, not INFO."""
+    import logging
+    transfers = [_transfer(_NPM, tx=f"0x{i}") for i in range(30)]  # > _MAX_PARKS
+    with caplog.at_level(logging.WARNING):
+        parks = find_lp_parks(transfers)
+    assert len(parks) == 25  # _MAX_PARKS
+    assert "park cap" in caplog.text
+
+
+def test_lp_park_cap_no_warn_under_limit(caplog) -> None:
+    import logging
+    transfers = [_transfer(_NPM, tx=f"0x{i}") for i in range(5)]
+    with caplog.at_level(logging.WARNING):
+        parks = find_lp_parks(transfers)
+    assert len(parks) == 5
+    assert "park cap" not in caplog.text

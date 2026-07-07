@@ -109,7 +109,15 @@ def find_lp_parks(
         seen.add(key)
         out.append({"parker": frm, "tx_hash": txh, "chain": chain, "npm": npm})
         if len(out) >= _MAX_PARKS:
-            log.info("lp-leads: park cap (%d) reached", _MAX_PARKS)
+            # No silent caps: WARN (not INFO). Once the cap bites, further LP
+            # positions for this case are NOT queried, so LP exits from them may
+            # be missed — a reviewer must know the fan-out was bounded.
+            log.warning(
+                "lp-leads: reached the park cap (%d) — additional LP positions "
+                "in this case are NOT being queried, so later LP exits may be "
+                "missed. Raise _MAX_PARKS to cover more.",
+                _MAX_PARKS,
+            )
             break
     return out
 

@@ -104,8 +104,17 @@ def collect_nft_flows(
             log.warning("nft-flows: fetch failed wallet=%s: %s", wallet, exc)
             continue
         if max_rows_per_wallet and len(rows) > max_rows_per_wallet:
-            log.info("nft-flows: wallet %s has %d NFT rows — keeping first %d",
-                     wallet, len(rows), max_rows_per_wallet)
+            # No silent caps: WARN (not INFO — INFO is routinely filtered and the
+            # truncation would never surface to a case reviewer). A launderer who
+            # exits via many NFT sales can exceed this, so the dropped rows may
+            # include the exits to fresh wallets.
+            log.warning(
+                "nft-flows: wallet %s has %d NFT rows — keeping only the first "
+                "%d; %d row(s) dropped from the case NFT history (raise "
+                "max_rows_per_wallet or query the wallet directly).",
+                wallet, len(rows), max_rows_per_wallet,
+                len(rows) - max_rows_per_wallet,
+            )
             rows = rows[:max_rows_per_wallet]
         for r in rows:
             key = (r.tx_hash, r.contract_address, r.token_id,

@@ -116,3 +116,29 @@ def test_flows_to_json_artifact_shape() -> None:
     assert doc["flow_count"] == 1
     assert "OBSERVATIONS only" in doc["disclaimer"]
     assert "not followed" in doc["disclaimer"]
+
+
+def test_nft_row_cap_warns_when_rows_dropped(caplog) -> None:
+    """No silent caps: exceeding max_rows_per_wallet drops NFT rows (possibly
+    exits to fresh wallets) — must WARN, not INFO."""
+    import logging
+    rows = [_row(frm=_W1, to=_OTHER, h=f"0x{i}") for i in range(4)]
+    adapter = _StubAdapter({_W1: rows})
+    with caplog.at_level(logging.WARNING):
+        collect_nft_flows(
+            transfers=[_transfer(_W1)], adapter=adapter, chain="ethereum",
+            force=True, max_rows_per_wallet=2,
+        )
+    assert "dropped from the case NFT history" in caplog.text
+
+
+def test_nft_row_cap_no_warn_under_limit(caplog) -> None:
+    import logging
+    rows = [_row(frm=_W1, to=_OTHER, h=f"0x{i}") for i in range(2)]
+    adapter = _StubAdapter({_W1: rows})
+    with caplog.at_level(logging.WARNING):
+        collect_nft_flows(
+            transfers=[_transfer(_W1)], adapter=adapter, chain="ethereum",
+            force=True, max_rows_per_wallet=10,
+        )
+    assert "dropped from the case NFT history" not in caplog.text

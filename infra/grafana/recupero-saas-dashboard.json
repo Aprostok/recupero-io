@@ -1,0 +1,95 @@
+{
+  "__comment": "Recupero SaaS dashboard. Import into Grafana (Dashboards → Import → paste JSON) with a Prometheus datasource that scrapes the API /v2/metrics and the worker health-port /metrics. Panels use the counters exposed by observability/metrics.py + the platform counters (b4340c3).",
+  "title": "Recupero — SaaS platform",
+  "uid": "recupero-saas",
+  "schemaVersion": 39,
+  "editable": true,
+  "tags": ["recupero", "saas"],
+  "time": { "from": "now-6h", "to": "now" },
+  "refresh": "30s",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Trace submissions / min (by plan)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(recupero_platform_requests_total{endpoint=\"submit_trace\"}[5m])) by (plan) * 60",
+          "legendFormat": "{{plan}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Signups (cumulative)",
+      "type": "stat",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "targets": [{ "expr": "sum(recupero_platform_signups_total)", "legendFormat": "signups" }]
+    },
+    {
+      "id": 3,
+      "title": "Investigations claimed / min (by outcome)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(recupero_claims_total[5m])) by (outcome) * 60",
+          "legendFormat": "{{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Stage duration p95 (s, by stage)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(recupero_stage_duration_seconds_bucket[10m])) by (le, stage))",
+          "legendFormat": "{{stage}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Freeze letters dispatched / h (by issuer)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "sum(increase(recupero_freeze_letters_sent_total[1h])) by (issuer)",
+          "legendFormat": "{{issuer}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Monitoring alerts fired / h (by trigger)",
+      "type": "timeseries",
+      "datasource": "${datasource}",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "sum(increase(recupero_alerts_fired_total[1h])) by (trigger_type)",
+          "legendFormat": "{{trigger_type}}"
+        }
+      ]
+    }
+  ]
+}

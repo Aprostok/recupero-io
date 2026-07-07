@@ -46,12 +46,34 @@ export default function TraceDetailPage() {
     load();
   }, [load]);
 
-  // Poll while the trace is still running.
+  // Live updates while the trace is running: prefer SSE (GET /v2/traces/{id}/
+  // stream), fall back to polling if EventSource errors or is unavailable.
   useEffect(() => {
-    if (!trace || !ACTIVE.has(trace.status)) return;
+    if (!token || !id || !trace || !ACTIVE.has(trace.status)) return;
+
+    if (typeof EventSource !== "undefined") {
+      const es = new EventSource(api.streamUrl(id, token));
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data);
+          if (data.status) {
+            setTrace((prev) => (prev ? { ...prev, status: data.status } : prev));
+            if (!ACTIVE.has(data.status)) {
+              es.close();
+              load(); // refresh full detail (timestamps) on terminal status
+            }
+          }
+        } catch {
+          /* ignore keep-alive / malformed frames */
+        }
+      };
+      es.onerror = () => es.close(); // fall through to the poll below
+      return () => es.close();
+    }
+
     const t = setInterval(load, 4000);
     return () => clearInterval(t);
-  }, [trace, load]);
+  }, [token, id, trace, load]);
 
   async function download(name: string) {
     if (!token || !id) return;
@@ -130,6 +152,9 @@ export default function TraceDetailPage() {
               </p>
             ) : (
               <div className="row">
+                <button onClick={() => download("interactive_graph.html")}>
+                  Fund-flow graph
+                </button>
                 {ARTIFACTS.map((a) => (
                   <button key={a.name} className="ghost" onClick={() => download(a.name)}>
                     {a.label}

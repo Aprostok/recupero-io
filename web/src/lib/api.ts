@@ -294,4 +294,9 @@ export const api = {
       `/v2/traces/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(name)}`,
       { token },
     ),
+
+  // SSE endpoint URL for live trace status. EventSource can't set headers, so
+  // the session token rides as a query param (matches the server's /stream).
+  streamUrl: (id: string, token: string) =>
+    `${BASE_URL}/v2/traces/${encodeURIComponent(id)}/stream?token=${encodeURIComponent(token)}`,
 };

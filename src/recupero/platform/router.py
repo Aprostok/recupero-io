@@ -7,6 +7,7 @@ worker queue (never runs the long trace inline).
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import uuid
@@ -28,6 +29,8 @@ from recupero.platform import (
     store,
     tenancy,
 )
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/v2", tags=["platform"],
@@ -788,6 +791,61 @@ def trace_artifact_url(
         raise HTTPException(status_code=501, detail="artifact storage not configured")
     url, ttl = signed
     return {"artifact": name, "url": url, "expires_in": ttl}
+
+
+# ---- fund-flow graph (JSON, for the web dashboard's D3 view) ---- #
+
+
+def _build_graph_payload(investigation_id: str, case_id: str | None) -> dict[str, Any]:
+    """Load the case and build the JSON fund-flow graph via the engine's
+    ``reports.graph_ui.build_graph_data`` (the exact ``{nodes, edges, meta}`` the
+    engine embeds in ``interactive_graph.html``). The case is read from the
+    Supabase bucket when ``RECUPERO_CASE_STORE=supabase`` (keyed by the
+    investigation UUID) else the local case store (keyed by ``case_id``).
+
+    Raises ``OSError`` / ``ValueError`` when the case can't be read (trace still
+    running, no artifacts yet, or a malformed id) — the caller maps these to 404.
+    """
+    from recupero.api import _supabase_case_source
+    from recupero.reports.graph_ui import build_graph_data
+
+    if _supabase_case_source.enabled():
+        case = _supabase_case_source.read_case(investigation_id)
+    else:
+        from recupero.config import load_config
+        from recupero.storage.case_store import CaseStore
+        cfg, _ = load_config()
+        case = CaseStore(cfg).read_case(case_id or investigation_id)
+    return build_graph_data(case)
+
+
+@router.get("/traces/{investigation_id}/graph")
+def trace_graph(
+    investigation_id: str,
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Fund-flow graph for a trace as JSON (``{nodes, edges, meta}``) — the same
+    data the engine embeds in ``interactive_graph.html``, served same-origin so
+    the web dashboard can render it with D3 directly (no S3 CORS, no HTML iframe).
+    The trace must belong to the caller's org; 404 until the case artifacts
+    exist (i.e. the trace has completed)."""
+    row = store.get_trace_status(
+        conn, org_id=principal.org_id, investigation_id=investigation_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    try:
+        return _build_graph_payload(investigation_id, row.get("case_id"))
+    except (OSError, ValueError):
+        # case.json not present yet (running / no artifacts) or a malformed id —
+        # a single "not available" to the caller (no state leak).
+        raise HTTPException(
+            status_code=404, detail="graph not available for this trace yet",
+        ) from None
+    except Exception as exc:  # noqa: BLE001 — any build blowup → 503, never 500
+        log.warning("graph build failed for %s: %s", investigation_id, exc)
+        raise HTTPException(status_code=503, detail="graph unavailable") from None
 
 
 __all__ = ("router",)

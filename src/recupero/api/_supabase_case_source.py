@@ -164,4 +164,17 @@ def read_artifact(case_id: str, relpath: str) -> bytes:
         store.close()
 
 
-__all__ = ("enabled", "list_artifacts", "list_cases", "read_artifact")
+def read_case(case_id: str):  # noqa: ANN201 — returns recupero.models.Case
+    """Load one Supabase-backed case (``case.json``) as a ``models.Case``.
+
+    Raises ``ValueError`` on a non-UUID id (store construction) and ``OSError`` /
+    a download/parse error when ``case.json`` is missing or malformed — the /v2
+    graph endpoint maps both to a 404 (graph not available)."""
+    store = _store(case_id)  # raises ValueError on a non-UUID case_id
+    try:
+        return store.read_case()
+    finally:
+        store.close()
+
+
+__all__ = ("enabled", "list_artifacts", "list_cases", "read_artifact", "read_case")

@@ -292,23 +292,20 @@ def test_tron_keyed_bridge_db_has_coverage() -> None:
     )
 
 
-def test_wormhole_eth_side_recipient_chain_18_decodes_to_tron() -> None:
-    """The EVM-side Wormhole → Tron handoff IS decodable today.
-    Verifies v0.17.5 round-10 forensic CRIT — recipientChain=18 in a
-    Wormhole transferTokens call must produce a base58check Tron
-    address (NOT a 0x-hex form the Tron adapter would reject)."""
+def test_wormhole_recipient_chain_18_is_terra2_never_fabricated_tron() -> None:
+    """Audit 2026-06 (H1): Wormhole chain 18 is Terra2, NOT Tron — Wormhole
+    has never bridged tokens to Tron. The prior code base58check-encoded the
+    exact blob below (trailing byte[11]==0x41) into a real-looking-but-WRONG
+    Tron T-address that the continuation BFS then traced. The destination must
+    decode as terra2 with NO fabricated address."""
     from recupero.trace.bridge_calldata import decode_bridge_calldata
 
-    # Construct a synthetic Wormhole transferTokens calldata blob
-    # with recipientChain=18 (Tron) and a 21-byte Tron payload
-    # (prefix 0x41 + 20 address bytes) right-padded into bytes32.
     method_id = "0f5287b0"
     token = "0" * 24 + "a" * 40
     amount = "0" * 62 + "01"
-    chain_id_slot = "0" * 60 + "0012"  # 0x12 = 18 = Wormhole's Tron
-    # 21-byte Tron payload — first byte 0x41 + 20 random hex bytes,
-    # right-padded into a bytes32 slot (= last 42 hex chars of the slot).
-    tron_payload = "41" + "ab" * 20  # 21 bytes = 42 hex
+    chain_id_slot = "0" * 60 + "0012"  # 0x12 = 18 = Wormhole Terra2 (was mis-mapped to Tron)
+    # The exact blob that used to fabricate a T-address (0x41 + 20 bytes).
+    tron_payload = "41" + "ab" * 20
     recipient_slot = "0" * (64 - 42) + tron_payload
     arbiter = "0" * 64
     nonce = "0" * 64
@@ -321,16 +318,11 @@ def test_wormhole_eth_side_recipient_chain_18_decodes_to_tron() -> None:
         bridge_protocol="Wormhole", input_data=calldata,
     )
     assert out is not None
-    assert out.destination_chain == "tron"
+    assert out.destination_chain == "terra2"
     assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
-    # Tron base58check addresses start with 'T'. Verifies that the
-    # 21-byte payload + 4-byte sha256d checksum encoder produced a
-    # canonical-shape b58check string, not a 0x-hex form.
-    assert out.destination_address is not None
-    assert out.destination_address.startswith("T")
-    # Length is the b58check envelope; Tron mainnet addresses are
-    # 34 characters regardless of payload entropy.
-    assert len(out.destination_address) == 34
+    assert out.destination_address is None, (
+        "Wormhole chain 18 (Terra2) must never be encoded as a Tron T-address"
+    )
 
 
 def test_handoffs_are_sorted_by_usd_descending_for_tron_chain() -> None:

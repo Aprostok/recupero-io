@@ -83,6 +83,23 @@ def test_serve_html_artifact_inline(tmp_path, monkeypatch) -> None:
     assert res.headers["content-type"].startswith("text/html")
     assert "LE HANDOFF MARKER" in res.text
     assert res.headers.get("x-content-type-options") == "nosniff"
+    # Inline HTML must render in a unique opaque origin — never the admin
+    # console's origin (a planted/un-escaped artifact could otherwise read
+    # the operator's admin key). allow-scripts keeps interactive trace
+    # reports working; the sandbox denies same-origin storage/cookies.
+    assert res.headers.get("content-security-policy") == "sandbox allow-scripts"
+
+
+def test_serve_svg_artifact_sandboxed(tmp_path, monkeypatch) -> None:
+    client = _seed(tmp_path, monkeypatch)
+    case_dir = tmp_path / "cases" / _CASE_ID
+    (case_dir / "flow.svg").write_text(
+        "<svg xmlns='http://www.w3.org/2000/svg'></svg>", encoding="utf-8")
+    res = client.get(f"/v1/cases/{_CASE_ID}/artifact",
+                     params={"path": "flow.svg"}, headers=_AUTH)
+    assert res.status_code == 200
+    assert res.headers["content-type"].startswith("image/svg")
+    assert res.headers.get("content-security-policy") == "sandbox allow-scripts"
 
 
 def test_serve_json_and_binary(tmp_path, monkeypatch) -> None:

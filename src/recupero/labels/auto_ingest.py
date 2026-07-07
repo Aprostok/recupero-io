@@ -73,6 +73,10 @@ _VALID_CHAINS = frozenset({
     "moonbeam", "polygon_zkevm", "metis", "kava",
     # v0.32.1 W5 (round-2 wire-up): additional rollup-canonical L2s
     "opbnb", "manta", "zksync",
+    # M2: TON — the auto-ingest tonapi source already emits ton candidates, but
+    # the promote validator rejected them on the chain allow-list. Added so a
+    # reviewed TON exchange wallet can be promoted.
+    "ton",
 })
 
 # Category enum allow-list. Anything else is rejected pre-write.
@@ -111,6 +115,11 @@ _SOLANA_BASE58_ADDR_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
 _BITCOIN_ADDR_RE = re.compile(
     r"^(?:[13][a-km-zA-HJ-NP-Z1-9]{25,34}|bc1[ac-hj-np-z02-9]{8,87})$"
 )
+# M2: TON addresses — raw form ``<workchain>:<64 hex>`` (workchain is a small
+# signed int, in practice 0 or -1) OR the user-friendly 48-char base64url form
+# (URL-safe alphabet, may end in '=' padding).
+_TON_RAW_ADDR_RE = re.compile(r"^-?\d{1,10}:[0-9a-fA-F]{64}$")
+_TON_FRIENDLY_ADDR_RE = re.compile(r"^[A-Za-z0-9_-]{48}=*$")
 # Source must be a short, lowercase, dotted/underscored identifier.
 # Reject any whitespace, quotes, semicolons, shell metachars.
 _VALID_SOURCE_RE = re.compile(r"^[a-z0-9][a-z0-9_.\-:]{0,63}$")
@@ -167,6 +176,17 @@ def _validate_promote_fields(row: dict[str, Any]) -> None:
         if not _BITCOIN_ADDR_RE.match(address):
             raise ValueError(
                 f"address {address!r} is not a valid Bitcoin address"
+            )
+    elif chain == "ton":
+        # M2: accept either the raw (workchain:hex64) or the friendly
+        # (48-char base64url) TON address form.
+        if not (
+            _TON_RAW_ADDR_RE.match(address)
+            or _TON_FRIENDLY_ADDR_RE.match(address)
+        ):
+            raise ValueError(
+                f"address {address!r} is not a valid TON address "
+                "(expected raw '<workchain>:<64 hex>' or 48-char base64url)"
             )
 
     # 3) Category enum allow-list.
@@ -470,6 +490,21 @@ def _safe_http_get_json(url: str, *, source_name: str) -> Any:
             source_name, type(exc).__name__, exc,
         )
         return None
+
+
+def _defillama_address_ok(address: str) -> bool:
+    """M6: a DeFiLlama ``protocol.address`` is the protocol's GOVERNANCE / TOKEN
+    contract, and is frequently formatted ``"<chain>:0x…"`` (chain-prefixed) or
+    is a plain token contract — NOT the bridge / CEX hot-wallet we want to
+    label. Reject a chain-prefixed value outright; otherwise require a clean
+    bare EVM address. This stops mis-labeling a protocol's token contract as a
+    bridge/exchange wallet (which would then mis-route freeze logic)."""
+    if not isinstance(address, str) or not address:
+        return False
+    if ":" in address:
+        # "ethereum:0x..." — a chain-tagged token contract, never a bare wallet.
+        return False
+    return bool(_EVM_HEX_ADDR_RE.match(address))
 
 
 def fetch_candidate_bridges() -> list[CandidateLabel]:
@@ -935,8 +970,15 @@ def persist_candidates(
     Returns the number of NEW rows actually inserted (i.e., not the
     input length — duplicates are subtracted).
 
-    The daily-cap clamp is applied AFTER de-duplication so already-
-    reviewed rows don't waste the budget.
+    The daily-cap counts INSERTED (post-dedup) rows, NOT submitted ones.
+
+    H4 (starvation fix): the pre-fix code clamped the INPUT list to the cap
+    (``candidates[:cap]``) BEFORE the ON CONFLICT dedup, so on every day after
+    the first the same already-persisted duplicates filled the whole budget and
+    fresh sources further down the list (TON / OSS / ScamSniffer / MEW) were
+    NEVER reached. We now walk ALL candidates and stop only once ``cap`` NEW
+    rows have actually been inserted — matching the docstring ("daily-cap clamp
+    is applied AFTER de-duplication").
     """
     if daily_cap is None:
         daily_cap = _daily_cap()
@@ -945,23 +987,15 @@ def persist_candidates(
     if not candidates:
         return 0
 
-    # Apply daily cap. Order-preserving so re-runs drop the same tail.
-    capped = candidates[:daily_cap]
-    if len(candidates) > daily_cap:
-        log.warning(
-            "label auto-ingest: %d candidates exceeds daily cap %d — "
-            "dropping %d",
-            len(candidates), daily_cap, len(candidates) - daily_cap,
-        )
-
     if not dsn:
         log.info(
             "label auto-ingest: SUPABASE_DB_URL unset — would have "
-            "persisted %d candidates (local-dev no-op)", len(capped),
+            "considered %d candidates (local-dev no-op)", len(candidates),
         )
         return 0
 
     inserted = 0
+    attempted = 0
     sql = """
     INSERT INTO public.label_candidates (
         address, chain, proposed_category, proposed_name,
@@ -974,7 +1008,18 @@ def persist_candidates(
     try:
         from recupero._common import db_connect
         with db_connect(dsn) as conn, conn.cursor() as cur:
-            for c in capped:
+            for c in candidates:
+                # Stop once the cap of NEW (inserted) rows is reached — a
+                # duplicate does not consume the budget, so the same dupes can
+                # no longer starve fresh sources further down the list.
+                if inserted >= daily_cap:
+                    log.warning(
+                        "label auto-ingest: hit daily cap of %d NEW rows after "
+                        "%d attempts — %d candidate(s) not considered this run",
+                        daily_cap, attempted, len(candidates) - attempted,
+                    )
+                    break
+                attempted += 1
                 cur.execute(sql, (
                     c.address, c.chain, c.proposed_category, c.proposed_name,
                     c.proposed_confidence, c.source, c.source_url,
@@ -992,8 +1037,8 @@ def persist_candidates(
 
     log.info(
         "label auto-ingest: persisted %d new candidates "
-        "(of %d submitted, %d were duplicates)",
-        inserted, len(capped), len(capped) - inserted,
+        "(of %d considered, %d were duplicates)",
+        inserted, attempted, attempted - inserted,
     )
     return inserted
 
@@ -1139,10 +1184,14 @@ def promote_candidate(
             candidate_id, reviewer, row.get("proposed_category"),
         )
     elif not gate_enabled:
-        log.debug(
+        # M1: audible WARN (was debug). A single-source promote of a
+        # high-impact label is a real poisoning surface; it must be visible in
+        # production logs, not swallowed at debug level.
+        log.warning(
             "multi-source gate not enabled (RECUPERO_MULTI_SOURCE_CONFIRM "
-            "unset); proceeding with single-source promote. SET THIS IN "
-            "PRODUCTION."
+            "unset); proceeding with single-source promote of candidate=%s "
+            "category=%s. SET THIS IN PRODUCTION.",
+            candidate_id, row.get("proposed_category"),
         )
     else:
         try:

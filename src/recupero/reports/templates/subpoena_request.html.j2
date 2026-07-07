@@ -77,8 +77,8 @@ commanded to produce the following:</p>
   <li>
     <strong>Customer account identification</strong> for the customer
     account or accounts associated with the following digital-asset
-    deposit address:
-    <p class="mono">{{ perpetrator.deposit_address }}</p>
+    deposit address(es):
+    {% if perpetrator.deposit_addresses %}{% for addr in perpetrator.deposit_addresses %}<p class="mono">{{ addr }}</p>{% endfor %}{% else %}<p class="mono">{{ perpetrator.deposit_address }}</p>{% endif %}
     including the customer's full legal name, all known aliases,
     date of birth, taxpayer identification number (where collected),
     primary and secondary residence and mailing addresses, primary

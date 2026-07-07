@@ -255,7 +255,22 @@ def _build_editorial() -> dict:
                 "Candidate for seizure if perpetrator identified."
             ),
         },
-        "UNRECOVERABLE_ITEMS": [],
+        # Document the non-freezable Sky/DAI position with a reason so the
+        # subpoena_targets_cover_non_freezable invariant (v0.41-audit H4) is
+        # satisfied. issuer+address match the per-issuer holding so the
+        # TOTAL_UNRECOVERABLE_USD rollup de-dups it (v0.41-audit H3).
+        "UNRECOVERABLE_ITEMS": [
+            {
+                "asset": "$655,751.45 DAI (Sky Protocol) at the perpetrator hub",
+                "reason": (
+                    "Sky Protocol DAI is permissionless with no issuer-level "
+                    "freeze pathway; recoverable only via seizure if the "
+                    "perpetrator is identified."
+                ),
+                "issuer": "Sky Protocol",
+                "address": PERP_HUB,
+            }
+        ],
         "IC3_CASE_ID": None,
         "INVESTIGATOR_NAME": "Test Investigator",
         "INVESTIGATOR_EMAIL": "investigator@test.com",

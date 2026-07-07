@@ -85,7 +85,9 @@ def _build_celer_send_native_calldata(
     sendNative(address receiver, uint256 amount,
                uint64 dstChainId, uint64 nonce, uint32 maxSlippage)
     """
-    method_id = "e957bf91"
+    # keccak("sendNative(address,uint256,uint64,uint64,uint32)")[:4]=0x3f2e5fc3
+    # (real selector; prior 0xe957bf91 was wrong — audit 2026-06 H5).
+    method_id = "3f2e5fc3"
     head = (
         _pad_address(receiver)              # [0..32]    receiver
         + _pad_uint(amount, 1)              # [32..64]   amount

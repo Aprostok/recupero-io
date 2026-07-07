@@ -69,3 +69,14 @@ jacob_postvalidator_artifacts.zip
 .coverage.*
 htmlcov/
 tmp/
+
+# Console design-system round scripts + one-off encoding/scratch checks
+# (operator-local tooling — the "per-round fix_rNN.py" console workflow).
+/fix_*.py
+/enc_check*
+/non_ascii_check.txt
+/tx_lookup.json
+
+# Root-level pytest run logs (operator-local; the suite is the source of truth)
+/pytest_*.log
+/test_r*.log

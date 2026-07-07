@@ -11,9 +11,53 @@ into the brief assembly in a follow-up.
 
 from __future__ import annotations
 
+import pytest
+
 from recupero.trace.bridge_calldata import (
     decode_bridge_calldata,
 )
+
+# ---- Selector-derivation guard (audit 2026-06) ----
+# The audit found that every selector pinned only by a synthetic
+# self-consistent test was WRONG, while every one verified against a real
+# tx fixture was correct. This guard recomputes each selector table entry
+# from its documented function signature via keccak and fails if a future
+# edit reintroduces a plausible-but-wrong 4-byte selector.
+
+# method_id -> exact function signature string (no spaces).
+_SELECTOR_SIGNATURES = {
+    "0x0f5287b0": "transferTokens(address,uint256,uint16,bytes32,uint256,uint32)",
+    "0xc5a5ebda": "transferTokensWithPayload(address,uint256,uint16,bytes32,uint32,bytes)",
+    "0x8aac16ba": "xcall(uint32,address,address,address,uint256,uint256,bytes)",
+    "0x3f2e5fc3": "sendNative(address,uint256,uint64,uint64,uint32)",
+    "0xa5977fbb": "send(address,address,uint256,uint64,uint64,uint32)",
+    "0x2637a450": "send((uint32,bytes32,bytes,bytes,bool),address)",
+    "0xedbdf5e2": "anySwapOutUnderlying(address,address,uint256,uint256)",
+    "0x241dc2df": "anySwapOut(address,address,uint256,uint256)",
+    "0x9fbf10fc": "swap(uint16,uint256,uint256,address,uint256,uint256,(uint256,uint256,bytes),bytes,bytes)",
+    "0x1114cd2a": "swapETH(uint16,address,bytes,uint256,uint256)",
+}
+
+
+def test_bridge_selectors_match_their_documented_signatures() -> None:
+    keccak = pytest.importorskip("eth_utils").keccak
+    for selector, sig in _SELECTOR_SIGNATURES.items():
+        derived = "0x" + keccak(text=sig).hex()[:8]
+        assert derived == selector, (
+            f"selector {selector} does not derive from {sig!r} "
+            f"(got {derived}) — a wrong 4-byte selector means the decoder "
+            f"never fires on real calldata"
+        )
+
+
+def test_wormhole_chain_id_map_has_no_tron_or_bitcoin() -> None:
+    """Wormhole has no Tron/Bitcoin token-bridge; chain 18=Terra2, 21=Sui."""
+    from recupero.trace.bridge_calldata import _WORMHOLE_CHAIN_IDS
+    assert "tron" not in _WORMHOLE_CHAIN_IDS.values()
+    assert "bitcoin" not in _WORMHOLE_CHAIN_IDS.values()
+    assert _WORMHOLE_CHAIN_IDS[18] == "terra2"
+    assert _WORMHOLE_CHAIN_IDS[21] == "sui"
+
 
 # ---- Empty / malformed input ---- #
 
@@ -304,42 +348,39 @@ def test_raw_calldata_excerpt_included() -> None:
 # rule (high only when chain known AND a trusted address parsed).
 
 
-def test_wormhole_tron_valid_0x41_payload_is_medium_confidence() -> None:
-    """A well-formed Tron recipient (21-byte payload, 0x41 version byte,
-    left-padded in the bytes32) decodes to a base58check T-address. v0.36:
-    a calldata-decoded destination is 'medium' (decoded intent, not observed
-    receipt) — 'high' is reserved for cryptographic cross-chain-id confirmation
-    or a direct label hit."""
-    payload_hex = "41" + "aa" * 20           # 0x41 + 20 addr bytes = 21 bytes
-    recipient = "0" * 22 + payload_hex        # left-pad to 32 bytes (64 hex)
+def test_wormhole_chain_18_is_terra2_not_tron() -> None:
+    """Audit 2026-06 (H1): Wormhole chain 18 is Terra2, NOT Tron — Wormhole
+    has never supported Tron as a token-bridge destination. The prior mapping
+    base58check-encoded any bytes32 whose trailing byte[11] was 0x41 into a
+    syntactically-valid-but-WRONG Tron T-address (~1/256 of Terra2 transfers)
+    that the continuation BFS then traced. The recipient must NEVER surface as
+    a Tron address; Terra2 has no EVM-decodable recipient, so no address is
+    emitted and confidence stays medium (chain known, address untrusted)."""
+    payload_hex = "41" + "aa" * 20           # the exact blob that used to fabricate a T-address
+    recipient = "0" * 22 + payload_hex
     assert len(recipient) == 64
     calldata = _build_wormhole_transfer_calldata(
         recipient_chain=18, recipient_bytes32=recipient,
     )
     out = decode_bridge_calldata(bridge_protocol="Wormhole", input_data=calldata)
     assert out is not None
-    assert out.destination_chain == "tron"
-    assert out.destination_address is not None
-    assert out.destination_address.startswith("T")  # base58check Tron form
-    assert out.confidence == "medium"  # v0.36: calldata decode is never 'high'
+    assert out.destination_chain == "terra2"
+    assert out.destination_address is None, (
+        "Wormhole chain 18 (Terra2) must not be decoded into a Tron T-address"
+    )
+    assert out.confidence == "medium"
 
 
-def test_wormhole_tron_without_0x41_prefix_is_not_fabricated() -> None:
-    """A bytes32 whose trailing 21 bytes do NOT start with the Tron 0x41
-    version byte (garbage / right-padded EVM blob) must NOT emit a
-    fabricated T-address — drop to no address + medium confidence."""
-    payload_hex = "ff" + "aa" * 20            # wrong version byte
-    recipient = "0" * 22 + payload_hex
+def test_wormhole_chain_21_is_sui_not_bitcoin() -> None:
+    """Audit 2026-06 (H1): Wormhole chain 21 is Sui, NOT Bitcoin. The prior
+    map reported every Wormhole->Sui transfer as a Bitcoin destination."""
+    recipient = "0" * 24 + "bb" * 20
     calldata = _build_wormhole_transfer_calldata(
-        recipient_chain=18, recipient_bytes32=recipient,
+        recipient_chain=21, recipient_bytes32=recipient,
     )
     out = decode_bridge_calldata(bridge_protocol="Wormhole", input_data=calldata)
     assert out is not None
-    assert out.destination_chain == "tron"
-    assert out.destination_address is None, (
-        "must not base58check-encode a non-0x41 payload into a confident "
-        "but WRONG Tron address"
-    )
+    assert out.destination_chain == "sui"
     assert out.confidence == "medium"
 
 

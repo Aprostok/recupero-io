@@ -1441,7 +1441,15 @@ _BURN_ADDRESSES: dict[str, str] = {
 # are ALWAYS kept regardless of volume — a $5 bridge handoff is still
 # the most actionable row in the table.
 _SECTION_5_USD_INCLUSION_FLOOR_DEFAULT = Decimal("100")
-_SECTION_5_HOP_DEPTH_FLOOR = 1
+# v0.41-audit H1: the tracer seeds the victim at hop_depth 0 and every
+# transfer leaving the victim (the drain to the perpetrator hub) carries
+# hop_depth=0 — NOT 1. A floor of 1 caused two defects once the
+# victim-outflow guard was fixed: (a) genuine 2nd-hop addresses (hop 1)
+# were mislabeled "Direct counterparty of victim", and (b) the
+# highest-inflow perp-hub promotion / auto-note could attach to a hop-1
+# address. Pin the floor to 0 so "direct counterparty of the victim"
+# means exactly that — a hop-0 recipient of the victim's own outflow.
+_SECTION_5_HOP_DEPTH_FLOOR = 0
 # Hard cap on unlabeled rows to keep the section skimmable; everything
 # beyond appears as a single "+N more counterparties (truncated)" line
 # with a pointer to the full CSV (investigator_findings.csv).
@@ -1603,8 +1611,14 @@ def _build_identified_wallets(
     current_holder_key = _ck(current_holder)
     for c in [primary, *linked]:
         for t in c.transfers:
-            if _ck(t.from_address) == victim_key:
-                continue  # victim already added
+            # v0.41-audit H1: the guard previously skipped OUTFLOWS from
+            # the victim (`from_address == victim_key`) — i.e. the drain
+            # to the perpetrator hub, the single most important row in
+            # this table. The victim row itself is added once above; what
+            # we must skip here are INFLOWS *to* the victim (refunds,
+            # dust), not the victim's outbound drain. Skip on to_address.
+            if _ck(t.to_address) == victim_key:
+                continue  # transfer back to the victim — not a destination
             cp_label = t.counterparty.label
             addr_lower = t.to_address.lower() if isinstance(t.to_address, str) else t.to_address
             # Burn-address shortcut (F6.1).

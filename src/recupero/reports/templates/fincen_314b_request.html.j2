@@ -71,9 +71,12 @@ of the misappropriated funds, conducted using on-chain analysis
 methods producing chain-of-custody-preserved evidence, established
 that <strong>{{ perpetrator.total_received_usd }}</strong> of the
 stolen proceeds were deposited at {{ perpetrator.exchange_name }}
-at the following address:
+at the following address(es):
 </p>
-<p class="mono">{{ perpetrator.deposit_address }}</p>
+{% if perpetrator.deposit_addresses %}
+{% for addr in perpetrator.deposit_addresses %}<p class="mono">{{ addr }}</p>
+{% endfor %}
+{% else %}<p class="mono">{{ perpetrator.deposit_address }}</p>{% endif %}
 
 <p>
 The transfers giving rise to this request are summarized below.

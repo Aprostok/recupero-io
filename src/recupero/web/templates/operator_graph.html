@@ -1003,12 +1003,17 @@ function initGraph(DATA, viewId) {
     for(const ne of (data.edges||[])){ const k=ek(ne); const e=ex.get(k); if(e){ e.totalUsdNumeric=(e.totalUsdNumeric||0)+(ne.totalUsdNumeric||0); e.transferCount=(e.transferCount||0)+(ne.transferCount||0); } else { DATA.edges.push(ne); ex.set(k,ne); edgeAdds++; } }
     if(added||edgeAdds){ document.getElementById("meta-stat").textContent = DATA.nodes.length+" nodes - "+DATA.edges.length+" edges (live)"; rebuild(true); }
   }
-  function connectLiveStream(){
+  async function connectLiveStream(){
     if(typeof EventSource==="undefined")return;
     try{
-      const es=new EventSource(API+"/stream?key="+encodeURIComponent(adminKey()));
+      // Never put the long-lived admin key in a URL (proxy logs / Referer).
+      // Mint a short-lived stream token over a header-authenticated POST.
+      const r=await fetch(API+"/stream-token",{method:"POST",headers:{"X-Recupero-Admin-Key":adminKey()}});
+      if(!r.ok)return;
+      const tok=(await r.json()).token;
+      const es=new EventSource(API+"/stream?token="+encodeURIComponent(tok));
       es.onmessage=(e)=>{ try{ const ev=JSON.parse(e.data); if(ev&&ev.type==="delta") mergeLiveDelta(ev); }catch(_){} };
-      es.onerror=()=>{ /* EventSource auto-reconnects; nothing to do */ };
+      es.onerror=()=>{ /* token may have expired — drop and reconnect with a fresh one */ es.close(); setTimeout(connectLiveStream,5000); };
     }catch(e){}
   }
 

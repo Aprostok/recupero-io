@@ -35,7 +35,7 @@ def test_decoder_survives_giant_calldata_blob() -> None:
     """A 1MB calldata payload (e.g., a router with a massive
     callData bytes arg) must not OOM or hang — decoders read a
     bounded prefix only."""
-    method_id = "4ff746f6"
+    method_id = "8aac16ba"
     # 1MB of zeros as args
     giant = "0" * (1024 * 1024 * 2)
     out = decode_bridge_calldata(
@@ -52,7 +52,7 @@ def test_decoder_rejects_non_hex_in_args() -> None:
     paste from a docs page) must NOT raise — the int(args_blob, 16)
     paths are wrapped in ValueError handlers but the dispatcher
     itself must not crash before those handlers fire."""
-    method_id = "4ff746f6"
+    method_id = "8aac16ba"
     # Embed 'z' (non-hex) inside otherwise-valid args
     bad = ("z" + "0" * 63) + "0" * 64 * 6  # 7 slots total
     out = decode_bridge_calldata(
@@ -69,7 +69,7 @@ def test_decoder_handles_uppercase_hex() -> None:
     mixed-case checksum addresses in the input field on some endpoints.
     The decoder lowercases data internally; must produce the same
     result regardless of input casing."""
-    method_id = "4ff746f6"
+    method_id = "8aac16ba"
     payload = ("0" * 56 + "00657768")  # domain 6648936 (Ethereum)
     payload += "0" * 24 + "AB" * 20    # to address (uppercase hex)
     payload += "0" * 64 * 4            # asset, delegate, amount, slippage
@@ -94,7 +94,7 @@ def test_decoder_handles_uppercase_hex() -> None:
 def test_decoder_handles_no_0x_prefix() -> None:
     """Some upstream callers pass calldata without the 0x prefix.
     The dispatcher strips it; must still work."""
-    method_id = "4ff746f6"
+    method_id = "8aac16ba"
     args = "0" * (64 * 7)
     out_with = decode_bridge_calldata(
         bridge_protocol="Connext", input_data="0x" + method_id + args)
@@ -111,7 +111,7 @@ def test_decoder_rejects_zero_address_recipient() -> None:
     a confident handoff. (LiFi explicitly checks this; Connext
     publishes 0x000…000 with medium confidence when domain is
     known, which is a known false-positive shape worth testing.)"""
-    method_id = "4ff746f6"
+    method_id = "8aac16ba"
     args = (
         f"{6648936:064x}"  # Ethereum domain
         + "0" * 64        # to address = all zeros

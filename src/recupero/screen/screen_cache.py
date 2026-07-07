@@ -43,18 +43,42 @@ _MAX_RESULTS = 50_000
 
 _lock = threading.Lock()
 _high_risk_db: dict[str, HighRiskEntry] | None = None
+# M5: stamp of the OFAC live CSV (mtime, size) captured when the DB cache was
+# built. When another PROCESS re-syncs OFAC the CSV changes on disk; on the
+# next access this process notices the changed stamp and auto-reloads — so a
+# cross-process refresh invalidates the cache without an explicit clear call.
+_ofac_csv_stamp: tuple[float, int] | None = None
 _results: OrderedDict[tuple[str, str], ScreeningResult] = OrderedDict()
 _hits = 0
 _misses = 0
 
 
+def _current_ofac_csv_stamp() -> tuple[float, int] | None:
+    """(mtime, size) of the authoritative OFAC live CSV, or None if absent /
+    unreadable. Never raises — a stat failure degrades to "no stamp" (the cache
+    simply won't auto-invalidate on that source)."""
+    try:
+        from recupero.trace.ofac_sync import DEFAULT_OFAC_CSV_PATH
+        st = DEFAULT_OFAC_CSV_PATH.stat()
+        return (st.st_mtime, st.st_size)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def get_cached_high_risk_db(*, force_reload: bool = False) -> dict[str, HighRiskEntry]:
     """Load the high-risk DB once and reuse it. ``force_reload`` re-reads disk
-    (call after a label re-sync)."""
-    global _high_risk_db
+    (call after a label re-sync).
+
+    M5: also auto-reloads when the OFAC live CSV's (mtime, size) has changed
+    since the cache was built — so a sync performed by ANOTHER process is
+    picked up here without an explicit ``clear_screen_cache`` call."""
+    global _high_risk_db, _ofac_csv_stamp
     with _lock:
-        if _high_risk_db is None or force_reload:
+        stamp = _current_ofac_csv_stamp()
+        stale = _high_risk_db is not None and stamp != _ofac_csv_stamp
+        if _high_risk_db is None or force_reload or stale:
             _high_risk_db = load_high_risk_db()
+            _ofac_csv_stamp = stamp
         return _high_risk_db
 
 
@@ -110,13 +134,14 @@ def clear_screen_cache(*, reload_db: bool = False) -> None:
     """Clear the result LRU + counters (call after a label re-sync). When
     ``reload_db`` is True the DB cache is dropped too so the next screen re-reads
     the refreshed seeds."""
-    global _high_risk_db, _hits, _misses
+    global _high_risk_db, _hits, _misses, _ofac_csv_stamp
     with _lock:
         _results.clear()
         _hits = 0
         _misses = 0
         if reload_db:
             _high_risk_db = None
+            _ofac_csv_stamp = None
 
 
 __all__ = (

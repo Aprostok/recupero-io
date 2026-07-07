@@ -177,12 +177,11 @@ def test_five_input_pro_rata_and_registry() -> None:
 def test_coinjoin_10_plus_inputs_from_same_controller_uses_unwrap() -> None:
     """A 10+ input + 10-equal-output CoinJoin (Wasabi 1.0 / Whirlpool
     pattern) shouldn't fall through the pro-rata peel-chain logic —
-    the CoinJoin detector at L354 of the adapter should fire first
-    and route to ``_unwrap_coinjoin_to_transfers``. If no
-    high-confidence hypothesis includes ``expected_from`` (Wasabi
-    obfuscation typically yields medium/low), the returned list is
-    empty — the trace skips the tx rather than fabricating peel-chain
-    Transfers."""
+    the CoinJoin detector fires first and routes to
+    ``_record_coinjoin_lead``. Per the HIGH-1 fix the trace TERMINATES
+    at the mixing boundary: it injects ZERO followable transfers (the
+    returned list is empty) and records the post-mix outputs as leads
+    only — never fabricating peel-chain Transfers."""
     # Whirlpool-shape: 10 inputs at exactly 10.1M sats, 10 outputs at
     # exactly 10M sats. VICTIM is one of the input addresses.
     addrs_in = [VICTIM] + [f"1Coinjoin{i:030d}" for i in range(9)]
@@ -206,12 +205,10 @@ def test_coinjoin_10_plus_inputs_from_same_controller_uses_unwrap() -> None:
     }
     adapter = _mk_adapter([cj_tx])
     out = adapter.fetch_native_outflows(VICTIM, start_block=0)
-    # Either the unwrap fires (synthetic transfers) or it doesn't
-    # (clean empty). What we MUST NOT see: 10 peel-chain Transfers
-    # at the pro-rata share, which would be totally wrong for a
-    # CoinJoin. Verify all returned rows are synthetic-unwrap rows.
-    for rec in out:
-        assert rec.get("_synthetic_coinjoin_unwrap") is True
+    # HIGH-1 fix: the trace terminates at the CoinJoin boundary — no
+    # followable transfers at all (and certainly not 10 pro-rata
+    # peel-chain Transfers, which would be totally wrong for a CoinJoin).
+    assert out == []
 
 
 # ---- 5: Pro-rata math sums to the output value (round-trip) ---- #

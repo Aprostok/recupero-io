@@ -4,11 +4,11 @@
 # src-layout project (setuptools can't find the `src/` dir at install
 # time). This Dockerfile copies every needed file before installing.
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 
-# All Python wheels we need ship pre-built for cp312-manylinux
+# All Python wheels we need ship pre-built for cp314-manylinux
 # (psycopg[binary], pydantic-core, orjson, pycryptodome, pyyaml).
 #
 # System deps:

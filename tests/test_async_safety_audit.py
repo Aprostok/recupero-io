@@ -150,8 +150,12 @@ def test_async_count_matches_baseline(parsed):
     # status). AUDITED non-blocking: awaits asyncio.to_thread(_poll_trace_status)
     # (DB read off the loop) + asyncio.sleep; no banned direct calls. See the
     # ALLOWED_ASYNC_MODULES entry + test_no_blocking_io_inside_async_def.
-    assert total == 36, (
-        f"async def count drifted to {total} (was 36). Update baseline and "
+    # a887c92 (API audit M2): +1 — api/app.py `operator_graph_stream_token`,
+    # the POST /stream-token minter so EventSource never carries the admin key
+    # in the URL. AUDITED non-blocking (in-memory admin-auth + _valid_inv +
+    # _mint_stream_token dict-insert under _STREAM_TOKENS_LOCK; no I/O).
+    assert total == 37, (
+        f"async def count drifted to {total} (was 37). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

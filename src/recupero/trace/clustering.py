@@ -576,6 +576,33 @@ _NEVER_CLUSTER_CATEGORIES = frozenset({
     LabelCategory.staking,
 })
 
+#: HIGH-2 fix (v0.48 audit): hard ceiling on distinct input addresses
+#: for the common-input-ownership (H1 co-spending) heuristic. A single
+#: tx with more than this many distinct inputs is almost always a
+#: CoinJoin or a shared-infrastructure consolidation, NOT one owner —
+#: pairing them would falsely merge unrelated participants. Standard
+#: wallet self-consolidations are well under 8 inputs.
+_MAX_CIO_INPUT_ADDRS = 8
+
+
+def _looks_like_coinjoin(output_values_sats: list[int]) -> bool:
+    """True iff the observed output values contain an equal-value cluster
+    of 3+ — the canonical CoinJoin / equal-output mixing shape.
+
+    Conservative: any value appearing 3+ times among the observed
+    outputs flags the tx as CoinJoin-shaped, so common-input-ownership
+    is suppressed. Mirrors the BitcoinAdapter's >=4-in / 3-equal-out
+    gate (the input-count check is applied by the caller).
+    """
+    if len(output_values_sats) < 3:
+        return False
+    counts: dict[int, int] = defaultdict(int)
+    for v in output_values_sats:
+        counts[v] += 1
+        if counts[v] >= 3:
+            return True
+    return False
+
 
 def _stable_cluster_id(addresses: set[str]) -> str:
     """Stable cluster id from the sorted address set.
@@ -742,8 +769,48 @@ def compute_clusters_with_metadata(
         if src and t.tx_hash:
             btc_inputs_by_tx[t.tx_hash].add(src)
 
+    # HIGH-2 fix (v0.48 audit): the common-input-ownership (CIO)
+    # heuristic is INVALID for CoinJoin txs — the inputs belong to many
+    # unrelated participants, not one owner. Before pairing we exclude:
+    #   (a) txs detected as CoinJoin (>=4 inputs + 3+ equal-value
+    #       outputs), via the adapter's same gate; and
+    #   (b) txs with more than _MAX_CIO_INPUT_ADDRS distinct input
+    #       addresses (belt-and-braces: a 100-input Wasabi tx would
+    #       otherwise emit C(100,2)=4950 edges merging strangers).
+    btc_outputs_by_tx: dict[str, list[int]] = defaultdict(list)
+    for t in case.transfers:
+        if t.chain != Chain.bitcoin or not t.tx_hash:
+            continue
+        # amount_raw is in sats for BTC; only outputs (to this case's
+        # observed recipients) are visible, but the equal-value-cluster
+        # test below is conservative — a real CoinJoin's equal outputs
+        # show up here as soon as 3+ are observed.
+        raw = getattr(t, "amount_raw", None)
+        if isinstance(raw, int) and raw > 0:
+            btc_outputs_by_tx[t.tx_hash].append(raw)
+
     for tx_hash, inputs in btc_inputs_by_tx.items():
         if len(inputs) < 2:
+            continue
+        # (b) input-count ceiling — skip pathological many-input txs.
+        if len(inputs) > _MAX_CIO_INPUT_ADDRS:
+            log.debug(
+                "clustering H1: skipping co-spending for tx %s — %d "
+                "distinct input addresses exceeds CIO ceiling %d "
+                "(likely CoinJoin / shared infra, not common ownership)",
+                tx_hash, len(inputs), _MAX_CIO_INPUT_ADDRS,
+            )
+            continue
+        # (a) CoinJoin gate — >=4 inputs with a 3+ equal-output cluster
+        # is the canonical mixing shape; CIO does not hold there.
+        if len(inputs) >= 4 and _looks_like_coinjoin(
+            btc_outputs_by_tx.get(tx_hash, [])
+        ):
+            log.debug(
+                "clustering H1: skipping co-spending for tx %s — CoinJoin "
+                "shape detected (>=4 inputs + equal-output cluster)",
+                tx_hash,
+            )
             continue
         inputs_list = sorted(inputs)
         for i, a in enumerate(inputs_list):
@@ -967,9 +1034,18 @@ def compute_clusters_with_metadata(
 
     uf = _UnionFind()
     pair_evidence: dict[tuple[str, str], list[_PairSignal]] = defaultdict(list)
+    # MEDIUM-14 fix (v0.48 audit): a separate union-find over ONLY the
+    # high-confidence edges. A cluster is "high" iff its high-edge
+    # subgraph spans all members — i.e. every member is connected to the
+    # rest by a chain of high-confidence edges. Pre-fix a member attached
+    # only by a weak bridge_round_trip edge inherited the cluster-level
+    # "high" from an unrelated strong edge elsewhere in the component.
+    uf_high = _UnionFind()
     for a, b, sig in edges:
         uf.union(a, b)
         pair_evidence[_edge_key(a, b)].append(sig)
+        if sig.confidence == "high":
+            uf_high.union(a, b)
 
     # Materialize clusters
     members_by_root: dict[str, set[str]] = defaultdict(set)
@@ -1002,14 +1078,36 @@ def compute_clusters_with_metadata(
                     })
                     heuristics_set.add(sig.heuristic)
                     confidences.add(sig.confidence)
-        # Cluster confidence: high if ANY high-confidence edge fired;
-        # otherwise medium (we don't emit clusters without evidence).
-        overall_conf = "high" if "high" in confidences else "medium"
+        # MEDIUM-14 fix (v0.48 audit): cluster-level "high" is granted
+        # ONLY when EVERY member is connected to the rest of the cluster
+        # by high-confidence edges — i.e. all members share a single
+        # high-edge component. A cluster where some member is attached
+        # only by a weak (medium/low) edge is at most "medium", since the
+        # weakest connecting link governs attachment confidence (the
+        # cluster is only as trustworthy as its weakest bridge).
+        high_roots = {uf_high.find(m) for m in sorted_members}
+        all_members_high_connected = (
+            "high" in confidences and len(high_roots) == 1
+        )
+        overall_conf = "high" if all_members_high_connected else "medium"
+        # Per-member attachment confidence: a member in the spanning
+        # high-edge component attaches at "high"; otherwise "medium".
+        if all_members_high_connected:
+            member_confidence = {m: "high" for m in sorted_members}
+        else:
+            high_root_counts: dict[str, int] = defaultdict(int)
+            for m in sorted_members:
+                high_root_counts[uf_high.find(m)] += 1
+            member_confidence = {
+                m: ("high" if high_root_counts[uf_high.find(m)] >= 2 else "medium")
+                for m in sorted_members
+            }
         out.append({
             "cluster_id": cid,
             "addresses": sorted_members,
             "size": len(sorted_members),
             "confidence": overall_conf,
+            "member_confidence": member_confidence,
             "heuristics": sorted(heuristics_set),
             "evidence": evidence,
         })

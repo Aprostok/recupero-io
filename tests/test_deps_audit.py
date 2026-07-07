@@ -73,7 +73,7 @@ def test_pyproject_parses() -> None:
     assert deps, "no dependencies parsed"
     # python-version requirement check
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
-    assert data["project"]["requires-python"].startswith(">=3.11")
+    assert data["project"]["requires-python"].startswith(">=3.14")
 
 
 def test_no_abandoned_packages() -> None:

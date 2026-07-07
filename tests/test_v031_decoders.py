@@ -82,7 +82,7 @@ def _build_connext_xcall_calldata(
     xcall(uint32 destination, address to, address asset,
           address delegate, uint256 amount, uint256 slippage, bytes callData)
     """
-    method_id = "4ff746f6"
+    method_id = "8aac16ba"  # keccak("xcall(uint32,address,address,address,uint256,uint256,bytes)")[:4]
     head = (
         _pad_uint(domain_id, 1)            # [0..32]   destination domain (uint32 right-aligned)
         + _pad_address(to_address)         # [32..64]  to
@@ -167,7 +167,7 @@ def test_connext_everclear_protocol_routes_to_connext() -> None:
 
 def test_connext_truncated_calldata_returns_low() -> None:
     """Calldata < 7 full slots → low confidence, no fields, no crash."""
-    short = "0x4ff746f6" + "00" * 64  # only 2 slots
+    short = "0x8aac16ba" + "00" * 64  # only 2 slots
     out = decode_bridge_calldata(
         bridge_protocol="Connext",
         input_data=short,
@@ -240,7 +240,7 @@ def test_v0_34_decoders_reject_nonaligned_recipient_slot() -> None:
             + _pad_uint(224, 1)
         )
         blob = head + _pad_uint(0, 1)
-        return _decode_connext("0x4ff746f6", blob, "0x4ff746f6" + blob)
+        return _decode_connext("0x8aac16ba", blob, "0x8aac16ba" + blob)
 
     cx_bad, cx_good = _connext(bad), _connext(good)
     assert cx_bad.destination_chain == "optimism"
@@ -574,14 +574,14 @@ def test_dispatch_prefers_decoder_over_unknown() -> None:
         bridge_protocol="Axelar",
         input_data=calldata,
     )
-    # Method id 0x4ff746f6 is not in _AXELAR_METHODS → dispatcher returns None
+    # Connext xcall id 0x8aac16ba is not in _AXELAR_METHODS → dispatcher returns None
     assert out is None
 
 
 def test_all_three_new_protocols_dispatched_not_swallowed() -> None:
     """A complete smoke check that the three protocols never short-
     circuit to None for valid method-IDs even on truncated input."""
-    truncated_connext = "0x4ff746f6" + "00" * 32
+    truncated_connext = "0x8aac16ba" + "00" * 32
     truncated_axelar = "0xb5417084" + "00" * 32
     truncated_lifi = "0xed178619" + "00" * 32
 

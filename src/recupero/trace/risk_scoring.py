@@ -126,6 +126,23 @@ class HighRiskEntry:
     ofac_listing_date: str | None = None
 
 
+# H3 (dust-gameable verdict): a single $0 spoofed Transfer(victim → OFAC addr)
+# must NOT, on its own, brand the seed SANCTIONED/CRITICAL. An exposure only
+# COUNTS toward the score + the verdict when at least one of its transfers is
+# either priced at/above this USD floor OR moves a verified (CoinGecko-listed)
+# token contract. Sub-floor, unverified-token-only matches are recorded but
+# annotated as low-confidence "possible spoofed-event poisoning" and ignored by
+# the verdict. The floor is deliberately tiny ($1) — it only filters the
+# dust/zero-value event-spoofing class, not real small transfers.
+_MIN_EXPOSURE_USD = Decimal("1")
+
+# Cap on how much a single (address, counterparty, direction) pair can add to
+# the numeric score via tx_count. A spammer who sends 10,000 tiny qualifying
+# transfers to one risky counterparty would otherwise inflate the score
+# without bound; the verdict tiers assume a handful of distinct exposures.
+_MAX_TX_COUNT_CONTRIB = 5
+
+
 @dataclass
 class AddressExposure:
     """One exposure event tying an address in the case to a
@@ -137,6 +154,13 @@ class AddressExposure:
     direction: str       # 'inflow' | 'outflow'
     tx_count: int
     total_usd: Decimal
+    # H3: True when at least one transfer in this exposure cleared the USD floor
+    # OR moved a verified (CoinGecko-listed) token — i.e. it is not a dust /
+    # zero-value event-spoofing artifact. Only qualified exposures drive the
+    # numeric score and the verdict; unqualified ones are surfaced as
+    # low-confidence leads.
+    qualified: bool = True
+    spoof_suspected: bool = False
 
 
 @dataclass
@@ -287,7 +311,32 @@ def load_high_risk_db(
             if entry.removed_at_utc:
                 continue
             if entry.address in out:
-                continue  # curated entry wins
+                # H1 (OFAC shadow): a curated seed (mixer_high_risk /
+                # ransomware / scam_drainer / internal_blacklist) that LATER
+                # lands on the authoritative OFAC live feed must be UPGRADED to
+                # a sanctioned verdict — the "first wins" dedup would otherwise
+                # leave it "high" forever, shadowing a real OFAC designation.
+                # Keep the curated name/notes (more descriptive) but adopt the
+                # OFAC risk_category + severity so the screener returns
+                # "sanctioned". An already-OFAC entry is left untouched.
+                prev = out[entry.address]
+                if not (prev.risk_category or "").lower().startswith("ofac"):
+                    out[entry.address] = HighRiskEntry(
+                        address=prev.address,
+                        name=prev.name,
+                        risk_category="ofac_sanctioned",
+                        severity=4,
+                        notes=(
+                            (prev.notes + " " if prev.notes else "")
+                            + "UPGRADED to OFAC-sanctioned: this address now "
+                            f"appears on the OFAC SDN feed (UID "
+                            f"{entry.sdn_entry_id}; listed "
+                            f"{entry.listing_date or '(date unknown)'})."
+                        ),
+                        confidence="high",
+                        ofac_listing_date=entry.listing_date or prev.ofac_listing_date,
+                    )
+                continue  # curated entry upgraded (or already OFAC) — done
             out[entry.address] = HighRiskEntry(
                 address=entry.address,
                 name=entry.sdn_entry_name or "(OFAC SDN)",
@@ -518,44 +567,66 @@ def score_addresses(
         src = _ck(t.from_address)
         dst = _ck(t.to_address)
 
+        # H3: does THIS transfer qualify to count toward score/verdict? A
+        # transfer qualifies when it is priced at/above the floor OR moves a
+        # verified (CoinGecko-listed) token contract. A $0 / unpriced transfer
+        # of an unrecognized token is the spoofed-event-poisoning signature —
+        # it is recorded but cannot, alone, drive a sanctioned verdict.
+        token = getattr(t, "token", None)
+        is_verified_token = bool(getattr(token, "coingecko_id", None))
+        qualifies = (usd >= _MIN_EXPOSURE_USD) or is_verified_token
+
+        def _bump(key: tuple[str, str, str], entry: HighRiskEntry) -> None:
+            slot = agg.setdefault(key, {
+                "name": entry.name, "category": entry.risk_category,
+                "severity": entry.severity, "tx_count": 0,
+                "total_usd": Decimal("0"),
+                "qualified_tx": 0, "unqualified_tx": 0,
+            })
+            slot["total_usd"] += usd
+            if qualifies:
+                slot["tx_count"] += 1
+                slot["qualified_tx"] += 1
+            else:
+                slot["unqualified_tx"] += 1
+
         # Check both ends: if either side matches a high-risk entry,
         # the OTHER side gets an exposure record.
         if src in db:
-            key = (dst, src, "inflow")  # dst received from risky src
-            entry = db[src]
-            agg.setdefault(key, {
-                "name": entry.name, "category": entry.risk_category,
-                "severity": entry.severity, "tx_count": 0,
-                "total_usd": Decimal("0"),
-            })
-            agg[key]["tx_count"] += 1
-            agg[key]["total_usd"] += usd
+            _bump((dst, src, "inflow"), db[src])   # dst received from risky src
         if dst in db:
-            key = (src, dst, "outflow")  # src sent to risky dst
-            entry = db[dst]
-            agg.setdefault(key, {
-                "name": entry.name, "category": entry.risk_category,
-                "severity": entry.severity, "tx_count": 0,
-                "total_usd": Decimal("0"),
-            })
-            agg[key]["tx_count"] += 1
-            agg[key]["total_usd"] += usd
+            _bump((src, dst, "outflow"), db[dst])  # src sent to risky dst
 
     # Build AddressRiskScore objects, aggregating per address.
     scores: dict[str, AddressRiskScore] = {}
     for (addr, counterparty, direction), data in agg.items():
         score = scores.setdefault(addr, AddressRiskScore(address=addr))
+        qualified_tx = int(data.get("qualified_tx", 0))
+        qualified = qualified_tx > 0
+        # An exposure built ONLY from sub-floor / unverified-token transfers is
+        # the spoofed-event-poisoning signature.
+        spoof_suspected = (not qualified) and int(data.get("unqualified_tx", 0)) > 0
         exposure = AddressExposure(
             counterparty=counterparty,
             counterparty_name=data["name"],
             risk_category=data["category"],
             severity=data["severity"],
             direction=direction,
-            tx_count=data["tx_count"],
+            # Report only the qualifying tx_count for a qualified exposure; for
+            # an unqualified one, report the full (sub-floor) count for context.
+            tx_count=(qualified_tx if qualified
+                      else int(data.get("unqualified_tx", 0))),
             total_usd=data["total_usd"],
+            qualified=qualified,
+            spoof_suspected=spoof_suspected,
         )
         score.exposures.append(exposure)
-        score.score += data["severity"] * data["tx_count"]
+        # Only QUALIFIED exposures contribute to the numeric score, and the
+        # per-counterparty tx contribution is capped so a flood of tiny
+        # qualifying transfers can't run the score to infinity (H3).
+        if qualified:
+            capped = min(qualified_tx, _MAX_TX_COUNT_CONTRIB)
+            score.score += data["severity"] * capped
 
     # Finalize verdicts.
     for score in scores.values():
@@ -577,8 +648,10 @@ def risk_scores_to_brief_section(
     addresses_payload: dict[str, Any] = {}
 
     for addr, score in scores.items():
-        # Per-address categorization for the summary
-        cats = {e.risk_category for e in score.exposures}
+        # Per-address categorization for the summary. H3: count only QUALIFIED
+        # exposures so a dust/spoofed-event match doesn't inflate the
+        # ofac/mixer exposure counts (which gate downstream recovery math).
+        cats = {e.risk_category for e in score.exposures if e.qualified}
         if any(c.startswith("ofac") for c in cats):
             ofac_exposed += 1
         if any("mixer" in c for c in cats):
@@ -605,6 +678,12 @@ def risk_scores_to_brief_section(
                     "direction": e.direction,
                     "tx_count": e.tx_count,
                     "total_usd": f"${e.total_usd:,.2f}",
+                    "qualified": e.qualified,
+                    **(
+                        {"note": "low-confidence — possible spoofed-event "
+                                 "poisoning (sub-floor / unverified-token only)"}
+                        if e.spoof_suspected else {}
+                    ),
                 }
                 for e in score.exposures
             ],
@@ -674,7 +753,11 @@ def _verdict_for_score(score: AddressRiskScore) -> str:
     50% Rule (any transaction with a sanctioned entity is
     a sanctioned transaction).
     """
-    cats = {e.risk_category for e in score.exposures}
+    # H3: only QUALIFIED exposures (a real, priced/verified transfer — not a
+    # dust / zero-value spoofed event) are dispositive. A single $0 spoofed
+    # Transfer(victim → OFAC addr) is recorded as a low-confidence lead but must
+    # NOT alone brand the seed SANCTIONED.
+    cats = {e.risk_category for e in score.exposures if e.qualified}
     if any(c.startswith("ofac") for c in cats):
         return "SANCTIONED — direct exposure to OFAC SDN List"
     if any(c == "mixer_sanctioned" for c in cats):

@@ -44,12 +44,28 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from recupero._common import atomic_write_text, resolve_render_time
+from recupero.reports._money import format_usd_cents, parse_usd
+
+
+def _parse_usd_string(s: Any) -> Decimal:
+    """Parse '$47,840.12' -> Decimal('47840.12'). Returns Decimal('0') on
+    failure. Strict parse (non-finite / negative -> 0); canonical
+    implementation lives in :mod:`recupero.reports._money`."""
+    return parse_usd(s)
+
+
+def usd(v: Decimal) -> str:
+    """Format a USD amount like '$47,840.00' or '$47,840.12'. Always shows
+    cents (this differs from ``emit_brief.usd`` which trims round numbers).
+    Canonical implementation lives in :mod:`recupero.reports._money`."""
+    return format_usd_cents(v)
 
 log = logging.getLogger(__name__)
 
@@ -327,9 +343,18 @@ def _enumerate_exchange_targets(
     """Build one perpetrator-context dict per exchange that received
     funds in this case.
 
-    Reads from brief.EXCHANGES (one entry per exchange with
-    address + total_received_usd). Filters by ``exchange_filter`` if
-    provided (case-insensitive substring match).
+    Reads from brief.EXCHANGES. v0.41-audit C1: the producer
+    (emit_brief._extract_exchanges) emits one entry per exchange shaped
+    ``{"exchange": name, "deposits": [{"address", "usd", "date", ...}]}``
+    — there is NO flat ``ex["address"]`` / ``ex["total_received_usd"]``
+    / ``ex["country"]`` key. Reading those non-existent keys made every
+    MLAT / 314(b) / subpoena render a blank deposit address and
+    ``$0.00`` regardless of how much actually landed at the exchange.
+
+    We now walk ``ex["deposits"]``: sum the per-deposit USD into the
+    target total and collect the FULL deposit-address list (court-facing
+    — full addresses, never truncated). Filters by ``exchange_filter``
+    if provided (case-insensitive substring match).
     """
     exchanges = brief.get("EXCHANGES") or []
     targets: list[dict[str, Any]] = []
@@ -341,17 +366,41 @@ def _enumerate_exchange_targets(
         )
         if exchange_filter and exchange_filter.lower() not in str(exchange_name).lower():
             continue
+        # Walk the per-deposit list (the real producer shape). Sum USD
+        # per deposit and collect full deposit addresses. Fall back to a
+        # legacy flat ``ex["address"]`` / ``ex["total_received_usd"]``
+        # shape only if no deposits list is present (back-compat with any
+        # hand-rolled brief).
+        deposits = ex.get("deposits")
+        deposit_addresses: list[str] = []
+        total_usd_dec = Decimal("0")
+        if isinstance(deposits, list) and deposits:
+            for d in deposits:
+                if not isinstance(d, dict):
+                    continue
+                addr = str(d.get("address") or "").strip()
+                if addr and addr not in deposit_addresses:
+                    deposit_addresses.append(addr)
+                total_usd_dec += _parse_usd_string(d.get("usd"))
+            total_received_usd = usd(total_usd_dec)
+        else:
+            legacy_addr = str(ex.get("address") or "").strip()
+            if legacy_addr:
+                deposit_addresses.append(legacy_addr)
+            total_received_usd = (
+                ex.get("total_received_usd") or ex.get("usd") or "$0.00"
+            )
         targets.append({
             "exchange_name": exchange_name,
             "exchange_legal_name": ex.get("exchange_legal_name") or exchange_name,
             "exchange_address": ex.get("exchange_address") or "",
             "registered_agent": ex.get("registered_agent") or "",
-            "deposit_address": ex.get("address") or "",
-            "total_received_usd": (
-                ex.get("total_received_usd")
-                or ex.get("usd")
-                or "$0.00"
-            ),
+            # FULL addresses (court-facing). Newline-joined for the
+            # single-string ``deposit_address`` consumers; the list form
+            # is the canonical multi-address surface for templates.
+            "deposit_address": "\n".join(deposit_addresses) or "",
+            "deposit_addresses": deposit_addresses,
+            "total_received_usd": total_received_usd,
             # Free-form country — operator should override if known.
             "destination_country": ex.get("country") or "[destination country]",
         })
@@ -364,6 +413,7 @@ def _enumerate_exchange_targets(
             "exchange_address": "[exchange address]",
             "registered_agent": "",
             "deposit_address": "[deposit address]",
+            "deposit_addresses": ["[deposit address]"],
             "total_received_usd": "$0.00",
             "destination_country": "[destination country]",
         })

@@ -737,17 +737,31 @@ def _score_hypothesis(
     *,
     all_input_addrs: set[str],
     all_output_addrs: set[str],
+    anonymity_set_size: int,
+    claimed_output_value_sats: int,
 ) -> tuple[str, float, str, list[str]]:
     """Score one (inputs → outputs) hypothesis.
 
     Returns (confidence_str, confidence_score 0..1, rationale, signals).
+
+    ``anonymity_set_size`` is the number of DISTINCT input subsets that
+    sum to this participant's claimed value (N × round amount) within
+    tolerance — i.e. how many other participants are indistinguishable
+    from this one at the same round amount. "high" confidence is granted
+    ONLY when this is 1 (a genuinely unique pairing). In a standard
+    Whirlpool/Wasabi round every participant contributes the same round
+    amount, so the anonymity set is always > 1 and no hypothesis can ever
+    be "high" — which is the whole point of a CoinJoin.
     """
     n_in = len(inputs)
-    n_out = len(outputs)
+    # ``outputs`` is the FULL round-output set (the destination lead); the
+    # participant's CLAIMED value is N × round amount, passed explicitly so
+    # the fee-fit math compares like-for-like (not against the whole set).
+    n_out = max(1, claimed_output_value_sats // max(round_amount_sats, 1))
     signals: list[str] = []
 
     input_sum = sum(i.value_sats for i in inputs)
-    output_sum = sum(o.value_sats for o in outputs)
+    output_sum = claimed_output_value_sats
     # Fee share — input MUST be >= output_sum.
     fee_share = input_sum - output_sum
     fee_ratio = fee_share / max(input_sum, 1)
@@ -785,20 +799,25 @@ def _score_hypothesis(
     combined = amount_fit_score * 0.5 + cardinality_score * 0.3
     combined *= self_mix_penalty
 
-    if n_in == 1 and fee_ratio < 0.02:
-        # Single-input UTXO with tight fee match → high confidence.
-        # NOTE (v0.39 audit): a forensic-posture review flagged whether this
-        # should be capped at "medium" like the mixer/demixing doctrine. Left
-        # as "high" deliberately — with n_in == 1 there is a SINGLE contributor
-        # at this round amount, so the input<->output match is a structural
-        # identity, not an anonymity-set guess (materially stronger than a
-        # cross-tx Tornado link). Revisit as an explicit doctrine decision if
-        # the team wants coinjoin unwrap to stop auto-crossing.
+    signals.append(f"anonymity_set={anonymity_set_size}")
+
+    if anonymity_set_size <= 1 and fee_ratio < 0.02:
+        # HIGH-1 fix (v0.48 audit): "high" is granted ONLY when the
+        # matching input-subset is UNIQUE at this round amount, i.e. the
+        # anonymity set is 1. In that degenerate case the input<->output
+        # pairing is a structural identity, not an anonymity-set guess.
+        #
+        # In a STANDARD Whirlpool/Wasabi round every participant
+        # contributes the same round amount, so multiple input subsets
+        # sum to N×R and the anonymity set is always > 1 — no hypothesis
+        # is ever "high" there (previously EVERY single-input participant
+        # was wrongly granted "high", a fabrication: all 5 Whirlpool
+        # participants are single-input and indistinguishable).
         confidence = "high"
         rationale = (
-            f"Single-input contribution of {input_sum:,} sats "
+            f"Single-input contribution of {input_sum:,} sats uniquely "
             f"matches {n_out} round-output(s) at {round_amount_sats:,} "
-            f"sats each (fee {fee_ratio*100:.2f}%)."
+            f"sats each (fee {fee_ratio*100:.2f}%; anonymity set 1)."
         )
         return confidence, max(0.7, combined), rationale, signals
 
@@ -874,30 +893,37 @@ def unwrap_coinjoin(
         if not candidate_input_sets:
             continue
 
-        # For each candidate input set, the participant claims SOME
-        # subset of size N from the round outputs. We don't know
-        # WHICH N specific outputs — but we can surface the
-        # hypothesis "these inputs received N of the round outputs".
-        # Per-output assignment is the hard part of unwrap; we
-        # provide the COARSE answer (participant → output-count)
-        # which is what TRM Labs surfaces.
+        # HIGH-1 fix (v0.48 audit): the anonymity set for participants
+        # claiming N outputs at this round amount is the number of
+        # DISTINCT input subsets that match. In a standard round this is
+        # > 1 (every participant looks the same), so no hypothesis can be
+        # "high". Only a degenerate round with a single matching subset
+        # yields anonymity_set == 1.
+        anonymity_set_size = len(candidate_input_sets)
+
+        # The whole round-output set is the destination LEAD — we do NOT
+        # claim any specific output subset (round_outputs[:n]) belongs to
+        # this participant. Per-output assignment is exactly what CoinJoin
+        # obfuscates; selecting an arbitrary slice would be fabrication.
+        round_output_set = tuple(round_outputs)
+        round_output_addrs_t = tuple(sorted({o.address for o in round_outputs}))
+
         for input_combo in candidate_input_sets:
-            # Pick the FIRST n round outputs as the "claimed set"
-            # (we have no way to identify the specific ones; this
-            # is a representative selection).
-            output_combo = tuple(round_outputs[:n])
             confidence, score, rationale, signals = _score_hypothesis(
-                input_combo, output_combo, round_amount,
+                input_combo, round_output_set, round_amount,
                 all_input_addrs=all_input_addrs,
                 all_output_addrs=all_output_addrs,
+                anonymity_set_size=anonymity_set_size,
+                claimed_output_value_sats=n * round_amount,
             )
             input_addrs_t = tuple(sorted({i.address for i in input_combo}))
-            output_addrs_t = tuple(sorted({o.address for o in output_combo}))
             hypotheses.append(CoinJoinHypothesis(
                 input_addresses=input_addrs_t,
-                output_addresses=output_addrs_t,
+                # The candidate destination is the FULL round-output set
+                # (a low-confidence lead), NOT an arbitrary slice.
+                output_addresses=round_output_addrs_t,
                 total_input_value_sats=sum(i.value_sats for i in input_combo),
-                total_output_value_sats=sum(o.value_sats for o in output_combo),
+                total_output_value_sats=n * round_amount,
                 round_amount_sats=round_amount,
                 output_count=n,
                 confidence=confidence,

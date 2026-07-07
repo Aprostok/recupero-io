@@ -126,12 +126,18 @@ def test_unwrap_returns_none_for_non_coinjoin() -> None:
     assert unwrap_coinjoin(tx_id="0xabc", inputs=inputs, outputs=outputs) is None
 
 
-def test_unwrap_emits_hypothesis_for_single_input_participant() -> None:
-    """A participant who contributed exactly 1 input at ~round
-    amount + small fee should produce a HIGH-confidence
-    hypothesis."""
-    # 5 participants, each contributes 1 input ~10.5M sats, gets
-    # 1 output at 10M sats. (Fee ~5%.)
+def test_unwrap_single_input_participant_is_never_high_in_standard_round() -> None:
+    """HIGH-1 fix (v0.48 audit): in a STANDARD Whirlpool round all 5
+    participants are single-input at the same round amount, so the
+    anonymity set is 5 — no participant is distinguishable. The unwrap
+    must NOT grant "high" to any of them (that was a fabrication; the
+    whole point of a CoinJoin is that single-input participants are
+    indistinguishable). Confidence must be medium/low.
+
+    The destination emitted is the WHOLE round-output set, never an
+    arbitrary single output."""
+    # 5 participants, each contributes 1 input ~10.1M sats, gets
+    # 1 output at 10M sats. (Fee ~1%.)
     inputs = [
         UTXOInput("alice", 10_100_000),
         UTXOInput("bob", 10_100_000),
@@ -154,12 +160,14 @@ def test_unwrap_emits_hypothesis_for_single_input_participant() -> None:
     assert result.round_amount_sats == 10_000_000
     assert result.round_output_count == 5
     assert len(result.hypotheses) > 0
-    # The highest-confidence hypothesis should match a single-input
-    # participant.
+    # NO hypothesis may be "high" — anonymity set > 1 for every one.
+    assert all(h.confidence != "high" for h in result.hypotheses)
     top = result.hypotheses[0]
-    assert len(top.input_addresses) == 1
     assert top.output_count == 1
-    assert top.confidence == "high"
+    # Destination lead is the whole round-output set, not one output.
+    assert set(top.output_addresses) == {
+        "alice_2", "bob_2", "carol_2", "dave_2", "eve_2",
+    }
 
 
 def test_unwrap_handles_multi_output_participant() -> None:

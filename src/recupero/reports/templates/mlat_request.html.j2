@@ -85,9 +85,12 @@ that a portion of the stolen proceeds were deposited at
 asset service provider headquartered in
 {{ perpetrator.destination_country }}, in the amount of
 <strong>{{ perpetrator.total_received_usd }} USD-equivalent</strong>.
-The specific receiving address is:
+The specific receiving address(es) are:
 </p>
-<p class="mono">{{ perpetrator.deposit_address }}</p>
+{% if perpetrator.deposit_addresses %}
+{% for addr in perpetrator.deposit_addresses %}<p class="mono">{{ addr }}</p>
+{% endfor %}
+{% else %}<p class="mono">{{ perpetrator.deposit_address }}</p>{% endif %}
 
 <h2>4. Investigative Assistance Requested</h2>
 <p>Pursuant to the applicable treaty between the United States and

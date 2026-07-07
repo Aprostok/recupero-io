@@ -830,6 +830,20 @@ def _job_ofac_sync() -> None:
     except Exception as exc:  # noqa: BLE001
         log.warning("cron: OFAC-delta rescreen skipped: %s", exc)
 
+    # M5 (stale cache): after a SUCCESSFUL sync, invalidate the in-process
+    # screening cache (result LRU + cached high-risk DB) so a long-running
+    # worker that holds the cache picks up the freshly-listed OFAC entries on
+    # its next screen — without this, a sanctioned wallet listed today would
+    # not flag until the process restarts. Best-effort: a cache-clear failure
+    # must never void a successful sync. (Cross-process refresh is handled by
+    # the CSV mtime/size keying in screen_cache.get_cached_high_risk_db.)
+    try:
+        from recupero.screen.screen_cache import clear_screen_cache
+        clear_screen_cache(reload_db=True)
+        log.info("cron: screening cache invalidated after OFAC sync")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cron: screening cache clear after OFAC sync failed: %s", exc)
+
 
 def _job_retrace_backfill() -> None:
     """Find cases that would benefit from re-trace after label-DB updates."""

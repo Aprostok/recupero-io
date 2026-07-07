@@ -269,7 +269,7 @@ def _build_layerzero_v1_send(
 
 def _build_layerzero_v2_send(
     *,
-    method_id: str = "1bb3a8fd",
+    method_id: str = "2637a450",
     dst_eid: int = 30110,                # Arbitrum (LZ v2 EID)
     receiver_addr: str = "b" * 40,
     message: bytes = b"",
@@ -579,7 +579,7 @@ def test_ccip_case_insensitive_protocol_dispatch() -> None:
 
 def _build_multichain_any_swap_out_underlying(
     *,
-    method_id: str = "a5e56571",
+    method_id: str = "edbdf5e2",
     token: str = "1" * 40,
     to_addr: str = "b" * 40,
     amount: int = 1_000_000_000,
@@ -618,7 +618,7 @@ def test_multichain_any_swap_out_underlying_bsc_high() -> None:
 def test_multichain_any_swap_out_avalanche_high() -> None:
     """Multichain anySwapOut (no underlying) → high."""
     calldata = _build_multichain_any_swap_out_underlying(
-        method_id="a5e3deeb",
+        method_id="241dc2df",
         to_addr="c" * 40,
         to_chain_id=43114,        # Avalanche
     )
@@ -635,7 +635,7 @@ def test_multichain_any_swap_out_avalanche_high() -> None:
 
 def test_multichain_truncated_calldata_returns_low() -> None:
     """Truncated calldata → low."""
-    short = "0xa5e56571" + "00" * 64
+    short = "0xedbdf5e2" + "00" * 64
     out = decode_bridge_calldata(
         bridge_protocol="Multichain",
         input_data=short,

@@ -22,7 +22,9 @@ def test_clean_bytecode_produces_clean_verdict() -> None:
 def test_setBuyTax_selector_emits_signal() -> None:
     """A tax mutator selector in the bytecode produces a medium-
     severity signal."""
-    bc = "0x6080604052" + "00" * 50 + "ed8e84e3" + "00" * 50
+    # keccak("setBuyTax(uint256)")[:4] = 0xdc1052e2 (the real on-chain
+    # selector; the prior 0xed8e84e3 fixture was a fabricated value).
+    bc = "0x6080604052" + "00" * 50 + "dc1052e2" + "00" * 50
     out = score_token("0xtoken", bytecode=bc)
     assert any(s.kind == "bytecode_pattern" for s in out.signals)
     assert "setBuyTax" in out.signals[0].description
@@ -30,7 +32,9 @@ def test_setBuyTax_selector_emits_signal() -> None:
 
 def test_multiple_mutator_selectors_produce_multiple_signals() -> None:
     """Both setBuyTax + setSellTax → 2 signals."""
-    bc = "0x6080604052" + "ed8e84e3" + "31fb0ad7" + "00" * 20
+    # setBuyTax(uint256)=0xdc1052e2, setSellTax(uint256)=0x8cd09d50 (real
+    # keccak selectors; prior 0xed8e84e3/0x31fb0ad7 fixtures were fabricated).
+    bc = "0x6080604052" + "dc1052e2" + "8cd09d50" + "00" * 20
     out = score_token("0xtoken", bytecode=bc)
     bytecode_signals = [s for s in out.signals if s.kind == "bytecode_pattern"]
     assert len(bytecode_signals) == 2
@@ -38,7 +42,7 @@ def test_multiple_mutator_selectors_produce_multiple_signals() -> None:
 
 def test_bytecode_is_case_insensitive() -> None:
     """Bytecode selectors should match regardless of case."""
-    upper = "0xED8E84E3" + "00" * 50
+    upper = "0xDC1052E2" + "00" * 50
     out = score_token("0xtoken", bytecode=upper)
     assert any(s.kind == "bytecode_pattern" for s in out.signals)
 

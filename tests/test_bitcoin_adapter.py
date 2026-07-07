@@ -286,15 +286,21 @@ def test_explorer_address_url_normalizes_bech32_case() -> None:
 # ---- CoinJoin unwrap wiring (v0.14.6) ---- #
 
 
-def test_coinjoin_with_high_confidence_hypothesis_emits_synthetic_transfers() -> None:
-    """v0.14.6: when a CoinJoin tx contains a HIGH-confidence
-    hypothesis where the queried address is one of the inputs,
-    the adapter emits synthetic Transfers for the unwrap output
-    addresses. The trace CONTINUES past the CoinJoin instead of
-    dead-ending."""
+def test_coinjoin_terminates_at_boundary_and_records_leads_only() -> None:
+    """HIGH-1 fix (v0.48 audit): a standard Whirlpool round has
+    anonymity set > 1 for every single-input participant, so the
+    adapter NEVER injects followable synthetic Transfers — the trace
+    STOPS at the CoinJoin boundary (returns []). The candidate
+    post-mix outputs are recorded ONLY as leads via the
+    synthetic-coinjoin registry."""
+    from recupero.chains.bitcoin.adapter import (
+        clear_synthetic_coinjoin_registry,
+        is_synthetic_coinjoin,
+    )
+
     # Whirlpool-shape: 5 inputs each ~10.1M sats, 5 outputs at
-    # exactly 10M sats. Single-input contribution with <2% fee
-    # ratio → high-confidence hypothesis per the unwrap algorithm.
+    # exactly 10M sats. Pre-fix this fabricated a "high"-confidence
+    # followable transfer; now it must not.
     cj_tx = {
         "txid": "whirlpool_tx",
         "vin": [
@@ -318,22 +324,17 @@ def test_coinjoin_with_high_confidence_hypothesis_emits_synthetic_transfers() ->
             "block_hash": "x" * 64,
         },
     }
+    clear_synthetic_coinjoin_registry()
     adapter = _mk_adapter([cj_tx])
     out = adapter.fetch_native_outflows(VICTIM, start_block=0)
-    # We should get at least one synthetic Transfer (high-confidence
-    # 1-output participant hypothesis fires).
-    assert len(out) >= 1
-    rec = out[0]
-    # Synthetic transfer marker present.
-    assert rec.get("_synthetic_coinjoin_unwrap") is True
-    assert rec.get("_unwrap_confidence_score") is not None
-    assert rec["_unwrap_confidence_score"] >= 0.7
-    # From = the queried victim address.
-    assert rec["from"] == VICTIM
-    # Target one of the round-output addresses.
-    assert rec["to"] in {"1B1", "1B2", "1B3", "1B4", "1B5"}
-    assert rec["tx_hash"] == "whirlpool_tx"
-    assert rec["chain"] == Chain.bitcoin
+    # No followable transfers injected into the BFS.
+    assert out == []
+    # But the post-mix candidate outputs ARE recorded as leads so the
+    # brief / LE renderer can surface them (lead only, not flow).
+    assert any(
+        is_synthetic_coinjoin("whirlpool_tx", f"1B{i}")
+        for i in range(1, 6)
+    )
 
 
 def test_coinjoin_with_no_actionable_hypothesis_returns_empty() -> None:
@@ -370,8 +371,9 @@ def test_coinjoin_with_no_actionable_hypothesis_returns_empty() -> None:
 
 
 def test_coinjoin_only_high_confidence_hypotheses_emitted() -> None:
-    """Medium and low confidence unwrap hypotheses must NOT enter
-    the trace — too noisy. Only HIGH confidence."""
+    """No unwrap hypothesis (high, medium, or low) may enter the trace
+    as a followable transfer — the CoinJoin is a terminal boundary
+    (HIGH-1 fix). This medium-confidence shape must yield [] too."""
     # Construct a CoinJoin where the only hypothesis involving the
     # victim is medium (large fee ratio).
     cj_tx = {

@@ -98,3 +98,36 @@ def test_to_dict_and_case_wrapper():
     assert d["consolidation_hubs"][0]["heuristic"] == "consolidation_hub"
     assert d["node_count"] == 5
     assert d["max_depth_from_seed"] == 2   # A→HUB→D
+
+
+# ---- no silent caps: BFS depth-guard observability ---- #
+
+
+def test_bfs_depth_guard_warns_and_floors(monkeypatch, caplog):
+    """When the seed-reachability BFS hits the pathological-depth guard, the
+    reported max_depth is a FLOOR and must be WARNED (no silent cap) so the
+    brief's depth figure can't read as a complete exploration."""
+    import logging
+
+    import recupero.trace.graph_analysis as ga
+
+    monkeypatch.setattr(ga, "_MAX_BFS_DEPTH", 2)
+    chain = [f"0x{i:040x}" for i in range(1, 8)]  # 7 nodes, 6 edges deep
+    ts = [_t(chain[i], chain[i + 1]) for i in range(len(chain) - 1)]
+    with caplog.at_level(logging.WARNING):
+        g = analyze_transfers(ts, seed=chain[0])
+    assert "guard" in caplog.text
+    # Broke at depth 3 (first depth strictly greater than the cap of 2),
+    # a floor well short of the true 6-hop chain.
+    assert g.max_depth_from_seed == 3
+
+
+def test_bfs_depth_no_warn_under_guard(caplog):
+    import logging
+
+    chain = [f"0x{i:040x}" for i in range(1, 5)]  # depth 3, well under 10_000
+    ts = [_t(chain[i], chain[i + 1]) for i in range(len(chain) - 1)]
+    with caplog.at_level(logging.WARNING):
+        g = analyze_transfers(ts, seed=chain[0])
+    assert "guard" not in caplog.text
+    assert g.max_depth_from_seed == 3

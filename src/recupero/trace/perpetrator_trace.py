@@ -266,10 +266,14 @@ def run_perpetrator_trace(
         case_dir=case_dir,
     )
 
+    # Canonical keying (not .lower()) so the distinct-destination count is
+    # correct on case-sensitive base58/bech32 chains (Tron/Solana/Sui/Cosmos),
+    # matching how merge_perpetrator_findings keys addresses.
+    from recupero._common import canonical_address_key as _ck
     log.info(
         "pass2 trace done case=%s transfers=%d destinations=%d",
         pass2_case_id, len(case.transfers),
-        len({t.to_address.lower() for t in case.transfers}),
+        len({_ck(t.to_address) for t in case.transfers}),
     )
 
     return case

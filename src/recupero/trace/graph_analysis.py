@@ -24,14 +24,23 @@ edge.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+log = logging.getLogger(__name__)
+
 # Default: a node fed by this many DISTINCT direct sources is a consolidation
 # hub candidate. 3 keeps it to genuine re-merge points (a normal hop has 1-2).
 _DEFAULT_MIN_DISTINCT_SOURCES = 3
+
+# Pathological-graph guard for the seed-reachability BFS: stop after this many
+# hops so a degenerate graph can't spin. If it fires, max_depth_from_seed is a
+# FLOOR (the true depth is >= this), so we WARN — the reported depth must never
+# read as "we fully explored the graph" when we actually stopped early.
+_MAX_BFS_DEPTH = 10_000
 
 
 @dataclass(frozen=True)
@@ -227,7 +236,18 @@ def analyze_transfers(
                 if nxt:
                     depth += 1
                 frontier = nxt
-                if depth > 10_000:   # pathological-graph guard
+                if depth > _MAX_BFS_DEPTH:   # pathological-graph guard
+                    # No silent caps: the returned max_depth is now a FLOOR, not
+                    # the true graph depth. Left silent, the brief's "traced to a
+                    # maximum depth of N hops" would read as complete when we
+                    # actually stopped early on an extremely deep chain.
+                    log.warning(
+                        "graph_analysis: seed-reachability BFS hit the %d-hop "
+                        "guard; max_depth_from_seed is a FLOOR (true depth is "
+                        "deeper) — may indicate an extremely deep mixing/peel "
+                        "chain.",
+                        _MAX_BFS_DEPTH,
+                    )
                     break
             max_depth = depth
 

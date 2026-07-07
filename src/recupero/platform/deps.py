@@ -13,7 +13,7 @@ import os
 from collections.abc import Iterator
 from typing import Any
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 
 from recupero.platform import keycache, store, tenancy
 from recupero.platform.ratelimit import get_rate_limiter
@@ -83,13 +83,31 @@ def db_conn() -> Iterator[Any]:
         conn.close()
 
 
+def _stash_principal(request: Request | None, ctx: store.OrgContext) -> store.OrgContext:
+    """Record the resolved tenant on ``request.state`` (which is ``scope['state']``)
+    so downstream ASGI middleware — the opt-in structured request log (see
+    ``platform.reqlog``) — can key a log line by org without re-parsing the token.
+    Best-effort: telemetry must never fail a request. Returns ``ctx`` so callers
+    can ``return _stash_principal(request, ctx)`` in one line."""
+    if request is not None:
+        try:
+            request.state.org_id = ctx.org_id
+            request.state.plan = ctx.plan
+            request.state.role = ctx.role
+        except Exception:  # noqa: BLE001
+            pass
+    return ctx
+
+
 def current_principal(
+    request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     conn: Any = Depends(db_conn),
 ) -> store.OrgContext:
     """Authenticate a request → OrgContext. Bearer JWT first (web sessions),
-    then an org API key. 401 if neither resolves."""
+    then an org API key. 401 if neither resolves. The resolved tenant is stashed
+    on ``request.state`` for the structured request log."""
     # 1) Bearer session token
     if authorization and authorization.lower().startswith("bearer "):
         token = authorization[7:].strip()
@@ -97,26 +115,26 @@ def current_principal(
             claims = tenancy.verify_jwt(token, secret=_jwt_secret())
         except tenancy.TokenError as exc:
             raise HTTPException(status_code=401, detail=f"invalid token: {exc}") from exc
-        return store.OrgContext(
+        return _stash_principal(request, store.OrgContext(
             org_id=str(claims.get("org")),
             plan=str(claims.get("plan", tenancy.DEFAULT_PLAN)),
             user_id=str(claims.get("sub")),
             role=str(claims.get("role", "member")),
-        )
+        ))
     # 2) Org API key. Check the optional short-TTL cache first (positive-only,
     # fails open to the DB); only active resolutions are ever cached.
     if x_api_key and x_api_key.startswith(tenancy.API_KEY_PREFIX):
         key_hash = tenancy.hash_api_key(x_api_key)
         cached = keycache.get(key_hash)
         if cached is not None:
-            return store.OrgContext(
+            return _stash_principal(request, store.OrgContext(
                 org_id=str(cached["org_id"]), plan=str(cached.get("plan", tenancy.DEFAULT_PLAN)),
                 user_id=None, role="service",
-            )
+            ))
         ctx = store.resolve_api_key(conn, x_api_key)
         if ctx is not None:
             keycache.put(key_hash, {"org_id": ctx.org_id, "plan": ctx.plan})
-            return ctx
+            return _stash_principal(request, ctx)
         raise HTTPException(status_code=401, detail="invalid API key")
     raise HTTPException(
         status_code=401,

@@ -154,8 +154,14 @@ def test_async_count_matches_baseline(parsed):
     # the POST /stream-token minter so EventSource never carries the admin key
     # in the URL. AUDITED non-blocking (in-memory admin-auth + _valid_inv +
     # _mint_stream_token dict-insert under _STREAM_TOKENS_LOCK; no I/O).
-    assert total == 37, (
-        f"async def count drifted to {total} (was 37). Update baseline and "
+    # SaaS /v2 structured request log (polish wave): +2 in api/app.py —
+    # _PlatformRequestLogMiddleware.__call__ + its nested _send. Pure ASGI
+    # plumbing: await self.app / await send + time.perf_counter + a sync
+    # reqlog.build_log_record/emit (json.dumps + logging). Zero blocking I/O
+    # (covered by test_no_blocking_io_inside_async_def). Same non-blocking shape
+    # as _BodySizeLimitMiddleware's __call__/_send/limited_receive.
+    assert total == 39, (
+        f"async def count drifted to {total} (was 39). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

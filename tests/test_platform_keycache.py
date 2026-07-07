@@ -7,8 +7,17 @@ No live Redis: the client picker is monkeypatched with a fake redis (or None).
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 from recupero.platform import deps, keycache, store, tenancy
+
+
+class _FakeRequest:
+    """Minimal stand-in for a Starlette Request: ``current_principal`` only
+    touches ``request.state`` (to stash the resolved tenant for the request log)."""
+
+    def __init__(self) -> None:
+        self.state = SimpleNamespace()
 
 
 class _FakeRedis:
@@ -113,7 +122,7 @@ def test_current_principal_cache_hit_skips_db(monkeypatch):
         raise AssertionError("resolve_api_key must NOT be called on a cache hit")
 
     monkeypatch.setattr(store, "resolve_api_key", _boom)
-    ctx = deps.current_principal(authorization=None, x_api_key=key, conn=object())
+    ctx = deps.current_principal(request=_FakeRequest(), authorization=None, x_api_key=key, conn=object())
     assert ctx.org_id == "org1" and ctx.plan == "pro" and ctx.role == "service"
 
 
@@ -122,7 +131,7 @@ def test_current_principal_cache_miss_populates(monkeypatch):
     key = tenancy.API_KEY_PREFIX + "freshtoken"
     resolved = store.OrgContext(org_id="org9", plan="enterprise", user_id=None, role="service")
     monkeypatch.setattr(store, "resolve_api_key", lambda conn, k: resolved)
-    ctx = deps.current_principal(authorization=None, x_api_key=key, conn=object())
+    ctx = deps.current_principal(request=_FakeRequest(), authorization=None, x_api_key=key, conn=object())
     assert ctx.org_id == "org9"
     # cache now populated for next time
     cached = json.loads(fake.store["akc:" + tenancy.hash_api_key(key)])

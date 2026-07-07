@@ -81,6 +81,13 @@ def consume_user_token(conn: Any, *, kind: str, token_hash: str) -> str | None:
     return row[0] if row else None
 
 
+def get_user_email(conn: Any, user_id: str) -> str | None:
+    with conn.cursor() as cur:
+        cur.execute("SELECT email FROM public.users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
 def set_email_verified(conn: Any, user_id: str) -> None:
     with conn.cursor() as cur:
         cur.execute(
@@ -557,5 +564,5 @@ __all__ = (
     "remove_member", "count_pending_invites", "create_invite", "list_invites",
     "revoke_invite", "get_invite_by_token", "mark_invite_accepted",
     "update_password_hash", "create_user_token", "consume_user_token",
-    "set_email_verified",
+    "set_email_verified", "get_user_email",
 )

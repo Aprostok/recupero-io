@@ -18,7 +18,16 @@ from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from recupero.observability import metrics as obs_metrics
-from recupero.platform import audit, billing, deps, keycache, objectstore, store, tenancy
+from recupero.platform import (
+    audit,
+    billing,
+    deps,
+    emailer,
+    keycache,
+    objectstore,
+    store,
+    tenancy,
+)
 
 router = APIRouter(
     prefix="/v2", tags=["platform"],
@@ -223,7 +232,12 @@ def request_email_verification(
         token_hash=token_hash, expires_at=expires,
     )
     base = os.environ.get("RECUPERO_APP_BASE_URL", "https://app.recupero.io")
-    return {"verify_token": token, "verify_url": f"{base}/verify?token={token}"}
+    verify_url = f"{base}/verify?token={token}"
+    # Best-effort email; the link is also returned (the caller owns the session).
+    email = store.get_user_email(conn, principal.user_id)
+    if email:
+        emailer.send_link_email(to=email, kind="verify", url=verify_url)
+    return {"verify_token": token, "verify_url": verify_url}
 
 
 @router.post("/auth/verify/confirm")
@@ -250,15 +264,19 @@ def request_password_reset(
     ALWAYS 202 regardless of whether the email exists (no user enumeration)."""
     user = store.get_user_by_email(conn, body.email)
     if user is not None:
-        _token, token_hash = tenancy.generate_invite_token()
+        token, token_hash = tenancy.generate_invite_token()
         expires = datetime.now(UTC) + timedelta(seconds=_PASSWORD_RESET_TTL_SEC)
         store.create_user_token(
             conn, user_id=user["id"], kind="password_reset",
             token_hash=token_hash, expires_at=expires,
         )
-        # Production: dispatch the reset link (RECUPERO_APP_BASE_URL/reset?token=…)
-        # via the existing email dispatcher. Delivery is intentionally out-of-band
-        # from this handler; the token is not exposed here.
+        # Email the reset link (best-effort). The token is delivered ONLY via
+        # email — it is never returned in the response, so an unauthenticated
+        # caller can't reset an account whose mailbox they don't control.
+        base = os.environ.get("RECUPERO_APP_BASE_URL", "https://app.recupero.io")
+        emailer.send_link_email(
+            to=body.email, kind="password_reset", url=f"{base}/reset?token={token}",
+        )
     return {"status": "sent"}
 
 
@@ -409,7 +427,11 @@ def invite_member(
                  action="member.invited", target=body.email, target_kind="invite",
                  metadata={"role": body.role})
     base = os.environ.get("RECUPERO_APP_BASE_URL", "https://app.recupero.io")
-    # The token is returned ONCE (email delivery is a separate, gated concern).
+    accept_url = f"{base}/invite?token={token}"
+    # Email the invitee the accept link (best-effort). The token is ALSO returned
+    # once to the inviter (who owns the session) so a copy-paste flow works even
+    # when email delivery isn't configured.
+    emailer.send_link_email(to=body.email, kind="invite", url=accept_url)
     return {
         "invite_id": invite_id, "email": body.email, "role": body.role,
         "invite_token": token, "accept_url": f"{base}/invite?token={token}",

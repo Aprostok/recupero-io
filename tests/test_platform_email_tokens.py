@@ -74,6 +74,9 @@ def test_verify_request_then_confirm(monkeypatch) -> None:
     monkeypatch.setenv("RECUPERO_APP_BASE_URL", "https://app.example")
     created = {}
     monkeypatch.setattr(store, "create_user_token", lambda conn, **k: created.update(k))
+    # verify-request also looks up the user's email + best-effort emails the link.
+    monkeypatch.setattr(store, "get_user_email", lambda conn, uid: "owner@example.com")
+    monkeypatch.setattr(router.emailer, "send_link_email", lambda **k: True)
     out = router.request_email_verification(principal=_principal(), conn=object())
     assert out["verify_url"].startswith("https://app.example/verify?token=")
     # the stored hash matches the returned token

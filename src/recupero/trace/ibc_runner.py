@@ -96,7 +96,19 @@ def run_ibc_leads(
         for tr in _normalize_tx_responses(raw):
             sends.extend(parse_ibc_sends(tr, src_zone=zone))
         # Defense-in-depth: only sends actually initiated by this wallet.
-        sends = [s for s in sends if s.sender == wallet][:_MAX_LEADS_PER_WALLET]
+        own_sends = [s for s in sends if s.sender == wallet]
+        # No silent caps: a high-IBC-activity wallet can exceed the per-wallet
+        # lead budget; the dropped sends may be cross-chain destinations worth
+        # following, so WARN when we truncate (the INFO line below reports only
+        # the KEPT count).
+        if len(own_sends) > _MAX_LEADS_PER_WALLET:
+            log.warning(
+                "ibc-leads: wallet %s (%s) has %d outbound IBC sends — keeping "
+                "only the first %d; %d dropped (raise _MAX_LEADS_PER_WALLET).",
+                wallet, zone, len(own_sends), _MAX_LEADS_PER_WALLET,
+                len(own_sends) - _MAX_LEADS_PER_WALLET,
+            )
+        sends = own_sends[:_MAX_LEADS_PER_WALLET]
         for s in sends:
             leads.append({
                 "src_zone": s.src_zone,

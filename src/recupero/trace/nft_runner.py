@@ -65,8 +65,14 @@ def traced_wallets(transfers: Iterable[Any], *, max_wallets: int = DEFAULT_MAX_W
         seen.add(key)
         out.append(str(frm))
         if len(out) >= max_wallets:
-            log.info("nft-flows: wallet cap reached (%d) — remaining traced "
-                     "wallets skipped", max_wallets)
+            # No silent caps: WARN (not INFO — filtered in prod). Shared by the
+            # NFT + IBC runners, so the message is chain-agnostic. Traced wallets
+            # past the cap get no NFT/IBC lead probe at all.
+            log.warning(
+                "traced-wallets: wallet cap reached (%d) — remaining traced "
+                "wallets are skipped (not probed for downstream leads). Raise "
+                "max_wallets to cover more.", max_wallets,
+            )
             break
     return out
 

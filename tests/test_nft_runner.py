@@ -142,3 +142,20 @@ def test_nft_row_cap_no_warn_under_limit(caplog) -> None:
             force=True, max_rows_per_wallet=10,
         )
     assert "dropped from the case NFT history" not in caplog.text
+
+
+def test_traced_wallets_cap_warns_chain_agnostic(caplog) -> None:
+    """The shared traced_wallets cap (used by NFT + IBC runners) must WARN
+    when it drops wallets, with a chain-agnostic message (not 'nft-flows')."""
+    import logging
+
+    from recupero.trace.nft_runner import traced_wallets
+    transfers = [
+        SimpleNamespace(from_address=f"0x{i:040x}", to_address=_OTHER)
+        for i in range(1, 6)
+    ]
+    with caplog.at_level(logging.WARNING):
+        out = traced_wallets(transfers, max_wallets=2)
+    assert len(out) == 2
+    assert "traced-wallets: wallet cap reached" in caplog.text
+    assert "nft-flows" not in caplog.text

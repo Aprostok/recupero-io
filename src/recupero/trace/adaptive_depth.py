@@ -195,10 +195,14 @@ def should_descend_further(
         current_depth >= FRONTIER_REFUSE_AT_DEPTH
         and frontier_size > FRONTIER_REFUSE_SIZE
     ):
-        log.info(
-            "should_descend_further: refusing expansion at depth=%d frontier=%d",
-            current_depth,
-            frontier_size,
+        # No silent caps: this refusal TRUNCATES the trace — the launderer's
+        # onward path past this frontier is not followed. That boundary must
+        # surface to a reviewer, so WARN (INFO is routinely filtered out).
+        log.warning(
+            "should_descend_further: refusing frontier expansion at depth=%d "
+            "(frontier=%d > %d) — the trace is TRUNCATED here; onward transfers "
+            "from this frontier are not followed (combinatorial blow-up guard).",
+            current_depth, frontier_size, FRONTIER_REFUSE_SIZE,
         )
         return False
     return True

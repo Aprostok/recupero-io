@@ -225,3 +225,37 @@ def test_infer_infrastructure_endpoints_skips_low_inflow_and_other_chains() -> N
     )
     out = infer_infrastructure_endpoints(case, adapter=adapter, start_block=1)
     assert out == []
+
+
+def test_infer_endpoints_cap_warns_when_probes_dropped(caplog) -> None:
+    """No silent caps: more qualifying endpoints than max_probe leaves the rest
+    unprobed ('unlabeled' in the brief) — warn so the coverage gap is visible."""
+    import logging
+    addrs = [f"0x{i:040x}" for i in range(1, 13)]  # 12 qualifying > max_probe 10
+    case = _Case(
+        transfers=[_Tx(a, Decimal("250000")) for a in addrs], unlabeled=addrs,
+    )
+    adapter = _OrchAdapter(
+        native_in=_rows("from", [f"0x{i:040x}" for i in range(60)]),
+        erc20_in=[],
+        native_out=_rows("to", [f"0x{(i + 1000):040x}" for i in range(60)]),
+        erc20_out=[],
+    )
+    with caplog.at_level(logging.WARNING):
+        infer_infrastructure_endpoints(case, adapter=adapter, start_block=1)
+    assert "qualify for probing" in caplog.text
+
+
+def test_infer_endpoints_no_warn_under_cap(caplog) -> None:
+    import logging
+    hot = "0x" + "9" * 40
+    case = _Case(transfers=[_Tx(hot, Decimal("250000"))], unlabeled=[hot])
+    adapter = _OrchAdapter(
+        native_in=_rows("from", [f"0x{i:040x}" for i in range(60)]),
+        erc20_in=[],
+        native_out=_rows("to", [f"0x{(i + 1000):040x}" for i in range(60)]),
+        erc20_out=[],
+    )
+    with caplog.at_level(logging.WARNING):
+        infer_infrastructure_endpoints(case, adapter=adapter, start_block=1)
+    assert "qualify for probing" not in caplog.text

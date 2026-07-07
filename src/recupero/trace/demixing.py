@@ -36,9 +36,12 @@ opt-in) pool-event fetch out of the hot path.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # Default window after a deposit within which a withdrawal is a plausible
 # same-actor candidate. 0 ⇒ unbounded (dormancy-aware), consistent with the
@@ -157,6 +160,16 @@ def demix_candidates(
         ))
 
     leads.sort(key=lambda lead: lead.score, reverse=True)
+    # No silent caps: a lower-ranked lead can still be the true withdrawal, so if
+    # we're dropping scored leads say so (these are already low-confidence LEADS
+    # a reviewer triages — the reviewer must know the list was trimmed).
+    if len(leads) > max_leads:
+        log.warning(
+            "demix_candidates: %d withdrawals scored for the %s deposit; "
+            "returning only the top %d by score — %d lower-ranked lead(s) "
+            "omitted. Raise max_leads to review more.",
+            len(leads), deposit.pool, max_leads, len(leads) - max_leads,
+        )
     return leads[:max_leads]
 
 

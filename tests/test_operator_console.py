@@ -59,6 +59,22 @@ def test_nav_is_public_and_links_live_consoles():
     assert all(c.get("live") for c in body["consoles"])
 
 
+def test_origin_story_is_public_html():
+    """The origin-story page is a public, data-free narrative served under the
+    console prefix and linked from the hub's About group."""
+    c = _client()
+    r = c.get("/v1/console/story")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    assert "Our Story" in r.text
+    assert '/v1/console/app.css' in r.text          # uses the shared design system
+    assert "X-Recupero-Admin-Key" not in r.text     # no auth, no secret on the page
+    # It is reachable from the hub nav registry as a live console.
+    nav = c.get("/v1/console/nav").json()["consoles"]
+    story = [x for x in nav if x["path"] == "/v1/console/story"]
+    assert story and story[0]["live"] is True and story[0]["group"] == "About"
+
+
 def test_stats_503_when_key_unset(monkeypatch):
     monkeypatch.delenv("RECUPERO_ADMIN_KEY", raising=False)
     r = _client().get("/v1/console/stats")

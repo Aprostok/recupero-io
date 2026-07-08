@@ -105,7 +105,17 @@ _PINNED_ASSETS: dict[str, tuple[str, int, str | None]] = {
 def _parse_ts(raw: Any) -> datetime:
     if isinstance(raw, str) and raw:
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=UTC)
+            # Normalize to aware-UTC. ``fromisoformat`` yields an *offset-aware*
+            # datetime when the string carries an offset (e.g. ``+05:00``); we
+            # must CONVERT it with ``astimezone``, not overwrite the offset with
+            # ``.replace(tzinfo=UTC)`` (which would silently shift the instant by
+            # the offset — an evidence-integrity bug for chain-of-custody
+            # timestamps). Only a *naive* result (no ``Z``/offset) is stamped
+            # UTC, since Aptos indexer timestamps are UTC.
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
         except ValueError:
             pass
     return datetime.fromtimestamp(0, tz=UTC)

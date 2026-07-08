@@ -126,6 +126,7 @@ their own section.
 | `RECUPERO_API_BUDGET_USD_PER_CASE` | `0` (disabled) | Decimal | `[0.01, 1_000_000.0]`, finite | v0.32 | Per-case API spend cap across all providers. v0.32.1+ industry-best mode: default DISABLED so the tracker can reach deep destinations without an artificial dollar gate. Operators on shared free-tier API keys opt in with a positive USD value. |
 | `RECUPERO_P_ANY_CALIBRATION_JSON` | unset | JSON | object | v0.21.x | Override default p_any calibration constants (recovery scorer). |
 | `RECUPERO_PRICING_FALLBACK` | `defillama` | str | `defillama` / `none` | v0.31.5 | Secondary historical-price provider. `none` disables the fallback chain (CoinGecko only). |
+| `RECUPERO_CONTRACT_ID_CACHE_MAX` | `50000` | int | `> 0` | v0.42 | LRU cap on the in-process CoinGecko contract→id cache. Bounds memory on long-running workers that trace high-token-diversity cases; hot tokens (ETH/stablecoins/majors) are touched on hit and never age out. |
 | **Worker / scheduler** | | | | | |
 | `RECUPERO_HEARTBEAT_INTERVAL_SEC` | `30` | float | `> 0`, finite | v0.18.x | Per-row heartbeat cadence for worker liveness. |
 | `RECUPERO_STALE_AFTER_SEC` | `300` | int | `> 0` | v0.18.x | Reaper threshold — claim is considered stale after this many seconds. |
@@ -554,6 +555,27 @@ through to `(unpriced)` in the brief.
   every token in the case (no fallback budget needed). The
   `source` column on each transfer in `case.json` records which
   provider actually answered.
+
+#### `RECUPERO_CONTRACT_ID_CACHE_MAX`
+
+v0.42. Upper bound on the number of entries kept in the in-process
+CoinGecko contract→coingecko-id cache. The cache is seeded from the
+static token map and grows by one entry per unique token resolved via
+the `/coins/{platform}/contract/{address}` API. Default `50000`.
+
+The cache is an LRU: on a cache hit the entry is moved to the recent
+end, and once the entry count exceeds this cap the least-recently-used
+learned mapping is evicted. Hot tokens (ETH, stablecoins, majors) are
+touched on essentially every case and therefore never age out.
+
+* **Why it exists:** without a bound, a long-running worker (24h+)
+  that traces many high-token-diversity cases (bridged tokens, L2
+  clones) accumulates one entry per token seen for the process
+  lifetime and eventually OOMs.
+* **When to override:** lower it on memory-constrained hosts; raise it
+  if a single worker process routinely traces well over 50k distinct
+  tokens between restarts and you want to avoid re-resolving them.
+* **Failure modes:** non-integer / unset values fall back to `50000`.
 
 ### Worker / scheduler
 

@@ -3100,6 +3100,27 @@ def _trace_one_hop(
         })
         raw_outflows = raw_outflows[:_cap]
 
+    # Per-hop dedup of blocking RPCs. A consolidation node fans thousands of
+    # transfers into a handful of unique destination addresses / txs; without
+    # this the loop below issued one is_contract RPC per transfer (not per
+    # address) and one evidence fetch per transfer (not per tx). Both calls are
+    # idempotent for a given key, so memoizing collapses N round-trips to K
+    # unique — the single biggest network-I/O reduction on the hot path.
+    _contract_cache: dict[str, bool] = {}
+    _evidence_seen: set[str] = set()
+
+    def _resolve_is_contract(addr: str) -> bool:
+        cached = _contract_cache.get(addr)
+        if cached is not None:
+            return cached
+        try:
+            val = adapter.is_contract(addr)
+        except Exception as e:  # noqa: BLE001
+            log.warning("is_contract check failed for %s: %s", addr, e)
+            val = False
+        _contract_cache[addr] = val
+        return val
+
     transfers: list[Transfer] = []
     for raw in raw_outflows:
         # Drop debug-only fields before transfer construction
@@ -3186,14 +3207,7 @@ def _trace_one_hop(
         # pass we defer it (placeholder False) — these are throwaway candidates;
         # only the value-matched onward hop(s) get a proper resolution when the
         # next wave fetches them.
-        if _lightweight:
-            is_contract = False
-        else:
-            try:
-                is_contract = adapter.is_contract(transfer.to_address)
-            except Exception as e:  # noqa: BLE001
-                log.warning("is_contract check failed for %s: %s", transfer.to_address, e)
-                is_contract = False
+        is_contract = False if _lightweight else _resolve_is_contract(transfer.to_address)
 
         counterparty = Counterparty(
             address=transfer.to_address,
@@ -3209,7 +3223,11 @@ def _trace_one_hop(
         # dominant cost at a high-fan-out node. The caller writes evidence for
         # the value-matched onward hop(s) only (see _value_match_and_enqueue
         # finalize in run_trace).
-        if not _lightweight:
+        # One evidence fetch per unique tx, not per log-line transfer. The
+        # receipt is keyed solely by tx_hash and is idempotent (same file), so
+        # de-duplicating multiple transfers within one tx avoids redundant RPCs.
+        if not _lightweight and transfer.tx_hash not in _evidence_seen:
+            _evidence_seen.add(transfer.tx_hash)
             try:
                 write_evidence_receipt(adapter, transfer.tx_hash, evidence_dir)
             except Exception as e:  # noqa: BLE001

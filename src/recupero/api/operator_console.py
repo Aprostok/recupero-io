@@ -37,6 +37,10 @@ _HUB_HTML = (
     Path(__file__).resolve().parent.parent
     / "web" / "templates" / "operator_dashboard.html"
 )
+_STORY_HTML = (
+    Path(__file__).resolve().parent.parent
+    / "web" / "templates" / "origin_story.html"
+)
 
 # Operator console navigation registry. Each entry = one linkable view.
 # `live` marks views that exist now; phase agents append their entry here during
@@ -131,6 +135,11 @@ _NAV: list[dict[str, Any]] = [
      "path": "/v1/incident-plans/console", "live": True,
      "desc": "Ordered D4 response playbooks from each recovery alert — re-trace, "
              "venue-conditional freeze/subpoena, notify, follow-up."},
+    # Origin story — why Recupero exists (narrative page, public, no data).
+    {"group": "About", "label": "Our Story", "icon": "heart",
+     "path": "/v1/console/story", "live": True,
+     "desc": "How Recupero began — the hack, the recovery with U.S. authorities, "
+             "and the mission to help others find their way back."},
 ]
 
 # ── Monochrome line-icon set (stroke=currentColor). Static + trusted (NOT user
@@ -189,6 +198,8 @@ _ICONS: dict[str, str] = {
                  '<path d="M10.5 21a2 2 0 0 0 3 0"/>'),
     "route": _svg('<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/>'
                   '<path d="M8 19h7a3 3 0 0 0 0-6H9a3 3 0 0 1 0-6h7"/>'),
+    "heart": _svg('<path d="M12 20s-7-4.4-9.2-8.6A4.6 4.6 0 0 1 12 6.5 4.6 4.6 0 0 '
+                  '1 21.2 11.4C19 15.6 12 20 12 20z"/>'),
 }
 _DEFAULT_ICON = _svg('<circle cx="12" cy="12" r="8"/>')
 
@@ -239,6 +250,24 @@ def operator_hub() -> HTMLResponse:
         return HTMLResponse(
             content="<h1>Operator console unavailable</h1>"
                     "<p>Template could not be read.</p>",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    return HTMLResponse(content=html)
+
+
+@router.get(
+    "/story",
+    response_class=HTMLResponse,
+    summary="Recupero origin story (HTML narrative). Unauthenticated by design — "
+            "public, data-free page linked from the hub's About group.",
+)
+def operator_story() -> HTMLResponse:
+    try:
+        html = _STORY_HTML.read_text(encoding="utf-8")
+    except OSError as exc:
+        log.warning("operator_story: template read failed: %s", exc)
+        return HTMLResponse(
+            content="<h1>Our story is momentarily unavailable</h1>",
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
         )
     return HTMLResponse(content=html)

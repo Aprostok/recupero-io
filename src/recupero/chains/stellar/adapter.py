@@ -70,7 +70,15 @@ _ASSET_COINGECKO: dict[str, str] = {"USDC": "usd-coin", "USDT": "tether"}
 def _parse_created_at(raw: Any) -> datetime:
     if isinstance(raw, str) and raw:
         try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            # Always return an aware-UTC datetime. A Z-less / offset-less
+            # ``created_at`` parses to a *naive* datetime, and calling
+            # ``.timestamp()`` on it downstream would interpret it in the HOST's
+            # local timezone (wrong start-block cutoff on any non-UTC host).
+            # Stamp UTC when naive; convert when an offset is present.
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=UTC)
+            return dt.astimezone(UTC)
         except ValueError:
             pass
     return datetime.fromtimestamp(0, tz=UTC)

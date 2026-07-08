@@ -261,13 +261,16 @@ class TestContractStop:
         assert case.transfers[0].to_address.lower() == HOP1A.lower()
 
     def test_is_contract_called_once_per_address_by_driver(self, cfg_with_depth, tmp_path, monkeypatch):
-        """Driver's contract-stop check caches; two transfers to same destination
-        should only trigger ONE extra is_contract call from the driver on top of
-        the per-transfer calls that _trace_one_hop makes to set Counterparty.is_contract.
+        """is_contract is resolved once per UNIQUE destination address, not once
+        per transfer. Two transfers to the same destination should trigger:
+          - 1 call from _trace_one_hop (per-hop memoization of the Counterparty
+            is_contract resolution — see _resolve_is_contract), and
+          - 1 call from the driver's stop-at-contract check (its own cache),
+        for 2 total.
 
-        Test invariant: the count for a duplicated destination is bounded — if
-        both transfers triggered the driver check, we'd see 4 calls (2 from
-        _trace_one_hop + 2 from driver). Caching should limit it to 3.
+        Pre-optimization this was 3 (_trace_one_hop called is_contract per
+        transfer: 2 + 1 driver). The per-hop dedup collapses the redundant
+        second per-transfer RPC. If BOTH layers lost their caching we'd see 4.
         """
         config, env = cfg_with_depth(3)
         adapter = GraphAdapter({
@@ -287,12 +290,12 @@ class TestContractStop:
             case_id="CACHE", config=config, env=env, case_dir=case_dir,
         )
         hop1a_checks = [a for a in adapter.is_contract_calls if a == HOP1A.lower()]
-        # 2 from _trace_one_hop (per-transfer counterparty labeling) + 1 from
-        # driver's stop-at-contract check (cached for the second traversal)
-        # = 3 total. If caching failed we'd see 4+.
-        assert len(hop1a_checks) == 3, (
-            f"is_contract called {len(hop1a_checks)}x, want 3 "
-            f"(2 from _trace_one_hop, 1 from driver cache)"
+        # 1 from _trace_one_hop (per-hop dedup: both transfers share one
+        # resolution) + 1 from the driver's stop-at-contract check (cached for
+        # the second traversal) = 2 total. If either cache failed we'd see 3-4.
+        assert len(hop1a_checks) == 2, (
+            f"is_contract called {len(hop1a_checks)}x, want 2 "
+            f"(1 from _trace_one_hop dedup, 1 from driver cache)"
         )
 
 

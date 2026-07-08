@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -446,7 +447,21 @@ class CoinGeckoClient:
         )
         # Cache key is (chain, contract_lower) so Ethereum USDC and Arbitrum USDC
         # don't collide. Seeded from the static map.
-        self._contract_id_cache: dict[tuple[Chain, str], str | None] = dict(_CONTRACT_TO_CG)
+        #
+        # LRU-bounded: a long-running worker (24h+) that traces high-token-
+        # diversity cases would otherwise grow this dict unbounded (one entry
+        # per unique token ever seen), leaking memory until OOM. OrderedDict +
+        # move_to_end-on-hit + popitem(last=False)-on-overflow caps it. The cap
+        # is far above the static seed size and any single case's token count,
+        # and hot seed tokens (ETH/stablecoins/majors) get touched on every hit
+        # so they never age out. Overridable for tests / constrained hosts.
+        self._contract_id_cache: OrderedDict[tuple[Chain, str], str | None] = OrderedDict(_CONTRACT_TO_CG)
+        try:
+            self._contract_id_cache_max = int(
+                os.environ.get("RECUPERO_CONTRACT_ID_CACHE_MAX", "50000")
+            )
+        except (TypeError, ValueError):
+            self._contract_id_cache_max = 50000
 
         # v0.31.5 — secondary provider chain. Lazy-loaded so the
         # CoinGecko-only cache path (set `RECUPERO_PRICING_FALLBACK=none`)
@@ -716,6 +731,10 @@ class CoinGeckoClient:
         canon = _ck(token.contract)
         cache_key = (token.chain, canon)
         if cache_key in self._contract_id_cache:
+            # Touch on hit so hot tokens stay at the recent end and survive
+            # LRU eviction. `in`+`[]` (not `.get`) is deliberate: None is a
+            # valid cached value (a genuine 404 caches None, see below).
+            self._lru_touch_and_bound(cache_key)
             return self._contract_id_cache[cache_key]
         if skip_api:
             # v0.34 fast path (value-trace at high-fan-out nodes): resolve from
@@ -740,7 +759,26 @@ class CoinGeckoClient:
             # returning None without raising).
             return None
         self._contract_id_cache[cache_key] = cg_id
+        self._lru_touch_and_bound(cache_key)
         return cg_id
+
+    def _lru_touch_and_bound(self, cache_key: tuple[Chain, str]) -> None:
+        """Move `cache_key` to the recent end and evict LRU entries past the
+        cap. No-ops when the cache is a plain dict (test scaffolding swaps in
+        a bare `dict` via ``__new__``, like the `budget`-attr guard elsewhere)
+        or when the cap attr is absent. Eviction is best-effort under
+        concurrent workers: a racing `popitem` on an emptied dict is harmless,
+        so `KeyError` is swallowed."""
+        cache = self._contract_id_cache
+        if not isinstance(cache, OrderedDict):
+            return
+        cache.move_to_end(cache_key)
+        cap = getattr(self, "_contract_id_cache_max", 50000)
+        while len(cache) > cap:
+            try:
+                cache.popitem(last=False)
+            except KeyError:  # pragma: no cover - concurrent-eviction race
+                break
 
     @retry(
         stop=stop_after_attempt(4),
@@ -928,7 +966,11 @@ class CoinGeckoClient:
         if _b is not None:
             _b.record("coingecko")
         if resp.status_code == 429:
-            time.sleep(15)
+            # Do NOT sleep here. _fetch_simple_price runs on the tracer's
+            # ThreadPool workers; a hard sleep freezes the worker and starves
+            # every other in-flight BFS node. The @retry decorator on this
+            # method already applies exponential backoff (2s→30s) on
+            # TransportError, which is the correct place to absorb a 429.
             raise httpx.TransportError("rate limited")
         resp.raise_for_status()
         data = resp.json()

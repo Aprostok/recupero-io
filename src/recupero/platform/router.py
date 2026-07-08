@@ -27,6 +27,7 @@ from recupero.platform import (
     objectstore,
     store,
     tenancy,
+    walletguard,
 )
 
 router = APIRouter(
@@ -788,6 +789,146 @@ def trace_artifact_url(
         raise HTTPException(status_code=501, detail="artifact storage not configured")
     url, ttl = signed
     return {"artifact": name, "url": url, "expires_in": ttl}
+
+
+# --------------------------------------------------------------------------- #
+# Wallet Guard (WalletBlock) — proactive pre-send checks + address book + alerts
+# --------------------------------------------------------------------------- #
+
+
+class GuardCheckIn(BaseModel):
+    address: str = Field(min_length=1, max_length=128)
+    chain: str = Field(default="ethereum", min_length=1, max_length=32)
+
+
+class WatchIn(BaseModel):
+    address: str = Field(min_length=1, max_length=128)
+    chain: str = Field(default="ethereum", min_length=1, max_length=32)
+    label: str | None = Field(default=None, max_length=120)
+
+
+# Roles allowed to mutate the guard (viewers get read-only).
+_GUARD_WRITE = ("owner", "admin", "member")
+
+
+def _maybe_raise_alert(
+    conn: Any, *, org_id: str, chain: str, result: dict[str, Any],
+    source: str, watched_address_id: str | None = None,
+) -> str | None:
+    """Create a wallet alert when a check screens sanctioned/high. Returns the
+    alert id, or None when the verdict is below the alert threshold."""
+    guard = result["guard"]
+    if not guard.get("should_alert"):
+        return None
+    screening = result["screening"]
+    labels = screening.get("labels") or []
+    category = labels[0].get("category") if labels else None
+    return walletguard.create_alert(
+        conn, org_id=org_id, chain=chain, address=screening["address"],
+        verdict=guard["verdict"], severity=guard["risk_score"],
+        headline=guard["headline"], category=category,
+        watched_address_id=watched_address_id, source=source,
+    )
+
+
+@router.post("/guard/check")
+def guard_check(
+    body: GuardCheckIn,
+    principal: store.OrgContext = Depends(deps.rate_limit),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Pre-send counterparty check: 'is it safe to send here?'. Screens the
+    address offline (<50ms) and returns a consumer-facing verdict; raises an
+    alert (and meters the check) when the verdict is sanctioned/high."""
+    try:
+        result = walletguard.check_address(body.address, chain=body.chain)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=f"invalid address: {exc}") from exc
+    alert_id = _maybe_raise_alert(
+        conn, org_id=principal.org_id, chain=body.chain, result=result,
+        source="guard_check",
+    )
+    store.record_usage(conn, org_id=principal.org_id, kind="guard_check")
+    return {**result, "alert_id": alert_id}
+
+
+@router.get("/guard/addresses")
+def list_guard_addresses(
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    return {"addresses": walletguard.list_watched_addresses(conn, principal.org_id)}
+
+
+@router.post("/guard/addresses", status_code=201)
+def add_guard_address(
+    body: WatchIn,
+    principal: store.OrgContext = Depends(deps.require_role(*_GUARD_WRITE)),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Add (or refresh) an address in the watchlist/address book. Screens on add
+    so the stored verdict is populated, and raises an alert if it screens risky."""
+    try:
+        result = walletguard.check_address(body.address, chain=body.chain)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=f"invalid address: {exc}") from exc
+    guard = result["guard"]
+    canonical = result["screening"]["address"]
+    watched_id = walletguard.add_watched_address(
+        conn, org_id=principal.org_id, chain=body.chain, address=canonical,
+        label=body.label, created_by=principal.user_id,
+        verdict=guard["verdict"], risk_score=guard["risk_score"],
+    )
+    alert_id = _maybe_raise_alert(
+        conn, org_id=principal.org_id, chain=body.chain, result=result,
+        source="watch_add", watched_address_id=watched_id,
+    )
+    audit.record(conn, org_id=principal.org_id, actor=principal.user_id or "system",
+                 action="guard.address_added", target=canonical,
+                 target_kind="watched_address", metadata={"verdict": guard["verdict"]})
+    return {
+        "id": watched_id, "address": canonical, "chain": body.chain,
+        "label": body.label, "guard": guard, "alert_id": alert_id,
+    }
+
+
+@router.delete("/guard/addresses/{watched_id}", status_code=204)
+def delete_guard_address(
+    watched_id: str,
+    principal: store.OrgContext = Depends(deps.require_role(*_GUARD_WRITE)),
+    conn: Any = Depends(deps.db_conn),
+) -> None:
+    if not walletguard.delete_watched_address(
+        conn, org_id=principal.org_id, watched_id=watched_id,
+    ):
+        raise HTTPException(status_code=404, detail="watched address not found")
+
+
+@router.get("/guard/alerts")
+def list_guard_alerts(
+    unacknowledged: bool = False, limit: int = 50,
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    return {
+        "alerts": walletguard.list_alerts(
+            conn, org_id=principal.org_id, only_unacked=unacknowledged, limit=limit,
+        ),
+        "unacknowledged": walletguard.count_unacked_alerts(conn, principal.org_id),
+    }
+
+
+@router.post("/guard/alerts/{alert_id}/ack")
+def ack_guard_alert(
+    alert_id: str,
+    principal: store.OrgContext = Depends(deps.require_role(*_GUARD_WRITE)),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    if not walletguard.ack_alert(
+        conn, org_id=principal.org_id, alert_id=alert_id, user_id=principal.user_id,
+    ):
+        raise HTTPException(status_code=404, detail="alert not found or already acknowledged")
+    return {"alert_id": alert_id, "acknowledged": True}
 
 
 __all__ = ("router",)

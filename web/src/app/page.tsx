@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { Brand } from "@/components/Brand";
+import { ARTICLES } from "@/content/academy";
 
 /** Public marketing landing page. Signed-in users are sent to the dashboard. */
 export default function Home() {
@@ -30,7 +31,7 @@ export default function Home() {
         <div className="nav-links">
           <a href="#platform">Platform</a>
           <a href="#how">How it works</a>
-          <a href="#insights">Insights</a>
+          <Link href="/academy">Academy</Link>
           <Link href="/login">Sign in</Link>
         </div>
         <Link href="/signup" className="cta primary" style={{ padding: "9px 18px", fontSize: 14 }}>
@@ -216,23 +217,28 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Insights */}
+      {/* Insights / Academy */}
       <section className="section" id="insights">
         <div className="section-head">
-          <span className="kicker">Insights</span>
+          <span className="kicker">Academy</span>
           <h2>Field notes from the recovery frontline</h2>
-          <p>How illicit funds move — and how investigators catch up.</p>
+          <p>How illicit funds move — and how investigators, and everyday users, catch up.</p>
         </div>
         <div className="insight-grid">
-          {INSIGHTS.map((p, i) => (
-            <a className="insight-card glass" key={p.title} href="#insights">
+          {ARTICLES.slice(0, 3).map((a, i) => (
+            <Link className="insight-card glass" key={a.slug} href={`/academy/${a.slug}`}>
               <div className={`thumb ${["", "b", "c"][i]}`} />
               <div className="body">
-                <div className="meta">{p.meta}</div>
-                <h4>{p.title}</h4>
+                <div className="meta">{a.meta}</div>
+                <h4>{a.title}</h4>
               </div>
-            </a>
+            </Link>
           ))}
+        </div>
+        <div style={{ textAlign: "center", marginTop: 24 }}>
+          <Link href="/academy" className="cta secondary">
+            Browse the Academy
+          </Link>
         </div>
       </section>
 
@@ -262,7 +268,7 @@ export default function Home() {
           </div>
           <div className="col">
             <h4>Resources</h4>
-            <a href="#insights">Insights</a>
+            <Link href="/academy">Academy</Link>
             <Link href="/login">Sign in</Link>
             <Link href="/signup">Get started</Link>
           </div>
@@ -287,12 +293,6 @@ const STEPS: { title: string; body: string }[] = [
   { title: "Trace & cluster", body: "Follow the largest flows through swaps, bridges and peels; cluster addresses by behavior." },
   { title: "Screen & attribute", body: "Score every hop against live sanctions data, mixers, and known entities." },
   { title: "Package for recovery", body: "Export freeze letters, SAR/STR drafts, and a signed, court-ready exhibit pack." },
-];
-
-const INSIGHTS: { title: string; meta: string }[] = [
-  { title: "How peel chains launder large thefts — and how to follow them", meta: "TRACING · 6 MIN" },
-  { title: "Reading a mixer: what withdrawal timing tells you", meta: "DEMIXING · 5 MIN" },
-  { title: "Sibling and shadow addresses in address-poisoning scams", meta: "SCREENING · 4 MIN" },
 ];
 
 /* ─────────────────────────── mini mockups ─────────────────────────── */
@@ -431,7 +431,7 @@ function MiniDonut({ pct }: { pct: number }) {
       <defs>
         <linearGradient id="rc-donut" x1="0" y1="0" x2="120" y2="120" gradientUnits="userSpaceOnUse">
           <stop stopColor="#3d7bff" />
-          <stop offset="1" stopColor="#8a63ff" />
+          <stop offset="1" stopColor="#2fd6a0" />
         </linearGradient>
       </defs>
       <circle cx="60" cy="60" r={R} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="10" />

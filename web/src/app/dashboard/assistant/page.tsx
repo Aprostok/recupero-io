@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, ReactNode, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { ApiError, api } from "@/lib/api";
 
@@ -15,6 +15,109 @@ const SUGGESTIONS = [
   "I think I was scammed — what should I do first?",
   "How do wallet-drainer scams work?",
 ];
+
+// Minimal, dependency-free Markdown renderer for the subset the assistant emits
+// (headings, **bold**, bullet/numbered lists, --- rules, paragraphs). Renders to
+// real React nodes — never injects HTML — so it is XSS-safe by construction.
+function renderInline(text: string, k: string): ReactNode[] {
+  return text.split(/(\*\*[^*]+\*\*)/g).map((seg, i) =>
+    /^\*\*[^*]+\*\*$/.test(seg) ? (
+      <strong key={`${k}-${i}`}>{seg.slice(2, -2)}</strong>
+    ) : (
+      <span key={`${k}-${i}`}>{seg}</span>
+    ),
+  );
+}
+
+function renderMarkdown(md: string): ReactNode[] {
+  const lines = md.replace(/\r\n/g, "\n").split("\n");
+  const blocks: ReactNode[] = [];
+  let list: { ordered: boolean; items: string[] } | null = null;
+  let para: string[] = [];
+  let k = 0;
+
+  const flushPara = () => {
+    if (para.length) {
+      const key = `p${k++}`;
+      blocks.push(
+        <p key={key} style={{ margin: "0 0 8px" }}>
+          {renderInline(para.join(" "), key)}
+        </p>,
+      );
+      para = [];
+    }
+  };
+  const flushList = () => {
+    if (list) {
+      const key = `l${k++}`;
+      const items = list.items.map((it, i) => (
+        <li key={`${key}-${i}`}>{renderInline(it, `${key}-${i}`)}</li>
+      ));
+      blocks.push(
+        list.ordered ? (
+          <ol key={key} style={{ margin: "4px 0 8px", paddingLeft: 20 }}>{items}</ol>
+        ) : (
+          <ul key={key} style={{ margin: "4px 0 8px", paddingLeft: 20 }}>{items}</ul>
+        ),
+      );
+      list = null;
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (line.trim() === "") {
+      flushPara();
+      flushList();
+      continue;
+    }
+    if (/^---+$/.test(line.trim())) {
+      flushPara();
+      flushList();
+      blocks.push(
+        <hr key={`hr${k++}`} style={{ border: 0, borderTop: "1px solid var(--border)", margin: "8px 0" }} />,
+      );
+      continue;
+    }
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      flushPara();
+      flushList();
+      const key = `h${k++}`;
+      blocks.push(
+        <div key={key} style={{ fontWeight: 700, fontSize: heading[1].length <= 2 ? "1.05em" : "1em", margin: "8px 0 2px" }}>
+          {renderInline(heading[2], key)}
+        </div>,
+      );
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      flushPara();
+      if (!list || list.ordered) {
+        flushList();
+        list = { ordered: false, items: [] };
+      }
+      list.items.push(bullet[1]);
+      continue;
+    }
+    const numbered = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (numbered) {
+      flushPara();
+      if (!list || !list.ordered) {
+        flushList();
+        list = { ordered: true, items: [] };
+      }
+      list.items.push(numbered[1]);
+      continue;
+    }
+    flushList();
+    para.push(line);
+  }
+  flushPara();
+  flushList();
+  return blocks;
+}
 
 export default function AssistantPage() {
   const { token } = useAuth();
@@ -125,7 +228,7 @@ export default function AssistantPage() {
                   maxWidth: "80%",
                   padding: "10px 14px",
                   borderRadius: 14,
-                  whiteSpace: "pre-wrap",
+                  whiteSpace: m.role === "user" ? "pre-wrap" : "normal",
                   lineHeight: 1.5,
                   background:
                     m.role === "user"
@@ -136,7 +239,7 @@ export default function AssistantPage() {
                     m.role === "user" ? "none" : "1px solid var(--border)",
                 }}
               >
-                {m.content}
+                {m.role === "user" ? m.content : renderMarkdown(m.content)}
               </div>
             ))
           )}

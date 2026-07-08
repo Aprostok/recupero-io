@@ -93,6 +93,11 @@ _RISK_BAND: dict[str, tuple[str, str]] = {
     "ransomware":       ("high",       "#E64A19"),  # orange-red
     "darknet_market":   ("high",       "#EF6C00"),  # orange
     "scam_drainer":     ("high",       "#F57C00"),  # amber-orange
+    # internal_blacklist is a severity-3 "high" category (see
+    # labels/internal_blacklist.py → screener verdict "high"). Without this key
+    # it fell through to the "elevated"/amber default, under-colouring a
+    # confirmed known-bad actor to the same band as a non-sanctioned mixer.
+    "internal_blacklist": ("high",     "#E65100"),  # deep orange (high band)
     "mixer_high_risk":  ("elevated",   "#F9A825"),  # amber
 }
 # Fallback for an unknown-but-present risk_category (still flag it as risky).

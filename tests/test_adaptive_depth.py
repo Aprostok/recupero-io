@@ -191,3 +191,16 @@ def test_unbounded_high_value_deeper_than_enabled_budget() -> None:
 def test_unbounded_never_exceeds_hard_ceiling() -> None:
     """Even unbounded + astronomical theft stays clipped to HARD_CEILING."""
     assert compute_max_depth({"theft_amount_usd": 1e18}, None) <= HARD_CEILING
+
+
+def test_frontier_refuse_warns_not_info(caplog) -> None:
+    """The frontier blow-up guard TRUNCATES the trace, so the refusal must
+    surface at WARNING (INFO is routinely filtered from a reviewer's view)."""
+    import logging
+    with caplog.at_level(logging.WARNING):
+        ok = should_descend_further(
+            FRONTIER_REFUSE_AT_DEPTH, FRONTIER_REFUSE_SIZE + 1, 999,
+        )
+    assert ok is False
+    assert "TRUNCATED" in caplog.text
+    assert any(r.levelno == logging.WARNING for r in caplog.records)

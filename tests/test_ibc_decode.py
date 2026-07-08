@@ -170,3 +170,24 @@ def test_leads_to_json_artifact_shape() -> None:
     assert doc["lead_count"] == 1
     assert "never a followed destination" in doc["disclaimer"]
     assert "recv_packet" in doc["disclaimer"]
+
+
+def test_runner_warns_when_wallet_send_cap_hit(caplog) -> None:
+    """No silent caps: a wallet with more IBC sends than _MAX_LEADS_PER_WALLET
+    must WARN that leads were dropped (the INFO summary reports only the kept
+    count)."""
+    import logging
+    events = [
+        _send_packet_event(
+            sender=_OSMO, receiver=_NOBLE,
+            denom="transfer/channel-750/uusdc", amount="5", seq=str(i),
+        )
+        for i in range(60)  # > _MAX_LEADS_PER_WALLET (50)
+    ]
+    client = _StubClient({_OSMO: {"tx_responses": [_tx(events)]}})
+    with caplog.at_level(logging.WARNING):
+        leads = run_ibc_leads(
+            transfers=[_transfer(_OSMO)], client=client, force=True,
+        )
+    assert len(leads) == 50
+    assert "keeping only the first" in caplog.text

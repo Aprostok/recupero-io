@@ -520,3 +520,24 @@ def test_v010_api_still_intact() -> None:
     # The v0.10.0 section shape is preserved.
     assert "addresses" in section
     assert "summary" in section
+
+
+def test_label_exposure_warns_when_above_threshold_leads_dropped(caplog) -> None:
+    """No silent caps: when more addresses score at/above the surface threshold
+    than the top-N surfaced, the dropped significant leads must be WARNed —
+    a #11-ranked money-mule must not silently vanish from the LE handoff."""
+    import logging
+
+    case = _mk_case([
+        _mk_transfer(from_addr=SEED, to_addr=ADDR_B,
+                     usd=Decimal("1000"), tx_suffix="1"),
+    ])
+    store = _FakeLabelStore({})
+    scores = {f"0x{i:040x}": 0.5 for i in range(12)}  # 12 above the 0.1 threshold
+    with caplog.at_level(logging.WARNING):
+        section = label_exposure_scores_to_brief_section(
+            case, scores, label_store=store, top_n=10,
+        )
+    assert section is not None
+    assert len(section["top_addresses"]) == 10
+    assert "significant exposure lead(s) omitted" in caplog.text

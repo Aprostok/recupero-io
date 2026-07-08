@@ -170,6 +170,50 @@ export interface WalletAlert {
   acknowledged: boolean;
 }
 
+// ---- Investigation graph ---- //
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  chain: string;
+  chainColor: string;
+  category: string;
+  inboundUsdNumeric: number;
+  outboundUsdNumeric: number;
+  flowUsdNumeric: number;
+  isVictim: boolean;
+  explorerUrl: string | null;
+  risk: string;
+  riskColor: string | null;
+  [k: string]: unknown;
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+  totalUsdNumeric: number;
+  transferCount: number;
+  isCrossChain: boolean;
+  [k: string]: unknown;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  meta: {
+    case_id: string;
+    seed_address: string;
+    node_count: number;
+    edge_count: number;
+    total_usd_traced: string;
+    chain: string;
+    chains: string[];
+    categories: string[];
+    risk_node_count: number;
+    risk_categories: string[];
+  };
+}
+
 export interface BillingUsage {
   plan: string;
   status: string;
@@ -393,6 +437,13 @@ export const api = {
       `/v2/traces/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(name)}`,
       { token },
     ),
+
+  // Fund-flow graph as JSON ({nodes, edges, meta}) — same-origin, so a D3 view
+  // can render it directly without opening the presigned interactive_graph.html
+  // (avoids configuring CORS on the artifact bucket). 404 until the trace
+  // completes; 503 if the graph can't be built.
+  getGraph: (token: string, id: string) =>
+    request<GraphData>(`/v2/traces/${encodeURIComponent(id)}/graph`, { token }),
 
   // SSE endpoint URL for live trace status. EventSource can't set headers, so
   // the session token rides as a query param (matches the server's /stream).

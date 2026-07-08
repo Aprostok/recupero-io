@@ -794,6 +794,18 @@ def label_exposure_scores_to_brief_section(
                 queue.append((nxt, depth + 1))
 
     ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    # No silent caps: the section surfaces only the top-N by score. Warn when
+    # ABOVE-THRESHOLD (i.e. genuinely significant) exposure leads are dropped —
+    # a #11-ranked money-mule still crossing surface_threshold would otherwise
+    # silently vanish from the LE handoff's "highest-value exposure leads".
+    n_above = sum(1 for s in scores.values() if s >= surface_threshold)
+    if n_above > top_n:
+        log.warning(
+            "label-exposure: %d addresses score at/above the surface threshold "
+            "but the brief surfaces only the top %d — %d significant exposure "
+            "lead(s) omitted from this section.",
+            n_above, top_n, n_above - top_n,
+        )
     entries: list[dict[str, object]] = []
     for addr, score in ranked[:top_n]:
         category = _v031_category_for(label_store, addr) or "unknown"

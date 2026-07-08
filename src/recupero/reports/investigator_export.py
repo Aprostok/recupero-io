@@ -745,6 +745,11 @@ def _findings_from_cross_case_correlation(
             f"usd={a.get('usd_flowed', '')}"
             for a in appearances[:5]
         )
+        # No silent truncation: a serial actor may appear in many prior cases,
+        # and an analyst subpoenaing them needs to know the list is trimmed
+        # (mirrors the "+N more" pattern in the cluster-members note above).
+        if len(appearances) > 5:
+            sample += f" (+{len(appearances) - 5} more prior case(s))"
         notes_parts = [payload.get("investigator_note", "")]
         if sample:
             notes_parts.append(f"PRIOR_CASES: {sample}")

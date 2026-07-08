@@ -308,6 +308,53 @@ class _BodySizeLimitMiddleware:
 app.add_middleware(_BodySizeLimitMiddleware, max_bytes=_MAX_REQUEST_BODY_BYTES)
 
 
+class _PlatformRequestLogMiddleware:
+    """Structured JSON request log for the ``/v2`` SaaS surface (opt-in).
+
+    Pure-ASGI so it never buffers the body. Emits one line per ``/v2`` HTTP
+    request via ``platform.reqlog`` — method/path/status/duration + the resolving
+    tenant (``org_id``/``plan``/``role``, read from ``scope['state']`` where
+    ``platform.deps.current_principal`` records it). Every non-``/v2`` request and
+    non-HTTP scope passes straight through untouched. Installed only when
+    ``RECUPERO_PLATFORM_REQUEST_LOG=1`` (see ``_install_optional_middleware``), so
+    the default deploy is unchanged.
+    """
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http" or not scope.get("path", "").startswith("/v2"):
+            await self.app(scope, receive, send)
+            return
+        from recupero.platform import reqlog
+
+        started = time.perf_counter()
+        holder = {"status": 0}
+
+        async def _send(message: Any) -> None:
+            if message.get("type") == "http.response.start":
+                holder["status"] = int(message.get("status", 0))
+            await send(message)
+
+        try:
+            await self.app(scope, receive, _send)
+        finally:
+            # scope['state'] is the same dict request.state writes into (Starlette
+            # backs State with scope['state']); the auth dependency stashed the
+            # tenant there. Read it after the app returns.
+            state = scope.get("state") or {}
+            reqlog.emit(reqlog.build_log_record(
+                method=scope.get("method"),
+                path=scope.get("path"),
+                status=holder["status"],
+                duration_ms=(time.perf_counter() - started) * 1000.0,
+                org_id=state.get("org_id"),
+                plan=state.get("plan"),
+                role=state.get("role"),
+            ))
+
+
 def _install_optional_middleware(app_: FastAPI) -> None:
     """Add prod-hardening middleware, each gated by an env var so the default
     (unset) preserves current behavior (serve any Host, no CORS) — zero change
@@ -319,8 +366,14 @@ def _install_optional_middleware(app_: FastAPI) -> None:
       * ``RECUPERO_API_CORS_ORIGINS`` — comma-separated allowed origins. When
         set, installs ``CORSMiddleware`` for cross-origin API clients. The
         operator console is same-origin and needs none.
+      * ``RECUPERO_PLATFORM_REQUEST_LOG`` — when ``=1``, installs the structured
+        per-tenant ``/v2`` request log (see ``_PlatformRequestLogMiddleware`` /
+        ``platform.reqlog``).
     """
     import os
+    from recupero.platform import reqlog
+    if reqlog.request_log_enabled():
+        app_.add_middleware(_PlatformRequestLogMiddleware)
     hosts_raw = (os.environ.get("RECUPERO_API_ALLOWED_HOSTS", "") or "").strip()
     if hosts_raw:
         from starlette.middleware.trustedhost import TrustedHostMiddleware

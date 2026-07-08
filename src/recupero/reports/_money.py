@@ -90,8 +90,17 @@ def format_usd_cents(v: Decimal | None) -> str:
     ``None`` / non-finite -> ``"$0.00"``; ``47840`` -> ``"$47,840.00"``;
     ``47840.12`` -> ``"$47,840.12"``. Matches ``legal_requests.usd``.
     """
-    if v is None or not v.is_finite():
+    if v is None:
         return "$0.00"
-    if v == v.to_integral_value():
-        return f"${int(v):,}.00"
-    return f"${v:,.2f}"
+    # Coerce first (matches format_usd_trim): a bare ``.is_finite()`` on a float
+    # NaN/Inf would raise AttributeError and crash brief rendering rather than
+    # fall back — so a stray float can't take down a court-facing document.
+    try:
+        d = Decimal(str(v))
+    except (InvalidOperation, ValueError):
+        return "$0.00"
+    if not d.is_finite():
+        return "$0.00"
+    if d == d.to_integral_value():
+        return f"${int(d):,}.00"
+    return f"${d:,.2f}"

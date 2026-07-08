@@ -84,3 +84,26 @@ def test_respects_round_cap(monkeypatch) -> None:
     extra = _run_chain(monkeypatch, max_rounds=4, collect_fn=collect, wave_fn=wave)
     assert calls["wave"] == 3       # max_rounds(4) - 1 round already done by caller
     assert len(extra) == 3
+
+
+def test_seed_cap_warns_when_dropped(monkeypatch, caplog) -> None:
+    """No silent caps: dropping continuation seeds at RECUPERO_MAX_CONTINUATION_
+    SEEDS means later legs of a multi-hop DEX chain go unfollowed — must WARN
+    (matching the primary continuation path), not truncate silently."""
+    import logging
+
+    monkeypatch.delenv("RECUPERO_MAX_CONTINUATION_SEEDS", raising=False)
+
+    def collect(transfers, *, chain, adapter, visited):
+        return [f"0xseed{i}" for i in range(30)]  # > default cap of 25
+
+    seen_wave_sizes: list[int] = []
+
+    def wave(wv, **kw):
+        seen_wave_sizes.append(len(wv))
+        return [(wv[0][0], 1, [_xfer("r")], False)]
+
+    with caplog.at_level(logging.WARNING):
+        _run_chain(monkeypatch, max_rounds=2, collect_fn=collect, wave_fn=wave)
+    assert "continuation seeds capped at 25 (had 30)" in caplog.text
+    assert seen_wave_sizes == [25]  # the wave actually processed only 25

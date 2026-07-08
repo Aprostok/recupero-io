@@ -1633,6 +1633,17 @@ def _continue_dex_swap_chain(
         )
         if not seeds:
             break
+        # No silent caps: mirror the primary continuation path — dropping swap-
+        # output seeds here means later legs of a multi-hop DEX chain (e.g.
+        # USDT→WBTC→ETH) go unfollowed, so WARN when the cap bites (the INFO
+        # line below reports only how many were FOLLOWED, not dropped).
+        if len(seeds) > max_cont:
+            log.warning(
+                "dex-swap-chain: continuation seeds capped at %d (had %d) on "
+                "%s — RECUPERO_MAX_CONTINUATION_SEEDS to raise; later swap legs "
+                "may go unfollowed.",
+                max_cont, len(seeds), chain.value,
+            )
         wave = [(addr, 1) for addr in seeds[:max_cont]]
         log.info(
             "dex-swap-chain: following %d further swap output(s) on %s "

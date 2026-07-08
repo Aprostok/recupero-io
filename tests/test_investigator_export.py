@@ -321,3 +321,22 @@ def test_json_write_includes_metadata_header() -> None:
     assert payload["findings_count"] == 1
     assert len(payload["findings"]) == 1
     assert payload["findings"][0]["severity"] == "critical"
+
+
+def test_prior_cases_note_reports_dropped_count() -> None:
+    """A recidivist with >5 prior cases must show '(+N more)' — an analyst
+    subpoenaing prior cases needs to know the list was trimmed."""
+    from recupero.reports.investigator_export import build_findings
+    addr = "0x" + "a" * 40
+    brief = {"CROSS_CASE_CORRELATION": {"addresses": {
+        addr: {
+            "total_prior_cases": 7,
+            "prior_case_appearances": [
+                {"case_id": f"c{i}", "role": "hop", "usd_flowed": "100"}
+                for i in range(7)
+            ],
+        },
+    }}}
+    findings = build_findings(brief)
+    notes = " ".join(getattr(f, "notes", "") or "" for f in findings)
+    assert "+2 more prior case(s)" in notes

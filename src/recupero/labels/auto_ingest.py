@@ -799,6 +799,16 @@ def fetch_candidate_scam_addresses() -> list[CandidateLabel]:
             log.debug("label auto-ingest: skipping malformed ScamSniffer row: %s", exc)
         if len(out) >= _SCAM_MAX_PER_RUN:
             break
+    # No silent caps: if we filled the per-run budget, later entries in the
+    # source list are not surfaced this run — a drainer past the cap would never
+    # reach the review queue without an operator noticing, so WARN.
+    if len(out) >= _SCAM_MAX_PER_RUN:
+        log.warning(
+            "scamsniffer blacklist: capped at %d candidates this run (source "
+            "list had %d entries) — remaining flagged addresses are NOT "
+            "surfaced until a later run; raise _SCAM_MAX_PER_RUN to ingest more.",
+            _SCAM_MAX_PER_RUN, len(body),
+        )
     return out
 
 

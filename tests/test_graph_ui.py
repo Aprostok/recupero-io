@@ -450,3 +450,18 @@ def test_empty_db_yields_no_overlay() -> None:
     assert all(n["risk"] == "none" for n in data["nodes"])
     assert data["meta"]["risk_node_count"] == 0
     assert data["meta"]["risk_categories"] == []
+
+
+def test_internal_blacklist_renders_high_band() -> None:
+    """internal_blacklist is a severity-3 'high' category — it must not fall
+    through to the 'elevated' default (which would under-colour a known-bad
+    node to the same band as a non-sanctioned mixer)."""
+    from types import SimpleNamespace
+
+    from recupero.reports.graph_ui import _risk_for_address
+    addr = "0x" + "a" * 40
+    db = {addr: SimpleNamespace(risk_category="internal_blacklist", name="Known bad")}
+    level, cat, _name, color = _risk_for_address(addr, db)
+    assert level == "high"
+    assert cat == "internal_blacklist"
+    assert color and color != "#F9A825"  # not the elevated/amber default

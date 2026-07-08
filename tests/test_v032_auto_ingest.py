@@ -898,3 +898,22 @@ def test_mew_darklist_unreachable_degrades_to_empty() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+def test_scamsniffer_cap_warns_when_source_exceeds_budget(
+    monkeypatch: pytest.MonkeyPatch, caplog,
+) -> None:
+    """No silent caps: a ScamSniffer list larger than _SCAM_MAX_PER_RUN is
+    truncated — the drop must WARN so tail drainers aren't silently never
+    reviewed."""
+    import logging
+
+    import recupero.labels.auto_ingest as ai
+    addrs = ["0x" + f"{i:040x}" for i in range(600)]  # > _SCAM_MAX_PER_RUN (500)
+    monkeypatch.setattr(
+        ai, "_safe_http_get_json", lambda url, *, source_name: addrs,
+    )
+    with caplog.at_level(logging.WARNING):
+        out = ai.fetch_candidate_scam_addresses()
+    assert len(out) == 500
+    assert "capped at 500" in caplog.text

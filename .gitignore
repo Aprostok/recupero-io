@@ -80,3 +80,7 @@ tmp/
 # Root-level pytest run logs (operator-local; the suite is the source of truth)
 /pytest_*.log
 /test_r*.log
+.env.review
+
+# Temp Postgres scratch dir spun up by platform tests
+/.pgtmp_platform/

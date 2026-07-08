@@ -4,6 +4,7 @@ import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { ApiError, api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { Brand } from "@/components/Brand";
 
 /**
  * Public invite-acceptance page: `/invite?token=…`. The token in the URL is the
@@ -43,9 +44,7 @@ function AcceptInvite() {
 
   return (
     <div className="auth-shell">
-      <div className="brand" style={{ marginBottom: 24 }}>
-        Recupero
-      </div>
+      <Brand style={{ marginBottom: 24 }} />
       <div className="panel">
         {!inviteToken ? (
           <p className="error">Missing invite token.</p>

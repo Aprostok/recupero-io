@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { Brand } from "@/components/Brand";
 
 /** Auth guard + top nav for every /dashboard route. */
 export default function DashboardLayout({
@@ -42,7 +43,7 @@ export default function DashboardLayout({
   return (
     <>
       <nav className="nav">
-        <span className="brand">Recupero</span>
+        <Brand size={24} />
         {tab("/dashboard", "Traces")}
         {tab("/dashboard/keys", "API Keys")}
         {tab("/dashboard/members", "Members")}

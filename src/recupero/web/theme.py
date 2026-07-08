@@ -9,35 +9,36 @@ the wheel (package_data ships *.html, not *.css/.js) and need no new build step.
 """
 
 CONSOLE_CSS = """
-/* ── Recupero console design system v2 (Apple-grade) ── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* ── Recupero console design system v3 (LegalBlock navy — dark by default) ── */
 :root {
-  --bg: #f5f5f7; --bg2: #eef1f6; --surface: #ffffff; --surface-2: #fbfbfd; --surface-3: #f2f2f7;
-  --ink: #1d1d1f; --ink-soft: #6e6e73; --ink-faint: #86868b;
-  --hair: rgba(0,0,0,.09); --hair-strong: rgba(0,0,0,.13);
-  --accent: #0071e3; --accent-press: #0058b0; --accent-soft: rgba(0,113,227,.10);
-  --crit: #d70015; --crit-soft: rgba(215,0,21,.07);
-  --warn: #b9770e; --warn-soft: rgba(185,119,14,.10);
-  --ok: #1d8a4e; --ok-soft: rgba(29,138,78,.10);
-  --crit-border: rgba(215,0,21,.22); --warn-border: rgba(185,119,14,.22); --ok-border: rgba(29,138,78,.22);
+  --bg: #0a0e17; --bg2: #0c111d; --surface: #121a2b; --surface-2: #0f1626; --surface-3: #16213a;
+  --ink: #f5f8ff; --ink-soft: #9aa8c2; --ink-faint: #6b7893;
+  --hair: rgba(255,255,255,.08); --hair-strong: rgba(255,255,255,.14);
+  --accent: #3d7bff; --accent-press: #5b90ff; --accent-soft: rgba(61,123,255,.14);
+  --crit: #ff5468; --crit-soft: rgba(255,84,104,.13);
+  --warn: #ffc24d; --warn-soft: rgba(255,194,77,.13);
+  --ok: #33d18a; --ok-soft: rgba(51,209,138,.13);
+  --crit-border: rgba(255,84,104,.32); --warn-border: rgba(255,194,77,.30); --ok-border: rgba(51,209,138,.30);
   --surface-solid: var(--surface);
-  --r-sm: 9px; --r: 14px; --r-lg: 20px;
+  --r-sm: 10px; --r: 14px; --r-lg: 20px;
   --ease: cubic-bezier(.32,.72,0,1);
-  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-  --shadow-sm: 0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.05);
-  --shadow-md: 0 8px 28px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.05);
-  --shadow-lg: 0 20px 48px rgba(0,0,0,.13), 0 6px 14px rgba(0,0,0,.07);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,.5);
+  --shadow-md: 0 10px 30px rgba(0,0,0,.55);
+  --shadow-lg: 0 22px 56px rgba(0,0,0,.7);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000; --bg2: #0c0c0e; --surface: #1c1c1e; --surface-2: #161618; --surface-3: #232325;
-    --ink: #f5f5f7; --ink-soft: #aeaeb2; --ink-faint: #8e8e93;
-    --hair: rgba(255,255,255,.10); --hair-strong: rgba(255,255,255,.16);
-    --accent: #0a84ff; --accent-press: #409cff; --accent-soft: rgba(10,132,255,.16);
-    --crit: #ff453a; --crit-soft: rgba(255,69,58,.13);
-    --warn: #ffd60a; --warn-soft: rgba(255,214,10,.14);
-    --ok: #30d158; --ok-soft: rgba(48,209,88,.13);
-    --crit-border: rgba(255,69,58,.32); --warn-border: rgba(255,214,10,.28); --ok-border: rgba(48,209,88,.28);
+    --bg: #07090f; --bg2: #0a0e17; --surface: #101725; --surface-2: #0d1320; --surface-3: #141d33;
+    --ink: #f5f8ff; --ink-soft: #9aa8c2; --ink-faint: #6b7893;
+    --hair: rgba(255,255,255,.09); --hair-strong: rgba(255,255,255,.15);
+    --accent: #3d7bff; --accent-press: #5b90ff; --accent-soft: rgba(61,123,255,.16);
+    --crit: #ff5468; --crit-soft: rgba(255,84,104,.14);
+    --warn: #ffc24d; --warn-soft: rgba(255,194,77,.14);
+    --ok: #33d18a; --ok-soft: rgba(51,209,138,.14);
+    --crit-border: rgba(255,84,104,.34); --warn-border: rgba(255,194,77,.30); --ok-border: rgba(51,209,138,.30);
     --surface-solid: var(--surface);
     --shadow-sm: 0 1px 3px rgba(0,0,0,.5);
     --shadow-md: 0 10px 30px rgba(0,0,0,.55);
@@ -1228,13 +1229,14 @@ CONSOLE_JS = r"""
     }
 
     function _isDark() {
-      try { return window.matchMedia('(prefers-color-scheme:dark)').matches; } catch (e) { return false; }
+      // Console design system v3 is navy dark-first regardless of OS setting.
+      return true;
     }
 
     function draw() {
       var dk = _isDark();
       ctx.clearRect(0, 0, W, H);
-      ctx.fillStyle = dk ? '#1c1c1e' : '#ffffff';
+      ctx.fillStyle = dk ? '#0f1626' : '#ffffff';
       ctx.fillRect(0, 0, W, H);
 
       // Grid dots (subtle)
@@ -1300,7 +1302,7 @@ CONSOLE_JS = r"""
         var tw = ctx.measureText(tip).width;
         var tx = Math.max(tw / 2 + 8, Math.min(W - tw / 2 - 8, nd.x));
         var ty = nd.y - nd.radius - 8;
-        ctx.fillStyle = dk ? 'rgba(44,44,46,.92)' : 'rgba(255,255,255,.95)';
+        ctx.fillStyle = dk ? 'rgba(18,26,43,.94)' : 'rgba(255,255,255,.95)';
         var bx = tx - tw / 2 - 8, bw = tw + 16, bh = 18;
         if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(bx, ty - bh, bw, bh, 5); ctx.fill(); }
         else { ctx.fillRect(bx, ty - bh, bw, bh); }

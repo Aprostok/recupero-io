@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { ApiError } from "@/lib/api";
+import { Brand } from "@/components/Brand";
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -30,9 +31,7 @@ export default function LoginPage() {
 
   return (
     <div className="auth-shell">
-      <div className="brand" style={{ marginBottom: 24 }}>
-        Recupero
-      </div>
+      <Brand style={{ marginBottom: 24 }} />
       <div className="panel">
         <form className="stack" onSubmit={onSubmit}>
           <h2 style={{ margin: 0 }}>Sign in</h2>

@@ -6,31 +6,32 @@
 <title>Recupero — Operator Console</title>
 <style>
   /* -- Recupero design system (Apple-grade): typography, depth, motion -- */
+  /* v3 (LegalBlock navy — dark by default; mirrors /v1/console/app.css) */
   :root {
-    --bg: #f5f5f7; --bg-grad-1: #eef1f6; --bg-grad-2: #f7f8fb;
-    --surface: rgba(255,255,255,.72); --surface-solid: #ffffff;
-    --ink: #1d1d1f; --ink-soft: #6e6e73; --ink-faint: #86868b;
-    --hair: rgba(0,0,0,.08); --hair-strong: rgba(0,0,0,.12);
-    --accent: #0071e3; --accent-press: #0058b0; --accent-soft: rgba(0,113,227,.10);
-    --alert: #d70015; --alert-soft: rgba(215,0,21,.08); --ok: #1d8a4e;
-    --shadow-sm: 0 1px 2px rgba(0,0,0,.04), 0 1px 3px rgba(0,0,0,.05);
-    --shadow-md: 0 6px 24px rgba(0,0,0,.08), 0 2px 6px rgba(0,0,0,.05);
-    --shadow-lg: 0 18px 48px rgba(0,0,0,.14), 0 6px 16px rgba(0,0,0,.08);
+    --bg: #0a0e17; --bg-grad-1: #0c111d; --bg-grad-2: #0a0e17;
+    --surface: rgba(18,26,43,.72); --surface-solid: #121a2b;
+    --ink: #f5f8ff; --ink-soft: #9aa8c2; --ink-faint: #6b7893;
+    --hair: rgba(255,255,255,.08); --hair-strong: rgba(255,255,255,.14);
+    --accent: #3d7bff; --accent-press: #5b90ff; --accent-soft: rgba(61,123,255,.14);
+    --alert: #ff5468; --alert-soft: rgba(255,84,104,.13); --ok: #33d18a;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,.5);
+    --shadow-md: 0 10px 30px rgba(0,0,0,.55);
+    --shadow-lg: 0 22px 56px rgba(0,0,0,.7);
     --r-sm: 10px; --r: 16px; --r-lg: 22px;
     --ease: cubic-bezier(.32,.72,0,1);
-    --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --font: 'Inter', -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #000000; --bg-grad-1: #0a0a0c; --bg-grad-2: #161618;
-      --surface: rgba(28,28,30,.66); --surface-solid: #1c1c1e;
-      --ink: #f5f5f7; --ink-soft: #aeaeb2; --ink-faint: #8e8e93;
-      --hair: rgba(255,255,255,.10); --hair-strong: rgba(255,255,255,.16);
-      --accent: #0a84ff; --accent-press: #409cff; --accent-soft: rgba(10,132,255,.16);
-      --alert: #ff453a; --alert-soft: rgba(255,69,58,.14); --ok: #30d158;
+      --bg: #07090f; --bg-grad-1: #0a0e17; --bg-grad-2: #101725;
+      --surface: rgba(16,23,37,.7); --surface-solid: #101725;
+      --ink: #f5f8ff; --ink-soft: #9aa8c2; --ink-faint: #6b7893;
+      --hair: rgba(255,255,255,.09); --hair-strong: rgba(255,255,255,.15);
+      --accent: #3d7bff; --accent-press: #5b90ff; --accent-soft: rgba(61,123,255,.16);
+      --alert: #ff5468; --alert-soft: rgba(255,84,104,.14); --ok: #33d18a;
       --shadow-sm: 0 1px 3px rgba(0,0,0,.5);
-      --shadow-md: 0 8px 28px rgba(0,0,0,.55);
+      --shadow-md: 0 10px 30px rgba(0,0,0,.55);
       --shadow-lg: 0 22px 56px rgba(0,0,0,.7);
     }
   }
@@ -57,7 +58,7 @@
   .brand { display: flex; align-items: center; gap: .6rem; margin-right: auto; }
   .brand .mark {
     width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
-    background: linear-gradient(140deg, var(--accent), #34c0ff); color: #fff; font-size: 1.05rem;
+    background: linear-gradient(140deg, var(--accent), #7b5bff); color: #fff; font-size: 1.05rem;
     box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255,255,255,.4);
   }
   .brand .name { font-size: 1.02rem; font-weight: 650; letter-spacing: -0.02em; }
@@ -125,10 +126,12 @@
   a.tile:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); border-color: transparent; }
   .tile .ico {
     flex: 0 0 auto; width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
-    font-size: 1.25rem; background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--hair);
+    color: var(--accent); background: var(--accent-soft);
+    box-shadow: inset 0 0 0 1px rgba(61,123,255,.28);
     transition: transform .25s var(--ease);
   }
-  a.tile:hover .ico { transform: scale(1.08) rotate(-3deg); }
+  .tile .ico svg { width: 22px; height: 22px; display: block; }
+  a.tile:hover .ico { transform: scale(1.06); }
   .tile .body { min-width: 0; }
   .tile .t { font-size: 1.02rem; font-weight: 620; letter-spacing: -0.015em; display: flex; align-items: center; gap: .4rem; }
   .tile .d { color: var(--ink-soft); font-size: .83rem; margin-top: .25rem; line-height: 1.4; }
@@ -144,18 +147,18 @@
   .cards .card, .grid .tile { animation: rise .5s var(--ease) both; }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 
-  /* -- Shared tokens (for score ring) -- */
+  /* -- Shared tokens (for score ring) — navy v3 -- */
   :root {
-    --crit: #d70015; --crit-soft: rgba(215,0,21,.07); --crit-border: rgba(215,0,21,.22);
-    --warn: #b9770e; --warn-soft: rgba(185,119,14,.10);
-    --ok-soft: rgba(29,138,78,.10); --hair-strong: rgba(0,0,0,.13);
+    --crit: #ff5468; --crit-soft: rgba(255,84,104,.13); --crit-border: rgba(255,84,104,.32);
+    --warn: #ffc24d; --warn-soft: rgba(255,194,77,.13);
+    --ok-soft: rgba(51,209,138,.13); --hair-strong: rgba(255,255,255,.14);
     --r-sm: 10px; --r: 14px; --mono: ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --crit: #ff453a; --crit-soft: rgba(255,69,58,.13); --crit-border: rgba(255,69,58,.32);
-      --warn: #ffd60a; --warn-soft: rgba(255,214,10,.14);
-      --ok-soft: rgba(48,209,88,.13); --hair-strong: rgba(255,255,255,.16);
+      --crit: #ff5468; --crit-soft: rgba(255,84,104,.14); --crit-border: rgba(255,84,104,.34);
+      --warn: #ffc24d; --warn-soft: rgba(255,194,77,.14);
+      --ok-soft: rgba(51,209,138,.14); --hair-strong: rgba(255,255,255,.15);
     }
   }
 
@@ -243,7 +246,8 @@
   .qp-link:hover { text-decoration: underline; }
 
   /* -- Metric card icon + sparkline + delta indicators -- */
-  .card .c-icon { font-size: .95rem; line-height: 1; margin-bottom: .3rem; opacity: .9; }
+  .card .c-icon { color: var(--accent); margin-bottom: .35rem; opacity: .95; }
+  .card .c-icon svg { width: 18px; height: 18px; display: block; }
   /* Pipeline bars (subset of shared .rc-bars -- hub is standalone, no app.css) */
   .rc-bars { background: var(--surface); border: 1px solid var(--hair);
     border-radius: var(--r); padding: .7rem 1rem .55rem; box-shadow: var(--shadow-sm); margin: .5rem 0; }
@@ -290,7 +294,7 @@
 <body>
   <div class="topbar">
     <div class="brand" aria-label="Recupero Operator Console">
-      <div class="mark">🛡️</div>
+      <div class="mark"><svg viewBox="0 0 32 32" fill="none" aria-hidden="true" width="20" height="20"><path d="M10 22.5c3.2 0 3.2-6.5 6.4-6.5s3.2-6.5 6.4-6.5" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/><circle cx="10" cy="22.5" r="2.7" fill="#fff"/><circle cx="22.8" cy="9.5" r="2.7" fill="#fff"/></svg></div>
       <div class="name">Recupero<small>Operator Console</small></div>
     </div>
     <input id="key" type="password" placeholder="X-Recupero-Admin-Key" autocomplete="off" spellcheck="false">
@@ -355,16 +359,31 @@
   function key() { return ($("key").value || "").trim(); }
   function fmt(v) { return (v === null || v === undefined) ? "\u2014" : esc(v); }
 
-  // [key, label, isAlert, icon]
+  // Monochrome line-icon helper (matches the hub nav icon set).
+  function svgIco(p) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '
+      + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + p + '</svg>';
+  }
+  var _I = {
+    search: '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>',
+    clipboard: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2H9z"/><path d="M9 12h6M9 16h6"/>',
+    sparkle: '<path d="M12 3l1.6 4.8L18.4 9.4 13.6 11 12 15.8 10.4 11 5.6 9.4 10.4 7.8z"/>',
+    files: '<rect x="8" y="3" width="12" height="15" rx="2"/><path d="M16 21H6a2 2 0 0 1-2-2V7"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>',
+    bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10.5 21a2 2 0 0 0 3 0"/>',
+    tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0l-6.2-6.2A2 2 0 0 1 4 13V5a1 1 0 0 1 1-1h8a2 2 0 0 1 1.4.6l6.2 6.2a2 2 0 0 1 0 2.6z"/><path d="M8.5 8.5h.01"/>'
+  };
+  // [key, label, isAlert, iconSvg]
   var STATS = [
-    ["cases_total",              "Traced cases",       false, "&#128269;"],
-    ["cases_with_brief",         "Freeze briefs",      false, "&#128203;"],
-    ["cases_triaged",            "AI-triaged",         false, "&#129302;"],
-    ["cases_with_exhibit",       "Exhibit packs",      false, "&#128193;"],
-    ["pending_reviews",          "Pending reviews",    true,  "&#9203;"],
-    ["watchlist_items",          "Watched addresses",  false, "&#128065;"],
-    ["watchlist_moved",          "Moved since check",  true,  "&#128680;"],
-    ["label_candidates_pending", "Label candidates",   false, "&#127991;"]
+    ["cases_total",              "Traced cases",       false, svgIco(_I.search)],
+    ["cases_with_brief",         "Freeze briefs",      false, svgIco(_I.clipboard)],
+    ["cases_triaged",            "AI-triaged",         false, svgIco(_I.sparkle)],
+    ["cases_with_exhibit",       "Exhibit packs",      false, svgIco(_I.files)],
+    ["pending_reviews",          "Pending reviews",    true,  svgIco(_I.clock)],
+    ["watchlist_items",          "Watched addresses",  false, svgIco(_I.eye)],
+    ["watchlist_moved",          "Moved since check",  true,  svgIco(_I.bell)],
+    ["label_candidates_pending", "Label candidates",   false, svgIco(_I.tag)]
   ];
 
   function renderStats(s) {
@@ -442,7 +461,9 @@
       groups[g].forEach(function (c) {
         var live = c.live !== false;
         var inner =
-          '<div class="ico">' + esc(c.emoji || "\u2022") + '</div>' +
+          // c.icon is trusted server-side SVG markup from operator_console._ICONS
+          // (a static map, never user input) \u2014 injected raw, not escaped.
+          '<div class="ico">' + (c.icon || "") + '</div>' +
           '<div class="body"><div class="t">' + esc(c.label) + (live ? "" : ' <span class="badge">soon</span>') + '</div>' +
           '<div class="d">' + esc(c.desc || "") + '</div></div>' +
           (live ? '<span class="chev">&#8250;</span>' : '');
@@ -484,7 +505,8 @@
 
   // -- Quick probe ---------------------------------------------------------
   (function () {
-    var BAND_ICON = { sanctioned: "&#9940;", high: "&#128308;", medium: "&#128992;", low: "&#128993;", clean: "&#9989;" };
+    function _dot(c) { return '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';vertical-align:middle"></span>'; }
+  var BAND_ICON = { sanctioned: _dot("var(--crit)"), high: _dot("var(--crit)"), medium: _dot("var(--warn)"), low: _dot("#e0b000"), clean: _dot("var(--ok)") };
     function bandKey(rb) {
       if (!rb) return "clean";
       var s = String(rb).toLowerCase();

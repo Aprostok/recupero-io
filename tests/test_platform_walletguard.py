@@ -219,15 +219,36 @@ def test_add_guard_address_screens_upserts_and_audits(monkeypatch):
     assert audited["action"] == "guard.address_added"
 
 
+_VALID_UUID = "11111111-1111-1111-1111-111111111111"
+
+
 def test_delete_guard_address_not_found_404(monkeypatch):
     monkeypatch.setattr(walletguard, "delete_watched_address", lambda conn, **k: False)
     with pytest.raises(HTTPException) as ei:
-        router.delete_guard_address("nope", principal=_principal(), conn=object())
+        router.delete_guard_address(_VALID_UUID, principal=_principal(), conn=object())
     assert ei.value.status_code == 404
 
 
 def test_ack_guard_alert_not_found_404(monkeypatch):
     monkeypatch.setattr(walletguard, "ack_alert", lambda conn, **k: False)
     with pytest.raises(HTTPException) as ei:
-        router.ack_guard_alert("nope", principal=_principal(), conn=object())
+        router.ack_guard_alert(_VALID_UUID, principal=_principal(), conn=object())
+    assert ei.value.status_code == 404
+
+
+def test_delete_guard_address_malformed_id_404(monkeypatch):
+    # A non-UUID path param is rejected up front (404), never reaching the DAO —
+    # otherwise it would hit the uuid column and surface as a psycopg 500.
+    monkeypatch.setattr(walletguard, "delete_watched_address",
+                        lambda *a, **k: pytest.fail("DAO must not be called for a bad id"))
+    with pytest.raises(HTTPException) as ei:
+        router.delete_guard_address("not-a-uuid", principal=_principal(), conn=object())
+    assert ei.value.status_code == 404
+
+
+def test_ack_guard_alert_malformed_id_404(monkeypatch):
+    monkeypatch.setattr(walletguard, "ack_alert",
+                        lambda *a, **k: pytest.fail("DAO must not be called for a bad id"))
+    with pytest.raises(HTTPException) as ei:
+        router.ack_guard_alert("not-a-uuid", principal=_principal(), conn=object())
     assert ei.value.status_code == 404

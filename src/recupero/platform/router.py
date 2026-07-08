@@ -815,6 +815,15 @@ class WatchIn(BaseModel):
 _GUARD_WRITE = ("owner", "admin", "member")
 
 
+def _require_uuid(value: str, kind: str) -> None:
+    """Reject a malformed id path param with 404, rather than letting a non-UUID
+    string reach the ``uuid`` column and surface as a psycopg 500."""
+    try:
+        uuid.UUID(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=f"{kind} not found") from exc
+
+
 def _maybe_raise_alert(
     conn: Any, *, org_id: str, chain: str, result: dict[str, Any],
     source: str, watched_address_id: str | None = None,
@@ -902,6 +911,7 @@ def delete_guard_address(
     principal: store.OrgContext = Depends(deps.require_role(*_GUARD_WRITE)),
     conn: Any = Depends(deps.db_conn),
 ) -> None:
+    _require_uuid(watched_id, "watched address")
     if not walletguard.delete_watched_address(
         conn, org_id=principal.org_id, watched_id=watched_id,
     ):
@@ -928,6 +938,7 @@ def ack_guard_alert(
     principal: store.OrgContext = Depends(deps.require_role(*_GUARD_WRITE)),
     conn: Any = Depends(deps.db_conn),
 ) -> dict[str, Any]:
+    _require_uuid(alert_id, "alert")
     if not walletguard.ack_alert(
         conn, org_id=principal.org_id, alert_id=alert_id, user_id=principal.user_id,
     ):

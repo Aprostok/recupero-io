@@ -96,3 +96,29 @@ def test_pct_capped_at_100() -> None:
     out = compute_exposure_summary(case, _db(), total_traced_usd=Decimal("100"))
     cats = {r["category"]: r for r in out["by_category"]}
     assert cats["mixer_high_risk"]["direct_pct"] == 100.0  # 1000/100 capped
+
+
+INTERNAL = "0x" + "e" * 40
+
+
+def test_internal_blacklist_category_ranked_and_labelled() -> None:
+    """internal_blacklist (a real risk_scoring category) must appear in the
+    rollup with its own human label + a "high"-tier rank, not fall back to a
+    generic label + rank 0 (which would sort it last, inconsistent with
+    graph_ui's "high" band)."""
+    db = {INTERNAL.lower(): HighRiskEntry(
+        address=INTERNAL.lower(), name="Case-corpus known-bad",
+        risk_category="internal_blacklist", severity=3)}
+    case = _case([_t(INTERNAL, "5000", "1")])
+    out = compute_exposure_summary(case, db)
+    assert out is not None
+    cats = {row["category"]: row for row in out["by_category"]}
+    assert "internal_blacklist" in cats
+    assert cats["internal_blacklist"]["label"] == "internal known-bad attribution"
+
+
+def test_usd_formatter_survives_non_finite() -> None:
+    from recupero.trace.exposure_summary import _usd
+    assert _usd(Decimal("NaN")) == "$0.00"
+    assert _usd(Decimal("Infinity")) == "$0.00"
+    assert _usd(Decimal("5000")) == "$5,000.00"

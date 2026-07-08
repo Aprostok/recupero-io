@@ -43,6 +43,11 @@ _CATEGORY_HUMAN: dict[str, str] = {
     "ransomware": "ransomware operators",
     "scam_drainer": "scam / drainer infrastructure",
     "darknet_market": "darknet markets",
+    # internal_blacklist: produced by risk_scoring.load_high_risk_db (severity-3
+    # "high"). Without it the rollup fell back to a generic label + rank 0
+    # (sorted last), inconsistent with graph_ui's "high" band for the same
+    # category.
+    "internal_blacklist": "internal known-bad attribution",
 }
 
 # Severity ranking for choosing the headline category when several are present
@@ -54,6 +59,7 @@ _CATEGORY_RANK: dict[str, int] = {
     "ransomware": 80,
     "darknet_market": 70,
     "scam_drainer": 60,
+    "internal_blacklist": 55,  # "high" band, below the named-service categories
     "mixer_high_risk": 50,
 }
 
@@ -69,6 +75,10 @@ def _pct(num: Decimal, denom: Decimal) -> float:
 
 
 def _usd(amount: Decimal) -> str:
+    # Never render "$NaN"/"$Infinity" in an exposure rollup that feeds legal
+    # artifacts — a poisoned/aggregated non-finite value falls back to "$0.00".
+    if not amount.is_finite():
+        return "$0.00"
     return f"${amount:,.2f}"
 
 
@@ -141,7 +151,10 @@ def compute_exposure_summary(
                     continue  # 1-hop is the direct number above
                 cat = (getattr(p, "risk_category", "") or "").lower()
                 amt = getattr(p, "weighted_amount_usd", None)
-                if not cat or amt is None or amt <= 0:
+                # is_finite BEFORE the compare: weighted_amount_usd is a computed
+                # aggregate, and `Decimal("NaN") <= 0` RAISES InvalidOperation
+                # (crashing the rollup) rather than returning False.
+                if not cat or amt is None or not amt.is_finite() or amt <= 0:
                     continue
                 indirect_usd[cat] += amt
                 indirect_addrs[cat].add(_ck(addr))

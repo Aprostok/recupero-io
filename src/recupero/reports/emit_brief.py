@@ -2015,13 +2015,18 @@ def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
     # downgrade a confirmed endpoint to an inferred lead.
     try:
         from recupero.trace.cex_attribution import infer_cex_deposits_from_case
+        # Canonical-key dedup (not bare .lower()): SUBPOENA_TARGETS is multi-
+        # chain, and .lower() corrupts case-sensitive base58 (Solana/Tron/BTC)
+        # addresses used as the dedup key. _ck lowercases EVM (identical to the
+        # old behaviour) and preserves base58 case — the codebase's canonical
+        # keying convention. The appended dict keeps the original address.
         _existing = {
-            (d.get("address") or "").lower()
+            _ck(d.get("address") or "")
             for d in out if d.get("address")
         }
         for dep in infer_cex_deposits_from_case(case):
             d = dep.to_dict()
-            addr_l = (d.get("address") or "").lower()
+            addr_l = _ck(d.get("address") or "")
             if addr_l and addr_l not in _existing:
                 out.append(d)
                 _existing.add(addr_l)
@@ -2040,7 +2045,7 @@ def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
     # one.
     try:
         for infra in (getattr(case, "inferred_infrastructure_endpoints", None) or []):
-            addr_l = (infra.get("address") or "").lower()
+            addr_l = _ck(infra.get("address") or "")
             if addr_l and addr_l not in _existing:
                 out.append(infra)
                 _existing.add(addr_l)
@@ -2061,7 +2066,7 @@ def _subpoena_exchange_dicts(case: Case) -> list[dict[str, Any]]:
         from recupero.trace.peel_chains import detect_peel_chains
         for chain in detect_peel_chains(case):
             for recipient in chain.peel_recipients:
-                addr_l = (recipient or "").lower()
+                addr_l = _ck(recipient or "")
                 if not addr_l or addr_l in _existing:
                     continue
                 out.append({

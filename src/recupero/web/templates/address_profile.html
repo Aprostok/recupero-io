@@ -300,11 +300,33 @@
     h += card(drainAttr,   "Drainer-attr.",    drainAttr   ? "alert" : "");
     h += card(c.prior_total_usd_flowed || "&#8212;", "Total USD seen");
     h += '</div>';
-    // Seen in prior cases &#8212; offer the recoverability / endpoint view.
-    // The screener returns sighting COUNTS, not case ids, so we can't deep-link
-    // a specific case; we surface the capability and let the operator enter the
-    // case id (from the Case Index / their workflow).
-    if (priorCases > 0) {
+    // Seen in prior cases &#8212; drill into where those funds are sitting now.
+    // When the correlation DB resolved the concrete case ids (p.prior_cases),
+    // link each one directly; otherwise (DB absent) fall back to a non-linked
+    // callout &#8212; the screener alone returns only sighting COUNTS, not ids.
+    var priorCasesList = (p.prior_cases && p.prior_cases.length) ? p.prior_cases : null;
+    if (priorCasesList) {
+      h += '<div class="note-callout" style="margin-top:.6rem">' +
+           '<div style="font-weight:700;margin-bottom:.45rem">&#128176; Traced in ' + priorCasesList.length +
+           ' case' + (priorCasesList.length === 1 ? '' : 's') +
+           ' &#8212; open one to see where those funds are sitting now (reachable vs. gone, and if they&#8217;ve moved):</div>' +
+           '<div style="display:flex;flex-direction:column;gap:.32rem">';
+      priorCasesList.forEach(function (pc) {
+        var lid = pc.link_id || pc.investigation_id || pc.case_id;
+        if (!lid) return;
+        var idShort = String(lid).slice(0, 8);
+        var meta = esc(pc.role || 'seen');
+        if (pc.observed_at) { meta += ' &#183; ' + esc(String(pc.observed_at).slice(0, 10)); }
+        h += '<a href="/v1/fund-endpoints/console?case_id=' + encodeURIComponent(lid) + '" target="_blank" rel="noopener" ' +
+             'style="display:flex;align-items:center;gap:.5rem;text-decoration:none;color:var(--ink);' +
+             'border:1px solid var(--accent-soft);border-radius:var(--r-sm);padding:.28rem .55rem">' +
+             '<span>&#128200;</span>' +
+             '<span class="mono" style="font-size:.78rem">' + esc(idShort) + '&#8230;</span>' +
+             '<span style="font-size:.72rem;color:var(--ink-soft);flex:1">' + meta + '</span>' +
+             '<span style="color:var(--accent);font-weight:700;white-space:nowrap">Where It&#8217;s Sitting Now &#8594;</span></a>';
+      });
+      h += '</div></div>';
+    } else if (priorCases > 0) {
       h += '<div class="note-callout" style="margin-top:.6rem;display:flex;align-items:center;gap:.6rem;flex-wrap:wrap">' +
            '<span>&#128176; This address was traced in ' + esc(priorCases) + ' prior case' + (priorCases === 1 ? '' : 's') +
            '. See where those funds are sitting now &#8212; reachable vs. gone, and whether they&#8217;ve moved.</span>' +

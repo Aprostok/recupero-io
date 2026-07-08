@@ -31,6 +31,7 @@ export default function Home() {
         <div className="nav-links">
           <a href="#platform">Platform</a>
           <a href="#how">How it works</a>
+          <Link href="/story">Our Story</Link>
           <Link href="/academy">Academy</Link>
           <Link href="/login">Sign in</Link>
         </div>
@@ -274,6 +275,7 @@ export default function Home() {
           </div>
           <div className="col">
             <h4>Company</h4>
+            <Link href="/story">Our Story</Link>
             <a href="#how">How it works</a>
             <a href="mailto:hello@recupero.io">Contact</a>
           </div>

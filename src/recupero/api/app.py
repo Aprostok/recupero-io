@@ -198,6 +198,9 @@ for _mod, _attr in (
     ("recupero.api.recovery_snapshot_api", "router"),
     # v0.35.26 (UI batch-7): per-case overview / launcher.
     ("recupero.api.case_overview_api", "router"),
+    # v0.42: fund-endpoints — "where the money is sitting now" (recoverability
+    # rollup + endpoint cards + flow map, from the case's freeze brief).
+    ("recupero.api.fund_endpoints_api", "router"),
     # v0.35.29 (UI batch-10): J1 trace-accuracy benchmark.
     ("recupero.api.benchmark_api", "router"),
     # v0.35.30: D6 proactive recovery alerts (persisted; live freeze-NOW queue).

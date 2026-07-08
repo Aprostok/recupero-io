@@ -107,6 +107,12 @@ _NAV: list[dict[str, Any]] = [
      "path": "/v1/case-overview/console", "live": True,
      "desc": "Per-case launcher — which deliverables a case has produced, with "
              "a deep link into each console."},
+    # v0.42: where the money is sitting now (recoverability + endpoints).
+    {"group": "Casework", "label": "Where It's Sitting Now", "emoji": "💰",
+     "path": "/v1/fund-endpoints/console", "live": True,
+     "desc": "Terminal resting places of a case's stolen funds — reachable vs. "
+             "gone, per-endpoint recoverability, movement since last check, and "
+             "a flow-to-endpoint map."},
     # v0.35.27 UI batch-8: surface main's just-merged operator-graph feature
     # (client-journey-graph) into the hub. Distinct from "Graph Analysis"
     # (computed consolidation hubs + cycles) — this is the INTERACTIVE explorer.

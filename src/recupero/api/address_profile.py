@@ -158,7 +158,46 @@ def get_address_profile(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="screening unavailable",
         ) from None
-    return build_address_profile(result)
+    profile = build_address_profile(result)
+    _attach_prior_cases(profile, addr, chain_norm)
+    return profile
+
+
+def _attach_prior_cases(profile: dict[str, Any], address: str, chain: str) -> None:
+    """Attach concrete prior-case refs so the console can deep-link into the
+    per-case "Where It's Sitting Now" view (v0.42).
+
+    The screener surfaces only prior-case COUNTS; this resolves the actual
+    case/investigation ids from the correlation index. Best-effort and additive:
+    needs the correlation DB (SUPABASE_DB_URL) — absent, ``profile`` is left
+    unchanged and the console falls back to a non-linked callout. Never raises."""
+    dsn = (os.environ.get("SUPABASE_DB_URL", "") or "").strip()
+    if not dsn:
+        return
+    try:
+        from recupero.trace.correlation import find_cases_for_address
+
+        refs = find_cases_for_address(address, dsn=dsn, chain=chain, limit=12)
+    except Exception as exc:  # noqa: BLE001 — drill-down is a nicety
+        log.warning("address profile prior-cases lookup failed for %r: %s", address, exc)
+        return
+    prior_cases = [
+        {
+            "case_id": r.case_id,
+            "investigation_id": r.investigation_id,
+            # The id the case store is keyed by (Supabase → investigation_id,
+            # local → case_id). The console links with this.
+            "link_id": r.investigation_id or r.case_id,
+            "role": r.role,
+            "label_name": r.label_name,
+            "risk_verdict": r.risk_verdict,
+            "observed_at": r.observed_at_iso,
+        }
+        for r in refs
+        if (r.investigation_id or r.case_id)
+    ]
+    if prior_cases:
+        profile["prior_cases"] = prior_cases
 
 
 @router.get(

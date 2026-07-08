@@ -588,6 +588,114 @@ def lookup_correlations(
     return out
 
 
+@dataclass(frozen=True)
+class AddressCaseRef:
+    """One case/investigation an address was observed in — for the operator
+    drill-down (address profile → the per-case "where the funds are now" view).
+
+    Both ids are carried because the case store is keyed differently by
+    deployment: Supabase addresses a case by ``investigation_id`` (the bucket
+    folder), a local store by ``case_id``. The caller links with whichever is
+    populated (prefer ``investigation_id``)."""
+    case_id: str | None
+    investigation_id: str | None
+    role: str
+    label_name: str | None
+    risk_verdict: str | None
+    usd_flowed: Decimal | None
+    observed_at_iso: str
+
+
+def find_cases_for_address(
+    address: str,
+    *,
+    dsn: str,
+    chain: str | None = None,
+    limit: int = 25,
+) -> list[AddressCaseRef]:
+    """Every case an address was observed in, most-recent first (deduped).
+
+    Powers the operator drill-down: the screener only surfaces prior-case
+    COUNTS, so this resolves the concrete case/investigation ids an address
+    appears in — one row per distinct case, newest first. Deduped on
+    (investigation_id or case_id). Best-effort: no dsn / no psycopg / DB error
+    → ``[]`` (the profile then falls back to a non-linked callout)."""
+    if not address or not dsn:
+        return []
+    try:
+        import psycopg  # noqa: F401
+        from psycopg.rows import dict_row
+    except ImportError:  # pragma: no cover
+        return []
+    # Canonical + legacy-lowercase forms (mirrors lookup_correlations so we
+    # match both current and pre-v0.17.5 rows). A set collapses the common
+    # EVM case where canonical == lowercase.
+    queries = [q for q in {_ck(address), (address or "").strip().lower()} if q]
+    if not queries:
+        return []
+    lim = max(1, min(int(limit or 25), 200))
+    # Over-fetch (× a few) before de-dup so `limit` distinct cases survive even
+    # when an address appears with several roles per case. Two COMPLETE literal
+    # queries (no f-string / dynamic SQL — passes the inline-SQL audit); the
+    # only difference is the optional chain filter, bound via %s.
+    if chain:
+        sql = """
+            SELECT case_id, investigation_id, role, label_name, risk_verdict,
+                   usd_flowed, observed_at
+              FROM public.address_observations
+             WHERE address = ANY(%(addresses)s) AND chain = %(chain)s
+             ORDER BY observed_at DESC NULLS LAST
+             LIMIT %(lim)s;
+        """
+        params: dict[str, Any] = {"addresses": queries, "chain": chain, "lim": lim * 5}
+    else:
+        sql = """
+            SELECT case_id, investigation_id, role, label_name, risk_verdict,
+                   usd_flowed, observed_at
+              FROM public.address_observations
+             WHERE address = ANY(%(addresses)s)
+             ORDER BY observed_at DESC NULLS LAST
+             LIMIT %(lim)s;
+        """
+        params = {"addresses": queries, "lim": lim * 5}
+    try:
+        with db_connect(dsn, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+    except Exception as exc:  # noqa: BLE001 — best-effort drill-down
+        log.warning("find_cases_for_address failed: %s", exc)
+        return []
+
+    out: list[AddressCaseRef] = []
+    seen: set[str] = set()
+    for row in rows:
+        cid = row.get("case_id")
+        inv = row.get("investigation_id")
+        key = str(inv or cid or "")
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        usd = row.get("usd_flowed")
+        if isinstance(usd, (int, float)):
+            usd = Decimal(str(usd))
+        observed = row.get("observed_at")
+        out.append(AddressCaseRef(
+            case_id=str(cid) if cid else None,
+            investigation_id=str(inv) if inv else None,
+            role=row.get("role") or "unlabeled",
+            label_name=row.get("label_name"),
+            risk_verdict=row.get("risk_verdict"),
+            usd_flowed=usd if isinstance(usd, Decimal) else None,
+            observed_at_iso=(
+                observed.isoformat().replace("+00:00", "Z")
+                if observed is not None else ""
+            ),
+        ))
+        if len(out) >= lim:
+            break
+    return out
+
+
 def correlations_to_brief_section(
     correlations: dict[str, CorrelationResult],
 ) -> dict[str, Any]:
@@ -751,10 +859,12 @@ def _empty_section() -> dict[str, Any]:
 
 
 __all__ = (
+    "AddressCaseRef",
     "AddressObservation",
     "CorrelationResult",
     "PriorCaseAppearance",
     "build_observations",
+    "find_cases_for_address",
     "record_observations",
     "lookup_correlations",
     "correlations_to_brief_section",

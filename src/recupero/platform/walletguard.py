@@ -145,7 +145,9 @@ def add_watched_address(
             "(org_id, chain, address, label, created_by, last_verdict, "
             " last_risk_score, last_checked_at) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, "
-            "        CASE WHEN %s IS NULL THEN NULL ELSE now() END) "
+            # %s::text so Postgres can infer the param type — it appears only in
+            # this IS NULL test, which otherwise yields IndeterminateDatatype.
+            "        CASE WHEN %s::text IS NULL THEN NULL ELSE now() END) "
             "ON CONFLICT (org_id, chain, address) DO UPDATE SET "
             "  label = EXCLUDED.label, "
             "  last_verdict = EXCLUDED.last_verdict, "

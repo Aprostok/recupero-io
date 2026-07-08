@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from recupero.observability import metrics as obs_metrics
 from recupero.platform import (
+    assistant,
     audit,
     billing,
     deps,
@@ -929,6 +930,42 @@ def ack_guard_alert(
     ):
         raise HTTPException(status_code=404, detail="alert not found or already acknowledged")
     return {"alert_id": alert_id, "acknowledged": True}
+
+
+# --------------------------------------------------------------------------- #
+# AI Assistant ("Nikiwa") — grounded crypto-safety chat
+# --------------------------------------------------------------------------- #
+
+
+class ChatMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str = Field(min_length=1, max_length=assistant.MAX_MSG_CHARS)
+
+
+class ChatIn(BaseModel):
+    messages: list[ChatMessage] = Field(min_length=1, max_length=assistant.MAX_TURNS)
+    chain: str = Field(default="ethereum", min_length=1, max_length=32)
+
+
+@router.post("/assistant/chat")
+def assistant_chat(
+    body: ChatIn,
+    principal: store.OrgContext = Depends(deps.rate_limit),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Grounded crypto-safety chat. Opt-in (``RECUPERO_ASSISTANT_ENABLED``); 503
+    when disabled or the model isn't configured (no API key)."""
+    if not assistant.is_enabled():
+        raise HTTPException(status_code=503, detail="assistant not enabled")
+    payload = [{"role": m.role, "content": m.content} for m in body.messages]
+    try:
+        result = assistant.answer(payload, chain=body.chain)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    store.record_usage(conn, org_id=principal.org_id, kind="assistant_chat")
+    return result
 
 
 __all__ = ("router",)

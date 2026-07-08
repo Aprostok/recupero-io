@@ -119,6 +119,57 @@ export interface AuditEvent {
   metadata: Record<string, unknown>;
 }
 
+// ---- Wallet Guard (WalletBlock) ---- //
+
+export interface GuardVerdict {
+  action: "block" | "warn" | "allow";
+  title: string;
+  verdict: "sanctioned" | "high" | "medium" | "low" | "clean";
+  risk_score: number;
+  headline: string;
+  advice: string;
+  should_alert: boolean;
+}
+
+export interface GuardCheckResult {
+  screening: {
+    address: string;
+    chain: string;
+    risk_verdict: string;
+    risk_score: number;
+    labels: { name: string; category: string; severity: number }[];
+    investigator_note: string;
+    [k: string]: unknown;
+  };
+  guard: GuardVerdict;
+  alert_id: string | null;
+}
+
+export interface WatchedAddress {
+  id: string;
+  chain: string;
+  address: string;
+  label: string | null;
+  last_verdict: string | null;
+  last_risk_score: number | null;
+  last_checked_at: string | null;
+  created_at: string;
+}
+
+export interface WalletAlert {
+  id: string;
+  watched_address_id: string | null;
+  chain: string;
+  address: string;
+  verdict: string;
+  severity: number;
+  category: string | null;
+  headline: string;
+  source: string;
+  created_at: string;
+  acknowledged: boolean;
+}
+
 export interface BillingUsage {
   plan: string;
   status: string;
@@ -285,6 +336,54 @@ export const api = {
       method: "POST",
       body: { token: inviteToken, password, name },
     }),
+
+  // ---- Wallet Guard ---- //
+
+  guardCheck: (token: string, address: string, chain = "ethereum") =>
+    request<GuardCheckResult>("/v2/guard/check", {
+      method: "POST",
+      token,
+      body: { address, chain },
+    }),
+
+  listWatched: (token: string) =>
+    request<{ addresses: WatchedAddress[] }>("/v2/guard/addresses", { token }),
+
+  addWatched: (token: string, address: string, chain: string, label?: string) =>
+    request<{ id: string; address: string; guard: GuardVerdict; alert_id: string | null }>(
+      "/v2/guard/addresses",
+      { method: "POST", token, body: { address, chain, label } },
+    ),
+
+  deleteWatched: (token: string, id: string) =>
+    request<void>(`/v2/guard/addresses/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      token,
+    }),
+
+  listAlerts: (token: string, unacknowledged = false) =>
+    request<{ alerts: WalletAlert[]; unacknowledged: number }>(
+      `/v2/guard/alerts?unacknowledged=${unacknowledged ? 1 : 0}`,
+      { token },
+    ),
+
+  ackAlert: (token: string, id: string) =>
+    request<{ alert_id: string; acknowledged: boolean }>(
+      `/v2/guard/alerts/${encodeURIComponent(id)}/ack`,
+      { method: "POST", token },
+    ),
+
+  // ---- AI Assistant ---- //
+
+  assistantChat: (
+    token: string,
+    messages: { role: "user" | "assistant"; content: string }[],
+    chain = "ethereum",
+  ) =>
+    request<{ reply: string; grounded_addresses: string[]; model: string }>(
+      "/v2/assistant/chat",
+      { method: "POST", token, body: { messages, chain } },
+    ),
 
   listAudit: (token: string, limit = 100) =>
     request<{ events: AuditEvent[] }>(`/v2/audit?limit=${limit}`, { token }),

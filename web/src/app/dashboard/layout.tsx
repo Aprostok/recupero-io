@@ -45,6 +45,8 @@ export default function DashboardLayout({
       <nav className="nav">
         <Brand size={24} />
         {tab("/dashboard", "Traces")}
+        {tab("/dashboard/guard", "Wallet Guard")}
+        {tab("/dashboard/assistant", "Assistant")}
         {tab("/dashboard/keys", "API Keys")}
         {tab("/dashboard/members", "Members")}
         {tab("/dashboard/activity", "Activity")}

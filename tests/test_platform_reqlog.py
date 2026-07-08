@@ -80,6 +80,25 @@ def test_emit_logs_at_info_on_named_logger(caplog) -> None:
 
 # ---- deps stash: current_principal records the tenant on request.state ---- #
 
+class _FakeCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, *a, **k):  # tolerate the app.current_org set_config
+        return None
+
+
+class _FakeConn:
+    """Minimal stand-in: current_principal now sets the RLS GUC on the tenant
+    connection, so the double must accept cursor().execute()."""
+
+    def cursor(self):
+        return _FakeCursor()
+
+
 def test_current_principal_stashes_tenant_from_jwt(monkeypatch) -> None:
     secret = "reqlog-stash-secret"
     monkeypatch.setattr(deps, "_jwt_secret", lambda: secret)
@@ -89,7 +108,7 @@ def test_current_principal_stashes_tenant_from_jwt(monkeypatch) -> None:
     )
     req = _FakeRequest()
     ctx = deps.current_principal(
-        request=req, authorization=f"Bearer {token}", x_api_key=None, conn=object(),
+        request=req, authorization=f"Bearer {token}", x_api_key=None, conn=_FakeConn(),
     )
     assert ctx.org_id == "org42"
     # the middleware reads exactly these off scope['state'] == request.state

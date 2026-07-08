@@ -116,7 +116,7 @@ class TraceIn(BaseModel):
 
 
 @router.post("/auth/signup", response_model=TokenOut, status_code=201)
-def signup(body: SignupIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
+def signup(body: SignupIn, conn: Any = Depends(deps.auth_db_conn)) -> TokenOut:
     if store.get_user_by_email(conn, body.email):
         raise HTTPException(status_code=409, detail="email already registered")
     user_id = store.create_user(
@@ -138,7 +138,7 @@ def signup(body: SignupIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
 
 
 @router.post("/auth/login", response_model=TokenOut)
-def login(body: LoginIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
+def login(body: LoginIn, conn: Any = Depends(deps.auth_db_conn)) -> TokenOut:
     user = store.get_user_by_email(conn, body.email)
     # Constant-ish path: verify even on missing user to avoid a timing oracle.
     stored_hash = user["password_hash"] if user else "scrypt$1$1$1$AA$AA"
@@ -467,7 +467,7 @@ def revoke_member_invite(
 
 @router.post("/members/invites/accept", response_model=TokenOut)
 def accept_member_invite(
-    body: AcceptInviteIn, conn: Any = Depends(deps.db_conn),
+    body: AcceptInviteIn, conn: Any = Depends(deps.auth_db_conn),
 ) -> TokenOut:
     """Public (no auth): the single-use token IS the proof the invitee received
     the emailed link. Adds an existing user to the org, or creates the account
@@ -661,7 +661,7 @@ def billing_checkout(
 def stripe_webhook(
     payload: bytes = Body(default=b""),
     stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
-    conn: Any = Depends(deps.db_conn),
+    conn: Any = Depends(deps.auth_db_conn),
 ) -> dict[str, Any]:
     """Stripe webhook: verify the signature over the RAW body, map the event to a
     tenant state change, and apply it. Unhandled events are acked (200) so Stripe
@@ -726,6 +726,9 @@ def _poll_trace_status(org_id: str, investigation_id: str) -> dict[str, Any] | N
     if not dsn:
         return None
     with psycopg.connect(dsn) as conn:
+        # RLS: scope this short-lived connection to the JWT-verified org so the
+        # status read is visible under a restricted (FORCE RLS) role.
+        deps._set_current_org(conn, org_id)
         return store.get_trace_status(
             conn, org_id=org_id, investigation_id=investigation_id,
         )

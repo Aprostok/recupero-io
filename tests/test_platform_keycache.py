@@ -20,6 +20,25 @@ class _FakeRequest:
         self.state = SimpleNamespace()
 
 
+class _FakeCursor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, *a, **k):  # tolerate the app.current_org set_config
+        return None
+
+
+class _FakeConn:
+    """current_principal sets the RLS GUC on the tenant conn, so the double must
+    accept cursor().execute()."""
+
+    def cursor(self):
+        return _FakeCursor()
+
+
 class _FakeRedis:
     def __init__(self):
         self.store: dict[str, bytes] = {}
@@ -122,7 +141,7 @@ def test_current_principal_cache_hit_skips_db(monkeypatch):
         raise AssertionError("resolve_api_key must NOT be called on a cache hit")
 
     monkeypatch.setattr(store, "resolve_api_key", _boom)
-    ctx = deps.current_principal(request=_FakeRequest(), authorization=None, x_api_key=key, conn=object())
+    ctx = deps.current_principal(request=_FakeRequest(), authorization=None, x_api_key=key, conn=_FakeConn())
     assert ctx.org_id == "org1" and ctx.plan == "pro" and ctx.role == "service"
 
 
@@ -131,7 +150,16 @@ def test_current_principal_cache_miss_populates(monkeypatch):
     key = tenancy.API_KEY_PREFIX + "freshtoken"
     resolved = store.OrgContext(org_id="org9", plan="enterprise", user_id=None, role="service")
     monkeypatch.setattr(store, "resolve_api_key", lambda conn, k: resolved)
-    ctx = deps.current_principal(request=_FakeRequest(), authorization=None, x_api_key=key, conn=object())
+    # key resolution now runs on the BYPASSRLS auth connection — mock it so the
+    # test needs no live DB (resolve_api_key is stubbed and ignores the conn).
+    import contextlib
+
+    @contextlib.contextmanager
+    def _fake_auth_cm():
+        yield _FakeConn()
+
+    monkeypatch.setattr(deps, "_auth_conn_cm", _fake_auth_cm)
+    ctx = deps.current_principal(request=_FakeRequest(), authorization=None, x_api_key=key, conn=_FakeConn())
     assert ctx.org_id == "org9"
     # cache now populated for next time
     cached = json.loads(fake.store["akc:" + tenancy.hash_api_key(key)])

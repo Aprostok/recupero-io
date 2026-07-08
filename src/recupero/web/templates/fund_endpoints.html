@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recupero &#8212; Where It's Sitting Now</title>
+<link rel="stylesheet" href="/v1/console/app.css">
+<style>
+  /* page-specific: fund endpoints */
+  .explain { background: var(--accent-soft); border: 1px solid var(--hair); color: var(--ink);
+    border-radius: var(--r); padding: .55rem .8rem; font-size: .8rem; margin-bottom: 1rem; }
+  .hero { display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap;
+    background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r);
+    padding: 1rem 1.2rem; box-shadow: var(--shadow-sm); margin-bottom: 1rem; }
+  .hero .figs { display: flex; gap: 1.6rem; flex-wrap: wrap; flex: 1; }
+  .hero .fig .v { font-size: 1.35rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .hero .fig .l { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); }
+  .split-bar { display: flex; height: 12px; border-radius: 999px; overflow: hidden; margin: .1rem 0 .3rem; }
+  .split-bar > span { transition: flex .8s cubic-bezier(.32,.72,0,1); }
+  .ep-card { background: var(--surface); border: 1px solid var(--hair); border-left: 4px solid var(--hair-strong);
+    border-radius: var(--r); padding: .7rem .9rem; box-shadow: var(--shadow-sm); }
+  .ep-head { display: flex; align-items: center; gap: .55rem; flex-wrap: wrap; }
+  .ep-addr { font-family: var(--mono); font-size: .8rem; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ep-usd { font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ep-meta { display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .4rem;
+    font-size: .72rem; color: var(--ink-soft); }
+  .st-pill { display: inline-flex; align-items: center; gap: .28rem; font-size: .66rem; font-weight: 800;
+    text-transform: uppercase; letter-spacing: .04em; padding: .12rem .5rem; border-radius: 999px;
+    color: #fff; white-space: nowrap; }
+  .mv { display: inline-flex; align-items: center; gap: .25rem; font-size: .68rem; font-weight: 700;
+    padding: .08rem .42rem; border-radius: 999px; white-space: nowrap; }
+  .mv-moved { background: var(--crit-soft); color: var(--crit); }
+  .mv-still { background: var(--ok-soft); color: var(--ok); }
+  .mv-never { background: var(--surface-2); color: var(--ink-faint); }
+  .grp-h { font-size: .74rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em;
+    margin: 1.1rem 0 .5rem; display: flex; align-items: center; gap: .5rem; }
+  .flow-wrap { background: var(--surface); border: 1px solid var(--hair); border-radius: var(--r);
+    padding: .6rem; box-shadow: var(--shadow-sm); overflow-x: auto; }
+  .exlink { font-size: .68rem; color: var(--accent); text-decoration: none; white-space: nowrap;
+    border: 1px solid var(--accent-soft); border-radius: var(--r-sm); padding: .08rem .4rem; }
+  .deeplinks a { font-size: .74rem; color: var(--ink-soft); text-decoration: none; margin-right: .8rem;
+    border: 1px solid var(--hair); border-radius: var(--r-sm); padding: .18rem .55rem; }
+</style>
+</head>
+<body>
+  <h1>&#128176; Where It's Sitting Now</h1>
+  <div class="sub">Pull up a case to see every terminal resting place of the stolen funds &#8212; how much is
+    still <strong>reachable</strong> (freeze / monitor / subpoena) versus <strong>gone</strong> (mixer / burned /
+    bridged-out), and whether any endpoint has <strong>moved</strong> since the last check. Paste your operator key;
+    data is fetched from the admin-gated API (the key stays in a request header, never the URL).</div>
+  <div class="explain">Read-only: derived entirely from this case's existing <span class="mono">freeze_brief.json</span>.
+    No new trace is run and nothing is inferred &#8212; recoverability and amounts match the LE handoff verbatim.
+    Movement verdicts come from real watchlist snapshots when a monitoring DB is configured.</div>
+
+  <div class="bar">
+    <input id="key" type="password" placeholder="X-Recupero-Admin-Key" size="34" autocomplete="off">
+    <input id="case" type="text" placeholder="case_id" size="24" autocomplete="off">
+    <button id="load">Load</button>
+    <span id="msg"></span>
+  </div>
+
+  <div id="out"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  function esc(s) { var d = document.createElement("div"); d.textContent = (s == null ? "" : String(s)); return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+  try { $("key").value = sessionStorage.getItem("rk_admin_key") || ""; } catch (e) {}
+  function setMsg(t, cls) { var m = $("msg"); m.textContent = t || ""; m.className = cls || ""; }
+  function key() { return ($("key").value || "").trim(); }
+  function caseId() { return ($("case").value || "").trim(); }
+
+  // -- Recoverability status vocabulary: color + label + reachable flag -------
+  var ST = {
+    FREEZABLE:     { color: "var(--ok)",   label: "Freezable",     gone: false, icon: "&#128994;" },
+    TRACKED:       { color: "#9d5cff",      label: "Tracked",       gone: false, icon: "&#128995;" },
+    INVESTIGATE:   { color: "var(--warn)",  label: "Investigate",   gone: false, icon: "&#128992;" },
+    EXCHANGE:      { color: "#22d3ee",      label: "Exchange",      gone: false, icon: "&#128998;" },
+    UNRECOVERABLE: { color: "#6b7280",      label: "Unrecoverable", gone: true,  icon: "&#9899;" },
+    UNKNOWN:       { color: "var(--ink-faint)", label: "Unknown",   gone: false, icon: "&#11036;" }
+  };
+  var ST_ORDER = ["FREEZABLE", "TRACKED", "INVESTIGATE", "EXCHANGE", "UNRECOVERABLE", "UNKNOWN"];
+  function stMeta(s) { return ST[String(s || "UNKNOWN").toUpperCase()] || ST.UNKNOWN; }
+
+  function fmtUsd(n) {
+    n = +n || 0;
+    var neg = n < 0; n = Math.abs(n);
+    var s;
+    if (n >= 1e9) s = "$" + (n / 1e9).toFixed(2) + "B";
+    else if (n >= 1e6) s = "$" + (n / 1e6).toFixed(2) + "M";
+    else if (n >= 1e3) s = "$" + (n / 1e3).toFixed(1) + "K";
+    else s = "$" + n.toFixed(n < 100 ? 2 : 0);
+    return (neg ? "-" : "") + s;
+  }
+
+  // -- Self-contained "seed -> endpoints" flow map (top-N by value) ----------
+  function buildFlowMap(el, eps) {
+    var top = eps.filter(function (e) { return (+e.usd_numeric || 0) > 0; })
+                 .sort(function (a, b) { return (+b.usd_numeric || 0) - (+a.usd_numeric || 0); });
+    var truncated = top.length > 12;
+    top = top.slice(0, 12);
+    if (!top.length) { el.innerHTML = '<p class="empty">No valued endpoints to map.</p>'; return; }
+    var maxUsd = top.reduce(function (m, e) { return Math.max(m, +e.usd_numeric || 0); }, 0) || 1;
+    var rowH = 44, padT = 16, W = 640, H = padT * 2 + rowH * top.length;
+    var sx = 150, sw = 20, ex = 300, ew = W - ex - 200;
+    var seedY = H / 2;
+    var p = ['<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="width:100%;min-width:560px;height:auto;display:block">'];
+    // edges first (under nodes)
+    top.forEach(function (e, i) {
+      var y = padT + rowH * i + rowH / 2;
+      var m = stMeta(e.status);
+      var sw2 = Math.max(1.5, Math.sqrt((+e.usd_numeric || 0) / maxUsd) * 15);
+      var x1 = sx + sw, y1 = seedY, x2 = ex, y2 = y, mx = (x1 + x2) / 2;
+      p.push('<path d="M' + x1 + ' ' + y1 + ' C' + mx + ' ' + y1 + ' ' + mx + ' ' + y2 + ' ' + x2 + ' ' + y2 +
+             '" fill="none" stroke="' + m.color + '" stroke-width="' + sw2.toFixed(1) + '" stroke-opacity=".45"/>');
+    });
+    // seed node
+    p.push('<rect x="' + (sx - 92) + '" y="' + (seedY - 20) + '" width="92" height="40" rx="8" fill="var(--accent)" />');
+    p.push('<text x="' + (sx - 46) + '" y="' + (seedY - 3) + '" text-anchor="middle" font-size="11" font-weight="800" fill="#fff">TRACED</text>');
+    p.push('<text x="' + (sx - 46) + '" y="' + (seedY + 11) + '" text-anchor="middle" font-size="9" fill="#fff" opacity=".85">funds</text>');
+    // endpoint nodes
+    top.forEach(function (e, i) {
+      var y = padT + rowH * i + rowH / 2;
+      var m = stMeta(e.status);
+      var lbl = (e.short || e.issuer || "endpoint");
+      p.push('<circle cx="' + ex + '" cy="' + y + '" r="6" fill="' + m.color + '" stroke="var(--surface)" stroke-width="2"/>');
+      p.push('<text x="' + (ex + 14) + '" y="' + (y - 2) + '" font-size="11" font-family="var(--mono)" fill="var(--ink)">' + esc(lbl) + '</text>');
+      p.push('<text x="' + (ex + 14) + '" y="' + (y + 11) + '" font-size="9.5" fill="' + m.color + '" font-weight="700">' +
+             esc(m.label) + ' &#183; ' + esc(fmtUsd(e.usd_numeric)) + '</text>');
+    });
+    p.push('</svg>');
+    el.innerHTML = p.join('');
+    if (truncated) {
+      el.innerHTML += '<div style="font-size:.7rem;color:var(--ink-faint);padding:.3rem .5rem">Showing top 12 endpoints by value; ' +
+        (eps.length - 12) + ' more below.</div>';
+    }
+  }
+
+  function movementBadge(e) {
+    var mv = e.movement || "never_checked";
+    if (mv === "moved") return '<span class="mv mv-moved" title="A balance snapshot recorded funds leaving this address">&#9888; Moved</span>';
+    if (mv === "still_present") return '<span class="mv mv-still" title="Last snapshot: funds still here">&#9679; Still here</span>';
+    return '<span class="mv mv-never" title="Not yet checked by the watcher">&#8212; Not checked</span>';
+  }
+
+  function epCard(e) {
+    var m = stMeta(e.status);
+    var h = '<div class="ep-card" style="border-left-color:' + m.color + '">';
+    h += '<div class="ep-head">';
+    h += '<span class="st-pill" style="background:' + m.color + '">' + m.icon + ' ' + esc(m.label) + '</span>';
+    if (window.RC && window.RC.chainChip && e.chain) { h += window.RC.chainChip(e.chain); }
+    h += '<span class="ep-addr" title="' + esc(e.address || "") + '">' + esc(e.address || (e.issuer ? "(" + e.issuer + ")" : "—")) + '</span>';
+    h += movementBadge(e);
+    h += '<span class="ep-usd">' + esc(e.usd || fmtUsd(e.usd_numeric)) + '</span>';
+    h += '</div>';
+    h += '<div class="ep-meta">';
+    if (e.issuer) h += '<span>&#127974; ' + esc(e.issuer) + '</span>';
+    if (e.amount) h += '<span>&#128181; ' + esc(e.amount) + '</span>';
+    if (e.evidence_type) h += '<span>&#128269; ' + esc(String(e.evidence_type).replace(/_/g, " ")) + '</span>';
+    if (e.observed_at) h += '<span>&#128337; ' + esc(String(e.observed_at).slice(0, 10)) + '</span>';
+    if (e.reason) h += '<span style="flex-basis:100%;color:var(--ink-soft)">&#9888; ' + esc(e.reason) + '</span>';
+    if (e.explorer_url) h += '<a class="exlink" href="' + esc(e.explorer_url) + '" target="_blank" rel="noopener">&#128279; Explorer</a>';
+    h += '</div></div>';
+    return h;
+  }
+
+  function render(v) {
+    var cid = v.case_id == null ? "" : String(v.case_id);
+    var eps = Array.isArray(v.endpoints) ? v.endpoints : [];
+    var reachable = +v.reachable_usd_numeric || 0;
+    var gone = +v.gone_usd_numeric || 0;
+    var tot = reachable + gone;
+    var recPct = tot > 0 ? Math.round(reachable / tot * 100) : 0;
+    var ringScore = Math.round(recPct / 10);
+    var ringCls = recPct >= 60 ? "r-ok" : recPct >= 25 ? "r-high" : "r-crit";
+
+    var h = "";
+    // -- Hero ---------------------------------------------------------------
+    h += '<div class="hero">';
+    h += '<div class="score-ring ' + ringCls + '" style="--score:' + ringScore + '">' +
+         '<div class="ring-inner">' + recPct + '%</div></div>';
+    h += '<div class="figs">';
+    h += '<div class="fig"><div class="v">' + esc(v.total_loss_usd || "—") + '</div><div class="l">Total loss</div></div>';
+    h += '<div class="fig"><div class="v" style="color:var(--ok)">' + esc(fmtUsd(reachable)) + '</div><div class="l">Reachable now</div></div>';
+    h += '<div class="fig"><div class="v" style="color:var(--ink-soft)">' + esc(fmtUsd(gone)) + '</div><div class="l">Gone / unrecoverable</div></div>';
+    h += '<div class="fig"><div class="v">' + esc(v.max_recoverable_usd || "—") + '</div><div class="l">Max recoverable</div></div>';
+    h += '<div class="fig"><div class="v">' + esc(v.n_endpoints || 0) + (v.n_moved ? ' <span style="font-size:.9rem;color:var(--crit)">(' + v.n_moved + ' moved)</span>' : '') + '</div><div class="l">Endpoints</div></div>';
+    h += '</div></div>';
+
+    if (v.note) { h += '<p class="empty">' + esc(v.note) + '</p>'; }
+
+    // -- Donut + reachable/gone split ---------------------------------------
+    if (eps.length) {
+      h += '<div style="display:flex;gap:1.4rem;flex-wrap:wrap;align-items:center;background:var(--surface);' +
+           'border:1px solid var(--hair);border-radius:var(--r);padding:1rem 1.2rem;box-shadow:var(--shadow-sm);margin-bottom:1rem">';
+      h += '<div id="donut"></div>';
+      h += '<div style="flex:1;min-width:220px"><div id="splitbar"></div>' +
+           '<div style="font-size:.72rem;color:var(--ink-soft);margin-top:.4rem">Recoverability of traced holdings by value. ' +
+           'The dead-weight grey slice is what current techniques can no longer follow.</div></div>';
+      h += '</div>';
+
+      // -- Flow-to-endpoint map --------------------------------------------
+      h += '<div class="grp-h">&#128200; Flow to endpoints</div>';
+      h += '<div class="flow-wrap"><div id="flow"></div></div>';
+
+      // -- Endpoint cards grouped by status --------------------------------
+      var byStatus = {};
+      eps.forEach(function (e) { var s = String(e.status || "UNKNOWN").toUpperCase(); (byStatus[s] = byStatus[s] || []).push(e); });
+      ST_ORDER.forEach(function (s) {
+        var list = byStatus[s]; if (!list || !list.length) return;
+        var m = stMeta(s);
+        list.sort(function (a, b) { return (+b.usd_numeric || 0) - (+a.usd_numeric || 0); });
+        var sum = list.reduce(function (t, e) { return t + (+e.usd_numeric || 0); }, 0);
+        h += '<div class="grp-h" style="color:' + m.color + '"><span style="width:10px;height:10px;border-radius:2px;background:' + m.color + '"></span>' +
+             esc(m.label) + ' <span style="color:var(--ink-faint);font-weight:600">' + list.length + ' &#183; ' + esc(fmtUsd(sum)) + '</span></div>';
+        h += '<div style="display:flex;flex-direction:column;gap:.5rem">';
+        list.forEach(function (e) { h += epCard(e); });
+        h += '</div>';
+      });
+    }
+
+    // -- Deep links to the interactive graph + case launcher ----------------
+    h += '<div class="deeplinks" style="margin-top:1.3rem">';
+    h += '<a href="/operator-graph" target="_blank" title="Interactive node-link fund-flow graph">&#127760; Interactive graph</a>';
+    h += '<a href="/v1/graph-analysis/console?case_id=' + encodeURIComponent(cid) + '" target="_blank">&#128376; Graph analysis</a>';
+    h += '<a href="/v1/case-overview/console?case_id=' + encodeURIComponent(cid) + '" target="_blank">&#128203; Case overview</a>';
+    h += '</div>';
+    h += '<p class="sub" style="margin-top:.8rem">' +
+         (v.watchlist_linked ? 'Movement verdicts from live watchlist snapshots. ' : 'Movement DB not configured &#8212; endpoints show &#8220;not checked&#8221;. ') +
+         (v.generated_at ? 'Generated ' + esc(String(v.generated_at).replace("T", " ").slice(0, 19)) + ' UTC.' : '') + '</p>';
+
+    $("out").innerHTML = h;
+
+    // -- Post-render viz builders ------------------------------------------
+    if (window.RC && eps.length) {
+      var rollup = Array.isArray(v.rollup) ? v.rollup : [];
+      var segs = rollup.map(function (r) {
+        var m = stMeta(r.status);
+        return { label: m.label, value: +r.usd || 0, color: m.color, valueLabel: fmtUsd(r.usd) };
+      }).filter(function (s) { return s.value > 0; });
+      if (window.RC.buildDonut && segs.length) {
+        window.RC.buildDonut($("donut"), segs, { size: 150, strokeWidth: 18,
+          centerLabel: recPct + "%", centerSub: "reachable", title: "By recoverability" });
+      }
+      if (window.RC.buildRiskBar) {
+        window.RC.buildRiskBar($("splitbar"), [
+          { label: "Reachable (" + fmtUsd(reachable) + ")", pct: Math.max(0, reachable), cls: "ok" },
+          { label: "Gone (" + fmtUsd(gone) + ")", pct: Math.max(0, gone), cls: "crit" }
+        ].filter(function (s) { return s.pct > 0; }), { height: 12, showLabels: true });
+      }
+      buildFlowMap($("flow"), eps);
+      window.RC.animateRings($("out"));
+      if (window.RC.attachCopyMono) { window.RC.attachCopyMono($("out")); }
+    }
+  }
+
+  function load() {
+    var k = key(); if (!k) { setMsg("Enter the admin key.", "err"); return; }
+    var cid = caseId(); if (!cid) { setMsg("Enter a case id.", "err"); return; }
+    try { sessionStorage.setItem("rk_admin_key", k); } catch (e) {}
+    setMsg("Loading&#8230;"); $("load").disabled = true;
+    if (window.RC) { $("out").innerHTML = window.RC.skeletonCards(4); }
+    fetch("/v1/fund-endpoints?case_id=" + encodeURIComponent(cid), { headers: { "X-Recupero-Admin-Key": k } })
+      .then(function (res) {
+        if (res.status === 400) throw new Error("Bad case id &#8212; must be 1..128 non-blank characters.");
+        if (res.status === 401) throw new Error("Unauthorized &#8212; check the key.");
+        if (res.status === 404) throw new Error("Case not found, or it has no freeze brief yet.");
+        if (res.status === 503) throw new Error("API not configured (set RECUPERO_ADMIN_KEY).");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (v) {
+        render(v);
+        setMsg("Loaded " + new Date().toLocaleTimeString(), "ok");
+        if (window.RC) { window.RC.toast("Endpoints loaded &#10003;", "ok"); }
+      })
+      .catch(function (e) {
+        setMsg(e.message, "err");
+        if (window.RC) { window.RC.toast(e.message, "err"); }
+      })
+      .finally(function () { $("load").disabled = false; });
+  }
+
+  $("load").addEventListener("click", load);
+  $("case").addEventListener("keydown", function (e) { if (e.key === "Enter") load(); });
+
+  // Deep-link: ?case_id=... prefills + auto-loads (e.g. from the address console).
+  (function () {
+    try {
+      var _qs = new URLSearchParams(window.location.search);
+      var _cid = _qs.get("case_id");
+      if (_cid) { $("case").value = _cid; }
+      if (_cid && $("key") && $("key").value) { load(); }
+    } catch (e) {}
+  })();
+})();
+</script>
+<script src="/v1/console/app.js" defer></script>
+</body>
+</html>

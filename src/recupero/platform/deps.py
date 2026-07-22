@@ -157,6 +157,31 @@ def require_role(*roles: str):
     return _dep
 
 
+def require_entitlement(*features: str):
+    """Dependency factory gating an endpoint to orgs whose PLAN unlocks every one
+    of ``features`` (see ``tenancy`` feature keys). This is the consumer product's
+    server-side unlock gate — 402 Payment Required with an upsell message listing
+    the missing feature(s) when the plan doesn't include them, so the web app can
+    surface an "Upgrade to unlock" path. Uses the plan from the session principal
+    (same source as ``rate_limit``), so it never adds a DB hit."""
+    needed = tuple(features)
+
+    def _dep(principal: store.OrgContext = Depends(current_principal)) -> store.OrgContext:
+        have = tenancy.plan_features(principal.plan)
+        missing = [f for f in needed if f not in have]
+        if missing:
+            raise HTTPException(
+                status_code=402,
+                detail=(
+                    f"plan '{principal.plan}' does not include: {', '.join(missing)}. "
+                    "Upgrade to unlock."
+                ),
+            )
+        return principal
+
+    return _dep
+
+
 # --------------------------------------------------------------------------- #
 # Per-org rate limiter
 # --------------------------------------------------------------------------- #
@@ -176,4 +201,4 @@ def rate_limit(principal: store.OrgContext = Depends(current_principal)) -> stor
     return principal
 
 
-__all__ = ("db_conn", "current_principal", "require_role", "rate_limit")
+__all__ = ("db_conn", "current_principal", "require_role", "require_entitlement", "rate_limit")

@@ -192,6 +192,29 @@ def me(
         "plan": org["plan"], "status": org["status"],
         "usage": {"traces_used": used, "traces_remaining": quota.remaining,
                   "rate_limit_per_min": plan.rate_limit_per_min},
+        # Entitlements ride along on /me so the web app can render unlocked vs
+        # locked tools on first load without a second round-trip.
+        "features": sorted(tenancy.plan_features(org["plan"])),
+    }
+
+
+@router.get("/entitlements")
+def entitlements(
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """The org's feature entitlements (consumer progressive-unlock). Returns the
+    unlocked ``features``, the full ``all_features`` catalog, and the ``locked``
+    diff so the web app can show each tool as available or "Upgrade to unlock"
+    in one call. Plan is read fresh from the org so an upgrade reflects at once."""
+    org = store.get_org(conn, principal.org_id)
+    plan_name = org["plan"] if org else principal.plan
+    unlocked = sorted(tenancy.plan_features(plan_name))
+    return {
+        "plan": plan_name,
+        "features": unlocked,
+        "all_features": sorted(tenancy.ALL_FEATURES),
+        "locked": sorted(tenancy.ALL_FEATURES - set(unlocked)),
     }
 
 

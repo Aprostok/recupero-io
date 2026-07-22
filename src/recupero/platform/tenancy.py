@@ -250,6 +250,57 @@ def verify_jwt(token: str, *, secret: str, now: int | None = None) -> dict[str, 
 # --------------------------------------------------------------------------- #
 
 
+# --------------------------------------------------------------------------- #
+# Feature entitlements — the "tools" a plan (or a purchased add-on) unlocks.
+#
+# This is the single source of truth for the consumer product's progressive
+# unlock: the API enforces it (``deps.require_entitlement``) and the web app
+# reads it (``GET /v2/entitlements``) to render each tool as unlocked or
+# locked-with-"Upgrade". It is deliberately SEPARATE from the env flags in
+# ENV_VARS.md — those stay as global ops kill-switches; entitlements are the
+# per-tenant, plan-driven axis. Gating is on breadth / depth / deliverables /
+# convenience ONLY, never on forensic honesty: a cheaper tier shows less, but
+# whatever it does show is just as correct (no fabricated data, no inflated
+# confidence — consistent with the engine's anti-fabrication doctrine).
+# --------------------------------------------------------------------------- #
+
+FEATURE_SCREENING = "screening"                       # single-address risk screen
+FEATURE_TRACE_BASIC = "trace.basic"                   # shallow single-chain trace
+FEATURE_TRACE_DEEP_REACH = "trace.deep_reach"         # deep multi-hop / cross-chain reach
+FEATURE_CHAINS_EVM = "chains.evm"                      # EVM family
+FEATURE_CHAINS_ALL = "chains.all"                      # every supported chain
+FEATURE_GRAPH = "graph"                                # interactive fund-flow graph
+FEATURE_RECOVERY_VIEW = "recovery_view"                # "where's my money now" view
+FEATURE_BRIEF = "deliverable.brief"                    # investigation brief PDF
+FEATURE_EXHIBIT_PACK = "deliverable.exhibit_pack"      # court-admissible exhibit pack
+FEATURE_MONITORING = "monitoring"                      # address monitoring / alerts
+FEATURE_API_ACCESS = "api_access"                      # programmatic /v2 API keys
+FEATURE_LITIGATION_ARTIFACTS = "litigation_artifacts"  # SAR/STR, LE handoff, MLAT
+FEATURE_ATTRIBUTION_MISTTRACK = "attribution.misttrack"
+FEATURE_DEMIX_LEADS = "demix_leads"                    # mixer demixing leads
+FEATURE_COOPERATION_INTEL = "cooperation_intel"        # issuer cooperation profiles
+FEATURE_BULK_SCREENING = "bulk_screening"              # batch screening API
+FEATURE_AUDIT_LOG = "audit_log"                        # per-org security audit log
+FEATURE_SSO = "sso"                                    # SSO / SAML
+
+# Tier feature sets, defined by inclusion (pro ⊇ free, enterprise ⊇ pro) so the
+# split reads clearly and stays DRY. Edit these three sets to re-tier the product.
+_FREE_FEATURES: frozenset[str] = frozenset({
+    FEATURE_SCREENING, FEATURE_TRACE_BASIC, FEATURE_CHAINS_EVM, FEATURE_BRIEF,
+})
+_PRO_FEATURES: frozenset[str] = _FREE_FEATURES | frozenset({
+    FEATURE_CHAINS_ALL, FEATURE_TRACE_DEEP_REACH, FEATURE_GRAPH, FEATURE_RECOVERY_VIEW,
+    FEATURE_EXHIBIT_PACK, FEATURE_MONITORING, FEATURE_API_ACCESS,
+})
+_ENTERPRISE_FEATURES: frozenset[str] = _PRO_FEATURES | frozenset({
+    FEATURE_LITIGATION_ARTIFACTS, FEATURE_ATTRIBUTION_MISTTRACK, FEATURE_DEMIX_LEADS,
+    FEATURE_COOPERATION_INTEL, FEATURE_BULK_SCREENING, FEATURE_AUDIT_LOG, FEATURE_SSO,
+})
+# Every known feature key (enterprise gets everything) — the UI diffs against this
+# to render the locked/upsell set.
+ALL_FEATURES: frozenset[str] = _ENTERPRISE_FEATURES
+
+
 @dataclass(frozen=True)
 class Plan:
     name: str
@@ -257,18 +308,31 @@ class Plan:
     rate_limit_per_min: int
     max_seats: int
     retention_days: int
+    features: frozenset[str] = frozenset()   # entitlement keys this plan unlocks
 
 
 PLANS: dict[str, Plan] = {
-    "free":       Plan("free", monthly_trace_quota=5, rate_limit_per_min=30, max_seats=2, retention_days=30),
-    "pro":        Plan("pro", monthly_trace_quota=500, rate_limit_per_min=120, max_seats=10, retention_days=365),
-    "enterprise": Plan("enterprise", monthly_trace_quota=-1, rate_limit_per_min=600, max_seats=-1, retention_days=3650),
+    "free":       Plan("free", monthly_trace_quota=5, rate_limit_per_min=30, max_seats=2, retention_days=30, features=_FREE_FEATURES),
+    "pro":        Plan("pro", monthly_trace_quota=500, rate_limit_per_min=120, max_seats=10, retention_days=365, features=_PRO_FEATURES),
+    "enterprise": Plan("enterprise", monthly_trace_quota=-1, rate_limit_per_min=600, max_seats=-1, retention_days=3650, features=_ENTERPRISE_FEATURES),
 }
 DEFAULT_PLAN = "free"
 
 
 def get_plan(name: str | None) -> Plan:
     return PLANS.get((name or DEFAULT_PLAN).lower(), PLANS[DEFAULT_PLAN])
+
+
+def plan_features(plan_name: str | None, *, extra: frozenset[str] | None = None) -> frozenset[str]:
+    """The entitlement set for a plan, optionally unioned with ``extra`` purchased
+    add-ons (e.g. resolved from Stripe metadata / a DB column later). Unknown plan
+    → the default plan's features (fail to the LEAST-privilege tier, never crash)."""
+    feats = get_plan(plan_name).features
+    return (feats | extra) if extra else feats
+
+
+def has_feature(plan_name: str | None, feature: str, *, extra: frozenset[str] | None = None) -> bool:
+    return feature in plan_features(plan_name, extra=extra)
 
 
 @dataclass(frozen=True)
@@ -312,4 +376,5 @@ __all__ = (
     "INVITE_TOKEN_TTL_SEC", "generate_invite_token", "hash_invite_token",
     "mint_jwt", "verify_jwt",
     "get_plan", "check_trace_quota", "check_seat_quota",
+    "ALL_FEATURES", "plan_features", "has_feature",
 )

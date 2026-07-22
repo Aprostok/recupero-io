@@ -137,7 +137,8 @@ cold storage after `plan.retention_days`.
 |---|---|---|---|
 | POST | `/v2/auth/signup` | — | create user+org+owner, return JWT |
 | POST | `/v2/auth/login` | — | email+password → JWT |
-| GET | `/v2/me` | JWT/key | principal, plan, usage/quota remaining |
+| GET | `/v2/me` | JWT/key | principal, plan, usage/quota remaining, unlocked `features` |
+| GET | `/v2/entitlements` | JWT/key | unlocked `features` + full `all_features` catalog + `locked` diff |
 | POST | `/v2/api-keys` | JWT (owner/admin) | mint org API key (**shown once**) |
 | GET | `/v2/api-keys` | JWT/key | list keys (metadata only) |
 | DELETE | `/v2/api-keys/{id}` | JWT (owner/admin) | revoke |
@@ -151,6 +152,22 @@ on list endpoints; idempotency-key header on POST (NEXT); OpenAPI at `/docs`.
 
 ### `/v1` — legacy flat-key (unchanged, back-compat)
 Screening, token-risk, monitoring, operator consoles. New signups get `/v2` keys.
+
+### Feature entitlements (consumer progressive-unlock)
+The single source of truth is `tenancy.PLANS[*].features` (a `frozenset` per plan;
+tiers defined by inclusion `free ⊂ pro ⊂ enterprise`). Feature keys are the
+`tenancy.FEATURE_*` constants (`trace.deep_reach`, `chains.all`, `graph`,
+`deliverable.exhibit_pack`, `monitoring`, `litigation_artifacts`,
+`attribution.misttrack`, …). This is the **per-tenant, plan-driven** axis and is
+deliberately separate from the `RECUPERO_*` env flags (which stay as **global ops
+kill-switches**). Enforced server-side by `deps.require_entitlement(*features)`
+(→ `402` + "Upgrade to unlock" when the plan lacks one); read by the web app via
+`GET /v2/entitlements` to render each tool as unlocked or locked. Add-on purchases
+union into the set via `tenancy.plan_features(plan, extra=…)`. **Gating axis:**
+breadth / depth / deliverables / convenience only — never forensic honesty (a
+cheaper tier shows less, but what it shows is just as correct). NOTE: the backbone
+(map + gate + endpoint) is shipped; wiring `require_entitlement` onto individual
+endpoints is done deliberately per-endpoint so existing use is never locked out.
 
 ---
 

@@ -42,6 +42,17 @@ export interface Me {
     traces_remaining: number;
     rate_limit_per_min: number;
   };
+  // Feature entitlements for this org's plan — the app renders each tool as
+  // unlocked (in this list) or locked-with-"Upgrade". Full catalog + locked
+  // diff come from getEntitlements().
+  features: string[];
+}
+
+export interface Entitlements {
+  plan: string;
+  features: string[];      // unlocked for this plan
+  all_features: string[];  // full catalog
+  locked: string[];        // catalog minus unlocked → show "Upgrade to unlock"
 }
 
 export interface TraceSummary {
@@ -291,6 +302,9 @@ export const api = {
     }),
 
   me: (token: string) => request<Me>("/v2/me", { token }),
+
+  entitlements: (token: string) =>
+    request<Entitlements>("/v2/entitlements", { token }),
 
   listTraces: (token: string, limit = 50) =>
     request<{ traces: TraceSummary[] }>(`/v2/traces?limit=${limit}`, { token }),

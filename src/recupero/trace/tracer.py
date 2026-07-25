@@ -42,6 +42,7 @@ from recupero.observability.api_budget import (
 )
 from recupero.pricing.coingecko import CoinGeckoClient, PriceResult
 from recupero.trace.address_poisoning import prune_airdrop_spam
+from recupero.trace.burn_sinks import burn_label, is_burn_sink
 from recupero.trace.evidence import write_evidence_receipt
 from recupero.trace.policies import TracePolicy
 
@@ -605,6 +606,16 @@ def run_trace(
         # the largest, and a larger inbound arriving on a non-traversable edge
         # must still inform the match rather than being dropped before recording.
         inbound_by_key.setdefault(dest_key, []).append(transfer)
+        # Burn sinks are terminal — funds sent to 0x0 / 0xdEaD / a chain
+        # incinerator are provably destroyed and have no recoverable outflow, so
+        # there is nothing to traverse. The inbound edge is recorded above (so the
+        # burn is captured + surfaced as an UNRECOVERABLE terminal by
+        # _detect_burn_terminals); we simply never enqueue it. Gated with the
+        # labeled-terminal family so legacy / fixture-build mode is unchanged.
+        if _label_terminals_enabled and is_burn_sink(
+            dest, getattr(getattr(transfer, "chain", None), "value", None) or "",
+        ):
+            return False
         if not policy.should_traverse(transfer):
             return False
         if dest_key in visited:
@@ -801,12 +812,24 @@ def run_trace(
                 _term_records: list[dict[str, Any]] = []
                 _term_kept: list[Transfer] = []
                 if _label_terminals_enabled:
-                    _term_records, _term_tx = _detect_labeled_terminals(
+                    _lab_records, _lab_tx = _detect_labeled_terminals(
                         inbound=_traced_inbounds[0],
                         node_outflows=hop_transfers,
                         node_addr=from_addr,
                         depth=depth,
                     )
+                    # Burn sinks are the same "stop-and-flag at a terminal" family
+                    # (funds destroyed → UNRECOVERABLE, $0 recoverable); detect +
+                    # merge into one accumulator so the dead-end guard + all_transfers
+                    # bookkeeping below treat both identically.
+                    _burn_records, _burn_tx = _detect_burn_terminals(
+                        inbound=_traced_inbounds[0],
+                        node_outflows=hop_transfers,
+                        node_addr=from_addr,
+                        depth=depth,
+                    )
+                    _term_records = _lab_records + _burn_records
+                    _term_tx = _lab_tx + _burn_tx
                     if _term_records:
                         value_labeled_terminals.extend(_term_records)
                         _matched_ids = {mt.transfer_id for mt in matched_transfers}
@@ -2691,6 +2714,68 @@ def _detect_labeled_terminals(
             "label_name": label.name,
             "label_category": label.category.value,
             "status": _terminal_status_for_category(label.category),
+            "token": (getattr(itok, "symbol", None) or "").upper() or None,
+            "tx_count": len(txs),
+            "agg_amount": str(agg_amt),
+            "agg_usd": float(agg_usd) if agg_usd is not None else None,
+            "depth": depth,
+            "sample_tx_hashes": [t.tx_hash for t in txs[:5]],
+        })
+        kept.extend(txs)
+    return records, kept
+
+
+def _detect_burn_terminals(
+    *,
+    inbound: Transfer,
+    node_outflows: list[Transfer],
+    node_addr: Address,
+    depth: int,
+) -> tuple[list[dict[str, Any]], list[Transfer]]:
+    """Surface the node's SAME-ASSET outflows that land at a known BURN SINK
+    (0x0 / 0xdEaD / chain incinerator / effective sink). Funds sent to a burn are
+    provably destroyed, so this is the traced money's end state: recorded as an
+    ``UNRECOVERABLE`` terminal (``label_category="burn_sink"``, the burn reason in
+    ``label_name``) and NEVER traversed. Mirrors ``_detect_labeled_terminals`` in
+    shape + return so the seam merges them into one accumulator; differs only in
+    that it keys off the burn-sink REGISTRY (``is_burn_sink``), not a label
+    category. Same-asset (contract identity) ties the burn to the funds being
+    traced and defeats an unrelated dust-token burn masquerading as the end."""
+    itok = getattr(inbound, "token", None)
+    if itok is None:
+        return [], []
+    by_dest: dict[str, list[Transfer]] = {}
+    for t in node_outflows:
+        dest = t.to_address or ""
+        if not dest:
+            continue
+        chain_val = getattr(getattr(t, "chain", None), "value", None) or ""
+        if not is_burn_sink(dest, chain_val):
+            continue
+        if not _same_onchain_asset(itok, getattr(t, "token", None)):
+            continue
+        by_dest.setdefault(dest.lower(), []).append(t)
+
+    records: list[dict[str, Any]] = []
+    kept: list[Transfer] = []
+    for _dest, txs in sorted(by_dest.items()):
+        first = txs[0]
+        chain_val = getattr(getattr(first, "chain", None), "value", None) or ""
+        agg_amt = sum(
+            (Decimal(str(t.amount_decimal)) for t in txs if t.amount_decimal is not None),
+            Decimal(0),
+        )
+        usd_vals = [
+            Decimal(str(t.usd_value_at_tx))
+            for t in txs if t.usd_value_at_tx is not None
+        ]
+        agg_usd = sum(usd_vals, Decimal(0)) if usd_vals else None
+        records.append({
+            "node": node_addr,
+            "terminal_address": first.to_address,
+            "label_name": burn_label(first.to_address, chain_val) or "burn-sink",
+            "label_category": "burn_sink",
+            "status": "UNRECOVERABLE",   # burned → funds destroyed, $0 recoverable
             "token": (getattr(itok, "symbol", None) or "").upper() or None,
             "tx_count": len(txs),
             "agg_amount": str(agg_amt),

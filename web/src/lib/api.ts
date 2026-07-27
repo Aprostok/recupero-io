@@ -72,6 +72,7 @@ export interface SubmitTraceResult {
   investigation_id: string;
   status: string;
   case_id: string;
+  chain: string; // resolved chain (echoes the auto-detected one when omitted)
   idempotent_replay: boolean;
   poll: string;
   quota_remaining: number;
@@ -358,7 +359,7 @@ export const api = {
   submitTrace: (
     token: string,
     payload: {
-      chain: string;
+      chain?: string; // omit to auto-detect from seed_address shape
       seed_address: string;
       incident_time: string;
       case_id?: string;

@@ -106,7 +106,10 @@ class TokenOut(BaseModel):
 
 
 class TraceIn(BaseModel):
-    chain: str = Field(min_length=1, max_length=32)
+    # Optional: when omitted/blank the chain is auto-detected from the seed
+    # address shape (the guided "start a recovery" flow lets a victim paste an
+    # address without picking a chain). An explicit chain always wins.
+    chain: str | None = Field(default=None, max_length=32)
     seed_address: str = Field(min_length=1, max_length=128)
     incident_time: str = Field(description="ISO-8601 UTC incident timestamp")
     case_id: str | None = Field(default=None, max_length=80)
@@ -584,6 +587,20 @@ def submit_trace(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="incident_time must be ISO-8601") from exc
 
+    # Resolve the chain: an explicit chain wins; otherwise auto-detect from the
+    # seed-address shape (the guided flow — paste an address, no dropdown). EVM
+    # addresses resolve to the family default (ethereum); the caller can override.
+    chain = (body.chain or "").strip().lower()
+    if not chain:
+        from recupero.chains.detect import detect_chain
+        detected = detect_chain(body.seed_address)
+        if detected is None:
+            raise HTTPException(
+                status_code=422,
+                detail="could not detect chain from seed_address — specify 'chain' explicitly",
+            )
+        chain = detected
+
     org = store.get_org(conn, principal.org_id)
     if not org or org["status"] != "active":
         raise HTTPException(status_code=403, detail="organization inactive")
@@ -599,7 +616,7 @@ def submit_trace(
     # (no double-enqueue, no double-metering). ``created`` is False on replay.
     investigation_id, created = store.enqueue_trace(
         conn, org_id=principal.org_id, submitted_by=principal.user_id,
-        chain=body.chain, seed_address=body.seed_address,
+        chain=chain, seed_address=body.seed_address,
         incident_time=body.incident_time, case_id=case_id,
         idempotency_key=(idempotency_key or None),
     )
@@ -607,6 +624,7 @@ def submit_trace(
         "investigation_id": investigation_id,
         "status": "queued" if created else "already_submitted",
         "case_id": case_id,
+        "chain": chain,  # the resolved chain (echoes the auto-detected one)
         "idempotent_replay": not created,
         "poll": f"/v2/traces/{investigation_id}",
         "quota_remaining": (

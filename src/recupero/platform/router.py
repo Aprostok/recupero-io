@@ -1060,4 +1060,160 @@ def trace_graph(
         raise HTTPException(status_code=503, detail="graph unavailable") from None
 
 
+# ---- consumer case summary ("where's my money now", JSON for the web view) ---- #
+
+
+def _parse_usd(v: Any) -> float | None:
+    """Coerce a brief USD/percent field to a number. The brief stores these as
+    pre-formatted strings (``"$572,186,472.25"``, ``"0%"``); a raw number passes
+    through. Returns None on anything unparseable (never raises)."""
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip().replace("$", "").replace(",", "").replace("%", "").strip()
+        try:
+            return float(s)
+        except ValueError:
+            return None
+    return None
+
+
+def _load_case_artifact_json(
+    investigation_id: str, case_id: str | None, name: str,
+) -> dict[str, Any]:
+    """Load a JSON case artifact (e.g. ``freeze_brief.json``) from the active case
+    store — the Supabase bucket when ``RECUPERO_CASE_STORE=supabase`` (keyed by
+    the investigation id) else the local case dir. Raises ``OSError``/``ValueError``
+    when the artifact is missing or malformed (→ the caller maps to 404)."""
+    import json as _json
+
+    from recupero.api import _supabase_case_source
+
+    if _supabase_case_source.enabled():
+        raw = _supabase_case_source.read_artifact(investigation_id, name)
+        data = _json.loads(raw.decode("utf-8-sig") if isinstance(raw, bytes) else raw)
+    else:
+        from recupero.config import load_config
+        from recupero.storage.case_store import CaseStore
+        cfg, _ = load_config()
+        path = CaseStore(cfg).case_dir(case_id or investigation_id) / name
+        data = _json.loads(path.read_text(encoding="utf-8-sig"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{name} is not a JSON object")
+    return data
+
+
+def _load_next_steps(investigation_id: str, case_id: str | None) -> list[Any]:
+    """Best-effort plain-English next steps from ``ai_triage.json`` (the G1 AI
+    triage artifact). Optional — returns [] when absent/malformed so the summary
+    never fails over a missing enrichment."""
+    try:
+        triage = _load_case_artifact_json(investigation_id, case_id, "ai_triage.json")
+    except Exception:  # noqa: BLE001 — triage is an optional enrichment
+        return []
+    for key in ("NEXT_STEPS", "next_steps", "RECOMMENDED_ACTIONS", "recommended_actions"):
+        val = triage.get(key)
+        if isinstance(val, list):
+            return val
+    return []
+
+
+def _build_summary_payload(investigation_id: str, case_id: str | None) -> dict[str, Any]:
+    """Shape a consumer-facing case summary from ``freeze_brief.json`` — the
+    "where's my money now" view: headline totals, per-endpoint status, recovery
+    estimate, and (best-effort) next steps. Defensive: tolerates missing/partial
+    brief keys (the brief schema is broad and evolves) and never fabricates —
+    every figure is read straight from the brief. Raises OSError/ValueError when
+    the brief itself can't be read (trace not finished / no artifacts)."""
+    brief = _load_case_artifact_json(investigation_id, case_id, "freeze_brief.json")
+
+    # DESTINATIONS is the uniform "where it's sitting now" master list; each row
+    # carries its own status (FREEZABLE / EXCHANGE / UNRECOVERABLE / …).
+    endpoints: list[dict[str, Any]] = []
+    dests = brief.get("DESTINATIONS")
+    if isinstance(dests, list):
+        for d in dests:
+            if not isinstance(d, dict) or not d.get("address"):
+                continue
+            endpoints.append({
+                "address": d.get("address"),
+                "chain": d.get("chain"),
+                "status": d.get("status"),
+                "role": d.get("role"),
+                "usd_holding_now": _parse_usd(d.get("usd_holding_now")),
+                "usd_received": _parse_usd(d.get("usd_received_in_trace")),
+                "note": d.get("notes"),
+            })
+
+    est = brief.get("RECOVERY_ESTIMATE")
+    est = est if isinstance(est, dict) else {}
+    hub = brief.get("PERP_HUB")
+    hub = hub if isinstance(hub, dict) else None
+
+    return {
+        "case_id": brief.get("CASE_ID") or case_id,
+        "chain": brief.get("PRIMARY_CHAIN"),
+        "incident_type": brief.get("INCIDENT_TYPE"),
+        "incident_date": brief.get("INCIDENT_DATE"),
+        "victim_name": brief.get("VICTIM_NAME"),
+        # Numeric (for bars/donuts) + the brief's own pre-formatted display strings.
+        "totals": {
+            "loss_usd": _parse_usd(brief.get("TOTAL_LOSS_USD")),
+            "freezable_usd": _parse_usd(brief.get("TOTAL_FREEZABLE_USD")),
+            "unrecoverable_usd": _parse_usd(brief.get("TOTAL_UNRECOVERABLE_USD")),
+            "max_recoverable_usd": _parse_usd(brief.get("MAX_RECOVERABLE_USD")),
+            "recoverable_percent": _parse_usd(brief.get("RECOVERABLE_PERCENT")),
+            "freezable_percent": _parse_usd(brief.get("FREEZABLE_PERCENT")),
+        },
+        "totals_display": {
+            "loss_usd": brief.get("TOTAL_LOSS_USD"),
+            "freezable_usd": brief.get("TOTAL_FREEZABLE_USD"),
+            "max_recoverable_usd": brief.get("MAX_RECOVERABLE_USD"),
+            "recoverable_percent": brief.get("RECOVERABLE_PERCENT"),
+        },
+        "recovery": {
+            "headline": est.get("headline_summary"),
+            "expected_net_to_victim_usd": _parse_usd(est.get("expected_net_to_victim_usd")),
+            "probability_any_recovery_90d": _parse_usd(est.get("probability_any_recovery_90d")),
+        },
+        "perp_hub": (
+            {"address": hub.get("address"), "chain": hub.get("chain"),
+             "usd_received": _parse_usd(hub.get("usd_received"))}
+            if hub and hub.get("address") else None
+        ),
+        "endpoints": endpoints,
+        "endpoint_count": len(endpoints),
+        "next_steps": _load_next_steps(investigation_id, case_id),
+    }
+
+
+@router.get("/traces/{investigation_id}/summary")
+def trace_summary(
+    investigation_id: str,
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """Consumer case summary as JSON — the "where's my money now" view the web
+    dashboard renders (headline totals, per-endpoint status, recovery estimate,
+    next steps). Read straight from the case's ``freeze_brief.json`` (never
+    fabricated). Org-scoped; 404 until the brief exists (trace still running),
+    503 on a build blowup."""
+    row = store.get_trace_status(
+        conn, org_id=principal.org_id, investigation_id=investigation_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    try:
+        return _build_summary_payload(investigation_id, row.get("case_id"))
+    except (OSError, ValueError):
+        raise HTTPException(
+            status_code=404, detail="summary not available for this trace yet",
+        ) from None
+    except Exception as exc:  # noqa: BLE001 — any build blowup → 503, never 500
+        log.warning("summary build failed for %s: %s", investigation_id, exc)
+        raise HTTPException(status_code=503, detail="summary unavailable") from None
+
+
 __all__ = ("router",)

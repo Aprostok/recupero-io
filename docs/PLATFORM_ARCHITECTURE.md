@@ -144,6 +144,8 @@ cold storage after `plan.retention_days`.
 | DELETE | `/v2/api-keys/{id}` | JWT (owner/admin) | revoke |
 | POST | `/v2/traces` | JWT/key + rate-limit + quota | **enqueue** a trace → `202 {investigation_id}` |
 | GET | `/v2/traces/{id}` | JWT/key | tenant-scoped status |
+| GET | `/v2/traces/{id}/summary` | JWT/key | consumer "where's my money now" JSON (totals, per-endpoint status, recovery estimate, next steps) from `freeze_brief.json` |
+| GET | `/v2/traces/{id}/graph` | JWT/key | fund-flow graph JSON (`{nodes, edges, meta}`) for the D3 view |
 | GET | `/v2/traces` | JWT/key | list this org's traces |
 
 **Conventions:** `202 Accepted` for async submit (never block on the trace);

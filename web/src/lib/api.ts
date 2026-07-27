@@ -225,6 +225,49 @@ export interface GraphData {
   };
 }
 
+export interface CaseSummaryEndpoint {
+  address: string;
+  chain: string | null;
+  status: string | null;     // FREEZABLE | EXCHANGE | UNRECOVERABLE | …
+  role: string | null;
+  usd_holding_now: number | null;
+  usd_received: number | null;
+  note: string | null;
+}
+
+// The consumer "where's my money now" view (GET /v2/traces/{id}/summary),
+// read straight from the case's freeze_brief.json.
+export interface CaseSummary {
+  case_id: string | null;
+  chain: string | null;
+  incident_type: string | null;
+  incident_date: string | null;
+  victim_name: string | null;
+  totals: {
+    loss_usd: number | null;
+    freezable_usd: number | null;
+    unrecoverable_usd: number | null;
+    max_recoverable_usd: number | null;
+    recoverable_percent: number | null;
+    freezable_percent: number | null;
+  };
+  totals_display: {
+    loss_usd: string | null;
+    freezable_usd: string | null;
+    max_recoverable_usd: string | null;
+    recoverable_percent: string | null;
+  };
+  recovery: {
+    headline: string | null;
+    expected_net_to_victim_usd: number | null;
+    probability_any_recovery_90d: number | null;
+  };
+  perp_hub: { address: string; chain: string | null; usd_received: number | null } | null;
+  endpoints: CaseSummaryEndpoint[];
+  endpoint_count: number;
+  next_steps: unknown[];
+}
+
 export interface BillingUsage {
   plan: string;
   status: string;
@@ -458,6 +501,11 @@ export const api = {
   // completes; 503 if the graph can't be built.
   getGraph: (token: string, id: string) =>
     request<GraphData>(`/v2/traces/${encodeURIComponent(id)}/graph`, { token }),
+
+  // Consumer "where's my money now" summary (totals, endpoint statuses,
+  // recovery estimate, next steps) — same-origin JSON from freeze_brief.json.
+  getSummary: (token: string, id: string) =>
+    request<CaseSummary>(`/v2/traces/${encodeURIComponent(id)}/summary`, { token }),
 
   // SSE endpoint URL for live trace status. EventSource can't set headers, so
   // the session token rides as a query param (matches the server's /stream).

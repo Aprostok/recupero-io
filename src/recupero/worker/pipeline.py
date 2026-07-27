@@ -255,6 +255,49 @@ def _maybe_mirror_artifacts_to_s3(db: Any, investigation_id: Any, case_dir: Any)
         log.warning("s3 artifact mirror skipped for %s: %s", investigation_id, exc)
 
 
+def _maybe_misttrack_enrich(investigation_id: Any) -> None:
+    """Opt-in, bounded, best-effort MistTrack attribution enrichment of a
+    completed case's UNLABELED addresses (the cheapest Chainalysis-grade
+    attribution source; see docs/PROD_CUTOVER.md).
+
+    MistTrack is PAY-PER-LOOKUP, so this is DOUBLY gated — a complete no-op
+    unless BOTH ``MISTTRACK_API_KEY`` is set AND ``RECUPERO_MISTTRACK_AUTO`` is
+    truthy — and capped at ``RECUPERO_MISTTRACK_MAX_ADDRS`` paid queries per case
+    (default 25) so auto-charging can never surprise-bill. Results land as
+    LOW-confidence ``pending_review`` candidates (never auto-promoted, no
+    fabrication). NEVER raises — enrichment must never break case completion.
+    Without the opt-in flag, operators still run it on demand via
+    ``recupero-ops misttrack-enrich``."""
+    import os
+    flag = (os.environ.get("RECUPERO_MISTTRACK_AUTO", "") or "").strip().lower()
+    if flag not in ("1", "true", "yes", "on"):
+        return
+    try:
+        from recupero.labels.misttrack_enrich import (
+            run_misttrack_enrichment,
+            targets_from_case,
+        )
+        from recupero.labels.providers.misttrack import misttrack_enabled
+        if not misttrack_enabled():
+            return
+        try:
+            cap = max(0, int(os.environ.get("RECUPERO_MISTTRACK_MAX_ADDRS", "25")))
+        except (TypeError, ValueError):
+            cap = 25
+        if cap == 0:
+            return
+        addrs, chain = targets_from_case(str(investigation_id))
+        if not addrs:
+            return
+        res = run_misttrack_enrichment(addrs, chain=chain, limit=cap)
+        log.info(
+            "misttrack auto-enrich for %s: %s", investigation_id,
+            res.as_dict() if hasattr(res, "as_dict") else res,
+        )
+    except Exception as exc:  # noqa: BLE001 — enrichment must never break completion
+        log.warning("misttrack auto-enrich skipped for %s: %s", investigation_id, exc)
+
+
 # ----- Public entry point ----- #
 
 
@@ -588,6 +631,7 @@ def _run_one_inner(
             db.mark_completed(inv.id)
             log.info("investigation %s completed", inv.id)
             _maybe_mirror_artifacts_to_s3(db, inv.id, case_dir)
+            _maybe_misttrack_enrich(inv.id)
 
     except _StageFailure as exc:
         log.exception("investigation %s failed at %s", inv.id, exc.stage)

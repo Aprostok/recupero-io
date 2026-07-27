@@ -11,7 +11,6 @@ import { ApiError, CaseSummary, Me, TraceDetail, api } from "@/lib/api";
 // tools render disabled with an "Upgrade to unlock" link — the consumer
 // progressive-unlock surface, driven by /v2/me `features`.
 const TOOLS: { name: string; label: string; feature: string | null }[] = [
-  { name: "interactive_graph.html", label: "Fund-flow graph", feature: "graph" },
   { name: "brief.pdf", label: "Investigation brief (PDF)", feature: "deliverable.brief" },
   { name: "transfers.csv", label: "Transfers (CSV)", feature: null },
   { name: "trace_report.html", label: "Trace report (HTML)", feature: null },
@@ -60,6 +59,7 @@ export default function TraceDetailPage() {
   const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [graphUrl, setGraphUrl] = useState<string | null>(null);
 
   // Plan entitlements, for unlocked/locked tool rendering (best-effort).
   useEffect(() => {
@@ -147,6 +147,26 @@ export default function TraceDetailPage() {
         setNotice(`"${name}" isn't available for this trace yet.`);
       } else {
         setError(err instanceof ApiError ? err.detail : "download failed");
+      }
+    }
+  }
+
+  // Load the engine's self-contained interactive D3 graph (pan/zoom/click/
+  // risk-coloured) into an inline iframe — the in-app investigation graph.
+  async function loadGraph() {
+    if (!token || !id) return;
+    setNotice(null);
+    setError(null);
+    try {
+      const { url } = await api.getArtifactUrl(token, id, "interactive_graph.html");
+      setGraphUrl(url);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 501) {
+        setNotice("The interactive graph needs object storage configured on this deployment.");
+      } else if (err instanceof ApiError && err.status === 404) {
+        setNotice("The interactive graph isn't available for this trace yet.");
+      } else {
+        setError(err instanceof ApiError ? err.detail : "failed to load graph");
       }
     }
   }
@@ -315,6 +335,36 @@ export default function TraceDetailPage() {
                 </section>
               )}
             </>
+          )}
+
+          {/* ── Interactive fund-flow graph (inline, in-app) ── */}
+          {trace.status === "complete" && !isLocked("graph") && (
+            <section className="panel stack">
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <h3 style={{ margin: 0 }}>Fund-flow graph</h3>
+                {!graphUrl && (
+                  <button onClick={loadGraph}>Load interactive graph</button>
+                )}
+              </div>
+              {graphUrl ? (
+                <iframe
+                  src={graphUrl}
+                  title="Interactive fund-flow graph"
+                  sandbox="allow-scripts allow-same-origin allow-popups"
+                  style={{
+                    width: "100%",
+                    height: 580,
+                    border: "1px solid var(--border)",
+                    borderRadius: "var(--r)",
+                    background: "var(--panel)",
+                  }}
+                />
+              ) : (
+                <p className="muted" style={{ margin: 0 }}>
+                  Pan / zoom / click-to-highlight, risk-coloured, multi-chain — opens right here in the page.
+                </p>
+              )}
+            </section>
           )}
 
           <section className="panel">

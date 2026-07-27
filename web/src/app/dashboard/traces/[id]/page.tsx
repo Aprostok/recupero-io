@@ -4,16 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { ApiError, CaseSummary, TraceDetail, api } from "@/lib/api";
+import { ApiError, CaseSummary, Me, TraceDetail, api } from "@/lib/api";
 
-// Standard deliverables the worker writes into a case dir. A download is a
-// presigned S3 URL from GET /v2/traces/{id}/artifacts/{name} (501 if object
-// storage isn't configured; the button then just reports that).
-const ARTIFACTS = [
-  { name: "brief.pdf", label: "Investigation brief (PDF)" },
-  { name: "transfers.csv", label: "Transfers (CSV)" },
-  { name: "trace_report.html", label: "Trace report (HTML)" },
-  { name: "exhibit_pack.zip", label: "Exhibit pack (ZIP)" },
+// Deliverables/tools, each tagged with the entitlement (tenancy FEATURE_* key)
+// that unlocks it. `feature: null` = available on every plan (basic). Locked
+// tools render disabled with an "Upgrade to unlock" link — the consumer
+// progressive-unlock surface, driven by /v2/me `features`.
+const TOOLS: { name: string; label: string; feature: string | null }[] = [
+  { name: "interactive_graph.html", label: "Fund-flow graph", feature: "graph" },
+  { name: "brief.pdf", label: "Investigation brief (PDF)", feature: "deliverable.brief" },
+  { name: "transfers.csv", label: "Transfers (CSV)", feature: null },
+  { name: "trace_report.html", label: "Trace report (HTML)", feature: null },
+  { name: "exhibit_pack.zip", label: "Exhibit pack (ZIP)", feature: "deliverable.exhibit_pack" },
 ];
 
 const ACTIVE = new Set(["queued", "running", "processing", "claimed"]);
@@ -55,8 +57,24 @@ export default function TraceDetailPage() {
 
   const [trace, setTrace] = useState<TraceDetail | null>(null);
   const [summary, setSummary] = useState<CaseSummary | null>(null);
+  const [me, setMe] = useState<Me | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Plan entitlements, for unlocked/locked tool rendering (best-effort).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    api.me(token).then((m) => !cancelled && setMe(m)).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  // A tool is locked only once we KNOW the plan (me loaded) and it lacks the
+  // feature — avoids a flash of "locked" before entitlements arrive.
+  const isLocked = (feature: string | null): boolean =>
+    feature !== null && me !== null && !me.features.includes(feature);
 
   const load = useCallback(async () => {
     if (!token || !id) return;
@@ -305,14 +323,34 @@ export default function TraceDetailPage() {
               <p className="muted">Available once the trace completes.</p>
             ) : (
               <div className="row">
-                <button onClick={() => download("interactive_graph.html")}>
-                  Fund-flow graph
-                </button>
-                {ARTIFACTS.map((a) => (
-                  <button key={a.name} className="ghost" onClick={() => download(a.name)}>
-                    {a.label}
-                  </button>
-                ))}
+                {TOOLS.map((t) =>
+                  isLocked(t.feature) ? (
+                    <span key={t.name} className="row" style={{ gap: 6 }}>
+                      <button
+                        className="ghost"
+                        disabled
+                        title="Not included in your plan"
+                      >
+                        🔒 {t.label}
+                      </button>
+                      <Link
+                        href="/dashboard/billing"
+                        className="muted"
+                        style={{ fontSize: 12 }}
+                      >
+                        Upgrade
+                      </Link>
+                    </span>
+                  ) : (
+                    <button
+                      key={t.name}
+                      className={t.feature === "graph" ? "" : "ghost"}
+                      onClick={() => download(t.name)}
+                    >
+                      {t.label}
+                    </button>
+                  ),
+                )}
               </div>
             )}
             {notice && (

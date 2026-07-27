@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
-import { ApiError, TraceDetail, api } from "@/lib/api";
+import { ApiError, CaseSummary, TraceDetail, api } from "@/lib/api";
 
 // Standard deliverables the worker writes into a case dir. A download is a
 // presigned S3 URL from GET /v2/traces/{id}/artifacts/{name} (501 if object
@@ -24,12 +24,37 @@ function statusBadge(status: string) {
   return <span className={`badge ${cls}`}>{status}</span>;
 }
 
+// Compact USD for stat tiles ("$1.2M"); the brief's own display strings are used
+// where available so the customer sees the same figures as the PDF.
+function fmtUsd(n: number | null): string {
+  if (n === null || Number.isNaN(n)) return "—";
+  const abs = Math.abs(n);
+  if (abs >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
+  return `$${n.toFixed(0)}`;
+}
+
+// Map a brief endpoint status to a card accent.
+function endpointClass(status: string | null): string {
+  const s = (status || "").toUpperCase();
+  if (s === "FREEZABLE") return "freezable";
+  if (s === "EXCHANGE") return "exchange";
+  if (s === "UNRECOVERABLE" || s === "BURNED") return "unrecoverable";
+  return "";
+}
+
+function short(addr: string): string {
+  return addr.length > 14 ? `${addr.slice(0, 8)}…${addr.slice(-6)}` : addr;
+}
+
 export default function TraceDetailPage() {
   const { token } = useAuth();
   const params = useParams<{ id: string }>();
   const id = params?.id as string;
 
   const [trace, setTrace] = useState<TraceDetail | null>(null);
+  const [summary, setSummary] = useState<CaseSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -46,8 +71,23 @@ export default function TraceDetailPage() {
     load();
   }, [load]);
 
-  // Live updates while the trace is running: prefer SSE (GET /v2/traces/{id}/
-  // stream), fall back to polling if EventSource errors or is unavailable.
+  // Once complete, pull the consumer "where's my money now" summary. Best-effort:
+  // a 404 just means the brief isn't ready yet (leave the panel out silently).
+  useEffect(() => {
+    if (!token || !id || trace?.status !== "complete" || summary) return;
+    let cancelled = false;
+    api
+      .getSummary(token, id)
+      .then((s) => {
+        if (!cancelled) setSummary(s);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token, id, trace?.status, summary]);
+
+  // Live updates while running: prefer SSE, fall back to polling.
   useEffect(() => {
     if (!token || !id || !trace || !ACTIVE.has(trace.status)) return;
 
@@ -60,14 +100,14 @@ export default function TraceDetailPage() {
             setTrace((prev) => (prev ? { ...prev, status: data.status } : prev));
             if (!ACTIVE.has(data.status)) {
               es.close();
-              load(); // refresh full detail (timestamps) on terminal status
+              load();
             }
           }
         } catch {
           /* ignore keep-alive / malformed frames */
         }
       };
-      es.onerror = () => es.close(); // fall through to the poll below
+      es.onerror = () => es.close();
       return () => es.close();
     }
 
@@ -93,6 +133,14 @@ export default function TraceDetailPage() {
     }
   }
 
+  // Recoverability split (of total loss) for the hero bar.
+  const loss = summary?.totals.loss_usd ?? null;
+  const recoverable = summary?.totals.max_recoverable_usd ?? null;
+  const recoverablePct =
+    loss && loss > 0 && recoverable !== null
+      ? Math.max(0, Math.min(100, (recoverable / loss) * 100))
+      : 0;
+
   return (
     <div className="stack" style={{ gap: 24 }}>
       <div className="row" style={{ justifyContent: "space-between" }}>
@@ -117,39 +165,144 @@ export default function TraceDetailPage() {
             <div className="row" style={{ gap: 32 }}>
               <div>
                 <label>Chain</label>
-                <div>{trace.chain}</div>
+                <div>{summary?.chain || trace.chain}</div>
               </div>
               <div>
                 <label>Seed address</label>
                 <div className="mono">{trace.seed_address}</div>
               </div>
-            </div>
-            <div className="row" style={{ gap: 32 }}>
-              <div>
-                <label>Submitted</label>
-                <div className="muted">
-                  {trace.created_at ? new Date(trace.created_at).toLocaleString() : "—"}
+              {summary?.incident_type && (
+                <div>
+                  <label>Incident</label>
+                  <div>{summary.incident_type}</div>
                 </div>
-              </div>
-              <div>
-                <label>Updated</label>
-                <div className="muted">
-                  {trace.updated_at ? new Date(trace.updated_at).toLocaleString() : "—"}
-                </div>
-              </div>
-              <div>
-                <label>ID</label>
-                <div className="mono">{trace.investigation_id}</div>
-              </div>
+              )}
             </div>
           </section>
+
+          {/* ── "Where's my money now" — the consumer recoverability view ── */}
+          {summary && (
+            <>
+              <section className="panel stack" style={{ gap: 18 }}>
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <h3 style={{ margin: 0 }}>Where your money is now</h3>
+                  {summary.totals_display.recoverable_percent && (
+                    <span className="badge ok">
+                      {summary.totals_display.recoverable_percent} recoverable
+                    </span>
+                  )}
+                </div>
+
+                {summary.recovery.headline && (
+                  <p className="muted" style={{ margin: 0 }}>
+                    {summary.recovery.headline}
+                  </p>
+                )}
+
+                <div className="hero-metrics">
+                  <div className="stat-tile">
+                    <div className="k">Total traced</div>
+                    <div className="v">
+                      {summary.totals_display.loss_usd || fmtUsd(summary.totals.loss_usd)}
+                    </div>
+                  </div>
+                  <div className="stat-tile good">
+                    <div className="k">Potentially recoverable</div>
+                    <div className="v">
+                      {summary.totals_display.max_recoverable_usd ||
+                        fmtUsd(summary.totals.max_recoverable_usd)}
+                    </div>
+                  </div>
+                  <div className="stat-tile">
+                    <div className="k">Net to you (est.)</div>
+                    <div className="v">
+                      {fmtUsd(summary.recovery.expected_net_to_victim_usd)}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Proportional recoverable / gone bar */}
+                <div className="stack" style={{ gap: 8 }}>
+                  <div className="recover-bar" aria-hidden>
+                    <div
+                      className="recover-seg good"
+                      style={{ width: `${recoverablePct}%` }}
+                    />
+                    <div
+                      className="recover-seg bad"
+                      style={{ width: `${100 - recoverablePct}%` }}
+                    />
+                  </div>
+                  <div className="recover-legend">
+                    <span>
+                      <i style={{ background: "var(--emerald)" }} />
+                      Potentially recoverable
+                    </span>
+                    <span>
+                      <i style={{ background: "var(--danger)" }} />
+                      Unrecoverable (mixed / burned / gone)
+                    </span>
+                  </div>
+                </div>
+              </section>
+
+              {summary.endpoints.length > 0 && (
+                <section className="panel stack">
+                  <h3 style={{ marginTop: 0 }}>
+                    Fund endpoints{" "}
+                    <span className="muted" style={{ fontWeight: 400 }}>
+                      ({summary.endpoint_count})
+                    </span>
+                  </h3>
+                  <div className="endpoint-grid">
+                    {summary.endpoints.slice(0, 60).map((e, i) => (
+                      <div
+                        key={`${e.address}-${i}`}
+                        className={`endpoint-card ${endpointClass(e.status)}`}
+                      >
+                        <div
+                          className="row"
+                          style={{ justifyContent: "space-between", marginBottom: 6 }}
+                        >
+                          <span className="st">{e.status || "TRANSIT"}</span>
+                          <span style={{ fontWeight: 700 }}>
+                            {fmtUsd(e.usd_holding_now ?? e.usd_received)}
+                          </span>
+                        </div>
+                        <div className="mono" title={e.address}>
+                          {short(e.address)}
+                        </div>
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          {[e.chain, e.role].filter(Boolean).join(" · ") || "—"}
+                        </div>
+                        {e.note && (
+                          <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                            {e.note}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              )}
+
+              {summary.next_steps.length > 0 && (
+                <section className="panel stack">
+                  <h3 style={{ marginTop: 0 }}>Recommended next steps</h3>
+                  <ol className="next-steps">
+                    {summary.next_steps.map((s, i) => (
+                      <li key={i}>{typeof s === "string" ? s : JSON.stringify(s)}</li>
+                    ))}
+                  </ol>
+                </section>
+              )}
+            </>
+          )}
 
           <section className="panel">
             <h3 style={{ marginTop: 0 }}>Deliverables</h3>
             {trace.status !== "complete" ? (
-              <p className="muted">
-                Available once the trace completes.
-              </p>
+              <p className="muted">Available once the trace completes.</p>
             ) : (
               <div className="row">
                 <button onClick={() => download("interactive_graph.html")}>

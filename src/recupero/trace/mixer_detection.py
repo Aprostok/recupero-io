@@ -300,8 +300,11 @@ KNOWN_MIXERS: dict[str, MixerEntry] = {
     "bc1qs604c7jv6amk4cxqlnvuxv26hv3e48cds4m0ew": MixerEntry(
         "Wasabi 1.0 Coordinator", "bitcoin", "btc_mixer",
         notes="zkSNACK coordinator (checksum-valid; attribution from public "
-              "coordinator lists, not independently re-verified). Wasabi 2.0 "
-              "uses WabiSabi (not yet decoded).",
+              "coordinator lists, not independently re-verified). Wasabi 2.0 / "
+              "WabiSabi rounds ARE detected structurally by trace.coinjoin_unwrap "
+              "(≥10-in/≥10-out, no dominant output) and wired via the Bitcoin "
+              "adapter — the trace stops-and-flags at the mix boundary (records a "
+              "low-confidence lead, injects no fabricated post-mix output).",
     ),
 }
 

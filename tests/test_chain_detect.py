@@ -66,6 +66,11 @@ def _patch_store(monkeypatch) -> dict:
     monkeypatch.setattr(router.obs_metrics, "record_platform_request", lambda *a, **k: None)
     monkeypatch.setattr(store, "get_org", lambda conn, org_id: {"status": "active", "plan": "pro"})
     monkeypatch.setattr(store, "traces_used_this_period", lambda conn, org_id: 0)
+    # submit_trace now takes a per-org row lock before the quota read (the
+    # count→check→enqueue sequence is read-then-write, so concurrent submits at the
+    # quota boundary all used to pass). These tests pass a bare object() as the
+    # connection, so stub the lock out.
+    monkeypatch.setattr(store, "lock_org_for_update", lambda conn, org_id: None)
 
     def _enqueue(conn, **kw):
         captured.update(kw)

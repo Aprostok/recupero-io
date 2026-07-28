@@ -19,12 +19,27 @@ real scale · **[OPTIONAL]** feature flip.
       *Without this service the `/v2` API + `/v1/console` are unreachable even though the code ships.*
 - [ ] **`recupero-worker`** — the SKIP-LOCKED queue consumer (runs traces, writes case artifacts).
 - [ ] **`recupero-cron`** (scheduler) — `platform_maintenance`, freeze-followup, OFAC sync, attribution harvest, etc.
+- [ ] **`recupero-web`** — the CUSTOMER-FACING Next.js app (`web/`). This is a
+      SEPARATE service: the root `Dockerfile` builds only the Python services and
+      copies `src/`, so nothing in the API deploy ships the frontend.
+      Railway: new service, **Root Directory = `web`**, Dockerfile Path =
+      `Dockerfile` (see [../web/railway.json](../web/railway.json)).
+      Vercel alternative: point a project at `web/` — no Dockerfile needed.
+      - [ ] `NEXT_PUBLIC_API_BASE_URL` = the API origin. **Build-time** (it is a
+            `NEXT_PUBLIC_*` var, inlined into the client bundle) — set it as a
+            build arg/env BEFORE the image is built, or every call fails with
+            "network error — is the API reachable?".
+      - [ ] Set `RECUPERO_API_CORS_ORIGINS` on the **API** service to this web
+            origin (the browser calls `/v2` cross-origin).
+      - [ ] `PREVIEW_PASSWORD` — OPTIONAL. Set it to gate the whole site behind
+            HTTP Basic while reviewing; **leave it unset for a public launch**
+            (it used to be a hardcoded `"preview"` that 401'd every customer).
 - [ ] For horizontal scale: k8s manifests + KEDA queue-depth autoscaling in [../infra/k8s](../infra/k8s).
 
 ## 2. Database — [REQUIRED]
 
 - [ ] Provision Supabase Postgres; set `RECUPERO_DATABASE_URL` (or `DATABASE_URL`) + `SUPABASE_DB_URL`.
-- [ ] Run migrations **in order through `042`** (`migrations/037_multitenancy` … `041_user_tokens`, `042_wallet_guard`). 042 creates `watched_addresses` + `wallet_alerts`, which back the shipped `/v2/guard/*` endpoints and the Wallet Guard UI — stopping at 041 ships that surface with no tables.
+- [ ] Run migrations **in order through `043`** (`migrations/037_multitenancy` … `041_user_tokens`, `042_wallet_guard`, `043_stripe_event_dedup`). 042 creates `watched_addresses` + `wallet_alerts`, which back the shipped `/v2/guard/*` endpoints and the Wallet Guard UI — stopping at 041 ships that surface with no tables. 043 creates `stripe_events`, the webhook replay guard — without it a duplicate Stripe delivery re-grants monthly quota.
       Sequence 021 before flipping older cron jobs (historical note); apply the rest ascending.
 - [ ] Confirm RLS is on for the tables that actually declare it: `organizations` (NOT `orgs`), `memberships`, `org_api_keys`, `usage_events` (037), `org_invites` (039), `watched_addresses`, `wallet_alerts` (042).
 - [ ] **Decision required:** `users` (037) and `audit_log` (034) have **no RLS policy anywhere**. Either add one or accept service-role-only access — do not tick this line without deciding.

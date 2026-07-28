@@ -117,6 +117,22 @@ def verify_password(password: str, stored: str) -> bool:
         return False
 
 
+@lru_cache(maxsize=1)
+def dummy_password_hash() -> str:
+    """A REAL hash (production parameters) over a fixed sentinel, for the
+    missing-user branch of login.
+
+    The old placeholder ``scrypt$1$1$1$AA$AA`` had n=1, which ``hashlib.scrypt``
+    rejects outright — ``verify_password`` swallowed the ValueError and returned
+    False immediately, so an unknown email answered ~2800x faster than a known one
+    (measured 0.015 ms vs 41 ms): a precise user-enumeration oracle, exactly what
+    the constant-time branch was meant to prevent. Deriving the dummy from
+    ``hash_password`` means its cost always tracks the configured KDF (including
+    argon2id when enabled). Memoized: computed once per process, never per request.
+    """
+    return hash_password("recupero:nonexistent-user:timing-equalizer")
+
+
 def needs_rehash(stored: str) -> bool:
     """True if ``stored`` should be re-hashed on the next successful login — i.e.
     argon2id is the configured target but the stored hash is still scrypt (or an
@@ -376,5 +392,6 @@ __all__ = (
     "INVITE_TOKEN_TTL_SEC", "generate_invite_token", "hash_invite_token",
     "mint_jwt", "verify_jwt",
     "get_plan", "check_trace_quota", "check_seat_quota",
+    "dummy_password_hash",
     "ALL_FEATURES", "plan_features", "has_feature",
 )

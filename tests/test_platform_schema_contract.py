@@ -163,3 +163,79 @@ def test_platform_queue_sql_only_touches_existing_investigation_columns() -> Non
     combined = " ".join([_sql(cur), _sql(cur2), _sql(cur3)])
     for col in _NONEXISTENT_COLUMNS:
         assert col not in combined
+
+
+# --------------------------------------------------------------------------- #
+# Billing replay guard + quota race (audit follow-ups)
+# --------------------------------------------------------------------------- #
+
+def test_claim_stripe_event_is_atomic_and_first_wins() -> None:
+    """Stripe delivers at-least-once and invoice.paid RESETS the billing period,
+    so an un-deduped replay re-granted a full monthly quota. The claim must be a
+    single INSERT ... ON CONFLICT DO NOTHING (no read-then-write race)."""
+    first = _RecCursor(fetchone=("evt_1",))
+    assert store.claim_stripe_event(
+        _RecConn(first), event_id="evt_1", event_type="invoice.paid",
+    ) is True
+    sql = _sql(first)
+    assert "INSERT INTO public.stripe_events" in sql
+    assert "ON CONFLICT (event_id) DO NOTHING" in sql
+    assert "RETURNING" in sql
+
+    # Conflict → no row returned → replay.
+    replay = _RecCursor(fetchone=None)
+    assert store.claim_stripe_event(
+        _RecConn(replay), event_id="evt_1", event_type="invoice.paid",
+    ) is False
+
+
+def test_claim_stripe_event_without_id_is_not_claimed() -> None:
+    """No id to dedupe on: process the event, but don't issue a bogus claim."""
+    cur = _RecCursor(fetchone=None)
+    assert store.claim_stripe_event(_RecConn(cur), event_id="") is True
+    assert cur.executed == []
+
+
+def test_lock_org_for_update_takes_a_row_lock() -> None:
+    cur = _RecCursor(fetchone=(1,))
+    store.lock_org_for_update(_RecConn(cur), "org1")
+    sql = _sql(cur)
+    assert "public.organizations" in sql
+    assert "FOR UPDATE" in sql
+
+
+def test_submit_locks_the_org_before_reading_usage(monkeypatch) -> None:
+    """Ordering matters: the lock must be held BEFORE the quota count, otherwise
+    concurrent submits at `used == quota - 1` all read the same value and pass."""
+    from recupero.platform import router
+
+    order: list[str] = []
+    monkeypatch.setattr(router.obs_metrics, "record_platform_request", lambda *a, **k: None)
+    monkeypatch.setattr(
+        store, "lock_org_for_update",
+        lambda conn, org_id: order.append("lock"),
+    )
+    monkeypatch.setattr(
+        store, "get_org",
+        lambda conn, org_id: {"status": "active", "plan": "pro"},
+    )
+
+    def _used(conn, org_id):
+        order.append("count")
+        return 0
+
+    monkeypatch.setattr(store, "traces_used_this_period", _used)
+    monkeypatch.setattr(store, "enqueue_trace", lambda conn, **kw: ("inv-1", True))
+
+    body = router.TraceIn(
+        chain="ethereum",
+        seed_address="0x" + "ab" * 20,
+        incident_time="2026-01-01T00:00:00Z",
+    )
+    router.submit_trace(
+        body,
+        principal=store.OrgContext(org_id="o", plan="pro", user_id="u", role="owner"),
+        conn=object(),
+        idempotency_key=None,
+    )
+    assert order[:2] == ["lock", "count"], f"lock must precede the count; got {order}"

@@ -99,6 +99,51 @@ def _stash_principal(request: Request | None, ctx: store.OrgContext) -> store.Or
     return ctx
 
 
+def _revalidate_session(conn: Any, *, org_id: str, user_id: str) -> store.OrgContext:
+    """Re-check a session JWT's membership + org status against the DB.
+
+    A JWT is a bearer of claims minted at LOGIN. Trusting those claims alone means
+    a removed or demoted member keeps full access until the token expires
+    (``RECUPERO_PLATFORM_JWT_TTL_SEC``, default 1h) — and inside that window can
+    mint an org API key that survives their removal indefinitely, so
+    ``remove_member`` / ``set_member_role`` were only advisory.
+
+    Re-reading the membership makes revocation immediate, and taking ``role`` +
+    ``plan`` from the DB (not the claims) also removes the staleness where a
+    Stripe upgrade left the rate limiter and entitlement gate on the old plan.
+
+    Fails CLOSED: a DB error here yields 401 rather than silently trusting the
+    token. Every authenticated endpoint already requires the DB, so this trades no
+    real availability for a genuine security property.
+    """
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT m.role, o.plan, o.status "
+                "FROM public.memberships m "
+                "JOIN public.organizations o ON o.id = m.org_id "
+                "WHERE m.org_id = %s AND m.user_id = %s",
+                (org_id, user_id),
+            )
+            row = cur.fetchone()
+    except Exception as exc:  # noqa: BLE001 — fail closed, never trust the claims
+        raise HTTPException(
+            status_code=401, detail="session could not be verified",
+        ) from exc
+    if row is None:
+        # Membership gone (removed from the org, or the org was deleted).
+        raise HTTPException(status_code=401, detail="session is no longer valid")
+    role, plan, status = row[0], row[1], row[2]
+    if status != "active":
+        raise HTTPException(status_code=403, detail="organization inactive")
+    return store.OrgContext(
+        org_id=org_id,
+        plan=str(plan or tenancy.DEFAULT_PLAN),
+        user_id=user_id,
+        role=str(role or "member"),
+    )
+
+
 def current_principal(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -115,12 +160,14 @@ def current_principal(
             claims = tenancy.verify_jwt(token, secret=_jwt_secret())
         except tenancy.TokenError as exc:
             raise HTTPException(status_code=401, detail=f"invalid token: {exc}") from exc
-        return _stash_principal(request, store.OrgContext(
-            org_id=str(claims.get("org")),
-            plan=str(claims.get("plan", tenancy.DEFAULT_PLAN)),
-            user_id=str(claims.get("sub")),
-            role=str(claims.get("role", "member")),
-        ))
+        return _stash_principal(
+            request,
+            _revalidate_session(
+                conn,
+                org_id=str(claims.get("org")),
+                user_id=str(claims.get("sub")),
+            ),
+        )
     # 2) Org API key. Check the optional short-TTL cache first (positive-only,
     # fails open to the DB); only active resolutions are ever cached.
     if x_api_key and x_api_key.startswith(tenancy.API_KEY_PREFIX):

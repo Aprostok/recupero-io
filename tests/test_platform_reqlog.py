@@ -21,6 +21,36 @@ class _FakeRequest:
         self.state = SimpleNamespace()
 
 
+class _MembershipCursor:
+    """Returns one (role, plan, status) row — current_principal now RE-VALIDATES a
+    session JWT against public.memberships so a removed/demoted member loses
+    access immediately instead of at token expiry (and role/plan come from the DB,
+    not stale claims)."""
+
+    def __init__(self, row=("admin", "pro", "active")):
+        self._row = row
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        pass
+
+    def fetchone(self):
+        return self._row
+
+
+class _MembershipConn:
+    def __init__(self, row=("admin", "pro", "active")):
+        self._cur = _MembershipCursor(row)
+
+    def cursor(self):
+        return self._cur
+
+
 # ---- pure record builder ---- #
 
 def test_build_log_record_shape_and_types() -> None:
@@ -89,7 +119,8 @@ def test_current_principal_stashes_tenant_from_jwt(monkeypatch) -> None:
     )
     req = _FakeRequest()
     ctx = deps.current_principal(
-        request=req, authorization=f"Bearer {token}", x_api_key=None, conn=object(),
+        request=req, authorization=f"Bearer {token}", x_api_key=None,
+        conn=_MembershipConn(("admin", "pro", "active")),
     )
     assert ctx.org_id == "org42"
     # the middleware reads exactly these off scope['state'] == request.state
@@ -103,3 +134,77 @@ def test_stash_principal_is_best_effort_when_request_none() -> None:
     ctx = store.OrgContext(org_id="o", plan="free", user_id=None, role="service")
     # request=None must not raise (telemetry never fails a request).
     assert deps._stash_principal(None, ctx) is ctx
+
+
+# --------------------------------------------------------------------------- #
+# Session revocation (security regression).
+#
+# A JWT is a bearer of claims minted at LOGIN. Trusting them alone meant a removed
+# or demoted member kept full org access until the token expired (default 1h) —
+# and inside that window could mint an org API key that outlived their removal, so
+# remove_member / set_member_role were only advisory.
+# --------------------------------------------------------------------------- #
+
+
+def _bearer(monkeypatch, secret="revocation-secret", role="admin", plan="free"):
+    monkeypatch.setattr(deps, "_jwt_secret", lambda: secret)
+    return tenancy.mint_jwt(
+        secret=secret, subject="u1", org_id="org1", role=role,
+        ttl_seconds=60, extra={"plan": plan},
+    )
+
+
+def test_removed_member_is_rejected_immediately(monkeypatch) -> None:
+    """Membership row gone → 401, even though the JWT is still cryptographically
+    valid and unexpired."""
+    import pytest
+    from fastapi import HTTPException
+    token = _bearer(monkeypatch)
+    with pytest.raises(HTTPException) as ei:
+        deps.current_principal(
+            request=_FakeRequest(), authorization=f"Bearer {token}",
+            x_api_key=None, conn=_MembershipConn(None),
+        )
+    assert ei.value.status_code == 401
+
+
+def test_inactive_org_is_rejected(monkeypatch) -> None:
+    import pytest
+    from fastapi import HTTPException
+    token = _bearer(monkeypatch)
+    with pytest.raises(HTTPException) as ei:
+        deps.current_principal(
+            request=_FakeRequest(), authorization=f"Bearer {token}",
+            x_api_key=None, conn=_MembershipConn(("admin", "pro", "suspended")),
+        )
+    assert ei.value.status_code == 403
+
+
+def test_role_and_plan_come_from_db_not_stale_claims(monkeypatch) -> None:
+    """A demotion (owner→viewer) and a Stripe upgrade (free→pro) both take effect
+    on the NEXT request, not at token expiry."""
+    token = _bearer(monkeypatch, role="owner", plan="free")
+    ctx = deps.current_principal(
+        request=_FakeRequest(), authorization=f"Bearer {token}",
+        x_api_key=None, conn=_MembershipConn(("viewer", "pro", "active")),
+    )
+    assert ctx.role == "viewer"   # demoted since the token was minted
+    assert ctx.plan == "pro"      # upgraded since the token was minted
+
+
+def test_db_failure_fails_closed(monkeypatch) -> None:
+    """A verification error must NOT silently fall back to trusting the claims."""
+    import pytest
+    from fastapi import HTTPException
+
+    class _BrokenConn:
+        def cursor(self):
+            raise RuntimeError("db down")
+
+    token = _bearer(monkeypatch)
+    with pytest.raises(HTTPException) as ei:
+        deps.current_principal(
+            request=_FakeRequest(), authorization=f"Bearer {token}",
+            x_api_key=None, conn=_BrokenConn(),
+        )
+    assert ei.value.status_code == 401

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile"
+  },
+  "deploy": {
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  },
+  "_note": "Customer web app (Next.js). Create this as a SEPARATE Railway service with Root Directory = web. Required build arg / env: NEXT_PUBLIC_API_BASE_URL (the API origin — inlined at BUILD time because it is NEXT_PUBLIC_*). Optional: PREVIEW_PASSWORD to gate the whole site behind HTTP Basic (unset = public). The API/worker/cron services keep using the ROOT Dockerfile + railway.json."
+}

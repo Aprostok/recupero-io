@@ -396,6 +396,46 @@ def apply_billing_change(conn: Any, change: Any) -> bool:
 # lifecycle columns are used instead:
 #   created_at → ``triggered_at`` (TIMESTAMPTZ DEFAULT NOW(), set on insert)
 #   updated_at → the newest lifecycle stamp the row has
+def claim_stripe_event(
+    conn: Any, *, event_id: str, event_type: str | None = None,
+) -> bool:
+    """Atomically claim a Stripe event id. True on FIRST delivery, False if it has
+    already been seen (a replay).
+
+    Stripe delivers at-least-once, and ``invoice.paid`` resets the billing period
+    (``trace_used_period = 0``), so an un-deduped replay re-granted the org a full
+    monthly quota — repeatably. ``ON CONFLICT DO NOTHING`` makes the claim a single
+    atomic statement (no read-then-write race between concurrent deliveries).
+    """
+    if not (event_id or "").strip():
+        # No id to dedupe on — process it, but don't pretend it was claimed.
+        return True
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO public.stripe_events (event_id, event_type) "
+            "VALUES (%s, %s) ON CONFLICT (event_id) DO NOTHING "
+            "RETURNING event_id",
+            (event_id, event_type),
+        )
+        return cur.fetchone() is not None
+
+
+def lock_org_for_update(conn: Any, org_id: str) -> None:
+    """Take a row lock on the org for the remainder of the transaction.
+
+    Quota enforcement is read-then-write (count usage → check quota → enqueue).
+    Without a lock, N concurrent submits at ``used == quota - 1`` all read the same
+    count and all pass — free-tier over-delivery, and revenue loss on metered
+    plans. Serializing per-org is cheap: submits for DIFFERENT orgs never contend.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM public.organizations WHERE id = %s FOR UPDATE",
+            (org_id,),
+        )
+        cur.fetchone()
+
+
 def get_trace_status(conn: Any, *, org_id: str, investigation_id: str) -> dict[str, Any] | None:
     """Tenant-scoped status read — an org can ONLY see its own jobs."""
     with conn.cursor() as cur:

@@ -143,8 +143,10 @@ def signup(body: SignupIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
 @router.post("/auth/login", response_model=TokenOut)
 def login(body: LoginIn, conn: Any = Depends(deps.db_conn)) -> TokenOut:
     user = store.get_user_by_email(conn, body.email)
-    # Constant-ish path: verify even on missing user to avoid a timing oracle.
-    stored_hash = user["password_hash"] if user else "scrypt$1$1$1$AA$AA"
+    # Constant-ish path: verify even on a missing user so the response time does
+    # not reveal whether the email exists. The dummy MUST be a real
+    # production-parameter hash — see tenancy.dummy_password_hash.
+    stored_hash = user["password_hash"] if user else tenancy.dummy_password_hash()
     if not tenancy.verify_password(body.password, stored_hash) or not user:
         raise HTTPException(status_code=401, detail="invalid credentials")
     # Rehash-on-login: transparently upgrade an outdated hash (e.g. scrypt →
@@ -604,6 +606,10 @@ def submit_trace(
             )
         chain = detected
 
+    # Serialize quota checks for THIS org: the count→check→enqueue sequence is
+    # read-then-write, so without the row lock concurrent submits at the quota
+    # boundary all pass. Different orgs never contend.
+    store.lock_org_for_update(conn, principal.org_id)
     org = store.get_org(conn, principal.org_id)
     if not org or org["status"] != "active":
         raise HTTPException(status_code=403, detail="organization inactive")
@@ -724,6 +730,22 @@ def _handle_stripe_webhook(
         if not dsn:
             raise RuntimeError("database not configured")
         with psycopg.connect(dsn) as conn:
+            # Replay guard: Stripe delivers at-least-once, and invoice.paid resets
+            # the billing period — a duplicate would re-grant a full monthly quota.
+            first_delivery = store.claim_stripe_event(
+                conn, event_id=str(event.get("id") or ""),
+                event_type=str(event.get("type") or "") or None,
+            )
+            if not first_delivery:
+                conn.commit()
+                log.info(
+                    "stripe webhook replay ignored: event=%s type=%s",
+                    event.get("id"), event.get("type"),
+                )
+                return {
+                    "received": True, "applied": False, "duplicate": True,
+                    "type": event.get("type"),
+                }
             applied = store.apply_billing_change(conn, change)
             conn.commit()
     return {"received": True, "applied": applied, "type": event.get("type")}

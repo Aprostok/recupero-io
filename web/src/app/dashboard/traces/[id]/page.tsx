@@ -182,7 +182,7 @@ export default function TraceDetailPage() {
   return (
     <div className="stack" style={{ gap: 24 }}>
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <Link href="/dashboard" className="muted">
+        <Link href="/dashboard/traces" className="muted">
           ← Traces
         </Link>
         {trace && ACTIVE.has(trace.status) && (

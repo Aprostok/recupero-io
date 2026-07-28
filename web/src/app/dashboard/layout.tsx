@@ -28,23 +28,30 @@ export default function DashboardLayout({
     );
   }
 
-  const tab = (href: string, label: string) => (
-    <Link
-      href={href}
-      style={{
-        color: pathname === href ? "var(--text)" : "var(--muted)",
-        fontWeight: pathname === href ? 600 : 400,
-      }}
-    >
-      {label}
-    </Link>
-  );
+  const tab = (href: string, label: string) => {
+    // Exact match for the Home tab; prefix match for sections so a sub-page
+    // (e.g. a case at /dashboard/traces/<id>) still highlights "Traces".
+    const active =
+      pathname === href || (href !== "/dashboard" && pathname.startsWith(`${href}/`));
+    return (
+      <Link
+        href={href}
+        style={{
+          color: active ? "var(--text)" : "var(--muted)",
+          fontWeight: active ? 600 : 400,
+        }}
+      >
+        {label}
+      </Link>
+    );
+  };
 
   return (
     <>
       <nav className="nav">
         <Brand size={24} />
-        {tab("/dashboard", "Traces")}
+        {tab("/dashboard", "Home")}
+        {tab("/dashboard/traces", "Traces")}
         {tab("/dashboard/guard", "Wallet Guard")}
         {tab("/dashboard/assistant", "Assistant")}
         {tab("/dashboard/keys", "API Keys")}

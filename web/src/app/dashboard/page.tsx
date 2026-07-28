@@ -1,34 +1,21 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useAuth } from "@/lib/auth";
-import { ApiError, TraceSummary, api } from "@/lib/api";
+import { ApiError, Me, TraceSummary, api } from "@/lib/api";
 
-const CHAINS = [
-  "ethereum",
-  "bitcoin",
-  "solana",
-  "tron",
-  "arbitrum",
-  "optimism",
-  "base",
-  "polygon",
+// The tools grid — one card per product surface, so everything we've built is
+// discoverable from the home.
+const TOOLS: { href: string; label: string; desc: string }[] = [
+  { href: "/dashboard/traces", label: "Traces", desc: "Start a recovery and view your cases" },
+  { href: "/dashboard/guard", label: "Wallet Guard", desc: "Screen an address before you sign" },
+  { href: "/dashboard/assistant", label: "Assistant", desc: "Ask questions about a case or address" },
+  { href: "/dashboard/keys", label: "API Keys", desc: "Programmatic access to the API" },
+  { href: "/dashboard/members", label: "Members", desc: "Invite and manage your team" },
+  { href: "/dashboard/activity", label: "Activity", desc: "Security audit log for your org" },
+  { href: "/dashboard/billing", label: "Billing", desc: "Plan, usage, and what's unlocked" },
 ];
-
-// Live client-side chain HINT from the address shape — mirrors the order of the
-// server's checksum-verified detect_chain (which is authoritative). This is only
-// for instant UX feedback; the backend re-derives it on submit. EVM 0x-addresses
-// can't be narrowed past the family, so we hint "ethereum" and let the user pick
-// the specific EVM chain.
-function detectChainHint(addr: string): string | null {
-  const a = addr.trim();
-  if (/^0x[0-9a-fA-F]{40}$/.test(a)) return "ethereum";
-  if (/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(a)) return "tron";
-  if (/^(bc1[0-9a-z]{6,}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$/.test(a)) return "bitcoin";
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)) return "solana";
-  return null;
-}
 
 function statusBadge(status: string) {
   const cls =
@@ -36,172 +23,108 @@ function statusBadge(status: string) {
   return <span className={`badge ${cls}`}>{status}</span>;
 }
 
-export default function TracesPage() {
+export default function DashboardHome() {
   const { token } = useAuth();
+  const [me, setMe] = useState<Me | null>(null);
   const [traces, setTraces] = useState<TraceSummary[]>([]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Guided "start a recovery" form.
-  const [seed, setSeed] = useState("");
-  const [chain, setChain] = useState(CHAINS[0]);
-  const [chainTouched, setChainTouched] = useState(false);
-  const [detected, setDetected] = useState<string | null>(null);
-  const [incident, setIncident] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [notice, setNotice] = useState<string | null>(null);
-
-  const refresh = useCallback(async () => {
+  useEffect(() => {
     if (!token) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const { traces } = await api.listTraces(token);
-      setTraces(traces);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "failed to load traces");
-    } finally {
-      setLoading(false);
-    }
+    let cancelled = false;
+    api
+      .me(token)
+      .then((m) => !cancelled && setMe(m))
+      .catch((err) => !cancelled && setError(err instanceof ApiError ? err.detail : "failed to load"));
+    api
+      .listTraces(token, 5)
+      .then(({ traces }) => !cancelled && setTraces(traces))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  // Paste-an-address-first: detect the chain from the shape and auto-select it
-  // (until the user overrides the dropdown, which we then respect).
-  function onSeedChange(value: string) {
-    setSeed(value);
-    const hint = detectChainHint(value);
-    setDetected(hint);
-    if (hint && !chainTouched) setChain(hint);
-  }
-
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    if (!token) return;
-    setSubmitting(true);
-    setNotice(null);
-    setError(null);
-    try {
-      const iso = new Date(incident).toISOString();
-      // Idempotency key so a double-click / retry never enqueues (or bills) twice.
-      const idem = `${chain}:${seed.trim()}:${iso}`;
-      const res = await api.submitTrace(
-        token,
-        { chain, seed_address: seed.trim(), incident_time: iso },
-        idem,
-      );
-      setNotice(
-        res.idempotent_replay
-          ? `Already submitted (${res.investigation_id.slice(0, 8)}…)`
-          : `Tracing on ${res.chain} — ${res.investigation_id.slice(0, 8)}… (${res.quota_remaining} left this period)`,
-      );
-      setSeed("");
-      setDetected(null);
-      setChainTouched(false);
-      await refresh();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.detail : "submit failed");
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const usage = me?.usage;
+  const used = usage?.traces_used ?? 0;
+  const remaining = usage?.traces_remaining ?? 0;
+  // included = used + remaining when metered; remaining < 0 means unlimited.
+  const included = remaining < 0 ? -1 : used + remaining;
+  const pct = included > 0 ? Math.min(100, (used / included) * 100) : 0;
 
   return (
     <div className="stack" style={{ gap: 24 }}>
-      <section className="panel">
-        <h3 style={{ marginTop: 0 }}>Start a recovery</h3>
-        <p className="muted" style={{ marginTop: 0 }}>
-          Paste the wallet address that was drained — we detect the chain and
-          trace where the funds went.
-        </p>
-        <form className="stack" onSubmit={onSubmit}>
-          <div className="stack">
-            <label htmlFor="seed">Drained wallet address</label>
-            <input
-              id="seed"
-              className="mono"
-              value={seed}
-              onChange={(e) => onSeedChange(e.target.value)}
-              placeholder="0x… / bc1… / T… / a Solana address"
-              autoComplete="off"
-              spellCheck={false}
-              required
-            />
-            {seed.trim() && (
-              <span className="muted" style={{ fontSize: 12 }}>
-                {detected ? (
-                  <>
-                    <span
-                      style={{
-                        display: "inline-block",
-                        width: 7,
-                        height: 7,
-                        borderRadius: "50%",
-                        background: "var(--emerald)",
-                        marginRight: 6,
-                        verticalAlign: "middle",
-                      }}
-                    />
-                    Detected <strong>{detected}</strong>
-                    {detected === "ethereum" && " (EVM — change below if it was on another EVM chain)"}
-                  </>
-                ) : (
-                  "Unrecognized address shape — pick the chain below."
-                )}
-              </span>
-            )}
+      {/* Hero */}
+      <section className="panel stack">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <div>
+            <h2 style={{ margin: 0 }}>Welcome back</h2>
+            <p className="muted" style={{ margin: "4px 0 0" }}>
+              Trace stolen crypto, see where it&apos;s sitting now, and act on it.
+            </p>
           </div>
-          <div className="row">
-            <div className="stack" style={{ flex: 1, minWidth: 180 }}>
-              <label htmlFor="chain">Chain{detected ? " (auto-detected)" : ""}</label>
-              <select
-                id="chain"
-                value={chain}
-                onChange={(e) => {
-                  setChain(e.target.value);
-                  setChainTouched(true);
-                }}
-              >
-                {CHAINS.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="stack" style={{ flex: 1, minWidth: 220 }}>
-              <label htmlFor="incident">When did it happen? (UTC)</label>
-              <input
-                id="incident"
-                type="datetime-local"
-                value={incident}
-                onChange={(e) => setIncident(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-          <div className="row">
-            <button type="submit" disabled={submitting}>
-              {submitting ? "Submitting…" : "Trace the funds"}
-            </button>
-            {notice && <span className="muted">{notice}</span>}
-            {error && <span className="error">{error}</span>}
-          </div>
-        </form>
+          {me && (
+            <span className="badge ok" style={{ textTransform: "capitalize" }}>
+              {me.plan} plan
+            </span>
+          )}
+        </div>
+        <div className="row">
+          <Link href="/dashboard/traces">
+            <button>＋ Start a recovery</button>
+          </Link>
+          <Link href="/dashboard/guard" className="muted">
+            or screen an address →
+          </Link>
+        </div>
       </section>
 
-      <section className="panel">
+      {/* Quota */}
+      <div className="hero-metrics">
+        <div className="stat-tile">
+          <div className="k">Traces this period</div>
+          <div className="v">
+            {used}
+            {included >= 0 && (
+              <span className="muted" style={{ fontSize: 14 }}> / {included}</span>
+            )}
+          </div>
+        </div>
+        <div className="stat-tile good">
+          <div className="k">Remaining</div>
+          <div className="v">{remaining < 0 ? "∞" : remaining}</div>
+        </div>
+        <div className="stat-tile">
+          <div className="k">Rate limit</div>
+          <div className="v">
+            {usage?.rate_limit_per_min ?? "—"}
+            <span className="muted" style={{ fontSize: 14 }}> /min</span>
+          </div>
+        </div>
+      </div>
+      {included > 0 && (
+        <div className="recover-bar" aria-hidden>
+          <div className="recover-seg good" style={{ width: `${pct}%` }} />
+          <div
+            className="recover-seg"
+            style={{ width: `${100 - pct}%`, background: "rgba(255,255,255,.05)" }}
+          />
+        </div>
+      )}
+
+      {/* Recent traces */}
+      <section className="panel stack">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h3 style={{ margin: 0 }}>Recent traces</h3>
-          <button className="ghost" onClick={refresh} disabled={loading}>
-            {loading ? "…" : "Refresh"}
-          </button>
+          <Link href="/dashboard/traces" className="muted">
+            View all →
+          </Link>
         </div>
-        {traces.length === 0 && !loading ? (
-          <p className="muted">No traces yet — start one above.</p>
+        {traces.length === 0 ? (
+          <p className="muted">
+            No traces yet —{" "}
+            <Link href="/dashboard/traces">start your first recovery</Link>.
+          </p>
         ) : (
           <table>
             <thead>
@@ -210,24 +133,20 @@ export default function TracesPage() {
                 <th>Chain</th>
                 <th>Status</th>
                 <th>Submitted</th>
-                <th>ID</th>
               </tr>
             </thead>
             <tbody>
               {traces.map((t) => (
                 <tr key={t.investigation_id}>
-                  <td>{t.case_id || "—"}</td>
+                  <td>
+                    <Link href={`/dashboard/traces/${t.investigation_id}`}>
+                      {t.case_id || `${t.investigation_id.slice(0, 8)}…`}
+                    </Link>
+                  </td>
                   <td>{t.chain}</td>
                   <td>{statusBadge(t.status)}</td>
                   <td className="muted">
-                    {t.created_at
-                      ? new Date(t.created_at).toLocaleString()
-                      : "—"}
-                  </td>
-                  <td className="mono">
-                    <Link href={`/dashboard/traces/${t.investigation_id}`}>
-                      {t.investigation_id.slice(0, 8)}…
-                    </Link>
+                    {t.created_at ? new Date(t.created_at).toLocaleString() : "—"}
                   </td>
                 </tr>
               ))}
@@ -235,6 +154,23 @@ export default function TracesPage() {
           </table>
         )}
       </section>
+
+      {/* Tools */}
+      <section className="stack">
+        <h3 style={{ margin: "0 0 4px" }}>Everything in one place</h3>
+        <div className="tool-grid">
+          {TOOLS.map((t) => (
+            <Link key={t.href} href={t.href} className="tool-card">
+              <div className="tool-label">{t.label}</div>
+              <div className="muted" style={{ fontSize: 13 }}>
+                {t.desc}
+              </div>
+            </Link>
+          ))}
+        </div>
+      </section>
+
+      {error && <p className="error">{error}</p>}
     </div>
   );
 }

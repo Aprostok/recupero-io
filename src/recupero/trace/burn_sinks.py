@@ -44,16 +44,28 @@ _EVM_BURN_SINKS: dict[str, str] = {
     "0x000000000000000000000000000000000000dead": "dead-address",
     # Common variant — older contracts (CryptoKitties era).
     "0xdeaddeaddeaddeaddeaddeaddeaddeaddeaddead": "dead-variant",
-    # Ethereum 2 deposit contract (pre-Pectra, ETH burned-in-bond).
-    "0x00000000219ab540356cbb839cbe05303d7705fa": "eth2-deposit",
+    # NOTE (forensic-honesty fix): the Ethereum 2 deposit contract
+    # (0x00000000219ab540356cbb839cbe05303d7705fa) was previously listed here as
+    # "eth2-deposit". It is NOT a burn: post-Shapella staked ETH is WITHDRAWABLE,
+    # and the withdrawal credential is itself a first-class attribution/recovery
+    # lead ("not recoverable except by depositor" — labels/seeds/defi_protocols
+    # .json — and the depositor is exactly who a trace is chasing). Claiming
+    # "provably destroyed / $0 recoverable" for staked ETH is a false statement in
+    # an operator-facing report, so it is deliberately NOT a burn sink; it is a
+    # defi_protocol terminal. Do not re-add it.
     # WETH9 contract (deposit() with no withdraw caller burns ETH).
     # Note: only sinks ETH if the WETH is then truly orphaned. We
     # mark this as a *weak* sink — see classify_outflow comment.
     # (Intentionally omitted; tests should pass without it.)
-    # Tornado Cash 100 ETH pool (OFAC-sanctioned; treated as effective
-    # sink for recovery purposes — funds enter but cannot be traced
-    # out without breaking ZK mixer cryptography).
-    "0xa160cdab225685da1d56aa342ad8841c3b53f291": "tornado-100eth",
+    # NOTE (forensic-honesty fix): the Tornado Cash 100-ETH pool
+    # (0xa160cdab225685da1d56aa342ad8841c3b53f291) was previously listed here as
+    # an "effective sink". It is NOT a burn: the deposit is WITHDRAWABLE by the
+    # note holder — the funds still exist in the pool. "Not traceable further"
+    # and "provably destroyed" are different claims, and this repo's own
+    # demix-leads feature treats these very deposits as followable. A mixer
+    # deposit is correctly handled as a MIXER terminal (status UNRECOVERABLE via
+    # _TERMINAL_CATEGORIES), which keeps the recovery posture honest without
+    # asserting destruction. Do not re-add it.
     # Vyper-deployed null-pattern dead address.
     "0xdead000000000000000042069420694206942069": "vyper-dead",
     # NOTE: the "0xdEaD"-shortform address (no padding) is the SAME 40-hex

@@ -828,6 +828,20 @@ def run_trace(
                         node_addr=from_addr,
                         depth=depth,
                     )
+                    # De-overlap: an address can be BOTH label-classified (e.g. a
+                    # sanctioned mixer) and in the burn registry. Recording it
+                    # twice would put the same USD in coverage.labeled_terminals
+                    # twice, breaking the invariant the trace-report relies on
+                    # ("the two classifications never double-count"). The LABEL
+                    # wins — it is the more specific, provenance-backed claim.
+                    _labeled_dests = {
+                        str(r.get("terminal_address") or "").lower()
+                        for r in _lab_records
+                    }
+                    _burn_records = [
+                        r for r in _burn_records
+                        if str(r.get("terminal_address") or "").lower() not in _labeled_dests
+                    ]
                     _term_records = _lab_records + _burn_records
                     _term_tx = _lab_tx + _burn_tx
                     if _term_records:

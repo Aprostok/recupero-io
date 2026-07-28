@@ -33,11 +33,25 @@ def test_ethereum_dead_address_case_insensitive() -> None:
     ) is True
 
 
-def test_eth2_deposit_contract_is_burn() -> None:
-    """Pre-Pectra eth2 deposit contract → burn."""
+def test_withdrawable_venues_are_not_burns() -> None:
+    """FORENSIC HONESTY: a venue whose funds are WITHDRAWABLE must never be
+    classified as a burn — the burn path asserts "provably destroyed / $0
+    recoverable" in an operator-facing report (trace_report "Burned /
+    Provably-Destroyed Funds" section).
+
+      * ETH2 deposit contract — staked ETH is withdrawable post-Shapella, and
+        the withdrawal credential is itself a recovery/attribution lead.
+      * Tornado Cash 100-ETH pool — the deposit is withdrawable by the note
+        holder; the funds still exist in the pool. "Not traceable further" is a
+        different claim from "destroyed" (and demix-leads treats these as
+        followable). It is handled as a MIXER terminal instead.
+    """
     assert is_burn_sink(
         "0x00000000219ab540356cBB839Cbe05303d7705Fa", "ethereum"
-    ) is True
+    ) is False
+    assert is_burn_sink(
+        "0xa160cdAB225685dA1d56aa342Ad8841c3b53f291", "ethereum"
+    ) is False
 
 
 def test_polygon_inherits_evm_burn_set() -> None:
@@ -150,6 +164,17 @@ def test_burn_sinks_dict_exposes_canonical_chains() -> None:
         assert len(BURN_SINKS[chain]) >= 1
 
 
-def test_evm_burn_set_has_at_least_six_entries() -> None:
-    """Sanity: we've enumerated zero + dead + variants + eth2 + tornado100 + ..."""
-    assert len(BURN_SINKS["ethereum"]) >= 6
+def test_evm_burn_set_is_provably_destroyed_only() -> None:
+    """The EVM registry holds ONLY addresses with no spendable key: the zero
+    address, the canonical dead address + its variants. Deliberately excludes
+    withdrawable venues (see test_withdrawable_venues_are_not_burns) — a burn
+    claim must be true by construction, so growth here is intentional, not a
+    count to pad."""
+    entries = BURN_SINKS["ethereum"]
+    assert len(entries) >= 4
+    labels = set(entries.values())
+    assert {"zero-address", "dead-address"} <= labels
+    # No withdrawable venue may appear under any label.
+    assert not any(
+        lbl in labels for lbl in ("eth2-deposit", "tornado-100eth")
+    )

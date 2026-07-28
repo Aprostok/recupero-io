@@ -329,6 +329,66 @@ class AlchemyClient:
                 break
         return all_rows
 
+    @staticmethod
+    def _row_sort_key(row: dict[str, Any]) -> tuple[int, str]:
+        """(block, uniqueId) — restores a deterministic ascending order after
+        merging the two direction queries (Etherscan returns one ordered list)."""
+        raw = row.get("blockNum")
+        try:
+            block = int(str(raw), 16) if isinstance(raw, str) else int(raw or 0)
+        except (TypeError, ValueError):
+            block = 0
+        return (block, str(row.get("uniqueId") or row.get("hash") or ""))
+
+    def _get_transfers_both_directions(
+        self,
+        *,
+        address: str,
+        category: list[str],
+        from_block_hex: str,
+        max_results: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch transfers in BOTH directions and merge.
+
+        Etherscan's account endpoints return an address's transfers in both
+        directions, and ``EvmAdapter`` relies on that: ``fetch_*_inflows()`` keeps
+        the rows where ``to == address``. Alchemy filters server-side, so a single
+        ``fromAddress`` query is OUTBOUND-ONLY — under which every inflow fetch
+        returned ZERO rows on all Alchemy-mapped chains. That silently broke the
+        default-on cross-chain lock-and-mint continuation (the destination chain
+        was never traced → missed stolen funds), the ``/v1/screen`` 1-hop exposure
+        probe, and counterparty-diversity endpoint classification.
+
+        Two queries + de-dup on ``uniqueId`` restores the documented contract. A
+        self-transfer appears in both result sets and is de-duplicated.
+        """
+        addr = address.lower()
+        outbound = self._get_asset_transfers(
+            from_address=addr, to_address=None, category=category,
+            from_block_hex=from_block_hex, max_results=max_results,
+        )
+        inbound = self._get_asset_transfers(
+            from_address=None, to_address=addr, category=category,
+            from_block_hex=from_block_hex, max_results=max_results,
+        )
+        merged: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in (*outbound, *inbound):
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("uniqueId") or "") or ":".join(
+                str(row.get(k) or "") for k in ("hash", "from", "to", "blockNum")
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+        merged.sort(key=self._row_sort_key)
+        # Preserve single-call cap semantics for the fetch-layer budget.
+        if max_results is not None and len(merged) > max_results:
+            merged = merged[:max_results]
+        return merged
+
     # ---------- Public API (Etherscan-compatible shape) ----------
 
     def get_normal_transactions(
@@ -340,9 +400,8 @@ class AlchemyClient:
         offset: int = 1000,  # noqa: ARG002
         max_results: int | None = None,
     ) -> list[dict[str, Any]]:
-        rows = self._get_asset_transfers(
-            from_address=address.lower(),
-            to_address=None,
+        rows = self._get_transfers_both_directions(
+            address=address,
             category=["external"],
             from_block_hex=hex(start_block),
             max_results=max_results,
@@ -358,9 +417,8 @@ class AlchemyClient:
         offset: int = 1000,  # noqa: ARG002
         max_results: int | None = None,
     ) -> list[dict[str, Any]]:
-        rows = self._get_asset_transfers(
-            from_address=address.lower(),
-            to_address=None,
+        rows = self._get_transfers_both_directions(
+            address=address,
             category=["internal"],
             from_block_hex=hex(start_block),
             max_results=max_results,
@@ -376,9 +434,8 @@ class AlchemyClient:
         offset: int = 1000,  # noqa: ARG002
         max_results: int | None = None,
     ) -> list[dict[str, Any]]:
-        rows = self._get_asset_transfers(
-            from_address=address.lower(),
-            to_address=None,
+        rows = self._get_transfers_both_directions(
+            address=address,
             category=["erc20"],
             from_block_hex=hex(start_block),
             max_results=max_results,

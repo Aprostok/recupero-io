@@ -54,6 +54,7 @@ export default function DashboardLayout({
         {tab("/dashboard/traces", "Traces")}
         {tab("/dashboard/guard", "Wallet Guard")}
         {tab("/dashboard/assistant", "Assistant")}
+        {tab("/academy", "Academy")}
         {tab("/dashboard/keys", "API Keys")}
         {tab("/dashboard/members", "Members")}
         {tab("/dashboard/activity", "Activity")}
@@ -69,7 +70,7 @@ export default function DashboardLayout({
           Sign out
         </button>
       </nav>
-      <div className="container">{children}</div>
+      <div className="container dash">{children}</div>
     </>
   );
 }

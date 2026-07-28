@@ -211,7 +211,7 @@ button:hover {
   background: var(--accent-hover);
 }
 button:active {
-  transform: translateY(0.5px);
+  transform: scale(0.98);
   background: var(--accent-press);
 }
 button:disabled {
@@ -575,6 +575,25 @@ tbody tr:hover {
 .tool-card:hover { transform: translateY(-3px); box-shadow: var(--shadow); border-color: var(--border-strong); }
 .tool-card .tool-label { font-weight: 700; margin-bottom: 4px; color: var(--text); }
 @media (prefers-reduced-motion: reduce) { .tool-card { transition: none; } }
+
+/* ── Dashboard motion: subtle top-to-bottom entrance cascade ──
+   "Nothing appears from nothing" — sections rise + fade in on mount with an
+   ease-out curve and a light stagger. Scoped to .dash so marketing/auth are
+   untouched; fully disabled under prefers-reduced-motion. */
+@keyframes rc-rise {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.dash > .stack > * { animation: rc-rise 0.38s cubic-bezier(0.22, 0.61, 0.36, 1) both; }
+.dash > .stack > *:nth-child(1) { animation-delay: 0ms; }
+.dash > .stack > *:nth-child(2) { animation-delay: 45ms; }
+.dash > .stack > *:nth-child(3) { animation-delay: 90ms; }
+.dash > .stack > *:nth-child(4) { animation-delay: 135ms; }
+.dash > .stack > *:nth-child(5) { animation-delay: 180ms; }
+.dash > .stack > *:nth-child(n+6) { animation-delay: 220ms; }
+@media (prefers-reduced-motion: reduce) {
+  .dash > .stack > * { animation: none; }
+}
 
 @media (max-width: 900px) {
   .hero-bento { grid-template-columns: 1fr 1fr; }

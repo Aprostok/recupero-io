@@ -15,6 +15,7 @@ const TOOLS: { href: string; label: string; desc: string }[] = [
   { href: "/dashboard/members", label: "Members", desc: "Invite and manage your team" },
   { href: "/dashboard/activity", label: "Activity", desc: "Security audit log for your org" },
   { href: "/dashboard/billing", label: "Billing", desc: "Plan, usage, and what's unlocked" },
+  { href: "/academy", label: "Academy", desc: "Learn to read a trace, mixer, or peel chain" },
 ];
 
 function statusBadge(status: string) {

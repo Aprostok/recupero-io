@@ -91,42 +91,45 @@ def get_exhibit_pack(
             detail="case_id must be 1..128 non-blank characters",
         )
 
-    from recupero.config import load_config
+    from recupero.api._case_workdir import (
+        CaseNotFound,
+        CaseStoreUnavailable,
+        case_workdir,
+    )
     from recupero.reports.exhibit_pack import build_exhibit_manifest
-    from recupero.storage.case_store import CaseStore
 
-    cfg, _ = load_config()
-    store = CaseStore(cfg)
-
-    # Validate existence the same way graph_analysis_api does: read_case is
-    # path-traversal-guarded and raises FileNotFoundError/ValueError for a
-    # missing or malformed case. We derive the case dir from cases_root only
-    # AFTER that validation succeeds (CaseStore.case_dir would CREATE the
-    # directory as a side effect, so it cannot be used to test existence).
+    # case_workdir yields the case's real directory on a filesystem deploy and
+    # a temp directory of downloaded artifacts on a Supabase deploy, so the
+    # manifest builder below is unchanged. want=None because the exhibit pack
+    # hashes EVERY artifact — it genuinely needs the whole tree.
     try:
-        store.read_case(case_id)
-    except (OSError, ValueError):
+        with case_workdir(case_id, want=None) as case_dir:
+            try:
+                manifest = build_exhibit_manifest(case_dir)
+            except (OSError, ValueError):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="case not found",
+                ) from None
+            except Exception as exc:  # noqa: BLE001 — never 500
+                log.warning(
+                    "get_exhibit_pack: manifest build failed for %r: %s",
+                    case_id, exc,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="exhibit pack unavailable",
+                ) from None
+    except CaseNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",
         ) from None
-
-    case_dir = store.cases_root / case_id
-
-    try:
-        manifest = build_exhibit_manifest(case_dir)
-    except (OSError, ValueError):
+    except CaseStoreUnavailable as exc:
+        log.warning("get_exhibit_pack: case store unavailable for %r: %s", case_id, exc)
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="case not found",
-        ) from None
-    except Exception as exc:  # noqa: BLE001 — never 500; map any blowup to 404
-        log.warning(
-            "get_exhibit_pack: manifest build failed for %r: %s", case_id, exc
-        )
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="exhibit pack unavailable",
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="case store unavailable",
         ) from None
 
     return manifest.to_dict()

@@ -13,11 +13,14 @@ the rest of the suite, dependency-light).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from recupero.platform import tenancy
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -410,14 +413,27 @@ def claim_stripe_event(
     if not (event_id or "").strip():
         # No id to dedupe on — process it, but don't pretend it was claimed.
         return True
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO public.stripe_events (event_id, event_type) "
-            "VALUES (%s, %s) ON CONFLICT (event_id) DO NOTHING "
-            "RETURNING event_id",
-            (event_id, event_type),
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO public.stripe_events (event_id, event_type) "
+                "VALUES (%s, %s) ON CONFLICT (event_id) DO NOTHING "
+                "RETURNING event_id",
+                (event_id, event_type),
+            )
+            return cur.fetchone() is not None
+    except Exception as exc:  # noqa: BLE001
+        # DEPLOY-ORDER SAFETY: code can reach production before migration 043
+        # creates public.stripe_events. Failing here would 500 the webhook and
+        # Stripe would retry the event forever, so instead we fail OPEN on the
+        # DEDUP only (same behaviour as before the guard existed) and say so
+        # loudly. Apply 043 and the guard starts working with no redeploy.
+        log.warning(
+            "stripe event dedup unavailable (apply migration 043?): %s — "
+            "processing event %s WITHOUT a replay guard",
+            exc, event_id,
         )
-        return cur.fetchone() is not None
+        return True
 
 
 def lock_org_for_update(conn: Any, org_id: str) -> None:

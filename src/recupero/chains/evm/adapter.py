@@ -26,6 +26,7 @@ from eth_utils import to_checksum_address
 
 from recupero.chains.base import ChainAdapter
 from recupero.chains.ethereum.etherscan import EtherscanClient
+from recupero.chains.evm.dual_backend_client import DualBackendClient
 from recupero.config import RecuperoConfig, RecuperoEnv
 from recupero.models import Address, Chain, EvidenceReceipt, TokenRef
 
@@ -79,6 +80,40 @@ def _resolve_etherscan_rps() -> float:
         )
         return _DEFAULT_ETHERSCAN_RPS
     return min(rps, _MAX_ETHERSCAN_RPS)
+
+
+def _prefer_alchemy() -> bool:
+    """Opt in to the Alchemy-preferred EVM backend via ``RECUPERO_PREFER_ALCHEMY``
+    (the /v2 worker has no CLI ``--prefer-alchemy`` flag, so this env var is the
+    only way to activate Alchemy in production). Default off → Etherscan-only,
+    byte-identical to the historical behavior."""
+    return (os.environ.get("RECUPERO_PREFER_ALCHEMY", "") or "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
+def _build_evm_client(env: RecuperoEnv, profile: EvmChainProfile):  # noqa: ANN202
+    """Build the EVM HTTP client. Default: a plain ``EtherscanClient`` (unchanged).
+    When ``RECUPERO_PREFER_ALCHEMY`` is set, route transfer queries through Alchemy
+    (higher quota → deeper reach) with automatic Etherscan fallback, via the
+    ``DualBackendClient`` factory (returns a plain EtherscanClient if the key/chain
+    isn't Alchemy-usable). Isolated here so the flag-off path stays identical."""
+    rps = _resolve_etherscan_rps()
+    if _prefer_alchemy():
+        return DualBackendClient.build(
+            etherscan_api_key=env.ETHERSCAN_API_KEY,
+            etherscan_api_base=profile.api_base,
+            chain_id=profile.chain_id,
+            alchemy_api_key=env.ALCHEMY_API_KEY,
+            requests_per_second=rps,
+            prefer_alchemy=True,
+        )
+    return EtherscanClient(
+        api_key=env.ETHERSCAN_API_KEY,
+        api_base=profile.api_base,
+        chain_id=profile.chain_id,
+        requests_per_second=rps,
+    )
 
 
 @dataclass(frozen=True)
@@ -187,12 +222,11 @@ class EvmAdapter(ChainAdapter):
         self.cfg = cfg
         self.profile = _profile_for(chain, cfg)
         self.chain = chain
-        self.client = EtherscanClient(
-            api_key=env.ETHERSCAN_API_KEY,
-            api_base=self.profile.api_base,
-            chain_id=self.profile.chain_id,
-            requests_per_second=_resolve_etherscan_rps(),
-        )
+        # Default: Etherscan-only (unchanged). RECUPERO_PREFER_ALCHEMY routes
+        # transfer queries through Alchemy (higher quota → deeper reach) with
+        # Etherscan fallback — the env activation of the built-but-unwired
+        # DualBackendClient (RIGOR-Jacob B) for the /v2 worker path.
+        self.client = _build_evm_client(env, self.profile)
         self._is_contract_cache: dict[str, bool] = {}
 
     # ---------- Required interface ----------

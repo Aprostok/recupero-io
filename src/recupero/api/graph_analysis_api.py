@@ -93,19 +93,47 @@ def get_graph_analysis(
             detail="case_id must be 1..128 non-blank characters",
         )
 
+    from recupero.api import _supabase_case_source as _sb
     from recupero.config import load_config
     from recupero.storage.case_store import CaseStore
     from recupero.trace.graph_analysis import analyze_case_graph
 
-    cfg, _ = load_config()
-    store = CaseStore(cfg)
-    try:
-        case = store.read_case(case_id)
-    except (OSError, ValueError):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="case not found",
-        ) from None
+    # A Supabase-configured deploy has an empty, ephemeral LOCAL case store, so
+    # the filesystem read 404s for every case the operator can actually SEE in
+    # the Case Index (which already reads through this same source). Mirror the
+    # index: Supabase when switched on, filesystem otherwise (the default).
+    #
+    # Only this endpoint can take the cheap version of that fix -- it needs the
+    # `Case` object and nothing else. The sibling per-case consoles (exhibit
+    # pack, SAR, recovery snapshot, AI triage, case overview) additionally read
+    # artifact FILES out of a local `case_dir`, so they need the artifact bytes
+    # materialized, not just a Case. They are deliberately left alone here.
+    if _sb.enabled():
+        try:
+            case = _sb.read_case(cid)
+        except (FileNotFoundError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="case not found",
+            ) from None
+        except Exception as exc:  # noqa: BLE001 -- store outage, not a missing case
+            # Do NOT report a transient Supabase/network failure as "case not
+            # found": that sends an operator hunting for a case that exists.
+            log.warning("get_graph_analysis: supabase read failed for %r: %s", cid, exc)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="case store unavailable",
+            ) from exc
+    else:
+        cfg, _ = load_config()
+        store = CaseStore(cfg)
+        try:
+            case = store.read_case(cid)
+        except (OSError, ValueError):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="case not found",
+            ) from None
 
     try:
         return analyze_case_graph(case).to_dict()

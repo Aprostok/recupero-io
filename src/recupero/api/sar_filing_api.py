@@ -97,13 +97,7 @@ def get_sar_filing(
             detail="case_id must be 1..128 non-blank characters",
         )
 
-    from recupero.config import load_config
-    from recupero.reports.regulatory_filing import (
-        SAR_JURISDICTIONS,
-        build_sar_context,
-        load_brief,
-    )
-    from recupero.storage.case_store import CaseStore
+    from recupero.reports.regulatory_filing import SAR_JURISDICTIONS
 
     # Validate the jurisdiction against the canonical set BEFORE touching
     # storage. build_sar_context accepts operator-friendly aliases (us/uk/eu)
@@ -118,25 +112,34 @@ def get_sar_filing(
             detail=f"jurisdiction {jurisdiction!r} not recognized; allowed: {allowed}",
         )
 
-    cfg, _ = load_config()
-    store = CaseStore(cfg)
+    from recupero.api._case_workdir import (
+        CaseNotFound,
+        CaseStoreUnavailable,
+        case_workdir,
+    )
 
-    # Validate existence WITHOUT creating anything: read_case is
-    # path-traversal-guarded and raises FileNotFoundError/ValueError for a
-    # missing or malformed case. We derive the case dir from cases_root only
-    # AFTER that validation succeeds — CaseStore.case_dir would CREATE the
-    # directory as a side effect (mkdir(exist_ok=True)), so an operator typo'ing
-    # a case_id must not litter an empty case folder. Mirrors /v1/exhibit-pack
-    # and /v1/graph-analysis exactly.
+    # Yields the real case dir on a filesystem deploy, or a temp dir holding
+    # just the freeze brief on a Supabase deploy. load_brief is unchanged.
     try:
-        store.read_case(case_id)
-    except (OSError, ValueError):
+        with case_workdir(case_id, want=["freeze_brief.json"]) as case_dir:
+            ctx = _render_sar(case_dir, case_id, jurisdiction)
+    except CaseNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",
         ) from None
+    except CaseStoreUnavailable as exc:
+        log.warning("get_sar_filing: case store unavailable for %r: %s", case_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="case store unavailable",
+        ) from None
 
-    case_dir = store.cases_root / case_id
+    return ctx
+
+
+def _render_sar(case_dir: Path, case_id: str, jurisdiction: str) -> Any:
+    from recupero.reports.regulatory_filing import build_sar_context, load_brief
 
     try:
         brief = load_brief(case_dir)

@@ -101,27 +101,35 @@ def get_recovery_snapshot(
             detail="case_id must be 1..128 non-blank characters",
         )
 
-    from recupero.config import load_config
-    from recupero.storage.case_store import CaseStore
+    from recupero.api._case_workdir import (
+        CaseNotFound,
+        CaseStoreUnavailable,
+        case_workdir,
+    )
 
-    cfg, _ = load_config()
-    store = CaseStore(cfg)
-
-    # Validate existence the same way ai_triage_api / exhibit_pack_api do:
-    # read_case is path-traversal-guarded and raises FileNotFoundError/ValueError
-    # for a missing or malformed case. We derive the case dir from cases_root
-    # only AFTER that validation succeeds (CaseStore.case_dir would CREATE the
-    # directory as a side effect, so it cannot be used to test existence).
+    # Yields the real case dir on a filesystem deploy, or a temp dir holding
+    # just the freeze brief on a Supabase deploy.
     try:
-        store.read_case(case_id)
-    except (OSError, ValueError):
+        with case_workdir(case_id, want=["freeze_brief.json"]) as case_dir:
+            estimate = _read_estimate(case_dir, case_id)
+    except CaseNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",
         ) from None
+    except CaseStoreUnavailable as exc:
+        log.warning(
+            "get_recovery_snapshot: case store unavailable for %r: %s", case_id, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="case store unavailable",
+        ) from None
 
-    case_dir = store.cases_root / case_id
+    return {"case_id": case_id, "recovery_estimate": estimate}
 
+
+def _read_estimate(case_dir: Path, case_id: str) -> Any:
     # READ-ONLY load of the already-produced freeze brief, surfacing only the
     # stored RECOVERY_ESTIMATE. Anything unexpected maps to 404 (never 500): a
     # missing file, an oversized/garbage file, a parse error, or a permission
@@ -161,7 +169,7 @@ def get_recovery_snapshot(
             detail="freeze_brief.json unavailable",
         ) from None
 
-    return {"case_id": case_id, "recovery_estimate": estimate}
+    return estimate
 
 
 @router.get(

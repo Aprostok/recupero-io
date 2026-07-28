@@ -87,9 +87,9 @@ export default function Home() {
           <div className="mini wide">
             <div className="cap">Screen API</div>
             <div className="code">
-              <span className="c"># POST /v2/screen</span>
+              <span className="c"># POST /v1/screen</span>
               {"\n"}
-              <span className="k">curl</span> -s api.recupero.io/v2/screen \{"\n"}
+              <span className="k">curl</span> -s api.recupero.io/v1/screen \{"\n"}
               {"  "}-d <span className="s">{'{"address":"0x9f2…a1"}'}</span>
               {"\n"}
               <span className="c"># → verdict: sanctioned · mixer exposure</span>

@@ -508,6 +508,14 @@ export const api = {
   getSummary: (token: string, id: string) =>
     request<CaseSummary>(`/v2/traces/${encodeURIComponent(id)}/summary`, { token }),
 
+  // The deliverables this case ACTUALLY has. Never hardcode artifact filenames:
+  // the engine's real names are case-dependent, so guessed names 404 forever.
+  listArtifacts: (token: string, id: string) =>
+    request<{
+      artifacts: { name: string; label: string; inline: boolean }[];
+      storage_configured: boolean;
+    }>(`/v2/traces/${encodeURIComponent(id)}/artifacts`, { token }),
+
   // SSE endpoint URL for live trace status. EventSource can't set headers, so
   // the session token rides as a query param (matches the server's /stream).
   streamUrl: (id: string, token: string) =>

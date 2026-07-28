@@ -243,6 +243,11 @@ button.danger:hover {
 /* ── Navigation (glass bar) ── */
 .nav {
   display: flex;
+  /* 9 tabs + brand + Sign out overflow below ~1050px. Without wrapping, the
+     nav forces the whole page wider than a phone viewport (measured 890px on a
+     375px screen) and horizontally scrolls the dashboard. */
+  flex-wrap: wrap;
+  row-gap: var(--s-2);
   gap: var(--s-5);
   align-items: center;
   padding: 14px var(--s-6);
@@ -315,6 +320,11 @@ tbody tr:hover {
 }
 .badge.muted {
   color: var(--muted);
+}
+.badge.danger {
+  color: var(--danger);
+  border-color: rgba(255, 93, 108, 0.4);
+  background: rgba(255, 93, 108, 0.08);
 }
 
 .error {
@@ -601,6 +611,8 @@ tbody tr:hover {
   .b, .b.wide { grid-column: span 3; }
 }
 @media (max-width: 640px) {
+  .nav { padding: 10px var(--s-4); gap: var(--s-4); font-size: 14px; }
+  .nav .spacer { flex-basis: 100%; height: 0; }
   .hero-bento { grid-template-columns: 1fr; grid-auto-rows: auto; }
   .mini.wide { grid-column: span 1; }
   .b, .b.wide { grid-column: span 6; }

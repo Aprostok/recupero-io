@@ -6,16 +6,17 @@ import { useParams } from "next/navigation";
 import { useAuth } from "@/lib/auth";
 import { ApiError, CaseSummary, Me, TraceDetail, api } from "@/lib/api";
 
-// Deliverables/tools, each tagged with the entitlement (tenancy FEATURE_* key)
-// that unlocks it. `feature: null` = available on every plan (basic). Locked
-// tools render disabled with an "Upgrade to unlock" link — the consumer
-// progressive-unlock surface, driven by /v2/me `features`.
-const TOOLS: { name: string; label: string; feature: string | null }[] = [
-  { name: "brief.pdf", label: "Investigation brief (PDF)", feature: "deliverable.brief" },
-  { name: "transfers.csv", label: "Transfers (CSV)", feature: null },
-  { name: "trace_report.html", label: "Trace report (HTML)", feature: null },
-  { name: "exhibit_pack.zip", label: "Exhibit pack (ZIP)", feature: "deliverable.exhibit_pack" },
-];
+// Which entitlement (tenancy FEATURE_* key) an artifact needs, by real filename.
+// The artifact NAMES are never hardcoded — they come from
+// GET /v2/traces/{id}/artifacts, because the engine's filenames are
+// case-dependent and guessed names 404 forever. This map only adds gating.
+function featureForArtifact(name: string): string | null {
+  const n = name.toLowerCase();
+  if (n === "graph_ui.html") return "graph";
+  if (n.startsWith("exhibit_pack")) return "deliverable.exhibit_pack";
+  if (n.endsWith(".pdf")) return "deliverable.brief";
+  return null; // CSV / JSON / report HTML are available on every plan
+}
 
 const ACTIVE = new Set(["queued", "running", "processing", "claimed"]);
 
@@ -60,6 +61,10 @@ export default function TraceDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [graphUrl, setGraphUrl] = useState<string | null>(null);
+  const [artifacts, setArtifacts] = useState<
+    { name: string; label: string; inline: boolean }[] | null
+  >(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
   // Plan entitlements, for unlocked/locked tool rendering (best-effort).
   useEffect(() => {
@@ -76,10 +81,15 @@ export default function TraceDetailPage() {
   const isLocked = (feature: string | null): boolean =>
     feature !== null && me !== null && !me.features.includes(feature);
 
+  // Derived status — the live-update effect keys off this string, never the
+  // `trace` object (see the effect's comment).
+  const isActive = trace ? ACTIVE.has(trace.status) : false;
+
   const load = useCallback(async () => {
     if (!token || !id) return;
     try {
       setTrace(await api.getTrace(token, id));
+      setError(null); // clear a stale transient error once a load succeeds
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : "failed to load trace");
     }
@@ -105,41 +115,92 @@ export default function TraceDetailPage() {
     };
   }, [token, id, trace?.status, summary]);
 
-  // Live updates while running: prefer SSE, fall back to polling.
+  // Which deliverables this case actually has (never guess filenames).
   useEffect(() => {
-    if (!token || !id || !trace || !ACTIVE.has(trace.status)) return;
+    if (!token || !id || trace?.status !== "complete" || artifacts) return;
+    let cancelled = false;
+    api
+      .listArtifacts(token, id)
+      .then((r) => {
+        if (!cancelled) setArtifacts(r.artifacts);
+      })
+      .catch(() => {
+        if (!cancelled) setArtifacts([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [token, id, trace?.status, artifacts]);
 
+  // Live updates while the trace is running: prefer SSE, degrade to polling.
+  //
+  // The effect depends on the STATUS STRING, never on the `trace` object: the
+  // server re-sends the current status on every connect, so depending on the
+  // object (whose identity changes on each setTrace) would tear down and
+  // reconnect the stream in a tight loop — one HTTP connection + one DB
+  // connection per iteration. setTrace is likewise a no-op when the status is
+  // unchanged, keeping the identity stable.
+  useEffect(() => {
+    if (!token || !id || !isActive) return;
+
+    let stopped = false;
+    let poll: ReturnType<typeof setInterval> | null = null;
+    const startPolling = () => {
+      if (poll || stopped) return;
+      poll = setInterval(load, 5000);
+    };
+
+    let es: EventSource | null = null;
     if (typeof EventSource !== "undefined") {
-      const es = new EventSource(api.streamUrl(id, token));
+      es = new EventSource(api.streamUrl(id, token));
       es.onmessage = (ev) => {
         try {
           const data = JSON.parse(ev.data);
-          if (data.status) {
-            setTrace((prev) => (prev ? { ...prev, status: data.status } : prev));
-            if (!ACTIVE.has(data.status)) {
-              es.close();
-              load();
-            }
+          if (!data.status) return;
+          setTrace((prev) =>
+            prev && prev.status !== data.status
+              ? { ...prev, status: data.status }
+              : prev,
+          );
+          if (!ACTIVE.has(data.status)) {
+            es?.close();
+            load();
           }
         } catch {
           /* ignore keep-alive / malformed frames */
         }
       };
-      es.onerror = () => es.close();
-      return () => es.close();
+      // The server closes the stream after a bounded tick ceiling (~5 min), and
+      // any transport hiccup lands here too. Fall back to polling so a
+      // long-running trace never silently stops updating.
+      es.onerror = () => {
+        es?.close();
+        startPolling();
+      };
+    } else {
+      startPolling();
     }
 
-    const t = setInterval(load, 4000);
-    return () => clearInterval(t);
-  }, [token, id, trace, load]);
+    return () => {
+      stopped = true;
+      es?.close();
+      if (poll) clearInterval(poll);
+    };
+  }, [token, id, isActive, load]);
 
   async function download(name: string) {
     if (!token || !id) return;
     setNotice(null);
     setError(null);
+    setBusy(name);
     try {
       const { url } = await api.getArtifactUrl(token, id, name);
-      window.open(url, "_blank", "noopener");
+      const opened = window.open(url, "_blank", "noopener");
+      if (!opened) {
+        // Popup blockers reject window.open outside the click task (we awaited
+        // the presign first) — tell the user instead of doing nothing.
+        setNotice("Your browser blocked the download popup — allow popups for this site.");
+      }
     } catch (err) {
       if (err instanceof ApiError && err.status === 501) {
         setNotice("Artifact storage isn't configured on this deployment.");
@@ -148,6 +209,8 @@ export default function TraceDetailPage() {
       } else {
         setError(err instanceof ApiError ? err.detail : "download failed");
       }
+    } finally {
+      setBusy(null);
     }
   }
 
@@ -158,7 +221,12 @@ export default function TraceDetailPage() {
     setNotice(null);
     setError(null);
     try {
-      const { url } = await api.getArtifactUrl(token, id, "interactive_graph.html");
+      const inlineArtifact = (artifacts || []).find((a) => a.inline);
+      if (!inlineArtifact) {
+        setNotice("No interactive graph was generated for this case.");
+        return;
+      }
+      const { url } = await api.getArtifactUrl(token, id, inlineArtifact.name);
       setGraphUrl(url);
     } catch (err) {
       if (err instanceof ApiError && err.status === 501) {
@@ -225,7 +293,15 @@ export default function TraceDetailPage() {
                 <div className="row" style={{ justifyContent: "space-between" }}>
                   <h3 style={{ margin: 0 }}>Where your money is now</h3>
                   {summary.totals_display.recoverable_percent && (
-                    <span className="badge ok">
+                    <span
+                      className={`badge ${
+                        recoverablePct >= 25
+                          ? "ok"
+                          : recoverablePct > 0
+                            ? "warn"
+                            : "danger"
+                      }`}
+                    >
                       {summary.totals_display.recoverable_percent} recoverable
                     </span>
                   )}
@@ -373,8 +449,8 @@ export default function TraceDetailPage() {
               <p className="muted">Available once the trace completes.</p>
             ) : (
               <div className="row">
-                {TOOLS.map((t) =>
-                  isLocked(t.feature) ? (
+                {(artifacts || []).map((t) =>
+                  isLocked(featureForArtifact(t.name)) ? (
                     <span key={t.name} className="row" style={{ gap: 6 }}>
                       <button
                         className="ghost"
@@ -394,10 +470,11 @@ export default function TraceDetailPage() {
                   ) : (
                     <button
                       key={t.name}
-                      className={t.feature === "graph" ? "" : "ghost"}
+                      className="ghost"
+                      disabled={busy === t.name}
                       onClick={() => download(t.name)}
                     >
-                      {t.label}
+                      {busy === t.name ? "Opening…" : t.label}
                     </button>
                   ),
                 )}

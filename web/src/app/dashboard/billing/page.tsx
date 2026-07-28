@@ -2,16 +2,52 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "@/lib/auth";
-import { ApiError, BillingUsage, api } from "@/lib/api";
+import { ApiError, BillingUsage, Entitlements, api } from "@/lib/api";
 
 const UPGRADE_TARGETS = ["pro", "enterprise"];
+
+// Human labels for the tenancy FEATURE_* keys (unknown keys fall back to the raw
+// key so a newly-added feature still renders).
+const FEATURE_LABELS: Record<string, string> = {
+  screening: "Address screening",
+  "trace.basic": "Basic tracing",
+  "trace.deep_reach": "Deep-reach tracing",
+  "chains.evm": "EVM chains",
+  "chains.all": "All chains (Solana, Tron, BTC, …)",
+  graph: "Interactive fund-flow graph",
+  recovery_view: "Recovery view",
+  "deliverable.brief": "Investigation brief (PDF)",
+  "deliverable.exhibit_pack": "Court exhibit pack",
+  monitoring: "Address monitoring & alerts",
+  api_access: "Programmatic API access",
+  litigation_artifacts: "Litigation artifacts (SAR/STR, LE handoff)",
+  "attribution.misttrack": "MistTrack attribution",
+  demix_leads: "Mixer demixing leads",
+  cooperation_intel: "Exchange cooperation intel",
+  bulk_screening: "Bulk screening",
+  audit_log: "Audit log",
+  sso: "SSO / SAML",
+};
+
+const featureLabel = (k: string) => FEATURE_LABELS[k] ?? k;
 
 export default function BillingPage() {
   const { token } = useAuth();
   const [usage, setUsage] = useState<BillingUsage | null>(null);
+  const [ent, setEnt] = useState<Entitlements | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Plan entitlements — "what your plan includes" (best-effort; never blocks billing).
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    api.entitlements(token).then((e) => !cancelled && setEnt(e)).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const refresh = useCallback(async () => {
     if (!token) return;
@@ -110,6 +146,29 @@ export default function BillingPage() {
           </div>
         </div>
       </section>
+
+      {ent && (
+        <section className="panel stack">
+          <h3 style={{ marginTop: 0 }}>What your plan includes</h3>
+          <div className="feature-grid">
+            {ent.features.map((f) => (
+              <div key={f} className="feat on">
+                <span className="tick">✓</span> {featureLabel(f)}
+              </div>
+            ))}
+            {ent.locked.map((f) => (
+              <div key={f} className="feat off">
+                <span className="tick">🔒</span> {featureLabel(f)}
+              </div>
+            ))}
+          </div>
+          {ent.locked.length > 0 && (
+            <p className="muted" style={{ margin: 0, fontSize: 13 }}>
+              🔒 items unlock on a higher plan — upgrade below.
+            </p>
+          )}
+        </section>
+      )}
 
       <section className="panel">
         <h3 style={{ marginTop: 0 }}>Upgrade</h3>

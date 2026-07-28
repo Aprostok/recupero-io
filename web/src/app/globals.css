@@ -561,6 +561,14 @@ tbody tr:hover {
 .next-steps li::before { counter-increment: ns; content: counter(ns); position: absolute; left: 0; top: 0; width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; font-family: var(--mono); font-weight: 700; font-size: 12px; color: var(--accent-hover); background: var(--accent-soft); border: 1px solid var(--accent-line); }
 @media (prefers-reduced-motion: reduce) { .recover-seg, .endpoint-card { transition: none; } }
 
+/* Plan features (billing "what your plan includes") */
+.feature-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 18px; }
+.feat { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.feat.on { color: var(--text); }
+.feat.off { color: var(--faint); }
+.feat .tick { font-size: 12px; width: 14px; text-align: center; }
+.feat.on .tick { color: var(--emerald); }
+
 @media (max-width: 900px) {
   .hero-bento { grid-template-columns: 1fr 1fr; }
   .mini.span2 { grid-row: span 1; }

@@ -82,13 +82,28 @@ def test_upload_bytes_puts_to_presigned_url(monkeypatch) -> None:
     import httpx
     monkeypatch.setattr(
         httpx, "put",
-        lambda url, content=None, timeout=None: seen.update(url=url, content=content) or _Resp(),
+        lambda url, content=None, timeout=None, headers=None: seen.update(
+            url=url, content=content, headers=headers,
+        ) or _Resp(),
     )
     ok = objectstore.upload_bytes("orgs/o/investigations/i/brief.pdf", b"PDF",
                                   now=datetime(2026, 1, 1, tzinfo=UTC))
     assert ok is True
     assert seen["content"] == b"PDF"
     assert "brief.pdf?X-Amz-Algorithm=" in seen["url"]
+    # An explicit Content-Type is REQUIRED: without it S3 stores
+    # binary/octet-stream, which makes a browser DOWNLOAD an .html artifact
+    # instead of rendering it — breaking the inline graph / trace-report iframe.
+    assert seen["headers"] == {"Content-Type": "application/pdf"}
+
+
+def test_content_type_for_extensions() -> None:
+    assert objectstore.content_type_for("graph_ui.html").startswith("text/html")
+    assert objectstore.content_type_for("transfers.csv").startswith("text/csv")
+    assert objectstore.content_type_for("freeze_brief.json") == "application/json"
+    assert objectstore.content_type_for("brief.pdf") == "application/pdf"
+    # Unknown extension → a safe binary default, never a guessed text type.
+    assert objectstore.content_type_for("evidence.bin") == "binary/octet-stream"
 
 
 def test_upload_bytes_noop_when_unconfigured(monkeypatch) -> None:

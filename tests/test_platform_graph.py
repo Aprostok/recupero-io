@@ -72,8 +72,14 @@ def test_build_graph_payload_local_path(monkeypatch) -> None:
 
     out = router._build_graph_payload("inv-uuid-123", "CASE-777")
     assert out == _PAYLOAD
-    # local store keys the case by the submitted case_id.
-    assert seen["case_id"] == "CASE-777"
+    # The LOCAL case dir is keyed by the INVESTIGATION UUID, never by the
+    # client-supplied case label: worker/pipeline.py writes it as
+    # `case_id_str = str(inv.id)` ("Local Case.case_id is the investigation
+    # UUID"). Preferring `case_id` here read a directory the worker never wrote,
+    # so summary/graph were permanently "not available" for any trace submitted
+    # with a case_id — and it would become a cross-tenant read key if the column
+    # were ever widened. Regression-locked.
+    assert seen["case_id"] == "inv-uuid-123"
 
 
 # --------------------------------------------------------------------------- #

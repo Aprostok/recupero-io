@@ -836,6 +836,81 @@ def trace_artifact_url(
     return {"artifact": name, "url": url, "expires_in": ttl}
 
 
+#: Human labels for the artifacts a case can contain. Keys are the REAL
+#: filenames the engine writes (verified against a completed case dir) — the UI
+#: must never hardcode guesses, it renders whatever this listing returns.
+_ARTIFACT_LABELS: dict[str, str] = {
+    "graph_ui.html": "Interactive fund-flow graph",
+    "trace_report.html": "Trace report (HTML)",
+    "transfers.csv": "Transfers (CSV)",
+    "freeze_brief.json": "Freeze brief (JSON)",
+    "freeze_asks.json": "Freeze asks (JSON)",
+    "case.json": "Case data (JSON)",
+    "manifest.json": "Evidence manifest (JSON)",
+    "victim.json": "Victim record (JSON)",
+    "ai_triage.json": "AI triage (JSON)",
+    "brief_editorial.json": "Brief narrative (JSON)",
+    "demix_leads.json": "Mixer demixing leads (JSON)",
+}
+
+
+def _list_case_artifact_names(investigation_id: str, case_id: str | None) -> list[str]:
+    """The case's TOP-LEVEL artifact filenames, filtered to those the artifact
+    endpoint can actually serve (``objectstore.is_safe_name`` rejects ``/``, so
+    nested deliverables like ``briefs/…`` / ``exhibit_pack/…`` are deliberately
+    excluded rather than advertised and then 404'd)."""
+    from recupero.api import _supabase_case_source
+
+    if _supabase_case_source.enabled():
+        items = _supabase_case_source.list_artifacts(investigation_id)
+        names = [
+            str(i.get("name") or "")
+            for i in items
+            if isinstance(i, dict) and "/" not in str(i.get("path") or i.get("name") or "")
+        ]
+    else:
+        from recupero.config import load_config
+        from recupero.storage.case_store import CaseStore
+        cfg, _ = load_config()
+        case_dir = CaseStore(cfg).case_dir(investigation_id)
+        names = [p.name for p in case_dir.iterdir() if p.is_file()]
+    return sorted({n for n in names if objectstore.is_safe_name(n)})
+
+
+@router.get("/traces/{investigation_id}/artifacts")
+def list_trace_artifacts(
+    investigation_id: str,
+    principal: store.OrgContext = Depends(deps.current_principal),
+    conn: Any = Depends(deps.db_conn),
+) -> dict[str, Any]:
+    """List the deliverables this trace ACTUALLY has, so the client renders real
+    (resolvable) download links instead of hardcoded guesses. Each entry carries
+    the real ``name``, a human ``label``, and whether it is inline-renderable.
+    Org-scoped; an unreadable/absent case dir yields an empty list (not an error)
+    so a still-running trace simply shows nothing yet."""
+    row = store.get_trace_status(
+        conn, org_id=principal.org_id, investigation_id=investigation_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="trace not found")
+    try:
+        names = _list_case_artifact_names(investigation_id, row.get("case_id"))
+    except Exception as exc:  # noqa: BLE001 — absent/unreadable case dir is normal
+        log.debug("artifact listing unavailable for %s: %s", investigation_id, exc)
+        names = []
+    return {
+        "artifacts": [
+            {
+                "name": n,
+                "label": _ARTIFACT_LABELS.get(n, n),
+                "inline": n.lower().endswith((".html", ".htm")),
+            }
+            for n in names
+        ],
+        "storage_configured": objectstore.is_configured(),
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Wallet Guard (WalletBlock) — proactive pre-send checks + address book + alerts
 # --------------------------------------------------------------------------- #
@@ -1045,7 +1120,7 @@ def _build_graph_payload(investigation_id: str, case_id: str | None) -> dict[str
         from recupero.config import load_config
         from recupero.storage.case_store import CaseStore
         cfg, _ = load_config()
-        case = CaseStore(cfg).read_case(case_id or investigation_id)
+        case = CaseStore(cfg).read_case(investigation_id)
     return build_graph_data(case)
 
 
@@ -1116,7 +1191,7 @@ def _load_case_artifact_json(
         from recupero.config import load_config
         from recupero.storage.case_store import CaseStore
         cfg, _ = load_config()
-        path = CaseStore(cfg).case_dir(case_id or investigation_id) / name
+        path = CaseStore(cfg).case_dir(investigation_id) / name
         data = _json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(data, dict):
         raise ValueError(f"{name} is not a JSON object")
@@ -1131,7 +1206,12 @@ def _load_next_steps(investigation_id: str, case_id: str | None) -> list[Any]:
         triage = _load_case_artifact_json(investigation_id, case_id, "ai_triage.json")
     except Exception:  # noqa: BLE001 — triage is an optional enrichment
         return []
-    for key in ("NEXT_STEPS", "next_steps", "RECOMMENDED_ACTIONS", "recommended_actions"):
+    # ``recommended_next_steps`` is the key ai_triage.py actually writes (see
+    # reports/ai_triage.py); the other spellings are tolerated for forward-compat.
+    for key in (
+        "recommended_next_steps", "NEXT_STEPS", "next_steps",
+        "RECOMMENDED_ACTIONS", "recommended_actions",
+    ):
         val = triage.get(key)
         if isinstance(val, list):
             return val

@@ -607,6 +607,23 @@ def build_all_deliverables(
             "INVARIANT E will flag at validation): %s", _exc,
         )
 
+    # Interactive fund-flow graph (graph_ui.html) — the self-contained D3 view
+    # the customer dashboard embeds inline. Previously only the `recupero
+    # graph-ui` CLI produced it, so a worker-run case never had one and the
+    # dashboard's graph panel could never resolve. Rendered here (best-effort,
+    # non-fatal) and recorded in `written` so the manifest + object-storage
+    # mirror pick it up. Deliberately NOT added to html_paths: it is an
+    # interactive page, not a document to convert to PDF.
+    try:
+        from recupero.reports.graph_ui import render_case_graph
+        graph_path = render_case_graph(case, case_dir)
+        written.append(graph_path)
+        log.info("wrote interactive graph for case=%s", case.case_id)
+    except Exception as _exc:  # noqa: BLE001
+        log.warning(
+            "interactive graph rendering failed (non-fatal): %s", _exc,
+        )
+
     # Generate PDF versions of every HTML deliverable + the standalone
     # flow SVG. Best-effort — a WeasyPrint failure on one file logs a
     # warning but doesn't kill the stage (operators can still hand-deliver

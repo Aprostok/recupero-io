@@ -218,6 +218,31 @@ def _presign_put_for(key: str, now: datetime) -> str | None:
     )
 
 
+#: Content types by artifact extension. Without an explicit type S3 stores
+#: ``binary/octet-stream``, which makes a browser DOWNLOAD an .html artifact
+#: instead of rendering it — breaking the inline graph / trace-report iframe.
+_CONTENT_TYPES: dict[str, str] = {
+    ".html": "text/html; charset=utf-8",
+    ".htm": "text/html; charset=utf-8",
+    ".json": "application/json",
+    ".csv": "text/csv; charset=utf-8",
+    ".pdf": "application/pdf",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".txt": "text/plain; charset=utf-8",
+    ".zip": "application/zip",
+}
+
+
+def content_type_for(name: str) -> str:
+    """Best-effort Content-Type from a filename extension (default binary)."""
+    lowered = (name or "").lower()
+    for ext, ctype in _CONTENT_TYPES.items():
+        if lowered.endswith(ext):
+            return ctype
+    return "binary/octet-stream"
+
+
 def upload_bytes(key: str, data: bytes, *, now: datetime) -> bool:
     """PUT ``data`` to object ``key`` via a presigned URL. Returns True on 2xx,
     False if storage is unconfigured or the PUT fails (best-effort mirror — never
@@ -228,7 +253,10 @@ def upload_bytes(key: str, data: bytes, *, now: datetime) -> bool:
     try:
         import httpx
 
-        resp = httpx.put(url, content=data, timeout=30.0)
+        resp = httpx.put(
+            url, content=data, timeout=30.0,
+            headers={"Content-Type": content_type_for(key)},
+        )
         return 200 <= resp.status_code < 300
     except Exception:
         return False

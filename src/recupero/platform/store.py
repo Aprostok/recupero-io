@@ -280,15 +280,25 @@ def enqueue_trace(
     do NOT enqueue or meter a second time (``created=False``)."""
     investigation_id = str(uuid.uuid4())
     with conn.cursor() as cur:
+        # SCHEMA CONTRACT (verified against migrations/000 + worker/state.py):
+        #   * ``status`` MUST be the worker's QUEUED literal ``'pending'`` —
+        #     worker/state.py CLAIMABLE_STATUSES is {'pending','review_approved'},
+        #     so the previous ``'queued'`` left every /v2 job unclaimable forever.
+        #   * ``case_id`` is ``UUID REFERENCES public.cases(id)`` — it is NOT the
+        #     human case label. Writing the synthetic ``CASE-<hex>`` string here
+        #     raised 22P02 (invalid uuid) and failed every submit. It is left NULL:
+        #     the worker keys the case dir by the investigation UUID
+        #     (worker/pipeline.py "Local Case.case_id is the investigation UUID"),
+        #     and the display label is returned to the client, not persisted here.
         cur.execute(
             "INSERT INTO public.investigations "
             "(id, org_id, submitted_by, chain, seed_address, incident_time, "
-            " case_id, status, idempotency_key) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, 'queued', %s) "
+            " status, idempotency_key) "
+            "VALUES (%s, %s, %s, %s, %s, %s, 'pending', %s) "
             "ON CONFLICT (org_id, idempotency_key) WHERE idempotency_key IS NOT NULL "
             "DO NOTHING RETURNING id::text",
             (investigation_id, org_id, submitted_by, chain, seed_address,
-             incident_time, case_id, idempotency_key),
+             incident_time, idempotency_key),
         )
         row = cur.fetchone()
         if row is None:
@@ -378,11 +388,22 @@ def apply_billing_change(conn: Any, change: Any) -> bool:
         return cur.rowcount > 0
 
 
+# SCHEMA CONTRACT: ``public.investigations`` has NO ``created_at`` / ``updated_at``
+# columns (verified against migrations/000 — worker/db.py's header says so
+# explicitly). Selecting them raised 42703 UndefinedColumn, and because
+# ``get_trace_status`` is the org gate for the status / summary / graph /
+# artifacts / stream endpoints, that 500'd the ENTIRE /v2 trace surface. The real
+# lifecycle columns are used instead:
+#   created_at → ``triggered_at`` (TIMESTAMPTZ DEFAULT NOW(), set on insert)
+#   updated_at → the newest lifecycle stamp the row has
 def get_trace_status(conn: Any, *, org_id: str, investigation_id: str) -> dict[str, Any] | None:
     """Tenant-scoped status read — an org can ONLY see its own jobs."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id::text, status, case_id, chain, seed_address, created_at, updated_at "
+            "SELECT id::text, status, case_id::text, chain, seed_address, "
+            "triggered_at, "
+            "COALESCE(completed_at, failed_at, last_heartbeat_at, claimed_at, "
+            "triggered_at) "
             "FROM public.investigations WHERE id = %s AND org_id = %s",
             (investigation_id, org_id),
         )
@@ -399,9 +420,9 @@ def get_trace_status(conn: Any, *, org_id: str, investigation_id: str) -> dict[s
 def list_traces(conn: Any, *, org_id: str, limit: int = 50) -> list[dict[str, Any]]:
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id::text, status, case_id, chain, created_at "
+            "SELECT id::text, status, case_id::text, chain, triggered_at "
             "FROM public.investigations WHERE org_id = %s "
-            "ORDER BY created_at DESC LIMIT %s",
+            "ORDER BY triggered_at DESC LIMIT %s",
             (org_id, max(1, min(limit, 200))),
         )
         rows = cur.fetchall()

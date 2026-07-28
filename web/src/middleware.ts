@@ -1,13 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Site-wide preview gate. Any visitor must present HTTP Basic credentials
-// whose password is `preview` (username is ignored). This protects the whole
-// site — landing, academy, and dashboard — behind one shared password so a
-// link can be shared for review without being fully public. Remove this file
-// (and rebuild) to lift the gate.
-const PREVIEW_PASSWORD = "preview";
+// Site-wide preview gate. When PREVIEW_PASSWORD is set at build time, every
+// route (landing, academy, dashboard) requires HTTP Basic credentials whose
+// password matches it; the username is ignored. This lets a link be shared for
+// review without the site being fully public.
+//
+// The password MUST come from the environment, never a literal in this file —
+// this repository is public, so a committed password protects nothing.
+//
+// Next inlines `process.env` for edge middleware at BUILD time, so this has to
+// be set in the build environment (same constraint as NEXT_PUBLIC_API_BASE_URL),
+// not flipped afterwards in a dashboard.
+//
+// To lift the gate at launch: build with PREVIEW_PASSWORD unset.
+const PREVIEW_PASSWORD = process.env.PREVIEW_PASSWORD ?? "";
 
 export function middleware(req: NextRequest) {
+  // No password configured => gate disabled. This is the launch configuration.
+  if (!PREVIEW_PASSWORD) {
+    return NextResponse.next();
+  }
   const header = req.headers.get("authorization") ?? "";
   if (header.startsWith("Basic ")) {
     try {

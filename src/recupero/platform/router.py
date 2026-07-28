@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
@@ -426,6 +426,9 @@ def prometheus_metrics() -> PlainTextResponse:
 def list_audit(
     limit: int = 100,
     principal: store.OrgContext = Depends(deps.require_role("owner", "admin")),
+    _ent: store.OrgContext = Depends(
+        deps.require_entitlement(tenancy.FEATURE_AUDIT_LOG),
+    ),
     conn: Any = Depends(deps.db_conn),
 ) -> dict[str, Any]:
     """Recent security-relevant events for THIS org (SOC 2 CC6/CC7)."""
@@ -698,33 +701,62 @@ def billing_checkout(
     return {"checkout_url": session["url"]}
 
 
-@router.post("/webhooks/stripe", include_in_schema=False)
-def stripe_webhook(
-    payload: bytes = Body(default=b""),
-    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
-    conn: Any = Depends(deps.db_conn),
+def _handle_stripe_webhook(
+    payload: bytes, stripe_signature: str | None,
 ) -> dict[str, Any]:
-    """Stripe webhook: verify the signature over the RAW body, map the event to a
-    tenant state change, and apply it. Unhandled events are acked (200) so Stripe
-    stops retrying. Never trusts the body without a valid signature.
-
-    Sync handler taking the raw body via ``bytes = Body()`` (FastAPI passes the
-    UNMODIFIED bytes Stripe signed) so blocking psycopg runs safely in the
-    threadpool — no async event-loop blocking."""
+    """SYNC webhook processing: verify the HMAC over the RAW bytes, map the event
+    to a tenant state change, apply it. Runs OFF the event loop via
+    ``asyncio.to_thread`` and opens its own short-lived DB connection (the same
+    pattern ``_poll_trace_status`` uses for SSE), so blocking psycopg never
+    touches the loop. Raises: StripeSignatureError (→400), ValueError /
+    UnicodeDecodeError (→400), RuntimeError (→503)."""
     import json as _json
 
     secret = os.environ.get("RECUPERO_STRIPE_WEBHOOK_SECRET", "")
+    billing.verify_stripe_signature(payload, stripe_signature, secret)
+    event = _json.loads(payload.decode("utf-8"))
+    change = billing.apply_webhook_event(event, price_to_plan=billing.price_plan_map())
+    applied = False
+    if change:
+        import psycopg
+
+        dsn = os.environ.get("RECUPERO_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not dsn:
+            raise RuntimeError("database not configured")
+        with psycopg.connect(dsn) as conn:
+            applied = store.apply_billing_change(conn, change)
+            conn.commit()
+    return {"received": True, "applied": applied, "type": event.get("type")}
+
+
+@router.post("/webhooks/stripe", include_in_schema=False)
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: str | None = Header(default=None, alias="Stripe-Signature"),
+) -> dict[str, Any]:
+    """Stripe webhook. Unhandled events are acked (200) so Stripe stops retrying;
+    the body is never trusted without a valid signature.
+
+    MUST read the body via ``await request.body()``. The previous
+    ``payload: bytes = Body(default=b"")`` looked equivalent but was NOT: Stripe
+    sends ``Content-Type: application/json``, so FastAPI parsed the body to a dict
+    and pydantic then rejected it as ``bytes`` — returning 422 BEFORE the handler
+    ran. Net effect: no plan upgrade, downgrade, suspension or period reset was
+    EVER applied; customers paid Stripe and stayed on the free plan. The HMAC also
+    has to be computed over the unmodified bytes, which only this path guarantees."""
+    payload = await request.body()
     try:
-        billing.verify_stripe_signature(payload, stripe_signature, secret)
+        return await asyncio.to_thread(
+            _handle_stripe_webhook, payload, stripe_signature,
+        )
     except billing.StripeSignatureError as exc:
         raise HTTPException(status_code=400, detail=f"signature: {exc}") from exc
-    try:
-        event = _json.loads(payload.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise HTTPException(status_code=400, detail="invalid JSON body") from exc
-    change = billing.apply_webhook_event(event, price_to_plan=billing.price_plan_map())
-    applied = store.apply_billing_change(conn, change) if change else False
-    return {"received": True, "applied": applied, "type": event.get("type")}
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=503, detail="database not configured",
+        ) from exc
 
 
 @router.get("/traces/{investigation_id}")
@@ -1127,7 +1159,9 @@ def _build_graph_payload(investigation_id: str, case_id: str | None) -> dict[str
 @router.get("/traces/{investigation_id}/graph")
 def trace_graph(
     investigation_id: str,
-    principal: store.OrgContext = Depends(deps.current_principal),
+    principal: store.OrgContext = Depends(
+        deps.require_entitlement(tenancy.FEATURE_GRAPH),
+    ),
     conn: Any = Depends(deps.db_conn),
 ) -> dict[str, Any]:
     """Fund-flow graph for a trace as JSON (``{nodes, edges, meta}``) — the same
@@ -1290,7 +1324,9 @@ def _build_summary_payload(investigation_id: str, case_id: str | None) -> dict[s
 @router.get("/traces/{investigation_id}/summary")
 def trace_summary(
     investigation_id: str,
-    principal: store.OrgContext = Depends(deps.current_principal),
+    principal: store.OrgContext = Depends(
+        deps.require_entitlement(tenancy.FEATURE_RECOVERY_VIEW),
+    ),
     conn: Any = Depends(deps.db_conn),
 ) -> dict[str, Any]:
     """Consumer case summary as JSON — the "where's my money now" view the web

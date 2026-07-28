@@ -160,8 +160,17 @@ def test_async_count_matches_baseline(parsed):
     # reqlog.build_log_record/emit (json.dumps + logging). Zero blocking I/O
     # (covered by test_no_blocking_io_inside_async_def). Same non-blocking shape
     # as _BodySizeLimitMiddleware's __call__/_send/limited_receive.
-    assert total == 39, (
-        f"async def count drifted to {total} (was 39). Update baseline and "
+    # Stripe webhook raw-body fix: +1 in platform/router.py — `stripe_webhook`
+    # became async because the HMAC MUST be computed over the UNMODIFIED request
+    # bytes, and `await request.body()` is the only way to get them (the previous
+    # `payload: bytes = Body()` made FastAPI parse Stripe's application/json body
+    # and 422 before the handler ran, so billing NEVER applied). AUDITED
+    # non-blocking: the handler only awaits request.body() + asyncio.to_thread;
+    # all blocking work (signature verify, psycopg connect/commit) lives in the
+    # SYNC `_handle_stripe_webhook` helper that runs in the threadpool — the same
+    # sanctioned pattern as `_poll_trace_status` for SSE.
+    assert total == 40, (
+        f"async def count drifted to {total} (was 40). Update baseline and "
         "verify each new async def is non-blocking."
     )
 

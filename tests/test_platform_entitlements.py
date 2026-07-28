@@ -129,3 +129,59 @@ def test_me_includes_features(monkeypatch) -> None:
     out = router.me(principal=_principal("pro"), conn=object())
     assert tenancy.FEATURE_GRAPH in out["features"]
     assert tenancy.FEATURE_LITIGATION_ARTIFACTS not in out["features"]
+
+
+# --------------------------------------------------------------------------- #
+# Server-side ENFORCEMENT (was: gating existed only in the browser, so any
+# API-key/JWT holder on `free` could fetch pro/enterprise features directly).
+# --------------------------------------------------------------------------- #
+
+def _dep_features(fn) -> set[str]:
+    """The FEATURE_* keys a route's require_entitlement dependencies demand."""
+    import inspect
+    feats: set[str] = set()
+    for param in inspect.signature(fn).parameters.values():
+        dep = getattr(param.default, "dependency", None)
+        if dep is None:
+            continue
+        closure = getattr(dep, "__closure__", None) or ()
+        for cell in closure:
+            val = cell.cell_contents
+            if isinstance(val, tuple) and all(isinstance(v, str) for v in val):
+                feats.update(val)
+    return feats
+
+
+def test_graph_endpoint_requires_graph_entitlement() -> None:
+    assert tenancy.FEATURE_GRAPH in _dep_features(router.trace_graph)
+
+
+def test_summary_endpoint_requires_recovery_view_entitlement() -> None:
+    assert tenancy.FEATURE_RECOVERY_VIEW in _dep_features(router.trace_summary)
+
+
+def test_audit_endpoint_requires_audit_log_entitlement() -> None:
+    assert tenancy.FEATURE_AUDIT_LOG in _dep_features(router.list_audit)
+
+
+def test_free_plan_is_refused_the_paid_endpoints() -> None:
+    """End-to-end on the gate itself: a free principal is 402'd for each paid
+    feature these endpoints now demand."""
+    for feature in (
+        tenancy.FEATURE_GRAPH,
+        tenancy.FEATURE_RECOVERY_VIEW,
+        tenancy.FEATURE_AUDIT_LOG,
+    ):
+        dep = deps.require_entitlement(feature)
+        with pytest.raises(HTTPException) as ei:
+            dep(principal=_principal("free"))
+        assert ei.value.status_code == 402
+        assert feature in ei.value.detail
+
+
+def test_basic_deliverables_stay_ungated() -> None:
+    """transfers.csv / freeze_brief.json / the trace report must remain available
+    on every plan — the artifact endpoint itself is deliberately NOT entitlement-
+    gated, only the paid views are."""
+    assert _dep_features(router.trace_artifact_url) == set()
+    assert _dep_features(router.list_trace_artifacts) == set()

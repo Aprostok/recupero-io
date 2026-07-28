@@ -347,6 +347,28 @@ export const api = {
 
   me: (token: string) => request<Me>("/v2/me", { token }),
 
+  // ---- password reset + email verification (public; token arrives by email) ---- //
+
+  // Always resolves 202 whether or not the email exists (no user enumeration),
+  // and NEVER returns the token — it is emailed only.
+  requestPasswordReset: (email: string) =>
+    request<{ status: string }>("/v2/auth/password/reset-request", {
+      method: "POST",
+      body: { email },
+    }),
+
+  confirmPasswordReset: (token: string, new_password: string) =>
+    request<{ reset: boolean }>("/v2/auth/password/reset-confirm", {
+      method: "POST",
+      body: { token, new_password },
+    }),
+
+  confirmEmailVerification: (token: string) =>
+    request<{ verified: boolean }>("/v2/auth/verify/confirm", {
+      method: "POST",
+      body: { token },
+    }),
+
   entitlements: (token: string) =>
     request<Entitlements>("/v2/entitlements", { token }),
 

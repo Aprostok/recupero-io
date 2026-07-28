@@ -583,6 +583,9 @@ def run_trace(
     value_matched: list[dict[str, Any]] = []
     # v0.34.7: labeled terminals recorded at directed dead-ends (mixer/exchange/
     # bridge endpoints the traced funds reached). Audit-trail provenance.
+    # Wave-level truncations (deadline cancelled nodes). Non-empty ⇒ the frontier
+    # was NOT fully explored, so the trace must never be stamped 'complete'.
+    wave_truncations: list[dict[str, Any]] = []
     value_labeled_terminals: list[dict[str, Any]] = []
     # v0.34.1 coverage-honesty: directed (value-trace) nodes that MOVED funds
     # onward (had outflows) but where we followed NOTHING — a potential
@@ -703,6 +706,7 @@ def run_trace(
                 concurrency=trace_concurrency,
                 value_trace=_value_trace_enabled,
                 deadline=trace_deadline,
+                truncation_sink=wave_truncations,
             )
         except BudgetExceededError as exc:
             # v0.32 — per-case API budget tripped mid-wave. Same
@@ -1017,6 +1021,25 @@ def run_trace(
             "trace_status": "partial_budget_hit",
             "trace_budget_provider": budget_hit_provider,
             "trace_waves_completed": wave_number,
+        }
+    elif wave_truncations:
+        # A wave deadline cancelled frontier nodes. The BFS can still end
+        # "naturally" (the surviving nodes yield no new frontier), which used to
+        # stamp the case ``complete`` even though part of the frontier was never
+        # explored — a false completeness claim (observed live: 7 of 27 nodes
+        # dropped, case marked complete). Report it honestly instead.
+        _dropped = sum(int(t.get("cancelled_nodes") or 0) for t in wave_truncations)
+        log.warning(
+            "trace incomplete: %d wave(s) truncated by the deadline, %d frontier "
+            "node(s) never traced — marking partial_wave_deadline",
+            len(wave_truncations), _dropped,
+        )
+        case.config_used = {
+            **(case.config_used or {}),
+            "trace_status": "partial_wave_deadline",
+            "trace_waves_truncated": len(wave_truncations),
+            "trace_frontier_nodes_dropped": _dropped,
+            "trace_wave_truncations": list(wave_truncations),
         }
     else:
         case.config_used = {
@@ -2640,6 +2663,25 @@ def _node_forwarded_inbound_asset(
 # record it and stop — exactly how TRM/Chainalysis stop-and-flag at a mixer
 # rather than chasing every pool deposit. Bounded + truthful: never fabricates
 # (only real, already-label-enriched outflows), never traverses the terminal.
+def _wave_cancel_grace_sec() -> float:
+    """Grace period (seconds) granted to ALREADY-RUNNING wave nodes after a wave
+    deadline cancels the queued ones, so their transfers + evidence receipts can
+    land before the shared adapter closes.
+
+    DEFAULT 0 (disabled): the wave MUST return promptly once the deadline has
+    elapsed — that is the production hang fix (a single huge depth-1 wave ran 90+
+    min unbounded) and it is contract-tested. Set
+    ``RECUPERO_WAVE_CANCEL_GRACE_SEC`` on a whale run to trade a bounded extra
+    wait for fewer abandoned in-flight nodes (each abandoned node loses its
+    transfers AND its evidence receipts — 72 lost on a real Ronin run).
+    """
+    raw = os.environ.get("RECUPERO_WAVE_CANCEL_GRACE_SEC", "")
+    try:
+        return max(0.0, min(float(raw), 120.0)) if raw.strip() else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 _TERMINAL_CATEGORIES = (
     LabelCategory.mixer,
     LabelCategory.exchange_deposit,
@@ -2900,6 +2942,7 @@ def _process_wave(
     concurrency: int,
     value_trace: bool = False,
     deadline: datetime | None = None,
+    truncation_sink: list[dict[str, Any]] | None = None,
 ) -> list[tuple[Address, int, list[Transfer], bool]]:
     """Run ``_trace_one_hop`` on every address in the wave, returning the
     aggregated results. Internal errors per-address are caught and
@@ -2951,6 +2994,18 @@ def _process_wave(
     def _past_deadline() -> bool:
         return deadline is not None and utcnow() >= deadline
 
+    def _record_truncation(kind: str, cancelled: int, wave_size: int) -> None:
+        """Signal to the CALLER that this wave was cut short. Without this the
+        BFS could exit "naturally" (surviving nodes yield no new frontier) and the
+        case was stamped ``trace_status='complete'`` despite dropped nodes — a
+        false completeness claim. Observed live on the real Ronin seed: 7 of 27
+        nodes cancelled, case still marked complete."""
+        if truncation_sink is None:
+            return
+        truncation_sink.append(
+            {"kind": kind, "cancelled_nodes": cancelled, "wave_size": wave_size},
+        )
+
     # Single-threaded path for trivial waves or when concurrency is off.
     # Preserves test determinism + avoids ThreadPoolExecutor overhead
     # for tiny cases. The deadline is checked before each node so the
@@ -2963,6 +3018,7 @@ def _process_wave(
                     "trace wave deadline: skipping %d remaining node(s) (serial)",
                     len(wave) - len(serial),
                 )
+                _record_truncation("serial", len(wave) - len(serial), len(wave))
                 break
             serial.append(_one(addr, depth))
         return serial
@@ -2997,8 +3053,40 @@ def _process_wave(
                 "trace wave deadline: cancelling %d of %d node(s) still in flight",
                 len(not_done), len(futures),
             )
-            for fut in not_done:
-                fut.cancel()
+            # Cancel what hasn't started, then give the ALREADY-RUNNING nodes a
+            # bounded grace period to finish. Without this they were orphaned:
+            # the pool shut down with wait=False and the caller closed the shared
+            # adapter underneath them, so their evidence receipts failed
+            # ("Cannot send a request, as the client has been closed" — 72 lost on
+            # a real Ronin run) and their transfers were discarded outright.
+            # Bounded, so a genuinely hung node still cannot stall the trace.
+            _grace = _wave_cancel_grace_sec()
+            if _grace <= 0:
+                for fut in not_done:
+                    fut.cancel()
+            still_running = (
+                {f for f in not_done if not f.cancel()} if _grace > 0 else set()
+            )
+            if still_running:
+                drained, abandoned = _futures_wait(
+                    still_running, timeout=_grace,
+                )
+                for fut in drained:
+                    try:
+                        results.append(fut.result())
+                    except Exception as e:  # noqa: BLE001
+                        addr, depth = futures[fut]
+                        log.warning(
+                            "trace wave worker crashed during drain for %s: %s",
+                            addr, e,
+                        )
+                log.warning(
+                    "trace wave drain: recovered %d of %d in-flight node(s) "
+                    "(%d abandoned after %.0fs grace)",
+                    len(drained), len(still_running), len(abandoned), _grace,
+                )
+                not_done = abandoned
+            _record_truncation("parallel", len(not_done), len(futures))
     finally:
         # wait=False so we don't block on the (≤concurrency) running nodes;
         # cancel_futures drops anything still queued.

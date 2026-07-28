@@ -167,9 +167,12 @@ kill-switches**). Enforced server-side by `deps.require_entitlement(*features)`
 `GET /v2/entitlements` to render each tool as unlocked or locked. Add-on purchases
 union into the set via `tenancy.plan_features(plan, extra=…)`. **Gating axis:**
 breadth / depth / deliverables / convenience only — never forensic honesty (a
-cheaper tier shows less, but what it shows is just as correct). NOTE: the backbone
-(map + gate + endpoint) is shipped; wiring `require_entitlement` onto individual
-endpoints is done deliberately per-endpoint so existing use is never locked out.
+cheaper tier shows less, but what it shows is just as correct). **Enforced
+server-side** on the paid surfaces: `GET /v2/traces/{id}/graph` (`graph`),
+`GET /v2/traces/{id}/summary` (`recovery_view`) and `GET /v2/audit` (`audit_log`)
+call `require_entitlement`, so a browser-side bypass returns 402. Basic
+deliverables (transfers CSV, freeze-brief JSON, trace report) and the artifact
+listing are deliberately UNGATED — available on every plan.
 
 ---
 

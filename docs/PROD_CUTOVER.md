@@ -24,9 +24,10 @@ real scale · **[OPTIONAL]** feature flip.
 ## 2. Database — [REQUIRED]
 
 - [ ] Provision Supabase Postgres; set `RECUPERO_DATABASE_URL` (or `DATABASE_URL`) + `SUPABASE_DB_URL`.
-- [ ] Run migrations **in order through `041`** (`migrations/037_multitenancy` … `041_user_tokens`).
+- [ ] Run migrations **in order through `042`** (`migrations/037_multitenancy` … `041_user_tokens`, `042_wallet_guard`). 042 creates `watched_addresses` + `wallet_alerts`, which back the shipped `/v2/guard/*` endpoints and the Wallet Guard UI — stopping at 041 ships that surface with no tables.
       Sequence 021 before flipping older cron jobs (historical note); apply the rest ascending.
-- [ ] Confirm RLS is on for `orgs / users / memberships / org_api_keys / usage_events / org_invites / audit_log`.
+- [ ] Confirm RLS is on for the tables that actually declare it: `organizations` (NOT `orgs`), `memberships`, `org_api_keys`, `usage_events` (037), `org_invites` (039), `watched_addresses`, `wallet_alerts` (042).
+- [ ] **Decision required:** `users` (037) and `audit_log` (034) have **no RLS policy anywhere**. Either add one or accept service-role-only access — do not tick this line without deciding.
 
 ## 3. Required platform env — [REQUIRED] (auth FAILS CLOSED / 503 if unset)
 

@@ -75,3 +75,64 @@ def test_far_deadline_processes_whole_wave(monkeypatch) -> None:
         monkeypatch, deadline=future, concurrency=4, per_node=0.02,
     )
     assert len(results) == len(_WAVE)
+
+
+# --------------------------------------------------------------------------- #
+# Truncation must be SIGNALLED to the caller (forensic-honesty regression).
+#
+# Found on the real OFAC Ronin seed: a wave deadline cancelled 7 of 27 frontier
+# nodes, yet the case was stamped ``trace_status: "complete"``. The BFS can end
+# "naturally" (the surviving nodes yield no new frontier), so the between-waves
+# deadline check never fired and nothing recorded that part of the frontier was
+# never explored. A trace must be honest about incompleteness.
+# --------------------------------------------------------------------------- #
+
+
+def _run_wave_with_sink(monkeypatch, *, deadline, concurrency, per_node=1.0):
+    sink: list[dict[str, Any]] = []
+    monkeypatch.setattr(tracer, "_trace_one_hop", _slow_hop(per_node))
+    tracer._process_wave(
+        list(_WAVE),
+        adapter=None, label_store=None, price_client=None, policy=None,
+        incident_time=None, config=None, evidence_dir=Path("."),
+        concurrency=concurrency, value_trace=False, deadline=deadline,
+        truncation_sink=sink,
+    )
+    return sink
+
+
+def test_threaded_truncation_is_reported_to_caller(monkeypatch) -> None:
+    past = datetime.now(UTC) - timedelta(seconds=1)
+    sink = _run_wave_with_sink(monkeypatch, deadline=past, concurrency=4)
+    assert sink, "a deadline-truncated wave must signal the caller"
+    assert sink[0]["kind"] == "parallel"
+    assert sink[0]["cancelled_nodes"] > 0
+    assert sink[0]["wave_size"] == len(_WAVE)
+
+
+def test_serial_truncation_is_reported_to_caller(monkeypatch) -> None:
+    past = datetime.now(UTC) - timedelta(seconds=1)
+    sink = _run_wave_with_sink(monkeypatch, deadline=past, concurrency=1)
+    assert sink and sink[0]["kind"] == "serial"
+    assert sink[0]["cancelled_nodes"] == len(_WAVE)
+
+
+def test_complete_wave_reports_no_truncation(monkeypatch) -> None:
+    """The happy path must stay silent — otherwise every trace would be
+    downgraded to partial."""
+    future = datetime.now(UTC) + timedelta(seconds=60)
+    sink = _run_wave_with_sink(monkeypatch, deadline=future, concurrency=4, per_node=0.0)
+    assert sink == []
+
+
+def test_cancel_grace_is_opt_in_and_defaults_off(monkeypatch) -> None:
+    """The grace drain must default OFF so the prompt-return contract above holds;
+    it is an explicit operator trade-off on whale runs."""
+    monkeypatch.delenv("RECUPERO_WAVE_CANCEL_GRACE_SEC", raising=False)
+    assert tracer._wave_cancel_grace_sec() == 0.0
+    monkeypatch.setenv("RECUPERO_WAVE_CANCEL_GRACE_SEC", "15")
+    assert tracer._wave_cancel_grace_sec() == 15.0
+    monkeypatch.setenv("RECUPERO_WAVE_CANCEL_GRACE_SEC", "nonsense")
+    assert tracer._wave_cancel_grace_sec() == 0.0
+    monkeypatch.setenv("RECUPERO_WAVE_CANCEL_GRACE_SEC", "9999")
+    assert tracer._wave_cancel_grace_sec() == 120.0  # clamped

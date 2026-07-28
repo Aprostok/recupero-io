@@ -1,20 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
 
-// Site-wide preview gate. Any visitor must present HTTP Basic credentials
-// whose password is `preview` (username is ignored). This protects the whole
-// site — landing, academy, and dashboard — behind one shared password so a
-// link can be shared for review without being fully public. Remove this file
-// (and rebuild) to lift the gate.
-const PREVIEW_PASSWORD = "preview";
+/**
+ * OPTIONAL site-wide preview gate.
+ *
+ * Set `PREVIEW_PASSWORD` (server-side env var, NOT `NEXT_PUBLIC_*`) to put the
+ * whole site behind HTTP Basic auth, so a link can be shared for review without
+ * being public. Leave it UNSET — the default — and the site is open.
+ *
+ * Why this changed: the password was the hardcoded literal `"preview"` with the
+ * gate ALWAYS on. That is a launch blocker — every real customer (and the Stripe
+ * checkout return hop) got a 401 prompt — and the "secret" was public in the
+ * repo. Behaviour now: no env var → no gate.
+ */
+const PREVIEW_PASSWORD = process.env.PREVIEW_PASSWORD ?? "";
+
+/** Length-then-constant-time compare so the gate leaks no timing signal. */
+function passwordMatches(candidate: string, expected: string): boolean {
+  if (candidate.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expected.length; i += 1) {
+    diff |= candidate.charCodeAt(i) ^ expected.charCodeAt(i);
+  }
+  return diff === 0;
+}
 
 export function middleware(req: NextRequest) {
+  // Gate disabled (no password configured) → serve everything.
+  if (!PREVIEW_PASSWORD) return NextResponse.next();
+
   const header = req.headers.get("authorization") ?? "";
   if (header.startsWith("Basic ")) {
     try {
       const decoded = atob(header.slice("Basic ".length));
       const sep = decoded.indexOf(":");
       const password = sep === -1 ? decoded : decoded.slice(sep + 1);
-      if (password === PREVIEW_PASSWORD) {
+      if (passwordMatches(password, PREVIEW_PASSWORD)) {
         return NextResponse.next();
       }
     } catch {

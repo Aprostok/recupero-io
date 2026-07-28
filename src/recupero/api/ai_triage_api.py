@@ -98,27 +98,32 @@ def get_ai_triage(
             detail="case_id must be 1..128 non-blank characters",
         )
 
-    from recupero.config import load_config
-    from recupero.storage.case_store import CaseStore
+    from recupero.api._case_workdir import (
+        CaseNotFound,
+        CaseStoreUnavailable,
+        case_workdir,
+    )
 
-    cfg, _ = load_config()
-    store = CaseStore(cfg)
-
-    # Validate existence the same way exhibit_pack_api does: read_case is
-    # path-traversal-guarded and raises FileNotFoundError/ValueError for a
-    # missing or malformed case. We derive the case dir from cases_root only
-    # AFTER that validation succeeds (CaseStore.case_dir would CREATE the
-    # directory as a side effect, so it cannot be used to test existence).
+    # Yields the real case dir on a filesystem deploy, or a temp dir holding
+    # just this one artifact on a Supabase deploy — everything below is
+    # unchanged plain-file reading either way.
     try:
-        store.read_case(case_id)
-    except (OSError, ValueError):
+        with case_workdir(case_id, want=["ai_triage.json"]) as case_dir:
+            return _read_triage(case_dir, case_id)
+    except CaseNotFound:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="case not found",
         ) from None
+    except CaseStoreUnavailable as exc:
+        log.warning("get_ai_triage: case store unavailable for %r: %s", case_id, exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="case store unavailable",
+        ) from None
 
-    case_dir = store.cases_root / case_id
 
+def _read_triage(case_dir: Path, case_id: str) -> dict[str, Any]:
     # READ-ONLY load of the already-produced artifact. Anything unexpected maps
     # to 404 (never 500): a missing file, an oversized/garbage file, a parse
     # error, or a permission glitch all surface to the operator as "not there —

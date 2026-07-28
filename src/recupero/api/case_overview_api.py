@@ -94,6 +94,47 @@ def get_case_overview(
             detail="case_id must be 1..128 non-blank characters",
         )
 
+    from recupero.api._case_workdir import (
+        CaseNotFound,
+        CaseStoreUnavailable,
+        artifact_names,
+    )
+
+    # This endpoint only answers "does the case have X?", so on a Supabase
+    # deploy the artifact LISTING is the whole answer — downloading bytes here
+    # would be pure waste (case.json alone can be tens of megabytes).
+    try:
+        names = artifact_names(case_id)
+    except CaseNotFound:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="case not found",
+        ) from None
+    except CaseStoreUnavailable as exc:
+        log.warning(
+            "get_case_overview: case store unavailable for %r: %s", case_id, exc
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="case store unavailable",
+        ) from None
+
+    if names is not None:
+        if not names:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="case not found",
+            )
+        # exhibit_pack is a DIRECTORY on disk, so match it as a path prefix
+        # rather than an exact name.
+        deliverables = {
+            "freeze_brief": "freeze_brief.json" in names,
+            "ai_triage": "ai_triage.json" in names,
+            "exhibit_pack": any(n.startswith("exhibit_pack/") for n in names),
+            "graph_ui": "graph_ui.html" in names,
+        }
+        return {"case_id": case_id, "deliverables": deliverables}
+
     from recupero.config import load_config
     from recupero.storage.case_store import CaseStore
 

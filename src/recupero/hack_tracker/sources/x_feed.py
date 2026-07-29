@@ -39,6 +39,8 @@ import logging
 import math
 import os
 import re
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 from recupero.hack_tracker.models import (
@@ -76,6 +78,30 @@ _X_HANDLES: dict[str, HackEventSource] = {
 # without warning; v2 has been stable since 2021).
 _X_API_BASE = "https://api.x.com/2"
 
+_HTTP_TIMEOUT_S = 20
+
+# Cost defaults, deliberately conservative. X bills new developers PER POST READ
+# (pay-per-use replaced the flat Basic/Pro tiers for new signups in Feb 2026 and
+# there is no free read tier), so the product of
+# handles x tweets-per-handle x fetches-per-day IS the invoice:
+#
+#   5 handles x 10 tweets x  1 fetch/day  ~=   1.5k reads/month
+#   5 handles x 10 tweets x  4 fetch/day  ~=     6k reads/month
+#   5 handles x 10 tweets x 96 fetch/day  ~=   288k reads/month
+#
+# The feed endpoint caches for 15 minutes, so an unguarded fetch would land in
+# that last row. Raise these only with the arithmetic in front of you.
+_DEFAULT_MAX_TWEETS = 10             # per handle per fetch
+_DEFAULT_MIN_INTERVAL_S = 6 * 3600   # at most 4 fetches/day
+_DEFAULT_MAX_READS_PER_DAY = 250     # hard ceiling on billable posts read
+
+_budget_lock = threading.Lock()
+_budget: dict[str, object] = {
+    "last_fetch_monotonic": None,
+    "day": None,
+    "reads_today": 0,
+}
+
 
 def fetch(*, since: datetime, offline: bool = False) -> list[HackEvent]:
     """Fetch X posts from the canonical hack-watcher accounts since
@@ -94,6 +120,11 @@ def fetch(*, since: datetime, offline: bool = False) -> list[HackEvent]:
             "hack_tracker.x_feed: RECUPERO_X_BEARER_TOKEN unset — "
             "skipping X feed fetch (returning empty)"
         )
+        return []
+
+    # Money gate. Checked BEFORE any request, because X reads are billed per
+    # post and the caller (a cached HTTP endpoint) has no idea it is spending.
+    if not _x_budget_allows():
         return []
 
     out: list[HackEvent] = []
@@ -129,22 +160,197 @@ def _is_offline() -> bool:
 def _fetch_user_tweets(
     *, handle: str, since: datetime, bearer_token: str,
 ) -> list[dict]:
-    """Fetch recent tweets for one user since ``since``. Returns the
-    raw X-API tweet list (each entry contains id, text, created_at,
-    public_metrics).
+    """Fetch recent tweets for one user since ``since``.
 
-    NB: feature-flagged path — operator must set
-    RECUPERO_HACK_TRACKER_ENABLED=1 + RECUPERO_X_BEARER_TOKEN to
-    activate. Implementation is intentionally a stub for v0.20.0; the
-    real X-API integration ships in the next phase once we've
-    validated the digest format against the fixture data.
+    Returns the raw X-API v2 tweet list (each entry has id, text, created_at,
+    public_metrics). Never raises: on any error it logs and returns [].
+
+    COST WARNING -- read this before changing the caller's cadence. X moved new
+    developers to pay-per-use in Feb 2026: reads are billed PER POST
+    (~$0.005each at time of writing), the flat Basic/Pro tiers are closed to new
+    signups, and there is no free read tier. Cost is therefore a direct function
+    of how often this runs times ``_max_tweets_per_handle()``:
+
+        5 handles x 10 tweets, once daily  ~= 1.5k reads/mo
+        5 handles x 10 tweets, every 15min ~= 288k reads/mo
+
+    The endpoint that surfaces this feed has a 15-minute cache, so without a
+    floor on fetch frequency a few console visitors would poll X ~96x/day.
+    ``_x_budget_allows()`` enforces that floor plus a daily read ceiling. Do not
+    remove it to "make the feed fresher" without doing the arithmetic.
     """
-    log.debug(
-        "x_feed._fetch_user_tweets stub: @%s since=%s — returns empty "
-        "until X-API integration lands in v0.20.1",
-        handle, since,
+    user_id = _resolve_user_id(handle=handle, bearer_token=bearer_token)
+    if not user_id:
+        return []
+
+    max_results = _max_tweets_per_handle()
+    params = {
+        "max_results": str(max_results),
+        "tweet.fields": "created_at,public_metrics",
+        "exclude": "retweets,replies",
+        "start_time": since.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    }
+    payload = _x_get(
+        f"{_X_API_BASE}/users/{user_id}/tweets",
+        params=params, bearer_token=bearer_token, label=f"tweets @{handle}",
     )
-    return []
+    if payload is None:
+        return []
+    data = payload.get("data")
+    if not isinstance(data, list):
+        # No posts in the window is a normal, non-error response.
+        return []
+    _record_reads(len(data))
+    return [d for d in data if isinstance(d, dict)]
+
+
+# Resolved handle -> numeric id. Handle-to-id mappings never change, so caching
+# them for the process lifetime removes a billable lookup per handle per run.
+_user_id_cache: dict[str, str] = {}
+
+
+def _resolve_user_id(*, handle: str, bearer_token: str) -> str | None:
+    cached = _user_id_cache.get(handle)
+    if cached:
+        return cached
+    payload = _x_get(
+        f"{_X_API_BASE}/users/by/username/{handle}",
+        params={}, bearer_token=bearer_token, label=f"lookup @{handle}",
+    )
+    if payload is None:
+        return None
+    data = payload.get("data")
+    uid = data.get("id") if isinstance(data, dict) else None
+    if not isinstance(uid, str) or not uid.isdigit():
+        log.warning("x_feed: unexpected user-lookup payload for @%s", handle)
+        return None
+    _user_id_cache[handle] = uid
+    return uid
+
+
+def _x_get(
+    url: str, *, params: dict, bearer_token: str, label: str,
+) -> dict | None:
+    """One authenticated GET against the X API. None on any failure."""
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover
+        log.warning("x_feed: httpx unavailable")
+        return None
+    try:
+        with httpx.Client(timeout=_HTTP_TIMEOUT_S, follow_redirects=False) as c:
+            resp = c.get(
+                url, params=params,
+                headers={
+                    "Authorization": f"Bearer {bearer_token}",
+                    "User-Agent": "recupero-hack-tracker/1.0",
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 — transport errors
+        log.warning("x_feed: %s failed: %s", label, exc)
+        return None
+
+    if resp.status_code == 429:
+        log.warning(
+            "x_feed: %s rate-limited (429). Reset: %s",
+            label, resp.headers.get("x-rate-limit-reset", "unknown"),
+        )
+        return None
+    if resp.status_code in (401, 403):
+        # Distinguish a bad token from an under-entitled one: both are operator
+        # config problems, not transient, so say so loudly once per run.
+        log.error(
+            "x_feed: %s returned HTTP %s — the bearer token is invalid or the "
+            "account lacks read entitlement (X has no free read tier).",
+            label, resp.status_code,
+        )
+        return None
+    if resp.status_code != 200:
+        log.warning("x_feed: %s returned HTTP %s", label, resp.status_code)
+        return None
+    try:
+        payload = resp.json()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("x_feed: %s returned unparseable JSON: %s", label, exc)
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+# ---- cost guardrails ---- #
+
+
+def _max_tweets_per_handle() -> int:
+    """Posts requested per handle per fetch. 5..100 (X API's own bounds)."""
+    raw = (os.environ.get("RECUPERO_X_MAX_TWEETS_PER_HANDLE") or "").strip()
+    try:
+        n = int(raw) if raw else _DEFAULT_MAX_TWEETS
+    except ValueError:
+        n = _DEFAULT_MAX_TWEETS
+    return max(5, min(100, n))
+
+
+def _min_fetch_interval_s() -> int:
+    raw = (os.environ.get("RECUPERO_X_MIN_FETCH_INTERVAL_S") or "").strip()
+    try:
+        return max(0, int(raw)) if raw else _DEFAULT_MIN_INTERVAL_S
+    except ValueError:
+        return _DEFAULT_MIN_INTERVAL_S
+
+
+def _max_reads_per_day() -> int:
+    raw = (os.environ.get("RECUPERO_X_MAX_READS_PER_DAY") or "").strip()
+    try:
+        return max(0, int(raw)) if raw else _DEFAULT_MAX_READS_PER_DAY
+    except ValueError:
+        return _DEFAULT_MAX_READS_PER_DAY
+
+
+def _x_budget_allows() -> bool:
+    """True if we may spend money on X reads right now.
+
+    Two independent brakes, because X reads cost real money per post:
+      * a floor on how often any fetch may happen at all, so a busy console
+        (15-minute cache) cannot turn into 96 polls/day; and
+      * a rolling daily ceiling on posts actually read.
+
+    In-process state, so a restart resets it. That is deliberate -- the
+    alternative is a shared datastore this module has no business depending on
+    -- but it means the ceiling is per-process. Keep the defaults conservative.
+    """
+    now = time.monotonic()
+    with _budget_lock:
+        interval = _min_fetch_interval_s()
+        last = _budget["last_fetch_monotonic"]
+        if last is not None and (now - last) < interval:
+            log.info(
+                "x_feed: skipping fetch — last was %.0fs ago, minimum interval "
+                "is %ds (RECUPERO_X_MIN_FETCH_INTERVAL_S). This brake exists "
+                "because X bills per post read.",
+                now - last, interval,
+            )
+            return False
+        # Roll the daily window.
+        day = int(time.time() // 86400)
+        if _budget["day"] != day:
+            _budget["day"] = day
+            _budget["reads_today"] = 0
+        cap = _max_reads_per_day()
+        if _budget["reads_today"] >= cap:
+            log.warning(
+                "x_feed: daily read cap reached (%d/%d, "
+                "RECUPERO_X_MAX_READS_PER_DAY) — not fetching",
+                _budget["reads_today"], cap,
+            )
+            return False
+        _budget["last_fetch_monotonic"] = now
+        return True
+
+
+def _record_reads(n: int) -> None:
+    if n <= 0:
+        return
+    with _budget_lock:
+        _budget["reads_today"] = int(_budget["reads_today"]) + n
 
 
 def _post_to_event(

@@ -54,6 +54,12 @@ _ALLOWED_SOURCE_URL_HOSTS = frozenset({
     "ic3.gov", "www.ic3.gov",
     "cisa.gov", "www.cisa.gov",
     "rekt.news", "www.rekt.news",
+    # DefiLlama's hack dataset. NOTE: each record also carries an arbitrary
+    # third-party `source` link (news posts, tweets, blogs). Those are NOT
+    # added here — the adapter cites defillama.com and keeps the upstream link
+    # as scrubbed summary TEXT, so this allowlist keeps meaning "source_url is
+    # a host we trust to attribute to".
+    "defillama.com", "www.defillama.com", "api.llama.fi",
 })
 
 # Implausibility cap on estimated_loss_usd. Global crypto market cap
@@ -82,6 +88,7 @@ class HackEventSource(str, Enum):
     ic3_alert = "ic3_alert"
     cisa_alert = "cisa_alert"
     rekt = "rekt"                  # rekt.news postmortem
+    defillama = "defillama"        # DefiLlama curated hack dataset
     manual = "manual"              # operator-added entry
 
 

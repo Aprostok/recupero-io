@@ -135,6 +135,12 @@ _NAV: list[dict[str, Any]] = [
      "path": "/v1/incident-plans/console", "live": True,
      "desc": "Ordered D4 response playbooks from each recovery alert — re-trace, "
              "venue-conditional freeze/subpoena, notify, follow-up."},
+    # Live hack-intelligence feed. Surfaces the hack_tracker engine, which was
+    # previously reachable only from the CLI digest.
+    {"group": "Intelligence", "label": "Hack Tracker", "icon": "bell",
+     "path": "/v1/hack-tracker/console", "live": True,
+     "desc": "Live crypto-incident feed (DefiLlama + government advisories), "
+             "deduped and ranked by severity, source credibility and recency."},
     # Origin story — why Recupero exists (narrative page, public, no data).
     {"group": "About", "label": "Our Story", "icon": "heart",
      "path": "/v1/console/story", "live": True,

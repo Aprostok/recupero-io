@@ -226,6 +226,9 @@ their own section.
 | `RECUPERO_HACK_TRACKER_ENABLED` | unset | bool | `=1` | v0.20.0 | Feature flag for the hack-tracker pipeline. |
 | `RECUPERO_HACK_TRACKER_OFFLINE` | unset | bool | `=1` | v0.20.0 | Run hack-tracker against bundled fixtures (no live HTTP). |
 | `RECUPERO_X_BEARER_TOKEN` | unset | str | secret | v0.20.0 | X (Twitter) v2 API bearer token for the hack-tracker feed source. |
+| `RECUPERO_X_MAX_TWEETS_PER_HANDLE` | `10` | int | 5..100 | v0.42 | Posts requested per handle per X fetch. **Billable** — see below. |
+| `RECUPERO_X_MIN_FETCH_INTERVAL_S` | `21600` | int | seconds | v0.42 | Minimum gap between X fetches (default 6h = 4/day). **Cost brake.** |
+| `RECUPERO_X_MAX_READS_PER_DAY` | `250` | int | count | v0.42 | Hard daily ceiling on billable X posts read. **Cost brake.** |
 | **Payments (Stripe)** | | | | | |
 | `RECUPERO_STRIPE_DIAGNOSTIC_PAYMENT_LINK` | unset | str | Stripe URL | v0.16.x | Stripe Payment Link for the $499 diagnostic. |
 | `RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK` | unset | str | Stripe URL | v0.16.x | Stripe Payment Link for the $10K engagement. |
@@ -913,6 +916,35 @@ hitting any live HTTP source.
 
 X (Twitter) v2 API bearer token. Unset → x_feed source logs an INFO
 and returns no events.
+
+#### `RECUPERO_X_MAX_TWEETS_PER_HANDLE` / `RECUPERO_X_MIN_FETCH_INTERVAL_S` / `RECUPERO_X_MAX_READS_PER_DAY`
+
+**These three control spend, not behaviour.** X moved new developers to
+pay-per-use in Feb 2026: reads are billed **per post** (~$0.005 each), the flat
+Basic/Pro tiers are closed to new signups, and there is no free read tier. The
+invoice is therefore `handles x tweets-per-handle x fetches-per-day`:
+
+| cadence (5 handles x 10 tweets) | reads/month | approx cost |
+| --- | --- | --- |
+| once daily (`_MIN_FETCH_INTERVAL_S=86400`) | ~1.5k | ~$8 |
+| every 6h (**default**) | ~6k | ~$30 |
+| every 15min (unguarded) | ~288k | ~$1,440 |
+
+`/v1/hack-tracker` caches for only 15 minutes, so **without a floor on fetch
+frequency a handful of console visitors would poll X ~96x/day** — that bottom
+row. Two independent brakes prevent it:
+
+* `RECUPERO_X_MIN_FETCH_INTERVAL_S` — refuses any fetch that arrives sooner
+  than this after the last one (default `21600` = 6h → at most 4/day).
+* `RECUPERO_X_MAX_READS_PER_DAY` — hard ceiling on posts actually read
+  (default `250`), counted on a rolling UTC day.
+
+Both are in-process, so a restart resets them: the ceiling is **per worker
+process**, which is why the defaults are conservative. Raise them only with the
+arithmetic above in front of you.
+
+`RECUPERO_X_MAX_TWEETS_PER_HANDLE` is clamped to X's own 5..100 bounds;
+unparseable values fall back to the default rather than failing the fetch.
 
 ### Payments (Stripe)
 

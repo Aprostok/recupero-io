@@ -175,6 +175,21 @@ ALLOWED: dict[tuple[str, str], str] = {
     # platform/deps.py; they now live as an INSTANCE attribute inside
     # platform/ratelimit.InProcessRateLimiter (no module-level mutable), so no
     # allowlist entry is required.
+
+    # api/hack_tracker_api.py: TTL cache of the ranked hack feed, keyed by
+    # window_days. Exists because every console load would otherwise hit
+    # third-party APIs. Every read/insert is under `_cache_lock`.
+    ("api/hack_tracker_api.py", "_cache"):
+        "lock-guarded by _cache_lock (hack-feed TTL cache)",
+
+    # hack_tracker/sources/x_feed.py: memo of X handle -> numeric user id.
+    # Deliberately lock-free: the mapping is immutable upstream (a handle's id
+    # never changes), so a racing double-lookup writes the SAME value and is
+    # merely a redundant call, not a corrupt read. Fetches are additionally
+    # serialized to at most one per _MIN_FETCH_INTERVAL_S, so the race is
+    # unreachable in practice.
+    ("hack_tracker/sources/x_feed.py", "_user_id_cache"):
+        "best-effort memo of an immutable handle->id mapping; idempotent writes",
 }
 
 

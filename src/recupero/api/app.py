@@ -206,6 +206,9 @@ for _mod, _attr in (
     ("recupero.api.incident_plans_api", "router"),
     # v0.38 (enterprise/SOC 2): append-only audit-log read endpoint.
     ("recupero.api.audit_api", "router"),
+    # Live hack-intelligence feed — surfaces the hack_tracker engine, which
+    # until now was reachable only from the CLI digest.
+    ("recupero.api.hack_tracker_api", "router"),
 ):
     try:
         _m = __import__(_mod, fromlist=[_attr])

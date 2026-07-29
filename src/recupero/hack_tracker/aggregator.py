@@ -26,7 +26,7 @@ from recupero.hack_tracker.models import (
     HackEventSeverity,
     HackEventSource,
 )
-from recupero.hack_tracker.sources import government_feeds, x_feed
+from recupero.hack_tracker.sources import defillama_hacks, government_feeds, x_feed
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,10 @@ _SOURCE_WEIGHT: dict[HackEventSource, float] = {
     HackEventSource.ic3_alert:      8.0,
     HackEventSource.x_peckshield:   7.0,
     HackEventSource.rekt:           7.0,
+    # Curated dataset with a hard USD figure per incident. Below the government
+    # feeds (which change a case's legal posture) and level with the top
+    # research firms, because it is curated rather than first-hand reporting.
+    HackEventSource.defillama:      7.0,
     HackEventSource.x_slowmist:     6.5,
     HackEventSource.x_certik:       6.0,
     HackEventSource.x_beosin:       6.0,
@@ -118,6 +122,9 @@ def run_daily_digest(
     )
 
     events: list[HackEvent] = []
+    # DefiLlama first: it is the only source that reliably yields live crypto
+    # hack records (see its module docstring for why the others do not).
+    events.extend(defillama_hacks.fetch(since=since, offline=offline))
     events.extend(x_feed.fetch(since=since, offline=offline))
     events.extend(government_feeds.fetch_ofac(since=since, offline=offline))
     events.extend(government_feeds.fetch_ic3(since=since, offline=offline))

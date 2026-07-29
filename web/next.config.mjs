@@ -10,7 +10,7 @@ const nextConfig = {
   // containerised deploy; harmless for `next start` in dev.
   output: "standalone",
   // The site this app REPLACES was a single-page brochure whose nav/footer
-  // linked /services, /how-it-works, /faq, /contact, /portal, /submit-a-case,
+  // linked /services, /how-it-works, /contact, /portal, /submit-a-case,
   // /privacy and /terms (every URL served the same shell). Those links exist in
   // the wild — map them to their nearest equivalent here so nothing 404s after
   // the cutover. Permanent (308) so search engines transfer the old URLs.
@@ -18,7 +18,6 @@ const nextConfig = {
     return [
       { source: "/services", destination: "/#platform", permanent: true },
       { source: "/how-it-works", destination: "/#how", permanent: true },
-      { source: "/faq", destination: "/contact", permanent: true },
       { source: "/portal", destination: "/login", permanent: true },
       { source: "/client-portal", destination: "/login", permanent: true },
       { source: "/submit", destination: "/signup", permanent: true },

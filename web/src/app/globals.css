@@ -579,6 +579,63 @@ tbody tr:hover {
 .feat .tick { font-size: 12px; width: 14px; text-align: center; }
 .feat.on .tick { color: var(--emerald); }
 
+/* ── Long-form documents (privacy, terms, FAQ) ── */
+.legal-doc { line-height: 1.75; }
+.legal-doc h2 {
+  font-size: 1.15rem; font-weight: 700; margin: 40px 0 12px;
+  padding-top: 20px; border-top: 1px solid var(--border); scroll-margin-top: 90px;
+}
+.legal-doc h2:first-of-type { border-top: none; padding-top: 0; margin-top: 8px; }
+.legal-doc h2 .num {
+  font-family: var(--mono); font-size: 12px; font-weight: 600;
+  color: var(--accent-hover); margin-right: 10px; vertical-align: 2px;
+}
+.legal-doc h3 { font-size: .98rem; font-weight: 700; margin: 22px 0 6px; color: var(--text); }
+.legal-doc p, .legal-doc li { color: var(--muted); }
+.legal-doc p { margin: 0 0 14px; }
+.legal-doc ul { margin: 0 0 14px; padding-left: 22px; }
+.legal-doc li { margin-bottom: 8px; }
+.legal-doc strong { color: var(--text); font-weight: 600; }
+.legal-doc a { color: var(--accent-hover); text-decoration: underline; text-underline-offset: 2px; }
+
+/* Document header + table of contents */
+.doc-head { border-bottom: 1px solid var(--border); padding-bottom: var(--s-5); margin-bottom: var(--s-5); }
+.doc-head h1 { font-size: clamp(1.9rem, 4vw, 2.4rem); font-weight: 800; letter-spacing: -0.03em; margin: 10px 0 8px; }
+.doc-meta { color: var(--faint); font-size: 13px; font-family: var(--mono); }
+.doc-toc {
+  background: rgba(255,255,255,.02); border: 1px solid var(--border);
+  border-radius: var(--r); padding: var(--s-4) var(--s-5); margin-bottom: var(--s-6);
+}
+.doc-toc h4 {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--faint); margin: 0 0 10px; font-weight: 600;
+}
+.doc-toc ol { margin: 0; padding-left: 18px; columns: 2; column-gap: var(--s-5); }
+.doc-toc li { margin-bottom: 6px; font-size: 13.5px; }
+.doc-toc a { color: var(--muted); text-decoration: none; }
+.doc-toc a:hover { color: var(--text); }
+@media (max-width: 640px) { .doc-toc ol { columns: 1; } }
+
+/* A value the operator must supply before launch. Visible ON PURPOSE: shipping
+   invented entity/jurisdiction text would be worse than an obvious blank. */
+.tbd {
+  display: inline-block; padding: 1px 7px; border-radius: 5px;
+  background: rgba(255,190,77,.12); border: 1px dashed rgba(255,190,77,.5);
+  color: var(--warn); font-family: var(--mono); font-size: 12px; font-weight: 600;
+}
+
+/* FAQ */
+.faq-list { display: flex; flex-direction: column; gap: 0; }
+.faq-item { border-bottom: 1px solid var(--border); padding: var(--s-5) 0; }
+.faq-item:first-child { padding-top: var(--s-3); }
+.faq-item h3 { font-size: 1.04rem; font-weight: 700; margin: 0 0 8px; color: var(--text); }
+.faq-item p { color: var(--muted); margin: 0 0 10px; line-height: 1.7; }
+.faq-item p:last-child { margin-bottom: 0; }
+.faq-cat {
+  font-size: 10.5px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--emerald); font-weight: 700; margin: var(--s-6) 0 var(--s-2);
+}
+
 /* Dashboard home — tools grid */
 .tool-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--s-3); }
 .tool-card { display: block; border: 1px solid var(--border); border-radius: var(--r); padding: var(--s-4); background: rgba(255,255,255,.015); transition: transform .16s ease-out, box-shadow .16s ease-out, border-color .16s; }

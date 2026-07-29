@@ -33,6 +33,7 @@ export default function Home() {
           <a href="#how">How it works</a>
           <Link href="/story">Our Story</Link>
           <Link href="/academy">Academy</Link>
+            <Link href="/faq">FAQ</Link>
           <Link href="/login">Sign in</Link>
         </div>
         <Link href="/signup" className="cta primary" style={{ padding: "9px 18px", fontSize: 14 }}>

@@ -21,6 +21,7 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
         <div className="nav-links">
           <Link href="/">Home</Link>
           <Link href="/academy">Academy</Link>
+          <Link href="/faq">FAQ</Link>
           <Link href="/login">Sign in</Link>
         </div>
         <Link href="/signup" className="cta primary" style={{ padding: "9px 18px", fontSize: 14 }}>
@@ -34,7 +35,8 @@ export default function LegalLayout({ children }: { children: React.ReactNode })
 
       <footer className="site-footer">
         <div className="footer-bottom">
-          <Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link> ·{" "}
+          <Link href="/faq">FAQ</Link> · <Link href="/privacy">Privacy</Link> ·{" "}
+          <Link href="/terms">Terms</Link> ·{" "}
           <Link href="/contact">Contact</Link> · © 2026 Recupero. All rights reserved.
         </div>
       </footer>

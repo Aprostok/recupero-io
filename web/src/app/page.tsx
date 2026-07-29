@@ -277,10 +277,14 @@ export default function Home() {
             <h4>Company</h4>
             <Link href="/story">Our Story</Link>
             <a href="#how">How it works</a>
-            <a href="mailto:hello@recupero.io">Contact</a>
+            <Link href="/contact">Contact</Link>
           </div>
         </div>
-        <div className="footer-bottom">© {new Date().getFullYear()} Recupero. All rights reserved.</div>
+        <div className="footer-bottom">
+          <Link href="/privacy">Privacy</Link> · <Link href="/terms">Terms</Link> ·{" "}
+          <Link href="/contact">Contact</Link> · © {new Date().getFullYear()} Recupero. All
+          rights reserved.
+        </div>
       </footer>
     </main>
   );

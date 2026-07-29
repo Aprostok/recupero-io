@@ -165,30 +165,28 @@ export default function TermsPage() {
       <h2 id="fees-and-payment">
         <span className="num">6</span>Fees and payment
       </h2>
-      <h3>Software subscriptions</h3>
+      <h3>How engagements are priced</h3>
       <p>
-        Where you use Recupero as self-serve software, paid plans are billed in advance on a
-        recurring basis through our payment processor and include the trace allowance, seat
-        count and feature set shown at checkout and on your billing page. Allowances reset
-        each billing period and do not carry over. Applicable taxes may be added. You may
-        cancel at any time; cancellation takes effect at the end of the current billing
-        period. Refunds: <Tbd>refund policy</Tbd>. We may change pricing with{" "}
-        <Tbd>notice period</Tbd> notice before it applies to your next renewal.
+        Recupero is currently provided as a managed engagement rather than a self-serve
+        subscription. Fees have three components, set out in full in the engagement letter
+        you sign:
       </p>
 
-      <h3>Managed recovery engagements</h3>
       <p>
         Where we act on a case for you, fees have three components, set out in full in the
         engagement letter you sign:
       </p>
       <ul>
         <li>
-          A <strong>diagnostic fee</strong>, payable upfront, for the investigation and the
-          honest assessment of what is realistically recoverable.
+          A <strong>flat diagnostic fee</strong>, payable upfront and the same for every
+          first case regardless of the amount stolen, covering the investigation and an
+          assessment of what is realistically recoverable.
         </li>
         <li>
-          An <strong>engagement fee</strong> if you choose to proceed. This becomes
-          non-refundable once we begin sending compliance freeze letters on your behalf.
+          An <strong>engagement fee priced per case</strong> if you choose to proceed, quoted
+          to you in writing before you commit, reflecting the scope of work the case
+          requires. This becomes non-refundable once we begin sending compliance freeze
+          letters on your behalf.
         </li>
         <li>
           A <strong>contingency fee of {FEE_RANGE} of any funds actually recovered</strong>{" "}
@@ -198,7 +196,9 @@ export default function TermsPage() {
         </li>
       </ul>
       <p>
-        The contingency fee is invoiced within 14 days of a recovery event and is due within
+        If we introduce self-serve subscription plans in future, their price, allowances and
+        billing terms will be shown at checkout before you subscribe. The contingency fee is
+        invoiced within 14 days of a recovery event and is due within
         30 days of invoice. Recoveries occurring more than 12 months after the engagement
         date are not subject to the contingency fee. The diagnostic and the engagement are
         distinct services with distinct deliverables, and the diagnostic fee is not credited

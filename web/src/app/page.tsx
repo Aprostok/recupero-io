@@ -64,7 +64,7 @@ export default function Home() {
             Sign in
           </Link>
         </div>
-        <div className="cta-note">No card required · 10+ chains · evidence-grade output</div>
+        <div className="cta-note">10+ chains · evidence-grade output · we never ask for your seed phrase</div>
       </header>
 
       {/* Product bento panel */}

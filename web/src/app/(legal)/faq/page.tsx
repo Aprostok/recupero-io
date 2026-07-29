@@ -63,11 +63,13 @@ const GROUPS: Group[] = [
         a: (
           <>
             <p>
-              For a managed recovery engagement there are three parts: an upfront{" "}
-              <strong>diagnostic fee</strong> to investigate and tell you honestly what
-              you&rsquo;re looking at, an <strong>engagement fee</strong> if you decide to
-              proceed, and a <strong>contingency fee of {FEE_RANGE}</strong> of any funds
-              actually recovered through the engagement.
+              Three parts. The <strong>first run is a flat diagnostic fee</strong> — the
+              same price for everyone, no matter the size of the theft — which buys the
+              investigation and an honest assessment of what is realistically recoverable.
+              If you decide to proceed, the <strong>engagement is priced per case</strong>,
+              because the work varies enormously with how the funds were moved and which
+              venues are involved. Finally, a <strong>contingency fee of {FEE_RANGE}</strong>{" "}
+              of any funds actually recovered through the engagement.
             </p>
             <p>
               &ldquo;Recovered&rdquo; means funds returned to you, or to a court-appointed
@@ -79,7 +81,7 @@ const GROUPS: Group[] = [
               We tell you the realistic recoverable figure <em>before</em> you commit to an
               engagement — the diagnostic exists precisely so you aren&rsquo;t paying to
               chase money that a trace shows is gone. Exact fee amounts are set out in your
-              engagement letter. <span className="tbd">confirm diagnostic + engagement fee amounts</span>
+              engagement letter. <span className="tbd">confirm the flat diagnostic fee amount</span>
             </p>
             <p>
               <strong>We never take custody of your assets.</strong> Recovered funds go to
@@ -202,8 +204,8 @@ const GROUPS: Group[] = [
           <p>
             A plain-English summary of where your money is now and what&rsquo;s realistically
             recoverable; an interactive fund-flow graph; a transfers spreadsheet; an
-            investigation brief; and — on the appropriate plan — the recovery paperwork:
-            exchange freeze requests, subpoena targets, SAR/STR drafts and a
+            investigation brief; and, as part of a managed engagement, the recovery
+            paperwork: exchange freeze requests, subpoena targets, SAR/STR drafts and a
             court-admissible exhibit pack with signed hashes.
           </p>
         ),

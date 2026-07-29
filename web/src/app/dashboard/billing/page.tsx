@@ -6,6 +6,14 @@ import { ApiError, BillingUsage, Entitlements, api } from "@/lib/api";
 
 const UPGRADE_TARGETS = ["pro", "enterprise"];
 
+// Self-serve subscriptions are NOT sold today — Recupero is delivered as a managed
+// engagement (flat diagnostic first run, then per-case pricing, plus a contingency
+// fee on recovered funds). Showing "Upgrade to pro" would advertise a product that
+// cannot be bought, so the upgrade CTAs stay hidden until this flips to true. The
+// Stripe checkout path underneath is intact and tested — flip this one constant on
+// the day self-serve goes live.
+const SELF_SERVE_BILLING = false;
+
 // Human labels for the tenancy FEATURE_* keys (unknown keys fall back to the raw
 // key so a newly-added feature still renders).
 const FEATURE_LABELS: Record<string, string> = {
@@ -164,28 +172,40 @@ export default function BillingPage() {
           </div>
           {ent.locked.length > 0 && (
             <p className="muted" style={{ margin: 0, fontSize: 13 }}>
-              🔒 items unlock on a higher plan — upgrade below.
+              {SELF_SERVE_BILLING
+                ? "🔒 items unlock on a higher plan — upgrade below."
+                : "🔒 items aren't included in your current plan — ask us about adding them."}
             </p>
           )}
         </section>
       )}
 
       <section className="panel">
-        <h3 style={{ marginTop: 0 }}>Upgrade</h3>
-        <div className="row">
-          {UPGRADE_TARGETS.filter((p) => p !== usage.plan).map((p) => (
-            <button key={p} onClick={() => onUpgrade(p)}>
-              Upgrade to {p}
-            </button>
-          ))}
-        </div>
+        <h3 style={{ marginTop: 0 }}>
+          {SELF_SERVE_BILLING ? "Upgrade" : "Changing your plan"}
+        </h3>
+        {SELF_SERVE_BILLING ? (
+          <div className="row">
+            {UPGRADE_TARGETS.filter((p) => p !== usage.plan).map((p) => (
+              <button key={p} onClick={() => onUpgrade(p)}>
+                Upgrade to {p}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="muted" style={{ marginTop: 0 }}>
+            Your plan is set up with you directly as part of your engagement — there is no
+            self-serve upgrade to buy. To change what&rsquo;s included, or to discuss a case,{" "}
+            <a href="/contact">get in touch</a>.
+          </p>
+        )}
         {notice && (
           <p className="muted" style={{ marginBottom: 0 }}>
             {notice}
           </p>
         )}
         {error && <p className="error">{error}</p>}
-        {!usage.billing_configured && (
+        {SELF_SERVE_BILLING && !usage.billing_configured && (
           <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
             No payment method on file.
           </p>

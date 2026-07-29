@@ -22,6 +22,12 @@ export const metadata = {
 
 const UPDATED = "29 July 2026";
 
+// Contingency rate on funds actually recovered. Mirrors what the engagement letter
+// renders (reports/templates/engagement_letter.html.j2 → `contingency_pct`) and the
+// figure quoted on /faq. The engagement letter is the binding instrument for a
+// managed engagement; this section must not contradict it.
+const FEE_RANGE = "10–15%";
+
 function Tbd({ children }: { children: React.ReactNode }) {
   return <span className="tbd">{children}</span>;
 }
@@ -32,7 +38,7 @@ const SECTIONS = [
   "What Recupero is not",
   "Eligibility and accounts",
   "Acceptable use",
-  "Plans, quotas and payment",
+  "Fees and payment",
   "Your data and ours",
   "Third-party data",
   "Availability and support",
@@ -156,20 +162,53 @@ export default function TermsPage() {
         <li>Upload malware, or attempt to disrupt or gain unauthorised access to the service or another organization&rsquo;s data.</li>
       </ul>
 
-      <h2 id="plans-quotas-and-payment">
-        <span className="num">6</span>Plans, quotas and payment
+      <h2 id="fees-and-payment">
+        <span className="num">6</span>Fees and payment
       </h2>
+      <h3>Software subscriptions</h3>
       <p>
-        Paid plans are billed in advance on a recurring basis through our payment processor,
-        and include the trace allowance, seat count and feature set shown at checkout and on
-        your billing page. Allowances reset each billing period and do not carry over.
-        Applicable taxes may be added.
+        Where you use Recupero as self-serve software, paid plans are billed in advance on a
+        recurring basis through our payment processor and include the trace allowance, seat
+        count and feature set shown at checkout and on your billing page. Allowances reset
+        each billing period and do not carry over. Applicable taxes may be added. You may
+        cancel at any time; cancellation takes effect at the end of the current billing
+        period. Refunds: <Tbd>refund policy</Tbd>. We may change pricing with{" "}
+        <Tbd>notice period</Tbd> notice before it applies to your next renewal.
+      </p>
+
+      <h3>Managed recovery engagements</h3>
+      <p>
+        Where we act on a case for you, fees have three components, set out in full in the
+        engagement letter you sign:
+      </p>
+      <ul>
+        <li>
+          A <strong>diagnostic fee</strong>, payable upfront, for the investigation and the
+          honest assessment of what is realistically recoverable.
+        </li>
+        <li>
+          An <strong>engagement fee</strong> if you choose to proceed. This becomes
+          non-refundable once we begin sending compliance freeze letters on your behalf.
+        </li>
+        <li>
+          A <strong>contingency fee of {FEE_RANGE} of any funds actually recovered</strong>{" "}
+          through the engagement. &ldquo;Recovered&rdquo; means funds returned to you, or to
+          a court-appointed custodian on your behalf, valued in USD equivalent at the time
+          of return.
+        </li>
+      </ul>
+      <p>
+        The contingency fee is invoiced within 14 days of a recovery event and is due within
+        30 days of invoice. Recoveries occurring more than 12 months after the engagement
+        date are not subject to the contingency fee. The diagnostic and the engagement are
+        distinct services with distinct deliverables, and the diagnostic fee is not credited
+        against the engagement fee.
       </p>
       <p>
-        You may cancel at any time; cancellation takes effect at the end of the current
-        billing period and your access continues until then. Refunds:{" "}
-        <Tbd>refund policy</Tbd>. We may change pricing with{" "}
-        <Tbd>notice period</Tbd> notice before it applies to your next renewal.
+        <strong>We never take custody of recovered funds.</strong> Recoveries are returned
+        to you or to your custodian directly, and we invoice afterwards. Exact amounts,
+        the applicable contingency percentage, and any case-specific terms are governed by
+        your engagement letter, which prevails over this section if they differ.
       </p>
 
       <h2 id="your-data-and-ours">

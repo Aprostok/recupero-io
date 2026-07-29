@@ -6,6 +6,11 @@ export const metadata = {
     "Straight answers about tracing stolen crypto: what we can and can't recover, what we need from you, which chains we cover, and what it costs.",
 };
 
+// Contingency rate charged on funds actually recovered. Keep in sync with the
+// engagement letter template (reports/templates/engagement_letter.html.j2 renders
+// `contingency_pct`) and with /terms.
+const FEE_RANGE = "10–15%";
+
 type QA = { q: string; a: React.ReactNode };
 type Group = { cat: string; items: QA[] };
 
@@ -54,13 +59,33 @@ const GROUPS: Group[] = [
         ),
       },
       {
-        q: "Do you charge a percentage of what's recovered?",
+        q: "How do you charge?",
         a: (
-          <p>
-            No. Recupero is software you subscribe to, priced by plan — see{" "}
-            <Link href="/signup">plans</Link>. We are not a recovery agent taking a cut,
-            and we never take custody of funds.
-          </p>
+          <>
+            <p>
+              For a managed recovery engagement there are three parts: an upfront{" "}
+              <strong>diagnostic fee</strong> to investigate and tell you honestly what
+              you&rsquo;re looking at, an <strong>engagement fee</strong> if you decide to
+              proceed, and a <strong>contingency fee of {FEE_RANGE}</strong> of any funds
+              actually recovered through the engagement.
+            </p>
+            <p>
+              &ldquo;Recovered&rdquo; means funds returned to you, or to a court-appointed
+              custodian on your behalf. The contingency fee is invoiced within 14 days of a
+              recovery event and due within 30 days. Recoveries more than 12 months after
+              the engagement date aren&rsquo;t subject to it.
+            </p>
+            <p>
+              We tell you the realistic recoverable figure <em>before</em> you commit to an
+              engagement — the diagnostic exists precisely so you aren&rsquo;t paying to
+              chase money that a trace shows is gone. Exact fee amounts are set out in your
+              engagement letter. <span className="tbd">confirm diagnostic + engagement fee amounts</span>
+            </p>
+            <p>
+              <strong>We never take custody of your assets.</strong> Recovered funds go to
+              you or your custodian; we invoice afterwards.
+            </p>
+          </>
         ),
       },
     ],

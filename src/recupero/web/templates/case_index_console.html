@@ -98,6 +98,28 @@
   }
   .vbar { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
   .vbar .t { font-family: var(--mono); font-size: .78rem; color: var(--ink); }
+
+  /* Per-case navigation: step between cases, and jump into any console for the
+     case currently open. */
+  .casevictim { color: var(--ink-soft); font-size: .85rem; margin: -.25rem 0 .5rem; }
+  .casenav { display: flex; align-items: center; gap: .55rem; margin-bottom: .55rem; }
+  .casenav .navbtn { font-size: .78rem; padding: .3rem .6rem; }
+  .casenav .navbtn[disabled] { opacity: .38; cursor: default; }
+  .casenav .navpos {
+    color: var(--ink-faint); font-size: .76rem; font-family: var(--mono);
+    margin-left: auto;
+  }
+  .conslinks { display: flex; flex-wrap: wrap; gap: .38rem; margin-bottom: .7rem; }
+  .conslink {
+    font-size: .77rem; padding: .3rem .58rem; border-radius: var(--r-sm);
+    border: 1px solid var(--hair); text-decoration: none; color: var(--accent);
+    background: var(--accent-soft); transition: border-color .18s, transform .18s;
+  }
+  .conslink:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .conslink.off {
+    color: var(--ink-faint); background: transparent; cursor: default;
+    text-decoration: line-through; text-decoration-thickness: 1px;
+  }
   @media (max-width: 820px) { .wrap { grid-template-columns: 1fr; } .viewer { height: 60vh; } }
 </style>
 </head>
@@ -148,6 +170,52 @@
   function httpErr(res){ if(res.status===401) return "Unauthorized - check the key."; if(res.status===503) return "API not configured (admin key)."; return "HTTP "+res.status; }
 
   var selectedCase = null;
+  // Display-order case ids + their deliverable flags, so the detail pane can
+  // offer prev/next and only link consoles the case can actually answer.
+  var caseOrder = [];
+  var caseMeta = {};
+
+  // Every per-case console reads ?case_id from the URL, so a deep link lands
+  // ready-loaded. `need` is the deliverable flag a console depends on; null
+  // means it works from case.json alone.
+  var CASE_CONSOLES = [
+    { path: "/v1/case-overview/console",     label: "Overview",  need: null },
+    { path: "/v1/graph-analysis/console",    label: "Graph",     need: null },
+    { path: "/v1/exhibit-pack/console",      label: "Exhibits",  need: "has_exhibit_pack" },
+    { path: "/v1/sar-filing/console",        label: "SAR / STR", need: "has_brief" },
+    { path: "/v1/recovery-snapshot/console", label: "Recovery",  need: "has_brief" },
+    { path: "/v1/ai-triage/console",         label: "AI Triage", need: "has_ai_triage" }
+  ];
+
+  function renderCaseNav(cid){
+    var i = caseOrder.indexOf(cid);
+    var prev = i > 0 ? caseOrder[i-1] : null;
+    var next = (i >= 0 && i < caseOrder.length-1) ? caseOrder[i+1] : null;
+    var pos = i >= 0 ? (i+1) + " of " + caseOrder.length : "";
+    var h = '<div class="casenav">'
+          + '<button class="ghost navbtn" data-nav="' + (prev ? esc(prev) : "") + '"'
+          + (prev ? ' title="' + esc(prev) + '"' : ' disabled') + '>&#8592; Prev</button>'
+          + '<span class="navpos">' + esc(pos) + '</span>'
+          + '<button class="ghost navbtn" data-nav="' + (next ? esc(next) : "") + '"'
+          + (next ? ' title="' + esc(next) + '"' : ' disabled') + '>Next &#8594;</button>'
+          + '</div>';
+    var meta = caseMeta[cid] || {};
+    h += '<div class="conslinks">';
+    CASE_CONSOLES.forEach(function(c){
+      var ok = !c.need || !!meta[c.need];
+      var href = c.path + "?case_id=" + encodeURIComponent(cid);
+      if (ok) {
+        h += '<a class="conslink" href="' + href + '" target="_blank" rel="noopener">'
+           + esc(c.label) + '</a>';
+      } else {
+        // Not produced yet — say so rather than linking to a guaranteed 404.
+        h += '<span class="conslink off" title="This case has not produced that '
+           + 'deliverable yet">' + esc(c.label) + '</span>';
+      }
+    });
+    h += '</div>';
+    return h;
+  }
 
   function loadCases(){
     var k=key(); if(!k){ setMsg("Enter the admin key.","err"); return; }
@@ -176,6 +244,10 @@
 
   function renderCases(rep){
     var rows = rep.cases || [];
+    // Record display order + flags for prev/next and the console links.
+    caseOrder = rows.map(function(r){ return r.case_id; });
+    caseMeta = {};
+    rows.forEach(function(r){ caseMeta[r.case_id] = r; });
     var hd = "Cases (" + (rep.count!=null?rep.count:rows.length) + ")";
     if(rep.hidden_test && !rep.include_test){ hd += " - " + rep.hidden_test + " test hidden"; }
     $("caseshd").textContent = hd;
@@ -275,7 +347,10 @@
   }
 
   function renderArtifacts(cid, arts){
-    var head = '<div class="sech">'+esc(cid)+' &#8212; '+arts.length+' file(s)</div>';
+    var vn = (caseMeta[cid] || {}).victim_name;
+    var head = '<div class="sech">'+esc(cid)+' &#8212; '+arts.length+' file(s)</div>'
+             + (vn ? '<div class="casevictim">'+esc(vn)+'</div>' : '')
+             + renderCaseNav(cid);
     if(!arts.length){ $("detail").innerHTML = head + '<div class="empty">This case has no files on disk.</div>'; return; }
     var groups = {}; var order = [];
     arts.forEach(function(a){ if(!groups[a.category]){ groups[a.category]=[]; order.push(a.category); } groups[a.category].push(a); });
@@ -358,6 +433,17 @@
     var b = ev.target.closest(".case"); if(b) openCase(b.getAttribute("data-cid"));
   });
   $("detail").addEventListener("click", function(ev){
+    // Prev/next case — move in and out of cases without going back to the list.
+    var nav = ev.target.closest(".navbtn");
+    if(nav){
+      var target = nav.getAttribute("data-nav");
+      if(target){
+        openCase(target);
+        var sel = document.querySelector('.case[data-cid="' + (window.CSS && CSS.escape ? CSS.escape(target) : target) + '"]');
+        if(sel && sel.scrollIntoView) sel.scrollIntoView({block:"nearest"});
+      }
+      return;
+    }
     var f = ev.target.closest(".file"); if(f && selectedCase) openArtifact(selectedCase, f.getAttribute("data-path"), f.getAttribute("data-view"), f);
   });
   $("load").addEventListener("click", loadCases);

@@ -318,41 +318,77 @@ def _collect_stats() -> dict[str, Any]:
         "watchlist_items": None,
         "watchlist_moved": None,
         "label_candidates_pending": None,
-        # Filesystem case rollup — populated below; works WITHOUT a DB.
+        # Case rollup — populated below; works WITHOUT a DB.
         "cases_total": None,
         "cases_with_brief": None,
         "cases_triaged": None,
         "cases_with_exhibit": None,
+        # How many fixture cases the rollup excluded, so the tiles can say so
+        # instead of silently under-reporting.
+        "cases_hidden_test": None,
     }
 
-    # Filesystem case rollup (no DB required): a bounded scan of the cases root,
-    # matching case_index_api's deliverable-flag conventions (case.json /
-    # freeze_brief.json / ai_triage.json / exhibit_pack). Fully guarded — a
-    # missing config or cases dir yields nulls, never a failed page. Does NOT
-    # parse case.json (robust against a single corrupted case).
+    # Case rollup. MUST count the same universe the Case Index lists, or the
+    # tiles become a lie: a Supabase deploy's local `data/cases` is empty and
+    # ephemeral, so the old filesystem-only scan reported whatever stray case
+    # happened to be on the container disk (production showed 1/1/1/1) while the
+    # index listed the 49 real ones. Test fixtures are excluded here for the
+    # same reason the index hides them by default.
     try:
-        from recupero.config import load_config
-        from recupero.storage.case_store import CaseStore
-        cfg, _ = load_config()
-        root = CaseStore(cfg).cases_root
-        if root.exists():
-            n_total = n_brief = n_triage = n_exhibit = 0
-            for child in sorted(root.iterdir())[:500]:
-                if not child.is_dir() or not (child / "case.json").is_file():
-                    continue
-                n_total += 1
-                if (child / "freeze_brief.json").exists():
-                    n_brief += 1
-                if (child / "ai_triage.json").exists():
-                    n_triage += 1
-                if (child / "exhibit_pack").exists():
-                    n_exhibit += 1
-            stats["cases_total"] = n_total
-            stats["cases_with_brief"] = n_brief
-            stats["cases_triaged"] = n_triage
-            stats["cases_with_exhibit"] = n_exhibit
+        from recupero.api import _supabase_case_source as _sb
+        from recupero.api.case_index_api import (
+            _finalize_case_index,
+            _read_victim_name_local,
+        )
+
+        raw: list[dict[str, Any]] | None = None
+        if _sb.enabled():
+            raw = _sb.list_cases()
+        if raw is not None:
+            index = _finalize_case_index(raw, include_test=False)
+            shown = index["cases"]
+            stats["cases_total"] = index["count"]
+            stats["cases_hidden_test"] = index["hidden_test"]
+            stats["cases_with_brief"] = sum(1 for c in shown if c.get("has_brief"))
+            stats["cases_triaged"] = sum(1 for c in shown if c.get("has_ai_triage"))
+            stats["cases_with_exhibit"] = sum(
+                1 for c in shown if c.get("has_exhibit_pack")
+            )
+        else:
+            # Filesystem deploy: bounded scan of the cases root, matching
+            # case_index_api's deliverable-flag conventions. Does NOT parse
+            # case.json (robust against a single corrupted case).
+            from recupero.config import load_config
+            from recupero.storage.case_store import CaseStore
+            cfg, _ = load_config()
+            root = CaseStore(cfg).cases_root
+            if root.exists():
+                local_raw: list[dict[str, Any]] = []
+                for child in sorted(root.iterdir())[:500]:
+                    if not child.is_dir() or not (child / "case.json").is_file():
+                        continue
+                    has_victim, victim_name = _read_victim_name_local(child)
+                    local_raw.append({
+                        "case_id": child.name,
+                        "has_brief": (child / "freeze_brief.json").exists(),
+                        "has_ai_triage": (child / "ai_triage.json").exists(),
+                        "has_exhibit_pack": (child / "exhibit_pack").exists(),
+                        "has_victim": has_victim,
+                        "victim_name": victim_name,
+                    })
+                index = _finalize_case_index(local_raw, include_test=False)
+                shown = index["cases"]
+                stats["cases_total"] = index["count"]
+                stats["cases_hidden_test"] = index["hidden_test"]
+                stats["cases_with_brief"] = sum(1 for c in shown if c.get("has_brief"))
+                stats["cases_triaged"] = sum(
+                    1 for c in shown if c.get("has_ai_triage")
+                )
+                stats["cases_with_exhibit"] = sum(
+                    1 for c in shown if c.get("has_exhibit_pack")
+                )
     except Exception as exc:  # noqa: BLE001 — best-effort
-        log.debug("operator stats: case scan unavailable: %s", exc)
+        log.debug("operator stats: case rollup unavailable: %s", exc)
 
     dsn = (os.environ.get("SUPABASE_DB_URL", "") or "").strip()
     if not dsn:

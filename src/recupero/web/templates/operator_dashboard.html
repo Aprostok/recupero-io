@@ -112,6 +112,15 @@
   .card .v { font-size: 1.85rem; font-weight: 700; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
   .card .l { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-faint); margin-top: .5rem; font-weight: 600; }
   .card.alert .v { color: var(--alert); } .card.alert::before { background: var(--alert); opacity: .9; }
+  /* Cards that navigate: keep the card's own look, add affordance. */
+  a.card.clickable { display: block; text-decoration: none; color: inherit; cursor: pointer; }
+  a.card.clickable:hover { border-color: var(--accent); }
+  a.card.clickable::after {
+    content: "\2192"; position: absolute; right: .9rem; top: .85rem;
+    color: var(--ink-faint); font-size: .9rem; opacity: 0;
+    transition: opacity .22s, transform .22s;
+  }
+  a.card.clickable:hover::after { opacity: 1; transform: translateX(2px); }
 
   /* Section + console tiles */
   .group { display: flex; align-items: center; gap: .6rem; margin: 2rem 0 .9rem; }
@@ -374,16 +383,18 @@
     bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M10.5 21a2 2 0 0 0 3 0"/>',
     tag: '<path d="M20.6 13.4l-7.2 7.2a2 2 0 0 1-2.8 0l-6.2-6.2A2 2 0 0 1 4 13V5a1 1 0 0 1 1-1h8a2 2 0 0 1 1.4.6l6.2 6.2a2 2 0 0 1 0 2.6z"/><path d="M8.5 8.5h.01"/>'
   };
-  // [key, label, isAlert, iconSvg]
+  // [key, label, isAlert, iconSvg, href]
+  // Every card links to the console that explains the number, so a count is
+  // never a dead end.
   var STATS = [
-    ["cases_total",              "Traced cases",       false, svgIco(_I.search)],
-    ["cases_with_brief",         "Freeze briefs",      false, svgIco(_I.clipboard)],
-    ["cases_triaged",            "AI-triaged",         false, svgIco(_I.sparkle)],
-    ["cases_with_exhibit",       "Exhibit packs",      false, svgIco(_I.files)],
-    ["pending_reviews",          "Pending reviews",    true,  svgIco(_I.clock)],
-    ["watchlist_items",          "Watched addresses",  false, svgIco(_I.eye)],
-    ["watchlist_moved",          "Moved since check",  true,  svgIco(_I.bell)],
-    ["label_candidates_pending", "Label candidates",   false, svgIco(_I.tag)]
+    ["cases_total",              "Traced cases",       false, svgIco(_I.search),    "/v1/cases/console"],
+    ["cases_with_brief",         "Freeze briefs",      false, svgIco(_I.clipboard), "/v1/cases/console"],
+    ["cases_triaged",            "AI-triaged",         false, svgIco(_I.sparkle),   "/v1/cases/console"],
+    ["cases_with_exhibit",       "Exhibit packs",      false, svgIco(_I.files),     "/v1/cases/console"],
+    ["pending_reviews",          "Pending reviews",    true,  svgIco(_I.clock),     "/review-gate"],
+    ["watchlist_items",          "Watched addresses",  false, svgIco(_I.eye),       "/v1/watchlist/console"],
+    ["watchlist_moved",          "Moved since check",  true,  svgIco(_I.bell),      "/v1/watchlist/console"],
+    ["label_candidates_pending", "Label candidates",   false, svgIco(_I.tag),       "/v1/label-review/console"]
   ];
 
   function renderStats(s) {
@@ -402,12 +413,21 @@
           ? '<div class="delta up">&#8593;&nbsp;+' + diff + ' since last load</div>'
           : '<div class="delta down">&#8595;&nbsp;' + diff + ' since last load</div>';
       }
-      return '<div class="' + cls + '" style="animation-delay:' + (i * 35) + 'ms">' +
-             '<div class="c-icon">' + d[3] + '</div>' +
-             '<div class="v">' + fmt(v) + '</div>' +
-             '<div class="l">' + esc(d[1]) + '</div>' +
-             deltaHtml +
-             '</div>';
+      var hiddenNote = "";
+      if (d[0] === "cases_total" && typeof s.cases_hidden_test === "number"
+          && s.cases_hidden_test > 0) {
+        // Be explicit that fixtures are excluded, rather than silently
+        // under-reporting against the raw case count.
+        hiddenNote = '<div class="delta">' + s.cases_hidden_test + ' test hidden</div>';
+      }
+      var inner = '<div class="c-icon">' + d[3] + '</div>' +
+                  '<div class="v">' + fmt(v) + '</div>' +
+                  '<div class="l">' + esc(d[1]) + '</div>' +
+                  deltaHtml + hiddenNote;
+      var style = 'style="animation-delay:' + (i * 35) + 'ms"';
+      return d[4]
+        ? '<a class="' + cls + ' clickable" href="' + d[4] + '" ' + style + '>' + inner + '</a>'
+        : '<div class="' + cls + '" ' + style + '>' + inner + '</div>';
     }).join("");
 
     // Persist for next comparison

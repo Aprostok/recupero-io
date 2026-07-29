@@ -6,10 +6,12 @@ export const metadata = {
     "Straight answers about tracing stolen crypto: what we can and can't recover, what we need from you, which chains we cover, and what it costs.",
 };
 
-// Contingency rate charged on funds actually recovered. Keep in sync with the
-// engagement letter template (reports/templates/engagement_letter.html.j2 renders
-// `contingency_pct`) and with /terms.
-const FEE_RANGE = "10–15%";
+// Fee facts — the SINGLE source of truth for this page. Must stay in sync with
+// /terms and with the engagement letter template
+// (reports/templates/engagement_letter.html.j2, which renders `contingency_pct`).
+// The engagement letter is the binding instrument; nothing here may contradict it.
+const DIAGNOSTIC_FEE = "$999";   // flat, USD, same for every first case
+const FEE_RANGE = "10–15%";      // contingency on funds actually recovered
 
 type QA = { q: string; a: React.ReactNode };
 type Group = { cat: string; items: QA[] };
@@ -63,9 +65,10 @@ const GROUPS: Group[] = [
         a: (
           <>
             <p>
-              Three parts. The <strong>first run is a flat diagnostic fee</strong> — the
-              same price for everyone, no matter the size of the theft — which buys the
-              investigation and an honest assessment of what is realistically recoverable.
+              Three parts. The first run is a{" "}
+              <strong>flat {DIAGNOSTIC_FEE} diagnostic fee</strong> — the same price for
+              everyone, no matter the size of the theft — which buys the investigation and
+              an honest assessment of what is realistically recoverable.
               If you decide to proceed, the <strong>engagement is priced per case</strong>,
               because the work varies enormously with how the funds were moved and which
               venues are involved. Finally, a <strong>contingency fee of {FEE_RANGE}</strong>{" "}
@@ -79,9 +82,11 @@ const GROUPS: Group[] = [
             </p>
             <p>
               We tell you the realistic recoverable figure <em>before</em> you commit to an
-              engagement — the diagnostic exists precisely so you aren&rsquo;t paying to
-              chase money that a trace shows is gone. Exact fee amounts are set out in your
-              engagement letter. <span className="tbd">confirm the flat diagnostic fee amount</span>
+              engagement — the {DIAGNOSTIC_FEE} diagnostic exists precisely so you
+              aren&rsquo;t paying to chase money that a trace shows is gone. It is
+              non-refundable and is not credited against the engagement fee: the diagnostic
+              and the engagement are distinct services with distinct deliverables. Your
+              engagement letter sets out the full fee schedule.
             </p>
             <p>
               <strong>We never take custody of your assets.</strong> Recovered funds go to

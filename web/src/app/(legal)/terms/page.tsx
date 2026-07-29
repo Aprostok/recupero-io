@@ -26,6 +26,7 @@ const UPDATED = "29 July 2026";
 // renders (reports/templates/engagement_letter.html.j2 → `contingency_pct`) and the
 // figure quoted on /faq. The engagement letter is the binding instrument for a
 // managed engagement; this section must not contradict it.
+const DIAGNOSTIC_FEE = "US$999";  // flat first-run fee, same regardless of amount stolen
 const FEE_RANGE = "10–15%";
 
 function Tbd({ children }: { children: React.ReactNode }) {
@@ -168,19 +169,16 @@ export default function TermsPage() {
       <h3>How engagements are priced</h3>
       <p>
         Recupero is currently provided as a managed engagement rather than a self-serve
-        subscription. Fees have three components, set out in full in the engagement letter
-        you sign:
-      </p>
-
-      <p>
-        Where we act on a case for you, fees have three components, set out in full in the
-        engagement letter you sign:
+        subscription. Where we act on a case for you, fees have three components, set out in
+        full in the engagement letter you sign:
       </p>
       <ul>
         <li>
-          A <strong>flat diagnostic fee</strong>, payable upfront and the same for every
-          first case regardless of the amount stolen, covering the investigation and an
-          assessment of what is realistically recoverable.
+          A <strong>flat diagnostic fee of {DIAGNOSTIC_FEE}</strong>, payable upfront and
+          the same for every first case regardless of the amount stolen, covering the
+          investigation and an assessment of what is realistically recoverable. It is
+          non-refundable and is not credited against the engagement fee — the diagnostic and
+          the engagement are distinct services with distinct deliverables.
         </li>
         <li>
           An <strong>engagement fee priced per case</strong> if you choose to proceed, quoted

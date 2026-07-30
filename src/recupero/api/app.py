@@ -1820,10 +1820,19 @@ def _render_intake_html(
             median_time_to_recovery_days=None,
         )
 
+    # Fee + refund figures come from the canonical constants so the
+    # checkout button can never quote a price the Stripe Payment Link and
+    # the engagement letter disagree with. refund_amount_text mirrors the
+    # default in worker/_victim_summary.py, which is what the unrecoverable
+    # summary letter actually promises the customer.
+    from recupero._pricing import DIAGNOSTIC_FEE_USD, fmt_usd_short
+
     return env.get_template("intake.html.j2").render(
         form=form or {},
         error=error,
         recovery_stats=recovery_stats,
+        diagnostic_fee_text=fmt_usd_short(DIAGNOSTIC_FEE_USD),
+        refund_amount_text="$99",
     )
 
 

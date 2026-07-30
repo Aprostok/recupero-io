@@ -262,8 +262,14 @@ def test_render_unrecoverable_variant(monkeypatch) -> None:
         assert "unrecoverable" in out_path.name
         html = out_path.read_text(encoding="utf-8")
 
-    # Unrecoverable variant has these specific signal phrases
-    assert "$99 of your $499" in html
+    # Unrecoverable variant has these specific signal phrases.
+    # The fee is asserted against _pricing rather than a literal: the
+    # template used to hardcode "$499", so raising the price left the
+    # letter promising a refund of a fee the customer never paid.
+    # Building the expected string from the constant also catches an
+    # unresolved Jinja var, which would render as an empty string.
+    from recupero._pricing import DIAGNOSTIC_FEE_USD, fmt_usd_short
+    assert f"$99 of your {fmt_usd_short(DIAGNOSTIC_FEE_USD)}" in html
     assert "IC3" in html
     assert "FBI" in html or "Federal Bureau of Investigation" in html
     assert "tax loss" in html.lower() or "tax-loss" in html.lower()

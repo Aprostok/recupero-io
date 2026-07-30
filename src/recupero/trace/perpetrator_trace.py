@@ -234,7 +234,7 @@ def run_perpetrator_trace(
     instead of pass-1's 2). Rationale: we're interested in the
     immediate destinations the hub redistributes to. Walking
     further from the hub explodes into general perpetrator
-    network analysis, which is outside the scope of a $499
+    network analysis, which is outside the scope of a fixed-fee
     diagnostic.
     """
     from recupero.trace.tracer import run_trace

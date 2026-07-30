@@ -1,7 +1,7 @@
 """Render the victim-facing case-summary letter.
 
 This is the artifact the customer (the victim) actually receives in
-their inbox after their $499 diagnostic completes. Two variants:
+their inbox after their diagnostic completes. Two variants:
 
   * ``victim_summary_recoverable.html.j2`` — sent when the diagnostic
     found freezable funds. Pitches Tier 2 engagement as Option A
@@ -181,6 +181,7 @@ def render_victim_summary(
     briefs_dir: Path,
     flow_filename: str | None = None,
     engagement_fee_text: str | None = None,
+    diagnostic_fee_text: str | None = None,
     contingency_pct: int | None = None,
     refund_amount_text: str = "$99",
     unrecoverable_reason_short: str | None = None,
@@ -202,15 +203,21 @@ def render_victim_summary(
     published values in recupero._pricing. v0.7.0 decoupled the
     diagnostic from the engagement (no credit applied) — the
     engagement_fee_text is now a clean dollar amount rather than
-    the "incremental over $499" phrasing.
+    the "incremental over the diagnostic" phrasing.
     """
     from recupero._pricing import (
         CONTINGENCY_PCT,
+        DIAGNOSTIC_FEE_USD,
         ENGAGEMENT_FEE_USD,
         fmt_usd_short,
     )
     if engagement_fee_text is None:
         engagement_fee_text = fmt_usd_short(ENGAGEMENT_FEE_USD)
+    # The diagnostic fee the victim already paid. Both summary variants
+    # quote it; both used to hardcode "$499", so a price change silently
+    # left the letters quoting a figure the customer never paid.
+    if diagnostic_fee_text is None:
+        diagnostic_fee_text = fmt_usd_short(DIAGNOSTIC_FEE_USD)
     if contingency_pct is None:
         contingency_pct = CONTINGENCY_PCT
     try:
@@ -250,6 +257,7 @@ def render_victim_summary(
             total_freezable_usd=total_freezable_usd,
             total_suspected_usd=total_suspected_usd,
             engagement_fee_text=engagement_fee_text,
+            diagnostic_fee_text=diagnostic_fee_text,
             contingency_pct=contingency_pct,
             refund_amount_text=refund_amount_text,
             unrecoverable_reason_short=unrecoverable_reason_short,
@@ -311,6 +319,7 @@ def _build_context(
     total_freezable_usd: Decimal,
     total_suspected_usd: Decimal,
     engagement_fee_text: str,
+    diagnostic_fee_text: str,
     contingency_pct: int,
     refund_amount_text: str,
     unrecoverable_reason_short: str | None,
@@ -399,6 +408,7 @@ def _build_context(
         "aggregate_evidence_mode": aggregate_evidence_mode,
         "flow_filename": flow_filename,
         "engagement_fee_text": engagement_fee_text,
+        "diagnostic_fee_text": diagnostic_fee_text,
         "contingency_pct": contingency_pct,
         "refund_amount_text": refund_amount_text,
         "unrecoverable_reason_short": unrecoverable_reason_short,

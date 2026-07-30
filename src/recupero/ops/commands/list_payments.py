@@ -25,7 +25,7 @@ Output shape (table form)
 -------------------------
 
   RECEIVED              TYPE        AMOUNT       STATUS    CASE         ACTION
-  2026-05-17 14:32 UTC  diagnostic  $499.00      paid      V-058868     investigation_created
+  2026-05-17 14:32 UTC  diagnostic  $999.00      paid      V-058868     investigation_created
   2026-05-17 14:35 UTC  engagement  $10,000.00   paid      V-058868     engagement_activated
   ...
 

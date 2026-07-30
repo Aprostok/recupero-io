@@ -534,7 +534,7 @@ def _handle_diagnostic(
 ) -> tuple[str, UUID | None, str | None]:
     """Diagnostic payment → INSERT a pending investigation row
     for the case. The pipeline picks it up on the next claim cycle
-    and runs the $499 trace.
+    and runs the $999 trace.
 
     Pre-flight: confirm the case exists. If case_uuid is missing
     or invalid, log to notes and skip the side effect.
@@ -709,9 +709,10 @@ def _handle_engagement(
     # Two real failure modes:
     #
     #   1. Misrouted webhook (operator dashboard mis-config, malformed
-    #      client_reference_id, or a $499 diagnostic-fee payment
+    #      client_reference_id, or a diagnostic-fee payment
     #      mis-tagged as type=engagement): the legitimate $10K
-    #      engagement_fee_paid_usd silently became $499. Downstream P&L
+    #      engagement_fee_paid_usd silently became the diagnostic
+#      amount. Downstream P&L
     #      + portal display showed the wrong amount; the row still
     #      looked "engaged."
     #

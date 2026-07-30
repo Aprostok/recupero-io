@@ -3,7 +3,7 @@
 Groups addresses that appear to belong to the same actor based
 on on-chain behavioral signals. This is what TRM / Chainalysis
 charge tens of thousands of dollars per year for, scoped down
-to MVP heuristics suitable for a $499 diagnostic.
+to MVP heuristics suitable for a fixed-fee diagnostic.
 
 Why entity clustering matters for crypto recovery
 --------------------------------------------------

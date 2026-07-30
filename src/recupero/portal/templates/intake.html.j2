@@ -280,23 +280,24 @@
 
     <div class="button-row">
       <button type="submit" class="primary">
-        Continue to payment ($499)
+        Continue to payment ({{ diagnostic_fee_text }})
       </button>
       <p class="price-line">
-        $499 forensic diagnostic · refundable if no recoverable
-        funds identified.
+        {{ diagnostic_fee_text }} forensic diagnostic · {{ refund_amount_text }}
+        refunded if we identify no recoverable funds.
       </p>
     </div>
   </form>
 
   <div class="reassurance">
-    <h3>What you get for $499</h3>
+    <h3>What you get for {{ diagnostic_fee_text }}</h3>
     <ul>
       <li>Full on-chain forensic trace of where your funds went</li>
       <li>Identified destinations: which exchanges or token issuers hold them now</li>
       <li>Recovery probability score with per-issuer breakdown</li>
       <li>If recoverable, an engagement option to send formal freeze requests on your behalf</li>
-      <li>If not recoverable, a full refund and an honest reason why</li>
+      <li>If not recoverable, a {{ refund_amount_text }} refund and an honest reason why —
+          the report, diagram and law-enforcement package stay yours</li>
     </ul>
   </div>
 

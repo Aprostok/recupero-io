@@ -17,9 +17,11 @@ up loudly.
 Pricing model (v0.7.0, decoupled)
 ---------------------------------
 
-  * Diagnostic fee: $499 (one-time, non-refundable on commencement
+  * Diagnostic fee: $999 (one-time, non-refundable on commencement
     of the forensic trace; partially refunded if recovery is
-    structurally infeasible).
+    structurally infeasible). Raised from $499 in 2026-07 — the
+    website FAQ/Terms quote this same figure, and
+    tests/test_pricing.py locks it.
   * Engagement fee: $10,000 (one-time, due at signing of the
     Tier-2 engagement letter). NOT credited against any prior
     payment — the diagnostic and the engagement are separate
@@ -40,11 +42,11 @@ from decimal import Decimal
 
 # ----- Public constants ----- #
 
-#: USD price of the $499 diagnostic. Charged via the diagnostic
+#: USD price of the $999 diagnostic. Charged via the diagnostic
 #: Payment Link before any trace work begins. Includes the
 #: forensic trace + victim-summary letter + (if recoverable) a
 #: pre-built engagement letter the customer can choose to sign.
-DIAGNOSTIC_FEE_USD: Decimal = Decimal("499")
+DIAGNOSTIC_FEE_USD: Decimal = Decimal("999")
 
 #: USD price of the Tier-2 engagement. Charged via the engagement
 #: Payment Link when the customer signs the engagement letter.

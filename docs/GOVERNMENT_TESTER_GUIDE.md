@@ -22,7 +22,7 @@ the on-chain graph → produces:
     compliance teams (Circle, Tether, Paxos, Maple, etc.).
   * An **LE handoff package** for filing with IC3 / FBI / state.
 
-Built for the Tier-2 crypto-recovery service model: $499
+Built for the Tier-2 crypto-recovery service model: $999
 diagnostic + $10,000 active engagement (if recoverable) + 15%
 contingency on funds returned. The diagnostic alone runs in
 ~14 minutes against a typical Ethereum case and costs ~$0.50 in

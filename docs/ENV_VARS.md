@@ -230,7 +230,7 @@ their own section.
 | `RECUPERO_X_MIN_FETCH_INTERVAL_S` | `21600` | int | seconds | v0.42 | Minimum gap between X fetches (default 6h = 4/day). **Cost brake.** |
 | `RECUPERO_X_MAX_READS_PER_DAY` | `250` | int | count | v0.42 | Hard daily ceiling on billable X posts read. **Cost brake.** |
 | **Payments (Stripe)** | | | | | |
-| `RECUPERO_STRIPE_DIAGNOSTIC_PAYMENT_LINK` | unset | str | Stripe URL | v0.16.x | Stripe Payment Link for the $499 diagnostic. |
+| `RECUPERO_STRIPE_DIAGNOSTIC_PAYMENT_LINK` | unset | str | Stripe URL | v0.16.x | Stripe Payment Link for the $999 diagnostic. |
 | `RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK` | unset | str | Stripe URL | v0.16.x | Stripe Payment Link for the $10K engagement. |
 
 ---
@@ -950,7 +950,7 @@ unparseable values fall back to the default rather than failing the fetch.
 
 #### `RECUPERO_STRIPE_DIAGNOSTIC_PAYMENT_LINK` / `RECUPERO_STRIPE_ENGAGEMENT_PAYMENT_LINK`
 
-Stripe Payment Link URLs for the $499 diagnostic and the $10K
+Stripe Payment Link URLs for the $999 diagnostic and the $10K
 engagement. `recupero-ops stripe-mode` cross-checks them against
 `STRIPE_WEBHOOK_SECRET` and flags test↔live mismatch.
 

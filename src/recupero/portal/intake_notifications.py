@@ -302,10 +302,22 @@ def _build_confirmation_html(
 
     Plain inline-styled HTML so it renders consistently across
     Gmail / Outlook / Apple Mail without Resend's templating layer.
-    Audience: a victim who just paid $499 minutes ago and wants
+    Audience: a victim who just paid the diagnostic fee minutes ago and wants
     reassurance that something is happening.
     """
     import html as _html
+
+    from recupero._pricing import DIAGNOSTIC_FEE_USD, fmt_usd_short
+
+    # Never hardcode the amount — see _pricing.py (single source of truth for
+    # every dollar figure in customer-facing copy and the legal contract).
+    # _short so prose reads "$999", not "$999.00".
+    _fee = fmt_usd_short(DIAGNOSTIC_FEE_USD)
+    # The PARTIAL refund the unrecoverable summary letter actually grants
+    # (worker/_victim_summary.py refund_amount_text). This email used to
+    # promise a full refund of the diagnostic, which that letter then
+    # contradicted — never promise money back that the deliverable won't.
+    _refund = "$99"
     safe_name = _html.escape(client_name)
     safe_case = _html.escape(case_number)
     safe_portal = _html.escape(portal_url, quote=True)
@@ -334,8 +346,10 @@ def _build_confirmation_html(
         'whether they are recoverable, and a recovery probability score.</li>'
         '<li>If recoverable — you can engage us to send formal freeze requests to '
         'the identified issuers / exchanges. Engagement is a separate decision; the '
-        '$499 forensic is yours regardless.</li>'
-        '<li>If not recoverable — we refund the $499 and tell you honestly why.</li>'
+        f'{_fee} forensic is yours regardless.</li>'
+        f'<li>If not recoverable — we refund {_refund} of the {_fee}, tell you '
+        'honestly why, and you keep the report, diagram and law-enforcement '
+        'package regardless.</li>'
         '</ol>'
         '<hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0">'
         '<p style="font-size:12px;color:#6b7280;margin:0">'

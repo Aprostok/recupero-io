@@ -360,7 +360,7 @@ def _build_engagement_summary(row: dict[str, Any]) -> dict[str, Any]:
     Possible statuses:
 
       * ``not_engaged``  — engagement_started_at is NULL (only the
-                           $499 diagnostic was paid)
+                           diagnostic fee was paid)
       * ``active``       — engagement_started_at is set,
                            engagement_closed_at is NULL
       * ``closed``       — engagement_closed_at is set

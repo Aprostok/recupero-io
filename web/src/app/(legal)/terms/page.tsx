@@ -27,7 +27,11 @@ const UPDATED = "29 July 2026";
 // figure quoted on /faq. The engagement letter is the binding instrument for a
 // managed engagement; this section must not contradict it.
 const DIAGNOSTIC_FEE = "US$999";  // flat first-run fee, same regardless of amount stolen
-const FEE_RANGE = "10–15%";
+const FEE_RANGE = "15%";  // = _pricing.CONTINGENCY_PCT
+// Partial refund granted when we conclude the funds aren't recoverable. Matches
+// `refund_amount_text` in worker/_victim_summary.py, which is what the
+// unrecoverable summary letter we actually send promises the customer.
+const UNRECOVERABLE_REFUND = "US$99";
 
 function Tbd({ children }: { children: React.ReactNode }) {
   return <span className="tbd">{children}</span>;
@@ -176,15 +180,17 @@ export default function TermsPage() {
         <li>
           A <strong>flat diagnostic fee of {DIAGNOSTIC_FEE}</strong>, payable upfront and
           the same for every first case regardless of the amount stolen, covering the
-          investigation and an assessment of what is realistically recoverable. It is
-          non-refundable and is not credited against the engagement fee — the diagnostic and
-          the engagement are distinct services with distinct deliverables.
+          investigation and an assessment of what is realistically recoverable. It is not
+          credited against the engagement fee — the diagnostic and the engagement are
+          distinct services with distinct deliverables. It is otherwise non-refundable, with
+          one exception: if we conclude your funds are not recoverable through our process,
+          we refund {UNRECOVERABLE_REFUND} of it, and the trace report, fund-flow diagram
+          and law-enforcement handoff package remain yours to keep.
         </li>
         <li>
-          An <strong>engagement fee priced per case</strong> if you choose to proceed, quoted
-          to you in writing before you commit, reflecting the scope of work the case
-          requires. This becomes non-refundable once we begin sending compliance freeze
-          letters on your behalf.
+          An <strong>engagement fee</strong> if you choose to proceed, quoted to you in
+          writing before you commit and set out in your engagement letter. This becomes
+          non-refundable once we begin sending compliance freeze letters on your behalf.
         </li>
         <li>
           A <strong>contingency fee of {FEE_RANGE} of any funds actually recovered</strong>{" "}

@@ -34,12 +34,13 @@ from recupero._pricing import (
 )
 
 
-def test_diagnostic_fee_is_499_usd() -> None:
-    """Diagnostic fee = $499. Changing this requires updating the
+def test_diagnostic_fee_is_999_usd() -> None:
+    """Diagnostic fee = $999. Changing this requires updating the
     Stripe diagnostic Payment Link in the Dashboard + every piece
-    of customer-facing copy that references the $499 figure."""
-    assert Decimal("499") == DIAGNOSTIC_FEE_USD
-    assert DIAGNOSTIC_FEE_CENTS == 49900
+    of customer-facing copy that references the $999 figure (incl. the
+    website FAQ + Terms, and the Stripe Payment Link itself)."""
+    assert Decimal("999") == DIAGNOSTIC_FEE_USD
+    assert DIAGNOSTIC_FEE_CENTS == 99900
 
 
 def test_engagement_fee_is_10000_usd() -> None:

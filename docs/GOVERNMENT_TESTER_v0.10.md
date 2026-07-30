@@ -277,7 +277,7 @@ tools ingest. Specifically:
 | Visualization | Interactive graph | Static SVG flow diagram |
 | API access | Yes (REST + GraphQL) | Worker HTTP + investigator CSV/JSON exports |
 | Bitcoin / UTXO chains | Yes | Not yet (account-model only) |
-| Price | $50k–$500k/year | **$499 + $10k engagement + 15% contingency** |
+| Price | $50k–$500k/year | **$999 + $10k engagement + 15% contingency** |
 
 The remaining material gaps:
 

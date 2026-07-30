@@ -79,7 +79,7 @@ def build_diagnostic_link(
     prefilled_email: str | None = None,
     base_url: str | None = None,
 ) -> str:
-    """Build the customer-facing $499 diagnostic Payment Link URL.
+    """Build the customer-facing $999 diagnostic Payment Link URL.
 
     ``client_reference_id`` is encoded as
     ``diag:<case_uuid>:<chain>:<seed_address>`` — the dispatcher
@@ -93,7 +93,7 @@ def build_diagnostic_link(
         raise PaymentLinkConfigError(
             f"{ENV_DIAGNOSTIC_LINK} is not set. Configure it in Railway "
             "with the Payment Link URL from your Stripe Dashboard "
-            "(the $499 diagnostic product)."
+            "(the $999 diagnostic product)."
         )
 
     seed_clean = seed_address.strip()

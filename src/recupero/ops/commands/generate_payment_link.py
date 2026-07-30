@@ -4,7 +4,7 @@ Mints a personalized Stripe Payment Link URL for a specific case.
 Two flavors:
 
   --type diagnostic
-    Builds the $499 diagnostic Payment Link with the case_id,
+    Builds the $999 diagnostic Payment Link with the case_id,
     chain, and seed_address encoded into client_reference_id so
     the webhook dispatcher can correlate the payment with the
     right case and trigger the investigation.
@@ -31,7 +31,7 @@ Typical run::
             ?client_reference_id=diag:5a9c901e-...:ethereum:0x0cdC...e955
             &prefilled_email=victim@example.com
 
-    Amount: $499
+    Amount: $999
     Send this URL to the customer; the webhook will trigger
     investigation creation on completed payment.
 """

@@ -11,7 +11,7 @@ Wallet drainer scams follow a specific operational pattern:
 
 The "approval" is the smoking gun for distinguishing drainer
 theft (victim was deceived into signing) from operator error
-(victim sent funds to wrong address). For a $499 diagnostic,
+(victim sent funds to wrong address). For a fixed-fee diagnostic,
 correctly classifying the case as drainer-theft drives:
 
   * The narrative tone in the victim_summary letter

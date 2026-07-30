@@ -905,7 +905,7 @@ def cli() -> None:
     # ----- generate-payment-link ----- #
     p_paylink = sub.add_parser(
         "generate-payment-link",
-        help="Mint a Stripe Payment Link URL for the $499 diagnostic "
+        help="Mint a Stripe Payment Link URL for the $999 diagnostic "
              "or $10,000 engagement payment, with case-specific "
              "metadata baked into client_reference_id.",
     )

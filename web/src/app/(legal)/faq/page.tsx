@@ -11,7 +11,10 @@ export const metadata = {
 // (reports/templates/engagement_letter.html.j2, which renders `contingency_pct`).
 // The engagement letter is the binding instrument; nothing here may contradict it.
 const DIAGNOSTIC_FEE = "$999";   // flat, USD, same for every first case
-const FEE_RANGE = "10–15%";      // contingency on funds actually recovered
+const FEE_RANGE = "15%";         // = _pricing.CONTINGENCY_PCT (what the letter renders)
+// = `refund_amount_text` in worker/_victim_summary.py — the partial refund the
+// unrecoverable summary letter promises. Must match /terms.
+const UNRECOVERABLE_REFUND = "$99";
 
 type QA = { q: string; a: React.ReactNode };
 type Group = { cat: string; items: QA[] };
@@ -69,10 +72,10 @@ const GROUPS: Group[] = [
               <strong>flat {DIAGNOSTIC_FEE} diagnostic fee</strong> — the same price for
               everyone, no matter the size of the theft — which buys the investigation and
               an honest assessment of what is realistically recoverable.
-              If you decide to proceed, the <strong>engagement is priced per case</strong>,
-              because the work varies enormously with how the funds were moved and which
-              venues are involved. Finally, a <strong>contingency fee of {FEE_RANGE}</strong>{" "}
-              of any funds actually recovered through the engagement.
+              If you decide to proceed there is a separate <strong>engagement fee</strong>,
+              quoted to you in writing before you commit. Finally, a{" "}
+              <strong>contingency fee of {FEE_RANGE}</strong> of any funds actually recovered
+              through the engagement.
             </p>
             <p>
               &ldquo;Recovered&rdquo; means funds returned to you, or to a court-appointed
@@ -83,14 +86,21 @@ const GROUPS: Group[] = [
             <p>
               We tell you the realistic recoverable figure <em>before</em> you commit to an
               engagement — the {DIAGNOSTIC_FEE} diagnostic exists precisely so you
-              aren&rsquo;t paying to chase money that a trace shows is gone. It is
-              non-refundable and is not credited against the engagement fee: the diagnostic
-              and the engagement are distinct services with distinct deliverables. Your
-              engagement letter sets out the full fee schedule.
+              aren&rsquo;t paying to chase money that a trace shows is gone. It is not
+              credited against the engagement fee: the diagnostic and the engagement are
+              distinct services with distinct deliverables. Your engagement letter sets out
+              the full fee schedule.
             </p>
             <p>
               <strong>We never take custody of your assets.</strong> Recovered funds go to
               you or your custodian; we invoice afterwards.
+            </p>
+            <p>
+              If we conclude your funds aren&rsquo;t recoverable through our process, we
+              refund {UNRECOVERABLE_REFUND} of the diagnostic fee and tell you plainly why.
+              You keep the trace report, the fund-flow diagram and the law-enforcement
+              handoff package regardless — they hold real value for a police report or an
+              insurance or tax-loss filing even when we can&rsquo;t get the money back.
             </p>
           </>
         ),

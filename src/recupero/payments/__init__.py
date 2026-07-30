@@ -5,7 +5,7 @@ translates them into workflow state transitions:
 
   * ``checkout.session.completed`` with ``metadata.type=diagnostic``
     → INSERT into public.investigations (status='pending'),
-      kicking off the $499 diagnostic pipeline.
+      kicking off the diagnostic pipeline.
   * ``checkout.session.completed`` with ``metadata.type=engagement``
     → UPDATE public.investigations
         SET engagement_started_at = COALESCE(engagement_started_at, NOW()),

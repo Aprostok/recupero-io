@@ -31,7 +31,7 @@ sections:
      reporting cadence)
   3. What this engagement does NOT include (no guarantees,
      not legal advice, partial-recovery typical)
-  4. Fees (engagement fee with $499 credit, contingency at 15%,
+  4. Fees (engagement fee, contingency at 15%,
      when invoiced, when due)
   5. Termination (75% refund pre-letter-send, 0% after)
   6. Authority & consent (what we're authorized to do on victim's

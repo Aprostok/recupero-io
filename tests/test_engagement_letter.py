@@ -153,7 +153,7 @@ def test_letter_includes_required_sections() -> None:
 def test_fee_math_with_default_engagement() -> None:
     """v0.7.0 decoupled the diagnostic from the engagement: the
     engagement fee is the published amount ($10,000) and the
-    $499 diagnostic is a separate, already-paid charge that does
+    $999 diagnostic is a separate, already-paid charge that does
     NOT get credited. The letter shows both amounts as standalone
     fees."""
     with TemporaryDirectory() as tmp:
@@ -168,7 +168,7 @@ def test_fee_math_with_default_engagement() -> None:
         html = path.read_text(encoding="utf-8")
 
     assert "$10,000.00" in html  # engagement fee
-    assert "$499.00" in html      # diagnostic fee (referenced as
+    assert "$999.00" in html      # diagnostic fee (referenced as
                                   # separately earned)
     # v0.7.0 decoupling: the template explicitly clarifies the
     # engagement is "not credited against" the diagnostic. The

@@ -57,7 +57,7 @@ and surfaces it to the intake form. If the table is empty the
 Chainalysis ~3% public figure is shown with explicit attribution. The
 customer's checkbox click is stored alongside the case row.
 
-Stripe webhooks at `payments/webhook.py` carry the diagnostic ($499) /
+Stripe webhooks at `payments/webhook.py` carry the diagnostic ($999) /
 engagement ($10K) payment events; on confirmation the case advances
 to `state=traced_pending` and the worker picks it up.
 

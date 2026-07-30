@@ -1440,7 +1440,7 @@ def _structured_usd_values(
     # diagnostic sections (engagement_letter, victim_summary). They are
     # NOT case-specific trace figures, so they don't live in the brief's
     # FREEZABLE / DESTINATIONS structured data — without grounding them
-    # here, INVARIANT O would flag "$499.00" and "$10,000.00" on every
+    # here, INVARIANT O would flag "$999.00" and "$10,000.00" on every
     # real brief that mentions its own fees. Source from the single
     # _pricing definition so a fee change stays in lock-step.
     try:
@@ -1448,12 +1448,12 @@ def _structured_usd_values(
             DIAGNOSTIC_FEE_USD,
             ENGAGEMENT_FEE_USD,
         )
-        _try_add(DIAGNOSTIC_FEE_USD)   # $499 diagnostic
+        _try_add(DIAGNOSTIC_FEE_USD)   # $999 diagnostic
         _try_add(ENGAGEMENT_FEE_USD)   # $10,000 engagement
     except Exception:  # noqa: BLE001
         # Fall back to the documented constants if the import path
         # changes — these are stable, contract-level fee amounts.
-        _try_add(Decimal("499"))
+        _try_add(Decimal("999"))
         _try_add(Decimal("10000"))
 
     # Brief-level totals.

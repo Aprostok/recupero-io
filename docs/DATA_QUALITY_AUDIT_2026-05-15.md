@@ -11,7 +11,7 @@ Audited against **17 cases total** (whole DB at time of audit).
 
 ### 1. Placeholder seed_address (1 case) — RESOLVED
 
-**Case 07831546** — Hekla (`hekla.partners@gmail.com`)
+**Case 07831546** — Hekla (`redacted-customer@example.com`)
 **Investigation:** `55703e71-aa74-4ee8-8ba6-1dddd045f27d`
 **Seed:** `0x1234567890123456789012345678901234567890`
 
@@ -28,7 +28,7 @@ mirror the worker-side guard lives at
 
 ### 2. Submitted-but-never-traced Hekla cases (6) — OPERATOR DECISION
 
-Six cases from `hekla.partners@gmail.com`, all in
+Six cases from `redacted-customer@example.com`, all in
 `status='Submitted'` or `'Under Review'`, none with an investigation
 row:
 
@@ -47,7 +47,7 @@ repeatedly with junk data, not submitting real cases. No
 investigations were ever triggered.
 
 **Recommended action:** Manually verify with Hekla via email
-(`hekla.partners@gmail.com`) — either close all 6 as test
+(`redacted-customer@example.com`) — either close all 6 as test
 submissions, OR if any are real (Hekla may have intended one of
 the later "Hekla Partners" submissions to be real), promote that
 one to a real investigation with a verified seed_address.

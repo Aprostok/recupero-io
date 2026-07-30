@@ -242,9 +242,9 @@ class TestGenerateBriefs:
         case_dir = tmp_path / "ZIGHA-VERIFY"
         case_dir.mkdir(parents=True)
         victim = VictimInfo(
-            name="Ibrahim Zigha", citizenship="France",
-            address="32, Rue Godillot, 93400 France",
-            email="snowkombat@gmail.com",
+            name="Jordan Avery", citizenship="Canada",
+            address="120 Sample Street, Springfield, IL 62704",
+            email="jordan.avery@example.com",
             wallet_address=VICTIM,
             incident_summary="Theft on 2025-10-09.",
         )
@@ -269,13 +269,13 @@ class TestGenerateBriefs:
 
         # Content sanity — Midas-targeted
         maple = bundle.maple_html
-        assert "Ibrahim Zigha" in maple
+        assert "Jordan Avery" in maple
         # v0.30.0 (F2 — privacy contract): the issuer freeze letter
         # MUST NOT leak victim PII (home address / personal email /
         # phone) to a compliance team. Pre-v0.30.0 this assertion
         # was the opposite — it pinned the leak. The LE handoff
         # package remains the appropriate vessel for victim PII.
-        assert "snowkombat@gmail.com" not in maple, (
+        assert "jordan.avery@example.com" not in maple, (
             "Victim email leaked to issuer freeze letter — F2 regression."
         )
         assert PERP1 in maple
@@ -292,7 +292,7 @@ class TestGenerateBriefs:
         assert "KYC" in maple
 
         le = bundle.le_html
-        assert "Ibrahim Zigha" in le
+        assert "Jordan Avery" in le
         assert "Recommended Actions" in le
         assert "Midas" in le
 
